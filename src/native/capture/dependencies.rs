@@ -3172,6 +3172,7 @@ pub(super) fn plan_dependency_only_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,

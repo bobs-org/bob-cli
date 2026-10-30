@@ -299,6 +299,7 @@ fn json_success_shape_is_stable() {
     let result = CaptureResult::from_items(
         vec![CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: false,
             routed: true,

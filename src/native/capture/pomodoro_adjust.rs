@@ -384,6 +384,7 @@ pub(super) fn plan_pomodoro_adjust_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -567,6 +568,7 @@ pub(super) fn plan_pomodoro_shift_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,

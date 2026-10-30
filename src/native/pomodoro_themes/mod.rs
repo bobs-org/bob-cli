@@ -25,6 +25,7 @@ mod journal;
 pub(crate) mod migrate;
 pub(crate) mod preselect;
 mod rank;
+pub(crate) mod relocation_apply;
 pub(crate) mod rename;
 pub(crate) mod routing;
 mod scan;

@@ -375,6 +375,7 @@ pub(super) fn plan_project_note_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,

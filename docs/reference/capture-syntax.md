@@ -88,7 +88,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
 | `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
 | `%` / `%N` / `%header` | Capture clipboard content as child bullets | [`%`](#percent-clipboard) |
-| `t:<type>` | Type the new task | [`t:<type>`](#t-type) |
+| `t:<type>` | Type the new task or retype the existing task it targets | [`t:<type>`](#t-type) |
 
 ## Overloaded markers
 

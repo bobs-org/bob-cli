@@ -767,29 +767,27 @@ pub(crate) fn type_marker_not_applicable_error(
             "adds a child bullet",
             "capture `@<route>+<block-id> t:<type>` alone to retype that task",
         ),
-        TypeMarkerSubject::ProjectNote => (
-            "creates a project note",
-            "set `task_type:` in the new note",
-        ),
+        TypeMarkerSubject::ProjectNote => {
+            ("creates a project note", "set `task_type:` in the new note")
+        }
         TypeMarkerSubject::Reference => (
             "queues a reference typed by `plan.reading_type`",
             "add `-R` to keep it as a task",
         ),
-        TypeMarkerSubject::PomodoroNote => (
-            "adds a Pomodoro note",
-            "add task text to capture a task",
-        ),
+        TypeMarkerSubject::PomodoroNote => {
+            ("adds a Pomodoro note", "add task text to capture a task")
+        }
         TypeMarkerSubject::TaskComplete => (
             "completes an existing task",
             "remove the completion gesture to capture a task",
         ),
         TypeMarkerSubject::ExistingLink => (
-            "targets an existing task, and retyping it with `t:` is not supported yet",
-            "capture the task text instead",
+            "links an existing task",
+            "capture the link alone to retype that task",
         ),
         TypeMarkerSubject::TaskToggle => (
-            "changes an existing task's status",
-            "remove the status gesture to capture a task",
+            "toggles an existing task",
+            "capture the toggle alone to retype that task",
         ),
         TypeMarkerSubject::Close => (
             "closes a Pomodoro",
@@ -834,4 +832,45 @@ pub(crate) fn not_applicable_error(
             TypeMarkerSubject::for_kind(&parsed.kind),
         )
     })
+}
+
+/// Classify whether a marker's parsed item retypes the existing task it
+/// targets: whole-item links (without a close suffix), Ensure Next and
+/// toggle forms, and relationship-only existing owners. Mirrors the
+/// phase-`existing` rows of the plan's §1.6 table.
+pub(crate) fn is_existing_type_marker_subject(
+    parsed: &ParsedCaptureText,
+) -> bool {
+    use super::model::{CaptureKind, ParsedDependencyTargetKind};
+    match &parsed.kind {
+        CaptureKind::PomodoroLink { close, .. } => close.is_none(),
+        CaptureKind::TaskToggle { .. } => true,
+        CaptureKind::SubBullet { target, .. } => {
+            use super::model::SubBulletTarget;
+            matches!(target, SubBulletTarget::BlockId(_))
+                && parsed.body.trim().is_empty()
+                && parsed.sub_bullets.is_empty()
+                && matches!(
+                    parsed.dependency_target.as_ref(),
+                    Some(target) if target.kind
+                        == ParsedDependencyTargetKind::ExistingTask
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Subject judgment for a refused marker on a link-close form: a
+/// whole-item link carrying a close suffix refuses as a close gesture,
+/// not as an existing link.
+pub(crate) fn refusal_subject_for_kind(
+    kind: &super::model::CaptureKind,
+) -> TypeMarkerSubject {
+    use super::model::CaptureKind;
+    match kind {
+        CaptureKind::PomodoroLink { close, .. } if close.is_some() => {
+            TypeMarkerSubject::Close
+        }
+        _ => TypeMarkerSubject::for_kind(kind),
+    }
 }

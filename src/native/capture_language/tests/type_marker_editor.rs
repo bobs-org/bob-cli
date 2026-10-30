@@ -154,19 +154,10 @@ fn non_task_subjects_are_refused_with_the_shared_copy() {
     // (draft, message needle)
     for (raw, needle) in [
         ("@notes#Ideas text t:fix", "writes a plain bullet"),
-        ("@sase+fix-x t:fix", "changes an existing task's status"),
         ("@sase:close-1=x t:fix", "closes a Pomodoro"),
         ("x t:fix", "closes a Pomodoro"),
         ("=3 t:fix", "starts a Pomodoro"),
         ("+5 t:fix", "adjusts a Pomodoro duration"),
-        (
-            "^sase:fix-x t:fix",
-            "retyping it with `t:` is not supported yet",
-        ),
-        (
-            "@sase:fix-x t:fix",
-            "retyping it with `t:` is not supported yet",
-        ),
         ("!sase:fix-x t:fix", "completes an existing task"),
     ] {
         let parse = editor(raw);
@@ -195,6 +186,37 @@ fn global_existing_task_inheritance_rechecks_the_marker_subject() {
     assert_eq!(parse.mode, EditorMode::SubBullet);
     assert_eq!(codes(&parse), vec!["type_marker_not_applicable"]);
     assert_eq!(parse.diagnostics[0].message, execute(raw).unwrap_err());
+}
+
+#[test]
+fn existing_subjects_accept_markers() {
+    for raw in [
+        "^sase:fix-x t:fix",
+        "@sase:fix-x t:fix",
+        "@sase+fix-x t:fix",
+        "@sase+fix-x! t:fix",
+        "@body+excercise &foo:bar t:fix",
+    ] {
+        let parse = editor(raw);
+        assert!(
+            !codes(&parse).contains(&"type_marker_not_applicable"),
+            "{raw:?}: {:?}",
+            parse.diagnostics
+        );
+        assert!(
+            !codes(&parse).contains(&"type_marker_needs_task"),
+            "{raw:?}: {:?}",
+            parse.diagnostics
+        );
+        assert!(execute(raw).is_ok(), "{raw:?}");
+    }
+    // Link-close suffixes refuse as closes.
+    let parse = editor("@sase:fix-x=x t:fix");
+    assert_eq!(
+        codes(&parse),
+        vec!["type_marker_not_applicable"],
+        "@sase:fix-x=x t:fix"
+    );
 }
 
 #[test]

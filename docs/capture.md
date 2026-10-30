@@ -145,7 +145,7 @@ anything is written, and any failure rolls the whole batch back.
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%`, `%N`, `%header` | Capture clipboard content as child bullets |
-| `t:<type>` | Type the new task (`t:fix`); at either line edge, lowercase only, one per item; unknown names write canonical spelling with a warning |
+| `t:<type>` | Type the new task or retype the existing task it targets (`t:fix`); at either line edge, lowercase only, one per item; unknown names write canonical spelling with a warning |
 | `t:"NAME"` | Same with a quoted name for spaces or punctuation (`t:"DEEP WORK"`) |
 | `t:` | Incomplete: type a task type after `t:`; execution refuses until named |
 | `\t:<anything>` | Escape: the body keeps the literal `t:<anything>`; a mid-line `\t:` stays verbatim |
@@ -499,12 +499,24 @@ one type). Escape with a backslash to keep the text: `\t:fix` writes
 `t:fix` in the body.
 
 Exactly one marker per item. A second marker fails with the duplicate
-`type marker (t:<type>)` error. The marker types the new task only; it never
-types prerequisites, blocked tasks, or relation targets. A marker alone, or
-on a bullet, sub-bullet, project note, reference, Pomodoro note, or
+`type marker (t:<type>)` error. The marker types the item's subject task:
+the new task it creates, or the existing task it targets (whole-item links,
+Ensure Next, toggle, and relationship-only owners). It never types
+prerequisites, blocked tasks, or relation targets. A marker alone, or on a
+bullet, sub-bullet with text, project note, reference, Pomodoro note, or
 completion/close/start/adjust/shift gesture, is refused with a teaching
-error. Markers on existing tasks (`^route:id t:fix`) are recognized but
-refused until a later phase: retyping with `t:` is not supported yet.
+error. A link-close suffix (`@route:id=x`) also refuses: remove the close
+gesture to capture a task.
+
+Retyping an existing task stages the `[type::]` field edit before the
+gesture runs, so a bare link places by the new type. The live Task Link is
+then relocated so it keeps agreeing with the new type (D8): Ensure Next
+already moves the link to its typed placement, while already-queued links,
+relationship-only owners, and toggles that link an already-linked task run
+the shared relocation applier. The item reports `type_relocation` when the
+ledger moves. A strict-cap refusal fails before any write with code
+`strict_cap`. Closed targets are refused: closed tasks keep their fields as
+history.
 
 The marker resolves against the configured `types:` vocabulary first, then
 the catalog; literals match by key, slugs also try spaces for hyphens.
@@ -5319,6 +5331,36 @@ includes a type row `type   → FIX · <stem> suggests BUILD` /
 `type   cleared · <stem> suggests BUILD` /
 `type   ■ FIX · from <stem>` (kept). Dry-run JSON reports the same
 post-image and summary without writing files.
+
+When an existing-task `t:` retype moves the live Task Link, the item also
+gains this additive `type_relocation` object (omitted when the ledger needs
+no change):
+
+```json
+"type_relocation": {
+  "outcome": "rename_entry",
+  "from": "BUILD",
+  "to": "FIX"
+}
+```
+
+`outcome` is `"rename_entry"`, `"append_component"`, `"move_to"`,
+`"rename_placeholder"`, or `"create_below"`. `from` is the source entry
+name (omitted when unnamed) and `to` is the destination entry name. The
+human output renders it as a ledger row: `ledger  BUILD → FIX · running
+entry renamed` / `ledger  BUILD → BUILD + FIX · running entry shared` /
+`ledger  moved under FIX` / `ledger  BUILD → FIX · planned entry renamed` /
+`ledger  moved under new FIX`.
+
+Existing-task examples:
+
+```markdown
+^sase:fix-x t:fix
+@sase:fix-x t:fix
+@sase+fix-x t:fix
+@sase+fix-x! t:fix
+^sase:fix-x &sase:other-y t:fix
+```
 
 #### Task blocks
 

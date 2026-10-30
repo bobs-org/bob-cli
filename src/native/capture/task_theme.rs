@@ -40,6 +40,12 @@ pub(super) struct AppliedTaskTheme {
     pub(super) summary: CaptureTaskThemeChange,
 }
 
+pub(super) struct ExistingTypeMarkerApplication {
+    pub(super) summary: CaptureTaskThemeChange,
+    pub(super) type_key: String,
+    pub(super) type_name: String,
+}
+
 /// Owned D7 typed-placement inputs for one bare link-creating capture:
 /// the task's effective type (D3, from the staged line) plus the budget
 /// context `routing::place` needs.
@@ -359,6 +365,209 @@ impl CaptureTaskThemeContext {
         )
     }
 
+    /// Explicit `t:` retype of an existing task. Reads the staged target
+    /// line, resolves X, enforces the named-Pomodoro agreement, applies
+    /// the §1.7 field table, and stages the edit before the gesture runs.
+    /// Closed targets are refused without a write. Always reports, so the
+    /// caller can relocate the live link and emit `task_theme` + relocation.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_type_marker_to_existing(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        target: &Path,
+        route: &str,
+        block_id: &str,
+        marker_name: &str,
+        marker_literal: bool,
+        pomodoro_destination: Option<&str>,
+        pomodoro_selector: Option<&str>,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Result<ExistingTypeMarkerApplication, CaptureError> {
+        self.refresh_residence_snapshot(planner);
+        let current_contents = planner.read_existing(target)?;
+        let settings = note_tasks::read_settings(&self.root);
+        let scan = note_tasks::scan(&current_contents, &settings);
+        let task = match scan.by_block_id(block_id) {
+            BlockIdLookup::Found(task) => task,
+            _ => {
+                return Err(CaptureError::io(
+                    "task theme capture invariant failed: existing task disappeared before retype",
+                ));
+            }
+        };
+        if !crate::native::capture_link_tasks::is_linkable_status(
+            task.status_symbol,
+        ) {
+            let line = line_text_at(&current_contents, task.line_index)
+                .unwrap_or_default();
+            let description = note_tasks::clean_description(
+                &line
+                    .find("] ")
+                    .map(|index| line[index + 2..].to_string())
+                    .unwrap_or_default(),
+                "",
+                None,
+            );
+            let _ = description;
+            return Err(CaptureError::usage(format!(
+                "`t:{marker_name}` needs an open task: ^{block_id} is {}; closed tasks keep their fields as history",
+                task.status_name
+            )));
+        }
+        let source_line =
+            line_text_at(&current_contents, task.line_index)?.to_string();
+        if !self.load_config(warnings) || !self.load_catalog(warnings) {
+            let display = unmatched_type_display(marker_name);
+            let edited = set_task_theme(&source_line, &display);
+            let staged =
+                self.write_task_field(planner, target, block_id, |_| {
+                    edited.clone()
+                })?;
+            let key = normalize_component(marker_name);
+            let theme = crate::native::pomodoro_themes::ThemeRef {
+                key: key.clone(),
+                name: display.clone(),
+                hue: None,
+                hue_source: HueSource::Unconfigured,
+                known: false,
+                configured: Some(false),
+                start: None,
+                end: None,
+            };
+            let _ = staged;
+            return Ok(ExistingTypeMarkerApplication {
+                summary: CaptureTaskThemeChange {
+                    action: "set",
+                    theme: Some(theme),
+                    previous: None,
+                    inherited: None,
+                },
+                type_key: key,
+                type_name: display,
+            });
+        }
+        let cfg = self.cfg.as_ref().expect("loaded plan config");
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        let configured_entries = catalog.configured_themes();
+        let resolved = resolve_exact_type_name(
+            configured_entries,
+            &|key| catalog.get(key).map(|record| record.name.clone()),
+            marker_name,
+            marker_literal,
+        );
+        let (x_key, x_name) = match resolved {
+            Some(found) => (found.key, found.name),
+            None => {
+                let display = unmatched_type_display(marker_name);
+                (normalize_component(marker_name), display)
+            }
+        };
+        if catalog.unconfigured(&x_key) {
+            let similar = catalog.similar_to(&x_name);
+            warnings
+                .push(CaptureWarning::Structured(StructuredCaptureWarning {
+                code: super::super::pomodoro_themes::THEME_NOT_CONFIGURED,
+                label: Some(x_name.clone()),
+                count: None,
+                message:
+                    super::super::pomodoro_themes::theme_not_configured_message(
+                        &x_name, &similar,
+                    ),
+            }));
+        }
+        if let Some(destination) = pomodoro_destination {
+            let sources = catalog.theme_sources();
+            let components =
+                routing::type_components(Some(destination), &sources);
+            let is_container = components.iter().all(|item| !item.is_type);
+            if !is_container {
+                let x_norm = normalize_component(&x_key);
+                let matches_component = components
+                    .iter()
+                    .filter(|item| item.is_type)
+                    .any(|item| item.key == x_norm);
+                if !matches_component {
+                    let d_display = split_components(destination)
+                        .first()
+                        .and_then(|component| canonical_theme_name(component))
+                        .unwrap_or_else(|| destination.trim().to_string());
+                    return Err(CaptureError::usage_code(
+                        format!(
+                            "`t:{marker_name}` disagrees with Pomodoro {d_display}: drop `#{d_display}` to link under {x_name}, or drop `t:{marker_name}` to type the task {d_display}"
+                        ),
+                        "type_marker_conflict",
+                    ));
+                }
+            }
+        }
+        let residence_path = relative_target(Some(route));
+        let residence = Path::new(&residence_path);
+        let suggested = suggest::suggest_for_task(
+            &mut self.resolver,
+            catalog,
+            cfg,
+            residence,
+            &source_line,
+        );
+        for warning in suggested.warnings {
+            let identity = (warning.code.clone(), warning.path.clone());
+            if self.warned_suggestions.insert(identity) {
+                warnings.push(CaptureWarning::Suggestion(warning));
+            }
+        }
+        let inherited = suggestion_inherited(suggested.suggestion.as_ref());
+        let inherited_key =
+            inherited.as_ref().map(|item| item.theme.key.as_str());
+        let field = parse_task_theme(&source_line);
+        let x_eq_i = inherited_key == Some(x_key.as_str());
+        let (action, theme, edited_line) = if x_eq_i {
+            match field {
+                TaskThemeState::None => {
+                    let display = catalog.display_name(&x_key, &x_name);
+                    let theme_ref = catalog.theme_ref(&x_key, &display);
+                    ("kept", Some(theme_ref), source_line.clone())
+                }
+                _ => {
+                    let cleared = clear_task_theme(&source_line);
+                    ("cleared", None, cleared)
+                }
+            }
+        } else {
+            let field_is_x = match &field {
+                TaskThemeState::Set { key, .. } => key == &x_key,
+                _ => false,
+            };
+            if field_is_x {
+                let display = catalog.display_name(&x_key, &x_name);
+                let theme_ref = catalog.theme_ref(&x_key, &display);
+                ("kept", Some(theme_ref), source_line.clone())
+            } else {
+                let display = catalog.display_name(&x_key, &x_name);
+                let theme_ref = catalog.theme_ref(&x_key, &display);
+                let edited = set_task_theme(&source_line, &display);
+                ("set", Some(theme_ref), edited)
+            }
+        };
+        let previous = valid_previous_theme(&field, catalog);
+        let summary = CaptureTaskThemeChange {
+            action,
+            theme,
+            previous,
+            inherited,
+        };
+        if edited_line != source_line {
+            self.write_task_field(planner, target, block_id, |_| {
+                edited_line.clone()
+            })?;
+        }
+        let _ = pomodoro_selector;
+        Ok(ExistingTypeMarkerApplication {
+            summary,
+            type_key: x_key,
+            type_name: x_name,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
@@ -584,6 +793,57 @@ impl CaptureTaskThemeContext {
             cap: cfg.max_themes(),
             strict: cfg.strict(),
         })
+    }
+
+    /// Shared D8 relocation for an explicit `t:` retype: after the gesture,
+    /// restore ledger agreement for `block_id` becoming `type_key`/`type_name`.
+    /// Stages the day-note edit and returns the JSON relocation, or `None`
+    /// when the ledger already agrees. A strict-cap refusal fails with
+    /// `strict_cap` before any write.
+    pub(super) fn relocate_for_retype(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        block_id: &str,
+        type_key: &str,
+        type_name: &str,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Result<Option<super::output::TypeRelocationJson>, CaptureError> {
+        self.refresh_residence_snapshot(planner);
+        if !self.load_config(warnings) || !self.load_catalog(warnings) {
+            return Ok(None);
+        }
+        let cfg = self.cfg.as_ref().expect("loaded plan config");
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        let sources = catalog.theme_sources();
+        let day_file = crate::native::pomodoro::day_file_for(&self.root);
+        let day_contents = match planner.read_existing(&day_file) {
+            Ok(contents) => contents,
+            Err(_) => return Ok(None),
+        };
+        match crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
+            &day_contents,
+            block_id,
+            type_key,
+            type_name,
+            &sources,
+            cfg.max_themes(),
+            cfg.strict(),
+        ) {
+            Ok(None) => Ok(None),
+            Ok(Some((updated, info))) => {
+                planner.stage(&day_file, updated)?;
+                Ok(Some(super::output::TypeRelocationJson {
+                    outcome: info.outcome,
+                    from: info.from,
+                    to: info.to,
+                }))
+            }
+            Err(refusal) => Err(CaptureError::strict_type_cap(
+                &refusal.name,
+                refusal.count,
+                refusal.cap,
+            )),
+        }
     }
 
     fn load_catalog(&mut self, warnings: &mut Vec<CaptureWarning>) -> bool {

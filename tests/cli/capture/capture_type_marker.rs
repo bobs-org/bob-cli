@@ -726,11 +726,12 @@ fn existing_target_marker_is_refused_honestly() {
     assert!(!output.status.success(), "{}", format_output(&output));
     let json: Value = serde_json::from_str(stdout(&output).trim())
         .expect("parse refusal JSON");
+    // Existing retypes are supported now: a missing target fails honestly
+    // for the missing task, never with the retired "not supported yet".
+    let error = json["error"].as_str().unwrap_or_default().to_string();
+    assert!(!error.contains("not supported yet"), "{json}");
     assert!(
-        json["error"]
-            .as_str()
-            .unwrap()
-            .contains("not supported yet"),
+        error.contains("disappeared") || error.contains("no task"),
         "{json}"
     );
 }

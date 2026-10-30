@@ -1498,11 +1498,38 @@ fn attach_type_marker_metadata(
     }
     match markers[0] {
         TypeMarkerOccurrence::Complete(marker) => {
+            // A link-close form refuses as a close gesture, not as an
+            // existing link.
+            if parsed.mode == EditorMode::PomodoroLink
+                && parsed.pomodoro_close.is_some()
+            {
+                parsed.diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "type_marker_not_applicable",
+                    message: type_marker_not_applicable_error(
+                        &marker.name,
+                        super::type_marker::TypeMarkerSubject::Close,
+                    ),
+                    range: Some((marker.span.start, marker.span.end)),
+                });
+                parsed.spans.sort_by_key(|span| (span.start, span.end));
+                return;
+            }
+            // A relationship-only SubBullet owner accepts the marker.
+            let relationship_sub_bullet = parsed.mode == EditorMode::SubBullet
+                && parsed.body.trim().is_empty()
+                && parsed.sub_bullets.is_empty()
+                && matches!(
+                    parsed.dependency_target.as_ref(),
+                    Some(target) if target.kind
+                        == DependencyTargetKind::ExistingTask
+                );
             // A form with no body never parses masked: execution fails it
             // with missing text, so the marker needs a task instead of
             // refusing a capture that does not exist yet.
             let needs_task_instead = parsed.body.trim().is_empty()
                 && parsed.pomodoro_close.is_none()
+                && !relationship_sub_bullet
                 && matches!(
                     parsed.mode,
                     EditorMode::Task
@@ -1522,10 +1549,12 @@ fn attach_type_marker_metadata(
                 if !parsed.needs.contains(&Need::Task) {
                     parsed.needs.push(Need::Task);
                 }
-            } else if let Some(subject) = type_marker_subject_for_editor(
-                parsed.mode,
-                parsed.pomodoro_close.is_some(),
-            ) {
+            } else if !relationship_sub_bullet
+                && let Some(subject) = type_marker_subject_for_editor(
+                    parsed.mode,
+                    parsed.pomodoro_close.is_some(),
+                )
+            {
                 parsed.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     code: "type_marker_not_applicable",
@@ -1558,8 +1587,9 @@ fn attach_type_marker_metadata(
 }
 
 /// Map an editor mode to the shared type-marker subject judgment. New-task
-/// modes are judged by their body; incomplete, dependency, and picker modes
-/// keep their own needs and get only the marker span.
+/// modes are judged by their body; existing-target link, toggle, and
+/// dependency modes accept the marker; incomplete, dependency, and picker
+/// modes keep their own needs and get only the marker span.
 fn type_marker_subject_for_editor(
     mode: EditorMode,
     has_close_gesture: bool,
@@ -1570,7 +1600,10 @@ fn type_marker_subject_for_editor(
         return Some(super::type_marker::TypeMarkerSubject::Close);
     }
     match mode {
-        EditorMode::Task | EditorMode::PomodoroTask => None,
+        EditorMode::Task
+        | EditorMode::PomodoroTask
+        | EditorMode::PomodoroLink
+        | EditorMode::TaskToggle => None,
         EditorMode::Bullet => {
             Some(super::type_marker::TypeMarkerSubject::Bullet)
         }
@@ -1588,12 +1621,6 @@ fn type_marker_subject_for_editor(
         }
         EditorMode::TaskComplete => {
             Some(super::type_marker::TypeMarkerSubject::TaskComplete)
-        }
-        EditorMode::PomodoroLink => {
-            Some(super::type_marker::TypeMarkerSubject::ExistingLink)
-        }
-        EditorMode::TaskToggle => {
-            Some(super::type_marker::TypeMarkerSubject::TaskToggle)
         }
         EditorMode::PomodoroAdjust => {
             Some(super::type_marker::TypeMarkerSubject::Adjust)

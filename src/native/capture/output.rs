@@ -324,6 +324,17 @@ pub(super) struct CaptureTaskThemeChange {
         Option<super::super::pomodoro_themes::suggest::ThemeSuggestion>,
 }
 
+/// Ledger relocation applied so a retyped task's live Task Link agrees
+/// with its new type (D8). Additive: omitted when the ledger needed no
+/// change, so older decoders never see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TypeRelocationJson {
+    pub(super) outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) from: Option<String>,
+    pub(super) to: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct TemplateSavedJson {
     pub(super) id: String,
@@ -462,6 +473,8 @@ pub(super) struct CaptureItemResult {
     pub(super) task_line: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) task_theme: Option<CaptureTaskThemeChange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) type_relocation: Option<TypeRelocationJson>,
     pub(super) kind: &'static str,
     pub(super) created: String,
     pub(super) scheduled: Option<String>,
@@ -2266,6 +2279,9 @@ pub(super) fn print_human_item_success(
     if let Some(row) = format_task_theme_row(result, &styler) {
         print!("{row}");
     }
+    if let Some(row) = format_type_relocation_row(result) {
+        print!("{row}");
+    }
     if let Some(note) = result.project_note.as_ref() {
         let sections = if note.sections.is_empty() {
             "—".to_string()
@@ -3419,6 +3435,9 @@ pub(super) fn print_human_ensure_next_ledger(
     if let Some(row) = format_task_theme_row(result, styler) {
         print!("{row}");
     }
+    if let Some(row) = format_type_relocation_row(result) {
+        print!("{row}");
+    }
 }
 
 pub(super) fn format_pomodoro_endpoint(
@@ -3638,6 +3657,9 @@ pub(crate) fn format_human_pomodoro_link_details(
     if let Some(row) = format_task_theme_row(result, styler) {
         out.push_str(&row);
     }
+    if let Some(row) = format_type_relocation_row(result) {
+        out.push_str(&row);
+    }
     if let Some(start) = result.pomodoro_start.as_ref() {
         let name = start.pomodoro_name.as_deref().unwrap_or("next session");
         let created = if start.created_pomodoro {
@@ -3662,6 +3684,28 @@ pub(crate) fn format_human_pomodoro_link_details(
         ));
     }
     out
+}
+
+fn format_type_relocation_row(result: &CaptureItemResult) -> Option<String> {
+    let relocation = result.type_relocation.as_ref()?;
+    let row = match relocation.outcome {
+        "rename_entry" => {
+            let from = relocation.from.as_deref().unwrap_or("entry");
+            format!("{} → {} · running entry renamed", from, relocation.to)
+        }
+        "append_component" => {
+            let from = relocation.from.as_deref().unwrap_or("entry");
+            format!("{} → {} · running entry shared", from, relocation.to)
+        }
+        "move_to" => format!("moved under {}", relocation.to),
+        "rename_placeholder" => {
+            let from = relocation.from.as_deref().unwrap_or("entry");
+            format!("{} → {} · planned entry renamed", from, relocation.to)
+        }
+        "create_below" => format!("moved under new {}", relocation.to),
+        _ => return None,
+    };
+    Some(format!("  ledger  {row}\n"))
 }
 
 fn format_task_theme_row(
@@ -4599,6 +4643,7 @@ mod tests {
     fn minimal_result() -> CaptureItemResult {
         CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: false,
             routed: true,

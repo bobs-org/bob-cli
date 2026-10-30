@@ -833,6 +833,7 @@ JS mirror's contract.
 | --- | --- | --- |
 | Task Card Type stage, Use default, Ctrl+D on Type | the type | relocating the live link (D8) |
 | Task move to another note | the inherited type, if no field | relocating the live link (D8) |
+| Capture `t:` on an existing task | the type | relocating the live link (D8) via the shared applier |
 | Naming or renaming an entry that holds links | the entry's types | retyping its tasks, count previewed (D6) |
 
 - **Type components.** A component of a Pomodoro name is a type component

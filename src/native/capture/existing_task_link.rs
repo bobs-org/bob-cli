@@ -79,6 +79,7 @@ pub(crate) fn link_existing_task(
         &mut warnings,
         &mut dependency_ctx,
         Some(&mut task_theme_context),
+        false,
     )?;
     let human_details =
         format_human_pomodoro_link_details(&planned.result, styler);

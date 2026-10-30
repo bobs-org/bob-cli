@@ -949,6 +949,7 @@ pub(super) fn plan_pomodoro_start_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -1153,6 +1154,7 @@ fn plan_override_restart_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -1706,6 +1708,7 @@ fn plan_override_swap_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -2455,6 +2458,7 @@ fn plan_named_pomodoro_start_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,

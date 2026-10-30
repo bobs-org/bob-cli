@@ -475,7 +475,9 @@ pub(super) fn parse_capture_item<'a>(
             super::type_marker::needs_task_error(Some(&marker.name)),
         ));
     }
-    if !super::type_marker::is_new_task(&outcome.parsed) {
+    if !super::type_marker::is_new_task(&outcome.parsed)
+        && !super::type_marker::is_existing_type_marker_subject(&outcome.parsed)
+    {
         return Err(CaptureItemParseError::coded(
             "type_marker_not_applicable",
             type_marker_not_applicable_error(
@@ -559,7 +561,7 @@ fn type_marker_only_error(
 fn type_marker_not_applicable_error(name: &str, kind: &CaptureKind) -> String {
     super::type_marker::type_marker_not_applicable_error(
         name,
-        super::type_marker::TypeMarkerSubject::for_kind(kind),
+        super::type_marker::refusal_subject_for_kind(kind),
     )
 }
 

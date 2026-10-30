@@ -102,9 +102,15 @@ fn only_task_subjects_accept_markers() {
     assert!(execute("Write a note @notes#Ideas t:fix")
         .unwrap_err()
         .contains("writes a plain bullet"));
-    assert!(execute("^sase:fix-x t:fix")
+    // Existing targets accept markers now: whole-item links, Ensure Next,
+    // toggles, and relationship-only owners retype.
+    assert!(execute("^sase:fix-x t:fix").is_ok());
+    assert!(execute("@sase+fix-x t:fix").is_ok());
+    assert!(execute("@sase+fix-x! t:fix").is_ok());
+    // Link-close suffixes still refuse as closes.
+    assert!(execute("@sase:fix-x=x t:fix")
         .unwrap_err()
-        .contains("not supported yet"));
+        .contains("closes a Pomodoro"));
 }
 
 #[test]

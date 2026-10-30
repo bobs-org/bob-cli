@@ -1051,6 +1051,7 @@ fn plan_reset_link_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,
@@ -1197,6 +1198,7 @@ fn plan_reset_task_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,
@@ -1316,6 +1318,7 @@ fn plan_reset_whole_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -1540,6 +1543,7 @@ pub(super) fn plan_pomodoro_close_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -2295,6 +2299,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,
@@ -2613,6 +2618,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,

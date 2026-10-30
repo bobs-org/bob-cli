@@ -479,6 +479,7 @@ fn plan_ref_item(
     let planned = PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -597,6 +598,59 @@ pub(super) fn plan_capture_item(
     // `@@route+id` items land as empty SubBullet owners and take the
     // same path so they write the edge without an empty bullet.
     if let Some(target) = relationship_only_existing_owner(&parsed) {
+        if let Some(marker) = parsed.type_marker.clone() {
+            let (route, block_id) = match &target {
+                ParsedDependencyTarget {
+                    route: Some(route),
+                    block_id: Some(block_id),
+                    ..
+                } => (route.clone(), block_id.clone()),
+                _ => {
+                    return Err(CaptureError::io(
+                        "dependency invariant failed: existing-task target without route and block ID",
+                    ));
+                }
+            };
+            let relative = relative_target(Some(&route));
+            let absolute = request.bob_dir.join(&relative);
+            let original_line = read_staged_task_line(
+                planner,
+                &request.bob_dir,
+                &absolute,
+                &route,
+                &block_id,
+            )?;
+            let applied = task_theme_context.apply_type_marker_to_existing(
+                planner,
+                &absolute,
+                &route,
+                &block_id,
+                &marker.name,
+                marker.literal,
+                None,
+                None,
+                warnings,
+            )?;
+            let mut planned = plan_dependency_only_item(
+                request,
+                &parsed,
+                &target,
+                planner,
+                warnings,
+                dependency_ctx,
+            )?;
+            let relocation = task_theme_context.relocate_for_retype(
+                planner,
+                &block_id,
+                &applied.type_key,
+                &applied.type_name,
+                warnings,
+            )?;
+            planned.result.task_theme = Some(applied.summary);
+            planned.result.type_relocation = relocation;
+            planned.result.previous_task_line = Some(original_line);
+            return Ok(planned);
+        }
         return plan_dependency_only_item(
             request,
             &parsed,
@@ -757,6 +811,31 @@ pub(super) fn plan_capture_item(
         let created = date_string(today);
         let relative_target = relative_target(Some(route));
         let target = request.bob_dir.join(&relative_target);
+        // Explicit `t:` retypes before the toggle so bare placement uses
+        // the new type; the marker is the authority over any named retype.
+        let marker_retype = if let Some(marker) = parsed.type_marker.clone() {
+            let original = read_staged_task_line(
+                planner,
+                &request.bob_dir,
+                &target,
+                route,
+                block_id,
+            )?;
+            let applied = task_theme_context.apply_type_marker_to_existing(
+                planner,
+                &target,
+                route,
+                block_id,
+                &marker.name,
+                marker.literal,
+                pomodoro_name.as_deref(),
+                pomodoro_name.as_deref(),
+                warnings,
+            )?;
+            Some((original, applied))
+        } else {
+            None
+        };
         let (mut note_plan, link_guard) = plan_task_toggle_capture(
             planner,
             &request.bob_dir,
@@ -772,7 +851,30 @@ pub(super) fn plan_capture_item(
             task_theme_context,
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
-        let task_theme = if link_guard.is_none()
+        // Marker relocation restores agreement unless Ensure Next already
+        // moved the link to its typed placement.
+        let mut marker_relocation = None;
+        let mut marker_theme = None;
+        let mut marker_previous = None;
+        if let Some((original, applied)) = marker_retype {
+            let needs_relocation = !(*intent == TaskToggleIntent::EnsureNext
+                && link_guard.is_none());
+            if needs_relocation {
+                marker_relocation = task_theme_context.relocate_for_retype(
+                    planner,
+                    block_id,
+                    &applied.type_key,
+                    &applied.type_name,
+                    warnings,
+                )?;
+            }
+            marker_theme = Some(applied.summary);
+            marker_previous = Some(original);
+        }
+        let has_marker = marker_theme.is_some();
+        let d6_theme = if has_marker {
+            None
+        } else if link_guard.is_none()
             && *intent == TaskToggleIntent::EnsureNext
             && pomodoro_name.is_some()
         {
@@ -810,6 +912,19 @@ pub(super) fn plan_capture_item(
             )
         })?;
         let link_consumed = link_guard.is_some();
+        // An explicit `t:` retype reports its own theme and ledger move;
+        // the original line (before the marker) is the previous task line.
+        let (task_theme, type_relocation, previous_task_line) = if has_marker {
+            (
+                marker_theme,
+                marker_relocation,
+                marker_previous
+                    .map(Some)
+                    .unwrap_or_else(|| Some(toggle.previous_task_line.clone())),
+            )
+        } else {
+            (d6_theme, None, Some(toggle.previous_task_line.clone()))
+        };
         return Ok(PlannedCaptureItem {
             result: CaptureItemResult {
                 ok: true,
@@ -822,6 +937,7 @@ pub(super) fn plan_capture_item(
                 text: String::new(),
                 task_line: toggle.task_line.clone(),
                 task_theme,
+                type_relocation,
                 kind: capture_kind_label(&parsed.kind),
                 created,
                 scheduled: None,
@@ -843,7 +959,7 @@ pub(super) fn plan_capture_item(
                 parent_status_name: None,
                 toggle_direction: (!link_consumed)
                     .then(|| toggle.direction.label()),
-                previous_task_line: Some(toggle.previous_task_line.clone()),
+                previous_task_line,
                 status_symbol: Some(toggle.status_symbol),
                 status_name: Some(toggle.status_name.clone()),
                 previous_status_symbol: Some(toggle.previous_status_symbol),
@@ -934,6 +1050,31 @@ pub(super) fn plan_capture_item(
             Some(name) => capture_task_toggle::PomodoroLinkTarget::Named(name),
             None => capture_task_toggle::PomodoroLinkTarget::Implicit,
         };
+        // Explicit `t:` retypes before the link so bare placement uses the
+        // new type; the marker replaces the named-capture retype.
+        let marker_retype = if let Some(marker) = parsed.type_marker.clone() {
+            let original = read_staged_task_line(
+                planner,
+                &request.bob_dir,
+                &target,
+                route,
+                block_id,
+            )?;
+            let applied = task_theme_context.apply_type_marker_to_existing(
+                planner,
+                &target,
+                route,
+                block_id,
+                &marker.name,
+                marker.literal,
+                pomodoro_name.as_deref(),
+                pomodoro_name.as_deref(),
+                warnings,
+            )?;
+            Some((original, applied))
+        } else {
+            None
+        };
         let mut planned = plan_existing_task_pomodoro_link_item(
             planner,
             &request.bob_dir,
@@ -948,7 +1089,21 @@ pub(super) fn plan_capture_item(
             warnings,
             dependency_ctx,
             Some(task_theme_context),
+            marker_retype.is_some(),
         )?;
+        if let Some((original, applied)) = marker_retype {
+            let relocation = task_theme_context.relocate_for_retype(
+                planner,
+                block_id,
+                &applied.type_key,
+                &applied.type_name,
+                warnings,
+            )?;
+            planned.result.task_theme = Some(applied.summary);
+            planned.result.type_relocation = relocation;
+            planned.result.previous_task_line = Some(original);
+            return Ok(planned);
+        }
         // This capture-only boundary keeps `bob ref today` on the shared
         // link planner's explicit never-deliberate path.
         if pomodoro_name.is_some() && planned.result.link_guard.is_none() {
@@ -1903,6 +2058,7 @@ pub(super) fn plan_capture_item(
             text: parsed.body,
             task_line: block_first_line,
             task_theme,
+            type_relocation: None,
             kind: kind_label,
             created,
             scheduled,
@@ -2177,6 +2333,24 @@ fn close_star_marker(parsed: &ParsedCaptureText) -> String {
             .map(|route| format!("@{route}:id=x"))
             .unwrap_or_else(|| "@route:id=x".to_string()),
     }
+}
+
+/// Read one staged task line for `t:` retype previous tracking: the
+/// original line before the marker stages its field edit.
+fn read_staged_task_line(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    target: &Path,
+    route: &str,
+    block_id: &str,
+) -> Result<String, CaptureError> {
+    let contents = planner.read_existing(target)?;
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let task = scan
+        .lookup_capture_task(route, block_id)
+        .map_err(CaptureError::io)?;
+    line_text_at(&contents, task.line_index).map(str::to_string)
 }
 
 /// Existing-task relationship with no body, authored children, or

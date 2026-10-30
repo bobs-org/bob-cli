@@ -83,4 +83,5 @@ mod task_toggle;
 mod template;
 mod template_expand;
 mod theme_warnings;
+mod type_marker_existing;
 mod typed_placement;

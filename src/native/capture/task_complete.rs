@@ -61,6 +61,7 @@ pub(super) fn plan_task_complete_item(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,

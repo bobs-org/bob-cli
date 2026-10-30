@@ -11,19 +11,15 @@ use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command as ClapCommand};
 use serde_json::{json, Value};
 
 use crate::native::{
-    capture::{line_spans, list_item_body, nearest_shallower_list_item_parent},
-    capture_pomodoros::{self, PomodoroState},
-    capture_task_toggle::{child_block_end_line, move_subtree_to_entry},
+    capture_pomodoros::{self},
     collect_done::link_repair_markdown_files,
     config::{self},
     env as bob_env,
     ob::{self, ChildEnv},
-    plan_budget::{normalize_component, split_components},
     pomodoro,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
-    pomodoro_themes::{self, routing, Catalog},
+    pomodoro_themes::{self, Catalog},
     style::Styler,
-    task_dependencies,
     task_status_hooks_write::{
         apply_plan, capture_required, planned_write, ApplyOutcome,
         ApplySession, CaptureError, InputKind, InputSnapshot, ReasonCode,
@@ -725,198 +721,38 @@ fn compute_move_relocation(
         let Some(block_id) = block_id else {
             continue;
         };
-        // Find live link by block id in current day contents.
-        let Some(found) = find_live_link(&day_contents, &block_id) else {
-            continue;
-        };
-        // Build relocation entries from current day contents.
-        let scan = capture_pomodoros::scan(&day_contents);
-        let mut entries = Vec::new();
-        let mut ledger_keys = Vec::new();
-        for entry in &scan.entries {
-            let open = entry.state == PomodoroState::Open;
-            let running = open && entry.time_range.is_some();
-            let links = if open {
-                entry_child_links(&day_contents, entry.line).len()
-            } else {
-                0
-            };
-            if open && let Some(name) = entry.name.as_deref() {
-                for component in split_components(name) {
-                    let key = normalize_component(&component);
-                    if !key.is_empty() {
-                        ledger_keys.push(key);
-                    }
-                }
+        // Shared D8 applier keeps the live link agreeing with the moved
+        // task's new type; capture `t:` retypes call the same helper.
+        match crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
+            &day_contents,
+            &block_id,
+            &after_key,
+            &after_name,
+            &sources,
+            cfg.max_themes(),
+            cfg.strict(),
+        ) {
+            Ok(None) => continue,
+            Ok(Some((updated, info))) => {
+                day_contents = updated;
+                changed = true;
+                relocated.push(RelocatedInfo {
+                    route: mv
+                        .dest_path
+                        .with_extension("")
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    block_id: block_id.clone(),
+                    from: info.from,
+                    to: info.to,
+                    type_name: after_name.clone(),
+                });
             }
-            entries.push(routing::RelocateEntry {
-                name: entry.name.clone(),
-                open,
-                running,
-                links,
-            });
-        }
-        let live_index = scan
-            .entries
-            .iter()
-            .position(|entry| entry.line == found.entry_line);
-        let Some(live_index) = live_index else {
-            continue;
-        };
-        let exempt: Vec<String> = sources.exempt.iter().cloned().collect();
-        let exempt_set: std::collections::BTreeSet<String> = exempt
-            .iter()
-            .map(|value| normalize_component(value))
-            .collect();
-        let themes_before = ledger_keys
-            .iter()
-            .filter(|key| !exempt_set.contains(key.as_str()))
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        let outcome = routing::relocate(&routing::RelocateInput {
-            entries: &entries,
-            live_link: Some(live_index),
-            type_key: &after_key,
-            type_name: &after_name,
-            sources: &sources,
-            ledger_keys: &ledger_keys,
-            themes_before,
-            cap: cfg.max_themes(),
-            strict: cfg.strict(),
-        });
-        match outcome {
-            routing::RelocateOutcome::Unchanged => continue,
-            routing::RelocateOutcome::Refused { .. } => {
+            Err(refusal) => {
                 return Err(format!(
-                    "plan.strict: {after_name} would be type {} of {} · nothing written",
-                    themes_before + 1,
-                    cfg.max_themes()
+                    "plan.strict: {} would be type {} of {} · nothing written",
+                    refusal.name, refusal.count, refusal.cap
                 ));
-            }
-            routing::RelocateOutcome::RenameEntry { index, new_name }
-            | routing::RelocateOutcome::RenamePlaceholder { index, new_name } =>
-            {
-                let Some(entry) = scan.entries.get(index) else {
-                    continue;
-                };
-                let from = entry.name.clone();
-                match rename_entry(&day_contents, entry.line, &new_name) {
-                    Some(updated) => {
-                        day_contents = updated;
-                        changed = true;
-                        relocated.push(RelocatedInfo {
-                            route: mv
-                                .dest_path
-                                .with_extension("")
-                                .to_string_lossy()
-                                .replace('\\', "/"),
-                            block_id: block_id.clone(),
-                            from,
-                            to: new_name,
-                            type_name: after_name.clone(),
-                        });
-                    }
-                    None => continue,
-                }
-            }
-            routing::RelocateOutcome::AppendComponent { index, new_name } => {
-                let Some(entry) = scan.entries.get(index) else {
-                    continue;
-                };
-                let from = entry.name.clone();
-                match rename_entry(&day_contents, entry.line, &new_name) {
-                    Some(updated) => {
-                        day_contents = updated;
-                        changed = true;
-                        relocated.push(RelocatedInfo {
-                            route: mv
-                                .dest_path
-                                .with_extension("")
-                                .to_string_lossy()
-                                .replace('\\', "/"),
-                            block_id: block_id.clone(),
-                            from,
-                            to: new_name,
-                            type_name: after_name.clone(),
-                        });
-                    }
-                    None => continue,
-                }
-            }
-            routing::RelocateOutcome::MoveTo { from, to } => {
-                let Some(source_entry) = scan.entries.get(from) else {
-                    continue;
-                };
-                let Some(dest_entry) = scan.entries.get(to) else {
-                    continue;
-                };
-                let from_name = source_entry.name.clone();
-                let to_name = dest_entry
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| after_name.clone());
-                // Locate link line again in current contents.
-                let Some(link) = find_live_link(&day_contents, &block_id)
-                else {
-                    continue;
-                };
-                match move_subtree_to_entry(
-                    &day_contents,
-                    link.line_index,
-                    link.subtree_end,
-                    dest_entry.line - 1,
-                ) {
-                    Ok((updated, _)) => {
-                        day_contents = updated;
-                        changed = true;
-                        relocated.push(RelocatedInfo {
-                            route: mv
-                                .dest_path
-                                .with_extension("")
-                                .to_string_lossy()
-                                .replace('\\', "/"),
-                            block_id: block_id.clone(),
-                            from: from_name,
-                            to: to_name,
-                            type_name: after_name.clone(),
-                        });
-                    }
-                    Err(_) => continue,
-                }
-            }
-            routing::RelocateOutcome::CreateBelow { from, name } => {
-                let Some(source_entry) = scan.entries.get(from) else {
-                    continue;
-                };
-                let from_name = source_entry.name.clone();
-                let Some(link) = find_live_link(&day_contents, &block_id)
-                else {
-                    continue;
-                };
-                match create_below_and_move(
-                    &day_contents,
-                    source_entry.line,
-                    link.line_index,
-                    link.subtree_end,
-                    &name,
-                ) {
-                    Some(updated) => {
-                        day_contents = updated;
-                        changed = true;
-                        relocated.push(RelocatedInfo {
-                            route: mv
-                                .dest_path
-                                .with_extension("")
-                                .to_string_lossy()
-                                .replace('\\', "/"),
-                            block_id: block_id.clone(),
-                            from: from_name,
-                            to: name.clone(),
-                            type_name: after_name.clone(),
-                        });
-                    }
-                    None => continue,
-                }
             }
         }
     }
@@ -924,218 +760,6 @@ fn compute_move_relocation(
         Ok((Some((day_rel, day_contents)), relocated))
     } else {
         Ok((None, relocated))
-    }
-}
-
-struct LiveLink {
-    entry_line: usize,
-    line_index: usize,
-    subtree_end: usize,
-}
-
-fn find_live_link(day_contents: &str, block_id: &str) -> Option<LiveLink> {
-    let spans = line_spans(day_contents);
-    let scan = capture_pomodoros::scan(day_contents);
-    let mut found: Option<LiveLink> = None;
-    for entry in &scan.entries {
-        if entry.state != PomodoroState::Open {
-            continue;
-        }
-        let entry_index = entry.line.saturating_sub(1);
-        if entry_index >= spans.len() {
-            continue;
-        }
-        let end = child_block_end_line(&spans, entry_index);
-        for line_index in
-            entry_index + 1..=end.min(spans.len().saturating_sub(1))
-        {
-            if nearest_shallower_list_item_parent(&spans, line_index)
-                != Some(entry_index)
-            {
-                continue;
-            }
-            let text = spans[line_index].text;
-            let Some(body) = list_item_body(text).map(str::trim) else {
-                continue;
-            };
-            // Match dedicated link whose block id equals target.
-            for span in task_dependencies::block_link_spans(text) {
-                if span.struck || span.embedded {
-                    continue;
-                }
-                if span.block_id == block_id {
-                    // Dedicated: body is exactly the link token.
-                    let token = &text[span.token_start..span.end];
-                    let trimmed_body = body.trim();
-                    // Allow exact match or body starting with token?
-                    // Require dedicated (sole content) like find_movable.
-                    if trimmed_body == token.trim()
-                        || trimmed_body
-                            == format!("[[{}#^{}]]", span.target, span.block_id)
-                                .as_str()
-                    {
-                        if found.is_some() {
-                            return None;
-                        }
-                        let subtree_end =
-                            child_block_end_line(&spans, line_index);
-                        found = Some(LiveLink {
-                            entry_line: entry.line,
-                            line_index,
-                            subtree_end,
-                        });
-                    } else if trimmed_body.contains(&span.block_id)
-                        && let Some(inside) = trimmed_body
-                            .strip_prefix("[[")
-                            .and_then(|rest| rest.strip_suffix("]]"))
-                        && let Some((_, id)) =
-                            task_dependencies::parse_block_link_inside(inside)
-                        && id == block_id
-                    {
-                        // Fallback: body contains block id and parses as
-                        // single link (covers alias-free dedicated links
-                        // with trailing spaces already trimmed).
-                        if found.is_some() {
-                            return None;
-                        }
-                        let subtree_end =
-                            child_block_end_line(&spans, line_index);
-                        found = Some(LiveLink {
-                            entry_line: entry.line,
-                            line_index,
-                            subtree_end,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    found
-}
-
-fn entry_child_links(
-    day_contents: &str,
-    entry_line: usize,
-) -> Vec<(String, String)> {
-    let spans = line_spans(day_contents);
-    if entry_line == 0 || entry_line > spans.len() {
-        return Vec::new();
-    }
-    let entry_index = entry_line - 1;
-    if entry_index >= spans.len() {
-        return Vec::new();
-    }
-    let end = child_block_end_line(&spans, entry_index);
-    let mut links = Vec::new();
-    for line_index in entry_index + 1..=end.min(spans.len().saturating_sub(1)) {
-        if nearest_shallower_list_item_parent(&spans, line_index)
-            != Some(entry_index)
-        {
-            continue;
-        }
-        let text = spans[line_index].text;
-        let Some(body) = list_item_body(text).map(str::trim) else {
-            continue;
-        };
-        if !(body.starts_with("[[") && body.ends_with("]]")) {
-            continue;
-        }
-        let inside = &body[2..body.len().saturating_sub(2)];
-        let Some((target, block_id)) =
-            task_dependencies::parse_block_link_inside(inside)
-        else {
-            continue;
-        };
-        if target.is_empty() {
-            continue;
-        }
-        links.push((target, block_id));
-    }
-    links
-}
-
-fn rename_entry(
-    day_contents: &str,
-    entry_line: usize,
-    new_name: &str,
-) -> Option<String> {
-    let spans = line_spans(day_contents);
-    let entry_index = entry_line.checked_sub(1)?;
-    let line = spans.get(entry_index)?.text;
-    let base = capture_pomodoros::without_name_tail(line);
-    let mut updated =
-        String::with_capacity(day_contents.len() + new_name.len() + 4);
-    for (index, span) in spans.iter().enumerate() {
-        let start = if index == 0 { 0 } else { spans[index - 1].end };
-        if index == entry_index {
-            // Preserve original line ending.
-            let full = &day_contents[start..span.end];
-            let ending = if full.ends_with("\r\n") {
-                "\r\n"
-            } else if full.ends_with('\n') {
-                "\n"
-            } else {
-                ""
-            };
-            updated.push_str(base.trim_end_matches([' ', '\t']));
-            updated.push_str(" — ");
-            updated.push_str(new_name);
-            updated.push_str(ending);
-        } else {
-            updated.push_str(&day_contents[start..span.end]);
-        }
-    }
-    Some(updated)
-}
-
-fn create_below_and_move(
-    day_contents: &str,
-    source_entry_line: usize,
-    link_line: usize,
-    subtree_end: usize,
-    new_name: &str,
-) -> Option<String> {
-    let spans = line_spans(day_contents);
-    let source_index = source_entry_line.checked_sub(1)?;
-    if source_index >= spans.len() {
-        return None;
-    }
-    let source_end = child_block_end_line(&spans, source_index);
-    let placeholder =
-        capture_pomodoros::format_named_placeholder_line(new_name);
-    // Insert placeholder directly below source block.
-    let insert_offset = spans
-        .get(source_end)
-        .map(|span| span.end)
-        .unwrap_or_else(|| day_contents.len());
-    let ending = if day_contents[..insert_offset].ends_with("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
-    let with_placeholder = format!(
-        "{}{placeholder}{ending}{}",
-        &day_contents[..insert_offset],
-        &day_contents[insert_offset..]
-    );
-    // Re-scan to find adjusted indices.
-    let new_spans = line_spans(&with_placeholder);
-    // Link moved down by one if it was at or below insertion? Insertion
-    // is after source block, and link is inside source block (before
-    // insertion), so link indices unchanged. New entry is at source_end+1.
-    let new_entry_index = source_end + 1;
-    // Find link again (same index, since insertion after).
-    if link_line >= new_spans.len() {
-        return None;
-    }
-    match move_subtree_to_entry(
-        &with_placeholder,
-        link_line,
-        subtree_end,
-        new_entry_index,
-    ) {
-        Ok((updated, _)) => Some(updated),
-        Err(_) => None,
     }
 }
 

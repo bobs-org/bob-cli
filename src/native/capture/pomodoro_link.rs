@@ -647,6 +647,7 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
     mut task_theme_context: Option<&mut CaptureTaskThemeContext>,
+    skip_named_retype: bool,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let (mut note_plan, link_guard) = plan_pomodoro_link_capture(
         planner,
@@ -663,7 +664,8 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
         task_theme_context.as_deref_mut(),
     )?;
     let mut task_theme = None;
-    if link_guard.is_none()
+    if !skip_named_retype
+        && link_guard.is_none()
         && !matches!(
             ledger_target,
             capture_task_toggle::PomodoroLinkTarget::Implicit
@@ -712,6 +714,7 @@ fn planned_item_from_pomodoro_link_plan(
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
+            type_relocation: None,
             ok: true,
             dry_run,
             routed: true,
