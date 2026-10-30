@@ -17,22 +17,25 @@ pub(crate) fn build_cli() -> ClapCommand {
         .about("Project Google Calendar events onto today's daily note")
         .long_about(
             "Google Calendar → daily-note Event Tasks: one read-only login \
-             through gog, then list and sync (later) write accepted events \
-             above today's Pomodoros. This phase ships calendars, doctor, \
-             login, and logout.",
+             through gog, then list accepted events and preview their roots. \
+             Sync writes them above today's Pomodoros in a later phase.",
         )
         .after_help(top_after_help())
         .disable_help_flag(true)
+        .arg(omitted_arg())
+        .arg(bob_dir_arg())
+        .arg(day_arg())
+        .arg(list_format_arg())
         .arg(help_arg())
         .subcommand(calendars_command())
         .subcommand(doctor_command())
+        .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(logout_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command prints this help. `list` and \
-     `sync` arrive in a later release.\n\nExamples:\n  bob gcal login              One-time read-only Calendar consent\n  bob gcal login -c PATH      Store a Desktop-app client JSON first\n  bob gcal login -m           Browserless sign-in (paste the redirect URL)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              One-time read-only Calendar consent\n  bob gcal login -c PATH      Store a Desktop-app client JSON first\n  bob gcal login -m           Browserless sign-in (paste the redirect URL)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -49,6 +52,24 @@ fn calendars_command() -> ClapCommand {
 
 fn calendars_after_help() -> &'static str {
     "Examples:\n  bob gcal calendars\n  bob gcal calendars -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+}
+
+fn list_command() -> ClapCommand {
+    ClapCommand::new("list")
+        .about(
+            "List a local day of events and show how Bob would classify them",
+        )
+        .disable_help_flag(true)
+        .arg(omitted_arg())
+        .arg(bob_dir_arg())
+        .arg(day_arg())
+        .arg(list_format_arg())
+        .arg(help_arg())
+        .after_help(list_after_help())
+}
+
+fn list_after_help() -> &'static str {
+    "`-a` also shows declined, unanswered, and out-of-scope events with their reasons. Root candidates are validated against the vault; warnings show why Bob fell back.\n\nExamples:\n  bob gcal\n  bob gcal list -D tomorrow\n  bob gcal list -D 2026-10-30 -f json\n  bob gcal list -a\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn doctor_command() -> ClapCommand {
@@ -172,6 +193,24 @@ fn list_format_arg() -> Arg {
         .help("Output format: table or json")
 }
 
+fn omitted_arg() -> Arg {
+    Arg::new("all")
+        .long("all")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help("Also show omitted events with the reason")
+}
+
+fn day_arg() -> Arg {
+    Arg::new("day")
+        .long("day")
+        .short('D')
+        .value_name("DAY")
+        .default_value("today")
+        .value_parser(OsStringValueParser::new())
+        .help("Local day: today, tomorrow, yesterday, or YYYY-MM-DD")
+}
+
 fn manual_arg() -> Arg {
     Arg::new("manual")
         .long("manual")
@@ -246,6 +285,37 @@ impl ListFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CalendarsArgs {
     pub format: ListFormat,
+}
+
+/// Typed read-only `list` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListArgs {
+    pub bob_dir: Option<PathBuf>,
+    pub day: String,
+    pub include_omitted: bool,
+    pub format: ListFormat,
+}
+
+impl ListArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            day: matches
+                .get_one::<OsString>("day")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .unwrap_or_else(|| "today".to_string()),
+            include_omitted: matches.get_flag("all"),
+            format: ListFormat::from_matches(matches),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+
+    pub(crate) fn error_format(&self) -> &'static str {
+        self.format.as_str()
+    }
 }
 
 impl CalendarsArgs {

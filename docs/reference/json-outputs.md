@@ -246,6 +246,7 @@ checkout: they expose no `--format json` or `--json` flag.
 | `bob ref jobs list` | `-f json` | Queued background jobs plus a `summary` | `schema_version: 1` | [Ref jobs](../ref-jobs.md) |
 | `bob ref jobs run` | Human only | Clips pending jobs through the shared ingest | No JSON flag | [Ref jobs](../ref-jobs.md) |
 | `bob gcal calendars` | `-f json` (default is `table`) | Calendars with id, name, access role, colour, sync flag, and mapped root | `schema_version: 1` | [Bob Gcal](../gcal.md) |
+| `bob gcal` and `bob gcal list` | `-f json` (default is `table`); `-a` adds omitted events | Local-day event snapshot with RSVP, inclusion, selected root and warnings | `schema_version: 1`, `day`, `calendars`, `events`, `counts` | [Bob Gcal](../gcal.md) |
 | `bob gcal doctor` | `-f json` | gog, client, account, token, calendars, default root, today, journal, and writer checks (`id`, `status`, `summary`, `fix`) | `schema_version: 1` | [Bob Gcal](../gcal.md) |
 | `bob gcal login` | `-f json` | One-time setup report: `already_connected`, `account`, `client`, calendar counts | `schema_version: 1` | [Bob Gcal](../gcal.md) |
 | `bob gcal logout` | `-f json` | Removed grant: `account`, `client`, `revoke_url` | `schema_version: 1` | [Bob Gcal](../gcal.md) |

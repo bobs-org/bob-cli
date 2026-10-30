@@ -29,7 +29,7 @@ fn list(args: &CalendarsArgs) -> Result<(), GcalError> {
     Ok(())
 }
 
-fn resolve_account(
+pub(crate) fn resolve_account(
     gog: &Gog,
     config: &GcalConfig,
 ) -> Result<String, GcalError> {

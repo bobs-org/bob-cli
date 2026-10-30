@@ -51,7 +51,7 @@ impl GcalConfig {
         Self::from_settings(settings)
     }
 
-    fn from_settings(
+    pub(crate) fn from_settings(
         settings: bob_config::GcalSettings,
     ) -> Result<Self, GcalError> {
         if let Some(account) = settings.account.as_deref()
@@ -132,6 +132,22 @@ impl GcalConfig {
             .find(|calendar| calendar.id == calendar_id)
             .and_then(|calendar| calendar.root.as_deref())
             .unwrap_or(&self.root)
+    }
+
+    /// Configured per-calendar override, without falling through to the default.
+    pub(crate) fn calendar_root(&self, calendar_id: &str) -> Option<&str> {
+        self.calendars
+            .iter()
+            .find(|calendar| calendar.id == calendar_id)
+            .and_then(|calendar| calendar.root.as_deref())
+    }
+
+    /// Root mapped to a Google event colour id, if configured.
+    pub(crate) fn color_root(&self, color_id: &str) -> Option<&str> {
+        self.colors.iter().find_map(|(key, root)| {
+            (bob_config::color_id_for_key(key) == Some(color_id))
+                .then_some(root.as_str())
+        })
     }
 
     /// Whether `calendar_id` is in the configured sync set.

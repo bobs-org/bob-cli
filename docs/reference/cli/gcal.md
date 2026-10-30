@@ -9,24 +9,45 @@ description: "Project Google Calendar events onto today's daily note"
 Project Google Calendar events onto today's daily note
 
 ```text title="bob gcal --help"
-Google Calendar → daily-note Event Tasks: one read-only login through gog, then list and sync (later) write accepted events above today's Pomodoros. This phase ships calendars, doctor, login, and logout.
+Google Calendar → daily-note Event Tasks: one read-only login through gog, then list accepted events and preview their roots. Sync writes them above today's Pomodoros in a later phase.
 
-Usage: bob gcal [COMMAND]
+Usage: bob gcal [OPTIONS] [COMMAND]
 
 Commands:
   calendars  List Google calendars with id, access role, colour, and mapped root
   doctor     Check the Calendar setup: gog, client, account, token, calendars, default root, today, journal, and writer
+  list       List a local day of events and show how Bob would classify them
   login      One-time read-only Google Calendar consent through gog
   logout     Remove Bob's Calendar grant only; prints the Google revoke URL
   help       Print this message or the help of the given subcommand(s)
 
 Options:
+  -a, --all
+          Also show omitted events with the reason
+
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -D, --day <DAY>
+          Local day: today, tomorrow, yesterday, or YYYY-MM-DD
+          
+          [default: today]
+
+  -f, --format <FORMAT>
+          Output format: table or json
+          
+          [default: table]
+          [possible values: table, json]
+
   -h, --help
           Show help
 
-Running `bob gcal` with no command prints this help. `list` and `sync` arrive in a later release.
+Running `bob gcal` with no command runs `bob gcal list`.
 
 Examples:
+  bob gcal                    Show today's events and what sync would do
+  bob gcal -D tomorrow        List tomorrow in Bob's timezone
+  bob gcal -a -f json         Include omitted events as JSON
   bob gcal login              One-time read-only Calendar consent
   bob gcal login -c PATH      Store a Desktop-app client JSON first
   bob gcal login -m           Browserless sign-in (paste the redirect URL)

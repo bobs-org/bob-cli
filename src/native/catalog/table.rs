@@ -892,6 +892,17 @@ pub(crate) const ENTRIES: &[Row] = &[
     Row {
         network: true,
         ..reads(
+            "gcal-list",
+            &["gcal", "list"],
+            "List Google Calendar events",
+            &["calendar", "google", "gcal", "events", "list"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        network: true,
+        ..reads(
             "gkeep-list",
             &["gkeep", "list"],
             "Keep inbox",

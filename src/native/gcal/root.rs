@@ -3,10 +3,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::native::{
-    pomodoro_homes::{path_string, DiskHomeSource, Home, HomeResolver},
+    parent_notes,
+    pomodoro_homes::{path_string, DiskHomeSource, Home, HomeResolver, Hue},
     task_root::is_invalid_root_value,
     vault_links::LinkResolution,
 };
+
+use super::{config::GcalConfig, model::GcalEvent};
 
 /// A resolved, valid root candidate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +25,163 @@ pub(crate) struct RootRejection {
     pub reason: &'static str,
     pub message: String,
     pub fix: String,
+}
+
+/// Chosen root and user-facing provenance for one Event Task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EventRoot {
+    pub value: Option<String>,
+    pub source: Option<String>,
+    pub hue: Option<Hue>,
+    pub warnings: Vec<String>,
+    pub title: String,
+}
+
+/// Choose the first valid root in the fixed precedence order.
+pub(crate) fn choose_event_root(
+    vault: &Path,
+    daily_rel: &Path,
+    event: &GcalEvent,
+    calendar_name: &str,
+    config: &GcalConfig,
+) -> EventRoot {
+    let mut warnings = Vec::new();
+    let mut title = event.title.clone();
+
+    if let Some(route) = event
+        .title_route_hint
+        .as_deref()
+        .or(event.route_hint.as_deref())
+    {
+        match parent_notes::resolve_parent(vault, route) {
+            Ok(parent) => {
+                match validate_root_candidate(vault, daily_rel, &parent.route) {
+                    Ok(target) => {
+                        if event.title_route_hint.as_deref() == Some(route) {
+                            title = strip_title_route(&event.title, route);
+                        }
+                        return chosen(
+                            target,
+                            format!("@{route}"),
+                            warnings,
+                            title,
+                        );
+                    }
+                    Err(rejection) => warnings.push(rejection_message(
+                        &format!("@{route}"),
+                        &rejection,
+                    )),
+                }
+            }
+            Err(error) => {
+                let mut warning = format!(
+                    "route_unknown (@{route}): {}",
+                    error.message().replace('\n', "; ")
+                );
+                if let Err(rejection) =
+                    validate_root_candidate(vault, daily_rel, route)
+                {
+                    warning.push_str("; ");
+                    warning.push_str(&rejection_message(
+                        &format!("@{route}"),
+                        &rejection,
+                    ));
+                }
+                warnings.push(warning);
+            }
+        }
+    }
+
+    if let Some(color_id) = event.color_id.as_deref()
+        && let Some(root) = config.color_root(color_id)
+    {
+        let color = crate::native::config::color_name_for_id(color_id)
+            .unwrap_or(color_id);
+        match validate_root_candidate(vault, daily_rel, root) {
+            Ok(target) => {
+                return chosen(
+                    target,
+                    format!("colour {color}"),
+                    warnings,
+                    title,
+                );
+            }
+            Err(rejection) => warnings.push(rejection_message(
+                &format!("colour {color}"),
+                &rejection,
+            )),
+        }
+    }
+
+    if let Some(root) = config.calendar_root(&event.key.calendar_id) {
+        match validate_root_candidate(vault, daily_rel, root) {
+            Ok(target) => {
+                return chosen(
+                    target,
+                    format!("calendar {calendar_name}"),
+                    warnings,
+                    title,
+                );
+            }
+            Err(rejection) => warnings.push(rejection_message(
+                &format!("calendar {calendar_name}"),
+                &rejection,
+            )),
+        }
+    }
+
+    match validate_root_candidate(vault, daily_rel, config.root()) {
+        Ok(target) => chosen(target, "default".to_string(), warnings, title),
+        Err(rejection) => {
+            warnings.push(rejection_message("default", &rejection));
+            EventRoot {
+                value: None,
+                source: None,
+                hue: None,
+                warnings,
+                title,
+            }
+        }
+    }
+}
+
+fn chosen(
+    target: RootTarget,
+    source: String,
+    warnings: Vec<String>,
+    title: String,
+) -> EventRoot {
+    EventRoot {
+        value: Some(target.name),
+        source: Some(source),
+        hue: target.home.hue,
+        warnings,
+        title,
+    }
+}
+
+fn rejection_message(source: &str, rejection: &RootRejection) -> String {
+    format!(
+        "{source} rejected ({}): {}; fix: {}",
+        rejection.reason, rejection.message, rejection.fix
+    )
+}
+
+fn strip_title_route(title: &str, route: &str) -> String {
+    let token = format!("@{route}");
+    let Some((prefix, suffix)) = title.rsplit_once(char::is_whitespace) else {
+        return "(untitled event)".to_string();
+    };
+    if suffix == token {
+        let prefix = prefix.trim_end();
+        if prefix.is_empty() {
+            "(untitled event)".to_string()
+        } else {
+            prefix.to_string()
+        }
+    } else {
+        title.to_string()
+    }
 }
 
 /// Validate `name` as a `[root::]` value relative to today's daily note.
@@ -98,6 +258,10 @@ pub(crate) fn validate_root_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::config::{GcalCalendarSettings, GcalSettings};
+    use crate::native::gcal::model::GcalEvent;
+    use serde_json::json;
+    use std::collections::BTreeMap;
     use std::fs;
 
     fn write_note(dir: &Path, rel: &str, body: &str) {
@@ -141,5 +305,121 @@ mod tests {
             target.home.kind,
             crate::native::pomodoro_homes::HomeKind::Area
         );
+    }
+
+    fn config(
+        calendar_root: Option<&str>,
+        color_root: Option<&str>,
+        default_root: &str,
+    ) -> GcalConfig {
+        GcalConfig::from_settings(GcalSettings {
+            root: Some(default_root.to_string()),
+            calendars: Some(vec![GcalCalendarSettings {
+                id: "primary".to_string(),
+                root: calendar_root.map(str::to_string),
+            }]),
+            colors: color_root
+                .map(|root| {
+                    BTreeMap::from([("tomato".to_string(), root.to_string())])
+                })
+                .unwrap_or_default(),
+            ..GcalSettings::default()
+        })
+        .expect("config")
+    }
+
+    fn event(
+        title: &str,
+        description: Option<&str>,
+        color_id: Option<&str>,
+    ) -> GcalEvent {
+        let mut value = json!({
+            "id": "event-1",
+            "summary": title,
+            "status": "confirmed",
+            "start": {"dateTime": "2026-10-30T08:00:00-04:00"},
+            "end": {"dateTime": "2026-10-30T09:00:00-04:00"},
+            "attendees": [{"self": true, "responseStatus": "accepted"}]
+        });
+        if let Some(description) = description {
+            value["description"] = json!(description);
+        }
+        if let Some(color_id) = color_id {
+            value["colorId"] = json!(color_id);
+        }
+        GcalEvent::from_google("primary", value).expect("event")
+    }
+
+    fn root_vault() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp vault");
+        for area in ["meet", "body", "job", "health"] {
+            write_note(
+                dir.path(),
+                &format!("{area}.md"),
+                &format!("---\ntype: area\n---\n# {area}\n"),
+            );
+        }
+        dir
+    }
+
+    #[test]
+    fn route_token_precedes_color_calendar_and_default() {
+        let vault = root_vault();
+        let event = event("Dentist @body", Some("@job"), Some("11"));
+        let root = choose_event_root(
+            vault.path(),
+            Path::new("2026/20261030.md"),
+            &event,
+            "Personal",
+            &config(Some("health"), Some("job"), "meet"),
+        );
+        assert_eq!(root.value.as_deref(), Some("body"));
+        assert_eq!(root.source.as_deref(), Some("@body"));
+        assert_eq!(root.title, "Dentist");
+        assert!(root.warnings.is_empty());
+    }
+
+    #[test]
+    fn unknown_title_route_stays_in_title_and_color_wins_next() {
+        let vault = root_vault();
+        let event = event("Dentist @missing", None, Some("11"));
+        let root = choose_event_root(
+            vault.path(),
+            Path::new("2026/20261030.md"),
+            &event,
+            "Personal",
+            &config(Some("health"), Some("job"), "meet"),
+        );
+        assert_eq!(root.value.as_deref(), Some("job"));
+        assert_eq!(root.source.as_deref(), Some("colour tomato"));
+        assert_eq!(root.title, "Dentist @missing");
+        assert!(root.warnings[0].starts_with("route_unknown"));
+    }
+
+    #[test]
+    fn invalid_color_falls_back_to_calendar_and_invalid_default_has_no_root() {
+        let vault = root_vault();
+        let meeting_event = event("Dentist", None, Some("11"));
+        let calendar = choose_event_root(
+            vault.path(),
+            Path::new("2026/20261030.md"),
+            &meeting_event,
+            "Personal",
+            &config(Some("health"), Some("missing"), "meet"),
+        );
+        assert_eq!(calendar.value.as_deref(), Some("health"));
+        assert_eq!(calendar.source.as_deref(), Some("calendar Personal"));
+        assert!(calendar.warnings[0].contains("missing"));
+        assert!(calendar.warnings[0].contains("fix:"));
+
+        let invalid_default = choose_event_root(
+            vault.path(),
+            Path::new("2026/20261030.md"),
+            &event("Dinner", None, None),
+            "Personal",
+            &config(None, None, "missing"),
+        );
+        assert_eq!(invalid_default.value, None);
+        assert!(invalid_default.warnings[0].contains("default rejected"));
     }
 }

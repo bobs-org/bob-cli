@@ -22,7 +22,8 @@ pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use gcal::{
-    load_gcal_config, GcalCalendarSettings, GcalSettings, GcalTentative,
+    color_id_for_key, color_name_for_id, load_gcal_config,
+    GcalCalendarSettings, GcalSettings, GcalTentative,
 };
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
 pub(crate) use relations::{load_relations_config, RelationsConfig};

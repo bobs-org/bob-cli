@@ -2,7 +2,7 @@
 
 mod gcal_support;
 
-use gcal_support::{stderr, stdout, GcalEnv};
+use gcal_support::{stderr, stdout, FakeGog, GcalEnv};
 
 fn assert_no_long_only_option_lines(label: &str, help: &str) {
     for line in help.lines() {
@@ -51,6 +51,7 @@ fn top_help_pins_the_command_surface() {
     for (subcommand, about) in [
         ("calendars", "calendars with id"),
         ("doctor", "Check the Calendar setup"),
+        ("list", "List a local day of events"),
         ("login", "read-only Google Calendar consent"),
         ("logout", "Remove Bob's Calendar grant"),
     ] {
@@ -66,8 +67,10 @@ fn top_help_pins_the_command_surface() {
         );
     }
     assert!(
-        help.contains("Running `bob gcal` with no command prints this help"),
-        "expected no-default note:\n{help}"
+        help.contains(
+            "Running `bob gcal` with no command runs `bob gcal list`"
+        ),
+        "expected list-default note:\n{help}"
     );
     for key in ["BOB_DIR", "BOB_CONFIG_FILE", "BOB_GCAL_GOG"] {
         assert!(help.contains(key), "expected Environment {key}:\n{help}");
@@ -76,6 +79,7 @@ fn top_help_pins_the_command_surface() {
         "bob gcal login",
         "bob gcal login -c PATH",
         "bob gcal login -m",
+        "bob gcal -D tomorrow",
         "bob gcal calendars",
         "bob gcal doctor",
         "bob gcal logout -y",
@@ -93,14 +97,20 @@ fn top_help_pins_the_command_surface() {
 }
 
 #[test]
-fn bare_gcal_prints_help_and_exits_0() {
+fn bare_gcal_lists_today_and_exits_0() {
     let env = GcalEnv::new("bob-cli-gcal-bare");
-    let output = env.command().arg("gcal").output().expect("run bob gcal");
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut command = env.command();
+    let output = fake
+        .install(&mut command)
+        .arg("gcal")
+        .output()
+        .expect("run bob gcal");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    let help = stdout(&output);
+    let listing = stdout(&output);
     assert!(
-        help.contains("Usage:") || help.contains("Usage: bob gcal"),
-        "bare gcal should print help:\n{help}"
+        listing.contains("Google Calendar") && listing.contains("TIME"),
+        "bare gcal should list today's events:\n{listing}"
     );
 }
 
@@ -109,10 +119,36 @@ fn unknown_subcommand_exits_2() {
     let env = GcalEnv::new("bob-cli-gcal-unknown");
     let output = env
         .command()
-        .args(["gcal", "list"])
+        .args(["gcal", "not-a-command"])
         .output()
         .expect("run bob gcal list");
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+}
+
+#[test]
+fn list_help_has_sorted_short_options_and_day_examples() {
+    let env = GcalEnv::new("bob-cli-gcal-list-help");
+    let output = env
+        .command()
+        .args(["gcal", "list", "--help"])
+        .output()
+        .expect("list help");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    assert_text_order(
+        &help,
+        &[
+            "-a, --all",
+            "-b, --bob-dir",
+            "-D, --day",
+            "-f, --format",
+            "-h, --help",
+        ],
+    );
+    for needle in ["bob gcal list -D tomorrow", "YYYY-MM-DD", "BOB_NOW"] {
+        assert!(help.contains(needle), "missing `{needle}`:\n{help}");
+    }
+    assert_no_long_only_option_lines("bob gcal list --help", &help);
 }
 
 #[test]

@@ -183,6 +183,13 @@ def scenario_defaults(name: str) -> dict:
                 "code": 1,
             }
         }
+    elif name == "events_failure":
+        defaults["fail"] = {
+            "events": {
+                "stderr": "fake gog: second page failed",
+                "code": 1,
+            }
+        }
     elif name == "sleep":
         defaults["sleep"] = 2
     return defaults
@@ -225,6 +232,10 @@ def op_name() -> str:
         return "auth_remove"
     if pos[:2] == ["calendar", "calendars"]:
         return "calendars"
+    if pos[:2] == ["calendar", "events"]:
+        return "events"
+    if pos[:2] == ["calendar", "event"]:
+        return "event"
     return "unknown"
 
 
@@ -303,6 +314,20 @@ if op == "calendars":
             "nextPageToken": None,
         }
     )
+    raise SystemExit(0)
+
+if op == "events":
+    fixture = os.environ.get("BOB_GCAL_FAKE_EVENTS")
+    if fixture and Path(fixture).exists():
+        sys.stdout.write(Path(fixture).read_text(encoding="utf-8"))
+        if not Path(fixture).read_text(encoding="utf-8").endswith("\n"):
+            sys.stdout.write("\n")
+    else:
+        dump({"events": [], "nextPageToken": None})
+    raise SystemExit(0)
+
+if op == "event":
+    dump({"event": {"id": pos[2] if len(pos) > 2 else "event"}})
     raise SystemExit(0)
 
 fail(f"fake gog: unknown command {pos}", 2)

@@ -1,22 +1,26 @@
 //! `bob gcal`: Google Calendar events as daily-note Event Tasks.
 //!
-//! This phase ships the skeleton, gog transport, login, logout, doctor,
-//! and calendars. `list` and `sync` arrive in later phases; a bare
-//! `bob gcal` prints help until then.
+//! The read-only `list` command previews the event snapshot and its roots;
+//! later phases add vault synchronization.
 
 mod calendars;
+mod classify;
 pub(crate) mod cli;
 mod config;
 mod doctor;
 mod gog;
+mod list;
 mod login;
 mod logout;
+mod model;
 mod root;
 mod ui;
 
 use std::{ffi::OsString, iter};
 
-pub(crate) use cli::{CalendarsArgs, DoctorArgs, LoginArgs, LogoutArgs};
+pub(crate) use cli::{
+    CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs,
+};
 
 const COMMAND_NAME: &str = "bob gcal";
 
@@ -104,6 +108,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Some(("doctor", sub_matches)) => {
             doctor::run(&DoctorArgs::from_matches(sub_matches))
         }
+        Some(("list", sub_matches)) => {
+            list::run(&ListArgs::from_matches(sub_matches))
+        }
         Some(("login", sub_matches)) => {
             login::run(&LoginArgs::from_matches(sub_matches))
         }
@@ -114,18 +121,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");
             2
         }
-        None => {
-            let mut help = cli::build_cli();
-            if let Err(print_error) = help.print_help()
-                && print_error.kind() != std::io::ErrorKind::BrokenPipe
-            {
-                eprintln!(
-                    "{COMMAND_NAME}: failed to print help: {print_error}"
-                );
-            }
-            println!();
-            0
-        }
+        None => list::run(&ListArgs::from_matches(&matches)),
     }
 }
 

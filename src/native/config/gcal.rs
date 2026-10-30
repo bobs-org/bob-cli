@@ -214,11 +214,22 @@ fn parse_colors(
         )));
     };
     let mut colors = BTreeMap::new();
+    let mut color_ids = std::collections::BTreeSet::new();
     for (key, mapped) in mapping {
         let name = match key {
             serde_yaml::Value::String(name) if !name.trim().is_empty() => {
                 name.trim().to_string()
             }
+            serde_yaml::Value::Number(number) => number
+                .as_u64()
+                .filter(|number| (1..=11).contains(number))
+                .map(|number| number.to_string())
+                .ok_or_else(|| {
+                    ConfigError::Invalid(format!(
+                        "gcal.colors in {} keys must be Google event colour names or ids (1–11)",
+                        path.display()
+                    ))
+                })?,
             other => {
                 return Err(ConfigError::Invalid(format!(
                     "gcal.colors in {} keys must be strings; got {}",
@@ -227,6 +238,18 @@ fn parse_colors(
                 )));
             }
         };
+        let Some(color_id) = color_id_for_key(&name) else {
+            return Err(ConfigError::Invalid(format!(
+                "gcal.colors.{name} in {} is not a Google event colour name or id (1–11)",
+                path.display()
+            )));
+        };
+        if !color_ids.insert(color_id) {
+            return Err(ConfigError::Invalid(format!(
+                "gcal.colors in {} maps Google event colour {color_id} more than once",
+                path.display()
+            )));
+        }
         let root = match mapped {
             serde_yaml::Value::String(root) if !root.trim().is_empty() => {
                 root.trim().to_string()
@@ -242,6 +265,48 @@ fn parse_colors(
         colors.insert(name, root);
     }
     Ok(colors)
+}
+
+/// Return Google's numeric event-colour id for a configured name or id.
+pub(crate) fn color_id_for_key(key: &str) -> Option<&'static str> {
+    const COLORS: &[(&str, &str)] = &[
+        ("lavender", "1"),
+        ("sage", "2"),
+        ("grape", "3"),
+        ("flamingo", "4"),
+        ("banana", "5"),
+        ("tangerine", "6"),
+        ("peacock", "7"),
+        ("graphite", "8"),
+        ("blueberry", "9"),
+        ("basil", "10"),
+        ("tomato", "11"),
+    ];
+    let key = key.trim().to_ascii_lowercase();
+    COLORS
+        .iter()
+        .find(|(name, id)| key == *name || key == *id)
+        .map(|(_, id)| *id)
+}
+
+pub(crate) fn color_name_for_id(id: &str) -> Option<&'static str> {
+    const COLORS: &[(&str, &str)] = &[
+        ("lavender", "1"),
+        ("sage", "2"),
+        ("grape", "3"),
+        ("flamingo", "4"),
+        ("banana", "5"),
+        ("tangerine", "6"),
+        ("peacock", "7"),
+        ("graphite", "8"),
+        ("blueberry", "9"),
+        ("basil", "10"),
+        ("tomato", "11"),
+    ];
+    COLORS
+        .iter()
+        .find(|(_, color_id)| *color_id == id)
+        .map(|(name, _)| *name)
 }
 
 fn parse_calendars(
@@ -426,5 +491,25 @@ mod tests {
                 "{text} names gcal: {error}"
             );
         }
+    }
+
+    #[test]
+    fn validates_google_event_colour_names_and_ids() {
+        let settings =
+            parse("gcal:\n  colors:\n    tomato: job\n    7: body\n")
+                .expect("valid colour names and ids");
+        assert_eq!(
+            settings.colors.get("tomato").map(String::as_str),
+            Some("job")
+        );
+        assert_eq!(settings.colors.get("7").map(String::as_str), Some("body"));
+        assert_eq!(color_id_for_key("tomato"), Some("11"));
+        assert_eq!(color_id_for_key("7"), Some("7"));
+        assert_eq!(color_name_for_id("11"), Some("tomato"));
+
+        let error = parse("gcal:\n  colors:\n    teal: body\n")
+            .expect_err("unsupported colour");
+        assert!(error.message().contains("gcal.colors.teal"));
+        assert!(error.message().contains("name or id"));
     }
 }

@@ -299,6 +299,86 @@ impl Gog {
         })
     }
 
+    /// Fetch a complete event snapshot for one calendar and local-day window.
+    pub(crate) fn events(
+        &self,
+        calendar_id: &str,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<serde_json::Value>, GcalError> {
+        const FIELDS: &str = "items(id,iCalUID,recurringEventId,originalStartTime,status,summary,description,location,htmlLink,hangoutLink,conferenceData(entryPoints(entryPointType,uri)),start,end,transparency,eventType,colorId,attendees(self,responseStatus),organizer(self)),nextPageToken";
+        let output = self.run(
+            self.common_flags(None)
+                .into_iter()
+                .chain([
+                    OsString::from("calendar"),
+                    OsString::from("events"),
+                    OsString::from(calendar_id),
+                    OsString::from("--from"),
+                    OsString::from(from),
+                    OsString::from("--to"),
+                    OsString::from(to),
+                    OsString::from("--all-pages"),
+                    OsString::from("--max"),
+                    OsString::from("250"),
+                    OsString::from("--fields"),
+                    OsString::from(FIELDS),
+                ])
+                .collect(),
+            false,
+        )?;
+        let value = parse_json(&output.stdout)?;
+        if value
+            .get("nextPageToken")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|token| !token.is_empty())
+        {
+            return Err(GcalError::runtime(
+                "incomplete_snapshot",
+                format!("gog left another page for calendar {calendar_id}"),
+            ));
+        }
+        let events = value
+            .get("events")
+            .or_else(|| value.get("items"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        serde_json::from_value(events).map_err(|error| {
+            GcalError::runtime(
+                "bad_json",
+                format!("parse gog events for {calendar_id}: {error}"),
+            )
+        })
+    }
+
+    /// Look up one event for later reconciliation.
+    #[allow(dead_code)]
+    pub(crate) fn event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Result<serde_json::Value, GcalError> {
+        let output = self.run(
+            self.common_flags(None)
+                .into_iter()
+                .chain([
+                    OsString::from("calendar"),
+                    OsString::from("event"),
+                    OsString::from(calendar_id),
+                    OsString::from(event_id),
+                ])
+                .collect(),
+            false,
+        )?;
+        let value = parse_json(&output.stdout)?;
+        value.get("event").cloned().ok_or_else(|| {
+            GcalError::runtime(
+                "bad_json",
+                format!("gog returned no event for {calendar_id}/{event_id}"),
+            )
+        })
+    }
+
     /// Interactive `gog auth add` with inherited stdio.
     pub(crate) fn auth_add(
         &self,

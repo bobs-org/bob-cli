@@ -1,0 +1,132 @@
+{
+  "events": [
+    {
+      "id": "holiday",
+      "iCalUID": "holiday@example.test",
+      "status": "confirmed",
+      "summary": "School holiday",
+      "eventType": "default",
+      "start": {"date": "2026-10-30"},
+      "end": {"date": "2026-10-31"},
+      "attendees": []
+    },
+    {
+      "id": "interview",
+      "iCalUID": "interview@example.test",
+      "status": "confirmed",
+      "summary": "Product interview",
+      "location": "https://teams.example.test/join/1",
+      "htmlLink": "https://calendar.google.com/event?eid=interview",
+      "hangoutLink": "https://meet.example.test/interview",
+      "eventType": "default",
+      "colorId": "11",
+      "start": {"dateTime": "2026-10-30T08:00:00-04:00"},
+      "end": {"dateTime": "2026-10-30T08:30:00-04:00"},
+      "attendees": [{"self": true, "responseStatus": "accepted"}]
+    },
+    {
+      "id": "class",
+      "status": "confirmed",
+      "summary": "Toddler class",
+      "eventType": "default",
+      "start": {"dateTime": "2026-10-30T09:15:00-04:00"},
+      "end": {"dateTime": "2026-10-30T10:00:00-04:00"},
+      "attendees": [{"self": true, "responseStatus": "tentative"}]
+    },
+    {
+      "id": "reply",
+      "status": "confirmed",
+      "summary": "Design review",
+      "eventType": "default",
+      "start": {"dateTime": "2026-10-30T12:00:00-04:00"},
+      "end": {"dateTime": "2026-10-30T12:30:00-04:00"},
+      "attendees": [{"self": true, "responseStatus": "needsAction"}]
+    },
+    {
+      "id": "dentist",
+      "status": "confirmed",
+      "summary": "Dentist @body",
+      "description": "Bring insurance card\n@job",
+      "location": "Main St Dental",
+      "htmlLink": "https://calendar.google.com/event?eid=dentist",
+      "eventType": "default",
+      "start": {"dateTime": "2026-10-30T18:30:00-04:00"},
+      "end": {"dateTime": "2026-10-30T19:00:00-04:00"},
+      "attendees": [{"self": true, "responseStatus": "accepted"}]
+    },
+    {
+      "id": "declined",
+      "status": "confirmed",
+      "summary": "Declined invitation",
+      "eventType": "default",
+      "start": {"dateTime": "2026-10-30T13:00:00-04:00"},
+      "end": {"dateTime": "2026-10-30T13:30:00-04:00"},
+      "attendees": [{"self": true, "responseStatus": "declined"}]
+    },
+    {
+      "id": "multi-day",
+      "status": "confirmed",
+      "summary": "Conference",
+      "eventType": "default",
+      "start": {"date": "2026-10-29"},
+      "end": {"date": "2026-10-31"},
+      "attendees": [{"self": true, "responseStatus": "accepted"}]
+    },
+    {
+      "id": "timed-multi-day",
+      "status": "confirmed",
+      "summary": "Travel block",
+      "eventType": "default",
+      "start": {"dateTime": "2026-10-29T08:00:00-04:00"},
+      "end": {"dateTime": "2026-10-31T08:00:00-04:00"},
+      "attendees": [{"self": true, "responseStatus": "accepted"}]
+    },
+    {
+      "id": "free",
+      "status": "confirmed",
+      "summary": "Optional focus block",
+      "eventType": "default",
+      "transparency": "transparent",
+      "start": {"dateTime": "2026-10-30T15:00:00-04:00"},
+      "end": {"dateTime": "2026-10-30T16:00:00-04:00"},
+      "attendees": [{"self": true, "responseStatus": "accepted"}]
+    },
+    {
+      "id": "focus",
+      "status": "confirmed",
+      "summary": "Focus time",
+      "eventType": "focusTime",
+      "start": {"dateTime": "2026-10-30T16:00:00-04:00"},
+      "end": {"dateTime": "2026-10-30T17:00:00-04:00"},
+      "attendees": []
+    },
+    {
+      "id": "gmail",
+      "status": "confirmed",
+      "summary": "Flight from Gmail",
+      "eventType": "fromGmail",
+      "start": {"dateTime": "2026-10-30T20:00:00-04:00"},
+      "end": {"dateTime": "2026-10-30T22:00:00-04:00"},
+      "attendees": []
+    },
+    {
+      "id": "foreign-zone",
+      "status": "confirmed",
+      "summary": "Late call",
+      "eventType": "default",
+      "start": {"dateTime": "2026-10-31T00:30:00+02:00"},
+      "end": {"dateTime": "2026-10-31T01:00:00+02:00"},
+      "attendees": []
+    },
+    {
+      "id": "cross-midnight",
+      "status": "confirmed",
+      "summary": "Late meeting",
+      "eventType": "default",
+      "start": {"dateTime": "2026-10-30T23:30:00-04:00"},
+      "end": {"dateTime": "2026-10-31T00:30:00-04:00"},
+      "attendees": []
+    }
+  ],
+  "nextPageToken": null
+}

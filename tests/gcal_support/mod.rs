@@ -190,6 +190,7 @@ pub(crate) struct FakeGog {
     path: PathBuf,
     log: PathBuf,
     state: PathBuf,
+    events: PathBuf,
     scenario: String,
 }
 
@@ -204,6 +205,7 @@ impl FakeGog {
             path,
             log: root.join("calls.jsonl"),
             state: root.join("state.json"),
+            events: root.join("events.json"),
             scenario: "ok".to_string(),
         }
     }
@@ -211,6 +213,10 @@ impl FakeGog {
     pub(crate) fn scenario(mut self, name: &str) -> Self {
         self.scenario = name.to_string();
         self
+    }
+
+    pub(crate) fn events_json(&self, text: &str) {
+        fs::write(&self.events, text).expect("write fake event snapshot");
     }
 
     pub(crate) fn install<'a>(
@@ -221,6 +227,7 @@ impl FakeGog {
             .env("BOB_GCAL_GOG", &self.path)
             .env("BOB_GCAL_FAKE_LOG", &self.log)
             .env("BOB_GCAL_FAKE_STATE", &self.state)
+            .env("BOB_GCAL_FAKE_EVENTS", &self.events)
             .env("BOB_GCAL_FAKE_SCENARIO", &self.scenario)
     }
 
