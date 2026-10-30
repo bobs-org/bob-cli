@@ -85,6 +85,10 @@ and $<N> still writes the priority. Like s:<N> it is recognized only in the \
 terminal token region and may appear on either side of a trailing @route \
 token. Single-quote '$<N>' in a shell; an unquoted or double-quoted $2 is \
 expanded by the shell.\n\n\
+Append a lowercase 't:<type>' token at either edge of any line to type the \
+new task (t:fix, t:\"DEEP WORK\"). One marker per item; unknown names write \
+canonical spelling with a warning. With '#NAME' the marker must agree with \
+the Pomodoro or capture refuses. Existing targets are refused for now.\n\n\
 Append a trailing clipboard marker: '%' captures one live value without a \
 header; '%<positive integer>' captures exactly that many values without \
 headers, starting with the live clipboard and then recent history newest first; \

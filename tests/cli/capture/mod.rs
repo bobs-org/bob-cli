@@ -5,6 +5,7 @@ mod bare;
 mod batch;
 mod blocked_tasks;
 mod blocks;
+mod capture_type_marker;
 mod clip;
 mod complete_block_id;
 mod complete_blocked_task;

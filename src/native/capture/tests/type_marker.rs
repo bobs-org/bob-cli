@@ -1,7 +1,10 @@
 use super::*;
 
 #[test]
-fn planner_rejects_a_recognized_new_task_type_until_writes_land() {
+fn planner_accepts_a_recognized_new_task_type_marker() {
+    // The writes phase stages `t:` markers instead of refusing them.
+    // A missing vault fails later with an IO error, never the temporary
+    // `type_marker_not_supported` code.
     let request = CaptureRequest {
         bob_dir: Path::new("/path/that/does/not/exist").to_path_buf(),
         dry_run: true,
@@ -23,10 +26,11 @@ fn planner_rejects_a_recognized_new_task_type_until_writes_land() {
         selection: crate::native::task_complete::SuccessorSelection::None,
     };
 
-    let error = match plan_capture_batch(&request, None) {
-        Err(error) => error,
-        Ok(_) => panic!("capture type writes belong to the later writes phase"),
-    };
-    assert_eq!(error.code.as_deref(), Some("type_marker_not_supported"));
-    assert!(error.message.contains("writing task types"));
+    if let Err(error) = plan_capture_batch(&request, None) {
+        assert_ne!(
+            error.code.as_deref(),
+            Some("type_marker_not_supported"),
+            "writes phase must not emit the temporary refusal"
+        );
+    }
 }

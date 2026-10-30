@@ -140,6 +140,8 @@
   location: /reference/capture-syntax/#percent-clipboard
 - query: "%header"
   location: /reference/capture-syntax/#percent-clipboard
+- query: "t:<type>"
+  location: /reference/capture-syntax/#t-type
 - query: Pending
   location: /reference/vault-format/#pending
 - query: Next

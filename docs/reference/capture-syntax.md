@@ -88,6 +88,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
 | `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
 | `%` / `%N` / `%header` | Capture clipboard content as child bullets | [`%`](#percent-clipboard) |
+| `t:<type>` | Type the new task | [`t:<type>`](#t-type) |
 
 ## Overloaded markers
 
@@ -1292,6 +1293,27 @@ bob capture --no-clip 'Keep the percent @work %'
 ```
 
 Contract: [Clipboard](../capture.md#clipboard).
+
+### `t:<type>` {#t-type}
+
+Type the new task at either line edge (`t:fix Fix it`, `Fix it t:fix`).
+Lowercase only; `T:` stays prose. One marker per item. Slugs use letters,
+digits, and hyphens; quoted literals allow spaces (`t:"DEEP WORK"`).
+Unknown names write canonical spelling with a warning. Existing targets
+are refused until a later phase. With `#NAME`, the marker must agree with
+the Pomodoro or the capture refuses with `type_marker_conflict`.
+
+```bash
+bob capture --no-clip 'Fix the parser t:fix @sase'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  sase.md
+  - [ ] #task Fix the parser [type:: FIX] [created::2026-10-20]
+  type   → FIX · from sase suggests WRITE
+```
+
+Contract: [Typing tasks with t:](../capture.md#typing-tasks-with-t).
 
 ## Related
 

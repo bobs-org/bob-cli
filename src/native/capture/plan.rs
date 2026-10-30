@@ -69,24 +69,6 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
-    if let Some(item) = parsed_draft
-        .items
-        .iter()
-        .find(|item| item.parsed.type_marker.is_some())
-    {
-        let marker = item
-            .parsed
-            .type_marker
-            .as_ref()
-            .expect("selected type marker");
-        return Err(CaptureError::usage_code(
-            format!(
-                "`t:{}` was recognized, but writing task types from capture is not supported yet",
-                marker.name
-            ),
-            "type_marker_not_supported",
-        ));
-    }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
         return Err(CaptureError::usage_code(
             "a template can't capture the clipboard: `%` would repeat once per row",
@@ -1073,7 +1055,7 @@ pub(super) fn plan_capture_item(
             target.block_id = Some(minted);
         }
     }
-    let capture_line = match &parsed.kind {
+    let mut capture_line = match &parsed.kind {
         CaptureKind::Task => format_task_line(
             &parsed.body,
             &created,
@@ -1165,6 +1147,44 @@ pub(super) fn plan_capture_item(
             (relative_target, target)
         }
     };
+    // Stage an explicit `t:` marker on the new-task line before placement.
+    // The marker is the authority: its field is written now, and the later
+    // named-retype path must not overwrite it. Existing-target markers
+    // were already refused in `item.rs`; only new tasks reach here.
+    let mut marker_theme: Option<CaptureTaskThemeChange> = None;
+    if let Some(marker) = parsed.type_marker.as_ref() {
+        let is_new_task_kind = matches!(
+            parsed.kind,
+            CaptureKind::Task
+                | CaptureKind::TaskWithBlockId { .. }
+                | CaptureKind::Pomodoro { .. }
+        );
+        if is_new_task_kind && !parsed.body.trim().is_empty() {
+            let route = parsed.route.as_deref().unwrap_or("");
+            // For Pomodoro tasks, the selector (e.g. `#FIX`) is D for the
+            // agreement check. The marker wins over the named retype.
+            let (pomodoro_destination, pomodoro_selector) = match &parsed.kind {
+                CaptureKind::Pomodoro {
+                    pomodoro_name: Some(selector),
+                    ..
+                } => (Some(selector.as_str()), Some(selector.as_str())),
+                _ => (None, None),
+            };
+            let applied = task_theme_context.apply_type_marker(
+                planner,
+                &target,
+                route,
+                &capture_line,
+                &marker.name,
+                marker.literal,
+                pomodoro_destination,
+                pomodoro_selector,
+                warnings,
+            )?;
+            capture_line = applied.task_line;
+            marker_theme = Some(applied.summary);
+        }
+    }
     let child_indent = (parsed.clip.is_some()
         || schedule_log_reason.is_some()
         || !parsed.sub_bullets.is_empty())
@@ -1743,38 +1763,50 @@ pub(super) fn plan_capture_item(
             details.parent_line = task.line_index + 1;
         }
     }
-    let task_theme = match &parsed.kind {
-        CaptureKind::Pomodoro {
-            block_id,
-            pomodoro_name: Some(selector),
-            close: None,
-            ..
-        } if new_task_link_guard.is_none() && note_plan.pomodoro.is_some() => {
-            let route = parsed.route.as_deref().ok_or_else(|| {
-                CaptureError::io(
-                    "Pomodoro capture invariant failed: route is missing",
-                )
-            })?;
-            let destination_name = note_plan
-                .pomodoro
-                .as_ref()
-                .and_then(|edit| edit.details.pomodoro_name.as_deref());
-            task_theme_context
-                .apply_new_task(
-                    planner,
-                    &target,
-                    route,
-                    block_id,
-                    destination_name,
-                    Some(selector.as_str()),
-                    warnings,
-                )?
-                .map(|applied| {
-                    block_first_line = applied.task_line;
-                    applied.summary
-                })
+    // An explicit `t:` marker is the authority: its staged field stands,
+    // and the named-retype path below must not overwrite or clear it.
+    let task_theme = if let Some(summary) = marker_theme {
+        // The staged line already carries the marker field through
+        // `block_first_line`; refresh it in case later steps rewrote it.
+        // (The `capture_line` edit above flows through flipped/augmented
+        // lines into `block_first_line`.)
+        Some(summary)
+    } else {
+        match &parsed.kind {
+            CaptureKind::Pomodoro {
+                block_id,
+                pomodoro_name: Some(selector),
+                close: None,
+                ..
+            } if new_task_link_guard.is_none()
+                && note_plan.pomodoro.is_some() =>
+            {
+                let route = parsed.route.as_deref().ok_or_else(|| {
+                    CaptureError::io(
+                        "Pomodoro capture invariant failed: route is missing",
+                    )
+                })?;
+                let destination_name = note_plan
+                    .pomodoro
+                    .as_ref()
+                    .and_then(|edit| edit.details.pomodoro_name.as_deref());
+                task_theme_context
+                    .apply_new_task(
+                        planner,
+                        &target,
+                        route,
+                        block_id,
+                        destination_name,
+                        Some(selector.as_str()),
+                        warnings,
+                    )?
+                    .map(|applied| {
+                        block_first_line = applied.task_line;
+                        applied.summary
+                    })
+            }
+            _ => None,
         }
-        _ => None,
     };
     let (dependency_update, dependency_updates) =
         fold_dependency_updates(dependency_summaries);

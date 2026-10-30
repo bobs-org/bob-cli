@@ -21,6 +21,7 @@ workflow guide.
   - [Routing and insertion](#routing-and-insertion)
   - [Global destination declaration](#global-destination-declaration)
   - [Scheduling and priority](#scheduling-and-priority)
+  - [Typing tasks with t:](#typing-tasks-with-t)
   - [Multi-item capture](#multi-item-capture)
   - [Bulk templates](#bulk-templates)
     - [Saved templates](#saved-templates)
@@ -144,6 +145,10 @@ anything is written, and any failure rolls the whole batch back.
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%`, `%N`, `%header` | Capture clipboard content as child bullets |
+| `t:<type>` | Type the new task (`t:fix`); at either line edge, lowercase only, one per item; unknown names write canonical spelling with a warning |
+| `t:"NAME"` | Same with a quoted name for spaces or punctuation (`t:"DEEP WORK"`) |
+| `t:` | Incomplete: type a task type after `t:`; execution refuses until named |
+| `\t:<anything>` | Escape: the body keeps the literal `t:<anything>`; a mid-line `\t:` stays verbatim |
 
 `#` is not one marker. Read it by what it is attached to:
 
@@ -479,6 +484,35 @@ To keep a trailing dollar amount as task text, escape it the same way as
 `Pay Bob \$3 $2 @cash` writes body `Pay Bob $3` at level 2 routed to
 `cash`. Elsewhere `\$` stays verbatim (`cost \$3 today` keeps the
 backslash).
+
+### Typing tasks with t:
+
+Append a lowercase `t:<type>` token to type a newly captured task, at the
+leading or trailing edge of any line. Between the marker and that edge may
+stand only transparent markers (`@…`, `@@…`, `#`, `s:`, `s:<N>`, `$…`,
+`%…`), complete or partial `&` / `*` / `~` / `~~` modifiers, or other `t:`
+tokens. Uppercase `T:` and mid-line `t:` stay prose. A slug name uses ASCII
+letters, digits, and hyphens (`t:fix`, `t:deep-work`); a literal name is
+quoted for spaces or punctuation (`t:"DEEP WORK"`, `t:"Q&A"`). An empty or
+unterminated name needs a type; a name containing `+` is invalid (one task,
+one type). Escape with a backslash to keep the text: `\t:fix` writes
+`t:fix` in the body.
+
+Exactly one marker per item. A second marker fails with the duplicate
+`type marker (t:<type>)` error. The marker types the new task only; it never
+types prerequisites, blocked tasks, or relation targets. A marker alone, or
+on a bullet, sub-bullet, project note, reference, Pomodoro note, or
+completion/close/start/adjust/shift gesture, is refused with a teaching
+error. Markers on existing tasks (`^route:id t:fix`) are recognized but
+refused until a later phase: retyping with `t:` is not supported yet.
+
+The marker resolves against the configured `types:` vocabulary first, then
+the catalog; literals match by key, slugs also try spaces for hyphens.
+Unknown names write the canonical spelling with a `theme_not_configured`
+warning. When the item also names a Pomodoro (`#NAME`), the marker must
+agree with it: a container accepts any type, a matching component accepts
+that explicit pick, otherwise the capture refuses with
+`type_marker_conflict` before any write.
 
 ### Multi-item capture
 
@@ -5247,33 +5281,36 @@ for `dry_run`. Human output names a deleted session on the structured
 #### Task-type changes
 
 When an explicitly named Pomodoro capture changes a task's `[type::]`
-field, that item gains this additive `task_theme` object. It is omitted when
-the type does not change: a container destination, a consistent type, a
+field, or when a `t:<type>` marker types a newly captured task, that item
+gains this additive `task_theme` object. For named captures it is omitted
+when the type does not change: a container destination, a consistent type, a
 guard that consumes the gesture, or a field that already holds the chosen
-value. The field edit is included in the same staged capture
-transaction as the task and Pomodoro changes.
+value. A marker always reports. The field edit is included in the same
+staged capture transaction as the task and Pomodoro changes.
 
 ```json
 "task_theme": {
   "action": "set",
-  "type": {"key": "fix", "name": "FIX", "hue": "blue", "hue_source": "config"},
+  "theme": {"key": "fix", "name": "FIX", "hue": "blue", "hue_source": "config"},
   "previous": null,
   "inherited": {
-    "type": {"key": "write", "name": "WRITE", "hue": "magenta", "hue_source": "config"},
+    "theme": {"key": "write", "name": "WRITE", "hue": "magenta", "hue_source": "config"},
     "source": "note",
     "label": "from sase"
   }
 }
 ```
 
-`action` is `"set"` or `"cleared"`. `theme` is the selected
+`action` is `"set"`, `"cleared"`, or `"kept"`. `theme` is the selected
 `ThemeRef`, or null when cleared. `previous` is the valid task type before
 the edit, or null when the field was absent or needed repair. `inherited` is
 the suggestion that the task inherits apart from its own field, or null when
 there was no suggestion. A clear removes every type field; a set writes
-the catalog spelling before trailing task metadata. The human output includes
-a type row `type   → FIX · <stem> suggests BUILD` /
-`type   cleared · <stem> suggests BUILD`. Dry-run JSON reports the same
+the catalog spelling before trailing task metadata; a keep writes nothing
+because the task already has or inherits the marker type. The human output
+includes a type row `type   → FIX · <stem> suggests BUILD` /
+`type   cleared · <stem> suggests BUILD` /
+`type   ■ FIX · from <stem>` (kept). Dry-run JSON reports the same
 post-image and summary without writing files.
 
 #### Task blocks
@@ -5480,6 +5517,12 @@ target, section, block-ID, or task picker. For example, `<task> @sase# %`
 opens the section picker for `sase.md`; the panel consumes only `@sase#`, and
 `bob capture` still owns clipboard, schedule, and priority interpretation
 after the section is chosen.
+
+A `t:<type>` marker types the new task. `capture-parse` emits a `task_type`
+span over the whole token (with one `ThemeRef` over the name content) and a
+`task_type` need when the name is incomplete; `body` excludes the marker.
+The editor paints the marker dimmed with the type pill. Existing-target
+markers are parsed but refused on execution until a later phase.
 
 Sub-bullet capture has the matching four-way `+` family. Use `<text> @+` to
 choose a destination and then one of its open tasks, `<text> @route+` to choose

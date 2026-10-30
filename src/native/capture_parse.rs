@@ -170,7 +170,8 @@ It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> or @@<route>+<block-id> \
 declaration token anywhere in the draft, ordered blank-line-separated item summaries and ranges after \
-inheritance, the UTF-8 byte spans of every recognized token, Obsidian wikilink \
+inheritance, the UTF-8 byte spans of every recognized token (including a \
+`task_type` span for `t:<type>` markers), Obsidian wikilink \
 component spans, every authored sub-bullet's normalized body plus depth, \
 an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` \
 start suffix (including the short `=name` suffix, e.g. `@work:outline=bugs`), an optional pomodoro_adjust object for a whole-item `+[N]`/`-[N]` \

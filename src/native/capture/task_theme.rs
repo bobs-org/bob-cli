@@ -2,11 +2,14 @@
 
 use super::*;
 use crate::native::{
+    capture_language::{resolve_exact_type_name, unmatched_type_display},
     config::themes::ThemeSources,
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::{HomeResolver, HomeSource, NoteFacts},
     pomodoro_themes::{
-        self, routing, suggest::ThemeSuggestion, Catalog, ThemeRef,
+        self, routing,
+        suggest::{self, ThemeSuggestion},
+        Catalog, HueSource, ThemeRef,
     },
     task_fields::canonical_theme_name,
     task_theme::{
@@ -127,6 +130,185 @@ impl CaptureTaskThemeContext {
             selector,
             warnings,
         )
+    }
+
+    /// Stage an explicit `t:` marker on a new-task formatted line before
+    /// placement. Resolves X via the shared helper, computes I from the
+    /// staged line in its destination, applies the field table, and
+    /// enforces named-Pomodoro agreement. Returns the edited line plus
+    /// the always-reported summary. Unknown names use canonical spelling
+    /// with a `theme_not_configured` warning.
+    pub(super) fn apply_type_marker(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        _target: &Path,
+        route: &str,
+        task_line: &str,
+        marker_name: &str,
+        marker_literal: bool,
+        pomodoro_destination: Option<&str>,
+        pomodoro_selector: Option<&str>,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Result<AppliedTaskTheme, CaptureError> {
+        self.refresh_residence_snapshot(planner);
+        if !self.load_config(warnings) || !self.load_catalog(warnings) {
+            // Without config/catalog, fall back to canonical spelling with
+            // no inherited suggestion.
+            let display = unmatched_type_display(marker_name);
+            let key = normalize_component(marker_name);
+            let theme = ThemeRef {
+                key: key.clone(),
+                name: display.clone(),
+                hue: None,
+                hue_source: HueSource::Unconfigured,
+                known: false,
+                configured: Some(false),
+                start: None,
+                end: None,
+            };
+            let edited = set_task_theme(task_line, &display);
+            return Ok(AppliedTaskTheme {
+                task_line: edited,
+                summary: CaptureTaskThemeChange {
+                    action: "set",
+                    theme: Some(theme),
+                    previous: None,
+                    inherited: None,
+                },
+            });
+        }
+        let cfg = self.cfg.as_ref().expect("loaded plan config");
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        // Resolve X via the shared helper: configured vocabulary first,
+        // then catalog; literal by key equality, slug also tries spaces.
+        let configured_entries = catalog.configured_themes();
+        let resolved = resolve_exact_type_name(
+            configured_entries,
+            &|key| catalog.get(key).map(|record| record.name.clone()),
+            marker_name,
+            marker_literal,
+        );
+        let (x_key, x_name) = match resolved {
+            Some(found) => (found.key, found.name),
+            None => {
+                let display = unmatched_type_display(marker_name);
+                (normalize_component(marker_name), display)
+            }
+        };
+        // Unknown/unconfigured names: canonical spelling plus the existing
+        // structured warning. Never refuse (unknown_types = warn).
+        if catalog.unconfigured(&x_key) {
+            let similar = catalog.similar_to(&x_name);
+            warnings
+                .push(CaptureWarning::Structured(StructuredCaptureWarning {
+                code: super::super::pomodoro_themes::THEME_NOT_CONFIGURED,
+                label: Some(x_name.clone()),
+                count: None,
+                message:
+                    super::super::pomodoro_themes::theme_not_configured_message(
+                        &x_name, &similar,
+                    ),
+            }));
+        }
+        // Named-Pomodoro agreement: D is container → accept X; X is a
+        // component of D → accept X as explicit pick; otherwise refuse
+        // with type_marker_conflict before commit.
+        if let Some(destination) = pomodoro_destination {
+            let sources = catalog.theme_sources();
+            let components =
+                routing::type_components(Some(destination), &sources);
+            let is_container = components.iter().all(|item| !item.is_type);
+            if !is_container {
+                let x_norm = normalize_component(&x_key);
+                let matches_component = components
+                    .iter()
+                    .filter(|item| item.is_type)
+                    .any(|item| item.key == x_norm);
+                if !matches_component {
+                    // Extract display name for D (first component or raw).
+                    let d_display = split_components(destination)
+                        .first()
+                        .and_then(|component| canonical_theme_name(component))
+                        .unwrap_or_else(|| destination.trim().to_string());
+                    return Err(CaptureError::usage_code(
+                        format!(
+                            "`t:{marker_name}` disagrees with Pomodoro {d_display}: drop `#{d_display}` to link under {x_name}, or drop `t:{marker_name}` to type the task {d_display}"
+                        ),
+                        "type_marker_conflict",
+                    ));
+                }
+            }
+        }
+        // Compute I from the staged line in its destination, skipping its
+        // own type field (the line has no field yet for a new task).
+        let residence_path = relative_target(Some(route));
+        let residence = Path::new(&residence_path);
+        let suggested = suggest::suggest_for_task(
+            &mut self.resolver,
+            catalog,
+            cfg,
+            residence,
+            task_line,
+        );
+        for warning in suggested.warnings {
+            let identity = (warning.code.clone(), warning.path.clone());
+            if self.warned_suggestions.insert(identity) {
+                warnings.push(CaptureWarning::Suggestion(warning));
+            }
+        }
+        let inherited = suggestion_inherited(suggested.suggestion.as_ref());
+        let inherited_key =
+            inherited.as_ref().map(|item| item.theme.key.as_str());
+        // Field table (1.7): X == I → kept (no field) or cleared (remove
+        // authored exception); X != I, F == X → kept; else set. A marker
+        // always reports.
+        let field = parse_task_theme(task_line);
+        let x_eq_i = inherited_key == Some(x_key.as_str());
+        let (action, theme, edited_line) = if x_eq_i {
+            match field {
+                TaskThemeState::None => {
+                    // No field, inherits X: kept.
+                    let display = catalog.display_name(&x_key, &x_name);
+                    let theme_ref = catalog.theme_ref(&x_key, &display);
+                    ("kept", Some(theme_ref), task_line.to_string())
+                }
+                _ => {
+                    // Authored exception removed: cleared.
+                    let cleared = clear_task_theme(task_line);
+                    ("cleared", None, cleared)
+                }
+            }
+        } else {
+            // X != I: check if field already equals X.
+            let field_is_x = match &field {
+                TaskThemeState::Set { key, .. } => key == &x_key,
+                _ => false,
+            };
+            if field_is_x {
+                let display = catalog.display_name(&x_key, &x_name);
+                let theme_ref = catalog.theme_ref(&x_key, &display);
+                ("kept", Some(theme_ref), task_line.to_string())
+            } else {
+                let display = catalog.display_name(&x_key, &x_name);
+                let theme_ref = catalog.theme_ref(&x_key, &display);
+                let edited = set_task_theme(task_line, &display);
+                ("set", Some(theme_ref), edited)
+            }
+        };
+        let previous = valid_previous_theme(&field, catalog);
+        let summary = CaptureTaskThemeChange {
+            action,
+            theme,
+            previous,
+            inherited,
+        };
+        // Suppress unused warning for pomodoro_selector (reserved for
+        // future explicit-pick tracking; agreement uses destination).
+        let _ = pomodoro_selector;
+        Ok(AppliedTaskTheme {
+            task_line: edited_line,
+            summary,
+        })
     }
 
     pub(super) fn apply_existing_task(

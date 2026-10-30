@@ -3700,6 +3700,36 @@ fn format_task_theme_row(
                 format!("cleared · {inherited}")
             }
         }
+        "kept" => {
+            let theme = change.theme.as_ref()?;
+            let name = super::super::pomodoro_themes::swatch_name(
+                std::slice::from_ref(theme),
+                "",
+                styler,
+            )
+            .unwrap_or_else(|| theme.name.clone());
+            // Short source label: `this task`, `from <stem>`,
+            // `default type`, or `reading task`.
+            let label = change
+                .inherited
+                .as_ref()
+                .map(|suggestion| match suggestion.source {
+                    super::super::pomodoro_themes::suggest::SuggestionSource::Task => {
+                        "this task".to_string()
+                    }
+                    super::super::pomodoro_themes::suggest::SuggestionSource::Reading => {
+                        "reading task".to_string()
+                    }
+                    super::super::pomodoro_themes::suggest::SuggestionSource::Note => {
+                        suggestion.label.clone()
+                    }
+                    super::super::pomodoro_themes::suggest::SuggestionSource::Default => {
+                        "default type".to_string()
+                    }
+                })
+                .unwrap_or_else(|| "no default here".to_string());
+            format!("{name} · {label}")
+        }
         _ => return None,
     };
     Some(format!("  type  {row}\n"))
