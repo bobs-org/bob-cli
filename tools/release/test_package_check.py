@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -35,6 +36,7 @@ class PackageCheckTests(unittest.TestCase):
         warning_threshold: int | None = None,
         failure_threshold: int | None = None,
         argv: list[str] | None = None,
+        github_actions: bool = False,
     ) -> tuple[int, str, str, list[list[str]], dict[str, int]]:
         """Run main with fake Cargo and small, real temporary package archives."""
         archive_contents = archive_contents or {}
@@ -100,6 +102,11 @@ class PackageCheckTests(unittest.TestCase):
                     stack.enter_context(
                         mock.patch("package_check.FAIL_BYTES", failure_threshold)
                     )
+                stack.enter_context(mock.patch.dict(os.environ))
+                if github_actions:
+                    os.environ["GITHUB_ACTIONS"] = "true"
+                else:
+                    os.environ.pop("GITHUB_ACTIONS", None)
                 with redirect_stdout(stdout), redirect_stderr(stderr):
                     exit_code = main(argv if argv is not None else [])
 
@@ -256,6 +263,25 @@ class PackageCheckTests(unittest.TestCase):
             "WARNING: bob-obsidian-assets is above the 8 MiB warning threshold", stdout
         )
         self.assertTrue(all(size <= failure_threshold for size in checked_sizes.values()))
+
+    def test_main_emits_github_warning_annotations_under_actions(self) -> None:
+        _, _, _, _, sizes = self._run_main_with_archives()
+        warning_threshold = min(sizes.values()) - 1
+        failure_threshold = max(sizes.values())
+        code, stdout, stderr, _, _ = self._run_main_with_archives(
+            warning_threshold=warning_threshold,
+            failure_threshold=failure_threshold,
+            github_actions=True,
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertIn(
+            "::warning::bob-obsidian is above the 8 MiB warning threshold", stdout
+        )
+        self.assertIn(
+            "::warning::bob-obsidian-assets is above the 8 MiB warning threshold",
+            stdout,
+        )
+        self.assertNotIn("WARNING: ", stdout)
 
     def test_largest_contributors_group_tar_members_by_top_level_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

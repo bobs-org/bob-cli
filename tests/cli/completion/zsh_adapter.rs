@@ -571,6 +571,7 @@ zmodload zsh/zselect || { print "ZSELECT-MISSING"; exit 2 }
 TMP=$1
 shift
 typeset -i deadline=$((SECONDS + 25))
+typeset -i sync_count=0
 READ_RESULT=
 PTY_FD=
 wait_for() {
@@ -588,10 +589,25 @@ wait_for() {
     zselect -t 10 "$PTY_FD" || true
   done
 }
+# Empty the edit buffer in-band, then run a marker command and wait for its
+# output. ZLE reads ^U and the command in order, so the next scenario always
+# starts on an empty line once the marker prints; the quotes keep the marker
+# out of the echoed command line. (A ^C here would race: the shell can still
+# read the next scenario's first byte into the doomed line.)
+reset_line() {
+  (( sync_count += 1 ))
+  zpty -w -n pb $'\x15'
+  zpty -w pb "print -r -- SY''NC-$sync_count"
+  wait_for "SYNC-$sync_count" ''
+}
+# The pty shell inherits PATH instead of having it typed: a long PATH can
+# overflow the tty input queue (1024 bytes on macOS) and lose the setup line.
+export PATH="$TMP:$PATH"
 zpty -d pb 2>/dev/null
 zpty -b pb zsh -f
 PTY_FD=$REPLY
-zpty -w pb "PS1='ZP> '; export PATH=\"$TMP:$PATH\""
+# bindkey -e pins ^U to kill-whole-line even when $EDITOR selects vi keys.
+zpty -w pb "PS1='ZP> '; bindkey -e"
 zpty -w pb "fpath=($TMP \$fpath)"
 # -i skips compaudit's interactive insecure-directory prompt so the test is
 # hermetic on any host; it does not change how completion renders.
@@ -600,16 +616,13 @@ wait_for COMPINIT-DONE '' || { print -r -- "SETUP-READ-FAILED"; zpty -d pb; exit
 print -r -- "SETUP OK"
 zpty -w -n pb $'bob capture-task\t'
 if wait_for capture-task-sections ''; then print -r -- "FIRST-TAB OK"; else print -r -- "FIRST-TAB MISS"; fi
-zpty -w -n pb $'\x03'
-wait_for 'ZP>' '' || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
+reset_line || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture -\t'
 if wait_for --route ''; then print -r -- "DASH-TAB OK"; else print -r -- "DASH-TAB MISS"; fi
-zpty -w -n pb $'\x03'
-wait_for 'ZP>' '' || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
+reset_line || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture --format \t'
 if wait_for human ''; then print -r -- "FORMAT-TAB OK"; else print -r -- "FORMAT-TAB MISS"; fi
-zpty -w -n pb $'\x03'
-wait_for 'ZP>' '' || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
+reset_line || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture --format \t'
 if wait_for format ''; then print -r -- "FORMAT-HEADER OK"; else print -r -- "FORMAT-HEADER MISS"; fi
 zpty -d pb

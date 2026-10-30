@@ -700,7 +700,6 @@ fn send_clobber_notification(body: &str) {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        return;
     }
     #[cfg(not(target_os = "macos"))]
     {
