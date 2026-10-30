@@ -13,10 +13,11 @@ use super::super::task_dependencies::{
 use super::super::task_status_hooks::{
     after_list_marker, leading_indentation_width, nearest_parent_list_item,
 };
-use super::label::parse_relation_label;
+use super::label::{is_reserved_mention_label, parse_relation_label};
 use super::{
-    LinkedFromLine, LinksLine, RelationEntry, BACKLINKS_LABEL, KNOT_EMOJI,
-    LINKED_FROM_LABEL, LINKS_LABEL, LINKS_TO_LABEL, TOLERATED_EMOJI,
+    LinkedFromLine, LinksLine, RelationEntry, RelationEntryKind,
+    BACKLINKS_LABEL, KNOT_EMOJI, LINKED_FROM_LABEL, LINKS_LABEL,
+    LINKS_TO_LABEL, MENTION_LABEL, TOLERATED_EMOJI,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +202,9 @@ fn parsed_label_span(raw: &str, base: usize) -> Option<RelationLabelSpan> {
     let start = raw.len() - raw.trim_start().len();
     let trimmed = raw.trim();
     let label = parse_relation_label(trimmed).ok()??;
+    if is_reserved_mention_label(&label) {
+        return None;
+    }
     Some(RelationLabelSpan {
         range: base + start..base + start + trimmed.len(),
         label,
@@ -342,7 +346,10 @@ fn parse_links_entries(
             (None, Some(alias)) => parse_relation_label(&alias).ok()?,
             (None, None) => None,
         };
-        entries.push(entry_from_span(span, label));
+        if label.as_deref().is_some_and(is_reserved_mention_label) {
+            return None;
+        }
+        entries.push(entry_from_span(span, label, RelationEntryKind::Relation));
         prev_end = span.full_end;
     }
     let trailing = &line[prev_end..];
@@ -385,7 +392,16 @@ fn parse_linked_from_entries(
             (None, Some(alias)) => parse_relation_label(&alias).ok()?,
             (None, None) => None,
         };
-        entries.push(entry_from_span(span, label));
+        let (label, kind) = match label {
+            Some(label) if is_reserved_mention_label(&label) => {
+                if label != MENTION_LABEL {
+                    return None;
+                }
+                (None, RelationEntryKind::Mention)
+            }
+            label => (label, RelationEntryKind::Relation),
+        };
+        entries.push(entry_from_span(span, label, kind));
     }
     Some(entries)
 }
@@ -459,11 +475,13 @@ fn alias_of(line: &str, span: &BlockLinkSpan) -> Option<String> {
 fn entry_from_span(
     span: &BlockLinkSpan,
     label: Option<String>,
+    kind: RelationEntryKind,
 ) -> RelationEntry {
     RelationEntry {
         target: span.target.clone(),
         block_id: span.block_id.clone(),
         label,
+        kind,
         embedded: span.embedded,
         struck: span.struck,
         aliased: span.aliased,
@@ -482,7 +500,7 @@ fn display_linked_from(
 ) -> Vec<(String, Option<String>)> {
     entries
         .iter()
-        .map(|entry| (entry.canonical_text(), entry.label.clone()))
+        .map(|entry| (entry.canonical_text(), entry.storage_label()))
         .collect()
 }
 

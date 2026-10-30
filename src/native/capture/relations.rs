@@ -857,9 +857,15 @@ fn stage_links_add(
             "cannot relate {token}: its LINKS line is malformed"
         ))),
         LinksLinePlan::InvalidLabel(error) => {
+            let message = if error
+                == crate::native::task_relations::label::LabelError::ReservedMention
+            {
+                "💬 is reserved for text mentions".to_string()
+            } else {
+                format!("relation label is {}", error.as_str())
+            };
             Err(CaptureError::usage(format!(
-                "cannot relate {token}: relation label is {}",
-                error.as_str()
+                "cannot relate {token}: {message}"
             )))
         }
         LinksLinePlan::Edits { edits, report } => {

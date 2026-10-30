@@ -748,6 +748,9 @@ fn invalid_label_message(label: &str) -> String {
              `·` or `,`, or use controls (1-40 characters after trimming)"
         ),
         Err(error) => match error {
+            crate::native::task_relations::label::LabelError::ReservedMention => {
+                "💬 is reserved for text mentions".to_string()
+            }
             crate::native::task_relations::label::LabelError::Empty => {
                 "relation label is empty after trimming".to_string()
             }

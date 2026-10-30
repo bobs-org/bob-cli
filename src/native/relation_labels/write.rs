@@ -349,8 +349,15 @@ fn resolve_labels(
     let mut planned = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for raw in &request.labels {
-        let normalized = normalize_relation_label(raw).map_err(|_| {
-            WriteError::InvalidLabel(format!("invalid label: {raw}"))
+        let normalized = normalize_relation_label(raw).map_err(|error| {
+            let message = if error
+                == crate::native::task_relations::label::LabelError::ReservedMention
+            {
+                "💬 is reserved for text mentions".to_string()
+            } else {
+                format!("invalid label: {raw}")
+            };
+            WriteError::InvalidLabel(message)
         })?;
         let key = relation_label_key(&normalized);
         if !seen.insert(key.clone()) {

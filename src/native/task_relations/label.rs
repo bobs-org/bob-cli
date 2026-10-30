@@ -12,6 +12,7 @@ pub(crate) enum LabelError {
     TooLong,
     ForbiddenCharacter,
     InvalidStart,
+    ReservedMention,
 }
 
 impl LabelError {
@@ -21,6 +22,7 @@ impl LabelError {
             Self::TooLong => "too long",
             Self::ForbiddenCharacter => "character",
             Self::InvalidStart => "start",
+            Self::ReservedMention => "💬 is reserved for text mentions",
         }
     }
 }
@@ -34,11 +36,19 @@ pub(crate) fn normalize_relation_label(
     if collapsed.is_empty() {
         return Err(LabelError::Empty);
     }
+    if is_reserved_mention_label(&collapsed) {
+        return Err(LabelError::ReservedMention);
+    }
     validate_label_characters(&collapsed)?;
     if collapsed.chars().count() > MAX_LABEL_CHARS {
         return Err(LabelError::TooLong);
     }
     Ok(collapsed)
+}
+
+/// Whether a normalized label uses the reserved mention namespace.
+pub(crate) fn is_reserved_mention_label(label: &str) -> bool {
+    label.starts_with('💬')
 }
 
 /// Capture spelling of a canonical label: `|label` or `|"multi word"`.

@@ -1663,6 +1663,9 @@ pub(super) fn relation_label_suggestions(
             Err(error) => (
                 normalized_query.clone(),
                 Some(match error {
+                    crate::native::task_relations::label::LabelError::ReservedMention => {
+                        "💬 is reserved for text mentions"
+                    }
                     crate::native::task_relations::label::LabelError::Empty => {
                         "label can't be empty"
                     }

@@ -291,6 +291,9 @@ fn normalize_label(raw: &str, which: &str) -> Result<String, ReverseFailure> {
     crate::native::task_relations::label::normalize_relation_label(raw).map_err(
         |error| {
             let detail = match error {
+                LabelError::ReservedMention => {
+                    "💬 is reserved for text mentions"
+                }
                 LabelError::Empty => "must not be empty",
                 LabelError::TooLong => "must be at most 40 characters",
                 LabelError::ForbiddenCharacter => {
@@ -316,6 +319,16 @@ fn display_relative(path: &Path) -> String {
 fn is_done_path(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == "done")
+}
+
+fn should_preserve_mention(
+    source_path: Option<PathBuf>,
+    source_id: &str,
+    relation_sources: &BTreeSet<(PathBuf, String)>,
+) -> bool {
+    source_path.is_none_or(|path| {
+        !relation_sources.contains(&(path, source_id.to_string()))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -1317,8 +1330,12 @@ fn plan_reverse(
                 (working[file_index].relative.clone(), owner_id.clone());
             let mut desired: BTreeSet<(String, Option<String>)> =
                 BTreeSet::new();
+            let mut relation_sources: BTreeSet<(PathBuf, String)> =
+                BTreeSet::new();
             if let Some(sources) = final_by_target.get(&owner_key) {
                 for (source_path, source_id, label) in sources {
+                    relation_sources
+                        .insert((source_path.clone(), source_id.clone()));
                     let link = canonical_link(
                         source_path,
                         source_id,
@@ -1336,6 +1353,28 @@ fn plan_reverse(
                     continue;
                 };
                 for entry in entries {
+                    if entry.kind
+                        == crate::native::task_relations::RelationEntryKind::Mention
+                    {
+                        let source_path = resolve_target_path(
+                            &working[file_index].relative,
+                            &entry.target,
+                            &note_index,
+                            &files,
+                            &file_by_path,
+                        );
+                        if should_preserve_mention(
+                            source_path,
+                            &entry.block_id,
+                            &relation_sources,
+                        ) {
+                            desired.insert((
+                                entry.canonical_text(),
+                                entry.storage_label(),
+                            ));
+                        }
+                        continue;
+                    }
                     let resolved_path = resolve_target_path(
                         &working[file_index].relative,
                         &entry.target,
@@ -1353,7 +1392,7 @@ fn plan_reverse(
                     if !certain {
                         desired.insert((
                             entry.canonical_text(),
-                            entry.label.clone(),
+                            entry.storage_label(),
                         ));
                     }
                 }
@@ -2475,5 +2514,29 @@ mod tests {
             "links",
         );
         assert_eq!(changes.len(), 2);
+    }
+
+    #[test]
+    fn relation_on_same_source_target_pair_supersedes_mention_mirror() {
+        let relation_sources = BTreeSet::from([(
+            PathBuf::from("source.md"),
+            "source-task".to_string(),
+        )]);
+
+        assert!(!should_preserve_mention(
+            Some(PathBuf::from("source.md")),
+            "source-task",
+            &relation_sources,
+        ));
+        assert!(should_preserve_mention(
+            Some(PathBuf::from("other.md")),
+            "source-task",
+            &relation_sources,
+        ));
+        assert!(should_preserve_mention(
+            None,
+            "source-task",
+            &relation_sources,
+        ));
     }
 }

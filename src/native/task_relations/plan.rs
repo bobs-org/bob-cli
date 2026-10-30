@@ -85,7 +85,7 @@ pub(crate) fn plan_links_edit(
                 for entry in parsed {
                     let identity = entry.canonical_text();
                     if seen.insert(identity.clone()) {
-                        entries.push((identity, entry.label.clone()));
+                        entries.push((identity, entry.storage_label()));
                     }
                 }
             }
@@ -207,7 +207,7 @@ where
         if let Some((identity, canonical_text)) = resolve(entry)
             && !remove.contains(&identity)
         {
-            desired.insert(identity, (canonical_text, entry.label.clone()));
+            desired.insert(identity, (canonical_text, entry.storage_label()));
         }
     }
     for (identity, (canonical_text, label)) in add {
@@ -248,7 +248,9 @@ pub(crate) fn plan_linked_from_line(
                 child.line_index,
                 entries
                     .iter()
-                    .map(|entry| (entry.canonical_text(), entry.label.clone()))
+                    .map(|entry| {
+                        (entry.canonical_text(), entry.storage_label())
+                    })
                     .collect::<Vec<_>>(),
                 *canonical,
             )),

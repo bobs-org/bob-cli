@@ -746,14 +746,17 @@ impl RelationsPass<'_> {
                     continue;
                 };
                 let key = (path.clone(), entry.block_id.clone());
-                if collected.uncertain.contains(&key) {
+                if entry.kind
+                    == super::super::task_relations::RelationEntryKind::Mention
+                    || collected.uncertain.contains(&key)
+                {
                     let link = canonical_link(
                         &path,
                         &entry.block_id,
                         owner_path,
                         self.note_index,
                     );
-                    desired.entry(key).or_insert((link, entry.label.clone()));
+                    desired.entry(key).or_insert((link, entry.storage_label()));
                 }
             }
         }

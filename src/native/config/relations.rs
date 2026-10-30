@@ -221,8 +221,15 @@ fn parse_effect_labels(
         let name = match normalize_relation_label(raw) {
             Ok(name) => name,
             Err(error) => {
+                let reason = if error
+                    == crate::native::task_relations::label::LabelError::ReservedMention
+                {
+                    "💬 is reserved for text mentions".to_string()
+                } else {
+                    format!("{error:?}")
+                };
                 warnings.push(format!(
-                    "invalid relations.{field} entry {} in {path}: {error:?}; skipping",
+                    "invalid relations.{field} entry {} in {path}: {reason}; skipping",
                     index + 1
                 ));
                 continue;

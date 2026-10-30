@@ -384,6 +384,7 @@ fn load_close_policy() -> bob_config::RelationsConfig {
 fn normalize_label(raw: &str, which: &str) -> Result<String, RenameFailure> {
     normalize_relation_label(raw).map_err(|error| {
         let detail = match error {
+            LabelError::ReservedMention => "💬 is reserved for text mentions",
             LabelError::Empty => "must not be empty",
             LabelError::TooLong => "must be at most 40 characters",
             LabelError::ForbiddenCharacter => "contains a forbidden character",
