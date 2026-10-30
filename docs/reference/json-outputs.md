@@ -95,7 +95,8 @@ previews, pickers, and discovery calls for the Mac app and editors.
 
 For `bob capture-complete` in `relation_label` context, visible catalog rows include
 `label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A nonempty
-query adds a typed row first, with `typed: true`, `existing`, and `hidden`.
+query adds a typed row first, with `typed: true`, `existing`, and `hidden`; that row
+may also carry `inverse` from the §10 rule, including for a brand-new label.
 When its key exists, it also includes `count` and uses the catalog spelling.
 Hidden labels are omitted from
 the visible rows, but an exact typed hidden label remains available with `hidden: true`.

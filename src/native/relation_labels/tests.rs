@@ -36,6 +36,14 @@ struct Vectors {
     catalog: Vec<CatalogCase>,
     fold: Vec<FoldCase>,
     rank: Vec<RankCase>,
+    inverse: Vec<InverseCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InverseCase {
+    name: String,
+    label: String,
+    expected: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,12 +122,13 @@ fn load_vectors() -> Vectors {
 }
 
 #[test]
-fn shared_vectors_cover_key_catalog_fold_and_rank() {
+fn shared_vectors_cover_key_catalog_fold_rank_and_inverse() {
     let vectors = load_vectors();
     assert!(!vectors.key.is_empty());
     assert!(!vectors.catalog.is_empty());
     assert!(!vectors.fold.is_empty());
     assert!(!vectors.rank.is_empty());
+    assert!(!vectors.inverse.is_empty());
 }
 
 #[test]
@@ -310,25 +319,23 @@ fn journal_append_round_trips_through_the_host_file() {
 }
 
 #[test]
-fn inverse_phrases_match_the_contract_table() {
-    for (stored, inverse) in [
-        ("merged into", "merged from"),
-        ("duplicate of", "duplicated by"),
-        ("follow-up of", "followed up by"),
-        ("superseded by", "supersedes"),
-        ("split from", "split into"),
-        ("implemented by", "implements"),
-        ("verified by", "verifies"),
-    ] {
-        assert_eq!(inverse_phrase(stored), Some(inverse));
+fn inverse_phrases_match_the_shared_vectors() {
+    for case in &load_vectors().inverse {
+        let got = inverse_phrase(&case.label);
         assert_eq!(
-            inverse_phrase(&stored.to_uppercase()),
-            Some(inverse),
-            "case-insensitive: {stored}"
+            got.as_deref(),
+            case.expected.as_deref(),
+            "inverse: {}",
+            case.name
+        );
+        let upper = case.label.to_uppercase();
+        assert_eq!(
+            inverse_phrase(&upper).as_deref(),
+            case.expected.as_deref(),
+            "case-insensitive: {}",
+            case.name
         );
     }
-    assert_eq!(inverse_phrase("see"), None);
-    assert_eq!(inverse_phrase("followed up by"), None);
 }
 
 #[test]

@@ -389,7 +389,7 @@ Chips render a live relation index (§11), never the stored mirror.
 - **Labels** are a muted small-caps pill on the arrow side.
   - LINKS: `‹label› → (chip)`.
   - LINKED FROM: `‹inverse› (chip)` for a known label (the inverse
-    table below), otherwise `(chip) · ‹label› → this`.
+    rule below), otherwise `(chip) · ‹label› → this`.
   - Rows with labels wrap one entry per visual row. Unlabelled rows
     wrap between chips. Chips never change line height.
 - **Stale and broken.** A stored LINKED FROM entry that is no longer
@@ -425,19 +425,25 @@ Chips render a live relation index (§11), never the stored mirror.
 - **Without the plugin**, both lines still read as English.
 
 **Inverse phrases** (display only; case-insensitive match; never
-stored):
+stored). Named pairs the participle rule cannot produce:
 
 | Stored label | Shown on LINKED FROM |
 | --- | --- |
 | `merged into` | `merged from` |
 | `duplicate of` | `duplicated by` |
 | `follow-up of` | `followed up by` |
-| `superseded by` | `supersedes` |
 | `split from` | `split into` |
-| `implemented by` | `implements` |
-| `verified by` | `verifies` |
 
-The nav Linked-from stage's CURRENT rows use the same table.
+Every other two-word label of the form `‹participle› by` derives an
+inverse: `inspired by` → `inspires`, `blocked by` → `blocks`,
+`verified by` → `verifies`, `cancelled by` → `cancels`,
+`co-authored by` → `co-authors`, `written by` → `writes`. Otherwise
+LINKED FROM falls back to `(chip) · ‹label› → this`. Longer phrases
+such as `followed up by`, and `‹verb›s` labels such as `polishes`,
+stay uninverted. `bob relations list` shows each label's inverse in
+the `⇄` column.
+
+The nav Linked-from stage's CURRENT rows use the same rule.
 
 ## 11. The live relation index
 
@@ -850,8 +856,9 @@ Rules RV1–RV10 are shipped.
 - **Display spelling.** The most-used spelling of the key, with ties
   going to the first seen. `spellings[]` lists every spelling with
   its count, so case drift is visible.
-- **Inverse.** The §10 display-only table, matched case-insensitively
-  and never stored (`task_relations::label::inverse_phrase`).
+- **Inverse.** The §10 display-only named pairs plus the
+  `‹participle› by` rule, matched case-insensitively and never stored
+  (`task_relations::label::inverse_phrase`).
 - **Journal-only keys.** A hidden key with zero uses stays listable
   (count 0) from the journal's stored name, so it can always be found
   and unhidden.

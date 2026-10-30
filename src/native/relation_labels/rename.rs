@@ -507,8 +507,8 @@ fn plan_rename(
     } else {
         format!("{new_name} is not hidden")
     };
-    let before_inverse = inverse_phrase(&old_display).map(str::to_string);
-    let after_inverse = inverse_phrase(new_name).map(str::to_string);
+    let before_inverse = inverse_phrase(&old_display);
+    let after_inverse = inverse_phrase(new_name);
     let inverse_note = if before_inverse == after_inverse {
         "inverse phrase is unchanged".to_string()
     } else {

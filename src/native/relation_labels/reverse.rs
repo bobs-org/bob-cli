@@ -1527,11 +1527,9 @@ fn plan_reverse(
         format!("{new_name} is not hidden")
     };
     let before_inverse =
-        crate::native::task_relations::label::inverse_phrase(&old_display)
-            .map(str::to_string);
+        crate::native::task_relations::label::inverse_phrase(&old_display);
     let after_inverse =
-        crate::native::task_relations::label::inverse_phrase(new_name)
-            .map(str::to_string);
+        crate::native::task_relations::label::inverse_phrase(new_name);
     let inverse_note = if before_inverse == after_inverse {
         "inverse phrase is unchanged".to_string()
     } else {

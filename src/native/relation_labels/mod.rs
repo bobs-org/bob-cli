@@ -108,7 +108,7 @@ impl Catalog {
                     name: name.clone(),
                     count: 0,
                     spellings: Vec::new(),
-                    inverse: inverse_phrase(name).map(str::to_string),
+                    inverse: inverse_phrase(name),
                 },
             );
         }
@@ -258,7 +258,7 @@ pub(crate) fn count_label(
                 name: label.to_string(),
                 count: 1,
             }],
-            inverse: inverse_phrase(label).map(str::to_string),
+            inverse: inverse_phrase(label),
         },
     );
 }

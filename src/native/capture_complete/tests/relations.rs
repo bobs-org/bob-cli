@@ -208,6 +208,18 @@ fn relation_label_suggestions_count_links_and_put_typed_spelling_first() {
     assert_eq!(typed["existing"], true);
     assert_eq!(typed["count"], 3);
     assert_eq!(typed["replacement"], "|\"inspired by\"");
+    assert_eq!(typed["inverse"], "inspires");
+
+    let unused = result(
+        temp.path(),
+        "New task ~tasks:target|\"blocked by",
+        "New task ~tasks:target|\"blocked by".len(),
+    );
+    let unused_json = serde_json::to_value(unused).unwrap();
+    let unused_typed = &unused_json["candidates"][0];
+    assert_eq!(unused_typed["label"], "blocked by");
+    assert_eq!(unused_typed["existing"], false);
+    assert_eq!(unused_typed["inverse"], "blocks");
 
     write_file(
         &temp.path().join(".bob/relations/test.jsonl"),

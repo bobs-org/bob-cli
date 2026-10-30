@@ -149,6 +149,7 @@ fn relations_lists_catalog_counts_on_scratch_vault() {
     assert_eq!(labels[0]["count"], 2);
     assert_eq!(labels[1]["key"], "inspired by");
     assert_eq!(labels[1]["count"], 2);
+    assert_eq!(labels[1]["inverse"], "inspires");
     assert_eq!(labels[2]["key"], "duplicate of");
     assert_eq!(labels[2]["inverse"], "duplicated by");
     assert_eq!(labels[2]["replacement"], "|\"duplicate of\"");

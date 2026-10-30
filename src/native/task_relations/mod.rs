@@ -7,6 +7,7 @@
 //! and reconcile emit lines through these planners.
 
 pub(crate) mod format;
+pub(crate) mod inverse;
 pub(crate) mod label;
 pub(crate) mod mentions;
 pub(crate) mod parse;

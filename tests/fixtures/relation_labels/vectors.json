@@ -64,7 +64,7 @@
             { "name": "Inspired By", "count": 1 },
             { "name": "inspired by", "count": 1 }
           ],
-          "inverse": null
+          "inverse": "inspires"
         },
         {
           "key": "duplicate of",
@@ -456,6 +456,1013 @@
       "draft": "Fix trip ~tasks:target||\"open",
       "status": "label_need",
       "hidden": true
+    }
+  ],
+  "inverse": [
+    {
+      "name": "Merged Into",
+      "label": "Merged Into",
+      "expected": "merged from"
+    },
+    {
+      "name": "duplicate of",
+      "label": "duplicate of",
+      "expected": "duplicated by"
+    },
+    {
+      "name": "follow-up of",
+      "label": "follow-up of",
+      "expected": "followed up by"
+    },
+    {
+      "name": "Split From",
+      "label": "Split From",
+      "expected": "split into"
+    },
+    {
+      "name": "Inspired By",
+      "label": "Inspired By",
+      "expected": "inspires"
+    },
+    {
+      "name": "INSPIRED   by:",
+      "label": " INSPIRED   by:",
+      "expected": "inspires"
+    },
+    {
+      "name": "superseded by",
+      "label": "superseded by",
+      "expected": "supersedes"
+    },
+    {
+      "name": "implemented by",
+      "label": "implemented by",
+      "expected": "implements"
+    },
+    {
+      "name": "verified by",
+      "label": "verified by",
+      "expected": "verifies"
+    },
+    {
+      "name": "blocked by",
+      "label": "blocked by",
+      "expected": "blocks"
+    },
+    {
+      "name": "caused by",
+      "label": "caused by",
+      "expected": "causes"
+    },
+    {
+      "name": "replaced by",
+      "label": "replaced by",
+      "expected": "replaces"
+    },
+    {
+      "name": "fixed by",
+      "label": "fixed by",
+      "expected": "fixes"
+    },
+    {
+      "name": "addressed by",
+      "label": "addressed by",
+      "expected": "addresses"
+    },
+    {
+      "name": "focused by",
+      "label": "focused by",
+      "expected": "focuses"
+    },
+    {
+      "name": "organized by",
+      "label": "organized by",
+      "expected": "organizes"
+    },
+    {
+      "name": "cached by",
+      "label": "cached by",
+      "expected": "caches"
+    },
+    {
+      "name": "patched by",
+      "label": "patched by",
+      "expected": "patches"
+    },
+    {
+      "name": "pushed by",
+      "label": "pushed by",
+      "expected": "pushes"
+    },
+    {
+      "name": "copied by",
+      "label": "copied by",
+      "expected": "copies"
+    },
+    {
+      "name": "tied by",
+      "label": "tied by",
+      "expected": "ties"
+    },
+    {
+      "name": "played by",
+      "label": "played by",
+      "expected": "plays"
+    },
+    {
+      "name": "deployed by",
+      "label": "deployed by",
+      "expected": "deploys"
+    },
+    {
+      "name": "keyed by",
+      "label": "keyed by",
+      "expected": "keys"
+    },
+    {
+      "name": "planned by",
+      "label": "planned by",
+      "expected": "plans"
+    },
+    {
+      "name": "committed by",
+      "label": "committed by",
+      "expected": "commits"
+    },
+    {
+      "name": "referred by",
+      "label": "referred by",
+      "expected": "refers"
+    },
+    {
+      "name": "tagged by",
+      "label": "tagged by",
+      "expected": "tags"
+    },
+    {
+      "name": "debugged by",
+      "label": "debugged by",
+      "expected": "debugs"
+    },
+    {
+      "name": "embedded by",
+      "label": "embedded by",
+      "expected": "embeds"
+    },
+    {
+      "name": "trekked by",
+      "label": "trekked by",
+      "expected": "treks"
+    },
+    {
+      "name": "revved by",
+      "label": "revved by",
+      "expected": "revs"
+    },
+    {
+      "name": "cancelled by",
+      "label": "cancelled by",
+      "expected": "cancels"
+    },
+    {
+      "name": "canceled by",
+      "label": "canceled by",
+      "expected": "cancels"
+    },
+    {
+      "name": "labelled by",
+      "label": "labelled by",
+      "expected": "labels"
+    },
+    {
+      "name": "compelled by",
+      "label": "compelled by",
+      "expected": "compels"
+    },
+    {
+      "name": "installed by",
+      "label": "installed by",
+      "expected": "installs"
+    },
+    {
+      "name": "called by",
+      "label": "called by",
+      "expected": "calls"
+    },
+    {
+      "name": "spelled by",
+      "label": "spelled by",
+      "expected": "spells"
+    },
+    {
+      "name": "misspelled by",
+      "label": "misspelled by",
+      "expected": "misspells"
+    },
+    {
+      "name": "passed by",
+      "label": "passed by",
+      "expected": "passes"
+    },
+    {
+      "name": "buzzed by",
+      "label": "buzzed by",
+      "expected": "buzzes"
+    },
+    {
+      "name": "stuffed by",
+      "label": "stuffed by",
+      "expected": "stuffs"
+    },
+    {
+      "name": "queued by",
+      "label": "queued by",
+      "expected": "queues"
+    },
+    {
+      "name": "continued by",
+      "label": "continued by",
+      "expected": "continues"
+    },
+    {
+      "name": "echoed by",
+      "label": "echoed by",
+      "expected": "echoes"
+    },
+    {
+      "name": "radioed by",
+      "label": "radioed by",
+      "expected": "radios"
+    },
+    {
+      "name": "solved by",
+      "label": "solved by",
+      "expected": "solves"
+    },
+    {
+      "name": "introduced by",
+      "label": "introduced by",
+      "expected": "introduces"
+    },
+    {
+      "name": "enabled by",
+      "label": "enabled by",
+      "expected": "enables"
+    },
+    {
+      "name": "handled by",
+      "label": "handled by",
+      "expected": "handles"
+    },
+    {
+      "name": "toggled by",
+      "label": "toggled by",
+      "expected": "toggles"
+    },
+    {
+      "name": "curled by",
+      "label": "curled by",
+      "expected": "curls"
+    },
+    {
+      "name": "crawled by",
+      "label": "crawled by",
+      "expected": "crawls"
+    },
+    {
+      "name": "centred by",
+      "label": "centred by",
+      "expected": "centres"
+    },
+    {
+      "name": "judged by",
+      "label": "judged by",
+      "expected": "judges"
+    },
+    {
+      "name": "merged by",
+      "label": "merged by",
+      "expected": "merges"
+    },
+    {
+      "name": "bulged by",
+      "label": "bulged by",
+      "expected": "bulges"
+    },
+    {
+      "name": "changed by",
+      "label": "changed by",
+      "expected": "changes"
+    },
+    {
+      "name": "challenged by",
+      "label": "challenged by",
+      "expected": "challenges"
+    },
+    {
+      "name": "plunged by",
+      "label": "plunged by",
+      "expected": "plunges"
+    },
+    {
+      "name": "pinged by",
+      "label": "pinged by",
+      "expected": "pings"
+    },
+    {
+      "name": "prolonged by",
+      "label": "prolonged by",
+      "expected": "prolongs"
+    },
+    {
+      "name": "engaged by",
+      "label": "engaged by",
+      "expected": "engages"
+    },
+    {
+      "name": "obliged by",
+      "label": "obliged by",
+      "expected": "obliges"
+    },
+    {
+      "name": "extended by",
+      "label": "extended by",
+      "expected": "extends"
+    },
+    {
+      "name": "started by",
+      "label": "started by",
+      "expected": "starts"
+    },
+    {
+      "name": "checked by",
+      "label": "checked by",
+      "expected": "checks"
+    },
+    {
+      "name": "formed by",
+      "label": "formed by",
+      "expected": "forms"
+    },
+    {
+      "name": "asked by",
+      "label": "asked by",
+      "expected": "asks"
+    },
+    {
+      "name": "evaluated by",
+      "label": "evaluated by",
+      "expected": "evaluates"
+    },
+    {
+      "name": "initiated by",
+      "label": "initiated by",
+      "expected": "initiates"
+    },
+    {
+      "name": "persuaded by",
+      "label": "persuaded by",
+      "expected": "persuades"
+    },
+    {
+      "name": "created by",
+      "label": "created by",
+      "expected": "creates"
+    },
+    {
+      "name": "treated by",
+      "label": "treated by",
+      "expected": "treats"
+    },
+    {
+      "name": "loaded by",
+      "label": "loaded by",
+      "expected": "loads"
+    },
+    {
+      "name": "joined by",
+      "label": "joined by",
+      "expected": "joins"
+    },
+    {
+      "name": "needed by",
+      "label": "needed by",
+      "expected": "needs"
+    },
+    {
+      "name": "proceeded by",
+      "label": "proceeded by",
+      "expected": "proceeds"
+    },
+    {
+      "name": "hoped by",
+      "label": "hoped by",
+      "expected": "hopes"
+    },
+    {
+      "name": "noted by",
+      "label": "noted by",
+      "expected": "notes"
+    },
+    {
+      "name": "named by",
+      "label": "named by",
+      "expected": "names"
+    },
+    {
+      "name": "used by",
+      "label": "used by",
+      "expected": "uses"
+    },
+    {
+      "name": "cited by",
+      "label": "cited by",
+      "expected": "cites"
+    },
+    {
+      "name": "typed by",
+      "label": "typed by",
+      "expected": "types"
+    },
+    {
+      "name": "ruled by",
+      "label": "ruled by",
+      "expected": "rules"
+    },
+    {
+      "name": "quoted by",
+      "label": "quoted by",
+      "expected": "quotes"
+    },
+    {
+      "name": "guided by",
+      "label": "guided by",
+      "expected": "guides"
+    },
+    {
+      "name": "updated by",
+      "label": "updated by",
+      "expected": "updates"
+    },
+    {
+      "name": "deleted by",
+      "label": "deleted by",
+      "expected": "deletes"
+    },
+    {
+      "name": "completed by",
+      "label": "completed by",
+      "expected": "completes"
+    },
+    {
+      "name": "targeted by",
+      "label": "targeted by",
+      "expected": "targets"
+    },
+    {
+      "name": "promoted by",
+      "label": "promoted by",
+      "expected": "promotes"
+    },
+    {
+      "name": "denoted by",
+      "label": "denoted by",
+      "expected": "denotes"
+    },
+    {
+      "name": "pivoted by",
+      "label": "pivoted by",
+      "expected": "pivots"
+    },
+    {
+      "name": "rescoped by",
+      "label": "rescoped by",
+      "expected": "rescopes"
+    },
+    {
+      "name": "developed by",
+      "label": "developed by",
+      "expected": "develops"
+    },
+    {
+      "name": "described by",
+      "label": "described by",
+      "expected": "describes"
+    },
+    {
+      "name": "upgraded by",
+      "label": "upgraded by",
+      "expected": "upgrades"
+    },
+    {
+      "name": "provided by",
+      "label": "provided by",
+      "expected": "provides"
+    },
+    {
+      "name": "exploded by",
+      "label": "exploded by",
+      "expected": "explodes"
+    },
+    {
+      "name": "included by",
+      "label": "included by",
+      "expected": "includes"
+    },
+    {
+      "name": "invoked by",
+      "label": "invoked by",
+      "expected": "invokes"
+    },
+    {
+      "name": "renamed by",
+      "label": "renamed by",
+      "expected": "renames"
+    },
+    {
+      "name": "assumed by",
+      "label": "assumed by",
+      "expected": "assumes"
+    },
+    {
+      "name": "escaped by",
+      "label": "escaped by",
+      "expected": "escapes"
+    },
+    {
+      "name": "prototyped by",
+      "label": "prototyped by",
+      "expected": "prototypes"
+    },
+    {
+      "name": "compared by",
+      "label": "compared by",
+      "expected": "compares"
+    },
+    {
+      "name": "required by",
+      "label": "required by",
+      "expected": "requires"
+    },
+    {
+      "name": "captured by",
+      "label": "captured by",
+      "expected": "captures"
+    },
+    {
+      "name": "compiled by",
+      "label": "compiled by",
+      "expected": "compiles"
+    },
+    {
+      "name": "consoled by",
+      "label": "consoled by",
+      "expected": "consoles"
+    },
+    {
+      "name": "scheduled by",
+      "label": "scheduled by",
+      "expected": "schedules"
+    },
+    {
+      "name": "defined by",
+      "label": "defined by",
+      "expected": "defines"
+    },
+    {
+      "name": "attuned by",
+      "label": "attuned by",
+      "expected": "attunes"
+    },
+    {
+      "name": "computed by",
+      "label": "computed by",
+      "expected": "computes"
+    },
+    {
+      "name": "edited by",
+      "label": "edited by",
+      "expected": "edits"
+    },
+    {
+      "name": "visited by",
+      "label": "visited by",
+      "expected": "visits"
+    },
+    {
+      "name": "opened by",
+      "label": "opened by",
+      "expected": "opens"
+    },
+    {
+      "name": "offered by",
+      "label": "offered by",
+      "expected": "offers"
+    },
+    {
+      "name": "covered by",
+      "label": "covered by",
+      "expected": "covers"
+    },
+    {
+      "name": "monitored by",
+      "label": "monitored by",
+      "expected": "monitors"
+    },
+    {
+      "name": "colored by",
+      "label": "colored by",
+      "expected": "colors"
+    },
+    {
+      "name": "signaled by",
+      "label": "signaled by",
+      "expected": "signals"
+    },
+    {
+      "name": "mentioned by",
+      "label": "mentioned by",
+      "expected": "mentions"
+    },
+    {
+      "name": "followed by",
+      "label": "followed by",
+      "expected": "follows"
+    },
+    {
+      "name": "showed by",
+      "label": "showed by",
+      "expected": "shows"
+    },
+    {
+      "name": "indexed by",
+      "label": "indexed by",
+      "expected": "indexes"
+    },
+    {
+      "name": "agreed by",
+      "label": "agreed by",
+      "expected": "agrees"
+    },
+    {
+      "name": "freed by",
+      "label": "freed by",
+      "expected": "frees"
+    },
+    {
+      "name": "guaranteed by",
+      "label": "guaranteed by",
+      "expected": "guarantees"
+    },
+    {
+      "name": "added by",
+      "label": "added by",
+      "expected": "adds"
+    },
+    {
+      "name": "synced by",
+      "label": "synced by",
+      "expected": "syncs"
+    },
+    {
+      "name": "debuted by",
+      "label": "debuted by",
+      "expected": "debuts"
+    },
+    {
+      "name": "combated by",
+      "label": "combated by",
+      "expected": "combats"
+    },
+    {
+      "name": "eyed by",
+      "label": "eyed by",
+      "expected": "eyes"
+    },
+    {
+      "name": "panicked by",
+      "label": "panicked by",
+      "expected": "panics"
+    },
+    {
+      "name": "invited by",
+      "label": "invited by",
+      "expected": "invites"
+    },
+    {
+      "name": "united by",
+      "label": "united by",
+      "expected": "unites"
+    },
+    {
+      "name": "excited by",
+      "label": "excited by",
+      "expected": "excites"
+    },
+    {
+      "name": "devoted by",
+      "label": "devoted by",
+      "expected": "devotes"
+    },
+    {
+      "name": "routed by",
+      "label": "routed by",
+      "expected": "routes"
+    },
+    {
+      "name": "postponed by",
+      "label": "postponed by",
+      "expected": "postpones"
+    },
+    {
+      "name": "explored by",
+      "label": "explored by",
+      "expected": "explores"
+    },
+    {
+      "name": "ignored by",
+      "label": "ignored by",
+      "expected": "ignores"
+    },
+    {
+      "name": "restored by",
+      "label": "restored by",
+      "expected": "restores"
+    },
+    {
+      "name": "convened by",
+      "label": "convened by",
+      "expected": "convenes"
+    },
+    {
+      "name": "interfered by",
+      "label": "interfered by",
+      "expected": "interferes"
+    },
+    {
+      "name": "welcomed by",
+      "label": "welcomed by",
+      "expected": "welcomes"
+    },
+    {
+      "name": "breathed by",
+      "label": "breathed by",
+      "expected": "breathes"
+    },
+    {
+      "name": "pasted by",
+      "label": "pasted by",
+      "expected": "pastes"
+    },
+    {
+      "name": "wasted by",
+      "label": "wasted by",
+      "expected": "wastes"
+    },
+    {
+      "name": "competed by",
+      "label": "competed by",
+      "expected": "competes"
+    },
+    {
+      "name": "eloped by",
+      "label": "eloped by",
+      "expected": "elopes"
+    },
+    {
+      "name": "inhaled by",
+      "label": "inhaled by",
+      "expected": "inhales"
+    },
+    {
+      "name": "murmured by",
+      "label": "murmured by",
+      "expected": "murmurs"
+    },
+    {
+      "name": "collared by",
+      "label": "collared by",
+      "expected": "collars"
+    },
+    {
+      "name": "bulleted by",
+      "label": "bulleted by",
+      "expected": "bullets"
+    },
+    {
+      "name": "penciled by",
+      "label": "penciled by",
+      "expected": "pencils"
+    },
+    {
+      "name": "biased by",
+      "label": "biased by",
+      "expected": "biases"
+    },
+    {
+      "name": "hanged by",
+      "label": "hanged by",
+      "expected": "hangs"
+    },
+    {
+      "name": "hinged by",
+      "label": "hinged by",
+      "expected": "hinges"
+    },
+    {
+      "name": "controlled by",
+      "label": "controlled by",
+      "expected": "controls"
+    },
+    {
+      "name": "signalled by",
+      "label": "signalled by",
+      "expected": "signals"
+    },
+    {
+      "name": "fuelled by",
+      "label": "fuelled by",
+      "expected": "fuels"
+    },
+    {
+      "name": "led by",
+      "label": "led by",
+      "expected": "leads"
+    },
+    {
+      "name": "fed by",
+      "label": "fed by",
+      "expected": "feeds"
+    },
+    {
+      "name": "fled by",
+      "label": "fled by",
+      "expected": "flees"
+    },
+    {
+      "name": "shed by",
+      "label": "shed by",
+      "expected": "sheds"
+    },
+    {
+      "name": "co-authored by",
+      "label": "co-authored by",
+      "expected": "co-authors"
+    },
+    {
+      "name": "fine-tuned by",
+      "label": "fine-tuned by",
+      "expected": "fine-tunes"
+    },
+    {
+      "name": "auto-generated by",
+      "label": "auto-generated by",
+      "expected": "auto-generates"
+    },
+    {
+      "name": "copy-pasted by",
+      "label": "copy-pasted by",
+      "expected": "copy-pastes"
+    },
+    {
+      "name": "re-opened by",
+      "label": "re-opened by",
+      "expected": "re-opens"
+    },
+    {
+      "name": "see",
+      "label": "see",
+      "expected": null
+    },
+    {
+      "name": "idea for",
+      "label": "idea for",
+      "expected": null
+    },
+    {
+      "name": "polishes",
+      "label": "polishes",
+      "expected": null
+    },
+    {
+      "name": "implements",
+      "label": "implements",
+      "expected": null
+    },
+    {
+      "name": "verifies",
+      "label": "verifies",
+      "expected": null
+    },
+    {
+      "name": "inspires",
+      "label": "inspires",
+      "expected": null
+    },
+    {
+      "name": "followed up by",
+      "label": "followed up by",
+      "expected": null
+    },
+    {
+      "name": "spec.md comment was inspired by",
+      "label": "spec.md comment was inspired by",
+      "expected": null
+    },
+    {
+      "name": "need by",
+      "label": "need by",
+      "expected": null
+    },
+    {
+      "name": "red by",
+      "label": "red by",
+      "expected": null
+    },
+    {
+      "name": "inspired",
+      "label": "inspired",
+      "expected": null
+    },
+    {
+      "name": "by",
+      "label": "by",
+      "expected": null
+    },
+    {
+      "name": "inspired by me",
+      "label": "inspired by me",
+      "expected": null
+    },
+    {
+      "name": "créé by",
+      "label": "créé by",
+      "expected": null
+    },
+    {
+      "name": "-ed by",
+      "label": "-ed by",
+      "expected": null
+    },
+    {
+      "name": "written by",
+      "label": "written by",
+      "expected": "writes"
+    },
+    {
+      "name": "overridden by",
+      "label": "overridden by",
+      "expected": "overrides"
+    },
+    {
+      "name": "driven by",
+      "label": "driven by",
+      "expected": "drives"
+    },
+    {
+      "name": "built by",
+      "label": "built by",
+      "expected": "builds"
+    },
+    {
+      "name": "made by",
+      "label": "made by",
+      "expected": "makes"
+    },
+    {
+      "name": "done by",
+      "label": "done by",
+      "expected": "does"
+    },
+    {
+      "name": "undone by",
+      "label": "undone by",
+      "expected": "undoes"
+    },
+    {
+      "name": "caught by",
+      "label": "caught by",
+      "expected": "catches"
+    },
+    {
+      "name": "found by",
+      "label": "found by",
+      "expected": "finds"
+    },
+    {
+      "name": "paid by",
+      "label": "paid by",
+      "expected": "pays"
+    },
+    {
+      "name": "split by",
+      "label": "split by",
+      "expected": "splits"
+    },
+    {
+      "name": "read by",
+      "label": "read by",
+      "expected": "reads"
     }
   ]
 }

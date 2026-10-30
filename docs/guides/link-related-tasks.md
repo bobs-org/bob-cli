@@ -57,8 +57,9 @@ Mac](capture-from-your-mac.md) for the panel workflow.
 
 Labels are optional and always describe the relation from the source task's
 side. Use `|label` for a one-word label and `|"follow-up of"` for a label with
-spaces. For a known label, the incoming view uses Bob's built-in inverse
-wording; the stored label stays as authored. See the [relation label
+spaces. `‹verb›ed by` labels and the built-in pairs get inverse wording
+on the incoming side; the stored label stays as authored.
+`bob relations list` shows each label's inverse. See the [relation label
 rules](../task-relations.md#32-labels).
 
 ## What a relation changes

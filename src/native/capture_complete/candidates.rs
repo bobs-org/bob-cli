@@ -1703,6 +1703,9 @@ pub(super) fn relation_label_suggestions(
             crate::native::task_relations::label::relation_label_hide_form(
                 &canonical_label,
             );
+        let inverse = crate::native::task_relations::label::inverse_phrase(
+            &canonical_label,
+        );
         suggestions.retain(|item| item.key != key);
         suggestions.insert(
             0,
@@ -1711,7 +1714,7 @@ pub(super) fn relation_label_suggestions(
                 hide_replacement,
                 label: canonical_label,
                 key: key.clone(),
-                inverse: existing.and_then(|record| record.inverse.clone()),
+                inverse,
                 count: existing.map(|record| record.count as usize),
                 typed: true,
                 disabled_reason,
@@ -1787,8 +1790,7 @@ fn append_cancel_overlay(
             inverse:
                 crate::native::task_relations::label::inverse_phrase(
                     &cancel.name,
-                )
-                .map(str::to_string),
+                ),
             count: None,
             typed: false,
             disabled_reason: None,
@@ -1853,8 +1855,7 @@ fn append_complete_overlay(
             inverse:
                 crate::native::task_relations::label::inverse_phrase(
                     &complete.name,
-                )
-                .map(str::to_string),
+                ),
             count: None,
             typed: false,
             disabled_reason: None,

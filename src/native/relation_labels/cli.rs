@@ -403,8 +403,7 @@ fn append_configured_overlay(
             hidden,
             inverse: crate::native::task_relations::label::inverse_phrase(
                 &cancel.name,
-            )
-            .map(str::to_string),
+            ),
             spellings: Vec::new(),
             replacement,
             hide_replacement,
@@ -453,8 +452,7 @@ fn append_configured_overlay(
             hidden,
             inverse: crate::native::task_relations::label::inverse_phrase(
                 &complete.name,
-            )
-            .map(str::to_string),
+            ),
             spellings: Vec::new(),
             replacement,
             hide_replacement,
