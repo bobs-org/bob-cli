@@ -335,6 +335,7 @@ qualify too; Google Calendar is not required.
 ```markdown
 ## Events
 
+*↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*
 - [ ] #task **0800-0830** Product interview [root:: job] [type:: MEET] ^product-interview
 - **all day** School holiday
 - **0915-1000** Toddler class · *maybe*
@@ -354,7 +355,8 @@ the root's suggested task type is not already `MEET`. Link an Event Task with
 its local block link under a Pomodoro.
 
 `bob gcal sync` writes rows in this shape, with a blank line between the
-`## Events` heading and the section's first line. A written Event Task carries a
+`## Events` heading and the section's first line. That first line is Bob's
+Events stamp: which Google account last changed the section, and when. A written Event Task carries a
 `📅` identity badge (Google's event link, also the adoption key), an optional
 `📹` join badge, and an optional `📍` maps badge for a non-URL location, then
 `[root::]`, then `[type:: MEET]` only when needed, then a `^block-id` minted

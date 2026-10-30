@@ -351,10 +351,13 @@ event, chooses roots, and folds the per-host journal. The plan then inserts
 new rows in time order (never reordering existing lines), adopts rows whose
 `📅` URL is already in the note without a journal record (crash recovery),
 tombstones journaled rows whose line is gone (never re-created), and appends
-each eligible MEET link once. A removed or moved link is never re-added. A
-byte-identical plan writes nothing and appends nothing. Sync keeps a blank
-line between the `## Events` heading and its first line, and adds the gap to
-an existing section that lacks it, even when there are no calendar changes.
+each eligible MEET link once. A removed or moved link is never re-added. An
+unchanged calendar can still write the Events stamp when the stamp is due
+(missing, malformed, edited, misplaced, duplicated, or later than now). Age
+never makes a stamp due: the line means last change. A plan that is
+byte-identical after that step writes nothing and appends nothing. Sync keeps a
+blank line between the `## Events` heading and its first line, and adds the gap
+to an existing section that lacks it, even when there are no calendar changes.
 
 The write takes the vault lock (30 seconds), re-reads and re-plans, then
 writes through the preimage-checked staged writer, all-or-nothing, retrying
@@ -368,7 +371,41 @@ plan and writes nothing. `-q` prints nothing on success, no-op, or waiting.
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
 (`action`, `kind`, `time`, `title`, `root`, `source`), `pomodoro`
-(`entry_line`, `created`, `links_added`), and `warnings`.
+(`entry_line`, `created`, `links_added`), `warnings`, and `stamp`
+(`account`, `synced_at`, `refreshed`, or `null` when there is no Events
+section and for `waiting`).
+
+### Events stamp
+
+Every reconciled `## Events` section carries one Bob-owned italic line
+immediately after the heading gap:
+
+```markdown
+## Events
+
+*↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*
+- [x] #task **0800-0830** Product interview [📅](…) [📹](…) [root:: job] ^product-interview
+```
+
+The source is `*↻ synced <when> · [<account>](<day-url>)*`. `<when>` is `HH:MM`
+in Bob's timezone when the run happened on the note's own day, otherwise
+`Ddd YYYY-MM-DD HH:MM` (for example `synced Thu 2026-10-29 21:40` on Friday's
+note after `bob gcal sync -D tomorrow`). The account is a deep link that opens
+that day in Google Calendar; the human report echoes `↻ synced 14:05 ·
+you@example.com` with no URL. Sync never creates an Events section just to hold
+a stamp. A hand-written section that sync reconciles gets one.
+
+The stamp means last change. Sync rewrites it when rows, links, the heading
+gap, or the stamp itself changed, and when the existing line is missing,
+malformed, edited, misplaced, duplicated, or later than now. An otherwise
+unchanged run leaves it byte-identical. Ledger Tools never paints the line
+stale. Bob owns the line: an edit is replaced and a deleted line returns on
+the next sync. Tombstones and "propose once" do not apply.
+
+A day whose stamp names a different Google account than this run uses is
+refused (`account_changed`, exit 2) so a switch cannot cancel the old
+account's untouched meetings. Delete the `↻` line to hand the day to the new
+account, or set `gcal.account` to the stamp's account.
 
 ### Who owns each part of a row
 
@@ -381,6 +418,7 @@ plan and writes nothing. `-q` prints nothing on success, no-op, or waiting.
 | Child bullets (meeting notes) | You | Never touched |
 | MEET Task Link | Bob, once | Never re-added or moved; removed only by a cancel |
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
+| Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
 
 "Untouched" means not done, not In Progress, never linked under a closed
 Pomodoro, and with no 🍅 history. A worked task is never cancelled; it is
@@ -483,8 +521,9 @@ column reports the same roots beside the note.
 - `1` — runtime failure: gog, network, timeout, token, a doctor check
   that failed, or a daily-note write that lost a concurrent-edit race.
 - `2` — usage or setup error: clap usage errors, bad `gcal:` config, missing
-  gog, gog older than v0.44.0, no client, not logged in, or sync on a host
-  other than `gcal.writer`.
+  gog, gog older than v0.44.0, no client, not logged in, sync on a host
+  other than `gcal.writer`, or `account_changed` when the day's Events stamp
+  names a different Google account than this run.
 
 Errors print `bob gcal <cmd>: <message>` to stderr (a red `error` prefix on a
 TTY) with an optional dim `  hint: …` line. In JSON mode, failures print
@@ -513,8 +552,9 @@ including the `last_sync` check.
 `counts`, and `last_sync`. `-a` adds omitted event rows. Each event contains
 no provider description or attendee list, and carries the `vault` state.
 
-`sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`, and
-`warnings`. Row actions add `updated`, `cancelled`, `removed` (context),
+`sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
+`warnings`, and `stamp`. `stamp` is `{account, synced_at, refreshed}` or
+`null`. Row actions add `updated`, `cancelled`, `removed` (context),
 `upgraded`, and `learned` to the sync-phase `added`, `adopted`, and `removed`
 (task) actions; lifecycle notices also arrive as `warnings`.
 

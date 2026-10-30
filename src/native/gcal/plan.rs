@@ -4,16 +4,17 @@
 //! The plan inserts new rows in time order (never reordering existing
 //! lines), adopts crash-recovery rows by their `📅` URL, tombstones
 //! journaled rows whose line is gone, and appends each eligible MEET
-//! link once. It keeps a blank line under the `## Events` heading. When
-//! the computed contents equal the input, the plan reports no change and
-//! carries no records.
+//! link once. It keeps a blank line under the `## Events` heading, then
+//! writes the Bob-owned Events stamp as its last step. When the computed
+//! contents equal the input, the plan reports no change and carries no
+//! records.
 
 use std::{
     collections::{BTreeMap, HashSet},
     ops::Range,
 };
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 
 use crate::native::{
     capture::line_spans,
@@ -22,7 +23,7 @@ use crate::native::{
         child_block_end_line, insert_link_into_entry,
         insert_named_placeholder_after_last_open,
     },
-    event_task,
+    event_task, markdown,
     pomodoro::pomodoros_section_range,
 };
 
@@ -34,6 +35,7 @@ use super::{
         AbsentVerdict, KeptNotice, LearnedSeries, LifecycleItem,
     },
     render::{render_context_row, render_task_row, ContextRowInput},
+    stamp::{self, Stamp},
 };
 
 /// One included occurrence with its decided rendering.
@@ -81,6 +83,10 @@ pub(crate) struct SyncPlanInput<'a> {
     /// journal does not already teach.
     pub series_roots:
         &'a BTreeMap<(String, String), super::journal::LearnedRoot>,
+    /// Resolved Google account for this run (`snapshot.account`).
+    pub account: &'a str,
+    /// Clock for the stamp; truncated to the minute when written.
+    pub now: NaiveDateTime,
 }
 
 /// One row the plan inserts, for the journal and the report.
@@ -172,6 +178,11 @@ pub(crate) struct SyncPlan {
     pub entries_removed: usize,
     pub pomodoro_entry_line: Option<usize>,
     pub pomodoro_created: bool,
+    /// Stamp the note carries after the plan, when an Events section
+    /// exists.
+    pub stamp: Option<Stamp>,
+    /// True when this plan wrote the stamp, or would write it under `-d`.
+    pub stamp_refreshed: bool,
 }
 
 pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
@@ -349,6 +360,8 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
         plan_meet_links(input, &mut working, &mut plan);
     }
 
+    plan_stamp(input, &mut working, &mut plan);
+
     plan.contents = working.finish();
     // A no-op plan writes nothing and appends nothing: identical
     // contents and no records. A tombstone-only run leaves the note
@@ -380,6 +393,8 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
         plan.entries_removed = 0;
         plan.pomodoro_entry_line = None;
         plan.pomodoro_created = false;
+        // Keep `stamp` / `stamp_refreshed` so an unchanged run still
+        // reports the line the note already carries.
     }
     plan
 }
@@ -1032,14 +1047,20 @@ impl WorkingNote {
     }
 
     /// Return the insertion point for a row that sorts before every other
-    /// row, keeping it below the heading gap and together with the list.
+    /// row, keeping it below the heading gap, below a recognized stamp,
+    /// and together with the list.
     fn events_top_index(&self) -> usize {
         let range = self.events_range().expect("Events section exists");
-        if let Some(index) = range
-            .clone()
-            .find(|index| !self.lines[*index].trim().is_empty())
-        {
+        let refs = self.line_refs();
+        let stamps: HashSet<usize> =
+            stamp::recognize(&refs, range.clone()).into_iter().collect();
+        if let Some(index) = range.clone().find(|index| {
+            !self.lines[*index].trim().is_empty() && !stamps.contains(index)
+        }) {
             return index;
+        }
+        if let Some(last) = stamps.iter().max().copied() {
+            return last + 1;
         }
         if range.len() >= 2 {
             range.start + 1
@@ -1206,6 +1227,84 @@ fn parse_hhmm(value: &str) -> Option<u16> {
         return None;
     }
     Some(hour * 60 + minute)
+}
+
+/// Write or keep the Events stamp as the last planning step.
+fn plan_stamp(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan: &mut SyncPlan,
+) {
+    let Some(range) = working.events_range() else {
+        plan.stamp = None;
+        plan.stamp_refreshed = false;
+        return;
+    };
+    let note_day = note_day(input);
+    let now = stamp::truncate_to_minute(input.now);
+    let other_changed = working.finish() != input.contents;
+    let (due, mut stamps) = {
+        let refs = working.line_refs();
+        let due =
+            other_changed || stamp::is_due(&refs, range.clone(), now, note_day);
+        (due, stamp::recognize(&refs, range))
+    };
+    if !due {
+        plan.stamp = stamps
+            .first()
+            .and_then(|&index| stamp::parse(&working.lines[index], note_day));
+        plan.stamp_refreshed = false;
+        return;
+    }
+
+    let mut pomodoro_0 = plan.pomodoro_entry_line.map(|line| line - 1);
+    stamps.sort_unstable();
+    for index in stamps.into_iter().rev() {
+        if pomodoro_0.is_some_and(|line| index < line) {
+            pomodoro_0 = pomodoro_0.map(|line| line - 1);
+        }
+        working.lines.remove(index);
+    }
+
+    let range = working.events_range().expect("Events section exists");
+    let mut slot = {
+        let refs = working.line_refs();
+        stamp::canonical_slot(&refs, range.clone())
+    };
+    if slot == range.start {
+        working.lines.insert(slot, String::new());
+        if pomodoro_0.is_some_and(|line| slot <= line) {
+            pomodoro_0 = pomodoro_0.map(|line| line + 1);
+        }
+        slot += 1;
+    }
+    let need_blank_after = working.lines.get(slot).is_some_and(|line| {
+        !line.trim().is_empty()
+            && !stamp::is_list_item(line)
+            && markdown::atx_heading(line).is_none()
+    });
+    let rendered = stamp::render(input.account, now, note_day);
+    working.lines.insert(slot, rendered);
+    if pomodoro_0.is_some_and(|line| slot <= line) {
+        pomodoro_0 = pomodoro_0.map(|line| line + 1);
+    }
+    if need_blank_after {
+        working.lines.insert(slot + 1, String::new());
+        if pomodoro_0.is_some_and(|line| slot < line) {
+            pomodoro_0 = pomodoro_0.map(|line| line + 1);
+        }
+    }
+    plan.pomodoro_entry_line = pomodoro_0.map(|line| line + 1);
+    plan.stamp = Some(Stamp {
+        account: input.account.to_string(),
+        synced_at: now,
+    });
+    plan.stamp_refreshed = true;
+}
+
+fn note_day(input: &SyncPlanInput<'_>) -> NaiveDate {
+    NaiveDate::parse_from_str(&input.day_string, "%Y-%m-%d")
+        .unwrap_or(input.today)
 }
 
 /// Append each eligible MEET link once, creating the placeholder in

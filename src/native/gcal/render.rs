@@ -184,7 +184,7 @@ fn maps_url(location: &str) -> String {
     )
 }
 
-fn percent_encode_query(value: &str) -> String {
+pub(crate) fn percent_encode_query(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {

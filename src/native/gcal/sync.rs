@@ -21,6 +21,7 @@ use super::{
     plan::{self, PlannedOccurrence},
     render,
     snapshot::{self},
+    stamp::{self, Stamp},
     ui, GcalError, SyncArgs,
 };
 use crate::native::{
@@ -68,6 +69,8 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             quiet: true,
             json: false,
             diff: None,
+            stamp: None,
+            stamp_refreshed: false,
         },
         Some(format!("{}: {}", error.kind(), error.message())),
     );
@@ -94,6 +97,8 @@ struct SyncReport {
     quiet: bool,
     json: bool,
     diff: Option<String>,
+    stamp: Option<Stamp>,
+    stamp_refreshed: bool,
 }
 
 fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
@@ -146,6 +151,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             &journal_warnings(&vault)?,
         );
     }
+    stamp::account_guard(&contents, &snapshot.account, day, &display_path)?;
 
     let (journal_state, mut warnings, _) = journal::load_state(&vault)
         .map_err(|error| {
@@ -179,6 +185,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         today: now.date(),
         lifecycle: lifecycle.clone(),
         series_roots: &snapshot.series_roots,
+        account: &snapshot.account,
+        now,
     });
 
     if args.dry_run {
@@ -195,6 +203,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             quiet: args.quiet,
             json: args.format.is_json(),
             diff: Some(diff),
+            stamp: plan.stamp.clone(),
+            stamp_refreshed: plan.stamp_refreshed,
         });
     }
 
@@ -211,6 +221,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             quiet: args.quiet,
             json: args.format.is_json(),
             diff: None,
+            stamp: plan.stamp.clone(),
+            stamp_refreshed: plan.stamp_refreshed,
         };
         record_status(&host, day, "unchanged", &report, None);
         return Ok(report);
@@ -261,6 +273,12 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                             format!("re-read {}: {error}", note_path.display()),
                         )
                     })?;
+                stamp::account_guard(
+                    &current,
+                    &snapshot.account,
+                    day,
+                    &display_path,
+                )?;
                 plan = plan::plan_sync(&plan::SyncPlanInput {
                     contents: &current,
                     is_today,
@@ -270,6 +288,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                     today: now.date(),
                     lifecycle: lifecycle.clone(),
                     series_roots: &snapshot.series_roots,
+                    account: &snapshot.account,
+                    now,
                 });
                 if !plan.changed {
                     let report = SyncReport {
@@ -284,6 +304,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         quiet: args.quiet,
                         json: args.format.is_json(),
                         diff: None,
+                        stamp: plan.stamp.clone(),
+                        stamp_refreshed: plan.stamp_refreshed,
                     };
                     record_status(&host, day, "unchanged", &report, None);
                     return Ok(report);
@@ -317,6 +339,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         quiet: args.quiet,
         json: args.format.is_json(),
         diff: None,
+        stamp: plan.stamp.clone(),
+        stamp_refreshed: plan.stamp_refreshed,
     };
     record_status(&host, day, "written", &report, None);
     Ok(report)
@@ -341,6 +365,8 @@ fn waiting(
         quiet: args.quiet,
         json: args.format.is_json(),
         diff: None,
+        stamp: None,
+        stamp_refreshed: false,
     };
     if !args.dry_run {
         record_status(host, day, "waiting", &report, None);
@@ -1055,6 +1081,13 @@ fn print_json(report: &SyncReport) {
             })
         })
         .collect();
+    let stamp = report.stamp.as_ref().map(|stamp| {
+        json!({
+            "account": stamp.account,
+            "synced_at": stamp.json_synced_at(),
+            "refreshed": report.stamp_refreshed,
+        })
+    });
     println!(
         "{}",
         json!({
@@ -1070,6 +1103,7 @@ fn print_json(report: &SyncReport) {
                 "links_added": report.links_added,
             },
             "warnings": report.warnings,
+            "stamp": stamp,
         })
     );
 }
@@ -1146,8 +1180,14 @@ fn print_human(report: &SyncReport) {
     };
     let tasks = count("added", "task");
     let context = count("added", "context");
+    let stamp_only = report.status == "written"
+        && report.rows.is_empty()
+        && report.links_added == 0
+        && !report.entry_created;
     let summary = if report.status == "unchanged" {
         "✓ Events unchanged · Pomodoros unchanged".to_string()
+    } else if stamp_only {
+        "✓ Events unchanged · stamp refreshed".to_string()
     } else {
         let mut parts = vec![
             format!("+{tasks} tasks"),
@@ -1176,6 +1216,9 @@ fn print_human(report: &SyncReport) {
         )
     };
     println!("{summary}");
+    if let Some(stamp) = &report.stamp {
+        println!("{}", styler.dim(&stamp.echo(report.day)));
+    }
     for warning in &report.warnings {
         eprintln!("{}", styler.dim(&format!("warning: {warning}")));
     }

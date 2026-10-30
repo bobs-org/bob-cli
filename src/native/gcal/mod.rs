@@ -23,6 +23,7 @@ mod render;
 mod root;
 mod signin;
 mod snapshot;
+mod stamp;
 mod sync;
 mod ui;
 

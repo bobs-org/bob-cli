@@ -72,7 +72,11 @@ fn first_sync_creates_events_meet_and_links() {
 
     assert!(
         note.contains(
-            "# Friday 2026-10-30\n## Events\n\n- **all day** Conference"
+            "# Friday 2026-10-30\n## Events\n\n\
+             *↻ synced 12:00 · [you@example.com](\
+             https://calendar.google.com/calendar/r/day/2026/10/30\
+             ?authuser=you%40example.com)*\n\
+             - **all day** Conference"
         ),
         "{note}"
     );
@@ -498,6 +502,9 @@ fn sync_json_reports_rows_and_pomodoro() {
     assert_eq!(dentist["time"], "1830-1900");
     assert_eq!(dentist["root"], "body");
     assert_eq!(dentist["source"], "@body");
+    assert_eq!(report["stamp"]["account"], "you@example.com");
+    assert_eq!(report["stamp"]["synced_at"], "2026-10-30T12:00");
+    assert_eq!(report["stamp"]["refreshed"], true);
     assert!(
         !stdout(&output).contains("Main St Dental\"],")
             && !stdout(&output).contains("attendees"),
@@ -677,4 +684,200 @@ fn quiet_prints_nothing_on_success() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert!(stdout(&output).is_empty(), "{:?}", stdout(&output));
     assert!(today_note(&env).contains("## Events"));
+}
+
+fn sync_at(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+    now: &str,
+) -> std::process::Output {
+    let mut command = env.command();
+    command.env("BOB_NOW", now);
+    let mut full = vec!["gcal", "sync"];
+    full.extend(args);
+    fake.install(&mut command)
+        .args(full)
+        .output()
+        .expect("run sync")
+}
+
+fn today_stamp(time: &str) -> String {
+    format!(
+        "*↻ synced {time} · [you@example.com](\
+         https://calendar.google.com/calendar/r/day/2026/10/30\
+         ?authuser=you%40example.com)*"
+    )
+}
+
+#[test]
+fn stamp_is_byte_identical_across_idle_runs() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-stamp-idle");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let first = sync_at(&env, &fake, &[], "2026-10-30 12:00:00");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let note = today_note(&env);
+    assert!(note.contains(&today_stamp("12:00")), "{note}");
+    assert!(
+        stdout(&first).contains("↻ synced 12:00 · you@example.com"),
+        "{}",
+        stdout(&first)
+    );
+    let journal_count = journal_lines(&env).len();
+
+    let second = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 12:20:00");
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    assert_eq!(today_note(&env), note, "12:20 must be byte-identical");
+    assert_eq!(journal_lines(&env).len(), journal_count);
+    let report: Value =
+        serde_json::from_str(&stdout(&second)).expect("JSON report");
+    assert_eq!(report["status"], "unchanged");
+    assert_eq!(report["stamp"]["account"], "you@example.com");
+    assert_eq!(report["stamp"]["synced_at"], "2026-10-30T12:00");
+    assert_eq!(report["stamp"]["refreshed"], false);
+
+    let later = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 13:00:00");
+    assert_eq!(later.status.code(), Some(0), "{}", stderr(&later));
+    assert_eq!(today_note(&env), note, "on_change never ages the stamp out");
+    let later_report: Value =
+        serde_json::from_str(&stdout(&later)).expect("JSON report");
+    assert_eq!(later_report["status"], "unchanged");
+    assert_eq!(later_report["stamp"]["refreshed"], false);
+}
+
+#[test]
+fn dry_run_diff_shows_the_stamp_line() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-stamp-dry");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &["-d"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let diff = stdout(&output);
+    assert!(
+        diff.contains(&format!("+{}", today_stamp("12:00"))),
+        "{diff}"
+    );
+}
+
+#[test]
+fn tomorrow_stamp_uses_the_dated_form() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-stamp-tomorrow");
+    prepare(&env);
+    fs::write(
+        env.vault().join("2026/20261031.md"),
+        "# Saturday 2026-10-31\n\n## Events\n\n## Pomodoros\n",
+    )
+    .expect("tomorrow note");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_at(
+        &env,
+        &fake,
+        &["-D", "tomorrow", "-f", "json"],
+        "2026-10-30 21:40:00",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = fs::read_to_string(env.vault().join("2026/20261031.md"))
+        .expect("tomorrow");
+    assert!(
+        note.contains(
+            "*↻ synced Fri 2026-10-30 21:40 · [you@example.com](\
+             https://calendar.google.com/calendar/r/day/2026/10/31\
+             ?authuser=you%40example.com)*"
+        ),
+        "{note}"
+    );
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    assert_eq!(report["stamp"]["synced_at"], "2026-10-30T21:40");
+    assert_eq!(report["stamp"]["refreshed"], true);
+    assert_eq!(report["day"], "2026-10-31");
+}
+
+#[test]
+fn account_guard_refuses_a_foreign_stamp() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-stamp-guard");
+    prepare(&env);
+    let foreign = "*↻ synced 12:00 · [other@example.com](\
+         https://calendar.google.com/calendar/r/day/2026/10/30\
+         ?authuser=other%40example.com)*";
+    fs::write(
+        env.vault().join("2026/20261030.md"),
+        format!(
+            "# Friday 2026-10-30\n\n## Events\n\n{foreign}\n\n## Pomodoros\n"
+        ),
+    )
+    .expect("seed foreign stamp");
+    let before = today_note(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON error");
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["error"]["kind"], "account_changed");
+    assert!(
+        report["error"]["message"].as_str().is_some_and(|message| {
+            message
+                .contains("2026/20261030.md was synced with other@example.com")
+                && message.contains("this run uses you@example.com")
+        }),
+        "{report}"
+    );
+    assert_eq!(today_note(&env), before, "guard writes nothing");
+    assert!(
+        !env.vault().join(".bob/gcal/test-host.jsonl").exists(),
+        "guard leaves the journal untouched"
+    );
+
+    let dry = sync_output(&env, &fake, &["-d", "-f", "json"]);
+    assert_eq!(dry.status.code(), Some(2), "{}", stderr(&dry));
+}
+
+#[test]
+fn deleted_stamp_is_restored_without_row_churn() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-stamp-restore");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let original = today_note(&env);
+    let journal_count = journal_lines(&env).len();
+    let stripped = original.replace(&format!("{}\n", today_stamp("12:00")), "");
+    assert_ne!(stripped, original);
+    fs::write(env.vault().join("2026/20261030.md"), stripped)
+        .expect("delete stamp");
+
+    let restored = sync_output(&env, &fake, &[]);
+    assert_eq!(restored.status.code(), Some(0), "{}", stderr(&restored));
+    assert_eq!(today_note(&env), original);
+    assert_eq!(journal_lines(&env).len(), journal_count);
+    assert!(
+        stdout(&restored).contains("✓ Events unchanged · stamp refreshed"),
+        "{}",
+        stdout(&restored)
+    );
+}
+
+#[test]
+fn waiting_json_reports_a_null_stamp() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-stamp-waiting");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &["-D", "2026-11-01", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    assert_eq!(report["status"], "waiting");
+    assert!(report["stamp"].is_null(), "{report}");
 }
