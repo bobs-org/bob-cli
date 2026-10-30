@@ -5,6 +5,7 @@ use super::model::{
     DependencyCandidate, OutputFormat, PomodoroNameCandidate,
     RelationCandidate, RelationLabelSuggestion, TaskCompleteCandidate,
     TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
+    TaskTypeCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::capture_task_wikilinks::WikilinkTaskCandidate;
@@ -261,6 +262,26 @@ pub(super) fn task_complete_line(
     (label, detail)
 }
 
+/// One human line for a `task_type` candidate, with the history or
+/// inheritance annotation Bob already computed for the row.
+pub(super) fn task_type_line(item: &TaskTypeCandidate) -> (String, String) {
+    let mut detail = match (item.last_used.as_deref(), item.days_used) {
+        (Some(date), Some(days)) => format!("your type · {date} · {days} days"),
+        _ => "your type · never used".to_string(),
+    };
+    if item.current {
+        detail.push_str(" · current · this task");
+    } else if item.inherited
+        && let Some(label) = item.suggestion_label.as_deref()
+    {
+        detail.push_str(&format!(" · {label}"));
+    }
+    if item.origin == "typed" {
+        detail = "new · not one of your types".to_string();
+    }
+    (item.replacement.clone(), detail)
+}
+
 /// One human line for a `task_dependency` candidate: the insertable
 /// replacement (or a needs-ID marker for rows the Add block ID flow must
 /// resolve first) plus task text, locator, and any guard reason.
@@ -466,6 +487,9 @@ pub(super) fn candidate_lines(
         Candidates::TaskComplete(items) => {
             items.iter().map(task_complete_line).collect()
         }
+        Candidates::TaskType(items) => {
+            items.iter().map(task_type_line).collect()
+        }
         Candidates::PomodoroName(items) => items
             .iter()
             .map(|item| {
@@ -632,6 +656,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::RelationFrom => "relation_from",
         CompletionContext::RelationLabel => "relation_label",
         CompletionContext::TaskComplete => "task_complete",
+        CompletionContext::TaskType => "task_type",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",

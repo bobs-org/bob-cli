@@ -31,6 +31,8 @@ pub(crate) enum CompletionContext {
     PomodoroName,
     PomodoroStartName,
     Task,
+    /// A `t:<type>` task-type marker at either item edge.
+    TaskType,
     TaskSection,
     ActiveTask,
     TaskLink,
@@ -1004,6 +1006,16 @@ pub(crate) fn completion_field_at(
     let masked_source;
     let masked_item;
     let (item, line) = {
+        if let Some(marker) = super::type_marker::completion_at(item, cursor) {
+            return Some(CompletionField {
+                context: CompletionContext::TaskType,
+                route: None,
+                block_id: None,
+                query: marker.query,
+                replacement: (marker.span.start, marker.span.end),
+                bare_name: false,
+            });
+        }
         let occurrences =
             super::type_marker::collect_item_with_clip_control(item, true);
         if occurrences.is_empty() {

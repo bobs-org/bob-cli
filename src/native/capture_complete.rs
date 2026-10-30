@@ -10,6 +10,7 @@ mod pomodoros;
 mod render;
 mod shell;
 mod support;
+mod task_types;
 #[cfg(test)]
 mod tests;
 mod theme_menu;

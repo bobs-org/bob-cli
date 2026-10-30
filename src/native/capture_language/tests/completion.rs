@@ -1046,9 +1046,19 @@ fn query_and_caret_completion_survive_a_neighboring_marker() {
 }
 
 #[test]
-fn a_cursor_on_a_type_marker_requests_no_completion() {
-    // The task_type context belongs to the later completion phase.
-    assert_eq!(field("Fix it t:fix", 9), None);
-    assert_eq!(field("Fix it t:", 9), None);
-    assert_eq!(field("t:fix Fix it", 2), None);
+fn a_cursor_on_a_type_marker_requests_task_type_completion() {
+    let marker = field("Fix it t:fix", 9).expect("type marker field");
+    assert_eq!(marker.context, CompletionContext::TaskType);
+    assert_eq!(marker.query, "");
+    assert_eq!(marker.replacement, (7, 12));
+
+    let empty = field("Fix it t:", 9).expect("empty type marker field");
+    assert_eq!(empty.context, CompletionContext::TaskType);
+    assert_eq!(empty.query, "");
+    assert_eq!(empty.replacement, (7, 9));
+
+    let leading = field("t:fix Fix it", 2).expect("leading marker field");
+    assert_eq!(leading.context, CompletionContext::TaskType);
+    assert_eq!(leading.query, "");
+    assert_eq!(leading.replacement, (0, 5));
 }

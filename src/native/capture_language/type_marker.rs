@@ -31,6 +31,13 @@ pub(crate) struct TypeMarker {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TypeMarkerCompletion {
+    pub(crate) span: Range<usize>,
+    pub(crate) query: String,
+    pub(crate) leading: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TypeMarkerOccurrence {
     Complete(TypeMarker),
     Incomplete { span: Range<usize> },
@@ -88,6 +95,18 @@ fn scan_line_inner(
     child_line: bool,
     parse_clip_markers: bool,
 ) -> Vec<TypeMarkerOccurrence> {
+    scan_line_with_positions(line, base, child_line, parse_clip_markers)
+        .into_iter()
+        .map(|(occurrence, _)| occurrence)
+        .collect()
+}
+
+fn scan_line_with_positions(
+    line: &str,
+    base: usize,
+    child_line: bool,
+    parse_clip_markers: bool,
+) -> Vec<(TypeMarkerOccurrence, bool)> {
     let (body_start, body) = if child_line {
         authored_body(line)
     } else {
@@ -165,20 +184,111 @@ fn scan_line_inner(
 
     candidates
         .into_iter()
-        .filter(|candidate| {
-            edge_run_is_transparent(body, 0, candidate.edge_start, &allowed)
-                || edge_run_is_transparent(
-                    body,
-                    candidate.edge_end,
-                    body.len(),
-                    &allowed,
-                )
-        })
-        .map(|mut candidate| {
+        .filter_map(|mut candidate| {
+            let leading = edge_run_is_transparent(
+                body,
+                0,
+                candidate.edge_start,
+                &allowed,
+            );
+            let trailing = edge_run_is_transparent(
+                body,
+                candidate.edge_end,
+                body.len(),
+                &allowed,
+            );
+            if !leading && !trailing {
+                return None;
+            }
             shift_occurrence(&mut candidate.occurrence, base + body_start);
-            candidate.occurrence
+            Some((candidate.occurrence, leading))
         })
         .collect()
+}
+
+/// Return the shared lexer's completable type marker under the cursor,
+/// including its decoded query and whether it occupies the leading edge.
+/// Invalid and escaped marker-shaped text never opens the type picker.
+pub(crate) fn completion_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<TypeMarkerCompletion> {
+    let lines = split_physical_lines(item.source);
+    let first_line_start = item
+        .lines
+        .first()
+        .map(|line| line.raw.start)
+        .unwrap_or(item.start);
+    for item_line in &item.lines {
+        let Some(line) = lines.iter().find(|line| {
+            line.start <= item_line.raw.start && item_line.raw.start <= line.end
+        }) else {
+            continue;
+        };
+        for (occurrence, leading) in scan_line_with_positions(
+            line.text,
+            line.start,
+            line.start > first_line_start,
+            true,
+        ) {
+            let span = occurrence.span().clone();
+            if span.start < item.start
+                || span.end > item.end
+                || cursor < span.start
+                || cursor > span.end
+            {
+                continue;
+            }
+            let query = match &occurrence {
+                TypeMarkerOccurrence::Complete(_)
+                | TypeMarkerOccurrence::Incomplete { .. } => {
+                    decoded_completion_query(
+                        line.text, line.start, span.start, cursor,
+                    )?
+                }
+                TypeMarkerOccurrence::Invalid { .. }
+                | TypeMarkerOccurrence::Escaped { .. } => continue,
+            };
+            return Some(TypeMarkerCompletion {
+                span,
+                query,
+                leading,
+            });
+        }
+    }
+    None
+}
+
+pub(crate) fn completion_at_raw(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<TypeMarkerCompletion> {
+    let draft = super::draft::split_capture_draft(raw_text);
+    let item = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
+    })?;
+    completion_at(item, cursor)
+}
+
+fn decoded_completion_query(
+    line: &str,
+    base: usize,
+    marker_start: usize,
+    cursor: usize,
+) -> Option<String> {
+    let prefix = line.get(marker_start - base..cursor - base)?;
+    let rest = prefix.strip_prefix("t:")?;
+    if rest.starts_with('"') || rest.starts_with('“') {
+        Some(
+            lex_exact_name_after_hash(rest, rest.len())
+                .map(|lex| lex.decoded)
+                .unwrap_or_default(),
+        )
+    } else {
+        Some(rest.to_string())
+    }
 }
 
 fn quoted_route_tokens(line: &str) -> Vec<Range<usize>> {

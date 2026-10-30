@@ -6677,6 +6677,50 @@ returns `relation_to_replacement` and `relation_from_replacement` for
 the Add block ID flow. See
 [Linking tasks with '~' and '~~'](#linking-tasks).
 
+A marker-position `t:` token also opens `task_type` completion, whether the item
+will create a task or target an existing task. The response replaces the whole
+marker, including `t:`, returns the decoded name as `query`, and identifies the
+subject as `new` or `existing`. This context does not open for prose such as
+`Ask about t:fix today`; another completion field still owns its own token.
+
+With a configured `types:` vocabulary, an empty query lists visible types in
+config order. Without a vocabulary, the menu lists up to twelve Recent catalog
+types. A nonempty query ranks exact, prefix, then substring matches. Hidden
+types stay out of empty-query suggestions but appear on an exact match. When
+the query is a valid new type name without an exact match, a typed row carries
+up to two nearby names. Accepting a row uses `t:<slug>` only when it preserves
+the type key; otherwise Bob returns a quoted literal such as `t:"DEEP WORK"`.
+At the leading edge, the replacement includes a space when the next byte is
+not whitespace, and `cursor_after` gives the resulting absolute caret offset.
+
+Each candidate includes `themes` with Bob's `ThemeRef`, `origin`, optional
+`last_used` / `days_used`, and task-aware `current`, `inherited`, and
+`suggestion_label` annotations. `effect` is `set` when the choice writes a
+task field, `clear` when it selects the inherited type, or `keep` when an
+existing explicit field already has that type. The top-level
+`theme_suggestion` gives the current or inherited type for the task's
+destination or existing subject. The context is read-only and never updates
+theme preferences.
+
+For example, the candidate row for a configured `FIX` type is shaped like:
+
+```json
+{
+  "replacement": "t:fix",
+  "cursor_after": 21,
+  "name": "FIX",
+  "key": "fix",
+  "themes": [{"key": "fix", "name": "FIX", "hue": "red", "hue_source": "config", "configured": true}],
+  "origin": "configured",
+  "current": false,
+  "inherited": false,
+  "effect": "set"
+}
+```
+
+Shell completion puts these rows in the `task types` group. `bob capture Fix it
+t:<TAB>` offers the configured type vocabulary.
+
 The analogous parent-task picker accepts a terminal `+query` on an item's
 parent line or an eligible authored child line. It uses context `task_parent`,
 strips `+` from the top-level `query`, and replaces the full selector token.
@@ -6768,12 +6812,16 @@ JSON output is a single versioned object:
 `replacement` is the half-open UTF-8 byte range a chosen candidate replaces in
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
-`context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
+`context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `pomodoro_start_name`, `task`,
+`task_section`, `active_task`, `task_type`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
-`query` is present only for `task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_task`, `relation_to`, `relation_from`, and `relation_label`; it
+`task_type` covers a complete or incomplete marker-position `t:` token and
+returns the whole marker span plus its decoded type-name query. Its top-level
+`subject` is `new` or `existing`; candidates describe the current and inherited
+type and the `set`, `clear`, or `keep` effect. `query` is present only for
+`task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `task_type`, `wikilink_task`, `relation_to`, `relation_from`, and `relation_label`; it
 contains the selector text after its sigil (and a decoded locator for a
 dependency, blocked-task, or relation query). `blocked_task` is the `*` twin of
 `task_dependency`: same owner and replacement-range rules, `*` replacements,

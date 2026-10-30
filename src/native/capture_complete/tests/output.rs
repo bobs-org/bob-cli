@@ -199,6 +199,7 @@ fn json_shape_is_stable() {
         cursor: 10,
         replacement: Replacement { start: 9, end: 10 },
         context: Some(CompletionContext::PomodoroName),
+        subject: None,
         candidates: Candidates::PomodoroName(vec![pomodoro_name]),
         theme_suggestion: None,
         r#override: None,
@@ -241,6 +242,7 @@ fn json_shape_is_stable() {
         cursor: 3,
         replacement: Replacement { start: 1, end: 3 },
         context: Some(CompletionContext::Route),
+        subject: None,
         candidates: Candidates::Route(vec![RouteCandidate {
             replacement: "cash".to_string(),
             route: "cash".to_string(),
@@ -549,6 +551,7 @@ fn human_output_is_plain_without_color() {
             cursor: 3,
             replacement: Replacement { start: 1, end: 3 },
             context: Some(CompletionContext::Route),
+            subject: None,
             candidates: Candidates::Route(vec![RouteCandidate {
                 replacement: "cash".to_string(),
                 route: "cash".to_string(),

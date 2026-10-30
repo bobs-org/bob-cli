@@ -107,6 +107,7 @@ fn build_result_inner(
             | CompletionContext::RelationFrom
             | CompletionContext::RelationLabel
             | CompletionContext::TaskComplete
+            | CompletionContext::TaskType
             | CompletionContext::WikilinkTask => {
                 unreachable!("link field context")
             }
@@ -121,6 +122,7 @@ fn build_result_inner(
                 end: field.replacement.1,
             },
             context: Some(field.context),
+            subject: None,
             candidates,
             theme_suggestion: None,
             r#override: None,
@@ -157,6 +159,7 @@ fn build_result_inner(
             cursor,
             replacement: marker_range,
             context: Some(CompletionContext::WikilinkTask),
+            subject: None,
             candidates: Candidates::WikilinkTask(rows),
             theme_suggestion: None,
             r#override: None,
@@ -245,6 +248,7 @@ fn build_result_inner(
                 end: field.replacement.1,
             },
             context: Some(field.context),
+            subject: None,
             candidates,
             theme_suggestion: None,
             r#override: None,
@@ -265,6 +269,7 @@ fn build_result_inner(
     let mut hidden_count = None;
     let mut relation_cancel = None;
     let mut relation_complete = None;
+    let mut subject = None;
     // A `||` probe is the `relation_label` context with `one_off`: the
     // scan behind the field already classified the separator, so this
     // never re-lexes the draft.
@@ -351,6 +356,17 @@ fn build_result_inner(
             // at `replacement.start`: the field reports an empty query
             // there, exactly like the `:` picker.
             task_complete_candidates(bob_dir, &field.query, raw_text, cursor)
+        }
+        CompletionContext::TaskType => {
+            let context = super::task_types::build(
+                bob_dir,
+                raw_text,
+                &field,
+                editor_item.as_ref(),
+            )?;
+            subject = Some(context.subject);
+            theme_suggestion = Some(context.suggestion);
+            (Candidates::TaskType(context.candidates), context.warnings)
         }
         CompletionContext::TaskDependency => {
             // Vault-wide prerequisite scan: the lexical owner of the
@@ -522,6 +538,7 @@ fn build_result_inner(
             | CompletionContext::Task
             | CompletionContext::TaskParent
             | CompletionContext::TaskComplete
+            | CompletionContext::TaskType
             | CompletionContext::RelationTo
             | CompletionContext::RelationFrom
             | CompletionContext::RelationLabel
@@ -600,6 +617,7 @@ fn build_result_inner(
             end: field.replacement.1,
         },
         context: Some(field.context),
+        subject,
         candidates,
         theme_suggestion,
         r#override: override_info,

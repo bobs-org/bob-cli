@@ -11,6 +11,7 @@ use crate::native::{
     capture_pomodoros::{self, PomodoroState},
     capture_targets::CaptureTargetKind,
     capture_task_wikilinks::WikilinkTaskCandidate,
+    pomodoro_themes::ThemeRef,
 };
 
 /// Bump only for a breaking change to the JSON object below; new optional
@@ -458,6 +459,41 @@ pub(super) struct TaskCompleteCandidate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub(super) enum TaskTypeEffect {
+    Set,
+    Clear,
+    Keep,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskTypeCandidate {
+    pub(super) replacement: String,
+    pub(super) cursor_after: usize,
+    pub(super) name: String,
+    pub(super) key: String,
+    pub(super) themes: Vec<ThemeRef>,
+    pub(super) origin: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) last_used: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) days_used: Option<u32>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) current: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) inherited: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) suggestion_label: Option<String>,
+    pub(super) effect: TaskTypeEffect,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) hidden: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) similar_to: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) refused: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum PickerKind {
     ParentTask,
     TaskComplete,
@@ -625,6 +661,7 @@ pub(super) enum Candidates {
     Relation(Vec<RelationCandidate>),
     RelationLabel(Vec<RelationLabelSuggestion>),
     TaskComplete(Vec<TaskCompleteCandidate>),
+    TaskType(Vec<TaskTypeCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -652,6 +689,7 @@ impl Candidates {
             Self::Relation(items) => items.len(),
             Self::RelationLabel(items) => items.len(),
             Self::TaskComplete(items) => items.len(),
+            Self::TaskType(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
@@ -693,6 +731,10 @@ pub(super) struct CaptureCompleteResult {
     pub(super) cursor: usize,
     pub(super) replacement: Replacement,
     pub(super) context: Option<CompletionContext>,
+    /// The task picked by a `task_type` completion field, or `new` when
+    /// the marker belongs to the task the item will create.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) subject: Option<&'static str>,
     pub(super) candidates: Candidates,
     /// `None` outside `pomodoro_name`; `Some(None)` means that context
     /// ran without a task theme suggestion.
@@ -758,6 +800,7 @@ impl CaptureCompleteResult {
                 end: cursor,
             },
             context: None,
+            subject: None,
             candidates: Candidates::Route(Vec::new()),
             theme_suggestion: None,
             r#override: None,

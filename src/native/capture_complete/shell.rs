@@ -735,6 +735,33 @@ pub(crate) fn shell_completion(
                 rows,
             }));
         }
+        CompletionContext::TaskType => {
+            let editor_item =
+                capture_language::editor_item_at(raw_text, cursor);
+            let context = super::task_types::build_for_shell(
+                bob_dir,
+                raw_text,
+                &field,
+                editor_item.as_ref(),
+            )
+            .map_err(|error| error.message)?;
+            for item in context.candidates {
+                if item.refused.is_some() {
+                    continue;
+                }
+                let full = item.replacement.trim_end().to_string();
+                if full.is_empty() {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: false,
+                    full,
+                    description: task_type_description(&item),
+                    group: "task types".to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
         CompletionContext::PomodoroBlockId => {
             // A `+` after a `:` block ID is the retired project-note
             // form, which offers nothing.
@@ -824,6 +851,30 @@ pub(crate) fn shell_completion(
 /// A value ending in a continuation character expects more typing.
 pub(super) fn ends_in_continuation(value: &str) -> bool {
     value.ends_with([':', '+', '#', '=', '^'])
+}
+
+fn task_type_description(item: &super::model::TaskTypeCandidate) -> String {
+    let mut description = if item.origin == "typed" {
+        "new · not one of your types".to_string()
+    } else {
+        match (item.last_used.as_deref(), item.days_used) {
+            (Some(date), Some(days)) => {
+                let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                    .map(|date| date.format("%b %-d").to_string())
+                    .unwrap_or_else(|_| date.to_string());
+                format!("your type · {date} · {days} days")
+            }
+            _ => "your type · never used".to_string(),
+        }
+    };
+    if item.current {
+        description.push_str(" · current · this task");
+    } else if item.inherited
+        && let Some(label) = item.suggestion_label.as_deref()
+    {
+        description.push_str(&format!(" · {label}"));
+    }
+    description
 }
 
 /// `time · name` for Pomodoro rows, mirroring the vault provider.

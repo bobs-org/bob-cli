@@ -157,7 +157,7 @@ fn pomodoro_candidates_inner(
     ))
 }
 
-fn resolve_task_suggestion(
+pub(super) fn resolve_task_suggestion(
     bob_dir: &Path,
     route: &str,
     block_id: Option<&str>,

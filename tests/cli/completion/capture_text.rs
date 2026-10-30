@@ -89,6 +89,26 @@ fn complete(fixture: &Fixture, words: &[&str]) -> Output {
     command.output().expect("run bob __complete")
 }
 
+fn complete_with_config(
+    fixture: &Fixture,
+    config: &std::path::Path,
+    words: &[&str],
+) -> Output {
+    let mut command = bob_completion_command();
+    command
+        .arg("__complete")
+        .arg("zsh")
+        .arg("--protocol")
+        .arg("1")
+        .arg("--")
+        .env("BOB_DIR", &fixture.vault)
+        .env("BOB_NOW", BOB_NOW)
+        .env("BOB_CONFIG_FILE", config)
+        .env("XDG_CACHE_HOME", fixture._temp.path().join("cache"))
+        .args(words);
+    command.output().expect("run configured bob __complete")
+}
+
 fn complete_with_suffix(
     fixture: &Fixture,
     suffix: &str,
@@ -186,6 +206,48 @@ fn partial_route_returns_full_set_for_shell_filtering() {
     assert!(values.contains(&"@mac_inbox".to_string()), "{values:?}");
     assert!(values.contains(&"@cash".to_string()), "{values:?}");
     assert!(values.contains(&"@dev".to_string()), "{values:?}");
+}
+
+#[test]
+fn task_type_shell_completion_returns_configured_t_type_rows() {
+    let fixture = fixture();
+    let config = fixture._temp.path().join("config.yml");
+    write_file(&config, "types:\n  BUILD: yellow\n  FIX: blue\n");
+    let output = complete_with_config(
+        &fixture,
+        &config,
+        &["bob", "capture", "Fix", "the", "parser", "t:"],
+    );
+
+    assert_success(&output);
+    let candidates = values(&output);
+    assert!(
+        candidates.contains(&"t:build".to_string()),
+        "{candidates:?}"
+    );
+    assert!(candidates.contains(&"t:fix".to_string()), "{candidates:?}");
+    assert!(groups(&output).contains(&"task types".to_string()));
+    assert!(stdout(&output).contains("your type · never used"));
+
+    let typed = complete_with_config(
+        &fixture,
+        &config,
+        &["bob", "capture", "Fix the parser t:fixs"],
+    );
+    assert_success(&typed);
+    assert!(values(&typed).contains(&"t:fixs".to_string()));
+
+    write_file(
+        &fixture.vault.join(".bob/themes/test.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-06-01T08:00:00Z\",\"host\":\"test\",\"kind\":\"theme.hide\",\"key\":\"fix\",\"name\":\"FIX\",\"via\":\"test\"}\\n",
+    );
+    let hidden = complete_with_config(
+        &fixture,
+        &config,
+        &["bob", "capture", "Fix the parser t:fix"],
+    );
+    assert_success(&hidden);
+    assert!(values(&hidden).contains(&"t:fix".to_string()));
 }
 
 #[test]
