@@ -374,13 +374,13 @@ The local calendar date a human last confirmed that an open task still needs doi
 
 *Aliases: task block link.*
 
-A block link to an Obsidian task. These can be located anywhere but, when they are the only contents of a sub-bullet on a pomodoro, they are treated as logged/planned tasks for that pomodoro. Task Links on a task's Depends-On line are [Task Dependency Link](#task-dependency-link)s. LINKS entries are [Task Relation](#task-relation)s, and LINKED FROM entries are relations or [Task Mention](#task-mention)s; none is ever a Pomodoro Task Link.
+A block link to an Obsidian task. These can be located anywhere but, when they are the only contents of a sub-bullet on a pomodoro, they are treated as logged/planned tasks for that pomodoro. Task Links on a task's Depends-On line are [Task Dependency Link](#task-dependency-link)s. LINKS entries are [Task Relation](#task-relation)s, and generated LINKED FROM entries may be relations or inert [Task Mention](#task-mention)s; neither is ever a Pomodoro Task Link.
 
 ### Task Mention {#task-mention}
 
 *Aliases: mention, text mention.*
 
-An inert, derived back-reference from one task's own text to another. When
+An inert, derived back-reference from one task's own text to another, enabled by default. When
 task S's title, a note under it, or a Cancel / Schedule / Work / Rotten Log
 entry contains a block [Task Link](#task-link) to task T (`[[note#^id]]`, including
 embeds and struck links), Bob stores `[[S]] (💬 mentions)` on T's generated
@@ -397,7 +397,7 @@ or an authored relation on the pair wins. See `docs/task-relations.md` §19.
 
 A directed, optionally labelled, inert link from one task to another. It is authored on
 the source task's 🪢 **LINKS:** line and mirrored on the target task's generated 🪢
-**LINKED FROM:** line. The generated LINKED FROM line also lists [Task Mention](#task-mention)s
+**LINKED FROM:** line. The generated LINKED FROM line also lists enabled-by-default [Task Mention](#task-mention)s
 (`(💬 mentions)` entries), which are not relations. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
 gestures. A relation is distinct from a Pomodoro [Task Link](#task-link): it never blocks a task,
 counts as a Pomodoro Task Link, or changes its schedule, priority, or freshness.

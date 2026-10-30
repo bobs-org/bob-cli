@@ -6741,6 +6741,9 @@ wikilink_task`, `scope_token: "(("`, `marker_range` equal to the
 replacement range, and `trigger_removal_range` from the second `(` to the
 range end. Shell completion returns nothing for this field. `((` is a
 draft-only trigger: captured bytes are always a plain Obsidian block link.
+That link sits in the captured task's own text, so under the
+[text mention](task-relations.md#19-text-mentions) rules capture also
+stages an inert `(💬 mentions)` entry on the target's LINKED FROM line.
 The note index is
 read-only, skips hidden directories plus `.git`, `.obsidian`, `_generated`, and
 `_templates`, never follows directory symlinks, and returns bounded warnings for
