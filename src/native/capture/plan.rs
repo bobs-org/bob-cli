@@ -69,6 +69,24 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
+    if let Some(item) = parsed_draft
+        .items
+        .iter()
+        .find(|item| item.parsed.type_marker.is_some())
+    {
+        let marker = item
+            .parsed
+            .type_marker
+            .as_ref()
+            .expect("selected type marker");
+        return Err(CaptureError::usage_code(
+            format!(
+                "`t:{}` was recognized, but writing task types from capture is not supported yet",
+                marker.name
+            ),
+            "type_marker_not_supported",
+        ));
+    }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
         return Err(CaptureError::usage_code(
             "a template can't capture the clipboard: `%` would repeat once per row",

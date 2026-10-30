@@ -153,6 +153,7 @@ fn claim_reference_item<'a>(
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
                     dependency_target: None,
+                    type_marker: None,
                 },
                 Vec::new(),
                 Some(format!("--route {forced}")),
@@ -172,6 +173,7 @@ fn claim_reference_item<'a>(
                 blocked_tasks: Vec::new(),
                 relations: Vec::new(),
                 dependency_target: None,
+                type_marker: None,
             },
             Vec::new(),
             None,
@@ -203,6 +205,7 @@ fn claim_reference_item<'a>(
                         blocked_tasks: Vec::new(),
                         relations: Vec::new(),
                         dependency_target: None,
+                        type_marker: None,
                     },
                     Vec::new(),
                     Some(format!("--route {forced}")),
@@ -222,6 +225,7 @@ fn claim_reference_item<'a>(
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
                     dependency_target: None,
+                    type_marker: None,
                 },
                 Vec::new(),
                 None,
@@ -269,6 +273,7 @@ fn claim_reference_item<'a>(
                 blocked_tasks: Vec::new(),
                 relations: Vec::new(),
                 dependency_target: None,
+                type_marker: None,
             },
             Vec::new(),
             Some(route_token.text.to_string()),
@@ -301,6 +306,7 @@ fn claim_reference_item<'a>(
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
                     dependency_target: None,
+                    type_marker: None,
                 },
                 Vec::new(),
                 Some(route_token.text.to_string()),
@@ -333,6 +339,7 @@ fn claim_reference_item<'a>(
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
                     dependency_target: None,
+                    type_marker: None,
                 },
                 Vec::new(),
                 Some(route_token.text.to_string()),
@@ -343,6 +350,211 @@ fn claim_reference_item<'a>(
 }
 
 pub(super) fn parse_capture_item<'a>(
+    item: &CaptureItem<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<ParsedCaptureItemOutcome<'a>, String> {
+    let occurrences = super::type_marker::collect_item_with_clip_control(
+        item,
+        options.parse_clip_markers,
+    );
+    let masked_source = super::type_marker::masked_source(item, &occurrences);
+    let masked_item = super::type_marker::masked_item(item, &masked_source);
+
+    if let Some(parent) = masked_item.lines.first()
+        && normalize_task_text(parent.raw.text).is_empty()
+        && occurrences.iter().any(|item| item.is_marker())
+    {
+        return Err(type_marker_only_error(&occurrences));
+    }
+
+    let parsed = parse_capture_item_masked(
+        &masked_item,
+        forced_route,
+        forced_section,
+        options,
+    );
+    let mut outcome = match parsed {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            if error == missing_text_error()
+                && occurrences.iter().any(|item| item.is_marker())
+            {
+                return Err(type_marker_only_error(&occurrences));
+            }
+            // Keep the established parser's diagnostics for malformed
+            // underlying forms. Marker-only items are handled above so they
+            // never collapse to the generic missing-text copy.
+            return Err(error);
+        }
+    };
+
+    let markers = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.is_marker())
+        .collect::<Vec<_>>();
+    if markers.len() > 1 {
+        return Err(duplicate_marker_error("type marker (t:<type>)"));
+    }
+    let Some(occurrence) = markers.first() else {
+        let declarations =
+            remap_type_marker_declarations(outcome.declarations, item.source);
+        return Ok(ParsedCaptureItemOutcome {
+            index: outcome.index,
+            start: outcome.start,
+            end: outcome.end,
+            line_start: outcome.line_start,
+            line_end: outcome.line_end,
+            parsed: outcome.parsed,
+            declarations,
+            local_destination_marker: outcome.local_destination_marker,
+        });
+    };
+    let marker = match occurrence {
+        super::type_marker::TypeMarkerOccurrence::Complete(marker) => {
+            marker.clone()
+        }
+        super::type_marker::TypeMarkerOccurrence::Incomplete { .. } => {
+            return Err(super::type_marker::needs_task_error(None));
+        }
+        super::type_marker::TypeMarkerOccurrence::Invalid { raw, .. } => {
+            return Err(super::type_marker::invalid_marker_error(raw));
+        }
+        super::type_marker::TypeMarkerOccurrence::Escaped { .. } => {
+            unreachable!("escaped occurrences are excluded above")
+        }
+    };
+    if outcome.parsed.body.trim().is_empty()
+        && super::type_marker::is_new_task(&outcome.parsed)
+    {
+        return Err(super::type_marker::needs_task_error(Some(&marker.name)));
+    }
+    if !super::type_marker::is_new_task(&outcome.parsed) {
+        return Err(type_marker_not_applicable_error(
+            &marker.name,
+            &outcome.parsed.kind,
+        ));
+    }
+    outcome.parsed.type_marker = Some(marker);
+    let declarations =
+        remap_type_marker_declarations(outcome.declarations, item.source);
+    Ok(ParsedCaptureItemOutcome {
+        index: outcome.index,
+        start: outcome.start,
+        end: outcome.end,
+        line_start: outcome.line_start,
+        line_end: outcome.line_end,
+        parsed: outcome.parsed,
+        declarations,
+        local_destination_marker: outcome.local_destination_marker,
+    })
+}
+
+fn remap_type_marker_declarations<'a>(
+    declarations: Vec<GlobalDeclarationToken<'_>>,
+    source: &'a str,
+) -> Vec<GlobalDeclarationToken<'a>> {
+    declarations
+        .into_iter()
+        .filter_map(|declaration| {
+            let start = declaration.token.start;
+            let end = declaration.token.end;
+            Some(GlobalDeclarationToken {
+                token: Token {
+                    text: source.get(start..end)?,
+                    start,
+                    end,
+                },
+                line_number: declaration.line_number,
+            })
+        })
+        .collect()
+}
+
+fn type_marker_only_error(
+    occurrences: &[super::type_marker::TypeMarkerOccurrence],
+) -> String {
+    let markers = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.is_marker())
+        .collect::<Vec<_>>();
+    if markers.len() > 1 {
+        return duplicate_marker_error("type marker (t:<type>)");
+    }
+    match markers.first().copied() {
+        Some(super::type_marker::TypeMarkerOccurrence::Complete(marker)) => {
+            super::type_marker::needs_task_error(Some(&marker.name))
+        }
+        Some(super::type_marker::TypeMarkerOccurrence::Incomplete {
+            ..
+        }) => super::type_marker::needs_task_error(None),
+        Some(super::type_marker::TypeMarkerOccurrence::Invalid {
+            raw, ..
+        }) => super::type_marker::invalid_marker_error(raw),
+        _ => missing_text_error(),
+    }
+}
+
+fn type_marker_not_applicable_error(name: &str, kind: &CaptureKind) -> String {
+    let marker = format!("t:{name}");
+    let (action, remedy) = match kind {
+        CaptureKind::Bullet { .. } => (
+            "writes a plain bullet",
+            "drop the section marker to capture a task",
+        ),
+        CaptureKind::SubBullet { .. } => (
+            "adds a child bullet",
+            "capture `@<route>+<block-id> t:<type>` alone to retype that task",
+        ),
+        CaptureKind::ProjectNote { .. } => (
+            "creates a project note",
+            "set `task_type:` in the new note",
+        ),
+        CaptureKind::Ref(_) => (
+            "queues a reference typed by `plan.reading_type`",
+            "add `-R` to keep it as a task",
+        ),
+        CaptureKind::PomodoroNote => (
+            "adds a Pomodoro note",
+            "add task text to capture a task",
+        ),
+        CaptureKind::TaskComplete { .. } => (
+            "completes an existing task",
+            "remove the completion gesture to capture a task",
+        ),
+        CaptureKind::PomodoroLink { .. } => (
+            "targets an existing task, and retyping it with `t:` is not supported yet",
+            "capture the task text instead",
+        ),
+        CaptureKind::TaskToggle { .. } => (
+            "changes an existing task's status",
+            "remove the status gesture to capture a task",
+        ),
+        CaptureKind::PomodoroClose { .. } => (
+            "closes a Pomodoro",
+            "remove the close gesture to capture a task",
+        ),
+        CaptureKind::PomodoroStart { .. } => (
+            "starts a Pomodoro",
+            "remove the start gesture to capture a task",
+        ),
+        CaptureKind::PomodoroAdjust { .. } => (
+            "adjusts a Pomodoro duration",
+            "remove the adjustment gesture to capture a task",
+        ),
+        CaptureKind::PomodoroShift { .. } => (
+            "shifts a Pomodoro session",
+            "remove the shift gesture to capture a task",
+        ),
+        CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } | CaptureKind::Pomodoro { .. } => {
+            return super::type_marker::needs_task_error(Some(name));
+        }
+    };
+    format!("`{marker}` types a task, but this capture {action}; {remedy}")
+}
+
+fn parse_capture_item_masked<'a>(
     item: &CaptureItem<'a>,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
@@ -399,6 +611,7 @@ pub(super) fn parse_capture_item<'a>(
                         blocked_tasks: Vec::new(),
                         relations: Vec::new(),
                         dependency_target: None,
+                        type_marker: None,
                     },
                     Vec::new(),
                     Some(dependency.raw.clone()),
@@ -765,6 +978,7 @@ pub(super) fn parse_capture_item<'a>(
                 blocked_tasks: execution_blocked_tasks(&item_dependencies),
                 relations: execution_relations(&item_dependencies),
                 dependency_target,
+                type_marker: None,
             },
             declarations,
             marker_text,
@@ -802,6 +1016,7 @@ pub(super) fn parse_capture_item<'a>(
                 blocked_tasks: Vec::new(),
                 relations: Vec::new(),
                 dependency_target: None,
+                type_marker: None,
             },
             declarations,
             aggregate
@@ -845,6 +1060,7 @@ pub(super) fn parse_capture_item<'a>(
                 blocked_tasks: execution_blocked_tasks(&item_dependencies),
                 relations: execution_relations(&item_dependencies),
                 dependency_target,
+                type_marker: None,
             },
             declarations,
             aggregate
@@ -981,6 +1197,7 @@ pub(super) fn parse_capture_item<'a>(
             blocked_tasks: execution_blocked_tasks(&item_dependencies),
             relations: execution_relations(&item_dependencies),
             dependency_target,
+            type_marker: None,
         },
         declarations,
         local_destination_marker,
@@ -1631,6 +1848,7 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
             dependency_target: None,
+            type_marker: None,
         },
         Vec::new(),
         None,
@@ -2016,6 +2234,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         blocked_tasks: Vec::new(),
                         relations: Vec::new(),
                         dependency_target: None,
+                        type_marker: None,
                     },
                     Vec::new(),
                     None,
@@ -2098,6 +2317,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                                 blocked_tasks: Vec::new(),
                                 relations: Vec::new(),
                                 dependency_target: None,
+                                type_marker: None,
                             },
                             Vec::new(),
                             None,
@@ -2244,6 +2464,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             blocked_tasks: Vec::new(),
                             relations: Vec::new(),
                             dependency_target: None,
+                            type_marker: None,
                         },
                         Vec::new(),
                         None,
@@ -2414,6 +2635,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         blocked_tasks: Vec::new(),
                         relations: Vec::new(),
                         dependency_target: None,
+                        type_marker: None,
                     },
                     Vec::new(),
                     None,
@@ -2548,6 +2770,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
                     dependency_target: None,
+                    type_marker: None,
                 },
                 Vec::new(),
                 None,

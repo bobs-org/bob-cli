@@ -35,3 +35,4 @@ mod grammar;
 mod placement;
 mod started;
 mod template;
+mod type_marker;

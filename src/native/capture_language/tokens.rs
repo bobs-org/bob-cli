@@ -2243,6 +2243,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
                     dependency_target: None,
+                    type_marker: None,
                 },
                 Vec::new(),
                 Some(marker_text),

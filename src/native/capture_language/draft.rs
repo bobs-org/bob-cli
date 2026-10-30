@@ -65,6 +65,13 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
 /// session-operator chain (`+2 x`) is split into one single-token item per
 /// operator; see [`session_chain_tokens`].
 pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
+    split_capture_draft_with_clip_control(raw, true)
+}
+
+pub(crate) fn split_capture_draft_with_clip_control(
+    raw: &str,
+    parse_clip_markers: bool,
+) -> CaptureDraft<'_> {
     let lines = split_physical_lines(raw);
     let mut declarations = Vec::new();
     let mut item_lines = Vec::new();
@@ -91,7 +98,11 @@ pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
 
     CaptureDraft {
         declarations,
-        items: split_items_from_item_lines(&item_lines, raw),
+        items: split_items_from_item_lines_with_clip_control(
+            &item_lines,
+            raw,
+            parse_clip_markers,
+        ),
     }
 }
 
@@ -102,19 +113,32 @@ pub(super) fn split_items_from_item_lines<'a>(
     lines: &[ItemLine<'a>],
     source: &'a str,
 ) -> Vec<CaptureItem<'a>> {
+    split_items_from_item_lines_with_clip_control(lines, source, true)
+}
+
+pub(super) fn split_items_from_item_lines_with_clip_control<'a>(
+    lines: &[ItemLine<'a>],
+    source: &'a str,
+    parse_clip_markers: bool,
+) -> Vec<CaptureItem<'a>> {
     let mut items = Vec::new();
     let mut current: Vec<ItemLine<'_>> = Vec::new();
 
     for line in lines.iter().copied() {
         if line.raw.text.trim().is_empty() {
-            push_capture_item(&mut items, &mut current, source);
+            push_capture_item(
+                &mut items,
+                &mut current,
+                source,
+                parse_clip_markers,
+            );
             continue;
         }
 
         current.push(line);
     }
 
-    push_capture_item(&mut items, &mut current, source);
+    push_capture_item(&mut items, &mut current, source, parse_clip_markers);
     items
 }
 
@@ -124,8 +148,12 @@ pub(super) fn split_items_from_item_lines<'a>(
 /// existing single-token path stays byte-identical.
 pub(super) fn session_chain_tokens<'a>(
     line: &RawLine<'a>,
+    parse_clip_markers: bool,
 ) -> Option<Vec<Token<'a>>> {
-    let tokens = tokenize_line_with_spans(line);
+    let tokens = super::type_marker::masked_tokens_with_clip_control(
+        line,
+        parse_clip_markers,
+    );
     if tokens.len() >= 2
         && tokens
             .iter()
@@ -242,6 +270,7 @@ pub(super) fn push_capture_item<'a>(
     items: &mut Vec<CaptureItem<'a>>,
     current: &mut Vec<ItemLine<'a>>,
     source: &'a str,
+    parse_clip_markers: bool,
 ) {
     let Some(first) = current.first().copied() else {
         return;
@@ -250,7 +279,14 @@ pub(super) fn push_capture_item<'a>(
     // item per line. The test is purely lexical, so parse, preview, and
     // submit always agree; each item classifies on its own later.
     if current.len() >= 2
-        && current.iter().all(|line| is_url_list_line(line.raw.text))
+        && current.iter().all(|line| {
+            is_url_list_line(
+                &super::type_marker::masked_line_with_clip_control(
+                    &line.raw,
+                    parse_clip_markers,
+                ),
+            )
+        })
     {
         for line in std::mem::take(current) {
             items.push(CaptureItem {
@@ -265,35 +301,64 @@ pub(super) fn push_capture_item<'a>(
         }
         return;
     }
-    if let Some(tokens) = session_chain_tokens(&first.raw) {
+    if let Some(tokens) = session_chain_tokens(&first.raw, parse_clip_markers) {
         let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
         let last_child = rest.last().copied();
+        let type_markers = super::type_marker::scan_line_with_clip_control(
+            first.raw.text,
+            first.raw.start,
+            parse_clip_markers,
+        )
+        .into_iter()
+        .filter(|occurrence| occurrence.is_marker())
+        .collect::<Vec<_>>();
+        let leading_marker_start = type_markers
+            .iter()
+            .filter(|marker| marker.span().end <= tokens[0].start)
+            .map(|marker| marker.span().start)
+            .min();
+        let trailing_marker_end = type_markers
+            .iter()
+            .filter(|marker| marker.span().start >= tokens.last().unwrap().end)
+            .map(|marker| marker.span().end)
+            .max();
         let owner = tokens
             .iter()
             .rposition(|token| is_chain_close_token(token.text))
             .unwrap_or(tokens.len() - 1);
         for (position, token) in tokens.iter().copied().enumerate() {
             let is_owner = position == owner;
+            let start = if position == 0 {
+                leading_marker_start.unwrap_or(token.start)
+            } else {
+                token.start
+            };
+            let end = if position + 1 == tokens.len() {
+                trailing_marker_end.unwrap_or(token.end)
+            } else {
+                token.end
+            };
             let token_line = ItemLine {
                 raw: RawLine {
-                    text: token.text,
-                    start: token.start,
-                    end: token.end,
+                    text: &source[start..end],
+                    start,
+                    end,
                 },
                 line_number: first.line_number,
             };
             if is_owner {
                 let mut lines = vec![token_line];
                 lines.extend(rest.iter().copied());
-                let (end, line_end) = match last_child {
+                let (base_end, line_end) = match last_child {
                     Some(child) => (child.raw.end, child.line_number),
                     None => (token.end, first.line_number),
                 };
+                let item_end = base_end.max(end).max(token.end);
                 items.push(CaptureItem {
                     source,
                     index: items.len(),
-                    start: token.start,
-                    end,
+                    start,
+                    end: item_end,
                     line_start: first.line_number,
                     line_end,
                     lines,
@@ -302,8 +367,8 @@ pub(super) fn push_capture_item<'a>(
                 items.push(CaptureItem {
                     source,
                     index: items.len(),
-                    start: token.start,
-                    end: token.end,
+                    start,
+                    end,
                     line_start: first.line_number,
                     line_end: first.line_number,
                     lines: vec![token_line],
@@ -313,17 +378,33 @@ pub(super) fn push_capture_item<'a>(
         current.clear();
         return;
     }
-    let parent_tokens: Vec<Token<'_>> = tokenize_with_spans(first.raw.text)
-        .into_iter()
-        .map(|token| Token {
-            text: token.text,
-            start: token.start + first.raw.start,
-            end: token.end + first.raw.start,
-        })
-        .collect();
+    let parent_tokens = super::type_marker::masked_tokens_with_clip_control(
+        &first.raw,
+        parse_clip_markers,
+    );
     if let Some(split) = split_inline_close_tokens(&parent_tokens) {
         let lead_before = &parent_tokens[..split.owner_index];
         let trail = &parent_tokens[split.trail_start..];
+        let type_markers = super::type_marker::scan_line_with_clip_control(
+            first.raw.text,
+            first.raw.start,
+            parse_clip_markers,
+        )
+        .into_iter()
+        .filter(|occurrence| occurrence.is_marker())
+        .collect::<Vec<_>>();
+        let leading_marker_start = type_markers
+            .iter()
+            .filter(|marker| marker.span().end <= parent_tokens[0].start)
+            .map(|marker| marker.span().start)
+            .min();
+        let trailing_marker_end = type_markers
+            .iter()
+            .filter(|marker| {
+                marker.span().start >= parent_tokens.last().unwrap().end
+            })
+            .map(|marker| marker.span().end)
+            .max();
         // No siblings: one item over the whole line, as today. The close
         // parser lexes the tail as the inline entry.
         if lead_before.is_empty() && trail.is_empty() {
@@ -341,11 +422,16 @@ pub(super) fn push_capture_item<'a>(
         }
         let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
         let last_child = rest.last().copied();
-        for token in lead_before.iter().copied() {
+        for (position, token) in lead_before.iter().copied().enumerate() {
+            let start = if position == 0 {
+                leading_marker_start.unwrap_or(token.start)
+            } else {
+                token.start
+            };
             let token_line = ItemLine {
                 raw: RawLine {
-                    text: token.text,
-                    start: token.start,
+                    text: &source[start..token.end],
+                    start,
                     end: token.end,
                 },
                 line_number: first.line_number,
@@ -353,7 +439,7 @@ pub(super) fn push_capture_item<'a>(
             items.push(CaptureItem {
                 source,
                 index: items.len(),
-                start: token.start,
+                start,
                 end: token.end,
                 line_start: first.line_number,
                 line_end: first.line_number,
@@ -362,14 +448,24 @@ pub(super) fn push_capture_item<'a>(
         }
         let owner = parent_tokens[split.owner_index];
         let entry_last = parent_tokens[split.trail_start - 1];
-        let owner_rel_start = owner.start - first.raw.start;
-        let entry_rel_end = entry_last.end - first.raw.start;
+        let owner_start = if lead_before.is_empty() {
+            leading_marker_start.unwrap_or(owner.start)
+        } else {
+            owner.start
+        };
+        let owner_line_end = if trail.is_empty() {
+            trailing_marker_end.unwrap_or(entry_last.end)
+        } else {
+            entry_last.end
+        };
+        let owner_rel_start = owner_start - first.raw.start;
+        let entry_rel_end = owner_line_end - first.raw.start;
         let owner_text = &first.raw.text[owner_rel_start..entry_rel_end];
         let owner_line = ItemLine {
             raw: RawLine {
                 text: owner_text,
-                start: owner.start,
-                end: entry_last.end,
+                start: owner_start,
+                end: owner_line_end,
             },
             line_number: first.line_number,
         };
@@ -377,25 +473,32 @@ pub(super) fn push_capture_item<'a>(
             let mut lines = vec![owner_line];
             lines.extend(rest.iter().copied());
             let (end, line_end) = match last_child {
-                Some(child) => (child.raw.end, child.line_number),
-                None => (entry_last.end, first.line_number),
+                Some(child) => {
+                    (child.raw.end.max(owner_line_end), child.line_number)
+                }
+                None => (owner_line_end, first.line_number),
             };
             items.push(CaptureItem {
                 source,
                 index: items.len(),
-                start: owner.start,
+                start: owner_start,
                 end,
                 line_start: first.line_number,
                 line_end,
                 lines,
             });
         }
-        for token in trail.iter().copied() {
+        for (position, token) in trail.iter().copied().enumerate() {
+            let end = if position + 1 == trail.len() {
+                trailing_marker_end.unwrap_or(token.end)
+            } else {
+                token.end
+            };
             let token_line = ItemLine {
                 raw: RawLine {
-                    text: token.text,
+                    text: &source[token.start..end],
                     start: token.start,
-                    end: token.end,
+                    end,
                 },
                 line_number: first.line_number,
             };
@@ -403,7 +506,7 @@ pub(super) fn push_capture_item<'a>(
                 source,
                 index: items.len(),
                 start: token.start,
-                end: token.end,
+                end,
                 line_start: first.line_number,
                 line_end: first.line_number,
                 lines: vec![token_line],
@@ -548,7 +651,10 @@ pub(crate) fn parse_capture_text_with_clip_control(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureText, String> {
-    let draft = split_capture_draft(raw_text);
+    let draft = split_capture_draft_with_clip_control(
+        raw_text,
+        options.parse_clip_markers,
+    );
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
         return Err(if global.is_some() {
@@ -730,7 +836,10 @@ fn parse_ordinary_draft(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, String> {
-    let draft = split_capture_draft(raw_text);
+    let draft = split_capture_draft_with_clip_control(
+        raw_text,
+        options.parse_clip_markers,
+    );
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
         return Err(if global.is_some() {

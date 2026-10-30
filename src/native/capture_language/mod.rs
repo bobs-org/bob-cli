@@ -34,6 +34,7 @@ mod rewrite;
 mod start_selection;
 pub(crate) mod template;
 mod tokens;
+mod type_marker;
 
 #[cfg(test)]
 mod tests;

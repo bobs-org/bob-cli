@@ -454,6 +454,10 @@ pub(crate) struct ParsedCaptureText {
     /// when no dependent was named yet (draft resolution finishes it
     /// after `@@` inheritance, or reports the ownerless diagnostic).
     pub(crate) dependency_target: Option<ParsedDependencyTarget>,
+    /// Explicit `t:<type>` marker on this item's subject task. The language
+    /// phase exposes the marker to planning, which still refuses writes until
+    /// the dedicated capture-writes phase lands.
+    pub(crate) type_marker: Option<super::type_marker::TypeMarker>,
 }
 
 /// One complete `~` / `~~` modifier on an execution item, in typed

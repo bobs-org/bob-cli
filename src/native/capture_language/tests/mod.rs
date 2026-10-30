@@ -102,3 +102,4 @@ mod ref_grammar;
 mod retired_close;
 mod rewrite;
 mod template;
+mod type_marker;
