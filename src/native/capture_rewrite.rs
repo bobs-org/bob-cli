@@ -102,7 +102,7 @@ standalone '@@@' token at the end of any physical line erases that token \
 ending as the draft's new first line. Only the whitespace-delimited token \
 ending at --cursor is examined, and it must be exactly '@@@' with the cursor \
 at the end of its physical line. The draft's first line break is reused \
-(`\r\n`, `\n`, or `\r`; `\n` when the draft has none). The caret lands where \
+(`\\r\\n`, `\\n`, or `\\r`; `\\n` when the draft has none). The caret lands where \
 the erased '@@@' began, after the inserted header -- so a first line that is \
 exactly '@@@' becomes the header with the caret on a fresh line. The result \
 is idempotent (`start_template`). Without --cursor this typing gesture is \

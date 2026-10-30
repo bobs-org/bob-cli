@@ -3,6 +3,26 @@
 use crate::support::*;
 
 #[test]
+fn capture_rewrite_help_prints_line_break_escapes_literally() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-rewrite help");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("(`\\r\\n`, `\\n`, or `\\r`;"),
+        "capture-rewrite help omitted the literal line-break escapes:\n{out}"
+    );
+    assert!(
+        !output.stdout.contains(&b'\r'),
+        "capture-rewrite help contains a raw CR byte"
+    );
+}
+
+#[test]
 fn capture_rewrite_human_output_is_plain_and_concise() {
     let output = bob_command()
         .arg("capture-rewrite")

@@ -40,8 +40,7 @@ sub-project, the project) they belong to. Every `#task` belongs in exactly one a
 project note by residence, the file holding its checkbox line; a [Task Link](#task-link) or embed
 elsewhere never moves it. Area notes hold the ongoing tasks, usually under `## Tasks`,
 that belong to no finite project; the inboxes (`inbox`, `mac_inbox`, `gkeep_inbox`) are
-area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task and closed tasks
-that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
+area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task, [Event Task](#event-task) rows under `## Events`, and closed tasks that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
 Root-level area notes are `@route` capture targets, and every area note gets the
 per-note Ready cap and `## Tasks` status grouping.
 
@@ -102,6 +101,24 @@ owns every value, and it never writes the note. `## Pomodoros` no longer
 repeats its total. Facts and the bars open the [Stats Dash](#stats-dash) with the day
 pinned. "Day stats" in UI copy (`Toggle Day stats`, `stats.day_strip`).
 Not the [Morning GTD Review Footer](#morning-gtd-review-footer).
+
+### Event Task {#event-task}
+
+*Aliases: event row, calendar task.*
+
+A checkbox `#task` row inside a canonical daily note's `## Events` section,
+whose description begins with a local `**HHMM-HHMM**` span. Hand-written
+rows qualify. Its `[root:: NOTE]` attributes meeting time to an area or
+project, and a Pomodoro Task Link under the daily note's ledger records the
+session. On timed close, Bob compares the span with the session's start and
+close times: a meeting that ended inside is completed, one still running
+stays In Progress and carried, and one not started or ended before the
+session is deferred. Explicit numbered selections take precedence; wildcard
+completion and parking do not select a not-started meeting. See
+`docs/reference/vault-format.md` and `docs/capture.md`.
+
+An Event Task is a daily-note residence exception beside `^gtd`. See the
+[Area Note](#area-note), [Pomodoro](#pomodoro), [Task Link](#task-link), and [Root Parent](#root-parent).
 
 ### Inbox File {#inbox-file}
 
