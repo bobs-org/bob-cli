@@ -64,6 +64,7 @@ fn run_sel(
 ) -> SuccessorPlan {
     let settings = test_settings();
     plan_successors(SuccessorInput {
+        bob_dir: None,
         completed,
         snapshot: snapshot
             .iter()
@@ -1276,6 +1277,7 @@ fn r3_project_reason_carries_scheduled() {
     let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
     let settings = test_settings();
     let plan = plan_successors(SuccessorInput {
+        bob_dir: None,
         completed: vec![CompletedTask {
             relative_path: PathBuf::from("sase.md"),
             block_id: "done-p".to_string(),

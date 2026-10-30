@@ -411,6 +411,7 @@ pub(super) fn complete_existing_task(
             }
             let index = note_index.as_ref().expect("index built above");
             successor_plan = engine::plan_successors(engine::SuccessorInput {
+                bob_dir: Some(bob_dir),
                 completed: predecessors,
                 snapshot,
                 note_texts,

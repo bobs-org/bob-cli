@@ -93,7 +93,8 @@ pub(crate) fn today_command() -> ClapCommand {
 -p NAME -e          Whole-slug among open entries only, else create\n  \
 -P LINE:DIGEST      Exactly that entry; stale or ambiguous is stale_pomodoro\n\n\
 The vault mutation matches `bob capture '^route:block-id[#name]'`. This command never starts a Pomodoro and never commits or syncs; vault-sync picks the change up, as with capture.\n\n\
-The response also suggests a Pomodoro theme for the reading task. JSON marks the suggested open row, or sets theme_suggestion.create when a new bucket can be offered; it reports a fallback when no row can be preselected. This metadata never writes a [theme::] field.\n\n\
+With no destination, Bob places the reading task by its effective type and preserves an existing queue. An explicit destination retypes the task to agree with that entry. JSON reports the suggested type and any field edit additively.\n\n\
+The response also suggests a type for the reading task. JSON marks the suggested open row, or sets theme_suggestion.create when a new bucket can be offered; it reports a fallback when no row can be preselected.\n\n\
 Environment:\n  \
 BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -751,6 +752,9 @@ fn print_success(
             };
             println!("{mark} {verb} 📖 {}", row.title);
             print!("{}", outcome.human_details);
+            if let Some(theme_change) = outcome.capture.get("task_theme") {
+                print_task_type_change(theme_change, styler);
+            }
             if dry_run {
                 print_open_pomodoros(&listing.pomodoros, styler);
                 if let Some(Some(suggestion)) =
@@ -768,6 +772,35 @@ fn print_success(
                 }
             }
         }
+    }
+}
+
+fn print_task_type_change(change: &serde_json::Value, styler: &Styler) {
+    let action = change.get("action").and_then(serde_json::Value::as_str);
+    let name = change
+        .get("theme")
+        .and_then(|theme| theme.get("name"))
+        .and_then(serde_json::Value::as_str);
+    let inherited = change.get("inherited");
+    let inherited_name = inherited
+        .and_then(|value| value.get("theme"))
+        .and_then(|theme| theme.get("name"))
+        .and_then(serde_json::Value::as_str);
+    let inherited_source = inherited
+        .and_then(|value| value.get("label"))
+        .and_then(serde_json::Value::as_str)
+        .map(|label| label.strip_prefix("from ").unwrap_or(label));
+    let suggested = inherited_name
+        .zip(inherited_source)
+        .map(|(name, source)| format!(" · {source} suggests {name}"))
+        .unwrap_or_default();
+    let line = match action {
+        Some("set") => name.map(|name| format!("  type → {name}{suggested}")),
+        Some("cleared") => Some(format!("  type cleared{suggested}")),
+        _ => None,
+    };
+    if let Some(line) = line {
+        println!("{}", styler.cyan(&line));
     }
 }
 

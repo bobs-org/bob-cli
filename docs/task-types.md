@@ -780,8 +780,11 @@ preselected. Zsh descriptions use `suggested · <label>`.
 listing, plus a top-level `theme_suggestion`. Its `fallback` also includes
 `already_queued` when the task already has a live link; that queue takes
 priority. When a known suggestion has no matching open bucket and a new
-entry is allowed, `theme_suggestion.create: true` tells clients to offer a
-new suggested Pomodoro. This command never writes a type field.
+entry is allowed, `theme_suggestion.create: true` identifies the canonical
+entry the shared D7 planner will create on a write. An explicit `-p` or
+`-P` destination uses D6 retyping, reported additively as
+`capture.task_theme`; implicit typed placement never changes the task's
+type field.
 
 The capture command and `bob ref today` consume the shared `preselect`
 vectors. `task_theme: {action: "set" | "cleared", theme, previous,
@@ -801,8 +804,9 @@ readers at `bob types suggest`.
 
 Pure planners in `src/native/pomodoro_themes/routing.rs`, next to
 `preselect.rs`. Named capture `#NAME` / `=name` forms call `retype`.
-Later phases wire `place` and `relocate` into bare capture, moves,
-links, ref-today, successors, and the Task Card. The `agree`,
+`place` now serves bare capture, existing-task links, ref-today, and
+successor offers; `relocate` and Task Card integration remain later work.
+The `agree`,
 `retype`, `place`, and `relocate` vector sections are the Ledger Tools
 JS mirror's contract.
 

@@ -594,17 +594,23 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
             .clone()
             .or(minted_id.clone())
             .unwrap_or_default();
-        let entry_name = match closing_target.as_ref() {
-            Some(resolved) => resolved.name.clone(),
-            None => {
-                let anchor =
-                    verdict.anchor.as_ref().expect("successor has an anchor");
-                day.entries
-                    .get(anchor.entry_index)
-                    .map(|entry| entry.name.clone())
-                    .unwrap_or_default()
-            }
-        };
+        let entry_name = verdict
+            .offer
+            .as_ref()
+            .map(|offer| offer.destination.entry_name.clone())
+            .unwrap_or_else(|| match closing_target.as_ref() {
+                Some(resolved) => resolved.name.clone(),
+                None => {
+                    let anchor = verdict
+                        .anchor
+                        .as_ref()
+                        .expect("successor has an anchor");
+                    day.entries
+                        .get(anchor.entry_index)
+                        .map(|entry| entry.name.clone())
+                        .unwrap_or_default()
+                }
+            });
         let block_link = successor_link_text(
             &file.relative_path,
             &block_id,
@@ -635,9 +641,13 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                 line: placed_link.line,
                 block_link,
                 entry_created: placed_link.entry_created
-                    || closing_target
+                    || (verdict
+                        .offer
                         .as_ref()
-                        .is_some_and(|resolved| resolved.entry_created),
+                        .is_none_or(|offer| !offer.placement_routed)
+                        && closing_target
+                            .as_ref()
+                            .is_some_and(|resolved| resolved.entry_created)),
                 next_up: placed_link.next_up,
                 block_id_created: minted_id.is_some(),
             }),

@@ -312,7 +312,7 @@ fn default_with_q_is_already_current() {
     );
     let vault = TodayVault::new(
         "bob-cli-ref-today-q",
-        "- [*] #task #ref [[ref/papers/attention]] ^ref-attention\n",
+        "- [*] #task #ref [[ref/papers/attention]] [type:: BUILD] ^ref-attention\n",
         day,
     );
     let before_day = fs::read_to_string(&vault.day_file).expect("day");
@@ -333,19 +333,80 @@ fn default_with_q_is_already_current() {
 }
 
 #[test]
-fn default_without_q_links_the_running_entry() {
+fn default_without_q_places_by_the_reading_task_type() {
     let vault =
         TodayVault::new("bob-cli-ref-today-running", ready_task(), DEFAULT_DAY);
     let (output, json) = run_today_json(&vault, &["attention"]);
     assert_success(&output);
     assert_eq!(json["capture"]["pomodoro_link_action"], "linked");
-    assert_eq!(json["capture"]["pomodoro_name"], "CURRENT");
+    assert_eq!(json["capture"]["creates_pomodoro"], true, "{json}");
+    assert_eq!(json["capture"]["pomodoro_name"], "READ");
     let day = fs::read_to_string(&vault.day_file).expect("day");
     assert!(day.contains("[[sase#^ref-attention]]"), "{day}");
-    let current = day.find("— CURRENT").expect("current");
+    assert!(day.contains("— READ\n"), "{day}");
+    let read = day.find("— READ\n").expect("typed entry");
     let linked = day.find("[[sase#^ref-attention]]").expect("link");
-    let reading = day.find("— READING").expect("reading");
-    assert!(current < linked && linked < reading, "{day}");
+    assert!(read < linked, "{day}");
+}
+
+#[test]
+fn typed_task_uses_matching_open_entry_for_implicit_today() {
+    let task = "- [ ] #task #ref [[ref/papers/attention]] [type:: BUILD] ^ref-attention\n";
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+        "- [ ] () — WRITE\n",
+        "- [ ] () — BUILD\n",
+    );
+    let vault = TodayVault::new("bob-cli-ref-today-typed-entry", task, day);
+    let (output, json) = run_today_json(&vault, &["attention"]);
+    assert_success(&output);
+    assert_eq!(json["capture"]["pomodoro_name"], "BUILD");
+    assert_eq!(
+        json["capture"]["pomodoro_link_destination"]["name"],
+        "BUILD"
+    );
+    assert_eq!(
+        json["capture"]["pomodoro_link_destination"]["type"]["theme"]["name"],
+        "BUILD"
+    );
+    assert!(json["capture"].get("task_theme").is_none(), "{json}");
+    let day_after = fs::read_to_string(&vault.day_file).expect("day");
+    let build = day_after.find("— BUILD").expect("BUILD entry");
+    let link = day_after
+        .find("[[sase#^ref-attention]]")
+        .expect("task link");
+    assert!(build < link, "{day_after}");
+}
+
+#[test]
+fn typed_task_creates_named_entry_when_no_open_type_matches() {
+    let task = "- [ ] #task #ref [[ref/papers/attention]] [type:: BUILD] ^ref-attention\n";
+    let vault = TodayVault::new(
+        "bob-cli-ref-today-typed-create",
+        task,
+        "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n- [ ] () — WRITE\n",
+    );
+    let (output, json) = run_today_json(&vault, &["attention"]);
+    assert_success(&output);
+    assert_eq!(json["capture"]["creates_pomodoro"], true, "{json}");
+    assert_eq!(json["capture"]["pomodoro_name"], "BUILD");
+    assert_eq!(
+        json["capture"]["pomodoro_link_destination"]["name"],
+        "BUILD"
+    );
+    assert_eq!(
+        json["capture"]["pomodoro_link_destination"]["role"],
+        "created"
+    );
+    assert_eq!(
+        json["capture"]["pomodoro_link_destination"]["type"]["theme"]["name"],
+        "BUILD"
+    );
+    assert!(json["capture"].get("task_theme").is_none(), "{json}");
+    let day_after = fs::read_to_string(&vault.day_file).expect("day");
+    assert!(day_after.contains("— BUILD\n"), "{day_after}");
+    assert!(day_after.contains("[[sase#^ref-attention]]"), "{day_after}");
 }
 
 #[test]
@@ -544,7 +605,7 @@ fn ready_becomes_next_with_fresh_stamp() {
 fn next_and_in_progress_keep_their_lanes() {
     let next = TodayVault::new(
         "bob-cli-ref-today-next",
-        "- [*] #task #ref [[ref/papers/attention]] ^ref-attention\n",
+        "- [*] #task #ref [[ref/papers/attention]] [type:: BUILD] ^ref-attention\n",
         DEFAULT_DAY,
     );
     let (output, json) = run_today_json(&next, &["attention"]);

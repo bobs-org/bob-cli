@@ -844,8 +844,15 @@ created gets `theme_suggestion.create: true`; the client can offer a new
 Pomodoro. Otherwise `theme_suggestion.fallback` reports
 `unknown_theme`, `creation_blocked`, or `strict_cap`. If the task already
 has a live link under an open entry, `already_queued` wins and no row is
-marked suggested. This is read-only suggestion metadata: `ref today`
-never writes `[theme::]`.
+marked suggested. This metadata describes the reading task's effective type
+and matching daily entries. On a write with no explicit destination,
+`ref today` keeps the implicit entry when its name agrees with that type;
+otherwise it uses the shared placement planner to choose an open matching
+entry or create the canonical named entry. A live link already under an
+open entry stays there. `-p` and `-P` remain explicit destinations and use
+the shared retype rule. The additive `capture.task_theme` reports a task
+type set or cleared by that explicit retype; default placement never changes
+the task's type field.
 
 ```json
 {"ok":true,"schema_version":1,"command":"ref today","mode":"dry_run","changed":true,"ref":{"path":"ref/papers/attention.md","link":"[[ref/papers/attention]]","title":"Attention Is All You Need","marker_id":"attention"},"task":{"path":"sase.md","block_id":"ref-attention","link":"[[sase#^ref-attention]]","status_symbol":" ","status_name":"Ready"},"pomodoros":[{"ref":"41:0b1c2d3e","line":41,"name":"BUGS","running":true,"default":true,"linked":false}],"capture":{"kind":"pomodoro_link"}}

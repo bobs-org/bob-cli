@@ -15,7 +15,10 @@ use std::path::{Component, Path, PathBuf};
 use chrono::NaiveDate;
 use sha2::{Digest, Sha256};
 
-use super::super::capture_task_toggle::select_implicit_open_entry;
+use super::super::capture_task_toggle::{
+    select_implicit_open_entry, select_typed_implicit_entry, TypedImplicit,
+    TypedImplicitOutcome,
+};
 use super::super::freshness::placement::{stamp_fresh, UnblockScope};
 use super::super::projects::edits::normalize_task_hide_tag;
 use super::super::projects::{project_surface, ProjectSurface};
@@ -24,9 +27,12 @@ use super::super::{
     capture_pomodoros,
     capture_task_toggle::set_task_line_status,
     collect_done::block_ids_in_markdown,
+    config,
     note_tasks::NoteTaskSettings,
     note_tasks::{clean_description, stable_task_key},
     pomodoro::pomodoros_section_range,
+    pomodoro_homes::{DiskHomeSource, HomeResolver},
+    pomodoro_themes::{self, routing, Catalog},
     project_dependencies::{
         blocking_open_dependency_ids, is_project_task_id, ProjectBlockReasons,
     },
@@ -92,6 +98,7 @@ pub(crate) enum EntryRole {
     Closing,
     Implicit,
     Created,
+    Typed,
 }
 
 impl EntryRole {
@@ -101,6 +108,7 @@ impl EntryRole {
             Self::Closing => "closing",
             Self::Implicit => "implicit",
             Self::Created => "created",
+            Self::Typed => "typed",
         }
     }
 }
@@ -124,6 +132,11 @@ pub(crate) struct OfferDraft {
     pub key: String,
     pub block_id_needed: bool,
     pub selected: bool,
+    /// A typed default was refused by the strict cap or has no eligible
+    /// destination. The offer remains visible for an explicit retarget.
+    pub placement_refusal: Option<&'static str>,
+    /// The default destination was changed by D7 type placement.
+    pub placement_routed: bool,
     pub n: usize,
     pub order_key: OfferOrderKey,
 }
@@ -166,6 +179,10 @@ pub(crate) struct CompletedTask {
 /// borrowed, so unit tests can drive the planner against in-memory
 /// snapshots in the style of `recovery_tests.rs` (§11.6).
 pub(crate) struct SuccessorInput<'a> {
+    /// Vault root for resolving each successor's effective task type.
+    /// Pure planner callers may omit it to keep legacy placement vectors
+    /// independent of the host filesystem.
+    pub bob_dir: Option<&'a Path>,
     pub completed: Vec<CompletedTask>,
     pub snapshot: Vec<(PathBuf, String)>,
     /// Staged post-gesture texts of C's notes for project pull-in trigger
@@ -1105,6 +1122,35 @@ fn plan_successors_inner(
         input.note_settings,
     );
 
+    if !mode.is_cancel_recovery()
+        && let Some(root) = input.bob_dir
+        && let Some(mut type_routing) =
+            SuccessorTypeRouting::load(root, input.today)
+    {
+        let placement_day = input
+            .post_day
+            .as_deref()
+            .or(input.pre_day.as_deref())
+            .unwrap_or("");
+        let closing_target = input.closing.as_ref().map(|closing| {
+            resolve_closing_target(
+                placement_day,
+                &input.day_relative,
+                input.index,
+                closing,
+            )
+        });
+        route_successor_offers(
+            &mut verdicts,
+            &files,
+            &mut type_routing,
+            placement_day,
+            &input.day_relative,
+            input.index,
+            closing_target.as_ref(),
+        );
+    }
+
     if !mode.is_cancel_recovery() {
         assign_offer_keys(&mut verdicts, &files, input.note_settings);
         apply_selection(&mut verdicts, &input.selection);
@@ -1379,6 +1425,8 @@ fn make_offer(
         key: String::new(),
         block_id_needed,
         selected: false,
+        placement_refusal: None,
+        placement_routed: false,
         n: 0,
         order_key: (3, (usize::MAX, usize::MAX), PathBuf::new(), 0),
     }
@@ -1733,7 +1781,12 @@ fn apply_selection(
         };
         offer.selected = picked;
         if picked {
-            verdict.kind = VerdictKind::Successor;
+            if let Some(reason) = offer.placement_refusal {
+                offer.selected = false;
+                verdict.kind = VerdictKind::Recover(reason);
+            } else {
+                verdict.kind = VerdictKind::Successor;
+            }
         } else {
             verdict.kind = VerdictKind::Recover("not_selected");
         }
@@ -1762,6 +1815,223 @@ fn number_offers(verdicts: &mut [DependentVerdict], files: &[FileScan]) {
             offer.order_key = key;
         }
     }
+}
+
+struct SuccessorTypeRouting {
+    config: config::PlanConfig,
+    catalog: Catalog,
+    resolver: HomeResolver<DiskHomeSource>,
+}
+
+impl SuccessorTypeRouting {
+    fn load(root: &Path, today: NaiveDate) -> Option<Self> {
+        Some(Self {
+            config: config::load_plan_config(&config::config_path()).ok()?,
+            catalog: Catalog::load(root, today, false).ok()?,
+            resolver: HomeResolver::new(DiskHomeSource::new(root)),
+        })
+    }
+
+    fn suggestion(
+        &mut self,
+        path: &Path,
+        line: &str,
+    ) -> Option<pomodoro_themes::suggest::ThemeSuggestion> {
+        pomodoro_themes::suggest::suggest_for_task(
+            &mut self.resolver,
+            &self.catalog,
+            &self.config,
+            path,
+            line,
+        )
+        .suggestion
+    }
+}
+
+/// Apply D7 to each offered successor's default destination. Existing
+/// queues are left in their anchor slot when that entry agrees; a mismatch
+/// uses the shared typed-placement planner.
+fn route_successor_offers(
+    verdicts: &mut [DependentVerdict],
+    files: &[FileScan],
+    type_routing: &mut SuccessorTypeRouting,
+    day_text: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
+    closing_target: Option<&ResolvedClosingTarget>,
+) {
+    let day = DayView::parse(day_text, day_relative, index);
+    let scan = capture_pomodoros::scan(day_text);
+    let sources = type_routing.catalog.theme_sources();
+    let exempt = sources.exempt.iter().cloned().collect::<Vec<_>>();
+    for verdict in verdicts {
+        let Some(offer) = verdict.offer.as_mut() else {
+            continue;
+        };
+        let file = &files[verdict.file];
+        let task = &file.tasks[verdict.task];
+        let line = raw_task_line(&file.contents, task.line_index);
+        let Some(suggestion) =
+            type_routing.suggestion(&file.relative_path, &line)
+        else {
+            continue;
+        };
+
+        let default_target = closing_target
+            .map(|resolved| resolved.target.clone())
+            .unwrap_or_else(|| offer.target.clone());
+        let default_name = closing_target
+            .map(|resolved| resolved.name.clone())
+            .unwrap_or_else(|| successor_target_name(&default_target, &day));
+        offer.target = default_target.clone();
+        offer.destination.entry_name = default_name.clone();
+        if routing::agrees(
+            Some(&suggestion.theme.key),
+            Some(&default_name),
+            &sources,
+        ) {
+            continue;
+        }
+
+        let typed = TypedImplicit {
+            type_key: &suggestion.theme.key,
+            type_name: &suggestion.theme.name,
+            exempt: &exempt,
+            cap: type_routing.config.max_themes(),
+            strict: type_routing.config.strict(),
+        };
+        match select_typed_implicit_entry(&scan, &typed) {
+            Ok(TypedImplicitOutcome::Entry(line)) => {
+                let Some((entry_index, entry_name, target)) =
+                    successor_entry_target(day_text, &day, line)
+                else {
+                    offer.placement_refusal = Some("no_destination");
+                    offer.placement_routed = true;
+                    continue;
+                };
+                if successor_target_entry_index(&default_target)
+                    == Some(entry_index)
+                {
+                    continue;
+                }
+                offer.target = target;
+                offer.destination.entry_name = entry_name;
+                offer.destination.entry_role = EntryRole::Typed;
+                offer.destination.fallback = false;
+                offer.placement_routed = true;
+            }
+            Ok(TypedImplicitOutcome::Create { name }) => {
+                offer.target = SuccessorTarget::Closing {
+                    entry_index: None,
+                    insert_at: named_creation_insert_at(day_text),
+                    created_name: Some(name.clone()),
+                };
+                offer.destination.entry_name = name;
+                offer.destination.entry_role = EntryRole::Created;
+                offer.destination.fallback = false;
+                offer.placement_routed = true;
+            }
+            Err(error) => {
+                offer.placement_refusal = Some(match error {
+                    super::super::capture_task_toggle::TypedImplicitError::StrictTypeCap { .. } => "strict_cap",
+                    _ => "no_destination",
+                });
+                offer.destination.entry_name = suggestion.theme.name;
+                offer.destination.entry_role = EntryRole::Created;
+                offer.destination.fallback = false;
+                offer.placement_routed = true;
+            }
+        }
+    }
+}
+
+fn successor_target_entry_index(target: &SuccessorTarget) -> Option<usize> {
+    match target {
+        SuccessorTarget::Slot { entry_index, .. } => Some(*entry_index),
+        SuccessorTarget::Closing { entry_index, .. } => *entry_index,
+    }
+}
+
+fn successor_target_name(target: &SuccessorTarget, day: &DayView) -> String {
+    if let Some(index) = successor_target_entry_index(target) {
+        return day
+            .entries
+            .get(index)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_default();
+    }
+    match target {
+        SuccessorTarget::Closing {
+            created_name: Some(name),
+            ..
+        } => name.clone(),
+        _ => String::new(),
+    }
+}
+
+fn successor_entry_target(
+    day_text: &str,
+    day: &DayView,
+    line: usize,
+) -> Option<(usize, String, SuccessorTarget)> {
+    let entry_index =
+        day.entries.iter().position(|entry| entry.line == line)?;
+    let entry = day.entries.get(entry_index)?;
+    let lines = logical_lines(day_text);
+    let end = pomodoros_section_range(&lines)
+        .map(|range| range.end.min(lines.len()))
+        .unwrap_or(lines.len());
+    let insert_at = capture_pomodoros::pomodoro_block_range(
+        &lines,
+        entry.line.min(end),
+        end,
+    )
+    .end;
+    Some((
+        entry_index,
+        entry.name.clone(),
+        SuccessorTarget::Closing {
+            entry_index: Some(entry_index),
+            insert_at,
+            created_name: None,
+        },
+    ))
+}
+
+/// Match the shared named-placeholder insertion point: after the running
+/// entry or last completed entry, otherwise before the first open entry,
+/// or at the top of `## Pomodoros` when the ledger is empty.
+fn named_creation_insert_at(day_text: &str) -> usize {
+    let lines = logical_lines(day_text);
+    let end = pomodoros_section_range(&lines)
+        .map(|range| range.end.min(lines.len()))
+        .unwrap_or(lines.len());
+    let scan = capture_pomodoros::scan(day_text);
+    let anchor = scan
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Open
+                && entry.time_range.is_some()
+        })
+        .or_else(|| {
+            scan.entries.iter().rev().find(|entry| {
+                entry.state == capture_pomodoros::PomodoroState::Completed
+            })
+        });
+    if let Some(anchor) = anchor {
+        return capture_pomodoros::pomodoro_block_range(
+            &lines,
+            anchor.line.saturating_sub(1).min(end),
+            end,
+        )
+        .end;
+    }
+    scan.entries
+        .first()
+        .map(|entry| entry.line.saturating_sub(1))
+        .or_else(|| pomodoros_section_range(&lines).map(|range| range.start))
+        .unwrap_or(lines.len())
 }
 
 pub(crate) fn offer_report(offer: &OfferDraft) -> OfferReport {
@@ -1921,8 +2191,11 @@ fn apply_verdicts(
         };
         for verdict in verdicts.iter_mut() {
             if let Some(offer) = verdict.offer.as_mut() {
-                offer.destination.entry_name = resolved.name.clone();
-                offer.destination.entry_role = role;
+                if !offer.placement_routed {
+                    offer.destination.entry_name = resolved.name.clone();
+                    offer.destination.entry_role = role;
+                    offer.target = resolved.target.clone();
+                }
             }
         }
     }
@@ -1948,29 +2221,16 @@ fn apply_verdicts(
             &input.day_relative,
             input.index,
         );
-        if let Some(resolved) = closing_target.as_ref() {
+        if let Some(offer) = verdict.offer.as_ref() {
             placements.push(SuccessorPlacement {
-                target: match &resolved.target {
-                    SuccessorTarget::Closing {
-                        entry_index,
-                        insert_at,
-                        created_name,
-                    } => SuccessorTarget::Closing {
-                        entry_index: *entry_index,
-                        insert_at: *insert_at,
-                        created_name: created_name.clone(),
-                    },
-                    SuccessorTarget::Slot { .. } => {
-                        unreachable!("closing target is never a slot")
-                    }
-                },
+                target: offer.target.clone(),
                 block_link,
             });
             continue;
         }
-        if let Some(offer) = verdict.offer.as_ref() {
+        if let Some(resolved) = closing_target.as_ref() {
             placements.push(SuccessorPlacement {
-                target: offer.target.clone(),
+                target: resolved.target.clone(),
                 block_link,
             });
             continue;

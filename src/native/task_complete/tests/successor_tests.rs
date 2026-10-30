@@ -65,6 +65,7 @@ fn run_sel(
 ) -> super::super::successors::SuccessorPlan {
     let settings = test_settings();
     plan_successors(SuccessorInput {
+        bob_dir: None,
         completed,
         snapshot: snapshot
             .iter()

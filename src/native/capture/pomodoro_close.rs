@@ -785,6 +785,7 @@ fn plan_close_successors(
     }
     let index = note_index.as_ref().expect("index built above");
     let successor_plan = engine::plan_successors(engine::SuccessorInput {
+        bob_dir: Some(bob_dir),
         completed: predecessors,
         snapshot,
         note_texts,

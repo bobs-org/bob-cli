@@ -62,6 +62,8 @@ pub(crate) fn link_existing_task(
     let mut planner = CaptureBatchPlanner::default();
     let mut warnings = Vec::new();
     let mut dependency_ctx = DependencyContext::new(bob_dir, today);
+    let mut task_theme_context =
+        CaptureTaskThemeContext::new(bob_dir, today, None);
     planner.begin_item(None);
     let planned = plan_existing_task_pomodoro_link_item(
         &mut planner,
@@ -76,7 +78,7 @@ pub(crate) fn link_existing_task(
         today,
         &mut warnings,
         &mut dependency_ctx,
-        None,
+        Some(&mut task_theme_context),
     )?;
     let human_details =
         format_human_pomodoro_link_details(&planned.result, styler);

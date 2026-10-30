@@ -89,7 +89,7 @@ fn so1_vault(name: &str) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
         &vault.join("sase_foo.md"),
         &project(concat!(
             "- [?] #task Foo [dependsOn:: bar] [id:: foo] ^prj\n",
-            "- [?] #task First #ref\n",
+            "- [?] #task First #ref [type:: FIX]\n",
             "- [ ] #task Second [unblocked:: 2026-10-01] [id:: second] ^second\n",
         )),
     );
@@ -184,7 +184,7 @@ fn so1_project_offers_pick_one() {
         .expect("picked n=1");
     assert_eq!(picked["status_symbol"], "*");
     assert_eq!(picked["link"]["entry_name"], "FIX");
-    assert_eq!(picked["link"]["block_id_created"], true);
+    assert_eq!(picked["link"]["block_id_created"], true, "{picked}");
     assert!(picked.get("not_linked").is_none(), "{picked}");
     let other = unblocked
         .iter()
@@ -211,6 +211,47 @@ fn so1_project_offers_pick_one() {
     assert!(!second.contains("[fresh:: 2026-10-05]"), "{second}");
     let day = fs::read_to_string(&day_file).expect("day");
     assert!(day.contains("[[sase_foo#^"), "{day}");
+}
+
+#[test]
+fn picked_successor_uses_its_typed_destination() {
+    let (_temp, vault, day_file) = vault("bob-cli-successor-typed-destination");
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "- [ ] #task Fix [id:: fix] ^fix\n",
+            "- [?] #task Follower [type:: WRITE] [dependsOn:: fix] [id:: follower] ^follower\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — FIX\n",
+            "  - [[sase#^fix]]\n",
+            "- [ ] () — WRITE\n",
+        ),
+    );
+
+    let json = capture_json(&vault, &day_file, &["-p", "1"], "!sase:fix");
+    let follower = json["task_complete"]["unblocked"]
+        .as_array()
+        .expect("unblocked")
+        .iter()
+        .find(|row| row["block_id"] == "follower")
+        .expect("follower");
+    assert_eq!(follower["link"]["entry_name"], "WRITE", "{follower}");
+    assert_eq!(follower["offer"]["destination"]["entry_role"], "typed");
+    assert_eq!(follower["offer"]["destination"]["fallback"], false);
+    let day = fs::read_to_string(&day_file).expect("day");
+    let write = day.find("— WRITE").expect("WRITE entry");
+    let link = day.find("[[sase#^follower]]").expect("successor link");
+    assert!(write < link, "{day}");
+    let task = fs::read_to_string(vault.join("sase.md")).expect("task note");
+    assert!(
+        task.contains("[type:: WRITE]"),
+        "default placement leaves type unchanged: {task}"
+    );
 }
 
 // SO2 / SO32: 11-way and 20-way fan-out. That many hand_off offers,

@@ -5107,10 +5107,11 @@ unnamed), 1-based `entry_line` and `line`, `entry_created`, `next_up`,
 linked a picked offer — additive `offer` with `key`, `n`, `group`
 (`hand_off` / `project` / `project_finished`), `project` on the project
 group, `destination` `{day_file, entry_name, entry_role, fallback}`
-(`entry_role` is `slot` / `closing` / `implicit` / `created`),
+(`entry_role` is `slot` / `closing` / `implicit` / `created` / `typed`),
 `selected`, and `block_id_needed`, `not_linked` with one of
 `already_planned`, `project_task`, `project_member`, `hidden`,
-`disabled`, `not_selected`, or `no_destination` (the key is omitted
+`disabled`, `not_selected`, `no_destination`, or `strict_cap` (a requested
+typed placement was refused by the strict type cap; the key is omitted
 when linked; `breaker` and `not_planned_today` are never emitted
 again), `trigger` `"dependency"` or `"project_empty"` (a missing key
 means an older bob), and `hide_removed` true when this item

@@ -1322,14 +1322,16 @@ stale `[ ]` resident).
   - `group`: `"hand_off"` | `"project"` | `"project_finished"`;
   - `project`: vault-relative path of N, present on the `project` group;
   - `destination`: `{day_file, entry_name, entry_role, fallback}` where
-    `entry_role` is `"slot"` | `"closing"` | `"implicit"` | `"created"`
+    `entry_role` is `"slot"` | `"closing"` | `"implicit"` | `"created"` | `"typed"`
     and `fallback` is true when the implicit destination was used
     because no §12.3 anchor existed;
   - `selected`: true when this offer was picked;
   - `block_id_needed`: true when a pick would mint.
 - `not_linked` is one of `already_planned`, `project_task`,
   `project_member`, `hidden`, `disabled`, `not_selected`,
-  `no_destination`. Serde omits the key when the row was linked.
+  `no_destination`, `strict_cap`. `strict_cap` means a requested typed
+  destination could not be created under the configured cap. Serde omits
+  the key when the row was linked.
   - The cycler-only model adds `failed` and `cancelled`; Rust never
     emits them.
   - `breaker` and `not_planned_today` are never emitted again.

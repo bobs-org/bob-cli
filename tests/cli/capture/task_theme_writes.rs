@@ -374,7 +374,7 @@ fn matching_type_and_guarded_links_do_not_write_a_task_theme() {
 }
 
 #[test]
-fn ref_today_named_selection_never_writes_task_theme() {
+fn ref_today_named_selection_retypes_to_the_explicit_destination() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-capture-task-theme-ref-today",
         &project(
@@ -393,7 +393,9 @@ fn ref_today_named_selection_never_writes_task_theme() {
         .arg("today")
         .arg("attention")
         .arg("-p")
-        .arg("READ")
+        .arg("WRITE")
+        .arg("-f")
+        .arg("json")
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -401,11 +403,26 @@ fn ref_today_named_selection_never_writes_task_theme() {
         .output()
         .expect("run ref today");
     assert_success(&output);
+    let json: Value =
+        serde_json::from_slice(&output.stdout).expect("ref today JSON");
+    assert_eq!(json["capture"]["task_theme"]["action"], "set", "{json}");
+    assert_eq!(
+        json["capture"]["task_theme"]["theme"]["name"], "WRITE",
+        "{json}"
+    );
+    assert_eq!(
+        json["capture"]["task_theme"]["previous"]["name"], "FIX",
+        "{json}"
+    );
+    assert_eq!(
+        json["capture"]["task_theme"]["inherited"]["theme"]["name"], "READ",
+        "{json}"
+    );
+    let task_after = fs::read_to_string(vault.join("sase.md")).unwrap();
     assert!(
-        fs::read_to_string(vault.join("sase.md"))
-            .unwrap()
-            .contains("[theme:: FIX]"),
-        "ref-today may update task status and freshness, but preserves its theme field"
+        task_after.contains("[type:: WRITE]")
+            && !task_after.contains("[theme::"),
+        "ref-today retypes the task to its explicit destination: {task_after}"
     );
 }
 

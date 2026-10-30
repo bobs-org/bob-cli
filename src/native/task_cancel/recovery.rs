@@ -69,6 +69,7 @@ pub(crate) fn recover_cancelled_source(
     }
     let successor = plan_recovery_only(
         SuccessorInput {
+            bob_dir: None,
             completed: vec![completed],
             snapshot: snapshot.to_vec(),
             note_texts: Vec::new(),

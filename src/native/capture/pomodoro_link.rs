@@ -483,9 +483,9 @@ pub(super) fn plan_pomodoro_link_capture(
         ledger_target,
         capture_task_toggle::PomodoroLinkTarget::LiteralName(_)
     );
-    // A bare link places by the task's effective type (D7); a named link
-    // keeps its deliberate destination and never types. `bob ref today`
-    // passes no theme context and keeps the legacy implicit selection.
+    // A bare link places by the task's effective type (D7). Named targets
+    // keep their deliberate destination; the caller applies D6 retyping.
+    // `bob ref today` uses this same context and placement path.
     let is_bare = matches!(
         ledger_target,
         capture_task_toggle::PomodoroLinkTarget::Implicit
@@ -646,9 +646,9 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
     today: NaiveDate,
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
-    task_theme_context: Option<&mut CaptureTaskThemeContext>,
+    mut task_theme_context: Option<&mut CaptureTaskThemeContext>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
-    let (note_plan, link_guard) = plan_pomodoro_link_capture(
+    let (mut note_plan, link_guard) = plan_pomodoro_link_capture(
         planner,
         bob_dir,
         target,
@@ -660,11 +660,37 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
         today,
         warnings,
         ctx,
-        task_theme_context,
+        task_theme_context.as_deref_mut(),
     )?;
-    planned_item_from_pomodoro_link_plan(
+    let mut task_theme = None;
+    if link_guard.is_none()
+        && !matches!(
+            ledger_target,
+            capture_task_toggle::PomodoroLinkTarget::Implicit
+        )
+        && let Some(context) = task_theme_context.as_deref_mut()
+        && let Some(link) = note_plan.pomodoro_link.as_mut()
+    {
+        let applied = context.apply_existing_task(
+            planner,
+            target,
+            route,
+            block_id,
+            &link.task_line,
+            Some(link.pomodoro_name.as_deref().unwrap_or_default()),
+            None,
+            warnings,
+        )?;
+        if let Some(applied) = applied {
+            link.task_line = applied.task_line;
+            task_theme = Some(applied.summary);
+        }
+    }
+    let mut planned = planned_item_from_pomodoro_link_plan(
         note_plan, link_guard, route, target, dry_run, today,
-    )
+    )?;
+    planned.result.task_theme = task_theme;
+    Ok(planned)
 }
 
 fn planned_item_from_pomodoro_link_plan(
