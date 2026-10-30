@@ -217,6 +217,7 @@ sections. See [freshness fields and configuration](../freshness.md#2-fields-over
 | `highlights.url_routing.capture` | Boolean | `true` | Whether eligible bare links in capture queue a reference job. |
 | `highlights.url_routing.gkeep` | Boolean | `true` | Whether eligible URL-only Keep notes are clipped during pull. |
 | `highlights.url_routing.exclude_hosts` | Sequence of host strings | `[google.com, googleplex.com, youtube.com, youtu.be, github.com, x.com, twitter.com]` | Replaces the built-in exclusions; an empty list excludes none. Entries are normalized and match a host and its subdomains. |
+| `highlights.annotation_task_relation` | String relation label | Unset (off) | When set, each task newly created from a Highlights `#task` annotation gains a 🪢 LINKS child pointing at its reference's reading task with this label. An invalid label fails scans that create annotation tasks. See [Relation to the reading task](../highlights-ref-sync.md#relation-to-the-reading-task). |
 
 The old `highlights.pre_scan_command` key is rejected; use
 `pre_scan_hook`. Invalid URL-routing config warns and leaves the URL as a task.

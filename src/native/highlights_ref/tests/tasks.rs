@@ -745,3 +745,147 @@ fn highlights_ref_capture_dates_follow_bob_clock() {
     )]);
     assert_eq!(super::current_local_date(), "2026-10-23");
 }
+
+#[test]
+fn annotation_task_relation_label_validation_reports_path_and_reason() {
+    assert_eq!(
+        super::normalize_annotation_task_relation(None).expect("absent is off"),
+        None
+    );
+    assert_eq!(
+        super::normalize_annotation_task_relation(Some("   "))
+            .expect("whitespace is off"),
+        None
+    );
+    assert_eq!(
+        super::normalize_annotation_task_relation(Some("inspired by"))
+            .expect("valid label")
+            .as_deref(),
+        Some("inspired by")
+    );
+    for raw in ["bad | label", &"a".repeat(41), "💬 mention"] {
+        let error = super::normalize_annotation_task_relation(Some(raw))
+            .expect_err("invalid label must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("invalid highlights.annotation_task_relation in"),
+            "{message}"
+        );
+        assert!(message.contains("; fix or remove it"), "{message}");
+    }
+    let reserved =
+        super::normalize_annotation_task_relation(Some("💬 mention"))
+            .expect_err("reserved mention must fail");
+    assert!(
+        reserved
+            .to_string()
+            .contains("💬 is reserved for text mentions"),
+        "{reserved}"
+    );
+}
+
+#[test]
+fn annotation_task_relation_links_line_uses_section_four_slot() {
+    let label = "inspired by".to_string();
+    let same = crate::native::task_relations::format::format_links_line(
+        "\t",
+        &[("[[#^ref-example]]".to_string(), Some(label.clone()))],
+    );
+    assert_eq!(same, "\t- 🪢 **LINKS:** inspired by [[#^ref-example]]");
+}
+
+#[test]
+fn annotation_relation_link_forms_follow_section_five() {
+    let bob_dir = temp_bob_dir("annotation-relation-links");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+    for rel in [
+        "obsidian.md",
+        "alice.md",
+        "notes/deep.md",
+        "done/old_done.md",
+        "ref/books/example.md",
+    ] {
+        write_test_file(&bob_dir.join(rel), "# Note\n");
+    }
+    // A second Alice forces the basename fallback to the full path.
+    write_test_file(&bob_dir.join("other/alice.md"), "# Other\n");
+    let mut run_state = super::RunWriteState::default();
+
+    // Same note.
+    let same = super::annotation_relation_link(
+        &config,
+        &bob_dir.join("obsidian.md"),
+        &bob_dir.join("obsidian.md"),
+        "ref-example",
+        &mut run_state,
+    );
+    assert_eq!(same, "[[#^ref-example]]");
+
+    // Unique basename.
+    let base = super::annotation_relation_link(
+        &config,
+        &bob_dir.join("alice.md"),
+        &bob_dir.join("obsidian.md"),
+        "ref-example",
+        &mut run_state,
+    );
+    assert_eq!(base, "[[obsidian#^ref-example]]");
+
+    // Nested path when the basename is ambiguous.
+    let nested = super::annotation_relation_link(
+        &config,
+        &bob_dir.join("ref/books/example.md"),
+        &bob_dir.join("other/alice.md"),
+        "ref-example",
+        &mut run_state,
+    );
+    assert_eq!(nested, "[[other/alice#^ref-example]]");
+
+    // Archive targets keep the explicit `done/…` form.
+    let archived = super::annotation_relation_link(
+        &config,
+        &bob_dir.join("obsidian.md"),
+        &bob_dir.join("done/old_done.md"),
+        "ref-example",
+        &mut run_state,
+    );
+    assert_eq!(archived, "[[done/old_done#^ref-example]]");
+    // The cross-note cases built the vault index lazily, exactly once.
+    assert!(run_state.note_index.is_some());
+}
+
+#[test]
+fn annotation_task_relation_blocks_preserve_crlf_endings() {
+    let task =
+        "- [ ] #task Follow up [[#^h-abc|🔖]] [h:: abc] [created::2026-10-30]";
+    let links = "\t- 🪢 **LINKS:** inspired by [[#^ref]]";
+    // v2 default blocks join with `\n`; capture converts to the
+    // destination's CRLF.
+    let block = format!("{task}\n{links}");
+    let crlf_contents = "# Alice\r\n\r\n- [ ] Existing\r\n";
+    let (updated, _) =
+        crate::native::capture::insert_task_line(crlf_contents, &block);
+    assert!(!updated.replace("\r\n", "").contains('\n'), "{updated:?}");
+    assert!(updated.contains("inspired by [[#^ref]]\r\n"), "{updated:?}");
+
+    // Explicit routes flatten without embedded newlines so CRLF files
+    // never get mixed endings.
+    let flat = vec![task.to_string(), links.to_string()];
+    let appended = super::append_task_lines(crlf_contents, &flat);
+    assert!(!appended.replace("\r\n", "").contains('\n'), "{appended:?}");
+    assert!(
+        appended.contains("inspired by [[#^ref]]\r\n"),
+        "{appended:?}"
+    );
+}
+
+#[test]
+fn pdf_task_line_parser_ignores_relation_children() {
+    let body = "# Example\n\n- [ ] #task #ref [[lib/example.pdf]] #hide ^ref\n\t- 🪢 **LINKED FROM:** [[#^abc]] (inspired by)\n\n## Tasks\n\n- [ ] #task Follow up [[#^h-abc|🔖]] [h:: abc] [created::2026-10-30]\n\t- 🪢 **LINKS:** inspired by [[#^ref]]\n";
+    match super::parse_pdf_task_line(body).expect("parse with relations") {
+        super::PdfTaskLineState::Present(task) => {
+            assert_eq!(task.line_index, 2);
+        }
+        super::PdfTaskLineState::Missing => panic!("expected ^ref line"),
+    }
+}

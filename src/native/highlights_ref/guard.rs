@@ -847,6 +847,7 @@ mod tests {
             }],
             owner: PathBuf::from("lib/papers/src.pdf"),
             is_v2_default: false,
+            annotation_task_relation: None,
         }
     }
 

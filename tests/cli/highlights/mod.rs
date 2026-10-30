@@ -1,5 +1,6 @@
 //! Highlights reference tests.
 
+mod annotation_relation;
 mod continuations;
 mod corpus_gate;
 mod create;

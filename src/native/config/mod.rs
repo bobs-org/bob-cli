@@ -105,6 +105,7 @@ pub(crate) struct HighlightsConfig {
     coordinate_pdf_writes: bool,
     table_layout: String,
     table_prose_words: u32,
+    annotation_task_relation: Option<String>,
 }
 
 impl Default for HighlightsConfig {
@@ -121,6 +122,7 @@ impl Default for HighlightsConfig {
             coordinate_pdf_writes: false,
             table_layout: DEFAULT_TABLE_LAYOUT.to_string(),
             table_prose_words: DEFAULT_TABLE_PROSE_WORDS,
+            annotation_task_relation: None,
         }
     }
 }
@@ -259,6 +261,13 @@ impl HighlightsConfig {
     /// Word threshold for the auto prose rule (1 to 200).
     pub(crate) fn table_prose_words(&self) -> u32 {
         self.table_prose_words
+    }
+
+    /// Raw trimmed `highlights.annotation_task_relation` label, if set.
+    /// Empty after trimming counts as unset. Validation happens where the
+    /// label is used, never in `parse_highlights_config`.
+    pub(crate) fn annotation_task_relation(&self) -> Option<&str> {
+        self.annotation_task_relation.as_deref()
     }
 }
 
@@ -477,6 +486,8 @@ struct RawHighlights {
     table_prose_words: Option<serde_yaml::Value>,
     #[serde(default)]
     url_routing: Option<RawUrlRouting>,
+    #[serde(default)]
+    annotation_task_relation: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -746,6 +757,13 @@ pub(crate) fn parse_highlights_config(
         path,
     )?;
 
+    let annotation_task_relation = config
+        .highlights
+        .as_ref()
+        .and_then(|highlights| highlights.annotation_task_relation.as_ref())
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty());
+
     Ok(HighlightsConfig {
         pre_scan_hook,
         audio_link_template,
@@ -765,6 +783,7 @@ pub(crate) fn parse_highlights_config(
             .unwrap_or(false),
         table_layout,
         table_prose_words,
+        annotation_task_relation,
     })
 }
 
@@ -1303,6 +1322,55 @@ highlights:
             "legacy rejection must name the new spelling: {}",
             error.message()
         );
+    }
+
+    #[test]
+    fn parses_highlights_annotation_task_relation() {
+        let path = Path::new("/config.yml");
+        let absent = parse_highlights_config(
+            "highlights:\n  coordinate_pdf_writes: false\n",
+            path,
+        )
+        .expect("absent key is off");
+        assert_eq!(absent.annotation_task_relation(), None);
+
+        let null = parse_highlights_config(
+            "highlights:\n  annotation_task_relation:\n",
+            path,
+        )
+        .expect("null key is off");
+        assert_eq!(null.annotation_task_relation(), None);
+
+        for text in [
+            "highlights:\n  annotation_task_relation: ''\n",
+            "highlights:\n  annotation_task_relation: '   '\n",
+        ] {
+            let off =
+                parse_highlights_config(text, path).expect("empty key is off");
+            assert_eq!(off.annotation_task_relation(), None);
+        }
+
+        let valid = parse_highlights_config(
+            "highlights:\n  annotation_task_relation: '  inspired by  '\n",
+            path,
+        )
+        .expect("valid label parses");
+        assert_eq!(valid.annotation_task_relation(), Some("inspired by"));
+
+        // The lenient parse never errors on a bad label; use-time
+        // validation reports it instead.
+        for text in [
+            "highlights:\n  annotation_task_relation: 'bad | label'\n",
+            "highlights:\n  annotation_task_relation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n",
+            "highlights:\n  annotation_task_relation: '💬 mention'\n",
+        ] {
+            let kept = parse_highlights_config(text, path)
+                .expect("bad label stays parseable");
+            assert!(
+                kept.annotation_task_relation().is_some(),
+                "bad label is kept raw for use-time validation"
+            );
+        }
     }
 
     fn parse(text: &str) -> Result<PriorityProperty, ConfigError> {

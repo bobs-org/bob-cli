@@ -355,6 +355,7 @@ failed follow-ups are repaired by reconcile.
 | Closes, cancels, reopens | None. Lifecycle events never write or remove a relation. |
 | Cancel-label commit | [§17](#17-cancel-labels). An explicit add or relabel into a cancel label cancels the source as Task Card Cancel would. |
 | Complete-label commit | [§18](#18-complete-labels). An explicit add or relabel into a complete label marks the source Done as that surface's managed Done gesture would. |
+| Highlights annotation tasks (opt-in via `highlights.annotation_task_relation`) | Writes only the new task's LINKS line, at creation time. There is no mint and no mirror (reconcile does both); existing LINKS lines are never edited. It is not an explicit gesture, so §17/§18 never fire. |
 
 All writers share one planner, implemented in Rust with a JS twin and
 pinned by the same LW vectors. Writers compare canonical output

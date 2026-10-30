@@ -562,7 +562,9 @@ pub(super) struct RoutedTaskNoteWrite {
 /// and legacy identities); `is_v2_default` selects capture's Tasks-section
 /// insertion (v2 unqualified follow-ups) over the legacy append behavior
 /// (explicit `@name` routes). Stale full-file snapshots are never stored
-/// here.
+/// here. `annotation_task_relation` is the normalized relation label to
+/// render as a LINKS child for each newly created task, or `None` when
+/// the feature is off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RoutedInsertionIntent {
     pub(super) path: PathBuf,
@@ -570,6 +572,7 @@ pub(super) struct RoutedInsertionIntent {
     pub(super) candidates: Vec<AnnotationTaskCandidate>,
     pub(super) owner: PathBuf,
     pub(super) is_v2_default: bool,
+    pub(super) annotation_task_relation: Option<String>,
 }
 
 /// Cross-PDF execution dedup: actually successful annotation writes in this
@@ -580,6 +583,7 @@ pub(super) struct RunWriteState {
     pub(super) processed_ids: BTreeSet<String>,
     pub(super) legacy_identities: BTreeSet<String>,
     pub(super) source_anchors: BTreeSet<String>,
+    pub(super) note_index: Option<crate::native::vault_links::NoteIndex>,
 }
 
 /// Shared per-scan planning context: one immutable locator index plus the
@@ -631,6 +635,7 @@ pub(super) struct PdfSyncPlan {
     pub(super) annotation_task_candidates: Vec<AnnotationTaskCandidate>,
     pub(super) annotation_tasks_created: usize,
     pub(super) annotation_tasks_skipped: usize,
+    pub(super) annotation_task_relation: Option<String>,
     pub(super) routed_task_note_writes: Vec<RoutedTaskNoteWrite>,
     pub(super) routed_intents: Vec<RoutedInsertionIntent>,
     pub(super) reading_task_plan: Option<ReadingTaskPlan>,

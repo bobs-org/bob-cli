@@ -2146,6 +2146,43 @@ block IDs to source task lines:
 ^h-2b91f0a4c7de
 ```
 
+### Relation to the reading task
+
+When `highlights.annotation_task_relation` is set, each newly created
+annotation task also gains one 🪢 LINKS child pointing at its reference's
+reading task with the configured label:
+
+```yaml
+highlights:
+  annotation_task_relation: inspired by
+```
+
+```md
+- [ ] #task Compare this claim with the appendix.
+      [[ref/books/example#^h-2b91f0a4c7de|🔖]] [h:: 4c0a13d2...] [created::2026-10-30]
+  - 🪢 **LINKS:** inspired by [[#^ref-example]]
+```
+
+Without the key the output stays byte-identical to today. The link form
+follows the destination the task is written into: same-note tasks use
+`[[#^ref]]` / `[[#^ref-example]]`, explicit `@name` routes and archived
+fallbacks use the cross-note `[[note#^id]]` form (`done/…` targets keep
+their explicit path). v2 follow-ups link the reading task's final address
+after the reading-task action, so a birth that collides to `^ref-x-2`
+links `[[#^ref-x-2]]`.
+
+Sync writes only the new task's LINKS line, at creation time. It never
+mints the follow-up's `^block-id` and never writes the reading task's
+LINKED FROM mirror; `bob task reconcile` owns both, and live chips render
+from the live index immediately. Only newly created tasks gain the line:
+existing tasks are untouched, removed relations are never re-added, and
+reruns stay no-ops. The relation is inert like every relation: even when
+the label also appears in `relations.cancel_labels` or
+`complete_labels`, nothing is cancelled or completed. References with no
+reading task (trackerless notes, `open_ref_without_task`, refused or
+ambiguous tasks) still create the task, with no LINKS line. An invalid
+label fails the scan before any write.
+
 The `[h:: ...]` processed ID is computed from the source reference note path,
 source annotation block, and normalized task identity. Duplicate identical
 `#task` bullets in the same annotation still create only one task. The property

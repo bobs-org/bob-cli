@@ -863,6 +863,7 @@ pub(super) fn plan_pdf_sync(
         annotation_task_candidates,
         annotation_tasks_created: 0,
         annotation_tasks_skipped: 0,
+        annotation_task_relation: None,
         routed_task_note_writes: Vec::new(),
         routed_intents: Vec::new(),
         reading_task_plan: Some(v1_reading_plan),
@@ -1403,6 +1404,7 @@ fn plan_pdf_sync_v2(
         annotation_task_candidates,
         annotation_tasks_created: 0,
         annotation_tasks_skipped: 0,
+        annotation_task_relation: None,
         routed_task_note_writes: Vec::new(),
         routed_intents: Vec::new(),
         reading_task_plan: Some(reading_plan),
@@ -1633,6 +1635,51 @@ pub(super) fn finalize_annotation_task_plans(
         return Ok(());
     }
 
+    let config_path = super::bob_config::config_path();
+    let highlights = super::bob_config::load_highlights_config(&config_path)
+        .map_err(super::hooks::config_error)?;
+    let raw_relation =
+        highlights.annotation_task_relation().map(str::to_string);
+    let raw_ref = raw_relation.as_deref();
+    finalize_annotation_task_plans_with_label(config, plans, ctx, raw_ref)
+}
+
+pub(super) fn normalize_annotation_task_relation(
+    relation_raw: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(raw) = relation_raw else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match crate::native::task_relations::label::normalize_relation_label(
+        trimmed,
+    ) {
+        Ok(label) => Ok(Some(label)),
+        Err(error) => Err(CommandError::new(format!(
+            "invalid highlights.annotation_task_relation in {}: {}; fix or remove it",
+            super::bob_config::config_path().display(),
+            error.as_str()
+        ))),
+    }
+}
+
+pub(super) fn finalize_annotation_task_plans_with_label(
+    config: &Config,
+    plans: &mut [&mut PdfSyncPlan],
+    ctx: &ScanContext,
+    relation_raw: Option<&str>,
+) -> Result<()> {
+    if plans
+        .iter()
+        .all(|plan| plan.annotation_task_candidates.is_empty())
+    {
+        return Ok(());
+    }
+    let normalized_relation = normalize_annotation_task_relation(relation_raw)?;
+
     let disk_index = processed_task_index(config)?;
     let created_date = ctx.invocation_date.clone();
 
@@ -1640,6 +1687,7 @@ pub(super) fn finalize_annotation_task_plans(
         let plan = &mut **plan;
         plan.annotation_tasks_created = 0;
         plan.annotation_tasks_skipped = 0;
+        plan.annotation_task_relation = None;
         plan.routed_task_note_writes.clear();
         plan.routed_intents.clear();
 
@@ -1653,6 +1701,16 @@ pub(super) fn finalize_annotation_task_plans(
             .as_ref()
             .is_some_and(|reading| reading.branch == NoteBranch::V2);
         let residence = plan.v2_residence.clone();
+        // v1 local LINKS need the in-note `^ref` tracker. Check once
+        // before mutating the body; a malformed duplicate still fails.
+        let v1_tracker_present = if is_v2 {
+            false
+        } else {
+            matches!(
+                parse_pdf_task_line(&plan.rendered_body)?,
+                PdfTaskLineState::Present(_)
+            )
+        };
 
         let mut reference_task_lines = Vec::new();
         // Per-destination intents preserve each PDF's ownership: later PDFs
@@ -1676,8 +1734,20 @@ pub(super) fn finalize_annotation_task_plans(
             match &candidate.target {
                 AnnotationTaskTarget::ReferenceNote => {
                     reference_task_lines.push(task_line);
+                    if let Some(label) = normalized_relation.as_deref()
+                        && v1_tracker_present
+                    {
+                        let link = "[[#^ref]]".to_string();
+                        reference_task_lines.push(
+                            crate::native::task_relations::format::format_links_line(
+                                "\t",
+                                &[(link, Some(label.to_string()))],
+                            ),
+                        );
+                    }
                 }
                 AnnotationTaskTarget::RoutedNote(path) => {
+                    let relation = normalized_relation.clone();
                     let intent =
                         intents.entry(path.clone()).or_insert_with(|| {
                             RoutedInsertionIntent {
@@ -1686,18 +1756,26 @@ pub(super) fn finalize_annotation_task_plans(
                                 candidates: Vec::new(),
                                 owner: plan.pdf.clone(),
                                 is_v2_default,
+                                annotation_task_relation: relation.clone(),
                             }
                         });
                     // A destination shared by explicit and default routes
                     // keeps the legacy append behavior unless every line is
                     // a v2 default.
                     intent.is_v2_default &= is_v2_default;
+                    if intent.annotation_task_relation.is_none() {
+                        intent.annotation_task_relation =
+                            normalized_relation.clone();
+                    }
                     intent.lines.push(task_line);
                     intent.candidates.push(candidate);
                 }
             }
         }
 
+        if plan.annotation_tasks_created > 0 {
+            plan.annotation_task_relation = normalized_relation.clone();
+        }
         if !reference_task_lines.is_empty() {
             plan.rendered_body =
                 insert_annotation_task_lines_into_tasks_section(
@@ -1899,7 +1977,20 @@ fn execute_pdf_sync_v1(
     }
     // Insertion intentions rebase against fresh bytes at execution so mixed
     // v1/v2 actions sharing a destination never overwrite one another.
-    let intent_outcome = execute_routed_intents(config, plan, run_state)?;
+    // v1 links the fixed `^ref` tracker when present; otherwise tasks are
+    // written exactly as today with no LINKS line.
+    let v1_ref_task = if plan.annotation_task_relation.is_some() {
+        match parse_pdf_task_line(&plan.rendered_body) {
+            Ok(PdfTaskLineState::Present(_)) => {
+                Some((plan.note_path.clone(), "ref".to_string()))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let intent_outcome =
+        execute_routed_intents(config, plan, run_state, v1_ref_task)?;
     routed_note_actions += intent_outcome.note_actions;
 
     Ok(SyncWriteReport {
@@ -1978,6 +2069,97 @@ struct IntentOutcome {
     deduped: usize,
 }
 
+/// Lazily built vault note index for cross-note relation links, cached
+/// on the run state and built at most once per run, only when a
+/// cross-note link is actually rendered.
+pub(super) fn routed_note_index<'a>(
+    config: &Config,
+    run_state: &'a mut RunWriteState,
+) -> &'a crate::native::vault_links::NoteIndex {
+    if run_state.note_index.is_none() {
+        run_state.note_index = Some(build_vault_note_index(&config.bob_dir));
+    }
+    run_state
+        .note_index
+        .as_ref()
+        .expect("note index just built")
+}
+
+pub(super) fn build_vault_note_index(
+    bob_dir: &Path,
+) -> crate::native::vault_links::NoteIndex {
+    let mut relative = Vec::new();
+    collect_markdown_relative(bob_dir, bob_dir, &mut relative);
+    crate::native::vault_links::NoteIndex::from_paths(relative)
+}
+
+pub(super) fn collect_markdown_relative(
+    root: &Path,
+    directory: &Path,
+    out: &mut Vec<PathBuf>,
+) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    let mut entries =
+        entries.filter_map(|entry| entry.ok()).collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
+            collect_markdown_relative(root, &path, out);
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            out.push(rel.to_path_buf());
+        }
+    }
+}
+
+/// Shortest link form for an annotation-task relation target, following
+/// §5: `[[#^id]]` in the same note, otherwise `canonical_link` (basename
+/// when unique, else full vault-relative path; archives keep `done/…`).
+pub(super) fn annotation_relation_link(
+    config: &Config,
+    dest_abs: &Path,
+    target_abs: &Path,
+    block_id: &str,
+    run_state: &mut RunWriteState,
+) -> String {
+    let dest_rel = dest_abs
+        .strip_prefix(&config.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| dest_abs.to_path_buf());
+    let target_rel = target_abs
+        .strip_prefix(&config.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| target_abs.to_path_buf());
+    if dest_rel == target_rel {
+        return format!("[[#^{block_id}]]");
+    }
+    let index = routed_note_index(config, run_state);
+    crate::native::task_dependencies::format::canonical_link(
+        &target_rel,
+        block_id,
+        &dest_rel,
+        index,
+    )
+}
+
 /// Execute routed insertion intentions by rereading each destination and
 /// rebasing through capture's preimage-checked writer: v2 defaults use
 /// capture's Tasks-section insertion (creating a missing inbox), explicit
@@ -1989,17 +2171,30 @@ struct IntentOutcome {
 /// successful writes stay deduped even if a later ref-note write fails.
 /// Bounded retries cover only true preimage mismatches, rebuilding against
 /// fresh bytes; arbitrary IO errors propagate without retry.
+///
+/// `ref_task` is the resolved reading-task address the new LINKS lines
+/// point at: v1 `(ref note path, "ref")` when the tracker is present, v2
+/// `reading.embed` mapped back to an absolute note path. `None` writes
+/// tasks exactly as today, with no LINKS line.
 fn execute_routed_intents(
     config: &Config,
     plan: &PdfSyncPlan,
     run_state: &mut RunWriteState,
+    ref_task: Option<(PathBuf, String)>,
 ) -> Result<IntentOutcome> {
-    let _ = config;
     let mut outcome = IntentOutcome {
         note_actions: 0,
         deduped: 0,
     };
     for intent in &plan.routed_intents {
+        let label = intent
+            .annotation_task_relation
+            .as_deref()
+            .or(plan.annotation_task_relation.as_deref());
+        // The link is identical for every task in one destination, so
+        // resolve it once per attempt (after dedup proves at least one
+        // task still needs it). Cross-note targets build the vault index
+        // lazily, only when actually needed.
         let mut attempts = 0usize;
         loop {
             attempts += 1;
@@ -2022,8 +2217,14 @@ fn execute_routed_intents(
                     )));
                 }
             };
-            let mut missing_lines = Vec::new();
+            // Blocks preserve each task's LINKS child: v2 defaults join
+            // the block with `\n` for `insert_task_line` (which converts
+            // to CRLF), explicit routes flatten into `append_task_lines`
+            // (which must never see an embedded `\n`).
+            let mut blocks: Vec<Vec<String>> = Vec::new();
             let mut missing_keys = Vec::new();
+            // Cache the resolved link text for this destination attempt.
+            let mut cached_link: Option<Option<String>> = None;
             for (line, candidate) in
                 intent.lines.iter().zip(intent.candidates.iter())
             {
@@ -2044,39 +2245,71 @@ fn execute_routed_intents(
                     outcome.deduped += 1;
                     continue;
                 }
-                missing_lines.push(line.clone());
+                let mut block = vec![line.clone()];
+                if let (Some(want), Some((target_abs, block_id))) =
+                    (label, ref_task.as_ref())
+                {
+                    let link = match cached_link.clone() {
+                        Some(cached) => cached,
+                        None => {
+                            let rendered = Some(annotation_relation_link(
+                                config,
+                                &intent.path,
+                                target_abs,
+                                block_id,
+                                run_state,
+                            ));
+                            cached_link = Some(rendered.clone());
+                            rendered
+                        }
+                    };
+                    if let Some(link) = link {
+                        block.push(
+                            crate::native::task_relations::format::format_links_line(
+                                "\t",
+                                &[(link, Some(want.to_string()))],
+                            ),
+                        );
+                    }
+                }
+                blocks.push(block);
                 missing_keys.push((
                     candidate.processed_id.clone(),
                     candidate.identity.clone(),
                     anchor,
                 ));
             }
-            if missing_lines.is_empty() {
+            if blocks.is_empty() {
                 break;
             }
             let existed = current.is_some();
             let base = current.as_deref().unwrap_or("");
             let rendered = if intent.is_v2_default {
+                let joined_blocks = blocks
+                    .iter()
+                    .map(|block| block.join("\n"))
+                    .collect::<Vec<_>>();
                 match current.as_deref() {
                     Some(contents) => {
                         let mut updated = contents.to_string();
-                        for line in &missing_lines {
+                        for block in &joined_blocks {
                             let (next, _) =
                                 crate::native::capture::insert_task_line(
-                                    &updated, line,
+                                    &updated, block,
                                 );
                             updated = next;
                         }
                         updated
                     }
                     None => {
-                        let mut rendered = missing_lines.join("\n");
+                        let mut rendered = joined_blocks.join("\n");
                         rendered.push('\n');
                         rendered
                     }
                 }
             } else {
-                append_task_lines(base, &missing_lines)
+                let flat = blocks.into_iter().flatten().collect::<Vec<_>>();
+                append_task_lines(base, &flat)
             };
             // A concurrent write that already contains our lines is a no-op.
             if current.as_deref() == Some(rendered.as_str()) {
@@ -2173,7 +2406,16 @@ fn execute_pdf_sync_v2(
     if note_write_planned(plan) {
         ensure_note_unchanged_for_write(plan)?;
     }
-    let intent_outcome = execute_routed_intents(config, plan, run_state)?;
+    // v2 links the reading task's final address after the reading-task
+    // action (a new birth may land past the planning preview id; an
+    // archived task keeps its `done/…` path). No embed means no ref task:
+    // write the task exactly as today, with no LINKS line. Never emit a
+    // link to an id that will not be on disk after the write.
+    let v2_ref_task = reading.embed.clone().map(|(target, block_id)| {
+        (config.bob_dir.join(format!("{target}.md")), block_id)
+    });
+    let intent_outcome =
+        execute_routed_intents(config, plan, run_state, v2_ref_task)?;
     if plan.marker_write_needed {
         write_planned_pdf_marker(plan, marker_prep)?;
     }
