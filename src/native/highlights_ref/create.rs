@@ -335,14 +335,44 @@ pub(crate) struct RenderFilters {
     pub(crate) code_catalog_report_filter: PathBuf,
     pub(crate) report: PathBuf,
     pub(crate) code_catalog_report: PathBuf,
+    pub(crate) table_layout: PathBuf,
+    pub(crate) table_layout_report: PathBuf,
+    pub(crate) layout_default: String,
+    pub(crate) prose_words: u32,
     pub(crate) diagrams: Option<super::diagrams::DiagramFilter>,
 }
 
-/// Reports from the two non-fatal Lua render passes.
+/// Reports from the three non-fatal Lua render passes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RenderReports {
     pub(crate) return_links: super::return_links::ReportOutcome,
     pub(crate) code_catalog: super::code_catalog::CatalogOutcome,
+    pub(crate) table_layout: super::table_layout::ReportOutcome,
+}
+
+/// Default `RenderFilters` table settings, for tests that render without
+/// going through a route caller (which resolves the real config).
+#[cfg(test)]
+pub(crate) fn default_table_settings() -> (String, u32) {
+    (
+        super::super::config::DEFAULT_TABLE_LAYOUT.to_string(),
+        super::super::config::DEFAULT_TABLE_PROSE_WORDS,
+    )
+}
+
+/// Resolve the table-layout settings once per route from
+/// `load_highlights_config`. Route callers pass the result into
+/// [`write_render_filters`]; that function never loads config itself
+/// because tests call it directly.
+fn table_layout_settings() -> Result<(String, u32)> {
+    let highlights = super::bob_config::load_highlights_config(
+        &super::bob_config::config_path(),
+    )
+    .map_err(super::config_error)?;
+    Ok((
+        highlights.table_layout().to_string(),
+        highlights.table_prose_words(),
+    ))
 }
 
 impl CreatePlan {
@@ -582,7 +612,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. The printed article is also saved as Markdown with its code/link catalog, so `bob ref code` and `bob ref links` work for web articles exactly as for Markdown-born references. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nRecapture:\n  `-f [MODE]`, `--force[=MODE]` changes what a repeated capture does. Bare `-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite` or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as `-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f` is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an explicit `=` value never adopts a following word. A bare TARGET that equals a mode, or is within edit distance 2 of one, refuses with exit 2: write `./overwrite` for a file and `[[overwrite]]` for a vault note. Bare `-f` on an already-captured source reads it again as `<stem>__vN` beside the earlier readings: the newest reading's parent and type become the defaults (explicit `-P`/`-t` win), `id` is stamped to the new stem, earlier audio is never inherited, and a `reread:` line prints where `renamed:` would; if the newest reading is ready with 0 highlights, both real and dry runs print `hint: <stem> is still ready with 0 highlights; -f overwrite would replace it instead`. An exact-URL-set collection rereads the same way in any URL order (several readings sharing one set count as one family); any partial overlap refuses under every mode. Bare `-f` on a fresh source captures it as usual. Without force the refusal names the next stem (`hint: -f read it again as <stem>__vN`). `-N` must name a reading of the same family (a free `-N` stays an ordinary capture) and selects the reading a later overwrite recaptures in place; `-o` on a captured reread exits 2. A library PDF as TARGET refuses even with `-f`: reread from its recorded `source_url` or the original file instead. `-L` without force still attaches to the captured set, while `-f -L` narrates the new reading and `-f overwrite -L` narrates the in-place replacement. `-f overwrite` on a filed Markdown file, original local PDF, same-day vault-note snapshot, or single-URL web capture (article, saved HTML, PDF URL, arXiv) replaces that reading in place, keeping the note, stem, id, and reading task; companion audio is preserved unless `-a` or `-L` replaces it, and `--no-audio` leaves it in place. `-s` is preserved unless passed explicitly. An exact collection URL-set overwrite replaces the selected reading in place in any URL order; use -N to select a reading. It uses that reading's parent and type by default, preserves its task and companion audio unless -a or -L replaces audio, and moves authored prose to ref_history/. A filed overwrite requires ingest to be enabled and a `-b` vault that matches `BOB_DIR`; otherwise it refuses with `intake_unavailable` instead of queueing. -o, -k, or a differing explicit -P or -t refuses before fetching; partial overlap still refuses under every mode. An explicit open -s cannot reopen an archived task, and a status overwrite cannot stamp refuses before rendering. Without a filed match overwrite exits 1. No force is needed for a URL recorded only by legacy notes without a Highlights PDF (it warns and captures a fresh copy) or for a new-day vault-note snapshot (an ordinary dated create). Queued-PDF, exact-output (`-o`), and companion-audio replacement keep working under either mode.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
+            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. The printed article is also saved as Markdown with its code/link catalog, so `bob ref code` and `bob ref links` work for web articles exactly as for Markdown-born references. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off. Tables whose cells hold prose print as single-column row records under `highlights.table_layout`, with a `tables:` line beside `links:`.\n\nRecapture:\n  `-f [MODE]`, `--force[=MODE]` changes what a repeated capture does. Bare `-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite` or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as `-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f` is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an explicit `=` value never adopts a following word. A bare TARGET that equals a mode, or is within edit distance 2 of one, refuses with exit 2: write `./overwrite` for a file and `[[overwrite]]` for a vault note. Bare `-f` on an already-captured source reads it again as `<stem>__vN` beside the earlier readings: the newest reading's parent and type become the defaults (explicit `-P`/`-t` win), `id` is stamped to the new stem, earlier audio is never inherited, and a `reread:` line prints where `renamed:` would; if the newest reading is ready with 0 highlights, both real and dry runs print `hint: <stem> is still ready with 0 highlights; -f overwrite would replace it instead`. An exact-URL-set collection rereads the same way in any URL order (several readings sharing one set count as one family); any partial overlap refuses under every mode. Bare `-f` on a fresh source captures it as usual. Without force the refusal names the next stem (`hint: -f read it again as <stem>__vN`). `-N` must name a reading of the same family (a free `-N` stays an ordinary capture) and selects the reading a later overwrite recaptures in place; `-o` on a captured reread exits 2. A library PDF as TARGET refuses even with `-f`: reread from its recorded `source_url` or the original file instead. `-L` without force still attaches to the captured set, while `-f -L` narrates the new reading and `-f overwrite -L` narrates the in-place replacement. `-f overwrite` on a filed Markdown file, original local PDF, same-day vault-note snapshot, or single-URL web capture (article, saved HTML, PDF URL, arXiv) replaces that reading in place, keeping the note, stem, id, and reading task; companion audio is preserved unless `-a` or `-L` replaces it, and `--no-audio` leaves it in place. `-s` is preserved unless passed explicitly. An exact collection URL-set overwrite replaces the selected reading in place in any URL order; use -N to select a reading. It uses that reading's parent and type by default, preserves its task and companion audio unless -a or -L replaces audio, and moves authored prose to ref_history/. A filed overwrite requires ingest to be enabled and a `-b` vault that matches `BOB_DIR`; otherwise it refuses with `intake_unavailable` instead of queueing. -o, -k, or a differing explicit -P or -t refuses before fetching; partial overlap still refuses under every mode. An explicit open -s cannot reopen an archived task, and a status overwrite cannot stamp refuses before rendering. Without a filed match overwrite exits 1. No force is needed for a URL recorded only by legacy notes without a Highlights PDF (it warns and captures a fresh copy) or for a new-day vault-note snapshot (an ordinary dated create). Queued-PDF, exact-output (`-o`), and companion-audio replacement keep working under either mode.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
         )
 }
 
@@ -2249,7 +2279,9 @@ fn overwrite_markdown(
     let audio_uri = overwrite_play_uri(config, &plan, &request)?;
     let render_path = scratch.path().join("render.pdf");
     let frozen_source = freeze_markdown_source(&create_plan, scratch.path())?;
-    let mut filters = write_render_filters(scratch.path())?;
+    let (layout_default, prose_words) = table_layout_settings()?;
+    let mut filters =
+        write_render_filters(scratch.path(), &layout_default, prose_words)?;
     let diagram_pass = super::diagrams::prepare(
         Some(pandoc.as_os_str()),
         super::diagrams::DiagramSource::Path(&frozen_source),
@@ -2409,7 +2441,9 @@ fn overwrite_vault_note(
         let render_path = scratch.path().join("render.pdf");
         let frozen_source =
             freeze_markdown_source(&create_plan, scratch.path())?;
-        let mut filters = write_render_filters(scratch.path())?;
+        let (layout_default, prose_words) = table_layout_settings()?;
+        let mut filters =
+            write_render_filters(scratch.path(), &layout_default, prose_words)?;
         let diagram_pass = super::diagrams::prepare(
             Some(pandoc.as_os_str()),
             super::diagrams::DiagramSource::Path(&frozen_source),
@@ -2435,7 +2469,9 @@ fn overwrite_vault_note(
         let asset_preparation = note_snapshot::assets::prepare(&mut snapshot)
             .map_err(CommandError::new)?;
         stage_snapshot_assets(&asset_preparation, scratch.path())?;
-        let mut filters = write_render_filters(scratch.path())?;
+        let (layout_default, prose_words) = table_layout_settings()?;
+        let mut filters =
+            write_render_filters(scratch.path(), &layout_default, prose_words)?;
         let diagram_pass = super::diagrams::prepare(
             pandoc_command().as_deref(),
             super::diagrams::DiagramSource::Text(&snapshot.projected_markdown),
@@ -2937,7 +2973,9 @@ fn create_snapshot_plan(
         )));
     }
     stage_snapshot_assets(&asset_preparation, scratch.path())?;
-    let mut filters = write_render_filters(scratch.path())?;
+    let (layout_default, prose_words) = table_layout_settings()?;
+    let mut filters =
+        write_render_filters(scratch.path(), &layout_default, prose_words)?;
     let diagram_pass = super::diagrams::prepare(
         pandoc_command().as_deref(),
         super::diagrams::DiagramSource::Text(&snapshot.projected_markdown),
@@ -2967,48 +3005,49 @@ fn create_snapshot_plan(
         title: Some(snapshot.identity_title.clone()),
         author: plan.author.clone(),
     };
-    let (page_count, link_outcome) = match (listen, listen_flow.as_ref()) {
-        (Some(command), Some(flow)) => {
-            let projected_path = scratch.path().join("projected.md");
-            let projected_display = projected_path.display().to_string();
-            let pages = stamp_listen_and_install_pdf(
-                scratch,
-                &plan.target_plan(),
-                command,
-                flow,
-                &projected_display,
-                &outcome.pdf,
-                &plan.title,
-                &plan.source,
-                &outcome.pdf,
-                &marker,
-                &info,
-                options.force.is_some(),
-            )?;
-            (pages, outcome.report)
-        }
-        _ => {
-            let (stamped, pages) = pdf_target_mod::stamp_pdf_to_scratch(
-                &outcome.pdf,
-                scratch,
-                &marker,
-                &info,
-            )?;
-            super::refuse_target_collisions(
-                &plan.target,
-                &plan.sidecar,
-                &plan.workflow,
-                options.force.is_some(),
-            )?;
-            pdf_target_mod::install_stamped_pdf(
-                &stamped,
-                &plan.target,
-                plan.audio.as_ref(),
-                pages,
-            )?;
-            (pages, outcome.report)
-        }
-    };
+    let (page_count, link_outcome, table_outcome) =
+        match (listen, listen_flow.as_ref()) {
+            (Some(command), Some(flow)) => {
+                let projected_path = scratch.path().join("projected.md");
+                let projected_display = projected_path.display().to_string();
+                let pages = stamp_listen_and_install_pdf(
+                    scratch,
+                    &plan.target_plan(),
+                    command,
+                    flow,
+                    &projected_display,
+                    &outcome.pdf,
+                    &plan.title,
+                    &plan.source,
+                    &outcome.pdf,
+                    &marker,
+                    &info,
+                    options.force.is_some(),
+                )?;
+                (pages, outcome.report, outcome.table_layout)
+            }
+            _ => {
+                let (stamped, pages) = pdf_target_mod::stamp_pdf_to_scratch(
+                    &outcome.pdf,
+                    scratch,
+                    &marker,
+                    &info,
+                )?;
+                super::refuse_target_collisions(
+                    &plan.target,
+                    &plan.sidecar,
+                    &plan.workflow,
+                    options.force.is_some(),
+                )?;
+                pdf_target_mod::install_stamped_pdf(
+                    &stamped,
+                    &plan.target,
+                    plan.audio.as_ref(),
+                    pages,
+                )?;
+                (pages, outcome.report, outcome.table_layout)
+            }
+        };
 
     let styler = Styler::detect();
     println!("{} created note snapshot", styler.success_prefix(false));
@@ -3041,6 +3080,7 @@ fn create_snapshot_plan(
         &outcome.warnings,
     );
     super::return_links::emit_outcome(&link_outcome, &styler);
+    super::table_layout::emit_outcome(&table_outcome, &styler);
     diagram_pass.emit(&styler);
     finish_create_intake(
         config,
@@ -3080,7 +3120,18 @@ fn stage_snapshot_assets(
     Ok(())
 }
 
-pub(crate) fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
+pub(crate) fn write_render_filters(
+    scratch: &Path,
+    layout_default: &str,
+    prose_words: u32,
+) -> Result<RenderFilters> {
+    let table_layout = scratch.join("table-layout.lua");
+    fs::write(&table_layout, super::table_layout::FILTER).map_err(|error| {
+        CommandError::new(format!(
+            "write pandoc filter {}: {error}",
+            table_layout.display()
+        ))
+    })?;
     let code_catalog = scratch.join("code-catalog.lua");
     fs::write(
         &code_catalog,
@@ -3128,6 +3179,10 @@ pub(crate) fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
         code_catalog_report_filter,
         report: scratch.join("return-links.json"),
         code_catalog_report: scratch.join("code-catalog.json"),
+        table_layout,
+        table_layout_report: scratch.join("table-layout.json"),
+        layout_default: layout_default.to_string(),
+        prose_words,
         diagrams: None,
     })
 }
@@ -3924,7 +3979,9 @@ fn create_markdown_plan(
         Some((.., path)) => path.clone(),
         None => scratch.path().join("render.pdf"),
     };
-    let mut filters = write_render_filters(scratch.path())?;
+    let (layout_default, prose_words) = table_layout_settings()?;
+    let mut filters =
+        write_render_filters(scratch.path(), &layout_default, prose_words)?;
     let frozen_source = freeze_markdown_source(&plan, scratch.path())?;
     let diagram_pass = super::diagrams::prepare(
         Some(pandoc.as_os_str()),
@@ -4079,6 +4136,7 @@ fn create_markdown_plan(
         &render_reports.code_catalog,
     );
     super::return_links::emit_outcome(&render_reports.return_links, &styler);
+    super::table_layout::emit_outcome(&render_reports.table_layout, &styler);
     diagram_pass.emit(&styler);
     finish_create_intake(
         config,
@@ -5803,6 +5861,7 @@ fn render_temp_pdf_from(
         .arg("--preserve-tabs")
         .arg(format!("--resource-path={}", resource_path.display()))
         .arg("--highlight-style=tango");
+    cmd.arg("--lua-filter").arg(&filters.table_layout);
     cmd.arg("--lua-filter").arg(&filters.code_catalog);
     if let Some(diagrams) = &filters.diagrams {
         super::diagrams::apply_swap_filter_args(
@@ -5848,10 +5907,11 @@ fn render_temp_pdf_from(
         .arg("monofontoptions=Ligatures=NoCommon")
         .arg("-V")
         .arg(format!(
-            "header-includes={PANDOC_HEADER_INCLUDES}\n{}\n{}\n{}",
+            "header-includes={PANDOC_HEADER_INCLUDES}\n{}\n{}\n{}\n{}",
             super::return_links::HEADER_INCLUDES,
             super::diagrams::HEADER_INCLUDES,
-            super::code_catalog::HEADER_INCLUDES
+            super::code_catalog::HEADER_INCLUDES,
+            super::table_layout::HEADER_INCLUDES
         ))
         .arg("--metadata")
         .arg(format!("title={}", plan.title))
@@ -5866,6 +5926,24 @@ fn render_temp_pdf_from(
             "{}={}",
             super::code_catalog::REPORT_METADATA_KEY,
             filters.code_catalog_report.display()
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::table_layout::TABLES_DEFAULT_METADATA_KEY,
+            filters.layout_default
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::table_layout::PROSE_WORDS_METADATA_KEY,
+            filters.prose_words
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::table_layout::REPORT_METADATA_KEY,
+            filters.table_layout_report.display()
         ))
         .args(audio_uri.into_iter().flat_map(|uri| {
             ["--metadata".to_string(), format!("bob-listen-uri={uri}")]
@@ -5908,6 +5986,9 @@ fn render_temp_pdf_from(
         code_catalog: super::code_catalog::build(
             &filters.code_catalog_report,
             render_path,
+        ),
+        table_layout: super::table_layout::read_report(
+            &filters.table_layout_report,
         ),
     })
 }
@@ -6836,8 +6917,10 @@ mod tests {
         let return_filter_path = temp.path.join("return-links.lua");
         fs::write(&return_filter_path, super::super::return_links::FILTER)
             .expect("write return-link filter");
-        let mut filters = write_render_filters(&temp.path)
-            .expect("write catalog render filters");
+        let (layout_default, prose_words) = default_table_settings();
+        let mut filters =
+            write_render_filters(&temp.path, &layout_default, prose_words)
+                .expect("write catalog render filters");
         filters.code_break = filter_path;
         filters.return_links = return_filter_path;
         let pandoc = pandoc_command().expect("pandoc checked above");
@@ -7144,8 +7227,10 @@ mod tests {
         let return_filter_path = temp.path.join("return-links.lua");
         fs::write(&return_filter_path, super::super::return_links::FILTER)
             .expect("write return-link filter");
-        let mut filters = write_render_filters(&temp.path)
-            .expect("write catalog render filters");
+        let (layout_default, prose_words) = default_table_settings();
+        let mut filters =
+            write_render_filters(&temp.path, &layout_default, prose_words)
+                .expect("write catalog render filters");
         filters.code_break = code_break_path;
         filters.return_links = return_filter_path;
         let pandoc = pandoc_command().expect("pandoc checked above");
@@ -7319,7 +7404,10 @@ mod tests {
         dir: &Path,
         diagrams: Option<super::super::diagrams::DiagramFilter>,
     ) -> RenderFilters {
-        let mut filters = write_render_filters(dir).expect("write filters");
+        let (layout_default, prose_words) = default_table_settings();
+        let mut filters =
+            write_render_filters(dir, &layout_default, prose_words)
+                .expect("write filters");
         filters.diagrams = diagrams;
         filters
     }
@@ -7683,7 +7771,10 @@ END_LONG_BLOCK
             "collector expands tabs at the same stop: {:?}",
             collected[0].text
         );
-        let filters = write_render_filters(&temp.path).expect("write filters");
+        let (layout_default, prose_words) = default_table_settings();
+        let filters =
+            write_render_filters(&temp.path, &layout_default, prose_words)
+                .expect("write filters");
         let catalog_filter = fs::read_to_string(&filters.code_catalog)
             .expect("read catalog filter");
         let prelude = super::super::code_catalog::TAB_EXPANSION_PRELUDE;
@@ -8007,8 +8098,10 @@ fn main() {}
         .expect("stage frozen image");
 
         let pandoc = pandoc_command().expect("pandoc checked above");
+        let (layout_default, prose_words) = default_table_settings();
         let mut filters =
-            write_render_filters(&temp.path).expect("write filters");
+            write_render_filters(&temp.path, &layout_default, prose_words)
+                .expect("write filters");
         let diagram_pass = super::super::diagrams::prepare(
             Some(pandoc.as_os_str()),
             super::super::diagrams::DiagramSource::Path(&frozen),
@@ -8515,7 +8608,7 @@ fn main() {}
     }
 
     #[test]
-    fn diagrams_filter_runs_first_on_generic_route() {
+    fn table_layout_filter_runs_first_on_generic_route() {
         let temp = TempDir::new("diagrams-generic-first");
         let calls = temp.path.join("calls.log");
         let fake_pandoc = temp.path.join("fake-pandoc");
@@ -8550,13 +8643,285 @@ fn main() {}
         )
         .expect("fake render");
         let log = fs::read_to_string(&calls).expect("calls log");
+        let tables = log.find("table-layout.lua").expect("table-layout filter");
+        let catalog = log.find("code-catalog.lua").expect("catalog filter");
         let diagrams = log.find("diagrams.lua").expect("diagrams filter");
         let cb = log.find("code-break.lua").expect("code-break");
         let rl = log.find("return-links.lua").expect("return-links");
-        assert!(diagrams < cb && cb < rl, "diagrams filter first: {log}");
+        assert!(
+            tables < catalog && catalog < diagrams && diagrams < cb && cb < rl,
+            "table-layout filter first: {log}"
+        );
         assert!(
             log.contains("bob-diagrams-results="),
             "results metadata: {log}"
+        );
+    }
+
+    const TABLE_PROSE_CELL: &str =
+        "one two three four five six seven eight nine ten eleven twelve";
+
+    fn table_fixture_markdown() -> String {
+        format!(
+            "# Tables\n\n\
+             A [return](#tables) target stays.\n\n\
+             | Name | Notes |\n\
+             |---|---|\n\
+             | Harbor | {TABLE_PROSE_CELL} with a [return](#tables) link |\n\
+             | Crane | {TABLE_PROSE_CELL} with a [site](https://example.com/crane) link |\n\n\
+             | A | B |\n\
+             |---|---|\n\
+             | 1 | 2 |\n\
+             | 3 | 4 |\n"
+        )
+    }
+
+    struct TableLatexRun {
+        latex: String,
+        report: super::super::table_layout::Report,
+    }
+
+    fn render_table_fixture_latex(
+        test_name: &str,
+        markdown: &str,
+    ) -> Option<TableLatexRun> {
+        let pandoc = pandoc_command()?;
+        let temp = TempDir::new(test_name);
+        let (layout_default, prose_words) = default_table_settings();
+        let filters =
+            write_render_filters(&temp.path, &layout_default, prose_words)
+                .expect("write filters");
+        let source = temp.path.join("doc.md");
+        fs::write(&source, markdown).expect("write source");
+        let output = Command::new(&pandoc)
+            .arg(&source)
+            .arg("-f")
+            .arg(super::super::code_catalog::MARKDOWN_PANDOC_READER)
+            .arg("-t")
+            .arg("latex")
+            .arg("--lua-filter")
+            .arg(&filters.table_layout)
+            .arg("--lua-filter")
+            .arg(&filters.code_catalog)
+            .arg("--lua-filter")
+            .arg(&filters.code_break)
+            .arg("--lua-filter")
+            .arg(&filters.return_links)
+            .arg("--lua-filter")
+            .arg(&filters.code_catalog_report_filter)
+            .arg("--metadata")
+            .arg("title=Tables")
+            .arg("--metadata")
+            .arg(format!(
+                "{}={}",
+                super::super::return_links::REPORT_METADATA_KEY,
+                filters.report.display()
+            ))
+            .arg("--metadata")
+            .arg(format!(
+                "{}={}",
+                super::super::code_catalog::REPORT_METADATA_KEY,
+                filters.code_catalog_report.display()
+            ))
+            .arg("--metadata")
+            .arg(format!(
+                "{}={}",
+                super::super::table_layout::TABLES_DEFAULT_METADATA_KEY,
+                filters.layout_default
+            ))
+            .arg("--metadata")
+            .arg(format!(
+                "{}={}",
+                super::super::table_layout::PROSE_WORDS_METADATA_KEY,
+                filters.prose_words
+            ))
+            .arg("--metadata")
+            .arg(format!(
+                "{}={}",
+                super::super::table_layout::REPORT_METADATA_KEY,
+                filters.table_layout_report.display()
+            ))
+            .output()
+            .expect("run pandoc");
+        assert!(
+            output.status.success(),
+            "pandoc failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let latex = String::from_utf8_lossy(&output.stdout).into_owned();
+        let super::super::table_layout::ReportOutcome::Report(report) =
+            super::super::table_layout::read_report(
+                &filters.table_layout_report,
+            )
+        else {
+            panic!("chain must write a table-layout report");
+        };
+        Some(TableLatexRun { latex, report })
+    }
+
+    #[test]
+    fn table_layout_chain_records_prose_table_and_keeps_return_pills() {
+        let Some(run) = render_table_fixture_latex(
+            "table-latex",
+            &table_fixture_markdown(),
+        ) else {
+            eprintln!("skipping table latex test: pandoc is required");
+            return;
+        };
+        assert!(
+            run.latex.contains("BobTableRecords"),
+            "prose table becomes records: {}",
+            run.latex
+        );
+        assert_eq!(
+            run.latex.matches("\\begin{longtable}").count(),
+            1,
+            "only the data table stays a longtable"
+        );
+        assert!(
+            run.latex.contains("\\BobBacklinks"),
+            "the # link target keeps its return-pill row"
+        );
+        assert!(
+            run.latex.contains("\\BobReturnAnchor{bob:ret:"),
+            "the # link in the prose cell keeps its return anchor"
+        );
+        assert!(
+            RETURN_TAG_GLYPHS
+                .chars()
+                .any(|glyph| run.latex.contains(glyph)),
+            "the # link in the prose cell keeps its raised tag"
+        );
+        assert_eq!(run.report.tables, 2);
+        assert_eq!(run.report.records, 1);
+        assert_eq!(run.report.grids, 1);
+        assert_eq!(
+            super::super::table_layout::tables_line(&run.report),
+            Some("tables: 1 record · 1 grid".to_string())
+        );
+    }
+
+    #[test]
+    fn table_layout_chain_honors_frontmatter_grid_override() {
+        if pandoc_command().is_none() {
+            eprintln!("skipping table override test: pandoc is required");
+            return;
+        }
+        let markdown = format!(
+            "---\nbob-tables: grid\n---\n\n{}",
+            table_fixture_markdown()
+        );
+        let Some(run) = render_table_fixture_latex("table-override", &markdown)
+        else {
+            eprintln!("skipping table override test: pandoc is required");
+            return;
+        };
+        assert!(
+            !run.latex.contains("BobTableRecords"),
+            "frontmatter grid keeps the prose table a grid"
+        );
+        assert_eq!(
+            run.latex.matches("\\begin{longtable}").count(),
+            2,
+            "both tables stay longtables"
+        );
+        assert_eq!(run.report.records, 0);
+        assert_eq!(run.report.grids, 2);
+        assert_eq!(
+            super::super::table_layout::tables_line(&run.report),
+            Some("tables: 0 records · 2 grids".to_string())
+        );
+    }
+
+    #[test]
+    fn table_layout_full_render_keeps_catalog_and_return_contracts() {
+        if skip_pandoc_xelatex("table full render") {
+            return;
+        }
+        let temp = TempDir::new("table-full-render");
+        let markdown = format!(
+            "{}\n```rust\nfn main() {{}}\n```\n",
+            table_fixture_markdown()
+        );
+        let source = temp.path.join("doc.md");
+        fs::write(&source, "# Tables\n").expect("write source");
+        let mut plan = mermaid_plan(&temp, &source);
+        plan.title = "Tables".to_string();
+        let frozen = temp.path.join("frozen").join("tables.md");
+        fs::create_dir_all(frozen.parent().expect("frozen parent"))
+            .expect("frozen dir");
+        fs::write(&frozen, &markdown).expect("write frozen tables");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let (layout_default, prose_words) = default_table_settings();
+        let filters =
+            write_render_filters(&temp.path, &layout_default, prose_words)
+                .expect("write filters");
+        let render_path = temp.path.join("tables.pdf");
+        let reports = render_temp_pdf_from(
+            &pandoc,
+            &plan,
+            &render_path,
+            &filters,
+            None,
+            Some(&frozen),
+        )
+        .expect("render tables PDF");
+        let super::super::table_layout::ReportOutcome::Report(table_report) =
+            &reports.table_layout
+        else {
+            panic!(
+                "render must write a table-layout report: {:?}",
+                reports.table_layout
+            );
+        };
+        assert_eq!(table_report.tables, 2);
+        assert_eq!(table_report.records, 1);
+        assert_eq!(table_report.grids, 1);
+        let super::super::return_links::ReportOutcome::Report(link_report) =
+            &reports.return_links
+        else {
+            panic!(
+                "render must write a return-link report: {:?}",
+                reports.return_links
+            );
+        };
+        assert!(
+            link_report.paired >= 1,
+            "the # link in the prose cell still pairs: {link_report:?}"
+        );
+        let super::super::code_catalog::CatalogOutcome::Catalog(catalog) =
+            &reports.code_catalog
+        else {
+            panic!("render should produce a link catalog: {reports:?}");
+        };
+        let links = catalog.links.as_deref().expect("links recorded");
+        let crane: Vec<_> = links
+            .iter()
+            .filter(|link| link.url == "https://example.com/crane")
+            .collect();
+        assert_eq!(crane.len(), 1, "prose-cell URI link recorded");
+        assert!(
+            crane[0].page.is_some(),
+            "prose-cell URI link lands with a page: {:?}",
+            crane[0]
+        );
+        assert_eq!(catalog.blocks.len(), 1);
+        assert!(
+            catalog.blocks[0].page.is_some(),
+            "code block keeps its catalog page"
+        );
+        let text = pdf_haystack(&render_path);
+        assert!(
+            text.contains("Harbor"),
+            "record lead-in text renders: {text}"
+        );
+        assert!(
+            text.contains("eleven twelve"),
+            "prose cell text renders: {text}"
+        );
+        assert!(
+            text.contains('↩'),
+            "the # link in the prose cell keeps its return pill: {text}"
         );
     }
 }

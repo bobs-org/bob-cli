@@ -441,7 +441,7 @@ Eligibility:
 
 | Link location or target | Result |
 | ----------------------- | ------ |
-| Paragraphs, plain blocks, line blocks, definition lists, block quotes, Div content, list items (not nav lists), table body cells, figure content, footnotes | Tagged + paired (when the target is return-capable) |
+| Paragraphs, plain blocks, line blocks, definition lists, block quotes, Div content, list items (not nav lists), table body cells, record cells and captions of tables printed as records (ordinary body text), figure content, footnotes | Tagged + paired (when the target is return-capable) |
 | Headings, figure captions, table captions, table head rows (including intermediate body heads), table foot rows, hand-written TOC lists | Untagged: rewritten to the canonical id, still a working forward link |
 | Target is a CodeBlock, Table, Figure, Image, Code, Link, Span in a skip context, or a duplicated id | Untagged: working forward link |
 | Listen cards (already raw LaTeX) and metadata (title, abstract) | Untouched |
@@ -449,9 +449,11 @@ Eligibility:
 | Non-`#` links | Untouched |
 
 Return-capable targets are Headings, Divs, and Spans outside headings,
-captions, and table head/foot rows. Each tagged link gets its own sequential
-letter in reading order (`a…z` without `l`, `o`, `q`, then `aa, ab, …`), and
-each target carries exactly one pill row in source reading order.
+captions, and table head/foot rows. A table printed as records keeps its
+identifier on the records Div, which is a return-capable Div target. Each
+tagged link gets its own sequential letter in reading order (`a…z` without
+`l`, `o`, `q`, then `aa, ab, …`), and each target carries exactly one pill
+row in source reading order.
 
 Targets resolve in this order: the exact pandoc id, then the percent-decoded
 id, then a GitHub-style alias computed by pandoc's own `gfm` reader (only
@@ -475,6 +477,59 @@ only when re-rendered. When a render pairs links, bob stamps
 `return_links: true` so `bob ref sync` can keep exports clean. Dry runs
 preview the planned marker without `return_links`; the flag is added only
 after an actual render pairs a link.
+
+## Tables
+
+On macOS 26, PDFKit recognizes tables visually and takes over drags inside
+them: a drag returns a private whole-cell selection with no geometry, or
+nothing at all, and Highlights then saves invisible annotations with zero
+`/QuadPoints`. No restyled grid escapes this detection, so tables whose
+cells hold prose print as single-column row records instead: a bold lead-in
+(or labeled fields) with one field per former column, in ordinary body-size
+text that selects and annotates normally.
+
+A table prints as records when it is **prose**: some body-row cell in column
+2 or later holds at least `highlights.table_prose_words` whitespace-separated
+words (default 12). Header and caption words do not count. All other tables
+keep a grid, with content-aware column widths and row air.
+
+Three levels reverse the choice, highest wins:
+
+1. **Per table:** wrap the table in a fenced Div with class `bob-records`
+   or `bob-grid`. The nearest enclosing Div wins.
+   `::: {.bob-grid}` around a prose table keeps its grid.
+2. **Per document:** frontmatter `bob-tables: auto | records | grid`
+   (trimmed, case-insensitive; anything else warns and is ignored).
+3. **Global:** `highlights.table_layout` (`auto | records | grid`, default
+   `auto`) in the managed Bob config.
+
+A Div with both classes is ignored, with a warning.
+
+**Complex** tables always stay grids, even when records were requested: any
+cell with a row or column span, more than one head row, an intermediate body
+head, a foot row, more than one table body, row header columns, a nested
+table, or a header cell containing a link, note, image, or identifier. A
+table with no body rows is left untouched.
+
+On success bob prints a `tables:` line beside `links:` when the document has
+at least one table (`tables: 3 records · 2 grids`, singular `1 record` /
+`1 grid`). Each table that stayed a grid although records were requested
+prints one `warning:` line with its reason, as does each report warning.
+
+Cells and captions of a table printed as records are ordinary body text: a
+`#` link inside one gets its raised tag and return pill like any other link,
+and its URI links and code blocks land in the code catalog with pages. The
+table's identifier moves to the records Div, so `#id` links and return pills
+still resolve. Records preserve wording, order, empty cells (shown as `—`),
+links, inline code, emphasis, captions, table numbering, and ids; only the
+print changes, never the saved `source.md`.
+
+Grids stay unreliable for cell selection on macOS 26. The stopgaps are
+Highlights' rectangle selection, or a per-table `::: {.bob-records}`
+override. Tables printed as records also lose Highlights'
+image-selection table-to-CSV export. Changing the default never touches
+existing PDFs or notes: only an explicit create or `-f overwrite` uses the
+new layout, and nothing bulk re-renders.
 
 ## PDF route
 

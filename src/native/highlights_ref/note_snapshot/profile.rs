@@ -100,6 +100,8 @@ pub(crate) struct RenderOutcome {
     pub(crate) report: super::super::return_links::ReportOutcome,
     /// Render-time code catalog, with page ranges resolved from the PDF.
     pub(crate) code_catalog: super::super::code_catalog::CatalogOutcome,
+    /// Table-layout report, printed beside the return-link outcome.
+    pub(crate) table_layout: super::super::table_layout::ReportOutcome,
 }
 
 /// Render projected Markdown to PDF via pandoc then xelatex.
@@ -162,6 +164,9 @@ pub(crate) fn render_note_pdf(
     // preserved.
     let pandoc_path = resolve_for_cwd(&pandoc);
     let xelatex_path = resolve_for_cwd(&xelatex);
+    let table_layout = resolve_path_for_cwd(&filters.table_layout);
+    let table_layout_report =
+        resolve_path_for_cwd(&filters.table_layout_report);
     let code_catalog = resolve_path_for_cwd(&filters.code_catalog);
     let code_break = resolve_path_for_cwd(&filters.code_break);
     let return_links = resolve_path_for_cwd(&filters.return_links);
@@ -183,6 +188,8 @@ pub(crate) fn render_note_pdf(
         .arg("-o")
         .arg(&tex_path)
         .arg("--preserve-tabs")
+        .arg("--lua-filter")
+        .arg(&table_layout)
         .arg("--lua-filter")
         .arg(&code_catalog);
     if let Some(diagrams) = &filters.diagrams {
@@ -218,11 +225,12 @@ pub(crate) fn render_note_pdf(
         .arg("geometry:top=0.9in,bottom=1in,left=1.1in,right=1.1in,letterpaper")
         .arg("-V")
         .arg(format!(
-            "header-includes={}\n{}\n{}\n{}",
+            "header-includes={}\n{}\n{}\n{}\n{}",
             super::super::create::PANDOC_HEADER_INCLUDES,
             super::super::return_links::HEADER_INCLUDES,
             super::super::diagrams::HEADER_INCLUDES,
-            super::super::code_catalog::HEADER_INCLUDES
+            super::super::code_catalog::HEADER_INCLUDES,
+            super::super::table_layout::HEADER_INCLUDES
         ))
         .arg("--metadata")
         .arg(format!("title={}", meta.identity_title))
@@ -243,6 +251,24 @@ pub(crate) fn render_note_pdf(
             "{}={}",
             super::super::code_catalog::REPORT_METADATA_KEY,
             code_catalog_report.display()
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::super::table_layout::TABLES_DEFAULT_METADATA_KEY,
+            filters.layout_default
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::super::table_layout::PROSE_WORDS_METADATA_KEY,
+            filters.prose_words
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::super::table_layout::REPORT_METADATA_KEY,
+            table_layout_report.display()
         ))
         .arg("--metadata")
         .arg(format!("bob-glyph-table={GLYPHS_NAME}"));
@@ -341,11 +367,14 @@ pub(crate) fn render_note_pdf(
         super::super::return_links::read_report(&filters.report);
     let code_catalog_outcome =
         super::super::code_catalog::build(&code_catalog_report, &pdf_path);
+    let table_layout_outcome =
+        super::super::table_layout::read_report(&filters.table_layout_report);
     Ok(RenderOutcome {
         pdf: pdf_path,
         warnings,
         report: report_outcome,
         code_catalog: code_catalog_outcome,
+        table_layout: table_layout_outcome,
     })
 }
 
@@ -561,8 +590,14 @@ mod tests {
     }
 
     fn test_filters(dir: &Path) -> super::super::super::create::RenderFilters {
-        super::super::super::create::write_render_filters(dir)
-            .expect("write render filters")
+        let (layout_default, prose_words) =
+            super::super::super::create::default_table_settings();
+        super::super::super::create::write_render_filters(
+            dir,
+            &layout_default,
+            prose_words,
+        )
+        .expect("write render filters")
     }
 
     #[test]
@@ -658,8 +693,10 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             !log.lines().any(|l| l == "PANDOC-ARG:--pdf-engine"),
             "no pdf-engine: {log}"
         );
-        // Catalog records first; its report sees the final AST after all
-        // content-changing filters.
+        // Table layout runs first so records are ordinary body text
+        // before the catalog and return-link passes see the AST; the
+        // catalog report still runs last.
+        let tables = log.find("table-layout.lua").expect("table-layout filter");
         let catalog = log.find("code-catalog.lua").expect("catalog filter");
         let cb = log.find("code-break.lua").expect("code-break");
         let rl = log.find("return-links.lua").expect("return-links");
@@ -674,7 +711,11 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .find("code-catalog-report.lua")
             .expect("catalog report filter");
         assert!(
-            catalog < cb && cb < rl && rl < nl && nl < report,
+            tables < catalog
+                && catalog < cb
+                && cb < rl
+                && rl < nl
+                && nl < report,
             "filter order: {log}"
         );
         assert!(log.contains("--preserve-tabs"), "reader flags: {log}");
@@ -797,8 +838,14 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
     fn write_filters_for_render(
         dir: &Path,
     ) -> super::super::super::create::RenderFilters {
-        super::super::super::create::write_render_filters(dir)
-            .expect("write render filters")
+        let (layout_default, prose_words) =
+            super::super::super::create::default_table_settings();
+        super::super::super::create::write_render_filters(
+            dir,
+            &layout_default,
+            prose_words,
+        )
+        .expect("write render filters")
     }
 
     fn stage_synthetic_image(scratch: &Path) {
@@ -1728,6 +1775,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         render_note_pdf("# Hi\n", &scratch, &filters, &test_meta())
             .expect("fake render");
         let log = fs::read_to_string(&calls).expect("calls log");
+        let tables = log.find("table-layout.lua").expect("table-layout filter");
         let catalog = log.find("code-catalog.lua").expect("catalog filter");
         let diagrams = log.find("diagrams.lua").expect("diagrams filter");
         let cb = log.find("code-break.lua").expect("code-break");
@@ -1736,8 +1784,12 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .find("code-catalog-report.lua")
             .expect("catalog report filter");
         assert!(
-            catalog < diagrams && diagrams < cb && cb < rl && rl < report,
-            "catalog before diagrams and report last: {log}"
+            tables < catalog
+                && catalog < diagrams
+                && diagrams < cb
+                && cb < rl
+                && rl < report,
+            "table layout first, catalog before diagrams and report last: {log}"
         );
         assert!(
             log.contains("bob-diagrams-results="),
@@ -1882,5 +1934,150 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             heading_page, top_page,
             "heading and diagramtop share a page"
         );
+    }
+
+    const SNAPSHOT_TABLE_PROSE: &str =
+        "one two three four five six seven eight nine ten eleven twelve";
+
+    fn snapshot_table_projected(frontmatter_extra: &str) -> String {
+        format!(
+            "---\n\
+             bob-snapshot: true\n\
+             bob-kicker: NOTE\n\
+             bob-display-title: Tables\n\
+             bob-snapshot-line: Snapshot\n\
+             bob-footer: Tables\n\
+             bob-glyph-table: glyphs.lua\n\
+             {frontmatter_extra}\
+             ---\n\n\
+             # Tables\n\n\
+             A [return](#tables) target stays.\n\n\
+             | Name | Notes |\n\
+             |---|---|\n\
+             | Harbor | {prose} with a [return](#tables) link |\n\
+             | Crane | {prose} with a [site](https://example.com/crane) link |\n\n\
+             | A | B |\n\
+             |---|---|\n\
+             | 1 | 2 |\n\
+             | 3 | 4 |\n",
+            frontmatter_extra = frontmatter_extra,
+            prose = SNAPSHOT_TABLE_PROSE
+        )
+    }
+
+    // The outcome holds parsed reports plus scratch paths, and the kept
+    // TeX is returned as an owned string, so the tempdir can drop while
+    // the caller keeps asserting.
+    fn render_snapshot_tables(
+        frontmatter_extra: &str,
+    ) -> (RenderOutcome, String) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&scratch).expect("scratch");
+        let filters = write_filters_for_render(&scratch);
+        let outcome = render_note_pdf(
+            &snapshot_table_projected(frontmatter_extra),
+            &scratch,
+            &filters,
+            &test_meta(),
+        )
+        .expect("snapshot tables render");
+        let tex = fs::read_to_string(scratch.join("note.tex"))
+            .expect("read note.tex");
+        (outcome, tex)
+    }
+
+    #[test]
+    fn table_layout_records_prose_tables_on_snapshot_route() {
+        if super::super::super::create::pandoc_command().is_none() {
+            eprintln!("skipping snapshot tables: pandoc is required");
+            return;
+        }
+        if std::process::Command::new("xelatex")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping snapshot tables: xelatex is required");
+            return;
+        }
+        if skip_if_missing_note_profile_packages("snapshot tables") {
+            return;
+        }
+        let (outcome, tex) = render_snapshot_tables("");
+        assert!(
+            tex.contains("BobTableRecords"),
+            "prose table becomes records on the snapshot chain"
+        );
+        assert_eq!(
+            tex.matches("\\begin{longtable}").count(),
+            1,
+            "only the data table stays a longtable"
+        );
+        match &outcome.table_layout {
+            super::super::super::table_layout::ReportOutcome::Report(
+                report,
+            ) => {
+                assert_eq!(report.tables, 2);
+                assert_eq!(report.records, 1);
+                assert_eq!(report.grids, 1);
+                assert_eq!(
+                    super::super::super::table_layout::tables_line(report),
+                    Some("tables: 1 record · 1 grid".to_string())
+                );
+            }
+            other => panic!("expected table-layout report, got {other:?}"),
+        }
+        match &outcome.report {
+            super::super::super::return_links::ReportOutcome::Report(
+                report,
+            ) => {
+                assert!(
+                    report.paired >= 1,
+                    "the # link in the prose cell still pairs: {report:?}"
+                );
+            }
+            other => panic!("expected return-link report, got {other:?}"),
+        }
+        let super::super::super::code_catalog::CatalogOutcome::Catalog(catalog) =
+            &outcome.code_catalog
+        else {
+            panic!(
+                "snapshot render should produce a catalog: {:?}",
+                outcome.code_catalog
+            );
+        };
+        let links = catalog.links.as_deref().expect("links recorded");
+        let crane: Vec<_> = links
+            .iter()
+            .filter(|link| link.url == "https://example.com/crane")
+            .collect();
+        assert_eq!(crane.len(), 1, "prose-cell URI link recorded");
+        assert!(
+            crane[0].page.is_some(),
+            "prose-cell URI link lands with a page: {:?}",
+            crane[0]
+        );
+
+        let (grid_outcome, grid_tex) =
+            render_snapshot_tables("bob-tables: grid\n");
+        assert!(
+            !grid_tex.contains("BobTableRecords"),
+            "frontmatter grid keeps the prose table a grid"
+        );
+        assert_eq!(
+            grid_tex.matches("\\begin{longtable}").count(),
+            2,
+            "both tables stay longtables"
+        );
+        match &grid_outcome.table_layout {
+            super::super::super::table_layout::ReportOutcome::Report(
+                report,
+            ) => {
+                assert_eq!(report.records, 0);
+                assert_eq!(report.grids, 2);
+            }
+            other => panic!("expected table-layout report, got {other:?}"),
+        }
     }
 }

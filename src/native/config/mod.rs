@@ -85,7 +85,13 @@ pub(crate) struct PriorityProperty {
     levels: Vec<PriorityLevel>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Default `highlights.table_layout`: prose tables print as records.
+pub(crate) const DEFAULT_TABLE_LAYOUT: &str = "auto";
+
+/// Default `highlights.table_prose_words`: the auto prose threshold.
+pub(crate) const DEFAULT_TABLE_PROSE_WORDS: u32 = 12;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HighlightsConfig {
     pre_scan_hook: Option<String>,
     audio_link_template: Option<String>,
@@ -96,6 +102,26 @@ pub(crate) struct HighlightsConfig {
     url_routing_exclude_hosts: Option<Vec<String>>,
     ingest_on_create: Option<bool>,
     coordinate_pdf_writes: bool,
+    table_layout: String,
+    table_prose_words: u32,
+}
+
+impl Default for HighlightsConfig {
+    fn default() -> Self {
+        Self {
+            pre_scan_hook: None,
+            audio_link_template: None,
+            audio_library: None,
+            listen_command: None,
+            url_routing_capture: None,
+            url_routing_gkeep: None,
+            url_routing_exclude_hosts: None,
+            ingest_on_create: None,
+            coordinate_pdf_writes: false,
+            table_layout: DEFAULT_TABLE_LAYOUT.to_string(),
+            table_prose_words: DEFAULT_TABLE_PROSE_WORDS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -222,6 +248,16 @@ impl HighlightsConfig {
 
     pub(crate) fn coordinate_pdf_writes(&self) -> bool {
         self.coordinate_pdf_writes
+    }
+
+    /// Global table default: `auto`, `records`, or `grid`.
+    pub(crate) fn table_layout(&self) -> &str {
+        &self.table_layout
+    }
+
+    /// Word threshold for the auto prose rule (1 to 200).
+    pub(crate) fn table_prose_words(&self) -> u32 {
+        self.table_prose_words
     }
 }
 
@@ -435,6 +471,10 @@ struct RawHighlights {
     #[serde(default)]
     coordinate_pdf_writes: Option<bool>,
     #[serde(default)]
+    table_layout: Option<String>,
+    #[serde(default)]
+    table_prose_words: Option<serde_yaml::Value>,
+    #[serde(default)]
     url_routing: Option<RawUrlRouting>,
 }
 
@@ -578,6 +618,59 @@ pub(crate) fn parse_gkeep_config(
         .unwrap_or_default())
 }
 
+/// Parse `highlights.table_layout` (`auto | records | grid`, default
+/// `auto`). Matching is trimmed and ASCII case-insensitive; anything else
+/// is `ConfigError::Invalid`, naming the key, the config path, and the
+/// allowed values.
+fn parse_table_layout(
+    raw: Option<&String>,
+    path: &Path,
+) -> Result<String, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_TABLE_LAYOUT.to_string());
+    };
+    let folded = raw.trim().to_ascii_lowercase();
+    if ["auto", "records", "grid"].contains(&folded.as_str()) {
+        return Ok(folded);
+    }
+    Err(ConfigError::Invalid(format!(
+        "highlights.table_layout in {} must be one of auto, records, grid (got '{raw}')",
+        path.display()
+    )))
+}
+
+/// Parse `highlights.table_prose_words` (an integer from 1 to 200,
+/// default 12). Out-of-range or non-integer values are
+/// `ConfigError::Invalid`.
+fn parse_table_prose_words(
+    raw: Option<&serde_yaml::Value>,
+    path: &Path,
+) -> Result<u32, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_TABLE_PROSE_WORDS);
+    };
+    let invalid = || {
+        ConfigError::Invalid(format!(
+            "highlights.table_prose_words in {} must be an integer from 1 to 200",
+            path.display()
+        ))
+    };
+    let value: i64 = match raw {
+        serde_yaml::Value::Number(number) => {
+            number.as_i64().ok_or_else(invalid)?
+        }
+        serde_yaml::Value::String(text) => {
+            text.trim().parse::<i64>().map_err(|_| invalid())?
+        }
+        _ => return Err(invalid()),
+    };
+    if (1..=200).contains(&value) {
+        Ok(value as u32)
+    } else {
+        Err(invalid())
+    }
+}
+
 pub(crate) fn parse_highlights_config(
     text: &str,
     path: &Path,
@@ -637,6 +730,21 @@ pub(crate) fn parse_highlights_config(
                 .collect::<Vec<_>>()
         });
 
+    let table_layout = parse_table_layout(
+        config
+            .highlights
+            .as_ref()
+            .and_then(|highlights| highlights.table_layout.as_ref()),
+        path,
+    )?;
+    let table_prose_words = parse_table_prose_words(
+        config
+            .highlights
+            .as_ref()
+            .and_then(|highlights| highlights.table_prose_words.as_ref()),
+        path,
+    )?;
+
     Ok(HighlightsConfig {
         pre_scan_hook,
         audio_link_template,
@@ -654,6 +762,8 @@ pub(crate) fn parse_highlights_config(
             .as_ref()
             .and_then(|highlights| highlights.coordinate_pdf_writes)
             .unwrap_or(false),
+        table_layout,
+        table_prose_words,
     })
 }
 
@@ -916,6 +1026,90 @@ highlights:
         assert!(enabled.coordinate_pdf_writes());
         assert!(!disabled.coordinate_pdf_writes());
         assert!(!absent.coordinate_pdf_writes());
+    }
+
+    #[test]
+    fn parses_highlights_table_layout() {
+        let path = Path::new("/config.yml");
+        let auto = parse_highlights_config(
+            "highlights:\n  table_layout: auto\n",
+            path,
+        )
+        .expect("valid auto layout");
+        let records = parse_highlights_config(
+            "highlights:\n  table_layout: RECORDS\n",
+            path,
+        )
+        .expect("valid records layout");
+        let grid = parse_highlights_config(
+            "highlights:\n  table_layout: ' grid '\n",
+            path,
+        )
+        .expect("valid grid layout");
+        let absent = parse_highlights_config(
+            "highlights:\n  coordinate_pdf_writes: false\n",
+            path,
+        )
+        .expect("valid config without layout");
+
+        assert_eq!(auto.table_layout(), "auto");
+        assert_eq!(records.table_layout(), "records");
+        assert_eq!(grid.table_layout(), "grid");
+        assert_eq!(absent.table_layout(), "auto");
+
+        let error = parse_highlights_config(
+            "highlights:\n  table_layout: rows\n",
+            path,
+        )
+        .expect_err("unknown layout is invalid");
+        assert!(
+            error
+                .message()
+                .contains("highlights.table_layout in /config.yml"),
+            "names the key and path: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("auto, records, grid"),
+            "names the allowed values: {}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn parses_highlights_table_prose_words() {
+        let path = Path::new("/config.yml");
+        let set = parse_highlights_config(
+            "highlights:\n  table_prose_words: 20\n",
+            path,
+        )
+        .expect("valid prose words");
+        let absent = parse_highlights_config(
+            "highlights:\n  coordinate_pdf_writes: false\n",
+            path,
+        )
+        .expect("valid config without prose words");
+
+        assert_eq!(set.table_prose_words(), 20);
+        assert_eq!(absent.table_prose_words(), 12);
+
+        for text in [
+            "highlights:\n  table_prose_words: 0\n",
+            "highlights:\n  table_prose_words: 201\n",
+            "highlights:\n  table_prose_words: many\n",
+            "highlights:\n  table_prose_words: 1.5\n",
+            "highlights:\n  table_prose_words: true\n",
+        ] {
+            let error = parse_highlights_config(text, path)
+                .expect_err("out-of-range or non-integer is invalid");
+            assert!(
+                error.message().contains(
+                    "highlights.table_prose_words in /config.yml must be an integer from 1 to 200"
+                ),
+                "names the key, path, and range: {}",
+                error.message()
+            );
+        }
     }
 
     #[test]
