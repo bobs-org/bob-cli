@@ -88,7 +88,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
 | `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
 | `%` / `%N` / `%header` | Capture clipboard content as child bullets | [`%`](#percent-clipboard) |
-| `t:<type>` | Type the new task or retype the existing task it targets | [`t:<type>`](#t-type) |
+| `#<type>` | Type a new task or retype its existing target | [`#<type>`](#hash-type) |
 
 ## Overloaded markers
 
@@ -1294,17 +1294,33 @@ bob capture --no-clip 'Keep the percent @work %'
 
 Contract: [Clipboard](../capture.md#clipboard).
 
-### `t:<type>` {#t-type}
+### `#<type>` {#hash-type}
 
-Type the new task at either line edge (`t:fix Fix it`, `Fix it t:fix`).
-Lowercase only; `T:` stays prose. One marker per item. Slugs use letters,
-digits, and hyphens; quoted literals allow spaces (`t:"DEEP WORK"`).
-Unknown names write canonical spelling with a warning. Existing targets
-are refused until a later phase. With `#NAME`, the marker must agree with
-the Pomodoro or the capture refuses with `type_marker_conflict`.
+Type a new task at either item edge (`#fix Fix it`, `Fix it #fix`), or retype
+an existing task the item targets. Slugs start with an ASCII letter and use
+letters, digits, and hyphens; quoted literals allow spaces and punctuation
+(`#"DEEP WORK"`). A bare `#` remains a Pomodoro note or prose and does not
+open task-type completion. `t:` is ordinary prose. Escape `\#fix` to keep
+the literal hash text in the body.
+
+With configured `types:`, only configured entries are accepted. Without that
+vocabulary, only names already present in Pomodoro history are accepted;
+inventory labels are excluded. Unknown names fail transactionally with
+`type_not_configured`, including in dry-run mode. A marker attached as
+`@route+block-id#type` retypes the task and ensures Next only when the whole
+item has no body or authored children; with body text, `#section` remains a
+task-section selector. `@route^block-id#type` types the new task with that
+explicit block ID. Named Pomodoro owners such as `@route:block-id#NAME`,
+`^route:block-id#NAME`, `=#NAME`, and project-note `@route^block-id+#NAME`
+keep their existing meanings.
+
+When the item also names a Pomodoro, the type marker must agree with the
+Pomodoro's type component; a container accepts any type. Retyping an existing
+task stages the `[type::]` edit with the gesture and relocates its live Task
+Link to the type's placement. Closed targets are refused.
 
 ```bash
-bob capture --no-clip 'Fix the parser t:fix @sase'
+bob capture --no-clip 'Fix the parser #fix @sase'
 ```
 
 ```text { .no-copy title="Output" }
@@ -1313,7 +1329,7 @@ bob capture --no-clip 'Fix the parser t:fix @sase'
   type   → FIX · from sase suggests WRITE
 ```
 
-Contract: [Typing tasks with t:](../capture.md#typing-tasks-with-t).
+Contract: [Typing tasks with `#<type>`](../capture.md#typing-tasks-with-type).
 
 ## Related
 

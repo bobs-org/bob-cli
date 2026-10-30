@@ -209,33 +209,50 @@ fn partial_route_returns_full_set_for_shell_filtering() {
 }
 
 #[test]
-fn task_type_shell_completion_returns_configured_t_type_rows() {
+fn task_type_shell_completion_returns_configured_hash_type_rows() {
     let fixture = fixture();
     let config = fixture._temp.path().join("config.yml");
     write_file(&config, "types:\n  BUILD: yellow\n  FIX: blue\n");
+    // A bare free-standing hash remains the Pomodoro-note marker, so it
+    // does not open the task-type menu. A letter starts the type query.
+    let bare = complete_with_config(
+        &fixture,
+        &config,
+        &["bob", "capture", "Fix", "the", "parser", "#"],
+    );
+    assert_success(&bare);
+    assert!(values(&bare).is_empty(), "{:?}", lines(&bare));
+
     let output = complete_with_config(
         &fixture,
         &config,
-        &["bob", "capture", "Fix", "the", "parser", "t:"],
+        &["bob", "capture", "Fix", "the", "parser", "#b"],
     );
 
     assert_success(&output);
     let candidates = values(&output);
-    assert!(
-        candidates.contains(&"t:build".to_string()),
-        "{candidates:?}"
-    );
-    assert!(candidates.contains(&"t:fix".to_string()), "{candidates:?}");
+    assert!(candidates.contains(&"#build".to_string()), "{candidates:?}");
     assert!(groups(&output).contains(&"task types".to_string()));
     assert!(stdout(&output).contains("your type · never used"));
+
+    let fix = complete_with_config(
+        &fixture,
+        &config,
+        &["bob", "capture", "Fix", "the", "parser", "#f"],
+    );
+    assert_success(&fix);
+    assert!(values(&fix).contains(&"#fix".to_string()));
 
     let typed = complete_with_config(
         &fixture,
         &config,
-        &["bob", "capture", "Fix the parser t:fixs"],
+        &["bob", "capture", "Fix the parser #fixs"],
     );
     assert_success(&typed);
-    assert!(values(&typed).contains(&"t:fixs".to_string()));
+    assert!(
+        !values(&typed).contains(&"#fixs".to_string()),
+        "shell completion must not insert a refused type"
+    );
 
     write_file(
         &fixture.vault.join(".bob/themes/test.jsonl"),
@@ -244,10 +261,10 @@ fn task_type_shell_completion_returns_configured_t_type_rows() {
     let hidden = complete_with_config(
         &fixture,
         &config,
-        &["bob", "capture", "Fix the parser t:fix"],
+        &["bob", "capture", "Fix the parser #fix"],
     );
     assert_success(&hidden);
-    assert!(values(&hidden).contains(&"t:fix".to_string()));
+    assert!(values(&hidden).contains(&"#fix".to_string()));
 }
 
 #[test]

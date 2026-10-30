@@ -1,4 +1,4 @@
-//! `t:<type>` retyping of existing tasks with D8 relocation.
+//! `#<type>` retyping of existing tasks with D8 relocation.
 
 use crate::support::*;
 use serde_json::Value;
@@ -108,7 +108,7 @@ fn whole_item_link_retype_sets_the_field() {
         &vault,
         &day_file,
         &config,
-        &["^sase:fix-x", "t:fix"],
+        &["^sase:fix-x", "#fix"],
         false,
     );
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
@@ -136,7 +136,7 @@ fn whole_item_link_retype_reports_kept_without_a_field() {
         &vault,
         &day_file,
         &config,
-        &["^sase:write-x", "t:write"],
+        &["^sase:write-x", "#write"],
         true,
     );
     assert_eq!(json["task_theme"]["action"], "kept", "{json}");
@@ -160,7 +160,7 @@ fn whole_item_link_retype_clears_the_authored_exception() {
         &vault,
         &day_file,
         &config,
-        &["^sase:write-y", "t:write"],
+        &["^sase:write-y", "#write"],
         true,
     );
     assert_eq!(json["task_theme"]["action"], "cleared", "{json}");
@@ -177,13 +177,8 @@ fn ensure_next_retype_sets_field_and_moves_link() {
         &project(Some("WRITE"), "- [ ] #task Fix parser ^fix-e\n"),
         "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^fix-e]]\n- [ ] () — FIX\n",
     );
-    let (_, json) = capture_json(
-        &vault,
-        &day_file,
-        &config,
-        &["@sase+fix-e", "t:fix"],
-        false,
-    );
+    let (_, json) =
+        capture_json(&vault, &day_file, &config, &["@sase+fix-e#fix"], false);
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
     assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
     assert!(
@@ -203,7 +198,7 @@ fn toggle_retype_sets_field() {
         &vault,
         &day_file,
         &config,
-        &["@sase+fix-t!", "t:fix"],
+        &["@sase+fix-t!", "#fix"],
         false,
     );
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
@@ -238,7 +233,7 @@ fn relationship_owner_retype_sets_field() {
         .arg("--no-clip")
         .arg("-f")
         .arg("json")
-        .args(["@body+excercise", "&foo:bar", "t:fix"])
+        .args(["@body+excercise", "&foo:bar", "#fix"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -274,7 +269,7 @@ fn named_form_conflict_refuses_before_any_write() {
         .arg("-f")
         .arg("json")
         .arg("-d")
-        .args(["^sase:fix-c#BUILD", "t:fix"])
+        .args(["^sase:fix-c#BUILD", "#fix"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -313,7 +308,7 @@ fn closed_target_refuses_without_a_write() {
         .arg("--no-clip")
         .arg("-f")
         .arg("json")
-        .args(["^sase:done-c", "t:fix"])
+        .args(["^sase:done-c", "#fix"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -364,7 +359,7 @@ fn strict_cap_refuses_before_any_write() {
         .arg("--no-clip")
         .arg("-f")
         .arg("json")
-        .args(["@body+excercise", "&foo:bar", "t:fix"])
+        .args(["@body+excercise", "&foo:bar", "#fix"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -403,14 +398,14 @@ fn dry_run_and_real_run_agree_on_existing_retype() {
         &vault,
         &day_file,
         &config,
-        &["^sase:fix-d", "t:fix"],
+        &["^sase:fix-d", "#fix"],
         true,
     );
     let (_, written) = capture_json(
         &vault,
         &day_file,
         &config,
-        &["^sase:fix-d", "t:fix"],
+        &["^sase:fix-d", "#fix"],
         false,
     );
     assert_eq!(
@@ -436,7 +431,7 @@ fn already_queued_link_retype_relocates_the_ledger() {
         &vault,
         &day_file,
         &config,
-        &["^sase:fix-q", "t:fix"],
+        &["^sase:fix-q", "#fix"],
         false,
     );
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
@@ -461,7 +456,7 @@ fn already_queued_link_retype_relocates_the_ledger() {
         .arg(&vault)
         .arg("--no-clip")
         .arg("-d")
-        .args(["^sase:fix-q", "t:fix"])
+        .args(["^sase:fix-q", "#fix"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -551,7 +546,7 @@ fn named_destination_prefixes_are_checked_after_resolution() {
         &vault,
         &day_file,
         &config,
-        &["^sase:fix-p#bui t:fix"],
+        &["^sase:fix-p#bui #fix"],
     );
     assert_eq!(json["code"], "type_marker_conflict", "{json}");
     assert!(
@@ -576,7 +571,7 @@ fn rename_placeholder_preview_rewrites_the_headline() {
         &vault,
         &day_file,
         &config,
-        &["^sase:fix-r", "t:fix"],
+        &["^sase:fix-r", "#fix"],
         true,
     );
     assert_eq!(
@@ -623,7 +618,7 @@ fn create_below_preview_reports_a_created_destination() {
         &vault,
         &day_file,
         &config,
-        &["^sase:fix-c", "t:fix"],
+        &["^sase:fix-c", "#fix"],
         true,
     );
     assert_eq!(json["type_relocation"]["outcome"], "create_below", "{json}");

@@ -884,7 +884,7 @@ fn capture_parse_never_touches_the_vault_or_clipboard() {
 }
 
 #[test]
-fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
+fn capture_parse_json_reports_explicit_toggle_and_attached_type_spans() {
     let vault_temp = TempDir::new("bob-cli-capture-parse-themes");
     let vault = vault_temp.path().join("vault");
     std::fs::create_dir_all(&vault).expect("create scratch vault");
@@ -943,7 +943,7 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+goog-exit#deep+work")
+        .arg("@cash+goog-exit#deep-work")
         .env("BOB_DIR", &vault)
         .output()
         .expect("run named ensure-Next parse");
@@ -951,33 +951,24 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(json["mode"], "task_toggle");
-    assert_eq!(json["section"], "deep+work");
+    assert!(json["section"].is_null());
     assert_eq!(
         json["spans"],
         serde_json::json!([
             { "start": 0, "end": 5, "kind": "task_toggle_route" },
             { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
             {
-                "start": 16,
+                "start": 15,
                 "end": 25,
-                "kind": "task_toggle_pomodoro_name",
+                "kind": "task_type",
                 "themes": [
                     {
-                        "key": "deep",
-                        "name": "deep",
-                        "hue": "red",
+                        "key": "deep-work",
+                        "name": "DEEP-WORK",
+                        "hue": "yellow",
                         "hue_source": "hash",
                         "known": false,
                         "start": 16,
-                        "end": 20,
-                    },
-                    {
-                        "key": "work",
-                        "name": "work",
-                        "hue": "blue",
-                        "hue_source": "hash",
-                        "known": false,
-                        "start": 21,
                         "end": 25,
                     },
                 ],

@@ -2,14 +2,17 @@
 
 use super::*;
 use crate::native::{
-    capture_language::{resolve_exact_type_name, unmatched_type_display},
+    capture_language::{
+        resolve_accepted_type_name, resolve_exact_type_name,
+        unmatched_type_display,
+    },
     config::themes::ThemeSources,
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::{HomeResolver, HomeSource, NoteFacts},
     pomodoro_themes::{
         self, routing,
         suggest::{self, ThemeSuggestion},
-        Catalog, HueSource, ThemeRef,
+        Catalog, ThemeRef,
     },
     task_fields::canonical_theme_name,
     task_theme::{
@@ -146,12 +149,11 @@ impl CaptureTaskThemeContext {
         )
     }
 
-    /// Stage an explicit `t:` marker on a new-task formatted line before
+    /// Stage an explicit `#<type>` marker on a new-task formatted line before
     /// placement. Resolves X via the shared helper, computes I from the
     /// staged line in its destination, applies the field table, and
     /// enforces named-Pomodoro agreement. Returns the edited line plus
-    /// the always-reported summary. Unknown names use canonical spelling
-    /// with a `theme_not_configured` warning.
+    /// the always-reported summary. Unknown names are refused before staging.
     pub(super) fn apply_type_marker(
         &mut self,
         planner: &mut CaptureBatchPlanner,
@@ -162,65 +164,33 @@ impl CaptureTaskThemeContext {
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<AppliedTaskTheme, CaptureError> {
         self.refresh_residence_snapshot(planner);
-        if !self.load_config(warnings) || !self.load_catalog(warnings) {
-            // Without config/catalog, fall back to canonical spelling with
-            // no inherited suggestion.
-            let display = unmatched_type_display(marker_name);
-            let key = normalize_component(marker_name);
-            let theme = ThemeRef {
-                key: key.clone(),
-                name: display.clone(),
-                hue: None,
-                hue_source: HueSource::Unconfigured,
-                known: false,
-                configured: Some(false),
-                start: None,
-                end: None,
+        if !self.load_catalog(warnings) {
+            return Err(CaptureError::io(
+                "could not load the task-type catalog to validate `#<type>`",
+            ));
+        }
+        let found = {
+            let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+            let Some(found) = resolve_accepted_type_name(
+                catalog,
+                marker_name,
+                marker_literal,
+            ) else {
+                return Err(
+                    self.type_not_configured_error(marker_name, catalog)
+                );
             };
-            let edited = set_task_theme(task_line, &display);
-            return Ok(AppliedTaskTheme {
-                task_line: edited,
-                summary: CaptureTaskThemeChange {
-                    action: "set",
-                    theme: Some(theme),
-                    previous: None,
-                    inherited: None,
-                },
-            });
+            found
+        };
+        if !self.load_config(warnings) {
+            return Err(CaptureError::io(format!(
+                "read plan config {} to apply task type",
+                self.config_path.display()
+            )));
         }
         let cfg = self.cfg.as_ref().expect("loaded plan config");
         let catalog = self.catalog.as_ref().expect("loaded theme catalog");
-        // Resolve X via the shared helper: configured vocabulary first,
-        // then catalog; literal by key equality, slug also tries spaces.
-        let configured_entries = catalog.configured_themes();
-        let resolved = resolve_exact_type_name(
-            configured_entries,
-            &|key| catalog.get(key).map(|record| record.name.clone()),
-            marker_name,
-            marker_literal,
-        );
-        let (x_key, x_name) = match resolved {
-            Some(found) => (found.key, found.name),
-            None => {
-                let display = unmatched_type_display(marker_name);
-                (normalize_component(marker_name), display)
-            }
-        };
-        // Unknown/unconfigured names: canonical spelling plus the existing
-        // structured warning. Never refuse (unknown_types = warn).
-        if catalog.unconfigured(&x_key) {
-            let similar = catalog.similar_to(&x_name);
-            warnings
-                .push(CaptureWarning::Structured(StructuredCaptureWarning {
-                code: super::super::pomodoro_themes::THEME_NOT_CONFIGURED,
-                label: Some(x_name.clone()),
-                count: None,
-                message:
-                    super::super::pomodoro_themes::theme_not_configured_message(
-                        &x_name, &similar,
-                    ),
-            }));
-        }
+        let (x_key, x_name) = (found.key, found.name);
         // Compute I from the staged line in its destination, skipping its
         // own type field (the line has no field yet for a new task).
         let residence = target.strip_prefix(&self.root).unwrap_or(target);
@@ -341,7 +311,7 @@ impl CaptureTaskThemeContext {
         let destination_name = destination.unwrap_or("(unnamed)").trim();
         Err(CaptureError::usage_code(
             format!(
-                "`t:{marker_name}` disagrees with Pomodoro {destination_name}: drop `#{destination_name}` to link under {x_name}, or drop `t:{marker_name}` to type the task {destination_name}"
+                "`#{marker_name}` disagrees with Pomodoro {destination_name}: drop `#{destination_name}` to link under {x_name}, or drop `#{marker_name}` to type the task {destination_name}"
             ),
             "type_marker_conflict",
         ))
@@ -373,7 +343,7 @@ impl CaptureTaskThemeContext {
         )
     }
 
-    /// Explicit `t:` retype of an existing task. Reads the staged target
+    /// Explicit `#<type>` retype of an existing task. Reads the staged target
     /// line, resolves X, applies the §1.7 field table, and stages the
     /// edit before the gesture runs. Named-Pomodoro agreement is checked
     /// later against the resolved destination. Closed targets are refused
@@ -417,71 +387,39 @@ impl CaptureTaskThemeContext {
             );
             let _ = description;
             return Err(CaptureError::usage(format!(
-                "`t:{marker_name}` needs an open task: ^{block_id} is {}; closed tasks keep their fields as history",
+                "`#{marker_name}` needs an open task: ^{block_id} is {}; closed tasks keep their fields as history",
                 task.status_name
             )));
         }
         let source_line =
             line_text_at(&current_contents, task.line_index)?.to_string();
-        if !self.load_config(warnings) || !self.load_catalog(warnings) {
-            let display = unmatched_type_display(marker_name);
-            let edited = set_task_theme(&source_line, &display);
-            let staged =
-                self.write_task_field(planner, target, block_id, |_| {
-                    edited.clone()
-                })?;
-            let key = normalize_component(marker_name);
-            let theme = crate::native::pomodoro_themes::ThemeRef {
-                key: key.clone(),
-                name: display.clone(),
-                hue: None,
-                hue_source: HueSource::Unconfigured,
-                known: false,
-                configured: Some(false),
-                start: None,
-                end: None,
+        if !self.load_catalog(warnings) {
+            return Err(CaptureError::io(
+                "could not load the task-type catalog to validate `#<type>`",
+            ));
+        }
+        let found = {
+            let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+            let Some(found) = resolve_accepted_type_name(
+                catalog,
+                marker_name,
+                marker_literal,
+            ) else {
+                return Err(
+                    self.type_not_configured_error(marker_name, catalog)
+                );
             };
-            let _ = staged;
-            return Ok(ExistingTypeMarkerApplication {
-                summary: CaptureTaskThemeChange {
-                    action: "set",
-                    theme: Some(theme),
-                    previous: None,
-                    inherited: None,
-                },
-                type_key: key,
-                type_name: display,
-            });
+            found
+        };
+        if !self.load_config(warnings) {
+            return Err(CaptureError::io(format!(
+                "read plan config {} to apply task type",
+                self.config_path.display()
+            )));
         }
         let cfg = self.cfg.as_ref().expect("loaded plan config");
         let catalog = self.catalog.as_ref().expect("loaded theme catalog");
-        let configured_entries = catalog.configured_themes();
-        let resolved = resolve_exact_type_name(
-            configured_entries,
-            &|key| catalog.get(key).map(|record| record.name.clone()),
-            marker_name,
-            marker_literal,
-        );
-        let (x_key, x_name) = match resolved {
-            Some(found) => (found.key, found.name),
-            None => {
-                let display = unmatched_type_display(marker_name);
-                (normalize_component(marker_name), display)
-            }
-        };
-        if catalog.unconfigured(&x_key) {
-            let similar = catalog.similar_to(&x_name);
-            warnings
-                .push(CaptureWarning::Structured(StructuredCaptureWarning {
-                code: super::super::pomodoro_themes::THEME_NOT_CONFIGURED,
-                label: Some(x_name.clone()),
-                count: None,
-                message:
-                    super::super::pomodoro_themes::theme_not_configured_message(
-                        &x_name, &similar,
-                    ),
-            }));
-        }
+        let (x_key, x_name) = (found.key, found.name);
         let residence_path = relative_target(Some(route));
         let residence = Path::new(&residence_path);
         let suggested = suggest::suggest_for_task(
@@ -694,6 +632,15 @@ impl CaptureTaskThemeContext {
             .map_or(0, |previous| spans[previous].end);
         let segment = &current[start..span.end];
         let updated_segment = update(segment);
+        let (_, line_ending) =
+            crate::native::markdown::split_line_ending(segment);
+        let updated_segment = if line_ending.is_empty() {
+            updated_segment
+        } else {
+            let (body, _) =
+                crate::native::markdown::split_line_ending(&updated_segment);
+            format!("{body}{line_ending}")
+        };
         let mut updated = String::with_capacity(
             current.len() + updated_segment.len().saturating_sub(segment.len()),
         );
@@ -776,7 +723,7 @@ impl CaptureTaskThemeContext {
         })
     }
 
-    /// Shared D8 relocation for an explicit `t:` retype: after the gesture,
+    /// Shared D8 relocation for an explicit `#type` retype: after the gesture,
     /// restore ledger agreement for `block_id` becoming `type_key`/`type_name`.
     /// Stages the day-note edit, pins explicit Pomodoro block refs for the
     /// renamed or created headlines, and rebases existing gesture refs.
@@ -858,6 +805,33 @@ impl CaptureTaskThemeContext {
             }
         }
         self.catalog.is_some()
+    }
+
+    fn type_not_configured_error(
+        &self,
+        marker_name: &str,
+        catalog: &Catalog,
+    ) -> CaptureError {
+        let marker = format!("#{marker_name}");
+        let escaped = format!("\\{marker}");
+        let canonical = unmatched_type_display(marker_name);
+        let similar = catalog.similar_to(&canonical);
+        let message = if catalog.configured_themes().is_some() {
+            let suggestion = similar
+                .first()
+                .map(|name| format!("; did you mean `#{name}`?"))
+                .unwrap_or_default();
+            format!(
+                "`{marker}` is not one of your task types{suggestion}; add `{canonical}` under `types:` in {}, or write `{escaped}` to keep it as a tag",
+                self.config_path.display()
+            )
+        } else {
+            format!(
+                "`{marker}` is not a task type yet: no Pomodoro has used {canonical} and no `types:` vocabulary is configured; add `types:` to {}, or write `{escaped}` to keep it as a tag",
+                self.config_path.display()
+            )
+        };
+        CaptureError::usage_code(message, "type_not_configured")
     }
 }
 

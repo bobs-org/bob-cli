@@ -82,9 +82,6 @@ pub(super) fn parse_editor_line<'a>(
     if let Some(diagnostic) = retired_priority_marker_diagnostic(&markers) {
         diagnostics.push(diagnostic);
     }
-    if let Some(diagnostic) = legacy_bullet_marker_diagnostic(&tokens) {
-        diagnostics.push(diagnostic);
-    }
     if let Some(diagnostic) =
         pomodoro_note_conflict_diagnostic(&tokens, leading)
     {
@@ -208,7 +205,7 @@ impl SeenMarkers {
     ) {
         if self.type_marker {
             diagnostics.push(duplicate_capture_marker_diagnostic(
-                duplicate_marker_error("type marker (t:<type>)"),
+                duplicate_marker_error("type marker (#<type>)"),
                 range,
             ));
         }
@@ -573,7 +570,6 @@ pub(super) fn rekind_sub_bullet_spans(spans: &mut [Span]) {
         span.kind = match span.kind {
             SpanKind::SubBulletRoute => SpanKind::TaskToggleRoute,
             SpanKind::SubBulletBlockId => SpanKind::TaskToggleBlockId,
-            SpanKind::SubBulletSection => SpanKind::TaskTogglePomodoroName,
             other => other,
         };
     }
@@ -1683,7 +1679,7 @@ fn validate_inherited_type_marker(
     });
 }
 
-fn parse_editor_item_inner<'a>(
+pub(super) fn parse_editor_item_inner<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
@@ -1903,13 +1899,9 @@ fn parse_editor_item_inner<'a>(
         }
     }
 
-    // A bare `@route+block-id[#name]` marker with an empty body, no authored
-    // children, and no other item-wide marker is a task toggle instead of a
-    // sub-bullet capture; a trailing bare `#` on the same shape is one
-    // keystroke away from one. Neither can arise from a child line's marker
-    // (a child line always has authored body text), so only the parent's
-    // marker is ever relevant here. See `resolve_sub_bullet_kind` for the
-    // mirrored decision in the execution grammar.
+    // A marker-only `@route+block-id` with no body, authored children, or
+    // other item-wide markers is Ensure Next. The type-marker wrapper masks
+    // its attached `#<type>` suffix before this classification.
     let toggle_eligible = body.is_empty()
         && sub_bullets.is_empty()
         && !seen.schedule
@@ -1936,12 +1928,6 @@ fn parse_editor_item_inner<'a>(
         if let Some(index) = own_local_destination_marker_index {
             local_destination_markers[index].mode = EditorMode::TaskToggle;
         }
-    } else if toggle_eligible
-        && mode == EditorMode::Incomplete
-        && needs == [Need::TaskSection]
-    {
-        needs = vec![Need::PomodoroName];
-        rekind_sub_bullet_spans(&mut spans);
     } else if let Some(range) = sub_bullet_relaxed_section_range {
         mode = EditorMode::Task;
         route = None;

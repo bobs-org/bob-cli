@@ -8,7 +8,7 @@ _bob() {
   local line value help group suffix array header ret=1
 
   lines=(${(f)"$(command bob __complete zsh --protocol 1 --suffix "$SUFFIX" -- \
-    "${(@Q)words[1,CURRENT-1]}" "$PREFIX" 2>/dev/null)"})
+    "${(@Q)words[1,CURRENT-1]}" "${(Q)PREFIX}" 2>/dev/null)"})
   (( $#lines )) || return 1
 
   # Bob-scoped presentation defaults, applied only where you have set no style.

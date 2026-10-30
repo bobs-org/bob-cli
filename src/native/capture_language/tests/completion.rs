@@ -322,23 +322,27 @@ fn cursor_past_a_trailing_space_has_no_completion() {
 }
 
 #[test]
-fn trailing_hash_fragments_have_no_completion() {
-    // `#now` is retired: `#n`/`#no`/`#now` are ordinary text with no
-    // completion field, exactly like any other `#tag`.
-    assert_eq!(field("Fix it #n", 9), None);
-    assert_eq!(field("Fix it @sase #no", 14), None);
-    assert_eq!(field("Fix it #now", 11), None);
+fn free_standing_hash_fragments_request_task_type_completion() {
+    for (raw, cursor, query) in [
+        ("Fix it #n", 9, "n"),
+        ("Fix it @sase #no", 15, "n"),
+        ("Fix it #now", 11, "now"),
+    ] {
+        let completion = field(raw, cursor).expect(raw);
+        assert_eq!(completion.context, CompletionContext::TaskType, "{raw}");
+        assert_eq!(completion.query, query, "{raw}");
+    }
 
     // A lone `#` stays the Pomodoro-note marker: no tag completion.
     assert_eq!(field("Fix #", 5), None);
 }
 
 #[test]
-fn operator_items_have_no_hash_completion() {
-    assert_eq!(field("x #n", 5), None);
-    assert_eq!(field("@r:id #n", 8), None);
-    assert_eq!(field("#n", 2), None);
-    assert_eq!(field("#now", 4), None);
+fn hash_completion_is_lexical_even_when_the_subject_will_refuse_it() {
+    for raw in ["@r:id #n", "#n", "#now"] {
+        let completion = field(raw, raw.len()).expect(raw);
+        assert_eq!(completion.context, CompletionContext::TaskType, "{raw}");
+    }
 }
 
 #[test]
@@ -432,13 +436,12 @@ fn empty_selector_after_hash_is_a_zero_length_task_section_field() {
 }
 
 #[test]
-fn hash_after_a_bare_block_id_marker_completes_a_pomodoro_name() {
+fn hash_after_a_bare_block_id_marker_completes_a_task_type() {
     // The `@route+` route side and the task-picker side are unchanged --
-    // still `Route` and `Task` -- only the trailing `#` context flips.
+    // still `Route` and `Task` -- while the marker-only suffix is a type.
     let raw = "@Cash+goog#bu";
     let at = raw.find('@').expect("at");
     let plus = raw.find('+').expect("plus");
-    let hash = raw.find('#').expect("hash");
 
     let route = field(raw, at + 3).expect("route field");
     assert_eq!(route.context, CompletionContext::Route);
@@ -446,12 +449,10 @@ fn hash_after_a_bare_block_id_marker_completes_a_pomodoro_name() {
     let task = field(raw, plus + 2).expect("task field");
     assert_eq!(task.context, CompletionContext::Task);
 
-    let name = field(raw, raw.len()).expect("pomodoro name field");
-    assert_eq!(name.context, CompletionContext::PomodoroName);
-    assert_eq!(name.route.as_deref(), Some("cash"));
-    assert_eq!(name.block_id.as_deref(), Some("goog"));
+    let name = field(raw, raw.len()).expect("task type field");
+    assert_eq!(name.context, CompletionContext::TaskType);
     assert_eq!(name.query, "bu");
-    assert_eq!(name.replacement, (hash + 1, raw.len()));
+    assert_eq!(name.replacement, (raw.find('#').unwrap(), raw.len()));
 
     // Once the item has body text, the same `#` keeps its task-section
     // meaning -- unaffected by the toggle rule.
@@ -1008,57 +1009,57 @@ fn parent_task_plus_preserves_operator_and_protected_text_boundaries() {
 #[test]
 fn route_completion_beside_a_type_marker_keeps_original_ranges() {
     // A trailing marker never changes the neighboring route field.
-    assert_eq!(field("Fix it @sa t:fix", 10), field("Fix it @sa", 10));
-    let completion = field("Fix it @sa t:fix", 10).expect("route field");
+    assert_eq!(field("Fix it @sa #fix", 10), field("Fix it @sa", 10));
+    let completion = field("Fix it @sa #fix", 10).expect("route field");
     assert_eq!(completion.context, CompletionContext::Route);
     assert_eq!(completion.replacement, (8, 10));
 
     // A leading marker shifts nothing behind it: ranges stay absolute.
-    let completion = field("t:fix Fix it @sa", 16).expect("route field");
+    let completion = field("#fix Fix it @sa", 15).expect("route field");
     assert_eq!(completion.context, CompletionContext::Route);
     assert_eq!(completion.query, "sa");
-    assert_eq!(completion.replacement, (14, 16));
+    assert_eq!(completion.replacement, (13, 15));
 
     // A marker on a child line leaves the child's route field alone.
-    let raw = "Fix it\n- check t:fix @sa";
+    let raw = "Fix it\n- check #fix @sa";
     let base = "Fix it\n- check @sa";
     let shifted = field(base, base.len()).map(|mut found| {
-        // The inserted `t:fix ` moves every later byte by its length.
-        found.replacement.0 += "t:fix ".len();
-        found.replacement.1 += "t:fix ".len();
+        // The inserted `#fix ` moves every later byte by its length.
+        found.replacement.0 += "#fix ".len();
+        found.replacement.1 += "#fix ".len();
         found
     });
     assert_eq!(field(raw, raw.len()), shifted);
     let completion = field(raw, raw.len()).expect("route field");
     assert_eq!(completion.context, CompletionContext::Route);
-    assert_eq!(completion.replacement, (22, 24));
+    assert_eq!(completion.replacement, (21, 23));
 }
 
 #[test]
 fn query_and_caret_completion_survive_a_neighboring_marker() {
     // Every whole-item query still claims through the masked view.
-    assert_eq!(field(":query t:fix", 3), field(":query", 3));
-    assert_eq!(field("/fix t:fix", 2), field("/fix", 2));
-    assert_eq!(field("!fix t:fix", 2), field("!fix", 2));
-    assert_eq!(field("+fix t:fix", 2), field("+fix", 2));
+    assert_eq!(field(":query #fix", 3), field(":query", 3));
+    assert_eq!(field("/fix #fix", 2), field("/fix", 2));
+    assert_eq!(field("!fix #fix", 2), field("!fix", 2));
+    assert_eq!(field("+fix #fix", 2), field("+fix", 2));
     // Caret completion on an existing-task link is unchanged.
-    assert_eq!(field("^sase:abc t:fix", 6), field("^sase:abc", 6));
+    assert_eq!(field("^sase:abc #fix", 6), field("^sase:abc", 6));
 }
 
 #[test]
 fn a_cursor_on_a_type_marker_requests_task_type_completion() {
-    let marker = field("Fix it t:fix", 9).expect("type marker field");
+    let marker = field("Fix it #fix", 8).expect("type marker field");
     assert_eq!(marker.context, CompletionContext::TaskType);
     assert_eq!(marker.query, "");
-    assert_eq!(marker.replacement, (7, 12));
+    assert_eq!(marker.replacement, (7, 11));
 
-    let empty = field("Fix it t:", 9).expect("empty type marker field");
+    let empty = field("Fix it #\"", 9).expect("incomplete literal type field");
     assert_eq!(empty.context, CompletionContext::TaskType);
     assert_eq!(empty.query, "");
     assert_eq!(empty.replacement, (7, 9));
 
-    let leading = field("t:fix Fix it", 2).expect("leading marker field");
+    let leading = field("#fix Fix it", 1).expect("leading marker field");
     assert_eq!(leading.context, CompletionContext::TaskType);
     assert_eq!(leading.query, "");
-    assert_eq!(leading.replacement, (0, 5));
+    assert_eq!(leading.replacement, (0, 4));
 }

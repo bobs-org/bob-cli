@@ -207,11 +207,6 @@ fn editor_reports_invalid_components_as_diagnostics() {
             "put the project-note `+` right after the block ID: `@dev^focus-123+#bugs` (a `+` after `#bugs` would be part of the Pomodoro name)",
         ),
         (
-            "Body @dev^focus-123#bugs",
-            "invalid_project_note_marker",
-            "`#bugs` after `@dev^focus-123` needs the project-note `+` (`@dev^focus-123+#bugs`); to link a task under a Pomodoro, use `@dev:focus-123#bugs`",
-        ),
-        (
             "Body @bad.route:id",
             "invalid_pomodoro_route",
             POMODORO_ROUTE_ERROR,
@@ -260,6 +255,17 @@ fn editor_reports_invalid_components_as_diagnostics() {
         assert_eq!(diagnostic.message, *message, "{raw}");
         assert_eq!(diagnostic.range, Some((5, raw.len())), "{raw}");
     }
+}
+
+#[test]
+fn attached_task_type_after_block_id_is_not_a_project_note_error() {
+    let parse = editor("Body @dev^focus-123#bugs");
+    assert_eq!(parse.mode, EditorMode::Task);
+    assert_eq!(parse.body, "Body");
+    assert!(parse.diagnostics.is_empty());
+    assert!(ranges(&parse)
+        .iter()
+        .any(|(_, _, kind)| *kind == SpanKind::TaskType));
 }
 
 #[test]
@@ -332,17 +338,15 @@ fn mixed_separators_keep_the_first_family_and_do_not_steal_section_suffixes() {
 }
 
 #[test]
-fn editor_reports_legacy_bullet_markers_without_failing() {
-    let parse = editor("Some note #bar");
-    assert_eq!(codes(&parse), vec!["legacy_bullet_marker"]);
-    assert_eq!(parse.diagnostics[0].range, Some((10, 14)));
+fn editor_t_colon_is_ordinary_prose() {
+    let parse = editor("Some note t:bar");
+    assert!(codes(&parse).is_empty());
     assert_eq!(parse.mode, EditorMode::Task);
-    assert_eq!(parse.body, "Some note #bar");
+    assert_eq!(parse.body, "Some note t:bar");
 
-    let parse = editor("Some note #bar @foo");
-    assert_eq!(codes(&parse), vec!["legacy_bullet_marker"]);
-    assert_eq!(parse.diagnostics[0].range, Some((10, 14)));
-    // The trailing route still resolves so the editor can keep painting.
+    let parse = editor("Some note t:bar @foo");
+    assert!(codes(&parse).is_empty());
+    assert_eq!(parse.body, "Some note t:bar");
     assert_eq!(parse.route.as_deref(), Some("foo"));
 }
 
@@ -791,73 +795,14 @@ fn editor_serializes_snake_case_vocabulary() {
 }
 
 #[test]
-fn editor_rejects_a_trailing_now_tag_like_any_other_tag() {
-    // `#now` is retired: a trailing tag is the ordinary legacy-marker
-    // diagnostic with no tag span. The marker stays unresolved, so the
-    // body keeps the whole line.
-    let parse = editor("Fix it @sase^fix-it #now");
-    assert_eq!(parse.mode, EditorMode::Task);
-    assert_eq!(parse.body, "Fix it @sase^fix-it #now");
-    assert_eq!(parse.route, None);
-    assert_eq!(codes(&parse), vec!["legacy_bullet_marker"]);
-    assert!(parse.spans.is_empty());
-
-    // The pre-route slot matches too, exactly like any other `#tag`,
-    // while the trailing route still resolves.
+fn editor_hash_token_is_a_task_type_marker_now() {
     let parse = editor("Fix it #now @sase");
-    assert_eq!(parse.body, "Fix it #now");
-    assert_eq!(parse.route.as_deref(), Some("sase"));
-    assert_eq!(codes(&parse), vec!["legacy_bullet_marker"]);
-
-    // Other trailing `#tag` shapes keep today's diagnostic.
-    let parse = editor("Some note #bar");
-    assert_eq!(codes(&parse), vec!["legacy_bullet_marker"]);
-
-    // Authored child lines report the same diagnostic.
-    let parse = editor("Fix it @sase\n- sub #now");
     assert_eq!(parse.body, "Fix it");
-    assert_eq!(
-        parse
-            .sub_bullets
-            .iter()
-            .map(|item| item.body.as_str())
-            .collect::<Vec<_>>(),
-        vec!["sub #now"]
-    );
-    assert!(codes(&parse).contains(&"legacy_bullet_marker"));
-}
-
-#[test]
-fn editor_rejects_a_partial_now_tag_like_any_other_tag() {
-    for raw in ["Fix it @sase #n", "Fix it @sase #no"] {
-        let parse = editor(raw);
-        assert_eq!(codes(&parse), vec!["legacy_bullet_marker"], "{raw}");
-    }
-}
-
-#[test]
-fn editor_rejects_a_now_tag_without_task_text() {
-    for raw in ["@sase:fix-it #now", "@sase+fix-it #now", "#now"] {
-        let parse = editor(raw);
-        assert_eq!(codes(&parse), vec!["legacy_bullet_marker"], "{raw}");
-    }
-    // Whole-item operators and links with a trailing tag report their
-    // own shape diagnostics. An inline `x #now` entry is literal text,
-    // so it stays a valid close.
-    for (raw, expected) in [
-        ("^sase:fix-it #now", "invalid_pomodoro_link"),
-        ("=3 #now", "invalid_pomodoro_start"),
-        ("+5 #now", "invalid_pomodoro_adjustment"),
-    ] {
-        let parse = editor(raw);
-        assert!(
-            codes(&parse).contains(&expected),
-            "{raw}: {:?}",
-            codes(&parse)
-        );
-    }
-    let inline = editor("x #now");
-    assert!(codes(&inline).is_empty(), "x #now");
+    assert_eq!(parse.route.as_deref(), Some("sase"));
+    assert!(codes(&parse).is_empty());
+    assert!(ranges(&parse)
+        .iter()
+        .any(|(_, _, kind)| *kind == SpanKind::TaskType));
 }
 
 #[test]

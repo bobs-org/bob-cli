@@ -30,14 +30,17 @@ fn empty_completion_has_no_context_and_a_zero_length_replacement() {
 }
 
 #[test]
-fn trailing_hash_fragment_requests_no_completion() {
-    let temp = TempDir::new("bob-cli-capture-complete-now-tag");
-    // `#now` is retired: a trailing `#n` is ordinary text with no
-    // completion field, exactly like any other `#tag`.
+fn trailing_hash_fragment_requests_task_type_completion() {
+    let temp = TempDir::new("bob-cli-capture-complete-task-type");
     let raw = "Fix it #n";
     let value = result(temp.path(), raw, raw.len());
-    assert_eq!(value.context, None);
-    assert_eq!(value.candidates.len(), 0);
+    assert_eq!(value.context, Some(CompletionContext::TaskType));
+    let Candidates::TaskType(candidates) = &value.candidates else {
+        panic!("expected task-type candidates");
+    };
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].replacement, "#n");
+    assert_eq!(candidates[0].refused, Some("type_not_configured"));
 }
 
 #[test]

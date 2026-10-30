@@ -101,30 +101,6 @@ pub(super) fn parse_sub_bullet_route_token(
     if !is_block_id(block_id) {
         return Err(SUB_BULLET_BLOCK_ID_ERROR.to_string());
     }
-    // A `#"NAME"` literal never names a task section: it names the
-    // Pomodoro directly, so resolve to a task toggle now. (A literal
-    // always errored here before, so nothing that parsed changes shape.)
-    if let Some(selector) = section
-        && opens_exact_name(selector)
-    {
-        let lex = lex_exact_name_after_hash(selector, selector.len())
-            .filter(|lex| lex.complete)
-            .ok_or_else(|| SUB_BULLET_SECTION_ERROR.to_string())?;
-        if selector.len() != lex.literal_len {
-            return Err(SUB_BULLET_SECTION_ERROR.to_string());
-        }
-        let canonical = canonicalize_exact_name(&lex.decoded)
-            .ok_or_else(|| SUB_BULLET_SECTION_ERROR.to_string())?;
-        return Ok(RouteToken {
-            route: Some(route.to_ascii_lowercase()),
-            kind: CaptureKind::TaskToggle {
-                block_id: block_id.to_string(),
-                pomodoro_name: Some(canonical),
-                pomodoro_name_is_literal: true,
-                intent: TaskToggleIntent::EnsureNext,
-            },
-        });
-    }
     let section = match section {
         None => None,
         Some("") => {
@@ -135,10 +111,9 @@ pub(super) fn parse_sub_bullet_route_token(
             ));
         }
         // The strict task-section charset (no `+`) is enforced later, once
-        // the finished item shows whether this stays a sub-bullet capture or
-        // becomes a task toggle -- whose trailing name is a Pomodoro name and
-        // takes the wider Pomodoro charset instead. See
-        // `resolve_sub_bullet_kind`.
+        // the finished item shows whether this stays a sub-bullet capture.
+        // Attached task-type suffixes are masked by the shared item scanner
+        // before this token parser runs.
         Some(selector) if !is_pomodoro_selector_component(selector) => {
             return Err(SUB_BULLET_SECTION_ERROR.to_string());
         }
@@ -153,8 +128,6 @@ pub(super) fn parse_sub_bullet_route_token(
             route: Some(route.to_ascii_lowercase()),
             kind: CaptureKind::TaskToggle {
                 block_id: block_id.to_string(),
-                pomodoro_name: None,
-                pomodoro_name_is_literal: false,
                 intent: TaskToggleIntent::Toggle,
             },
         });

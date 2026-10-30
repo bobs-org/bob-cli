@@ -1,4 +1,4 @@
-//! Read-only task-type candidates for capture's `t:<type>` marker.
+//! Read-only task-type candidates for capture's `#<type>` marker.
 
 use std::{collections::BTreeSet, path::Path};
 
@@ -9,8 +9,8 @@ use super::{
 };
 use crate::native::{
     capture,
-    capture_language::selector_slug,
     capture_language::EditorItemParse,
+    capture_language::{resolve_accepted_type_name, selector_slug},
     env,
     plan_budget::normalize_component,
     pomodoro_themes::{self, preselect::MenuSuggestion, Catalog, ThemeRef},
@@ -85,7 +85,7 @@ fn build_inner(
         });
     // A solo whole-item link is itself the task target. The editor parser
     // reserves `dependency_target` for relationship owners, so also read the
-    // route and block id from the existing-link form here. An empty `t:` on
+    // route and block id from the existing-link form here. An empty `#` on
     // that link makes the editor mode incomplete while it reports the need.
     let whole_item_link = editor_item.filter(|item| {
         matches!(
@@ -94,7 +94,14 @@ fn build_inner(
                 | crate::native::capture_language::EditorMode::Incomplete
         ) && item.block_id.is_some()
     });
-    let subject = if existing.is_some() || whole_item_link.is_some() {
+    let whole_item_toggle = editor_item.filter(|item| {
+        item.mode == crate::native::capture_language::EditorMode::TaskToggle
+            && item.block_id.is_some()
+    });
+    let subject = if existing.is_some()
+        || whole_item_link.is_some()
+        || whole_item_toggle.is_some()
+    {
         "existing"
     } else {
         "new"
@@ -102,11 +109,15 @@ fn build_inner(
     let route: &str = existing
         .and_then(|target| target.route.as_deref())
         .or_else(|| whole_item_link.and_then(|item| item.route.as_deref()))
+        .or_else(|| whole_item_toggle.and_then(|item| item.route.as_deref()))
         .or_else(|| editor_item.and_then(|item| item.route.as_deref()))
         .unwrap_or(capture::inbox_route());
     let block_id = existing
         .and_then(|target| target.block_id.as_deref())
-        .or_else(|| whole_item_link.and_then(|item| item.block_id.as_deref()));
+        .or_else(|| whole_item_link.and_then(|item| item.block_id.as_deref()))
+        .or_else(|| {
+            whole_item_toggle.and_then(|item| item.block_id.as_deref())
+        });
     let suggestion = resolve_task_suggestion(
         bob_dir,
         route,
@@ -272,6 +283,9 @@ fn rows_in_empty_order(catalog: &Catalog, query: &str) -> Vec<TypeRow> {
             })
             .collect()
     };
+    if catalog.configured_themes().is_none() {
+        rows.retain(|row| !catalog.is_inventory(&row.key));
+    }
     if query.is_empty() {
         rows.retain(|row| !row.hidden);
     } else {
@@ -353,6 +367,9 @@ fn candidate(
     }
     let themes =
         vec![typed_theme.unwrap_or_else(|| catalog.theme_ref(&key, &name))];
+    let refused = resolve_accepted_type_name(catalog, &name, false)
+        .is_none()
+        .then_some("type_not_configured");
     TaskTypeCandidate {
         cursor_after: field.replacement.0 + replacement.len(),
         replacement,
@@ -370,15 +387,17 @@ fn candidate(
         effect,
         hidden,
         similar_to,
-        refused: None,
+        refused,
     }
 }
 
 fn replacement_for(name: &str, key: &str) -> String {
     let slug = selector_slug(name);
-    if normalize_component(&slug) == key {
-        format!("t:{slug}")
+    if slug.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && normalize_component(&slug) == key
+    {
+        format!("#{slug}")
     } else {
-        format!("t:\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+        format!("#\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
     }
 }

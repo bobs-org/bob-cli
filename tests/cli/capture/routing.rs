@@ -866,7 +866,7 @@ fn capture_bullet_marker_order_routes_equivalently() {
 }
 
 #[test]
-fn capture_legacy_standalone_marker_form_is_usage_error() {
+fn capture_hash_marker_is_not_a_legacy_route_section() {
     let temp = TempDir::new("bob-cli-capture-bullet-legacy");
     let vault = temp.path().join("vault");
     write_file(&vault.join("foo.md"), "## Ideas\n- existing\n");
@@ -875,25 +875,26 @@ fn capture_legacy_standalone_marker_form_is_usage_error() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
+        .arg("-f")
+        .arg("json")
         .arg("Some")
         .arg("bullet")
         .arg("#Ideas")
         .arg("@foo")
         .env("BOB_NOW", "2026-06-15")
         .output()
-        .expect("run legacy standalone marker capture");
+        .expect("run standalone hash type capture");
 
     assert_eq!(
         output.status.code(),
         Some(2),
-        "legacy standalone marker should be a usage error:\n{}",
+        "unknown hash type should be refused:\n{}",
         format_output(&output)
     );
-    assert!(
-        stderr(&output).contains("@foo#bar instead of #bar @foo"),
-        "expected legacy marker usage error:\n{}",
-        format_output(&output)
-    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["code"], "type_not_configured", "{json}");
+    assert!(json["error"].as_str().unwrap().contains("#Ideas"), "{json}");
     assert_eq!(
         fs::read_to_string(vault.join("foo.md")).expect("read foo"),
         "## Ideas\n- existing\n",

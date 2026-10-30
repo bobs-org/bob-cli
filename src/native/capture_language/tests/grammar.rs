@@ -108,33 +108,17 @@ fn a_bare_sub_bullet_marker_becomes_a_task_toggle() {
         vec![SpanKind::TaskToggleRoute, SpanKind::TaskToggleBlockId]
     );
 
-    let named = editor("@Cash+Goog-Exit#deep+work");
-    assert_eq!(named.mode, EditorMode::TaskToggle);
-    assert_eq!(named.section.as_deref(), Some("deep+work"));
-    assert!(named.diagnostics.is_empty());
-    assert_eq!(
-        span_kinds(&named),
-        vec![
-            SpanKind::TaskToggleRoute,
-            SpanKind::TaskToggleBlockId,
-            SpanKind::TaskTogglePomodoroName,
-        ]
-    );
+    let typed = editor("@Cash+Goog-Exit#fix");
+    assert_eq!(typed.mode, EditorMode::TaskToggle);
+    assert!(typed.section.is_none());
+    assert!(typed.diagnostics.is_empty());
+    assert!(span_kinds(&typed).contains(&SpanKind::TaskType));
 
-    // A trailing bare `#` on an otherwise-empty item is one keystroke
-    // from a toggle: stay `incomplete`, but ask for a Pomodoro name
-    // instead of a task section.
+    // An attached `#` on a marker-only toggle opens task-type completion.
     let incomplete = editor("@cash+goog-exit#");
     assert_eq!(incomplete.mode, EditorMode::Incomplete);
-    assert_eq!(incomplete.needs, vec![Need::PomodoroName]);
-    assert_eq!(
-        span_kinds(&incomplete),
-        vec![
-            SpanKind::TaskToggleRoute,
-            SpanKind::TaskToggleBlockId,
-            SpanKind::InteractivePlaceholder,
-        ]
-    );
+    assert_eq!(incomplete.needs, vec![Need::TaskType]);
+    assert!(span_kinds(&incomplete).contains(&SpanKind::TaskType));
 
     // The same trailing bare `#` keeps its task-section meaning once the
     // item has body text -- unaffected by the toggle rule.
@@ -142,11 +126,19 @@ fn a_bare_sub_bullet_marker_becomes_a_task_toggle() {
     assert_eq!(with_body.mode, EditorMode::Incomplete);
     assert_eq!(with_body.needs, vec![Need::TaskSection]);
 
+    let attached_with_body = editor("@cash+goog-exit#fix detail");
+    assert_eq!(attached_with_body.mode, EditorMode::SubBullet);
+    assert!(!span_kinds(&attached_with_body).contains(&SpanKind::TaskType));
+
     // Any authored child bullet disqualifies the item from toggling, so
     // it still just needs text.
     let with_child = editor("@cash+goog-exit\n- detail");
     assert_ne!(with_child.mode, EditorMode::TaskToggle);
     assert_eq!(with_child.mode, EditorMode::SubBullet);
+
+    let typed_with_child = editor("@cash+goog-exit#fix\n- detail");
+    assert_ne!(typed_with_child.mode, EditorMode::TaskToggle);
+    assert!(!span_kinds(&typed_with_child).contains(&SpanKind::TaskType));
 
     // A schedule/priority/clip marker on the item also disqualifies it.
     let with_schedule = editor("@cash+goog-exit s:2");
@@ -186,9 +178,7 @@ fn a_terminal_bang_on_a_marker_only_toggle_is_explicit_toggle() {
     assert_eq!(
         executed.kind,
         CaptureKind::TaskToggle {
-            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
-            pomodoro_name: None,
             intent: TaskToggleIntent::Toggle,
         }
     );
@@ -212,9 +202,7 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
     assert_eq!(
         plain.kind,
         CaptureKind::TaskToggle {
-            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
-            pomodoro_name: None,
             intent: TaskToggleIntent::EnsureNext,
         }
     );
@@ -225,37 +213,33 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
         vec![SpanKind::TaskToggleRoute, SpanKind::TaskToggleBlockId]
     );
 
-    let named = execute("@dev+id#deep+work").expect("named ensure-Next");
+    let typed = execute("@dev+id#fix").expect("typed ensure-Next");
     assert_eq!(
-        named.kind,
+        typed.kind,
         CaptureKind::TaskToggle {
-            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
-            pomodoro_name: Some("deep+work".to_string()),
             intent: TaskToggleIntent::EnsureNext,
         }
     );
-    assert_eq!(named.route.as_deref(), Some("dev"));
-    let named_editor = editor("@dev+id#deep+work");
-    assert_eq!(named_editor.mode, EditorMode::TaskToggle);
+    assert_eq!(typed.route.as_deref(), Some("dev"));
     assert_eq!(
-        span_kinds(&named_editor),
-        vec![
-            SpanKind::TaskToggleRoute,
-            SpanKind::TaskToggleBlockId,
-            SpanKind::TaskTogglePomodoroName,
-        ]
+        typed
+            .type_marker
+            .as_ref()
+            .map(|marker| marker.name.as_str()),
+        Some("fix")
     );
-    assert!(!span_kinds(&named_editor)
+    let typed_editor = editor("@dev+id#fix");
+    assert_eq!(typed_editor.mode, EditorMode::TaskToggle);
+    assert!(span_kinds(&typed_editor).contains(&SpanKind::TaskType));
+    assert!(!span_kinds(&typed_editor)
         .contains(&SpanKind::TaskToggleExplicitToggle));
 
     let bang = execute("@dev+id!").expect("explicit toggle");
     assert_eq!(
         bang.kind,
         CaptureKind::TaskToggle {
-            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
-            pomodoro_name: None,
             intent: TaskToggleIntent::Toggle,
         }
     );
@@ -275,7 +259,9 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
     let named = editor("@dev+id#now!");
     assert_eq!(codes(&named), vec!["unsupported_explicit_toggle"]);
     assert!(
-        named.diagnostics[0].message.contains("#<pomodoro>"),
+        named.diagnostics[0]
+            .message
+            .contains("cannot follow a task type"),
         "{}",
         named.diagnostics[0].message
     );
@@ -283,7 +269,9 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
     let hash_bang = editor("@dev+id#!");
     assert_eq!(codes(&hash_bang), vec!["unsupported_explicit_toggle"]);
     assert!(
-        hash_bang.diagnostics[0].message.contains("#<pomodoro>"),
+        hash_bang.diagnostics[0]
+            .message
+            .contains("cannot follow a task type"),
         "{}",
         hash_bang.diagnostics[0].message
     );
@@ -325,7 +313,10 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
     }
 
     let executed_named = execute("@dev+id#now!").expect_err("named");
-    assert!(executed_named.contains("#<pomodoro>"), "{executed_named}");
+    assert!(
+        executed_named.contains("explicit toggle `!` cannot follow a task type; write `@<route>+<block-id>! #<type>`"),
+        "{executed_named}"
+    );
     let executed_repeated = execute("@dev+id!!").expect_err("repeated");
     assert!(
         executed_repeated.contains("repeated"),
@@ -368,7 +359,6 @@ fn a_toggle_with_body_text_stays_a_sub_bullet_marker() {
                 | SpanKind::SubBulletSection
                 | SpanKind::TaskToggleRoute
                 | SpanKind::TaskToggleBlockId
-                | SpanKind::TaskTogglePomodoroName
         )),
         "{:?}",
         rejected.spans
@@ -1663,13 +1653,15 @@ fn execution_rejects_project_note_shape_errors() {
         project_note_misordered_error("cash", "goog-exit", "bugs")
     );
 
-    // A `#name` without the project-note `+` names the fix.
-    let error = execute("Finish it @cash^goog-exit#bugs")
-        .expect_err("name without plus");
-    assert_eq!(
-        error,
-        project_note_name_without_plus_error("cash", "goog-exit", "bugs")
-    );
+    // Without the project-note `+`, `#name` types the task with that block ID.
+    let typed_task = execute("Finish it @cash^goog-exit#bugs")
+        .expect("new task with a type marker");
+    assert_eq!(typed_task.body, "Finish it");
+    assert!(matches!(
+        typed_task.kind,
+        CaptureKind::TaskWithBlockId { ref block_id } if block_id == "goog-exit"
+    ));
+    assert_eq!(typed_task.type_marker.as_ref().unwrap().name, "bugs");
 
     // An empty name asks for one.
     let error = execute("Finish it @cash^goog-exit+#")
@@ -2045,48 +2037,45 @@ fn execution_rejects_route_less_retired_project_note_markers() {
 }
 
 #[test]
-fn execution_rejects_a_trailing_now_tag_like_any_other_tag() {
-    // `#now` is retired: after the route it is the ordinary
-    // trailing-tag error, and before the route it is the ordinary
-    // pre-route-tag error, exactly like any other `#tag`.
+fn execution_parses_trailing_hash_slugs_as_task_types() {
     for raw in [
         "Fix it @sase^fix-it #now",
-        "Fix it @sase:fix-it #now",
         "Fix it @sase s:3 #now",
         "Fix it #now @sase",
-        "@sase:fix-it #now",
         "@sase+fix-it #now",
         "@sase+fix-it! #now",
-        "#now",
     ] {
-        let error = execute(raw).expect_err(&format!("{raw} stays rejected"));
-        assert!(error.contains("bullet section markers"), "{raw}: {error}");
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert_eq!(parsed.type_marker.as_ref().unwrap().name, "now", "{raw}");
     }
 
-    // Whole-item operators and links with a trailing tag still fail, but
-    // an inline `x #now` entry is literal text and stays valid.
-    for raw in ["^sase:fix-it #now", "=3 #now", "+5 #now"] {
-        execute(raw).expect_err(&format!("{raw} stays rejected"));
-    }
-    execute("x #now").expect("x #now stays valid");
+    assert!(execute("#now").unwrap_err().contains("needs a task"));
+    // Pomodoro name selectors keep their own hash ownership.
+    assert_eq!(
+        execute("Fix it @sase:fix-it#bugs").unwrap().type_marker,
+        None
+    );
 }
 
 #[test]
-fn execution_keeps_other_trailing_hash_tags_rejected() {
-    // Every trailing `#tag` keeps today's legacy-marker error, and
-    // matching stays case-sensitive and whole-token.
-    for raw in [
-        "Some note #bar",
-        "Some note #bar @foo",
-        "Some note @foo #bar",
-        "Some note #now",
-        "Some note #nowadays",
-        "Some note #now/x",
-        "Some note #NOW",
+fn execution_claims_trailing_hash_types_but_leaves_midline_hash_text() {
+    for (raw, name) in [
+        ("Some note #bar", "bar"),
+        ("Some note #bar @foo", "bar"),
+        ("Some note @foo #bar", "bar"),
+        ("Some note #now", "now"),
+        ("Some note #nowadays", "nowadays"),
+        ("Some note #NOW", "NOW"),
     ] {
-        let error = execute(raw).expect_err(&format!("{raw} stays rejected"));
-        assert!(error.contains("bullet section markers"), "{raw}: {error}");
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert_eq!(parsed.body, "Some note", "{raw}");
+        assert_eq!(parsed.type_marker.as_ref().unwrap().name, name, "{raw}");
     }
+    let invalid =
+        execute("Some note #now/x").expect_err("malformed type token");
+    assert!(invalid.contains("is not a task type"), "{invalid}");
 
     // A `#now` mid-body stays literal task text.
     let parsed = execute("Some #now note").expect("middle tag");
@@ -2094,15 +2083,16 @@ fn execution_keeps_other_trailing_hash_tags_rejected() {
     assert_eq!(parsed.kind, CaptureKind::Task);
 
     // With a forced route every `@...` token stays literal, while a
-    // trailing `#now` is rejected like any other trailing `#tag`.
+    // trailing `#now` remains a type marker.
     let forced = parse_capture_text_with_clip_control(
         "Fix #now",
         Some("work"),
         None,
         &CaptureParseOptions::routing_off(true),
     )
-    .expect_err("forced route trailing tag");
-    assert!(forced.contains("bullet section markers"), "{forced}");
+    .expect("forced route with type marker");
+    assert_eq!(forced.route.as_deref(), Some("work"));
+    assert_eq!(forced.type_marker.as_ref().unwrap().name, "now");
     let parsed = parse_capture_text_with_clip_control(
         "Fix #now note",
         Some("work"),
@@ -2466,18 +2456,21 @@ fn relationship_only_owner_refuses_text_extras() {
 }
 
 #[test]
-fn suffixed_owners_keep_must_be_bare_refusals() {
+fn typed_existing_task_owner_keeps_dependency_behavior() {
     let plus_named = "@body+excercise#bugs &foo:bar";
-    let plus_expected =
-        invalid_relation_target_error("@body+excercise#bugs", b'&');
-    assert_eq!(execute(plus_named).expect_err(plus_named), plus_expected);
-    let parsed = editor(plus_named);
+    let typed_owner = execute(plus_named).expect("typed relationship owner");
+    assert!(matches!(typed_owner.kind, CaptureKind::TaskToggle { .. }));
+    assert_eq!(typed_owner.type_marker.as_ref().unwrap().name, "bugs");
     assert_eq!(
-        codes(&parsed),
-        vec!["invalid_dependency_target"],
-        "{plus_named}"
+        typed_owner
+            .dependency_target
+            .as_ref()
+            .map(|target| &target.kind),
+        Some(&ParsedDependencyTargetKind::ExistingTask)
     );
-    assert_eq!(parsed.diagnostics[0].message, plus_expected);
+    let parsed = editor(plus_named);
+    assert_eq!(parsed.mode, EditorMode::TaskDependency, "{plus_named}");
+    assert!(codes(&parsed).is_empty(), "{plus_named}");
 
     let bang = "@body+excercise! *job:cleanup";
     let bang_expected = invalid_relation_target_error("@body+excercise!", b'*');

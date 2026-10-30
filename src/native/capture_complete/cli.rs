@@ -211,13 +211,14 @@ or `=x[<N>][*<P>][!<M>][~<K>][@<N>]` offers nothing. A whole-item `!` token comp
 completable catalog, today rows first and ranked by the query with today matches on top; \
 the replacement covers the whole `!` token, sigil included, and the response carries a \
 vault-scoped `picker` descriptor plus the `!`/`[` continuation keys on a bare `!`. \
-A marker-position `t:<type>` token at either line edge completes `task_type`: the \
+A marker-position `#<type>` token at either line edge completes `task_type`: the \
 replacement covers the whole marker, `query` is the decoded type name, and \
 `subject` says `new` or `existing`. Configured rows follow config order for \
 an empty query; hidden types remain available on exact matches. Candidates \
 carry Bob's theme refs, current and inherited annotations, and a `set`, \
-`clear`, or `keep` effect. A creatable unknown name adds a typed row with \
-near-name suggestions. The response includes the subject's \
+`clear`, or `keep` effect. An unconfigured typed name appears as a refused \
+candidate with `type_not_configured` and near-name suggestions; shell completion \
+never inserts it. The response includes the subject's \
 `theme_suggestion`, and zsh groups the rows as `task types`. \
 A solo leading `:` token \
 completes `task_link`: every linkable open task (Ready, Blocked, Next, In \

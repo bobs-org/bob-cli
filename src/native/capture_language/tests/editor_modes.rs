@@ -784,7 +784,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "@Cash+Goog-Exit",
         "@Cash+Goog-Exit!",
         "@Cash+Goog-Exit#bugs",
-        "@Cash+Goog-Exit#deep+work",
+        "@Cash+Goog-Exit#deep-work",
         "Some note @foo#bar",
         "@foo#bar Some note",
         "Some note @foo#",
@@ -928,19 +928,6 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         }
         if let CaptureKind::Bullet { section_prefix, .. } = &executed.kind {
             assert_eq!(parse.section, *section_prefix, "{raw}");
-        }
-        if let CaptureKind::TaskToggle {
-            block_id,
-            pomodoro_name,
-            ..
-        } = &executed.kind
-        {
-            assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
-            assert_eq!(
-                parse.section.as_deref(),
-                pomodoro_name.as_deref(),
-                "{raw}"
-            );
         }
         if let CaptureKind::ProjectNote {
             block_id,
@@ -1626,12 +1613,14 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
     assert_eq!(declared.items[1].needs, vec![Need::PomodoroName]);
     assert!(declared.items[1].route.is_none());
     assert!(declared.items[1].pomodoro_start.is_some());
-    // Unnamed lookalikes stay ordinary tasks.
-    for raw in ["= #foo", "Plan =#foo"] {
-        let parse = editor(raw);
-        assert_eq!(parse.mode, EditorMode::Task, "{raw}");
-        assert!(parse.pomodoro_start.is_none(), "{raw}");
-    }
+    // A separated marker belongs to the whole-item start and is refused;
+    // the attached `=#NAME` spelling remains a named Pomodoro start.
+    let separated = editor("= #foo");
+    assert_eq!(separated.mode, EditorMode::PomodoroStart);
+    assert_eq!(codes(&separated), vec!["type_marker_not_applicable"]);
+    let attached = editor("Plan =#foo");
+    assert_eq!(attached.mode, EditorMode::Task);
+    assert!(attached.pomodoro_start.is_none());
 }
 
 #[test]

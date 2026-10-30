@@ -430,7 +430,7 @@ pub(super) fn parse_capture_item<'a>(
     if markers.len() > 1 {
         return Err(CaptureItemParseError::coded(
             "duplicate_capture_marker",
-            duplicate_marker_error("type marker (t:<type>)"),
+            duplicate_marker_error("type marker (#<type>)"),
         ));
     }
     let Some(occurrence) = markers.first() else {
@@ -532,7 +532,7 @@ fn type_marker_only_error(
     if markers.len() > 1 {
         return CaptureItemParseError::coded(
             "duplicate_capture_marker",
-            duplicate_marker_error("type marker (t:<type>)"),
+            duplicate_marker_error("type marker (#<type>)"),
         );
     }
     match markers.first().copied() {
@@ -1298,7 +1298,7 @@ pub(super) fn execution_item_dependencies(
     Ok((execution_dependencies(found), target))
 }
 
-/// Decide whether a resolved `@route+block-id[#name]` marker stays an
+/// Decide whether a resolved `@route+block-id[#<type>]` marker stays an
 /// ordinary sub-bullet capture or becomes a task toggle, once the finished
 /// item -- not just the marker's own token -- is known. A toggle needs an
 /// empty parent body, no authored children, and no other item-wide marker;
@@ -1338,10 +1338,6 @@ pub(super) fn resolve_sub_bullet_kind(
     if sub_bullets_is_empty && no_other_item_markers {
         return Ok(CaptureKind::TaskToggle {
             block_id,
-            pomodoro_name: section.map(|selector| selector.text),
-            // Plain `#name` sections are slug-resolved; `#"…"` literals
-            // never reach here (they resolve in `parse_sub_bullet_route_token`).
-            pomodoro_name_is_literal: false,
             intent: TaskToggleIntent::EnsureNext,
         });
     }

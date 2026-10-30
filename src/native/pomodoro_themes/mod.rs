@@ -295,6 +295,10 @@ impl Catalog {
         self.prefs.hidden(key)
     }
 
+    pub(crate) fn is_inventory(&self, key: &str) -> bool {
+        self.inventory.contains(key)
+    }
+
     pub(crate) fn is_exempt(&self, key: &str) -> bool {
         self.exempt.contains(key)
     }

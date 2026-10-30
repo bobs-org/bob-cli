@@ -633,9 +633,8 @@ fn rx12_sub_bullet_prints_children_then_relationship() {
 
 // RX13
 #[test]
-fn rx13_suffixed_owners_keep_must_be_bare() {
+fn rx13_explicit_and_project_owners_keep_must_be_bare() {
     for draft in [
-        "@body+excercise#bugs &foo:bar",
         "@body+excercise! *job:cleanup",
         "^body:excercise=x &foo:bar",
     ] {

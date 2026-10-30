@@ -401,7 +401,7 @@ fn capture_strict_mode_refuses_new_theme_past_cap_atomically() {
     let config = temp.path().join("config.yml");
     write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
     write_file(&day_file, three_theme_day());
-    write_file(&config, "plan:\n  strict: true\n");
+    write_file(&config, "plan:\n  strict: true\ntypes:\n  NEWT: magenta\n");
     let before_day = fs::read_to_string(&day_file).expect("read day");
     let before_target = fs::read_to_string(&target).expect("read target");
 
@@ -441,7 +441,7 @@ fn capture_strict_mode_never_refuses_session_starts() {
     let config = temp.path().join("config.yml");
     write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
     write_file(&day_file, three_theme_day());
-    write_file(&config, "plan:\n  strict: true\n");
+    write_file(&config, "plan:\n  strict: true\ntypes:\n  NEWT: magenta\n");
 
     // A start that creates a fourth theme past the cap still succeeds.
     let output = capture_json(
@@ -767,7 +767,7 @@ fn capture_strict_mode_refuses_toggle_path() {
             "## Later\n",
         ),
     );
-    write_file(&config, "plan:\n  strict: true\n");
+    write_file(&config, "plan:\n  strict: true\ntypes:\n  NEWT: magenta\n");
     write_toggle_task_settings(&vault);
 
     let output =
@@ -779,7 +779,7 @@ fn capture_strict_mode_refuses_toggle_path() {
         format_output(&output)
     );
     let json = parse_json(&output);
-    assert_eq!(json["code"], "plan_theme_cap_exceeded", "{json}");
+    assert_eq!(json["code"], "strict_cap", "{json}");
 }
 
 #[test]
@@ -835,7 +835,7 @@ fn capture_parse_link_close_with_drop_reports_close() {
 }
 
 #[test]
-fn capture_trailing_now_tag_fails_like_any_other_tag() {
+fn capture_unknown_now_type_refuses_without_writing() {
     let temp = TempDir::new("bob-cli-capture-now-e2e");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -847,8 +847,8 @@ fn capture_trailing_now_tag_fails_like_any_other_tag() {
         r##"{"globalFilter":"#task","statusSettings":{"coreStatuses":[{"symbol":" ","name":"Todo","type":"TODO"},{"symbol":"x","name":"Done","type":"DONE"}],"customStatuses":[]}}"##,
     );
 
-    // `#now` is retired: a trailing tag is the ordinary trailing-tag
-    // error, like any other `#tag`.
+    // `#now` has no special tag behavior; as a hash type it must be in the
+    // configured vocabulary or Pomodoro history.
     let output = capture_json(
         &vault,
         &day_file,
@@ -857,8 +857,9 @@ fn capture_trailing_now_tag_fails_like_any_other_tag() {
     );
     assert_ne!(output.status.code(), Some(0), "{}", format_output(&output));
     let json = parse_json(&output);
+    assert_eq!(json["code"], "type_not_configured", "{json}");
     let error = json["error"].as_str().expect("error message");
-    assert!(error.contains("bullet section markers"), "{error}");
+    assert!(error.contains("`#now`"), "{error}");
 
     // The same capture without the tag still succeeds.
     let output = capture_json(

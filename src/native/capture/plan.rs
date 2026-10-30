@@ -858,13 +858,7 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
         );
     }
-    if let CaptureKind::TaskToggle {
-        block_id,
-        pomodoro_name,
-        pomodoro_name_is_literal,
-        intent,
-    } = &parsed.kind
-    {
+    if let CaptureKind::TaskToggle { block_id, intent } = &parsed.kind {
         reject_task_toggle_conflicts(&parsed, request)?;
         let route = parsed.route.as_deref().ok_or_else(|| {
             CaptureError::io(
@@ -874,8 +868,8 @@ pub(super) fn plan_capture_item(
         let created = date_string(today);
         let relative_target = relative_target(Some(route));
         let target = request.bob_dir.join(&relative_target);
-        // Explicit `t:` retypes before the toggle so bare placement uses
-        // the new type; the marker is the authority over any named retype.
+        // Explicit `#type` retypes before the toggle so Ensure Next places
+        // the Task Link by the resulting type.
         let marker_retype = if let Some(marker) = parsed.type_marker.clone() {
             let original = read_staged_task_line(
                 planner,
@@ -903,8 +897,6 @@ pub(super) fn plan_capture_item(
             &target,
             route,
             block_id,
-            pomodoro_name.as_deref(),
-            *pomodoro_name_is_literal,
             *intent,
             today,
             warnings,
@@ -913,52 +905,17 @@ pub(super) fn plan_capture_item(
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
         let has_marker = marker_retype.is_some();
-        let d6_theme = if has_marker {
-            None
-        } else if link_guard.is_none()
-            && *intent == TaskToggleIntent::EnsureNext
-            && pomodoro_name.is_some()
-        {
-            let toggle = note_plan.toggle.as_ref().ok_or_else(|| {
-                CaptureError::io(
-                    "task toggle capture invariant failed: missing toggle details",
-                )
-            })?;
-            task_theme_context
-                .apply_existing_task(
-                    planner,
-                    &target,
-                    route,
-                    block_id,
-                    &toggle.previous_task_line,
-                    toggle.pomodoro_name.as_deref(),
-                    pomodoro_name.as_deref(),
-                    warnings,
-                )?
-                .map(|applied| {
-                    let task_line = applied.task_line.clone();
-                    note_plan
-                        .toggle
-                        .as_mut()
-                        .expect("toggle details were checked above")
-                        .task_line = task_line;
-                    applied.summary
-                })
-        } else {
-            None
-        };
+        let d6_theme = None;
         let toggle = note_plan.toggle.as_ref().ok_or_else(|| {
             CaptureError::io(
                 "task toggle capture invariant failed: missing toggle details",
             )
         })?;
         let link_consumed = link_guard.is_some();
-        // Ensure Next already placed a bare link by type; a named
-        // selector still needs agreement + D8 when the dest disagrees.
-        let skip_relocation = *intent == TaskToggleIntent::EnsureNext
-            && link_guard.is_none()
-            && pomodoro_name.is_none();
-        // An explicit `t:` retype reports its own theme and ledger move;
+        // Ensure Next places the link by the task's effective type.
+        let skip_relocation =
+            *intent == TaskToggleIntent::EnsureNext && link_guard.is_none();
+        // An explicit `#type` retype reports its own theme and ledger move;
         // the original line (before the marker) is the previous task line.
         let (task_theme, previous_task_line) = if has_marker {
             (None, Some(toggle.previous_task_line.clone()))
@@ -1066,7 +1023,7 @@ pub(super) fn plan_capture_item(
                 block_id,
                 applied,
                 original,
-                pomodoro_name.as_deref(),
+                None,
                 &marker.name,
                 marker.literal,
                 skip_relocation,
@@ -1111,7 +1068,7 @@ pub(super) fn plan_capture_item(
             Some(name) => capture_task_toggle::PomodoroLinkTarget::Named(name),
             None => capture_task_toggle::PomodoroLinkTarget::Implicit,
         };
-        // Explicit `t:` retypes before the link so bare placement uses the
+        // Explicit `#type` retypes before the link so bare placement uses the
         // new type; the marker replaces the named-capture retype.
         let marker_retype = if let Some(marker) = parsed.type_marker.clone() {
             let original = read_staged_task_line(
@@ -1390,7 +1347,7 @@ pub(super) fn plan_capture_item(
             (relative_target, target)
         }
     };
-    // Stage an explicit `t:` marker on the new-task line before placement.
+    // Stage an explicit `#type` marker on the new-task line before placement.
     // The marker is the authority: its field is written now, and the later
     // named-retype path must not overwrite it. Existing-target markers
     // were already refused in `item.rs`; only new tasks reach here.
@@ -2011,7 +1968,7 @@ pub(super) fn plan_capture_item(
             details.parent_line = task.line_index + 1;
         }
     }
-    // An explicit `t:` marker is the authority: its staged field stands,
+    // An explicit `#type` marker is the authority: its staged field stands,
     // and the named-retype path below must not overwrite or clear it.
     let task_theme = if let Some(summary) = marker_theme {
         // The staged line already carries the marker field through
@@ -2401,7 +2358,7 @@ fn close_star_marker(parsed: &ParsedCaptureText) -> String {
     }
 }
 
-/// Read one staged task line for `t:` retype previous tracking: the
+/// Read one staged task line for `#type` retype previous tracking: the
 /// original line before the marker stages its field edit.
 fn read_staged_task_line(
     planner: &mut CaptureBatchPlanner,

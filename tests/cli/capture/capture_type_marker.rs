@@ -1,4 +1,4 @@
-//! `t:<type>` marker writes for newly captured tasks.
+//! `#<type>` marker writes for newly captured tasks.
 //!
 //! Covers inbox, routed, explicit block IDs, `-R` URL tasks, templates,
 //! Pomodoro-linked tasks, inherited suggestions, set/cleared/kept,
@@ -141,7 +141,7 @@ fn inbox_marker_sets_the_explicit_type() {
         &vault,
         &day_file,
         &config,
-        &["Fix", "the", "parser", "t:fix"],
+        &["Fix", "the", "parser", "#fix"],
         true,
     );
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
@@ -167,7 +167,7 @@ fn inbox_marker_inherits_from_the_actual_mac_inbox_note() {
         "---\ntype: \"[[area]]\"\ntask_type: WRITE\n---\n\n## Tasks\n",
     );
     let (_, json) =
-        capture_json(&vault, &day_file, &config, &["Inbox task t:fix"], true);
+        capture_json(&vault, &day_file, &config, &["Inbox task #fix"], true);
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
     assert_eq!(
         json["task_theme"]["inherited"]["theme"]["name"], "WRITE",
@@ -197,7 +197,7 @@ fn routed_marker_reports_the_inherited_suggestion() {
         &vault,
         &day_file,
         &config,
-        &["Fix", "the", "parser", "t:fix", "@sase"],
+        &["Fix", "the", "parser", "#fix", "@sase"],
         false,
     );
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
@@ -226,7 +226,7 @@ fn matching_inherited_type_reports_kept_without_a_field() {
         &vault,
         &day_file,
         &config,
-        &["Write", "docs", "t:write", "@sase"],
+        &["Write", "docs", "#write", "@sase"],
         false,
     );
     assert_eq!(json["task_theme"]["action"], "kept", "{json}");
@@ -249,7 +249,7 @@ fn explicit_kept_field_uses_this_task_as_its_human_label() {
         &vault,
         &day_file,
         &config,
-        &["Fix it [type:: FIX] t:fix @sase"],
+        &["Fix it [type:: FIX] #fix @sase"],
         true,
     );
     assert_eq!(json["task_theme"]["action"], "kept", "{json}");
@@ -264,7 +264,7 @@ fn explicit_kept_field_uses_this_task_as_its_human_label() {
         .arg(&vault)
         .arg("--no-clip")
         .arg("-d")
-        .args(["Fix", "it", "[type::", "FIX]", "t:fix", "@sase"])
+        .args(["Fix", "it", "[type::", "FIX]", "#fix", "@sase"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -288,12 +288,12 @@ fn authored_exception_matching_inherited_type_is_cleared() {
         "## Pomodoros\n- [ ] () — FIX\n",
     );
     // Body authors `[type:: WRITE]`, I is WRITE from sase, marker is
-    // `t:write`: X == I with an authored exception means cleared.
+    // `#write`: X == I with an authored exception means cleared.
     let (_, json) = capture_json(
         &vault,
         &day_file,
         &config,
-        &["Write", "docs", "[type::", "WRITE]", "t:write", "@sase"],
+        &["Write", "docs", "[type::", "WRITE]", "#write", "@sase"],
         true,
     );
     assert_eq!(json["task_theme"]["action"], "cleared", "{json}");
@@ -304,51 +304,60 @@ fn authored_exception_matching_inherited_type_is_cleared() {
 }
 
 #[test]
-fn unknown_marker_writes_canonical_spelling_with_a_warning() {
-    let (_temp, vault, day_file, config) = fixture(
+fn unknown_marker_refuses_transactionally_even_in_dry_run() {
+    let (temp, vault, day_file, config) = fixture(
         "bob-capture-type-marker-unknown",
         &project(Some("WRITE"), ""),
         "## Pomodoros\n- [ ] () — FIX\n",
     );
-    let (_, json) = capture_json(
-        &vault,
-        &day_file,
-        &config,
-        &["Fix", "it", "t:snack", "@sase"],
-        true,
-    );
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "SNACK", "{json}");
-    // Structured warning is present.
-    let warnings = json["warnings"].as_array().cloned().unwrap_or_default();
-    assert!(
-        warnings
-            .iter()
-            .any(|warning| warning["code"] == "theme_not_configured"),
-        "{json}"
-    );
+    let before = snapshot_files(temp.path());
+    for args in [
+        vec!["Fix it #snack @sase"],
+        vec!["-d", "Fix it #snack @sase"],
+    ] {
+        let (_, json) = capture_error_json(&vault, &day_file, &config, &args);
+        assert_eq!(json["code"], "type_not_configured", "{json}");
+        assert!(json["error"].as_str().unwrap().contains("#snack"), "{json}");
+        assert_eq!(snapshot_files(temp.path()), before);
+    }
 }
 
 #[test]
-fn hyphenated_slug_writes_canonical_spelling_when_unknown() {
+fn unknown_hyphenated_slug_is_refused() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-capture-type-marker-slug",
         &project(Some("WRITE"), ""),
         "## Pomodoros\n- [ ] () — FIX\n",
     );
-    // `deep-work` has no configured or catalog entry, so the slug→space
-    // fallback finds nothing and the canonical `DEEP-WORK` spelling writes
-    // with an unconfigured warning. Prefixes never resolve.
-    let (_, json) = capture_json(
+    // Prefixes and names outside the configured vocabulary never resolve.
+    let (_, json) = capture_error_json(
         &vault,
         &day_file,
         &config,
-        &["Deep", "work", "t:deep-work", "@sase"],
-        true,
+        &["Deep work #deep-work @sase"],
     );
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "DEEP-WORK", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["key"], "deep-work", "{json}");
+    assert_eq!(json["code"], "type_not_configured", "{json}");
+}
+
+#[test]
+fn vocabulary_is_authoritative_and_history_is_the_fallback() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-type-marker-acceptance",
+        &project(Some("WRITE"), ""),
+        "## Pomodoros\n- [ ] () — FIX\n- [ ] () — SNACK\n",
+    );
+    let (_, configured_rejection) =
+        capture_error_json(&vault, &day_file, &config, &["Do work #snack"]);
+    assert_eq!(configured_rejection["code"], "type_not_configured");
+
+    write_file(&config, "plan:\n  max_themes: 30\n");
+    let (_, historical) =
+        capture_json(&vault, &day_file, &config, &["Do work #snack"], true);
+    assert_eq!(historical["task_theme"]["theme"]["name"], "SNACK");
+
+    let (_, inventory) =
+        capture_error_json(&vault, &day_file, &config, &["Do work #later"]);
+    assert_eq!(inventory["code"], "type_not_configured");
 }
 
 #[test]
@@ -363,7 +372,7 @@ fn named_pomodoro_conflict_refuses_before_any_write() {
         &vault,
         &day_file,
         &config,
-        &["First @sase:first-1#BUILD t:build\n\nSecond @sase:second-1#BUILD t:fix"],
+        &["First @sase:first-1#BUILD #build\n\nSecond @sase:second-1#BUILD #fix"],
     );
     assert_eq!(json["ok"], false, "{json}");
     assert_eq!(json["code"], "type_marker_conflict", "{json}");
@@ -387,7 +396,7 @@ fn named_pomodoro_component_match_accepts_the_explicit_pick() {
         &vault,
         &day_file,
         &config,
-        &["Fix", "it", "@sase:agree-1#FIX", "t:fix"],
+        &["Fix", "it", "@sase:agree-1#FIX", "#fix"],
         true,
     );
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
@@ -405,7 +414,7 @@ fn named_destination_prefixes_are_checked_after_resolution() {
         &vault,
         &day_file,
         &config,
-        &["Fix it @sase:prefix-1#bui t:fix"],
+        &["Fix it @sase:prefix-1#bui #fix"],
     );
     assert_eq!(json["code"], "type_marker_conflict", "{json}");
     assert!(json["error"].as_str().unwrap().contains("Pomodoro BUILD"));
@@ -418,12 +427,12 @@ fn named_containers_and_composites_accept_a_matching_type() {
         (
             "container",
             "## Pomodoros\n- [ ] () — FOCUS\n",
-            "Fix it @sase:container-1#FOCUS t:fix",
+            "Fix it @sase:container-1#FOCUS #fix",
         ),
         (
             "composite",
             "## Pomodoros\n- [ ] () — BUILD + FIX\n",
-            "Fix it @sase:composite-1#BUILD+FIX t:fix",
+            "Fix it @sase:composite-1#BUILD+FIX #fix",
         ),
     ] {
         let (_temp, vault, day_file, config) = fixture(
@@ -456,7 +465,7 @@ fn exact_block_ids_and_template_rows_keep_the_marker() {
         &vault,
         &day_file,
         &config,
-        &["Task with id @sase^typed-id t:fix"],
+        &["Task with id @sase^typed-id#fix"],
         true,
     );
     assert_eq!(explicit_id["block_id"], "typed-id", "{explicit_id}");
@@ -472,7 +481,7 @@ fn exact_block_ids_and_template_rows_keep_the_marker() {
         &vault,
         &day_file,
         &config,
-        &["@@template:\nTask {0} t:fix\n\nparser\n"],
+        &["@@template:\nTask {0} #fix\n\nparser\n"],
         true,
     );
     assert_eq!(template["template"]["row_count"], 1, "{template}");
@@ -495,7 +504,7 @@ fn root_and_reading_defaults_precede_the_note_default() {
         &config,
         concat!(
             "plan:\n  max_themes: 30\n  reading_type: READ\n",
-            "themes:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n  READ: green\n",
+            "types:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n  READ: green\n",
         ),
     );
 
@@ -503,7 +512,7 @@ fn root_and_reading_defaults_precede_the_note_default() {
         &vault,
         &day_file,
         &config,
-        &["Follow root [root:: area] t:fix @sase"],
+        &["Follow root [root:: area] #fix @sase"],
         true,
     );
     assert_eq!(rooted["task_theme"]["action"], "kept", "{rooted}");
@@ -520,16 +529,16 @@ fn root_and_reading_defaults_precede_the_note_default() {
         &vault,
         &day_file,
         &config,
-        &["Read article #ref @sase:reading-1 t:read"],
+        &["Read article \\#ref @sase:reading-1"],
         true,
     );
-    assert_eq!(reading["task_theme"]["action"], "kept", "{reading}");
+    assert!(reading.get("task_theme").is_none(), "{reading}");
     assert_eq!(
-        reading["task_theme"]["inherited"]["theme"]["name"], "READ",
+        reading["pomodoro_link_destination"]["type"]["theme"]["name"], "READ",
         "{reading}"
     );
     assert_eq!(
-        reading["task_theme"]["inherited"]["source"], "reading",
+        reading["pomodoro_link_destination"]["type"]["source"], "reading",
         "{reading}"
     );
 }
@@ -546,21 +555,21 @@ fn global_and_forced_routes_preserve_new_task_applicability() {
         &vault,
         &day_file,
         &config,
-        &["@@sase\n\nGlobal task t:fix"],
+        &["@@sase\n\nGlobal task #fix"],
         true,
     );
     assert_eq!(global["task_theme"]["theme"]["name"], "FIX", "{global}");
 
     for args in [
-        "@@sase+parent\n\nA child t:fix",
-        "-r sase --task parent A child t:fix",
+        "@@sase+parent\n\nA child #fix",
+        "-r sase --task parent A child #fix",
     ] {
         let (_, error) = if args.starts_with("-r ") {
             capture_error_json(
                 &vault,
                 &day_file,
                 &config,
-                &["-r", "sase", "--task", "parent", "A child t:fix"],
+                &["-r", "sase", "--task", "parent", "A child #fix"],
             )
         } else {
             capture_error_json(&vault, &day_file, &config, &[args])
@@ -580,14 +589,14 @@ fn typed_link_uses_the_written_type_before_bare_pomodoro_placement() {
         &vault,
         &day_file,
         &config,
-        &["Fix it @sase:typed-1 t:fix"],
+        &["Fix it @sase:typed-1 #fix"],
         true,
     );
     let (_, written) = capture_json(
         &vault,
         &day_file,
         &config,
-        &["Fix it @sase:typed-1 t:fix"],
+        &["Fix it @sase:typed-1 #fix"],
         false,
     );
     assert_eq!(dry["pomodoro_link_destination"]["name"], "FIX", "{dry}");
@@ -615,7 +624,7 @@ fn blocked_new_tasks_keep_their_explicit_type_without_a_link() {
         &vault,
         &day_file,
         &config,
-        &["Future task @sase:future-1#FIX s:5 t:fix"],
+        &["Future task @sase:future-1#FIX s:5 #fix"],
         true,
     );
     assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
@@ -641,7 +650,7 @@ fn task_modifiers_do_not_receive_the_subject_type() {
         &vault,
         &day_file,
         &config,
-        &["Child task @sase:typed-child t:fix &sase:parent"],
+        &["Child task @sase:typed-child #fix &sase:parent"],
         true,
     );
     assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
@@ -666,15 +675,12 @@ fn marker_errors_keep_their_json_codes() {
         "## Pomodoros\n- [ ] () — FIX\n",
     );
     for (draft, code) in [
-        ("Fix it t:\"BUILD + FIX\"", "invalid_type_marker"),
-        ("Fix it t:fix t:write", "duplicate_capture_marker"),
-        ("t:fix", "type_marker_needs_task"),
+        ("Fix it #\"BUILD + FIX\"", "invalid_type_marker"),
+        ("Fix it #fix #write", "duplicate_capture_marker"),
+        ("#fix", "type_marker_needs_task"),
+        ("https://example.test/a\n#fix", "type_marker_not_applicable"),
         (
-            "https://example.test/a\nt:fix",
-            "type_marker_not_applicable",
-        ),
-        (
-            "https://example.test/a\n- t:fix",
+            "https://example.test/a\n- #fix",
             "type_marker_not_applicable",
         ),
     ] {
@@ -682,6 +688,28 @@ fn marker_errors_keep_their_json_codes() {
             capture_error_json(&vault, &day_file, &config, &[draft]);
         assert_eq!(json["code"], code, "{draft:?}: {json}");
     }
+}
+
+#[test]
+fn t_colon_spelling_stays_plain_task_text() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-type-marker-retired-t",
+        &project(Some("WRITE"), ""),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["Fix the parser t:snack"],
+        true,
+    );
+    assert_eq!(json["text"], "Fix the parser t:snack", "{json}");
+    assert!(json.get("task_theme").is_none(), "{json}");
+    assert!(
+        !json["task_line"].as_str().unwrap().contains("[type::"),
+        "{json}"
+    );
 }
 
 #[test]
@@ -695,7 +723,7 @@ fn url_task_override_keeps_the_marker_as_a_new_task() {
         &vault,
         &day_file,
         &config,
-        &["-R", "https://example.test/a\nt:fix"],
+        &["-R", "https://example.test/a\n#fix"],
         true,
     );
     assert_eq!(json["kind"], "task", "{json}");
@@ -717,7 +745,7 @@ fn existing_target_marker_is_refused_honestly() {
         .arg("--no-clip")
         .arg("-f")
         .arg("json")
-        .args(["^sase:missing-x", "t:fix"])
+        .args(["^sase:missing-x", "#fix"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
@@ -747,14 +775,14 @@ fn dry_run_and_real_run_agree_on_marker_writes() {
         &vault,
         &day_file,
         &config,
-        &["Fix", "the", "parser", "t:fix", "@sase:dry-1"],
+        &["Fix", "the", "parser", "#fix", "@sase:dry-1"],
         true,
     );
     let (_, written) = capture_json(
         &vault,
         &day_file,
         &config,
-        &["Fix", "the", "parser", "t:fix", "@sase:dry-1"],
+        &["Fix", "the", "parser", "#fix", "@sase:dry-1"],
         false,
     );
     assert_eq!(
@@ -777,7 +805,7 @@ fn kept_marker_renders_the_human_type_row() {
         .arg(&vault)
         .arg("--no-clip")
         .arg("-d")
-        .args(["Write", "docs", "t:write", "@sase"])
+        .args(["Write", "docs", "#write", "@sase"])
         .env("BOB_DIR", &vault)
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)

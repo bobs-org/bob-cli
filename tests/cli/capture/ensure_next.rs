@@ -514,6 +514,11 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "types:\n  CODING: red\n  \"DEEP WORK\": green\n  FRESH: blue\n",
+    );
     write_toggle_task_settings(&vault);
     write_file(&target, "- [*] #task Finish packet ^goog-exit\n");
     write_file(
@@ -537,6 +542,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("--")
         .arg("@cash+goog-exit#coding")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
         .expect("dry-run named ensure-Next");
@@ -568,8 +574,9 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+goog-exit#cod")
+        .arg("@cash+goog-exit#coding")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
         .expect("named prefix ensure-Next");
@@ -614,6 +621,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("--")
         .arg("@cash+goog-exit#coding")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:05:00")
         .output()
         .expect("named no-op");
@@ -631,6 +639,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("--")
         .arg("@cash+goog-exit#coding")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:05:00")
         .output()
         .expect("named no-op json");
@@ -648,7 +657,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         &day_file,
         concat!(
             "## Pomodoros\n",
-            "- [x] (**0800-0830**) — DEEP+WORK\n",
+            "- [x] (**0800-0830**) — DEEP WORK\n",
             "  - old\n",
             "- [ ] (**0900-0930**) — CURRENT\n",
             "  - [[cash#^goog-exit]]\n",
@@ -663,8 +672,9 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+goog-exit#deep+work")
+        .arg("@cash+goog-exit#deep-work")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:10:00")
         .output()
         .expect("named create");
@@ -675,20 +685,20 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
     assert_eq!(json["status_changed"], true);
     assert_eq!(json["pomodoro_link_action"], "moved");
     assert_eq!(json["creates_pomodoro"], true);
-    assert_eq!(json["pomodoro_name"], "DEEP+WORK");
+    assert_eq!(json["pomodoro_name"], "DEEP WORK");
     assert_eq!(json["removed_pomodoro_links"], 0);
     assert_eq!(
         fs::read_to_string(&target).expect("target"),
-        "- [*] #task Finish packet [type:: DEEP] [fresh:: 2026-07-10] ^goog-exit\n"
+        "- [*] #task Finish packet [type:: DEEP WORK] [fresh:: 2026-07-10] ^goog-exit\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("day"),
         concat!(
             "## Pomodoros\n",
-            "- [x] (**0800-0830**) — DEEP+WORK\n",
+            "- [x] (**0800-0830**) — DEEP WORK\n",
             "  - old\n",
             "- [ ] (**0900-0930**) — CURRENT\n",
-            "- [ ] () — DEEP+WORK\n",
+            "- [ ] () — DEEP WORK\n",
             "  - [[cash#^goog-exit]]\n",
             "    - review notes\n",
         )
@@ -702,6 +712,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("--")
         .arg("@cash+goog-exit#fresh")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:15:00")
         .output()
         .expect("named create human");
@@ -720,6 +731,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("--")
         .arg("@cash+noleak#coding")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:20:00")
         .output()
         .expect("named missing link");
@@ -747,6 +759,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         .arg("--")
         .arg("@cash+noleak!")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:25:00")
         .output()
         .expect("explicit insert");
@@ -842,13 +855,15 @@ fn capture_task_toggle_ensure_next_keeps_in_progress() {
 
 // PDG19 (§13.15): ensure-next on a target whose only reason is its
 // own open prerequisites drops those links and then relocates exactly
-// like an unblocked target (here through the `#name` form).
+// like an unblocked target through the attached task-type form.
 #[test]
 fn capture_ensure_next_drops_own_dependency_and_relocates() {
     let temp = TempDir::new("bob-cli-capture-ensure-next-drop");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "types:\n  CURRENT: blue\n");
     write_toggle_task_settings(&vault);
     let target_before = concat!(
         "- [?] #task Blocked work ^blocked\n",
@@ -875,6 +890,7 @@ fn capture_ensure_next_drops_own_dependency_and_relocates() {
         .arg("--")
         .arg("@cash+blocked#current")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
         .expect("dry-run ensure-next drop");
@@ -896,6 +912,7 @@ fn capture_ensure_next_drops_own_dependency_and_relocates() {
         .arg("--")
         .arg("@cash+blocked#current")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
         .expect("ensure-next blocked task");

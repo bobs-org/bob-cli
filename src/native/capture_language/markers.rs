@@ -1,7 +1,6 @@
 //! Terminal-marker extraction, schedules, priorities, clips, and marker messages.
 
 use super::editor_model::*;
-use super::line::*;
 use super::model::*;
 use super::tokens::*;
 use crate::native::capture_clip;
@@ -275,42 +274,9 @@ pub(super) fn is_route_marker(token: &str) -> bool {
 }
 
 /// The bare `#` token: a Pomodoro-note marker, recognized only in the
-/// terminal marker region. `#<anything-else>` stays a distinct, retired
-/// legacy bullet-marker shape (see [`reject_legacy_bullet_markers`]).
+/// terminal marker region.
 pub(super) fn is_pomodoro_note_marker(token: &str) -> bool {
     token == "#"
-}
-
-/// Reject the retired standalone bullet marker forms so they fail clearly
-/// instead of silently capturing literal `#...` text. The marker is honored
-/// only when appended to an `@route` token (`@foo#bar`).
-///
-/// Two terminal positions are rejected: a final token that itself starts with
-/// `#`, and (when `allow_route`) a final plain `@route` token preceded by a
-/// `#...` token. A `#tag` anywhere else stays literal task text.
-pub(super) fn reject_legacy_bullet_markers(
-    tokens: &[&str],
-    allow_route: bool,
-) -> Result<(), String> {
-    let Some(&last) = tokens.last() else {
-        return Ok(());
-    };
-
-    if last.starts_with('#') && !is_pomodoro_note_marker(last) {
-        return Err(legacy_marker_error());
-    }
-
-    if allow_route
-        && tokens.len() >= 2
-        && tokens[tokens.len() - 2].starts_with('#')
-        && !is_pomodoro_note_marker(tokens[tokens.len() - 2])
-        && parse_route_token(last)
-            .is_some_and(|token| matches!(token.kind, CaptureKind::Task))
-    {
-        return Err(legacy_marker_error());
-    }
-
-    Ok(())
 }
 
 pub(super) fn normalize_forced_route(route: &str) -> Result<String, String> {
@@ -340,9 +306,9 @@ pub(super) const GLOBAL_DESTINATION_BLOCK_ID_ERROR: &str =
 pub(super) const MISSING_CAPTURE_ITEM_ERROR: &str =
     "global destination declaration has no capture item; add a capture item to this draft";
 
-pub(super) const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str = "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, priority, or a Pomodoro name";
+pub(super) const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str = "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, or priority";
 
-pub(super) const EXPLICIT_TOGGLE_NAMED_ERROR: &str = "explicit toggle `!` cannot be combined with a `#<pomodoro>` selector; use `@<route>+<block-id>!`";
+pub(super) const EXPLICIT_TOGGLE_NAMED_ERROR: &str = "explicit toggle `!` cannot follow a task type; write `@<route>+<block-id>! #<type>`";
 
 pub(super) const EXPLICIT_TOGGLE_REPEATED_ERROR: &str =
     "explicit toggle `!` cannot be repeated; use a single `@<route>+<block-id>!`";

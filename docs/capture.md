@@ -21,7 +21,7 @@ workflow guide.
   - [Routing and insertion](#routing-and-insertion)
   - [Global destination declaration](#global-destination-declaration)
   - [Scheduling and priority](#scheduling-and-priority)
-  - [Typing tasks with t:](#typing-tasks-with-t)
+  - [Typing tasks with `#<type>`](#typing-tasks-with-type)
   - [Multi-item capture](#multi-item-capture)
   - [Bulk templates](#bulk-templates)
     - [Saved templates](#saved-templates)
@@ -137,18 +137,17 @@ anything is written, and any failure rolls the whole batch back.
 | `- <task> :<task-id>` (project-note bullet) | Name the task, make it Next (`[*]`, or `[?]` when scheduled), and link `[[<stem>#^<task-id>]]` into the Pomodoro the task's type places, or the `#pomodoro` one |
 | `- <task> ^<task-id>` (project-note bullet) | Name the task only: `- [ ] #task <task> [created::DATE] ^<task-id>` |
 | `@route+block-id` | Ordinary child bullet under an existing task |
-| `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
+| `@route+block-id#section <text>` | Child bullet under an ALL-CAPS section of that task |
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
-| `@route+block-id#pomodoro` with no other text | Ensure Next and move that existing Task Link subtree to the named open Pomodoro, or create that named future Pomodoro and move the subtree there; a task Blocked only by its own prerequisites drops them first |
+| `@route+block-id#<type>` with no other text | Ensure Next and retype that existing task; this attached marker applies only when the whole item has no body or authored children |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
-| trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
+| trailing bare `#` | Plain-text note on a Pomodoro; bare `#` does not open task-type completion |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%`, `%N`, `%header` | Capture clipboard content as child bullets |
-| `t:<type>` | Type the new task or retype the existing task it targets (`t:fix`); at either line edge, lowercase only, one per item; unknown names write canonical spelling with a warning |
-| `t:"NAME"` | Same with a quoted name for spaces or punctuation (`t:"DEEP WORK"`) |
-| `t:` | Incomplete: type a task type after `t:`; execution refuses until named |
-| `\t:<anything>` | Escape: the body keeps the literal `t:<anything>`; a mid-line `\t:` stays verbatim |
+| `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
+| `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
+| `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
 
 `#` is not one marker. Read it by what it is attached to:
 
@@ -157,8 +156,8 @@ anything is written, and any failure rolls the whole batch back.
 | `remembered the timeout #` | Pomodoro note |
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
-| `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
-| `@cash+id#coding` with no other text | Ensure that task is Next and move its Task Link to the `CODING` Pomodoro |
+| `@cash+id#requirements <text>` | Child under that task's `REQUIREMENTS` section |
+| `@cash+id#coding` with no other text | Ensure Next and retype that existing task to `CODING` |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
 | `@sase:deep-fix#"SASE V18"`, `=#"DEEP WORK"` | Exact-name literal: the quoted spelling is the name, matched by key equality, never by slug or prefix; straight `"…"` and curly `“…”` both lex, `\"` and `\\` are the only escapes, and the token runs through the closing quote |
 | `@sase:deep-fix#bugs=-2` | Same, starting a 25-minute session with a 10-minute offset |
@@ -485,28 +484,31 @@ To keep a trailing dollar amount as task text, escape it the same way as
 `cash`. Elsewhere `\$` stays verbatim (`cost \$3 today` keeps the
 backslash).
 
-### Typing tasks with t:
+### Typing tasks with `#<type>`
 
-Append a lowercase `t:<type>` token to type a newly captured task, at the
-leading or trailing edge of any line. Between the marker and that edge may
-stand only transparent markers (`@…`, `@@…`, `#`, `s:`, `s:<N>`, `$…`,
-`%…`), complete or partial `&` / `*` / `~` / `~~` modifiers, or other `t:`
-tokens. Uppercase `T:` and mid-line `t:` stay prose. A slug name uses ASCII
-letters, digits, and hyphens (`t:fix`, `t:deep-work`); a literal name is
-quoted for spaces or punctuation (`t:"DEEP WORK"`, `t:"Q&A"`). An empty or
-unterminated name needs a type; a name containing `+` is invalid (one task,
-one type). Escape with a backslash to keep the text: `\t:fix` writes
-`t:fix` in the body.
+Add a free-standing `#<type>` marker at either item edge (`#fix Fix it`,
+`Fix it #fix`). A slug starts with an ASCII letter and uses letters, digits,
+and hyphens (`#fix`, `#deep-work`); quote spaces or punctuation
+(`#"DEEP WORK"`, `#"Q&A"`). A bare `#` stays a Pomodoro note or prose and
+does not open the type menu. Escape a marker as `\#fix` to keep the literal
+`#fix` text in the body. The retired `t:` spelling is ordinary prose.
+
+The marker can attach to a new task with an explicit block ID
+(`Fix it @sase^fix-x#fix`). It can also attach to `@route+block-id#type` to
+retype an existing task while ensuring Next, but only when the complete item
+has no task body or authored children. With a body,
+`@route+block-id#section` keeps its task-section meaning. A marker on a
+whole-item link or a relationship-only owner also retypes its existing
+subject task. Each item accepts one marker, and a marker alone still needs a
+task.
 
 Exactly one marker per item. A second marker fails with the duplicate
-`type marker (t:<type>)` error. The marker types the item's subject task:
-the new task it creates, or the existing task it targets (whole-item links,
-Ensure Next, toggle, and relationship-only owners). It never types
-prerequisites, blocked tasks, or relation targets. A marker alone, or on a
-bullet, sub-bullet with text, project note, reference, Pomodoro note, or
-completion/close/start/adjust/shift gesture, is refused with a teaching
-error. A link-close suffix (`@route:id=x`) also refuses: remove the close
-gesture to capture a task.
+`type marker (#<type>)` error. The marker types the item's subject task; it
+never types prerequisites, blocked tasks, or relation targets. A marker on a
+bullet, a sub-bullet with text, project note, reference, Pomodoro note, or
+completion/close/start/adjust/shift gesture is refused with a teaching error.
+A link-close suffix (`@route:id=x`) also refuses: remove the close gesture
+to capture a task.
 
 Retyping an existing task stages the `[type::]` field edit before the
 gesture runs, so a bare link places by the new type. The live Task Link is
@@ -518,13 +520,15 @@ ledger moves. A strict-cap refusal fails before any write with code
 `strict_cap`. Closed targets are refused: closed tasks keep their fields as
 history.
 
-The marker resolves against the configured `types:` vocabulary first, then
-the catalog; literals match by key, slugs also try spaces for hyphens.
-Unknown names write the canonical spelling with a `theme_not_configured`
-warning. When the item also names a Pomodoro (`#NAME`), the marker must
-agree with it: a container accepts any type, a matching component accepts
-that explicit pick, otherwise the capture refuses with
-`type_marker_conflict` before any write.
+With a configured `types:` vocabulary, only its entries are accepted.
+Without one, only names already present in Pomodoro history are accepted;
+inventory labels are excluded. Literals match by key, and slugs also try
+spaces for hyphens. Unknown names fail transactionally with code
+`type_not_configured`, including in dry-run mode. Bob suggests a nearby
+configured type when available and explains how to add a type or keep the
+text as an escaped tag. When the item also names a Pomodoro (`#NAME` in a
+Pomodoro-link position), the marker must agree with it: a container accepts
+any type, while a type component must match.
 
 ### Multi-item capture
 
@@ -1231,11 +1235,11 @@ are rejected with messages naming the `@route^block-id+` project-note and
 current new-task meaning.
 
 An explicit Pomodoro name on a whole-item existing-task link also applies the
-retype rule described above. This includes the `^route:block-id`
-active-task spelling, the `@route+id#pomodoro` Ensure Next spelling, and
-the equivalent `=name` shorthands. The type is evaluated from the task's
-staged pre-edit line and its destination note; the selected, resolved
-Pomodoro name plus the authored selector choose the type component. The field edit is staged with the task and ledger changes.
+retype rule described above. This includes the `^route:block-id` active-task
+spelling and the equivalent `=name` shorthands. An attached `#<type>` on a
+marker-only `@route+id` item is the type marker for Ensure Next, not a Pomodoro
+selector. The type is evaluated from the task's staged pre-edit line and its
+destination note; the field edit is staged with the task and ledger changes.
 
 The existing task resolves with the task-toggle lookup, so missing notes,
 missing IDs (with a close-match suggestion plus a hint to add text for a new
@@ -1256,10 +1260,7 @@ statuses fail: only Ready, Blocked, Next, and In Progress tasks can be linked.
 Let _Q_ be the open Pomodoro whose children hold the task's dedicated
 `[[route#^id]]` Task Link (links under completed Pomodoros are history and are
 never edited; more than one movable link is the existing write-free invariant
-error). With `#pomodoro`, the existing named selection applies: whole-slug
-then prefix over open entries, else the canonical named future Pomodoro is
-created, and _Q_'s complete subtree moves there (or a new link is inserted
-when there is no _Q_). Without a name, an already-queued task respects the
+error). An already-queued task respects the
 queue: the destination is _Q_ and nothing moves. Without a name and no _Q_,
 the task's effective type places the link: the running exact entry, else
 the first open exact entry, else the first open entry whose name contains
@@ -2918,8 +2919,9 @@ text unchanged.
 
 With `plan.strict: true`, the whole batch is refused, atomically, when
 a non-start item creates a new named Pomodoro entry past the type cap
-(`<text> @r:id#NAME`, `@r^id+#NAME` project notes, `@r+id#NAME`
-toggles, and any other non-start creation path). A bare link-creating
+(`<text> @r:id#NAME`, `@r^id+#NAME` project notes, and any other
+non-start creation path; marker-only `@r+id#type` retypes an existing task
+and does not create a named Pomodoro). A bare link-creating
 capture whose task type would add a type past the cap is refused before
 any write with code `strict_cap`, including a bare link-start
 (`@r:id=<X>`) that would create a started `— T` entry; pure `=` starts
@@ -4581,20 +4583,19 @@ it makes the task Next and relocates its existing Task Link. The route note and
 daily note are planned together before either file is written, so a failure
 leaves the whole batch unchanged.
 
-`@route+block-id#pomodoro` is the same Ensure Next operation with a Pomodoro
-selector. The `#` component follows the item's mode: with no body text it
-selects a Pomodoro name, using the same slug matching, canonicalization, and
-named-future-entry creation rules as `@route:block-id#pomodoro`; once the item
-has body text, `#section` keeps its child-bullet meaning and selects an
-ALL-CAPS task section. Whole-slug matches beat prefix matches. A valid selector
-with no matching open entry, including a completed-only match, creates the
-canonical named future Pomodoro and then moves the existing Task Link subtree
-into it. Ensure Next never creates a missing Task Link; that remains an
-explicit reason to use `@route+block-id!`.
+The attached `@route+block-id#type` form also ensures Next and retypes the
+existing task, but only when the whole item has no body or authored children.
+The `#` suffix is then the task type marker and the task's Task Link moves to
+the placement selected by that type. When the item has body text,
+`@route+block-id#section <text>` keeps its child-bullet meaning and selects an
+ALL-CAPS task section. `@route+block-id#` opens the task-type completion menu
+only when the whole item qualifies as marker-only Ensure Next.
 
 The link-presence toggle, including Pomodoro-link insertion and
 all-open-link removal, is reserved for the terminal `@route+block-id!`
-spelling. `!` cannot be combined with `#pomodoro`. The ledger decides the
+spelling. To retype during an explicit toggle, write `@route+block-id! #type`;
+`@route+block-id#type!` is refused with a message showing the correct order.
+The ledger decides the
 direction: no matching link under an open Pomodoro links the task, and any
 matching link unlinks it. No toggle path ever lowers a lane.
 
@@ -4649,7 +4650,7 @@ markers`, `s:<N>` with `task toggle capture cannot be combined with s:<N>`,
 `$<N>` with `task toggle capture cannot be combined with $<N>`, and authored
 child bullets with `task toggle capture cannot have authored child bullets`.
 
-The marker-only `@route+block-id` and `@route+block-id#pomodoro` forms are
+The marker-only `@route+block-id` and `@route+block-id#type` forms are
 Ensure Next operations. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and
 Next `[*]` are eligible: Ready and a task Blocked only by its own
 prerequisites rise to Next after a §13.5.1 drop, while Next and In
@@ -4662,19 +4663,15 @@ idempotent relocation, and use `@route+block-id!` only when you intentionally
 want to toggle the link itself — add a missing link, or remove every
 open-Pomodoro link with the lane unchanged.
 
-The plain form's destination is the Pomodoro the task's effective type
-places: the running exact entry, else the first open exact entry, else the
-first open entry whose name contains the type, else a created `— T`
-placeholder at the named-creation insertion point. With no effective type
-(no default configured) the legacy implicit current/next open Pomodoro is
-used unchanged: the single open timed entry when present, otherwise the
-first open entry in document order. The named form's destination is the
-matching open named Pomodoro, or a newly created named future Pomodoro
-when no open name matches.
-A missing Pomodoros section, no eligible open implicit entry, multiple open
-timed entries for implicit selection or named creation, or an invalid
-Pomodoro name is an atomic error. Existing named selection skips the
-multiple-open-timed guard. The command never creates a missing Task Link; if
+The destination is the Pomodoro the task's effective type places: the
+running exact entry, else the first open exact entry, else the first open
+entry whose name contains the type, else a created `— T` placeholder at the
+named-creation insertion point. With no effective type (no default
+configured), the legacy implicit current/next open Pomodoro is used unchanged:
+the single open timed entry when present, otherwise the first open entry in
+document order. A missing Pomodoros section, no eligible open implicit entry,
+multiple open timed entries for implicit selection, or an invalid Pomodoro
+name is an atomic error. The command never creates a missing Task Link; if
 no dedicated Task Link exists under an open Pomodoro, it fails write-free and
 tells the user to use `@route+block-id!` to add one. More than one movable
 occurrence is also a write-free invariant error. Completed Pomodoros are
@@ -4718,7 +4715,7 @@ clients ignore them:
 
 A terminal `!` on the same marker-only shape, `@route+block-id!`, opts into
 the link-presence toggle. It is accepted only as the final byte of that
-exact marker: not on `@route+id#name`, `@@route+id`, body-bearing items,
+exact marker: not on `@route+id#type`, `@@route+id`, body-bearing items,
 authored children, clipboard, schedule, priority, or forced destination flags.
 Ordinary `!` in capture prose stays literal. An unlinked Ready `[ ]` task,
 or a Blocked `[?]` task whose own open prerequisites §13.5.1 can drop,
@@ -5300,7 +5297,7 @@ for `dry_run`. Human output names a deleted session on the structured
 #### Task-type changes
 
 When an explicitly named Pomodoro capture changes a task's `[type::]`
-field, or when a `t:<type>` marker types a newly captured task, that item
+field, or when a `#<type>` marker types a task, that item
 gains this additive `task_theme` object. For named captures it is omitted
 when the type does not change: a container destination, a consistent type, a
 guard that consumes the gesture, or a field that already holds the chosen
@@ -5332,7 +5329,7 @@ includes a type row `type   → FIX · <stem> suggests BUILD` /
 `type   ■ FIX · from <stem>` (kept). Dry-run JSON reports the same
 post-image and summary without writing files.
 
-When an existing-task `t:` retype moves the live Task Link, the item also
+When an existing-task `#<type>` retype moves the live Task Link, the item also
 gains this additive `type_relocation` object (omitted when the ledger needs
 no change):
 
@@ -5355,11 +5352,11 @@ entry renamed` / `ledger  BUILD → BUILD + FIX · running entry shared` /
 Existing-task examples:
 
 ```markdown
-^sase:fix-x t:fix
-@sase:fix-x t:fix
-@sase+fix-x t:fix
-@sase+fix-x! t:fix
-^sase:fix-x &sase:other-y t:fix
+^sase:fix-x #fix
+@sase:fix-x #fix
+@sase+fix-x #fix
+@sase+fix-x! #fix
+^sase:fix-x &sase:other-y #fix
 ```
 
 #### Task blocks
@@ -5567,11 +5564,11 @@ opens the section picker for `sase.md`; the panel consumes only `@sase#`, and
 `bob capture` still owns clipboard, schedule, and priority interpretation
 after the section is chosen.
 
-A `t:<type>` marker types the new task. `capture-parse` emits a `task_type`
-span over the whole token (with one `ThemeRef` over the name content) and a
-`task_type` need when the name is incomplete; `body` excludes the marker.
-The editor paints the marker dimmed with the type pill. Existing-target
-markers are parsed but refused on execution until a later phase.
+A `#<type>` marker types a new task or its existing target.
+`capture-parse` emits a `task_type` span over the whole marker (with one
+`ThemeRef` over the name content) and a `task_type` need when the name is
+incomplete; `body` excludes the marker. The editor paints the marker dimmed
+with the type pill. Unknown marker names are refused before any write.
 
 Sub-bullet capture has the matching four-way `+` family. Use `<text> @+` to
 choose a destination and then one of its open tasks, `<text> @route+` to choose
@@ -5912,8 +5909,8 @@ span over the sigil, never a diagnostic. A bare trailing `#` reports `pomodoro_n
 `route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
 that marker with `@route`, `s:<N>`, or `$<N>` on the same item still reports
 mode `pomodoro_note` plus a `pomodoro_note_conflict` diagnostic; `bob capture`
-rejects the same input. A trailing `#n` or `#no` is rejected like any other
-trailing `#tag`. `route`, `section`, and `block_id` are the
+rejects the same input. A trailing `#n` or `#no` is an incomplete task-type marker at an eligible
+task edge. `route`, `section`, and `block_id` are the
 resolved components, or `null`; `block_id` carries the ID-only task, Pomodoro,
 sub-bullet, or project-note ID, whichever applies — for a project-note marker
 it is the authored block ID the filename suffix derives from. For a Pomodoro
@@ -5922,16 +5919,16 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
-needs `["section"]`, while `@route+id#` with no body text reports mode
-`incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
+needs `["section"]`, while marker-only `@route+id#` opens task-type completion and needs
+`["task_type"]`, `note @route+id#` reports mode
 `incomplete` and needs `["task_section"]`, and `@route:id#` reports mode
-`incomplete` and needs `["pomodoro_name"]`. A complete `@route+id#sec`
-sub-bullet populates `route`, `block_id`, and `section` together. A complete
-`@route:id#name` Pomodoro marker and a complete `@route+id#name` task toggle
-populate `route`, `block_id`, and `section` the same way; the mode says whether
-`section` is a Pomodoro name or a task section.
+`incomplete` and needs `["pomodoro_name"]`. A complete
+`@route+id#section <text>` sub-bullet populates `route`, `block_id`, and
+`section` together. A complete `@route:id#name` Pomodoro marker populates
+`route`, `block_id`, and `section` the same way; the mode says that `section`
+is a Pomodoro name.
 
 `relationship_needs_text` is an error diagnostic, not a picker need. It is
 ranged on the `$<N>`, `s:<N>`, clipboard marker, or `child bullets` token
@@ -6054,14 +6051,15 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
 `pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
-`task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
+`task_toggle_block_id`, `task_toggle_explicit_toggle`, `task_type`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `ref_url`, `ref_listen`,
 `interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `blocked_task_sigil`, `blocked_task_note`, `blocked_task_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, `wikilink_alias`,
 `wikilink_task_delimiter`, or `wikilink_task_query`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
-`@cash+` or `@@cash+`, the trailing `#` in `@cash+id#` or `@cash:id#`, the dangling `,` or `!` in `x1,` or `x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
+`@cash+` or `@@cash+`, the trailing `#` in `@cash:id#`, a task-type span in
+`@cash+id#`, the dangling `,` or `!` in `x1,` or `x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
 `@@` when the route is still empty too. For example, `x1,3!2` gives
 `[0,2) pomodoro_close`, `[2,5) pomodoro_close_in_progress`, and
 `[5,7) pomodoro_close_complete`; `x1,3!2~4` adds
@@ -6081,7 +6079,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `+` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `+`, a `#name` without its `+`, or an `=` suffix), `retired_project_note_marker` (a `:` project-note spelling, teaching the `^` form), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `#name` with no ` :` task, ranged on the name), `unsupported_explicit_toggle`, `legacy_bullet_marker`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `+` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `+`, a `#name` without its `+`, or an `=` suffix), `retired_project_note_marker` (a `:` project-note spelling, teaching the `^` form), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `#name` with no ` :` task, ranged on the name), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `$<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -6678,19 +6676,19 @@ returns `relation_to_replacement` and `relation_from_replacement` for
 the Add block ID flow. See
 [Linking tasks with '~' and '~~'](#linking-tasks).
 
-A marker-position `t:` token also opens `task_type` completion, whether the item
+A marker-position `#` token also opens `task_type` completion, whether the item
 will create a task or target an existing task. The response replaces the whole
-marker, including `t:`, returns the decoded name as `query`, and identifies the
+marker, including `#`, returns the decoded name as `query`, and identifies the
 subject as `new` or `existing`. This context does not open for prose such as
-`Ask about t:fix today`; another completion field still owns its own token.
+`Ask about #fix today`; another completion field still owns its own token.
 
 With a configured `types:` vocabulary, an empty query lists visible types in
 config order. Without a vocabulary, the menu lists up to twelve Recent catalog
 types. A nonempty query ranks exact, prefix, then substring matches. Hidden
-types stay out of empty-query suggestions but appear on an exact match. When
-the query is a valid new type name without an exact match, a typed row carries
-up to two nearby names. Accepting a row uses `t:<slug>` only when it preserves
-the type key; otherwise Bob returns a quoted literal such as `t:"DEEP WORK"`.
+types stay out of empty-query suggestions but appear on an exact match. An
+unknown typed row carries `refused: "type_not_configured"` and up to two
+nearby names. Accepting an accepted row uses `#<slug>` only when it preserves
+the type key; otherwise Bob returns a quoted literal such as `#"DEEP WORK"`.
 At the leading edge, the replacement includes a space when the next byte is
 not whitespace, and `cursor_after` gives the resulting absolute caret offset.
 
@@ -6707,7 +6705,7 @@ For example, the candidate row for a configured `FIX` type is shaped like:
 
 ```json
 {
-  "replacement": "t:fix",
+  "replacement": "#fix",
   "cursor_after": 21,
   "name": "FIX",
   "key": "fix",
@@ -6720,7 +6718,7 @@ For example, the candidate row for a configured `FIX` type is shaped like:
 ```
 
 Shell completion puts these rows in the `task types` group. `bob capture Fix it
-t:<TAB>` offers the configured type vocabulary.
+#<TAB>` offers the configured type vocabulary.
 
 The analogous parent-task picker accepts a terminal `+query` on an item's
 parent line or an eligible authored child line. It uses context `task_parent`,
@@ -6827,7 +6825,7 @@ in an empty result, where it collapses to a zero-length range at the cursor.
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
-`task_type` covers a complete or incomplete marker-position `t:` token and
+`task_type` covers a complete or incomplete marker-position `#` token and
 returns the whole marker span plus its decoded type-name query. Its top-level
 `subject` is `new` or `existing`; candidates describe the current and inherited
 type and the `set`, `clear`, or `keep` effect. `query` is present only for

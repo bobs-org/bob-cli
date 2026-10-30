@@ -252,19 +252,20 @@ fn relationship_only_owner_reports_needs_text() {
 }
 
 #[test]
-fn suffixed_plus_owner_keeps_must_be_bare() {
+fn suffixed_plus_owner_can_set_type_and_dependencies() {
     let json = parse_json("@body+excercise#bugs &foo:bar");
-    let diagnostics =
-        json["diagnostics"].as_array().expect("diagnostics array");
-    assert_eq!(diagnostics[0]["code"], "invalid_dependency_target");
+    assert_eq!(json["mode"], "task_dependency", "{json}");
+    assert_eq!(json["dependency_target"]["kind"], "existing_task", "{json}");
+    assert_eq!(json["dependencies"][0]["raw"], "&foo:bar", "{json}");
     assert!(
-        diagnostics[0]["message"]
-            .as_str()
+        json["spans"]
+            .as_array()
             .unwrap()
-            .contains("must be bare"),
-        "{}",
-        diagnostics[0]["message"]
+            .iter()
+            .any(|span| { span["kind"] == "task_type" }),
+        "the owner type remains explicit: {json}"
     );
+    assert_eq!(json["diagnostics"], serde_json::json!([]), "{json}");
 }
 
 #[test]

@@ -8,8 +8,6 @@ pub(super) fn plan_task_toggle_capture(
     target: &Path,
     route: &str,
     block_id: &str,
-    pomodoro_name: Option<&str>,
-    pomodoro_name_is_literal: bool,
     intent: TaskToggleIntent,
     today: NaiveDate,
     warnings: &mut Vec<CaptureWarning>,
@@ -36,8 +34,6 @@ pub(super) fn plan_task_toggle_capture(
             target,
             route,
             block_id,
-            pomodoro_name,
-            pomodoro_name_is_literal,
             &contents,
             task_line_index,
             previous_status_symbol,
@@ -283,106 +279,53 @@ pub(super) fn plan_task_toggle_capture(
     // daily note, insertion must build on the just-staged task edit.
     let day_contents = planner.read_existing(&day_file)?;
 
-    // A bare `!` toggle places by the task's effective type (D7); a named
-    // toggle keeps the deliberate destination and never types.
-    let placement_type = if pomodoro_name.is_none() {
-        task_theme_context
-            .placement_for_task(planner, route, &task_line, warnings)
-    } else {
-        None
-    };
+    // A `!` toggle places by the task's effective type (D7).
+    let placement_type = task_theme_context
+        .placement_for_task(planner, route, &task_line, warnings);
     let placed_type = placement_type.as_ref().map(|placement| {
         let typed = placement.as_typed();
         (typed, placement.placed_type())
     });
     let typed = placed_type.as_ref().map(|(typed, _)| typed);
 
-    let pomodoro_link_placement;
-    let resolved_pomodoro_name;
-    let creates_pomodoro: bool;
-    let mut pomodoro_already_linked = false;
-    let removed_pomodoro_links;
-    let pomodoro_selector_unused = false;
-    let mut pomodoro_link_destination = None;
-
-    match capture_task_toggle::plan_link_insertion(
+    let plan = capture_task_toggle::plan_link_insertion(
         &day_contents,
         &block_link,
-        pomodoro_name,
-        pomodoro_name_is_literal,
+        None,
+        false,
         typed,
     )
-    .map_err(link_plan_error)?
-    {
-        capture_task_toggle::LinkInsertionOutcome::Planned(plan) => {
-            pomodoro_link_placement =
-                plan.placement.map(link_placement_to_placement);
-            resolved_pomodoro_name = plan.pomodoro_name;
-            pomodoro_already_linked = plan.already_linked;
-            removed_pomodoro_links = plan.removed_links;
-            creates_pomodoro = plan.creates_pomodoro;
-            // A bare toggle reports where the type placed the link; a
-            // named toggle keeps its deliberate endpoint unwrapped.
-            pomodoro_link_destination =
-                plan.destination.as_ref().and_then(|destination| {
-                    placed_type.as_ref().map(|(_, placed)| {
-                        PomodoroLinkEndpoint {
-                            line: destination.line,
-                            name: destination.name.clone(),
-                            time_range: destination.time_range.clone(),
-                            role: Some(destination_role(
-                                plan.creates_pomodoro,
-                                None,
-                                destination.time_range.as_deref(),
-                            )),
-                            placed_type: Some(placed.clone()),
-                        }
-                    })
-                });
-            if plan.has_changes {
-                planner.stage(&day_file, plan.content)?;
-            }
-        }
-        capture_task_toggle::LinkInsertionOutcome::NeedsPomodoroCreation {
-            canonical_name,
-        } => {
-            let selector = pomodoro_name.ok_or_else(|| {
-                        CaptureError::io(
-                            "task toggle capture invariant failed: named creation without selector",
-                        )
-                    })?;
-            let (created_day, placement, _, _) = insert_pomodoro_child_block(
-                &day_contents,
-                &format!("- {block_link}"),
-                PomodoroSelection::NamedOrCreate {
-                    selector,
-                    is_literal: pomodoro_name_is_literal,
-                },
-            )?;
-            let cleanup = match capture_task_toggle::plan_link_insertion(
-                        &created_day,
-                        &block_link,
-                        Some(selector),
-                        pomodoro_name_is_literal,
+    .map_err(link_plan_error)?;
+    let capture_task_toggle::LinkInsertionOutcome::Planned(plan) = plan else {
+        return Err(CaptureError::io(
+            "task toggle capture invariant failed: implicit placement requested a named Pomodoro",
+        ));
+    };
+    let pomodoro_link_placement =
+        plan.placement.map(link_placement_to_placement);
+    let resolved_pomodoro_name = plan.pomodoro_name;
+    let pomodoro_already_linked = plan.already_linked;
+    let removed_pomodoro_links = plan.removed_links;
+    let creates_pomodoro = plan.creates_pomodoro;
+    let pomodoro_selector_unused = false;
+    let pomodoro_link_destination =
+        plan.destination.as_ref().and_then(|destination| {
+            placed_type
+                .as_ref()
+                .map(|(_, placed)| PomodoroLinkEndpoint {
+                    line: destination.line,
+                    name: destination.name.clone(),
+                    time_range: destination.time_range.clone(),
+                    role: Some(destination_role(
+                        plan.creates_pomodoro,
                         None,
-                    )
-                    .map_err(link_plan_error)?
-                    {
-                        capture_task_toggle::LinkInsertionOutcome::Planned(plan) => plan,
-                        capture_task_toggle::LinkInsertionOutcome::NeedsPomodoroCreation {
-                            ..
-                        } => {
-                            return Err(CaptureError::io(
-                                "task toggle capture invariant failed: created Pomodoro was not selectable",
-                            ));
-                        }
-                    };
-            pomodoro_link_placement = Some(placement);
-            resolved_pomodoro_name = Some(canonical_name);
-            creates_pomodoro = true;
-            removed_pomodoro_links = cleanup.removed_links;
-            planner.stage(&day_file, cleanup.content)?;
-        }
+                        destination.time_range.as_deref(),
+                    )),
+                    placed_type: Some(placed.clone()),
+                })
+        });
+    if plan.has_changes {
+        planner.stage(&day_file, plan.content)?;
     }
 
     Ok((

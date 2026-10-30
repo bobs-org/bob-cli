@@ -139,7 +139,7 @@ fn build_result_inner(
         });
     }
 
-    // A valid edge `t:` owns the caret even when it sits inside a
+    // A valid edge `#` owns the caret even when it sits inside a
     // `((query` Task Wikilink; `((` itself still completes at its own
     // positions.
     let type_owns_cursor =

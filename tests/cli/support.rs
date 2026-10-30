@@ -901,6 +901,36 @@ pub(crate) fn capture_json_dry_run_matches_real_flags(
     flags: &[&str],
     args: &[&str],
 ) -> serde_json::Value {
+    capture_json_dry_run_matches_real_with_config(
+        vault, day_file, now, flags, args, None,
+    )
+}
+
+pub(crate) fn capture_json_dry_run_matches_real_config(
+    vault: &Path,
+    day_file: &Path,
+    now: &str,
+    config: &Path,
+    args: &[&str],
+) -> serde_json::Value {
+    capture_json_dry_run_matches_real_with_config(
+        vault,
+        day_file,
+        now,
+        &[],
+        args,
+        Some(config),
+    )
+}
+
+fn capture_json_dry_run_matches_real_with_config(
+    vault: &Path,
+    day_file: &Path,
+    now: &str,
+    flags: &[&str],
+    args: &[&str],
+    config: Option<&Path>,
+) -> serde_json::Value {
     let run = |dry_run: bool| {
         let mut command = bob_command();
         command
@@ -913,11 +943,11 @@ pub(crate) fn capture_json_dry_run_matches_real_flags(
             command.arg("--dry-run");
         }
         command.args(flags).arg("--").args(args);
-        let output = command
-            .env("BOB_DAY_FILE", day_file)
-            .env("BOB_NOW", now)
-            .output()
-            .expect("run capture");
+        command.env("BOB_DAY_FILE", day_file).env("BOB_NOW", now);
+        if let Some(config) = config {
+            command.env("BOB_CONFIG_FILE", config);
+        }
+        let output = command.output().expect("run capture");
         assert_success(&output);
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
     };

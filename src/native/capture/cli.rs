@@ -85,11 +85,11 @@ and $<N> still writes the priority. Like s:<N> it is recognized only in the \
 terminal token region and may appear on either side of a trailing @route \
 token. Single-quote '$<N>' in a shell; an unquoted or double-quoted $2 is \
 expanded by the shell.\n\n\
-Append a lowercase 't:<type>' token at either edge of any line to type the \
-new task (t:fix, t:\"DEEP WORK\") or retype the existing task an item targets \
-(whole-item links, Ensure Next, toggle, relationship owners). One marker per \
-item; unknown names write canonical spelling with a warning. With '#NAME' the \
-marker must agree with the Pomodoro or capture refuses. Retyping stages the \
+Append a lowercase '#<type>' token at either edge of any line to type the \
+new task (#fix, #\"DEEP WORK\") or retype the existing task an item targets \
+(whole-item links, Ensure Next, explicit toggle, relationship owners). One marker per \
+item; unknown names are refused with a suggestion. With a named Pomodoro, the \
+marker must agree with its type or capture refuses. Retyping stages the \
 field before the gesture and relocates the live Task Link to agree; a strict-cap \
 refusal fails before any write.\n\n\
 Append a trailing clipboard marker: '%' captures one live value without a \
@@ -429,17 +429,22 @@ incomplete and needs a task section; run \
 'bob capture-task-sections -r <route> -i <block-id>' to list them. A marker-only \
 '@<route>+<block-id>' item with no body text ensures that task is Next and \
 relocates its existing open-Pomodoro Task Link to the Pomodoro the task's type places \
-without creating a missing link or toggling Next back to Ready. The \
-same marker-only form with a Pomodoro selector, '@<route>+<block-id>#<pomodoro>', \
-ensures Next and moves that existing Task Link subtree to the named open \
-Pomodoro, or creates that named future Pomodoro and moves the subtree there. \
-Neither unsuffixed form synthesizes a missing Task Link. A terminal '!' on the \
-unsuffixed marker-only form, '@<route>+<block-id>!', is the only spelling that \
-toggles the Pomodoro Task Link itself: when no matching link sits under an \
-open Pomodoro the task links (Ready/Blocked rise to Next while Next/In \
-Progress keep their lane), and when a matching link is already there every \
-such link is removed with the lane unchanged; '!' cannot be combined with \
-'#<pomodoro>'.\n\n\
+without creating a missing link or toggling Next back to Ready. The marker-only \
+form with an attached '#<type>', '@<route>+<block-id>#<type>', also retypes the \
+existing task before ensuring Next and choosing the destination from its new \
+type. This attached type marker only applies when the complete item has no body \
+text or authored children; with body text, \
+'@<route>+<block-id>#<section>' keeps its child-bullet meaning. \
+'@<route>+<block-id>#' opens task-type completion only when the whole item \
+qualifies as marker-only Ensure Next. Neither unsuffixed form synthesizes a \
+missing Task Link. A terminal '!' on the unsuffixed marker-only form, \
+'@<route>+<block-id>!', is the only spelling that toggles the Pomodoro Task \
+Link itself: when no matching link sits under an open Pomodoro the task links \
+(Ready/Blocked rise to Next while Next/In Progress keep their lane), and when \
+a matching link is already there every such link is removed with the lane \
+unchanged. To retype during an explicit toggle, put '#<type>' after the bang, \
+as in '@<route>+<block-id>! #<type>'; \
+'@<route>+<block-id>#<type>!' is refused.\n\n\
 Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
 Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
 no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \

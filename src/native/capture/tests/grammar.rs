@@ -787,15 +787,23 @@ fn parses_sub_bullet_routes_with_precedence_and_terminal_markers() {
             }),
         }
     );
-    for raw in ["body @foo^bad:id", "body @foo^bad#section"] {
-        let error = parse_capture_text(raw, None)
-            .expect_err("caret must take precedence");
-        assert!(
-            error.message.contains("task block-ID")
-                || error.message.contains("project-note `+`"),
-            "{raw}: {error:?}"
-        );
-    }
+    let error = parse_capture_text("body @foo^bad:id", None)
+        .expect_err("colon after caret must take precedence");
+    assert!(
+        error.message.contains("task block-ID")
+            || error.message.contains("project-note `+`"),
+        "{error:?}"
+    );
+    let typed = parse_capture_text("body @foo^bad#section", None)
+        .expect("hash after a caret task ID is a task-type marker");
+    assert!(matches!(typed.kind, CaptureKind::TaskWithBlockId { .. }));
+    assert_eq!(
+        typed
+            .type_marker
+            .as_ref()
+            .map(|marker| marker.name.as_str()),
+        Some("section")
+    );
     let error = parse_capture_text("body @foo::id", None)
         .expect_err("retired double colon is not ID-only or Pomodoro");
     assert!(
@@ -845,7 +853,7 @@ fn malformed_sub_bullet_markers_are_usage_errors() {
     assert_eq!(parsed.kind, CaptureKind::Task);
 }
 
-/// A bare `@route+block-id[#name]` marker with no other text is a task
+/// A bare `@route+block-id[#<type>]` marker with no other text is a task
 /// toggle operation, not a "task text is required" error.
 #[test]
 fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
@@ -856,23 +864,26 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
     assert_eq!(
         parsed.kind,
         CaptureKind::TaskToggle {
-            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
-            pomodoro_name: None,
             intent: TaskToggleIntent::EnsureNext,
         }
     );
 
-    let named = parse_capture_text("@cash+id#deep+work", None)
-        .expect("bare marker with a Pomodoro name ensures Next");
+    let typed = parse_capture_text("@cash+id#fix", None)
+        .expect("bare marker with a task type ensures Next");
     assert_eq!(
-        named.kind,
+        typed.kind,
         CaptureKind::TaskToggle {
-            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
-            pomodoro_name: Some("deep+work".to_string()),
             intent: TaskToggleIntent::EnsureNext,
         }
+    );
+    assert_eq!(
+        typed
+            .type_marker
+            .as_ref()
+            .map(|marker| marker.name.as_str()),
+        Some("fix")
     );
 
     for raw in ["@cash+id s:2", "@cash+id\n- child text"] {
@@ -890,9 +901,7 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
     assert_eq!(
         explicit.kind,
         CaptureKind::TaskToggle {
-            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
-            pomodoro_name: None,
             intent: TaskToggleIntent::Toggle,
         }
     );

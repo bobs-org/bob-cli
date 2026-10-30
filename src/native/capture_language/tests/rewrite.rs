@@ -761,11 +761,11 @@ fn rewrite_draft_separator_toggle_parses_as_the_switched_mode() {
 
 #[test]
 fn rewrite_draft_separator_toggle_leaves_type_markers_intact() {
-    let raw = "Do work @file:id^ t:fix";
+    let raw = "Do work @file:id^ #fix";
     let cursor = "Do work @file:id^".len();
     let rewrite = rewrite_draft(raw, Some(cursor));
     assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
-    assert_eq!(rewrite.text, "Do work @file^id t:fix");
+    assert_eq!(rewrite.text, "Do work @file^id #fix");
     assert_eq!(rewrite.cursor, Some("Do work @file^id".len()));
     // The toggled draft still parses with the marker as a type span.
     let parsed = parse_for_editor(&rewrite.text);
@@ -773,7 +773,7 @@ fn rewrite_draft_separator_toggle_leaves_type_markers_intact() {
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 
     // A cursor at the end of an incomplete marker is not a separator.
-    let raw = "Fix it t:";
+    let raw = "Fix it #\"";
     let rewrite = rewrite_draft(raw, Some(raw.len()));
     assert_eq!(rewrite.text, raw);
 }

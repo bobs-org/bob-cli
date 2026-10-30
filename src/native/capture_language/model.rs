@@ -104,15 +104,10 @@ pub(crate) enum CaptureKind {
         section: Option<TaskSectionSelector>,
     },
     PomodoroNote,
-    /// A bare `@route+block-id`, `@route+block-id!`, or
-    /// `@route+block-id#pomodoro` marker with no other text on the item:
-    /// update the existing task's status instead of capturing a new
-    /// sub-bullet under it.
+    /// A marker-only `@route+block-id` or `@route+block-id!` item: update
+    /// the existing task's status instead of capturing a child bullet.
     TaskToggle {
         block_id: String,
-        pomodoro_name: Option<String>,
-        /// True when `pomodoro_name` came from a `#"NAME"` literal.
-        pomodoro_name_is_literal: bool,
         intent: TaskToggleIntent,
     },
     /// A whole-item `+N`/`-N` Pomodoro duration adjustment (for example
@@ -389,8 +384,9 @@ pub(crate) enum TaskToggleIntent {
     /// `@route+block-id!` spelling carries this intent.
     Toggle,
     /// One-way ensure-Next plus Task Link relocation. Both unsuffixed
-    /// marker-only forms (`@route+block-id` and `@route+block-id#pomodoro`)
-    /// carry this intent; the optional Pomodoro name selects the destination.
+    /// marker-only forms (`@route+block-id` and `@route+block-id#type`)
+    /// carry this intent; an optional type marker retypes the task before
+    /// choosing its destination.
     EnsureNext,
 }
 
@@ -454,7 +450,7 @@ pub(crate) struct ParsedCaptureText {
     /// when no dependent was named yet (draft resolution finishes it
     /// after `@@` inheritance, or reports the ownerless diagnostic).
     pub(crate) dependency_target: Option<ParsedDependencyTarget>,
-    /// Explicit `t:<type>` marker on this item's subject task. Planning
+    /// Explicit `#<type>` marker on this item's subject task. Planning
     /// resolves it against the selected destination and includes the type
     /// write in the capture transaction.
     pub(crate) type_marker: Option<super::type_marker::TypeMarker>,

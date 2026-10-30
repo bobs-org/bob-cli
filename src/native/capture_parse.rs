@@ -171,7 +171,7 @@ section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> or @@<route>+<block-id> \
 declaration token anywhere in the draft, ordered blank-line-separated item summaries and ranges after \
 inheritance, the UTF-8 byte spans of every recognized token (including a \
-`task_type` span for `t:<type>` markers), Obsidian wikilink \
+`task_type` span for `#<type>` markers), Obsidian wikilink \
 component spans, every authored sub-bullet's normalized body plus depth, \
 an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` \
 start suffix (including the short `=name` suffix, e.g. `@work:outline=bugs`), an optional pomodoro_adjust object for a whole-item `+[N]`/`-[N]` \
@@ -755,7 +755,6 @@ fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
     matches!(
         span.kind,
         capture_language::SpanKind::PomodoroName
-            | capture_language::SpanKind::TaskTogglePomodoroName
             | capture_language::SpanKind::TaskType
     )
 }
@@ -2603,41 +2602,41 @@ mod tests {
     fn task_type_spans_carry_one_ref_over_the_name_content() {
         let (_vault, catalog) = task_type_catalog();
         // A catalog slug match resolves through the hyphen fallback.
-        let themes = task_type_themes("Fix it t:deep-work", &catalog);
+        let themes = task_type_themes("Fix it #deep-work", &catalog);
         assert_eq!(themes.as_array().unwrap().len(), 1);
         assert_eq!(themes[0]["key"], "deep work");
         assert_eq!(themes[0]["name"], "DEEP WORK");
         assert!(themes[0].get("known").is_none());
         assert_eq!(
-            &"Fix it t:deep-work"[themes[0]["start"].as_u64().unwrap() as usize
+            &"Fix it #deep-work"[themes[0]["start"].as_u64().unwrap() as usize
                 ..themes[0]["end"].as_u64().unwrap() as usize],
             "deep-work"
         );
         // A literal resolves by key equality with quotes excluded.
-        let themes = task_type_themes("Fix it t:\"DEEP WORK\"", &catalog);
+        let themes = task_type_themes("Fix it #\"DEEP WORK\"", &catalog);
         assert_eq!(themes[0]["key"], "deep work");
         assert_eq!(
-            &"Fix it t:\"DEEP WORK\""[themes[0]["start"].as_u64().unwrap()
+            &"Fix it #\"DEEP WORK\""[themes[0]["start"].as_u64().unwrap()
                 as usize
                 ..themes[0]["end"].as_u64().unwrap() as usize],
             "DEEP WORK"
         );
         // Curly quotes keep char-boundary name ranges.
-        let themes = task_type_themes("Fix it t:“FIX”", &catalog);
+        let themes = task_type_themes("Fix it #“FIX”", &catalog);
         assert_eq!(themes[0]["key"], "fix");
         assert_eq!(
-            &"Fix it t:“FIX”"[themes[0]["start"].as_u64().unwrap() as usize
+            &"Fix it #“FIX”"[themes[0]["start"].as_u64().unwrap() as usize
                 ..themes[0]["end"].as_u64().unwrap() as usize],
             "FIX"
         );
         // An unknown name carries no fabricated resolution.
-        let themes = task_type_themes("Fix it t:nope", &catalog);
+        let themes = task_type_themes("Fix it #nope", &catalog);
         assert_eq!(themes.as_array().unwrap().len(), 1);
         assert_eq!(themes[0]["key"], "nope");
         assert_eq!(themes[0]["name"], "NOPE");
         assert_eq!(themes[0]["known"], false);
         // Quoted composites are invalid markers and never fabricate a ref.
-        for raw in ["Fix it t:\"a+b\"", "Fix it t:“a+b”"] {
+        for raw in ["Fix it #\"a+b\"", "Fix it #“a+b”"] {
             let mut result = CaptureParseResult::new(
                 raw.to_string(),
                 &EditorParseOptions::routing_off(),
@@ -2664,7 +2663,7 @@ mod tests {
         let (_vault, catalog) = task_type_catalog();
         let options = EditorParseOptions::routing_off();
         let mut result =
-            CaptureParseResult::new("Fix it t:".to_string(), &options);
+            CaptureParseResult::new("Fix it #\"".to_string(), &options);
         attach_theme_refs(&mut result, &catalog);
         let value = serde_json::to_value(&result).unwrap();
         let span = value["spans"]

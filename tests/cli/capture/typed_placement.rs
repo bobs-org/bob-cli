@@ -220,7 +220,7 @@ fn bare_new_ref_task_places_into_read() {
         &vault,
         &day_file,
         &config,
-        &["Read the manual #ref @inbox:ref1"],
+        &["Read the manual \\#ref @inbox:ref1"],
         false,
     );
     assert_success(&output);

@@ -111,7 +111,7 @@ fn names(value: &Value) -> Vec<&str> {
 fn configured_menu_uses_config_order_and_carries_task_effects() {
     let temp = TempDir::new("bob-cli-complete-task-types-config");
     let (vault, config) = fixture(temp.path(), true);
-    let draft = "@dev t:";
+    let draft = "@dev #\"";
     let result = complete_end(temp.path(), &vault, &config, draft);
 
     assert_eq!(result["context"], "task_type");
@@ -126,12 +126,12 @@ fn configured_menu_uses_config_order_and_carries_task_effects() {
         vec!["BUILD", "FIX", "FIXUP", "PREFIX", "DEEP WORK"]
     );
     let build = &result["candidates"][0];
-    assert_eq!(build["replacement"], "t:build ");
+    assert_eq!(build["replacement"], "#build ");
     assert_eq!(build["origin"], "configured");
     assert_eq!(build["current"], true);
     assert_eq!(build["inherited"], true);
     assert_eq!(build["effect"], "keep");
-    assert_eq!(build["cursor_after"], 13);
+    assert_eq!(build["cursor_after"], 12);
     assert_eq!(build["suggestion_label"], "default type");
     assert_eq!(build["themes"][0]["configured"], true);
     assert_eq!(result["theme_suggestion"]["theme"]["key"], "build");
@@ -141,13 +141,13 @@ fn configured_menu_uses_config_order_and_carries_task_effects() {
 fn query_orders_exact_prefix_substring_and_adds_typed_row() {
     let temp = TempDir::new("bob-cli-complete-task-types-rank");
     let (vault, config) = fixture(temp.path(), true);
-    let result = complete_end(temp.path(), &vault, &config, "Fix it t:fix");
+    let result = complete_end(temp.path(), &vault, &config, "Fix it #fix");
 
     assert_eq!(names(&result), vec!["FIX", "FIXUP", "PREFIX"]);
-    assert_eq!(result["candidates"][0]["replacement"], "t:fix");
+    assert_eq!(result["candidates"][0]["replacement"], "#fix");
     assert_eq!(result["candidates"][0]["effect"], "set");
 
-    let typed = complete_end(temp.path(), &vault, &config, "Fix it t:fixs");
+    let typed = complete_end(temp.path(), &vault, &config, "Fix it #fixs");
     let row = typed["candidates"]
         .as_array()
         .unwrap()
@@ -157,7 +157,7 @@ fn query_orders_exact_prefix_substring_and_adds_typed_row() {
     assert_eq!(row["origin"], "typed");
     assert_eq!(row["themes"][0]["configured"], false);
     assert_eq!(row["similar_to"][0], "FIX");
-    assert!(row.get("refused").is_none(), "unknown_types=warn");
+    assert_eq!(row["refused"], "type_not_configured");
 }
 
 #[test]
@@ -171,9 +171,9 @@ fn exact_hidden_type_remains_available_but_not_in_empty_menu() {
     let journal = fs::read_to_string(vault.join(".bob/themes/test.jsonl"))
         .expect("theme journal");
 
-    let empty = complete_end(temp.path(), &vault, &config, "t:");
+    let empty = complete_end(temp.path(), &vault, &config, "#\"");
     assert!(!names(&empty).contains(&"FIX"));
-    let exact = complete_end(temp.path(), &vault, &config, "t:fix");
+    let exact = complete_end(temp.path(), &vault, &config, "#fix");
     let fix = exact["candidates"]
         .as_array()
         .unwrap()
@@ -193,7 +193,8 @@ fn current_and_inherited_existing_types_drive_effects() {
     let temp = TempDir::new("bob-cli-complete-task-types-existing");
     let (vault, config) = fixture(temp.path(), true);
 
-    let current = complete_end(temp.path(), &vault, &config, "@dev:current t:");
+    let current =
+        complete_end(temp.path(), &vault, &config, "@dev:current #\"");
     assert_eq!(current["subject"], "existing");
     let fix = current["candidates"]
         .as_array()
@@ -213,7 +214,7 @@ fn current_and_inherited_existing_types_drive_effects() {
     assert_eq!(build["effect"], "clear");
 
     let inherited =
-        complete_end(temp.path(), &vault, &config, "@dev:inherited t:");
+        complete_end(temp.path(), &vault, &config, "@dev:inherited #\"");
     assert_eq!(inherited["subject"], "existing");
     let build = inherited["candidates"]
         .as_array()
@@ -227,32 +228,67 @@ fn current_and_inherited_existing_types_drive_effects() {
 }
 
 #[test]
+fn attached_ensure_next_type_uses_existing_subject_without_extra_space() {
+    let temp = TempDir::new("bob-cli-complete-task-types-attached");
+    let (vault, config) = fixture(temp.path(), true);
+
+    let full_menu = complete_end(temp.path(), &vault, &config, "@dev+current#");
+    assert_eq!(full_menu["context"], "task_type");
+    assert_eq!(full_menu["subject"], "existing");
+    assert_eq!(full_menu["query"], "");
+    assert_eq!(
+        full_menu["replacement"],
+        serde_json::json!({"start": 12, "end": 13})
+    );
+
+    let typed = complete_end(temp.path(), &vault, &config, "@dev+current#fi");
+    assert_eq!(typed["context"], "task_type");
+    assert_eq!(typed["subject"], "existing");
+    let fix = typed["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "FIX")
+        .unwrap();
+    assert_eq!(fix["replacement"], "#fix");
+
+    let body =
+        complete_end(temp.path(), &vault, &config, "@dev+current#fi detail");
+    assert_ne!(body["context"], "task_type");
+}
+
+#[test]
 fn literal_replacement_child_and_second_line_triggers_work() {
     let temp = TempDir::new("bob-cli-complete-task-types-literal");
     let (vault, config) = fixture(temp.path(), true);
-    let literal = complete_end(temp.path(), &vault, &config, "t:");
+    let literal = complete_end(temp.path(), &vault, &config, "#\"");
     let deep = literal["candidates"]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["name"] == "DEEP WORK")
         .unwrap();
-    assert_eq!(deep["replacement"], "t:\"DEEP WORK\" ");
+    assert_eq!(deep["replacement"], "#\"DEEP WORK\" ");
 
-    let child = "Parent task\n- check the lexer t:fi";
+    let child = "Parent task\n- check the lexer #fi";
     assert_eq!(
         complete_end(temp.path(), &vault, &config, child)["context"],
         "task_type"
     );
-    let second_line = "Parent task\n t:fi";
+    let second_line = "Parent task\n #fi";
     assert_eq!(
         complete_end(temp.path(), &vault, &config, second_line)["context"],
         "task_type"
     );
-    let mid_line = "Ask about t:fix today";
+    let mid_line = "Ask about #fix today";
     assert!(
         complete_end(temp.path(), &vault, &config, mid_line)["context"]
             .is_null()
+    );
+    assert!(
+        complete_end(temp.path(), &vault, &config, "Fix it t:fix")["context"]
+            .is_null(),
+        "retired t: syntax is ordinary prose"
     );
 }
 
@@ -260,10 +296,10 @@ fn literal_replacement_child_and_second_line_triggers_work() {
 fn route_completion_wins_at_its_token_and_unconfigured_menu_uses_history() {
     let temp = TempDir::new("bob-cli-complete-task-types-context");
     let (vault, config) = fixture(temp.path(), false);
-    let route = complete(temp.path(), &vault, &config, "@de t:fix", 3);
+    let route = complete(temp.path(), &vault, &config, "@de #fix", 3);
     assert_eq!(route["context"], "route");
 
-    let history = complete_end(temp.path(), &vault, &config, "t:");
+    let history = complete_end(temp.path(), &vault, &config, "#b");
     assert_eq!(history["context"], "task_type");
     assert_eq!(history["candidates"][0]["origin"], "history");
     assert_eq!(history["candidates"][0]["name"], "BUILD");
@@ -273,11 +309,11 @@ fn route_completion_wins_at_its_token_and_unconfigured_menu_uses_history() {
 fn type_marker_inside_task_wikilink_owns_the_caret() {
     let temp = TempDir::new("bob-cli-complete-task-types-wikilink");
     let (vault, config) = fixture(temp.path(), true);
-    let draft = "Follow up ((foo t:";
+    let draft = "Follow up ((foo #f";
     let at_type = complete(temp.path(), &vault, &config, draft, draft.len());
     assert_eq!(at_type["context"], "task_type", "{at_type}");
-    assert_eq!(at_type["query"], "", "{at_type}");
-    let start = draft.rfind("t:").expect("type marker");
+    assert_eq!(at_type["query"], "f", "{at_type}");
+    let start = draft.rfind("#").expect("type marker");
     assert_eq!(
         at_type["replacement"],
         serde_json::json!({"start": start, "end": draft.len()}),

@@ -1,4 +1,4 @@
-//! Shared lexer and byte-preserving view for capture `t:<type>` markers.
+//! Shared lexer and byte-preserving view for capture `#<type>` markers.
 //!
 //! This phase feeds the execution parser. The editor adopts the same scanner
 //! in its own phase, so marker positions and escaping stay identical.
@@ -18,7 +18,7 @@ use super::{
 };
 use crate::native::{
     config::themes::ConfiguredTheme, plan_budget::normalize_component,
-    task_fields::canonical_theme_name,
+    pomodoro_themes::Catalog, task_fields::canonical_theme_name,
 };
 use std::ops::Range;
 
@@ -33,6 +33,7 @@ pub(crate) struct TypeMarker {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TypeMarkerCompletion {
     pub(crate) span: Range<usize>,
+    pub(crate) replacement: Range<usize>,
     pub(crate) query: String,
     pub(crate) leading: bool,
 }
@@ -70,7 +71,10 @@ struct Candidate {
 /// Scan an authored physical line for type markers. Child bullet prefixes
 /// are excluded from edge checks, while all returned ranges remain absolute.
 pub(crate) fn scan_line(line: &str, base: usize) -> Vec<TypeMarkerOccurrence> {
-    scan_line_with_clip_control(line, base, true)
+    scan_line_with_positions(line, base, false, true, None)
+        .into_iter()
+        .map(|(occurrence, _)| occurrence)
+        .collect()
 }
 
 pub(crate) fn scan_line_with_clip_control(
@@ -78,24 +82,7 @@ pub(crate) fn scan_line_with_clip_control(
     base: usize,
     parse_clip_markers: bool,
 ) -> Vec<TypeMarkerOccurrence> {
-    scan_line_inner(line, base, false, parse_clip_markers)
-}
-
-fn scan_child_line(
-    line: &str,
-    base: usize,
-    parse_clip_markers: bool,
-) -> Vec<TypeMarkerOccurrence> {
-    scan_line_inner(line, base, true, parse_clip_markers)
-}
-
-fn scan_line_inner(
-    line: &str,
-    base: usize,
-    child_line: bool,
-    parse_clip_markers: bool,
-) -> Vec<TypeMarkerOccurrence> {
-    scan_line_with_positions(line, base, child_line, parse_clip_markers)
+    scan_line_with_positions(line, base, false, parse_clip_markers, None)
         .into_iter()
         .map(|(occurrence, _)| occurrence)
         .collect()
@@ -106,6 +93,7 @@ fn scan_line_with_positions(
     base: usize,
     child_line: bool,
     parse_clip_markers: bool,
+    item: Option<&CaptureItem<'_>>,
 ) -> Vec<(TypeMarkerOccurrence, bool)> {
     let (body_start, body) = if child_line {
         authored_body(line)
@@ -131,9 +119,9 @@ fn scan_line_with_positions(
             index += char_len(body, index);
             continue;
         }
-        let escaped = body[index..].starts_with("\\t:");
+        let escaped = body[index..].starts_with("\\#");
         let sigil = if escaped { index + 1 } else { index };
-        if !body[sigil..].starts_with("t:")
+        if !body[sigil..].starts_with('#')
             || protected
                 .iter()
                 .any(|(start, end)| *start <= sigil && sigil < *end)
@@ -147,9 +135,54 @@ fn scan_line_with_positions(
             index += char_len(body, index);
             continue;
         }
+        let after_hash = &body[sigil + 1..];
+        let opens = after_hash.chars().next().is_some_and(|character| {
+            character.is_ascii_alphabetic() || matches!(character, '"' | '“')
+        });
+        // A free-standing bare hash remains the Pomodoro-note marker (or
+        // prose). Only an attached @route^/+ suffix may be incomplete at #.
+        if !opens {
+            index += char_len(body, index);
+            continue;
+        }
         let parsed = parse_candidate(body, index, sigil, escaped);
         index = parsed.edge_end.max(index + 1);
         candidates.push(parsed);
+    }
+
+    // An attached `@route^block-id#type` is unambiguous at line scope. The
+    // `@route+block-id#type` form depends on the whole item, so it is only
+    // considered when the caller supplied that item view.
+    for (token_start, token_end) in whitespace_tokens(body) {
+        let Some((candidate, attached)) =
+            attached_route_candidate(body, token_start, token_end)
+        else {
+            continue;
+        };
+        let sigil = candidate.occurrence.span().start;
+        if protected
+            .iter()
+            .any(|(start, end)| *start <= sigil && sigil < *end)
+            || quoted_route_tokens
+                .iter()
+                .any(|span| span.start <= sigil && sigil < span.end)
+            || modifier_protected
+                .iter()
+                .any(|span| span.start <= sigil && sigil < span.end)
+        {
+            continue;
+        }
+        if attached == AttachedRouteKind::ExistingTask {
+            let Some(item) = item else {
+                continue;
+            };
+            let mut occurrence = candidate.occurrence.clone();
+            shift_occurrence(&mut occurrence, base + body_start);
+            if !marker_only_task_toggle(item, occurrence, parse_clip_markers) {
+                continue;
+            }
+        }
+        candidates.push(candidate);
     }
 
     let mut allowed = Vec::<Range<usize>>::new();
@@ -230,6 +263,7 @@ pub(crate) fn completion_at(
             line.start,
             line.start > first_line_start,
             true,
+            Some(item),
         ) {
             let span = occurrence.span().clone();
             if span.start < item.start
@@ -249,8 +283,12 @@ pub(crate) fn completion_at(
                 TypeMarkerOccurrence::Invalid { .. }
                 | TypeMarkerOccurrence::Escaped { .. } => continue,
             };
+            let replacement = span.clone();
             return Some(TypeMarkerCompletion {
                 span,
+                // Candidates include the `#` sigil, so attached suffixes
+                // replace their full marker while preserving the route token.
+                replacement,
                 query,
                 leading,
             });
@@ -279,7 +317,7 @@ fn decoded_completion_query(
     cursor: usize,
 ) -> Option<String> {
     let prefix = line.get(marker_start - base..cursor - base)?;
-    let rest = prefix.strip_prefix("t:")?;
+    let rest = prefix.strip_prefix('#')?;
     if rest.starts_with('"') || rest.starts_with('“') {
         Some(
             lex_exact_name_after_hash(rest, rest.len())
@@ -303,11 +341,159 @@ fn quoted_route_tokens(line: &str) -> Vec<Range<usize>> {
         .filter(|token| {
             (token.text.starts_with('@') || token.text.starts_with('^'))
                 && token.text.find('#').is_some_and(|hash| {
-                    opens_exact_name(&token.text[hash + 1..])
+                    let prefix = &token.text[..hash];
+                    let name = &token.text[hash + 1..];
+                    if prefix.contains(':') {
+                        return opens_exact_name(name);
+                    }
+                    if prefix.starts_with('^') {
+                        return prefix.ends_with('+')
+                            || misordered_project_name_suffix(name);
+                    }
+                    if prefix.starts_with('@') {
+                        return !prefix.contains('+') && !prefix.contains('^');
+                    }
+                    false
                 })
         })
         .map(|token| token.start..token.end)
         .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachedRouteKind {
+    ProjectTask,
+    ExistingTask,
+}
+
+fn attached_route_candidate(
+    line: &str,
+    token_start: usize,
+    token_end: usize,
+) -> Option<(Candidate, AttachedRouteKind)> {
+    let token = line.get(token_start..token_end)?;
+    let hash = token.find('#')?;
+    let prefix = &token[..hash];
+    let suffix = &token[hash + 1..];
+    let attached = if prefix.contains('^') {
+        if prefix.ends_with('+') || misordered_project_name_suffix(suffix) {
+            return None;
+        }
+        let parsed =
+            super::tokens::parse_task_block_id_route_token(prefix).ok()?;
+        matches!(
+            parsed.kind,
+            super::model::CaptureKind::TaskWithBlockId { .. }
+        )
+        .then_some(AttachedRouteKind::ProjectTask)?
+    } else {
+        let parsed =
+            super::tokens::parse_sub_bullet_route_token(prefix).ok()?;
+        if !matches!(
+            parsed.kind,
+            super::model::CaptureKind::SubBullet {
+                target: super::model::SubBulletTarget::BlockId(_),
+                section: None,
+            }
+        ) || suffix.ends_with('!')
+        {
+            return None;
+        }
+        AttachedRouteKind::ExistingTask
+    };
+    let marker_start = token_start + hash;
+    let candidate = parse_candidate(line, marker_start, marker_start, false);
+    Some((
+        Candidate {
+            occurrence: candidate.occurrence,
+            // The marker bytes attach to the route token. Treat them as a
+            // trailing field for replacement spacing even when the whole
+            // route token is at the line's leading edge.
+            edge_start: marker_start,
+            edge_end: token_end,
+        },
+        attached,
+    ))
+}
+
+/// A project-note name ending in `+` is the existing misordered spelling,
+/// not a type suffix. Preserve that route parser diagnostic, including its
+/// quoted-name form.
+fn misordered_project_name_suffix(suffix: &str) -> bool {
+    if let Some(name) = suffix.strip_suffix('+') {
+        if !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        {
+            return true;
+        }
+        if let Some(literal) = lex_exact_name_after_hash(name, name.len())
+            && literal.complete
+            && literal.literal_len == name.len()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Decide the overloaded `@route+block-id#…` suffix from one whole-item
+/// parse. Existing type markers are blanked first, then the low-level editor
+/// parser examines body and authored children without entering its own
+/// type-marker wrapper.
+fn marker_only_task_toggle(
+    item: &CaptureItem<'_>,
+    attached: TypeMarkerOccurrence,
+    parse_clip_markers: bool,
+) -> bool {
+    let lines = split_physical_lines(item.source);
+    let first_line_start = item
+        .lines
+        .first()
+        .map(|line| line.raw.start)
+        .unwrap_or(item.start);
+    let mut occurrences = Vec::new();
+    for item_line in &item.lines {
+        let Some(line) = lines.iter().find(|line| {
+            line.start <= item_line.raw.start && item_line.raw.start <= line.end
+        }) else {
+            continue;
+        };
+        occurrences.extend(
+            scan_line_with_positions(
+                line.text,
+                line.start,
+                line.start > first_line_start,
+                parse_clip_markers,
+                None,
+            )
+            .into_iter()
+            .map(|(occurrence, _)| occurrence)
+            .filter(|occurrence| {
+                occurrence.span().start >= item.start
+                    && occurrence.span().end <= item.end
+            }),
+        );
+    }
+    occurrences.push(attached);
+    let masked_source = masked_source(item, &occurrences);
+    let skips = marker_only_child_lines(item, &occurrences);
+    let mut masked_item = masked_item(item, &masked_source);
+    masked_item
+        .lines
+        .retain(|line| !skips.contains(&(line.raw.start, line.raw.end)));
+    matches!(
+        super::editor_parse::parse_editor_item_inner(
+            &masked_item,
+            &super::model::EditorParseOptions::routing_off(),
+        )
+        .item
+        .mode,
+        super::editor_model::EditorMode::TaskToggle
+            | super::editor_model::EditorMode::TaskDependency
+    )
 }
 
 fn parse_candidate(
@@ -316,7 +502,7 @@ fn parse_candidate(
     sigil: usize,
     escaped: bool,
 ) -> Candidate {
-    let content_start = sigil + 2;
+    let content_start = sigil + 1;
     let rest = &line[content_start..];
     let candidate_end = token_end(line, start);
     let (occurrence, edge_end) = if rest.starts_with('"')
@@ -396,10 +582,8 @@ fn parse_candidate(
             .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
             .count();
         let slug = &suffix[..slug_len];
-        let valid_start = slug
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphanumeric);
+        let valid_start =
+            slug.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
         if escaped {
             (
                 TypeMarkerOccurrence::Escaped {
@@ -552,6 +736,16 @@ pub(crate) fn collect_item_with_clip_control(
     item: &CaptureItem<'_>,
     parse_clip_markers: bool,
 ) -> Vec<TypeMarkerOccurrence> {
+    collect_item_with_positions(item, parse_clip_markers)
+        .into_iter()
+        .map(|(occurrence, _)| occurrence)
+        .collect()
+}
+
+fn collect_item_with_positions(
+    item: &CaptureItem<'_>,
+    parse_clip_markers: bool,
+) -> Vec<(TypeMarkerOccurrence, bool)> {
     let lines = split_physical_lines(item.source);
     let mut found = Vec::new();
     let first_line_start = item
@@ -565,27 +759,25 @@ pub(crate) fn collect_item_with_clip_control(
         }) else {
             continue;
         };
-        let occurrences = if line.start > first_line_start {
-            scan_child_line(line.text, line.start, parse_clip_markers)
-        } else {
-            scan_line_with_clip_control(
-                line.text,
-                line.start,
-                parse_clip_markers,
-            )
-        };
-        found.extend(occurrences.into_iter().filter(|occurrence| {
+        let occurrences = scan_line_with_positions(
+            line.text,
+            line.start,
+            line.start > first_line_start,
+            parse_clip_markers,
+            Some(item),
+        );
+        found.extend(occurrences.into_iter().filter(|(occurrence, _)| {
             occurrence.span().start >= item.start
                 && occurrence.span().end <= item.end
         }));
     }
-    found.sort_by_key(|occurrence| occurrence.span().start);
-    found.dedup_by(|left, right| left.span() == right.span());
+    found.sort_by_key(|(occurrence, _)| occurrence.span().start);
+    found.dedup_by(|(left, _), (right, _)| left.span() == right.span());
     found
 }
 
 /// Return a same-length line copy with type markers blanked. Escaped markers
-/// lose only their backslash, leaving the visible `t:…` text in the body.
+/// lose only their backslash, leaving the visible `#…` text in the body.
 pub(crate) fn masked_line(line: &RawLine<'_>) -> String {
     masked_line_with_clip_control(line, true)
 }
@@ -742,29 +934,29 @@ impl ItemLineView {
 pub(crate) fn invalid_marker_error(raw: &str) -> String {
     if raw.contains('+') {
         let name = raw
-            .strip_prefix("t:")
+            .strip_prefix('#')
             .unwrap_or(raw)
             .trim_matches(['"', '“', '”']);
         if let Some((left, right)) = name.split_once('+') {
             return format!(
-                "`t:{name}` names two types; a task has one type: write `t:{left}` or `t:{right}`"
+                "`#{name}` names two types; a task has one type: write `#{left}` or `#{right}`"
             );
         }
         return format!(
-            "`t:{name}` names two types; a task has one type: write `t:<type>`"
+            "`#{name}` names two types; a task has one type: write `#<type>`"
         );
     }
     format!(
-        "`{raw}` is not a task type: names use letters, digits, and `-`; quote other names (`t:\"Q&A\"`) or write `\\t:fix.` to keep the text"
+        "`{raw}` is not a task type: names start with a letter and use letters, digits, and `-`; quote other names (`#\"Q&A\"`) or write `\\#fix.` to keep the text"
     )
 }
 
 pub(crate) fn needs_task_error(name: Option<&str>) -> String {
     match name {
         Some(name) => format!(
-            "`t:{name}` needs a task: add the task text (`Fix the parser t:{name}`) or target one (`^sase:fix-x t:{name}`)"
+            "`#{name}` needs a task: add the task text (`Fix the parser #{name}`) or target one (`^sase:fix-x #{name}`)"
         ),
-        None => "`t:` is incomplete: type a task type after `t:` (for example `t:fix`)".to_string(),
+        None => "`#` is incomplete: type a task type after `#` (for example `#fix`)".to_string(),
     }
 }
 
@@ -809,6 +1001,29 @@ pub(crate) fn resolve_exact_type_name(
         }
     }
     None
+}
+
+/// Resolve a task type under capture's acceptance rule. A configured
+/// vocabulary is authoritative; without one, only names with Pomodoro
+/// history are accepted, and inventory labels never count as types.
+pub(crate) fn resolve_accepted_type_name(
+    catalog: &Catalog,
+    name: &str,
+    literal: bool,
+) -> Option<ResolvedTypeName> {
+    let configured = catalog.configured_themes();
+    resolve_exact_type_name(
+        configured,
+        &|key| {
+            if configured.is_none() && !catalog.is_inventory(key) {
+                catalog.get(key).map(|record| record.name.clone())
+            } else {
+                None
+            }
+        },
+        name,
+        literal,
+    )
 }
 
 /// Display spelling for a decoded marker name with no exact match: the
@@ -866,7 +1081,7 @@ pub(crate) fn type_marker_not_applicable_error(
     name: &str,
     subject: TypeMarkerSubject,
 ) -> String {
-    let marker = format!("t:{name}");
+    let marker = format!("#{name}");
     let (action, remedy) = match subject {
         TypeMarkerSubject::NewTask => return needs_task_error(Some(name)),
         TypeMarkerSubject::Bullet => (
@@ -875,7 +1090,7 @@ pub(crate) fn type_marker_not_applicable_error(
         ),
         TypeMarkerSubject::SubBullet => (
             "adds a child bullet",
-            "capture `@<route>+<block-id> t:<type>` alone to retype that task",
+            "capture `@<route>+<block-id>#<type>` alone to retype that task",
         ),
         TypeMarkerSubject::ProjectNote => {
             ("creates a project note", "set `task_type:` in the new note")

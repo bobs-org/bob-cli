@@ -8,8 +8,6 @@ pub(super) fn plan_ensure_next_capture(
     target: &Path,
     route: &str,
     block_id: &str,
-    pomodoro_name: Option<&str>,
-    pomodoro_name_is_literal: bool,
     contents: &str,
     _task_line_index: usize,
     previous_status_symbol: char,
@@ -190,14 +188,8 @@ pub(super) fn plan_ensure_next_capture(
     }
     let block_link = format!("[[{route}#^{block_id}]]");
     let day_contents = planner.read_existing(&day_file)?;
-    // A bare Ensure Next relocates to the task's typed placement (D7);
-    // a named one keeps its deliberate destination and never types.
-    let placement_type = if pomodoro_name.is_none() {
-        task_theme_context
-            .placement_for_task(planner, route, &task_line, warnings)
-    } else {
-        None
-    };
+    let placement_type = task_theme_context
+        .placement_for_task(planner, route, &task_line, warnings);
     let placed_type = placement_type.as_ref().map(|placement| {
         let typed = placement.as_typed();
         (typed, placement.placed_type())
@@ -206,8 +198,8 @@ pub(super) fn plan_ensure_next_capture(
     let relocation = capture_task_toggle::plan_link_relocation(
         &day_contents,
         &block_link,
-        pomodoro_name,
-        pomodoro_name_is_literal,
+        None,
+        false,
         typed,
     )
     .map_err(|error| {
@@ -217,7 +209,6 @@ pub(super) fn plan_ensure_next_capture(
         planner.stage(&day_file, relocation.content.clone())?;
     }
 
-    let selector = pomodoro_name;
     let pomodoro_link_action = match relocation.action {
         capture_task_toggle::LinkRelocationAction::Moved => "moved",
         capture_task_toggle::LinkRelocationAction::AlreadyCurrent => {
@@ -286,7 +277,7 @@ pub(super) fn plan_ensure_next_capture(
                     let mut destination = destination_json(
                         &relocation.destination,
                         relocation.creates_pomodoro,
-                        selector,
+                        None,
                     );
                     if let Some((_, placed)) = placed_type.as_ref() {
                         destination.placed_type = Some(placed.clone());

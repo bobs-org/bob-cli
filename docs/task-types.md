@@ -638,7 +638,7 @@ component.
 
 Forms: a new Pomodoro-linked task (`<text> @route:id#NAME`), a
 whole-item existing-task link (`@route:id#NAME` or `^route:id#NAME`),
-Ensure Next (`@route+id#NAME`), the equivalent `=name` shorthands, and
+the equivalent `=name` shorthands, and
 project-note ` :<id>` bullets under a named `+#NAME`. Link guards,
 unnamed links, ordinary toggles, close gestures, and `bob ref today`
 never write this field. A batch re-evaluates suggestions against its
@@ -646,7 +646,7 @@ staged note snapshot, and the task field is committed with that
 capture's task and ledger edits.
 
 Capture JSON omits `task_theme` on an unchanged write unless the capture
-has an explicit `t:` marker. A marker always reports the result, including
+has an explicit `#<type>` marker. A marker always reports the result, including
 `kept`. When present
 it is `{action, theme, previous, inherited}`: `action` is `set`,
 `cleared`, or `kept` (a marker always reports, even when nothing is
@@ -659,22 +659,24 @@ field (or null). Human output adds a type row
 `type   ■ FIX · from <stem>` (kept); dry-run reports the same
 post-image without writing.
 
-### Typed captures (`t:`)
+### Typed captures (`#<type>`)
 
-A `t:<type>` marker on a new task writes the resolved type X before
+A `#<type>` marker on a new or selected existing task writes the resolved type X before
 placement, following the field table: X equals the inherited suggestion I
 with no field means kept; with an authored exception means cleared;
 otherwise a field already equal to X is kept, else set. The marker is the
 authority over any `#NAME` retype: a container destination accepts X, a
 matching component accepts that explicit pick, otherwise the capture
-refuses with `type_marker_conflict`. Type-only changes stamp no freshness,
-change no lane, and consume no dependency guard.
+refuses with `type_marker_conflict`. With `types:` configured, only configured
+entries are accepted; without it, only types in Pomodoro history are accepted,
+excluding inventory labels. Unknown names fail with `type_not_configured`
+before any write. Type-only changes stamp no freshness, change no lane, and
+consume no dependency guard.
 
-The explicitly named capture choice and the `t:` marker are the writer
+The explicitly named capture choice and the `#<type>` marker are the writer
 boundary in this phase. Close, roll, typed `^^`, move, rollover,
 reconcile, ordinary successor placement, and ref-today remain
-never-writers. Existing-target markers are parsed but refused until a
-later phase.
+never-writers.
 
 ### Bare captures place by type
 
@@ -833,7 +835,7 @@ JS mirror's contract.
 | --- | --- | --- |
 | Task Card Type stage, Use default, Ctrl+D on Type | the type | relocating the live link (D8) |
 | Task move to another note | the inherited type, if no field | relocating the live link (D8) |
-| Capture `t:` on an existing task | the type | relocating the live link (D8) via the shared applier |
+| Capture `#<type>` on an existing task | the type | relocating the live link (D8) via the shared applier |
 | Naming or renaming an entry that holds links | the entry's types | retyping its tasks, count previewed (D6) |
 
 - **Type components.** A component of a Pomodoro name is a type component

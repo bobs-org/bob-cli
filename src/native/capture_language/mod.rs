@@ -131,6 +131,7 @@ pub(crate) use self::tokens::is_block_id;
 pub(crate) use self::tokens::is_pomodoro_selector_component;
 pub(crate) use self::type_marker::completion_at_raw as task_type_completion_at;
 pub(crate) use self::type_marker::not_applicable_error;
+pub(crate) use self::type_marker::resolve_accepted_type_name;
 pub(crate) use self::type_marker::resolve_exact_type_name;
 pub(crate) use self::type_marker::scan_line;
 pub(crate) use self::type_marker::unmatched_type_display;

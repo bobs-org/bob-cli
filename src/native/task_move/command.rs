@@ -722,7 +722,7 @@ fn compute_move_relocation(
             continue;
         };
         // Shared D8 applier keeps the live link agreeing with the moved
-        // task's new type; capture `t:` retypes call the same helper.
+        // task's new type; capture `#<type>` retypes call the same helper.
         match crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
             &day_contents,
             &block_id,

@@ -2660,7 +2660,7 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDG16 | a new task captured into K while K's `^prj` is tagged | lands `[?]`, `#prj_is_blocked`, unlinked, `not_linked` with the project reason |
 | PDG17 | Alt+] / Alt+[ on K's tagged `[?]` `^prj` | refused, as for a tagged resident: `Project blocked by parent project · <parent(K)>` |
 | PDG18 | capture `@route:id` (also `^route:id`, `#name`, `=<X>`) on a target whose only reason is `local_dependency` | open prerequisite links dropped from the line and field; `[?]` → `[*]`; linked (and started for `=<X>`); `dropped_dependencies` listed; prerequisite notes byte-identical |
-| PDG19 | the same target through `@route+id!`, `@route+id` / `@route+id#name` Ensure Next, and `@route:id=x…` | dropped, then linked, relocated, or linked-and-closed exactly like an unblocked target (`x1` leaves it `[/]`, `x!1` completes it) |
+| PDG19 | the same target through `@route+id!`, `@route+id` / `@route+id#type` Ensure Next, and `@route:id=x…` | dropped, then linked, relocated, or linked-and-closed exactly like an unblocked target (`x1` leaves it `[/]`, `x!1` completes it) |
 | PDG20 | the dropped links were the line's only links | line deleted; `[dependsOn::]` removed |
 | PDG21 | own open prerequisites plus a single own future `scheduled` | both retired in one write (PDG2 pull-forward plus the drop); linked |
 | PDG22 | the line also holds a Done prerequisite and an unresolved link | the Done and unresolved links are kept verbatim in order; their field ids are kept |

@@ -13,7 +13,7 @@ pub(crate) enum SpanKind {
     PomodoroRoute,
     PomodoroBlockId,
     PomodoroName,
-    /// A whole `t:<type>` marker token, sigil and quotes included.
+    /// A whole `#<type>` marker token, sigil and quotes included.
     TaskType,
     PomodoroStart,
     PomodoroStartDrop,
@@ -32,7 +32,6 @@ pub(crate) enum SpanKind {
     SubBulletSection,
     TaskToggleRoute,
     TaskToggleBlockId,
-    TaskTogglePomodoroName,
     TaskToggleExplicitToggle,
     ProjectNoteMarker,
     ProjectTaskLinkMarker,
@@ -103,7 +102,6 @@ impl SpanKind {
             Self::SubBulletSection => "sub_bullet_section",
             Self::TaskToggleRoute => "task_toggle_route",
             Self::TaskToggleBlockId => "task_toggle_block_id",
-            Self::TaskTogglePomodoroName => "task_toggle_pomodoro_name",
             Self::TaskToggleExplicitToggle => "task_toggle_explicit_toggle",
             Self::ProjectNoteMarker => "project_note_marker",
             Self::ProjectTaskLinkMarker => "project_task_link_marker",
@@ -243,7 +241,7 @@ pub(crate) enum Need {
     BlockId,
     PomodoroId,
     PomodoroName,
-    /// A `t:` marker is still open: name the task type to finish it.
+    /// A `#` marker is still open: name the task type to finish it.
     TaskType,
     Task,
     TaskSection,

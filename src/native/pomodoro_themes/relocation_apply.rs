@@ -1,6 +1,6 @@
 //! Shared D8 relocation applier for task-type agreement.
 //!
-//! Both `bob task move` and capture `t:` retypes call this helper so the
+//! Both `bob task move` and capture `#<type>` retypes call this helper so the
 //! live Task Link keeps agreeing with the task's new type. It is pure over
 //! the day-note contents plus the new type: it finds the dedicated live
 //! link, runs `routing::relocate`, applies the winning edit, and reports

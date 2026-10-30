@@ -177,6 +177,8 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "types:\n  \"DEEP WORK\": green\n");
     let target_before = concat!(
         "- [?] #task Scheduled work [scheduled::2026-07-20] ^sched\n",
         "  - 🗓️ **SCHEDULE LOG**
@@ -203,8 +205,9 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+sched#deep+work")
+        .arg("@cash+sched#deep-work")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
         .expect("dry-run named toggle");
@@ -216,7 +219,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     assert_eq!(json["toggle_behavior"], "ensure_next");
     assert_eq!(json["creates_pomodoro"], true);
     assert_eq!(json["pomodoro_link_action"], "moved");
-    assert_eq!(json["pomodoro_name"], "DEEP+WORK");
+    assert_eq!(json["pomodoro_name"], "DEEP WORK");
     assert_eq!(json["removed_scheduled"], "2026-07-20");
     assert_eq!(
         json["schedule_log"]["lines"][0],
@@ -238,8 +241,9 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+sched#deep+work")
+        .arg("@cash+sched#deep-work")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
         .expect("run named toggle");
@@ -254,7 +258,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
         concat!(
-            "- [*] #task Scheduled work [type:: DEEP] [fresh:: 2026-07-10] ^sched\n",
+            "- [*] #task Scheduled work [type:: DEEP WORK] [fresh:: 2026-07-10] ^sched\n",
             "  - 🗓️ **SCHEDULE LOG**
 ",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
@@ -270,8 +274,9 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+nolog#deep+work")
+        .arg("@cash+nolog#deep-work")
         .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 13:45:00")
         .output()
         .expect("run second named toggle");
@@ -283,12 +288,12 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
         concat!(
-            "- [*] #task Scheduled work [type:: DEEP] [fresh:: 2026-07-10] ^sched\n",
+            "- [*] #task Scheduled work [type:: DEEP WORK] [fresh:: 2026-07-10] ^sched\n",
             "  - 🗓️ **SCHEDULE LOG**
 ",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
             "    - *2026-07-01* — older\n",
-            "- [*] #task No log [type:: DEEP] [fresh:: 2026-07-10] ^nolog\n",
+            "- [*] #task No log [type:: DEEP WORK] [fresh:: 2026-07-10] ^nolog\n",
         )
     );
     assert_eq!(
@@ -296,7 +301,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         concat!(
             "## Pomodoros\n",
             "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
-            "- [ ] () — DEEP+WORK\n",
+            "- [ ] () — DEEP WORK\n",
             "  - [[cash#^sched]]\n",
             "    - review notes\n",
             "  - [[cash#^nolog]]\n",
@@ -355,6 +360,8 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
     let vault = temp.path().join("vault");
     let cash = vault.join("cash.md");
     let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "types:\n  \"DEEP WORK\": green\n");
     write_toggle_task_settings(&vault);
     write_file(&cash, "- [ ] #task Alpha ^alpha\n- [ ] #task Beta ^beta\n");
     write_file(
@@ -376,6 +383,7 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
             .arg("-f")
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_CONFIG_FILE", &config)
             .env("BOB_NOW", "2026-07-10 13:40:00"),
         draft,
     );
@@ -394,15 +402,16 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
         concat!(
             "## Pomodoros\n",
             "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
-            "- [ ] () — DEEP-WORK\n",
-            "  - [[dev#^first]]\n",
+            "- [ ] () — DEEP WORK\n",
             "  - [[cash#^alpha]]\n",
             "  - [[cash#^beta]]\n",
+            "- [ ] () — DEEP-WORK\n",
+            "  - [[dev#^first]]\n",
         )
     );
     assert_eq!(
         fs::read_to_string(&cash).expect("read cash"),
-        "- [*] #task Alpha [type:: DEEP-WORK] [fresh:: 2026-07-10] ^alpha\n- [*] #task Beta [type:: DEEP-WORK] [fresh:: 2026-07-10] ^beta\n",
+        "- [*] #task Alpha [type:: DEEP WORK] [fresh:: 2026-07-10] ^alpha\n- [*] #task Beta [type:: DEEP WORK] [fresh:: 2026-07-10] ^beta\n",
     );
 
     let rollback_temp = TempDir::new("bob-cli-capture-task-toggle-rollback");
@@ -644,6 +653,8 @@ fn capture_task_toggle_reports_created_named_entry() {
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "types:\n  \"DEEP WORK\": green\n");
     write_toggle_task_settings(&vault);
     write_file(&target, "- [ ] #task Fresh work ^fresh\n");
     let day_before = concat!(
@@ -654,11 +665,12 @@ fn capture_task_toggle_reports_created_named_entry() {
     );
     write_file(&day_file, day_before);
 
-    let json = capture_json_dry_run_matches_real(
+    let json = capture_json_dry_run_matches_real_config(
         &vault,
         &day_file,
         "2026-07-10 10:00:00",
-        &["@cash+fresh#deep+work"],
+        &config,
+        &["@cash+fresh#deep-work"],
     );
     assert_eq!(json["kind"], "task_toggle");
     assert_eq!(json["toggle_behavior"], "ensure_next");
@@ -670,13 +682,13 @@ fn capture_task_toggle_reports_created_named_entry() {
             {
                 "relative_target": "day.md",
                 "line": 3,
-                "name": "DEEP+WORK",
+                "name": "DEEP WORK",
                 "status": "queued",
                 "created": true,
                 "roles": ["linked"],
                 "lines": [
                     {
-                        "text": "- [ ] () — DEEP+WORK",
+                        "text": "- [ ] () — DEEP WORK",
                         "depth": 0,
                         "change": "added",
                     },
@@ -715,7 +727,7 @@ fn capture_task_toggle_reports_created_named_entry() {
         concat!(
             "## Pomodoros\n",
             "- [ ] (**0900-0930**) — CODING\n",
-            "- [ ] () — DEEP+WORK\n",
+            "- [ ] () — DEEP WORK\n",
             "  - [[cash#^fresh]]\n",
             "- [ ] () — QUEUE\n",
         )

@@ -1761,13 +1761,11 @@ pub(crate) fn resolve_execution_ownership(
     match kind {
         CaptureKind::TaskToggle {
             block_id,
-            pomodoro_name,
             intent,
             ..
         } => {
             let marker = local_marker_text.unwrap_or("@route+id");
-            if pomodoro_name.is_some()
-                || matches!(intent, TaskToggleIntent::Toggle)
+            if matches!(intent, TaskToggleIntent::Toggle)
                 || has_creation_modifiers
             {
                 return Err(invalid_relation_target_error(marker, sigil));

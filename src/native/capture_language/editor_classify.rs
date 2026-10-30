@@ -258,10 +258,9 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
             SUB_BULLET_BLOCK_ID_ERROR,
         ));
     }
-    // The strict task-section charset (no `+`) is enforced later, once the
-    // finished item shows whether this stays a sub-bullet capture or becomes
-    // a task toggle -- whose trailing name is a Pomodoro name and takes the
-    // wider Pomodoro charset instead. See `parse_editor_item`.
+    // The strict task-section charset (no `+`) applies when this remains a
+    // sub-bullet capture. Marker-only `@route+id#type` is masked by the
+    // shared item-level type-marker scanner before this classifier runs.
     if section_part.is_some_and(|section| {
         !section.is_empty() && !is_pomodoro_selector_component(section)
     }) {
@@ -278,8 +277,8 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
                 SpanKind::TaskToggleRoute,
                 SpanKind::TaskToggleBlockId,
                 EditorMode::TaskToggle,
-                SpanKind::TaskTogglePomodoroName,
-                Need::PomodoroName,
+                SpanKind::SubBulletSection,
+                Need::TaskSection,
             )
         } else {
             (
@@ -1553,29 +1552,6 @@ pub(super) fn retired_priority_marker_diagnostic(
         code: "retired_priority_marker",
         message: retired_priority_marker_error(&retired.token),
         range: retired.span,
-    })
-}
-
-/// Surface the retired standalone `#...` bullet marker as a diagnostic. The
-/// rule itself is [`reject_legacy_bullet_markers`], so the editor and
-/// `bob capture` can never disagree about which inputs are affected.
-pub(super) fn legacy_bullet_marker_diagnostic(
-    tokens: &[Token<'_>],
-) -> Option<Diagnostic> {
-    let texts: Vec<&str> = tokens.iter().map(|token| token.text).collect();
-    let message = reject_legacy_bullet_markers(&texts, true).err()?;
-    let last = tokens.last()?;
-    let offender = if last.text.starts_with('#') {
-        last
-    } else {
-        tokens.get(tokens.len().checked_sub(2)?)?
-    };
-
-    Some(Diagnostic {
-        severity: Severity::Error,
-        code: "legacy_bullet_marker",
-        message,
-        range: Some((offender.start, offender.end)),
     })
 }
 

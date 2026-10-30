@@ -216,6 +216,27 @@ fn request_argv_unquotes_words_and_passes_suffix() {
 }
 
 #[test]
+fn request_argv_unquotes_escaped_hash_prefix() {
+    if !have_zsh() {
+        return;
+    }
+    let out = run_stubbed(
+        "#fix\tFix the parser\ttask types\tspace\n",
+        "",
+        r#"words=(bob capture); CURRENT=3; PREFIX='\#f'; SUFFIX=""; curcontext=":completion:complete:bob:argument-1:";"#,
+        PRINT_RET,
+        false,
+    );
+    assert!(out.stdout.contains("RET 0"), "stdout:\n{}", out.stdout);
+    let hash_index = out.argv.iter().position(|arg| arg == "#f");
+    assert!(
+        hash_index.is_some(),
+        "expected decoded hash prefix, argv: {:?}",
+        out.argv
+    );
+}
+
+#[test]
 fn candidate_groups_keep_order_and_nospace_flag() {
     if !have_zsh() {
         return;
@@ -520,6 +541,16 @@ fn real_zsh_first_tab_completes() {
     }
     let temp = TempDir::new("bob-zsh-zpty");
     let dir = temp.path();
+    let vault = dir.join("vault");
+    let config = dir.join("config.yml");
+    let day_file = vault.join("2026/20260601.md");
+    write_capture_task_settings(&vault);
+    write_file(
+        &vault.join("mac_inbox.md"),
+        "---\ntype: \"[[area]]\"\n---\n# Inbox\n\n## Tasks\n",
+    );
+    write_file(&config, "types:\n  FIX: blue\n");
+    write_file(&day_file, "## Pomodoros\n- [x] () — FIX\n");
     let adapter = fs::read(adapter_path()).expect("read _bob.zsh source");
     fs::write(dir.join("_bob"), &adapter).expect("stage _bob adapter");
     #[cfg(unix)]
@@ -529,7 +560,13 @@ fn real_zsh_first_tab_completes() {
     write_file(&dir.join("driver.zsh"), driver);
     let mut command = Command::new("zsh");
     command.arg("-f").arg(dir.join("driver.zsh")).arg(dir);
-    command.env("BOB_COMPLETE_DEADLINE_MS", BOB_COMPLETION_TEST_DEADLINE_MS);
+    command
+        .env("BOB_COMPLETE_DEADLINE_MS", BOB_COMPLETION_TEST_DEADLINE_MS)
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-06-01 09:10:01")
+        .env("XDG_CACHE_HOME", dir.join("cache"));
     let output = match try_output_with_timeout(command, 30) {
         Ok(output) => output,
         Err(error) => panic!("zpty readiness deadline exceeded: {error}"),
@@ -550,6 +587,7 @@ fn real_zsh_first_tab_completes() {
         "DASH-TAB OK",
         "FORMAT-TAB OK",
         "FORMAT-HEADER OK",
+        "HASH-TYPE OK",
     ] {
         assert!(
             stdout.contains(marker),
@@ -625,5 +663,11 @@ if wait_for human ''; then print -r -- "FORMAT-TAB OK"; else print -r -- "FORMAT
 reset_line || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture --format \t'
 if wait_for format ''; then print -r -- "FORMAT-HEADER OK"; else print -r -- "FORMAT-HEADER MISS"; fi
+reset_line || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
+zpty -w pb "setopt interactive_comments"
+    # With interactive_comments, escape the leading hash so zsh treats it as
+    # an argument. The completion result must retain a usable hash marker.
+    zpty -w -n pb $'bob capture -d -f json Fix the parser \\#f\t\n'
+if wait_for '"task_theme"' ''; then print -r -- "HASH-TYPE OK"; else print -r -- "HASH-TYPE MISS"; fi
 zpty -d pb
 "#;

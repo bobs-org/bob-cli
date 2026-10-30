@@ -477,7 +477,7 @@ fn candidate_selects_plain_marker(
                 return false;
             }
             // Type markers are transparent to the toggle: mask them so a
-            // neighboring `t:` never blocks an otherwise plain marker.
+            // neighboring `#<type>` never blocks an otherwise plain marker.
             // Masking preserves byte lengths, so every span still indexes
             // the original draft.
             let masked = super::type_marker::masked_line(&RawLine {

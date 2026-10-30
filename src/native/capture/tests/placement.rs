@@ -562,15 +562,24 @@ fn suffixed_route_token_without_body_is_usage_error() {
 }
 
 #[test]
-fn legacy_standalone_bullet_markers_are_rejected() {
-    for raw in [
-        "Some note #bar @foo",
-        "Some note @foo #bar",
-        "Some note #bar",
+fn edge_hash_markers_are_task_types_not_legacy_bullet_selectors() {
+    for (raw, route) in [
+        ("Some note #bar @foo", Some("foo")),
+        ("Some note @foo #bar", Some("foo")),
+        ("Some note #bar", None),
     ] {
-        let error = parse_capture_text(raw, None)
-            .expect_err(&format!("{raw} should be a usage error"));
-        assert_eq!(error.kind, CaptureErrorKind::Usage, "{raw}");
+        let parsed = parse_capture_text(raw, None)
+            .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+        assert_eq!(parsed.body, "Some note", "{raw}");
+        assert_eq!(parsed.route.as_deref(), route, "{raw}");
+        assert_eq!(
+            parsed
+                .type_marker
+                .as_ref()
+                .map(|marker| marker.name.as_str()),
+            Some("bar"),
+            "{raw}"
+        );
     }
 }
 
@@ -584,10 +593,18 @@ fn bare_trailing_hash_resolves_pomodoro_note() {
 }
 
 #[test]
-fn forced_route_rejects_terminal_marker_but_keeps_middle_hashtag() {
-    let error = parse_capture_text("Some note #bar", Some("Work"))
-        .expect_err("forced terminal marker must fail");
-    assert_eq!(error.kind, CaptureErrorKind::Usage);
+fn forced_route_accepts_terminal_type_marker_but_keeps_middle_hashtag() {
+    let typed = parse_capture_text("Some note #bar", Some("Work"))
+        .expect("forced route accepts a terminal type marker");
+    assert_eq!(typed.body, "Some note");
+    assert_eq!(typed.route.as_deref(), Some("work"));
+    assert_eq!(
+        typed
+            .type_marker
+            .as_ref()
+            .map(|marker| marker.name.as_str()),
+        Some("bar")
+    );
 
     let parsed = parse_capture_text("Some #tag note", Some("Work"))
         .expect("middle hashtag stays literal");

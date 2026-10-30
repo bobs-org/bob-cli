@@ -59,7 +59,6 @@ fn resolve_line_inner<'a>(
     }
 
     let token_texts = tokens.iter().map(|token| token.text).collect::<Vec<_>>();
-    reject_legacy_bullet_markers(&token_texts, detect_route)?;
 
     // The bare `#` Pomodoro-note marker claims the route/mode slot from the
     // final token position, exactly like an `@route` token does, but it
@@ -152,7 +151,7 @@ fn resolve_line_inner<'a>(
                 } | CaptureKind::TaskToggle { .. }
                     | CaptureKind::Pomodoro { .. }
             ) {
-                // A bare `@route+block-id[#name]`, `@route+block-id!`, or
+                // A bare `@route+block-id[#<type>]`, `@route+block-id!`, or
                 // `@route:block-id[#pomodoro][=<X>]` routes with an empty
                 // body; `parse_capture_item` decides whether the finished
                 // item qualifies as a task-toggle or Pomodoro-link operation
@@ -313,12 +312,6 @@ pub(super) fn missing_capture_item_error() -> String {
 
 pub(super) fn unsupported_global_destination_error(token: &str) -> String {
     format!("{GLOBAL_DESTINATION_SHAPE_ERROR}; {token} is not supported")
-}
-
-pub(super) fn legacy_marker_error() -> String {
-    "bullet section markers must be appended to an @route token; use \
-@foo#bar instead of #bar @foo"
-        .to_string()
 }
 
 pub(super) fn pomodoro_note_route_conflict_error() -> String {

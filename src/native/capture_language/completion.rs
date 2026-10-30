@@ -31,7 +31,7 @@ pub(crate) enum CompletionContext {
     PomodoroName,
     PomodoroStartName,
     Task,
-    /// A `t:<type>` task-type marker at either item edge.
+    /// A `#<type>` task-type marker at either item edge.
     TaskType,
     TaskSection,
     ActiveTask,
@@ -1012,7 +1012,7 @@ pub(crate) fn completion_field_at(
                 route: None,
                 block_id: None,
                 query: marker.query,
-                replacement: (marker.span.start, marker.span.end),
+                replacement: (marker.replacement.start, marker.replacement.end),
                 bare_name: false,
             });
         }
@@ -1183,17 +1183,7 @@ pub(crate) fn completion_field_at(
         return None;
     }
 
-    // A `#` after `@route+block-id` completes a Pomodoro name instead of a
-    // task section exactly when the finished item is (or is one keystroke
-    // from becoming) a task toggle -- mirroring `parse_editor_item`'s own
-    // toggle decision, since only that whole-item view knows whether the
-    // body, authored children, and other item-wide markers allow it.
-    let resolved = parse_editor_item(item).item;
-    let sub_bullet_is_toggle = matches!(resolved.mode, EditorMode::TaskToggle)
-        || (resolved.mode == EditorMode::Incomplete
-            && resolved.needs == [Need::PomodoroName]);
-
-    marker_field_at_cursor(&token, cursor, sub_bullet_is_toggle)
+    marker_field_at_cursor(&token, cursor)
 }
 
 /// Build the vault-wide parent-task field for the shared terminal-plus
@@ -1589,7 +1579,6 @@ pub(super) fn completion_marker_index(
 pub(super) fn marker_field_at_cursor(
     token: &Token<'_>,
     cursor: usize,
-    sub_bullet_is_toggle: bool,
 ) -> Option<CompletionField> {
     let text = token.text;
 
@@ -1604,18 +1593,13 @@ pub(super) fn marker_field_at_cursor(
         let marker = &text[1..];
         let (route_part, rest) =
             marker.split_once('+').expect("sub-bullet candidate");
-        let third_context = if sub_bullet_is_toggle {
-            CompletionContext::PomodoroName
-        } else {
-            CompletionContext::TaskSection
-        };
         let (block_part, third) = match rest.split_once('#') {
             Some((block, section)) => (
                 block,
                 Some(CompletionThird {
                     separator_len: 1,
                     part: section,
-                    context: third_context,
+                    context: CompletionContext::TaskSection,
                 }),
             ),
             None => (rest, None),
