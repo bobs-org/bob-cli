@@ -2,8 +2,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
+
+use chrono::{TimeZone, Utc};
 
 use super::{
     bands, corpus, query_related_in, score, tokenize, CaptureRelatedResult,
@@ -262,6 +264,23 @@ fn query(root: &Path, text: &str) -> CaptureRelatedResult {
     query_related_in(root, text, 30, 5, None)
 }
 
+fn archive_mtime_on(year: i32, month: u32, day: u32) -> SystemTime {
+    let datetime = Utc
+        .with_ymd_and_hms(year, month, day, 12, 0, 0)
+        .single()
+        .expect("utc noon");
+    SystemTime::from(datetime)
+}
+
+fn set_mtime(path: &Path, time: SystemTime) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("open for mtime")
+        .set_modified(time)
+        .expect("set mtime");
+}
+
 fn bands_for(result: &CaptureRelatedResult, title: &str) -> Vec<String> {
     result
         .items
@@ -475,11 +494,8 @@ fn archive_closed_window_respects_mtime() {
         &archive,
         "---\ntype: [[area]]\n---\n- [x] #task Archived UPS swap [completion:: 2026-10-01] ^archived-ups\n",
     );
-    let recent = SystemTime::now() - Duration::from_secs(2 * 86400);
-    fs::File::open(&archive)
-        .expect("open archive")
-        .set_modified(recent)
-        .expect("set archive mtime");
+    // BOB_NOW is 2026-10-20; the 30-day archive window starts 2026-09-20.
+    set_mtime(&archive, archive_mtime_on(2026, 10, 18));
     let result = query(temp.path(), "Archived UPS swap");
     assert!(
         result.items[0]
@@ -494,11 +510,7 @@ fn archive_closed_window_respects_mtime() {
         &stale,
         "---\ntype: [[area]]\n---\n- [x] #task Stale archive task [completion:: 2026-10-01] ^stale-arch\n",
     );
-    let old = SystemTime::now() - Duration::from_secs(40 * 86400);
-    fs::File::open(&stale)
-        .expect("open stale archive")
-        .set_modified(old)
-        .expect("set stale mtime");
+    set_mtime(&stale, archive_mtime_on(2026, 9, 1));
     let stale_result = query(temp.path(), "Stale archive task");
     assert!(
         stale_result.items[0]
