@@ -1247,7 +1247,7 @@ fn plan_stamp(
         let refs = working.line_refs();
         let due =
             other_changed || stamp::is_due(&refs, range.clone(), now, note_day);
-        (due, stamp::recognize(&refs, range))
+        (due, stamp::recognize(&refs, range.clone()))
     };
     if !due {
         plan.stamp = stamps
@@ -1258,6 +1258,40 @@ fn plan_stamp(
     }
 
     let mut pomodoro_0 = plan.pomodoro_entry_line.map(|line| line - 1);
+    let pre_canonical = {
+        let refs = working.line_refs();
+        stamp::canonical_slot(&refs, range.clone())
+    };
+    if stamps.len() == 1 && stamps[0] == pre_canonical {
+        let anchor = stamps[0];
+        if pomodoro_0.is_some_and(|line| anchor < line) {
+            pomodoro_0 = pomodoro_0.map(|line| line - 1);
+        }
+        working.lines.remove(anchor);
+        let need_blank_after = working.lines.get(anchor).is_some_and(|line| {
+            !line.trim().is_empty()
+                && !stamp::is_list_item(line)
+                && markdown::atx_heading(line).is_none()
+        });
+        let rendered = stamp::render(input.account, now, note_day);
+        working.lines.insert(anchor, rendered);
+        if pomodoro_0.is_some_and(|line| anchor <= line) {
+            pomodoro_0 = pomodoro_0.map(|line| line + 1);
+        }
+        if need_blank_after {
+            working.lines.insert(anchor + 1, String::new());
+            if pomodoro_0.is_some_and(|line| anchor < line) {
+                pomodoro_0 = pomodoro_0.map(|line| line + 1);
+            }
+        }
+        plan.pomodoro_entry_line = pomodoro_0.map(|line| line + 1);
+        plan.stamp = Some(Stamp {
+            account: input.account.to_string(),
+            synced_at: now,
+        });
+        plan.stamp_refreshed = true;
+        return;
+    }
     stamps.sort_unstable();
     for index in stamps.into_iter().rev() {
         if pomodoro_0.is_some_and(|line| index < line) {

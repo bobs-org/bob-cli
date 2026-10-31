@@ -169,7 +169,14 @@ pub(crate) fn is_due(
     if render(&parsed.account, parsed.synced_at, note_day) != lines[index] {
         return true;
     }
-    if index != canonical_slot(lines, events_range) {
+    if index != canonical_slot(lines, events_range.clone()) {
+        return true;
+    }
+    if lines.get(index + 1).is_some_and(|line| {
+        !line.trim().is_empty()
+            && !is_list_item(line)
+            && markdown::atx_heading(line).is_none()
+    }) {
         return true;
     }
     if let Some(minutes) = STAMP_HEARTBEAT_MINUTES

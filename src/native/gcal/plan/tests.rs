@@ -370,3 +370,72 @@ fn stamp_below_pomodoros_does_not_shift_meet_line() {
     );
     assert!(events.contains("- leftover\n"), "{events}");
 }
+
+#[test]
+fn canonical_stamp_directly_above_prose_gains_one_separator() {
+    let old = stamp_line(12, 0);
+    let input = format!(
+        "## Events\n\n{old}\nPersonal notes for the day.\n\n## Pomodoros\n"
+    );
+    let plan = run_at(&input, Vec::new(), ACCOUNT, now_at(12, 20), false);
+    let fresh = stamp_line(12, 20);
+    assert!(plan.changed, "{input:?}");
+    assert!(plan.stamp_refreshed);
+    assert_eq!(
+        plan.contents,
+        format!("## Events\n\n{fresh}\n\nPersonal notes for the day.\n\n## Pomodoros\n")
+    );
+    let idle =
+        run_at(&plan.contents, Vec::new(), ACCOUNT, now_at(13, 0), false);
+    assert!(!idle.changed, "{}", idle.contents);
+    assert_eq!(idle.contents, plan.contents);
+    assert!(!idle.stamp_refreshed);
+}
+
+#[test]
+fn stamp_separator_is_reused_across_forced_refreshes() {
+    for heading_blanks in ["\n\n", "\n\n\n"] {
+        let future = stamp_line(12, 1);
+        let input = format!("## Events{heading_blanks}{future}\n\nPersonal notes.\n\n## Pomodoros\n");
+        let plan = run_at(&input, Vec::new(), ACCOUNT, now_at(12, 0), false);
+        let canonical = stamp_line(12, 0);
+        let expected =
+            format!("## Events{heading_blanks}{canonical}\n\nPersonal notes.\n\n## Pomodoros\n");
+        assert_eq!(
+            plan.contents, expected,
+            "heading_blanks={heading_blanks:?}"
+        );
+        assert!(plan.stamp_refreshed);
+        let repeat =
+            run_at(&expected, Vec::new(), ACCOUNT, now_at(12, 0), false);
+        assert!(!repeat.changed, "{}", repeat.contents);
+        assert_eq!(repeat.contents, expected);
+        assert!(!repeat.stamp_refreshed);
+        let earlier = stamp_line(11, 0);
+        let forced =
+            run_at(&expected, Vec::new(), ACCOUNT, now_at(11, 0), false);
+        let expected_forced =
+            format!("## Events{heading_blanks}{earlier}\n\nPersonal notes.\n\n## Pomodoros\n");
+        assert_eq!(
+            forced.contents, expected_forced,
+            "heading_blanks={heading_blanks:?}"
+        );
+        assert!(forced.stamp_refreshed);
+    }
+}
+
+#[test]
+fn stamp_blank_before_list_is_preserved_on_refresh() {
+    let future = stamp_line(12, 1);
+    let input =
+        format!("## Events\n\n{future}\n\n- leftover\n\n## Pomodoros\n");
+    let plan = run_at(&input, Vec::new(), ACCOUNT, now_at(12, 0), false);
+    let canonical = stamp_line(12, 0);
+    assert_eq!(
+        plan.contents,
+        format!("## Events\n\n{canonical}\n\n- leftover\n\n## Pomodoros\n"),
+        "{}",
+        plan.contents
+    );
+    assert!(plan.stamp_refreshed);
+}

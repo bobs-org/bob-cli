@@ -868,6 +868,60 @@ fn deleted_stamp_is_restored_without_row_churn() {
 }
 
 #[test]
+fn missing_paragraph_gap_is_repaired_without_journal_churn() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-stamp-paragraph-gap");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let baseline = today_note(&env);
+    let journal_count = journal_lines(&env).len();
+    let old_stamp = today_stamp("12:00");
+    assert!(baseline.contains(&format!("{old_stamp}\n")), "{baseline}");
+    let without_gap = baseline.replacen(
+        &format!("{old_stamp}\n"),
+        &format!("{old_stamp}\nPersonal notes for the day.\n"),
+        1,
+    );
+    assert_ne!(without_gap, baseline);
+    fs::write(env.vault().join("2026/20261030.md"), &without_gap)
+        .expect("remove paragraph gap");
+
+    let dry = sync_at(&env, &fake, &["-d"], "2026-10-30 12:20:00");
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    let diff = stdout(&dry);
+    assert!(diff.contains(&today_stamp("12:20")), "{diff}");
+    assert_eq!(today_note(&env), without_gap, "dry run writes nothing");
+    assert_eq!(journal_lines(&env).len(), journal_count);
+
+    let repaired = sync_at(&env, &fake, &[], "2026-10-30 12:20:00");
+    assert_eq!(repaired.status.code(), Some(0), "{}", stderr(&repaired));
+    let fresh_stamp = today_stamp("12:20");
+    let note = today_note(&env);
+    assert!(
+        note.contains(&format!(
+            "{fresh_stamp}\n\nPersonal notes for the day.\n"
+        )),
+        "{note}"
+    );
+    assert!(
+        stdout(&repaired).contains("✓ Events unchanged · stamp refreshed"),
+        "{}",
+        stdout(&repaired)
+    );
+    assert_eq!(journal_lines(&env).len(), journal_count);
+
+    let idle = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 13:00:00");
+    assert_eq!(idle.status.code(), Some(0), "{}", stderr(&idle));
+    assert_eq!(today_note(&env), note, "idle run is byte-identical");
+    assert_eq!(journal_lines(&env).len(), journal_count);
+    let report: Value =
+        serde_json::from_str(&stdout(&idle)).expect("JSON report");
+    assert_eq!(report["stamp"]["synced_at"], "2026-10-30T12:20");
+    assert_eq!(report["stamp"]["refreshed"], false);
+}
+
+#[test]
 fn waiting_json_reports_a_null_stamp() {
     let env = GcalEnv::new("bob-cli-gcal-sync-stamp-waiting");
     prepare(&env);
