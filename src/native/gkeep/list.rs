@@ -22,7 +22,7 @@ use super::{
     ui::{format_age, report_error, warn},
 };
 use super::{GkeepError, ListArgs};
-use crate::native::url_routing::{library_verdicts, UrlRoutingPolicy};
+use crate::native::url_routing::library_verdicts;
 use crate::native::{
     env as bob_env, note_tasks,
     style::{self, Styler},
@@ -86,9 +86,15 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
         Some("Syncing Google Keep")
     };
     let credentials = Credentials::from_config(&config, &token);
+    let started_at = super::ui::now_utc();
     let notes = match client.snapshot(&credentials, args.all, spinner_label) {
         Ok(notes) => notes,
-        Err(error) => return print_keep_failure(args, &vault, &error),
+        Err(error) => {
+            super::status_cache::StatusCache::record_failure(
+                &config, &error, started_at,
+            );
+            return print_keep_failure(args, &vault, &error);
+        }
     };
 
     // Archived notes are listed only with `--all`, even if the adapter
@@ -99,14 +105,8 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
         .collect();
     // URL-only notes show a 🔗 ref hint; a config error warns and
     // lists without hints instead of failing.
-    let routing = match UrlRoutingPolicy::load() {
-        Ok(policy) => {
-            if policy.gkeep {
-                Some(policy)
-            } else {
-                None
-            }
-        }
+    let routing = match super::plan::load_gkeep_routing(false) {
+        Ok(routing) => routing,
         Err(error) => {
             warn(&format!("URL routing is off: {error:?}"));
             None
@@ -130,6 +130,12 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
         fetched_at,
         plan,
     };
+    super::status_cache::StatusCache::record_observation(
+        &config,
+        super::status_cache::Observation::from_default_plan(
+            &keep.plan, started_at, "list",
+        ),
+    );
     let ref_hints = ref_hint_map(&bob_dir, &keep.plan);
 
     if args.format.is_json() {
@@ -282,7 +288,7 @@ fn read_vault(
     let mut tasks =
         read_target_tasks_with_imports(&contents, &settings, &store_files);
     if !show_all {
-        tasks.retain(|task| is_open_status(task.status_symbol));
+        tasks.retain(|task| super::ledger::is_open_status(task.status_symbol));
     }
     // Vault rows oldest first: by `created`, then line. Rows without
     // `created` go last, in file order.
@@ -301,12 +307,6 @@ fn read_vault(
         journal,
         missing_target,
     })
-}
-
-/// Whether a vault task counts as open: anything but done (`x`) or
-/// cancelled (`-`).
-fn is_open_status(symbol: char) -> bool {
-    !matches!(symbol, 'x' | 'X' | '-')
 }
 
 /// A Keep failure still prints the vault section (unless `-s keep`),

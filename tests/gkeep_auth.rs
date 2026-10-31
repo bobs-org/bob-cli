@@ -14,8 +14,8 @@ use std::{
 };
 
 use gkeep_support::{
-    exchange_ok, note, ping_ok, snapshot_ok, stderr, stdout, FakeAdapter,
-    GkeepEnv,
+    error_response, exchange_ok, note, ping_ok, snapshot_ok, stderr, stdout,
+    FakeAdapter, GkeepEnv,
 };
 
 /// A `bob` command pointed at the fake adapter with isolated state and
@@ -164,6 +164,15 @@ fn write_target(env: &GkeepEnv) {
         "---\ntitle: inbox\n---\n\n- intro\n\n## Tasks\n",
     )
     .expect("write target note");
+}
+
+fn status_doc(env: &GkeepEnv) -> Option<serde_json::Value> {
+    let path = root_of(env)
+        .join("state")
+        .join("bob-cli")
+        .join("gkeep")
+        .join("status.json");
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
 #[test]
@@ -625,4 +634,85 @@ fn doctor_json_reports_the_check_shape() {
         !stdout(&output).contains("aas_et/test-master-token"),
         "no token in JSON"
     );
+}
+
+#[test]
+fn doctor_records_a_keep_observation() {
+    let env = GkeepEnv::new("bob-cli-gkeep-doctor-status-cache");
+    let root = root_of(&env);
+    let reader = write_token_reader(&root, "aas_et/test-master-token");
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    write_auth_config(&env, &reader_cmd, "true");
+    write_target(&env);
+    let fake = FakeAdapter::new(&env, "doctor-status");
+    fake.respond("ping", &ping_ok());
+    fake.respond(
+        "snapshot",
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![note("Call dentist").id("n1").build()],
+        ),
+    );
+    let output = run_doctor(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let doc = status_doc(&env).expect("status.json");
+    assert_eq!(doc["verified"], true);
+    assert_eq!(doc["observation"]["source"], "doctor");
+    assert_eq!(doc["observation"]["pull"]["new"], 1);
+}
+
+#[test]
+fn doctor_records_keep_adapter_failures() {
+    let env = GkeepEnv::new("bob-cli-gkeep-doctor-status-fail");
+    let root = root_of(&env);
+    let reader = write_token_reader(&root, "aas_et/test-master-token");
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    write_auth_config(&env, &reader_cmd, "true");
+    write_target(&env);
+    let fake = FakeAdapter::new(&env, "doctor-status-fail");
+    fake.respond("ping", &ping_ok());
+    fake.respond("snapshot", &error_response("auth", "login expired"));
+    let output = run_doctor(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let doc = status_doc(&env).expect("status.json");
+    assert_eq!(doc["failure"]["state"], "auth");
+    assert_eq!(doc["failure"]["kind"], "auth");
+}
+
+#[test]
+fn login_records_a_keep_observation() {
+    let env = GkeepEnv::new("bob-cli-gkeep-login-status-cache");
+    let root = root_of(&env);
+    let token_file = root.join("token.txt");
+    let reader = write_token_reader(&root, "unused-until-stored");
+    let store = write_token_store(&root, &token_file);
+    fs::write(
+        &reader,
+        format!("#!/bin/sh\ncat {}\n", shell_quote(&token_file)),
+    )
+    .expect("rewrite token reader");
+    chmod_exec(&reader);
+    let reader_cmd = format!("sh {}", shell_quote(&reader));
+    let store_cmd = format!("sh {}", shell_quote(&store));
+    write_auth_config(&env, &reader_cmd, &store_cmd);
+    let fake = FakeAdapter::new(&env, "login-status");
+    fake.respond("exchange", &exchange_ok("aas_et/fresh-token"));
+    fake.respond(
+        "snapshot",
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![note("Call dentist").id("n1").build()],
+        ),
+    );
+    let output = run_login(&env, &fake, &[], "oauth2_4/test-cookie\n");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let doc = status_doc(&env).expect("status.json");
+    assert_eq!(doc["verified"], true);
+    assert_eq!(doc["observation"]["source"], "login");
+    assert_eq!(doc["observation"]["pull"]["new"], 1);
 }

@@ -77,7 +77,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     checks.push(adapter_check);
     match (token, client) {
         (Some(master_token), Some(client)) => {
-            checks.push(keep_check(&config, &client, &master_token));
+            checks.push(keep_check(&config, &client, &master_token, &bob_dir));
         }
         (None, _) => {
             checks.push(skipped("keep", "no working token"));
@@ -314,11 +314,21 @@ fn keep_check(
     config: &GkeepConfig,
     client: &AdapterClient,
     master_token: &str,
+    bob_dir: &Path,
 ) -> Check {
     let credentials =
         super::adapter::Credentials::from_config(config, master_token);
+    let started_at = ui::now_utc();
     match client.snapshot(&credentials, false, None) {
         Ok(notes) => {
+            if let Some(observation) = super::status_cache::observe_default(
+                &notes, bob_dir, started_at, "doctor",
+            ) {
+                super::status_cache::StatusCache::record_observation(
+                    config,
+                    observation,
+                );
+            }
             let pinned = notes.iter().filter(|note| note.pinned).count();
             Check {
                 name: "keep",
@@ -331,12 +341,17 @@ fn keep_check(
                 hint: None,
             }
         }
-        Err(error) => Check {
-            name: "keep",
-            status: CheckStatus::Fail,
-            summary: error.message().to_string(),
-            hint: error.hint().map(str::to_string),
-        },
+        Err(error) => {
+            super::status_cache::StatusCache::record_failure(
+                config, &error, started_at,
+            );
+            Check {
+                name: "keep",
+                status: CheckStatus::Fail,
+                summary: error.message().to_string(),
+                hint: error.hint().map(str::to_string),
+            }
+        }
     }
 }
 

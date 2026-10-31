@@ -411,6 +411,12 @@ pub(super) struct VaultTask {
     pub(super) source: Option<SourceIdentity>,
 }
 
+/// Whether a vault task counts as open: anything but done (`x`/`X`) or
+/// cancelled (`-`).
+pub(super) fn is_open_status(symbol: char) -> bool {
+    !matches!(symbol, 'x' | 'X' | '-')
+}
+
 impl VaultTask {
     /// The Keep id for presentation (`marker` first, else receipt).
     pub(super) fn source_id(&self) -> Option<&str> {
@@ -963,5 +969,47 @@ mod tests {
             .description
             .contains("[💡](https://keep.google.com"));
         assert_eq!(tasks[1].marker, None);
+    }
+
+    #[test]
+    fn open_status_parity_fixture_counts_five() {
+        let contents = "\
+---
+parent: \"[[inbox]]\"
+---
+
+# Keep inbox
+
+- [ ] Call the bank #task
+- [?] Blocked thing #task
+- [*] Next thing #task
+- [/] In progress thing #task
+- [x] Done thing #task
+- [x] Done uppercase #task
+- [-] Cancelled thing #task
+- [ ] Grocery list #task
+  - [ ] milk
+  - [ ] eggs
+  - [ ] Hand-nested subtask #task
+- [ ] Untagged top-level line
+
+```text
+- [ ] Fenced #task line
+```
+";
+        let settings = read_settings(Path::new("/nonexistent"));
+        let tasks = read_target_tasks(contents, &settings);
+        let open: Vec<_> = tasks
+            .iter()
+            .filter(|task| is_open_status(task.status_symbol))
+            .collect();
+        assert_eq!(
+            open.len(),
+            5,
+            "open tasks: {:?}",
+            open.iter()
+                .map(|task| task.description.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 }

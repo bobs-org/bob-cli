@@ -51,6 +51,17 @@ fn write_target(env: &GkeepEnv, contents: &str) {
         .expect("write target note");
 }
 
+fn status_doc(env: &GkeepEnv) -> Option<serde_json::Value> {
+    let path = env
+        .vault()
+        .parent()?
+        .join("state")
+        .join("bob-cli")
+        .join("gkeep")
+        .join("status.json");
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+}
+
 fn target_with_note(marker: &str) -> String {
     format!(
         "---\ntitle: gkeep inbox\n---\n\n- Seed bullet one.\n- The tasks below are pulled in by the `bob gkeep` command.\n\n## Tasks\n\n- [ ] #task Pending task [created::2026-09-27]\n\t- Source: Google Keep · 2026-09-27 21:14 {marker}\n"
@@ -890,4 +901,85 @@ fn url_only_note_shows_parent_hint_for_resolved_and_asks_routes() {
     let notes = document["keep"]["notes"].as_array().expect("notes array");
     assert_eq!(notes[0]["clip"]["parent"], "sase");
     assert_eq!(notes[1]["clip"]["parent"], "gkeep_inbox");
+}
+
+#[test]
+fn list_records_a_default_pull_observation() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-status-cache");
+    install_token_stub(&env);
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond(
+        "snapshot",
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![
+                note("Fresh idea").id("keep-new-1").build(),
+                note("Wi-Fi password").id("keep-pinned-1").pinned().build(),
+            ],
+        ),
+    );
+    let output = list_command(&env, &fake, &[]).output().expect("run list");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let doc = status_doc(&env).expect("status.json");
+    assert_eq!(doc["cache_version"], 1);
+    assert_eq!(doc["verified"], true);
+    assert_eq!(doc["observation"]["source"], "list");
+    assert_eq!(doc["observation"]["pull"]["total"], 1);
+    assert_eq!(doc["observation"]["pull"]["new"], 1);
+    assert_eq!(doc["observation"]["stays"]["pinned"], 1);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = env
+            .vault()
+            .parent()
+            .expect("root")
+            .join("state/bob-cli/gkeep/status.json");
+        let mode = fs::metadata(&path)
+            .expect("stat status.json")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}
+
+#[test]
+fn list_vault_source_writes_no_status_cache() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-vault-cache");
+    install_token_stub(&env);
+    write_target(
+        &env,
+        "## Tasks\n\n- [ ] #task Solo vault task [created::2026-09-27]\n",
+    );
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond(
+        "snapshot",
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![note("Should not snapshot").id("n1").build()],
+        ),
+    );
+    let output = list_command(&env, &fake, &["-s", "vault"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(fake.call_count(), 0);
+    assert!(status_doc(&env).is_none(), "vault-only writes no cache");
+}
+
+#[test]
+fn list_records_adapter_failures() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-status-fail");
+    install_token_stub(&env);
+    write_target(&env, "## Tasks\n");
+    let fake = FakeAdapter::new(&env, "adapter");
+    fake.respond("snapshot", &error_response("network", "down"));
+    let output = list_command(&env, &fake, &[]).output().expect("run");
+    assert_eq!(output.status.code(), Some(1));
+    let doc = status_doc(&env).expect("status.json");
+    assert_eq!(doc["verified"], false);
+    assert_eq!(doc["failure"]["state"], "offline");
+    assert_eq!(doc["failure"]["kind"], "network");
+    assert_eq!(doc["failure"]["count"], 1);
 }

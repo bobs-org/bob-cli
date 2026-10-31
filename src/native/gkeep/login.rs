@@ -92,12 +92,25 @@ pub(crate) fn run(args: &LoginArgs) -> i32 {
         }
     }
     let credentials = Credentials::from_config(&config, &master_token);
+    let started_at = ui::now_utc();
     let notes = match client.snapshot(&credentials, false, None) {
         Ok(notes) => notes,
         Err(error) => {
+            super::status_cache::StatusCache::record_failure(
+                &config, &error, started_at,
+            );
             return ui::report_error("login", &error, "human");
         }
     };
+    let bob_dir = bob_env::bob_dir();
+    if let Some(observation) = super::status_cache::observe_default(
+        &notes, &bob_dir, started_at, "login",
+    ) {
+        super::status_cache::StatusCache::record_observation(
+            &config,
+            observation,
+        );
+    }
 
     let styler = Styler::detect();
     println!("{} exchanged for a master token", styler.green("✓"));

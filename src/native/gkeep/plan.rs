@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::ledger::{Journal, Ledger};
 use super::model::{note_ref, KeepNote};
 use super::GkeepError;
+use crate::native::config::ConfigError;
 use crate::native::url_routing::{
     classify_token, is_standalone_listen_marker, RefIntent, RoutingEntry,
     UrlRoutingPolicy,
@@ -29,6 +30,23 @@ pub(super) struct PlanOptions {
     /// URL routing policy for the R5 URL-only rule. `None` disables
     /// reference classification (`-R`, or routing off in config).
     pub(super) routing: Option<UrlRoutingPolicy>,
+}
+
+/// Load gkeep URL routing. `no_ref` (`-R`) disables it. A `gkeep: false`
+/// toggle disables it silently. A config error is returned so the caller
+/// can warn without this helper printing.
+pub(super) fn load_gkeep_routing(
+    no_ref: bool,
+) -> Result<Option<UrlRoutingPolicy>, ConfigError> {
+    if no_ref {
+        return Ok(None);
+    }
+    let policy = UrlRoutingPolicy::load()?;
+    if policy.gkeep {
+        Ok(Some(policy))
+    } else {
+        Ok(None)
+    }
 }
 
 /// The classification of one Keep note.

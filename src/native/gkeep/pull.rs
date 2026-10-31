@@ -133,17 +133,8 @@ impl ClipSet {
 /// a config error warns and disables it too (a bare URL then simply
 /// stays a task). A `gkeep: false` toggle disables it silently.
 fn load_gkeep_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
-    if no_ref {
-        return None;
-    }
-    match UrlRoutingPolicy::load() {
-        Ok(policy) => {
-            if policy.gkeep {
-                Some(policy)
-            } else {
-                None
-            }
-        }
+    match super::plan::load_gkeep_routing(no_ref) {
+        Ok(routing) => routing,
         Err(error) => {
             eprintln!("bob gkeep pull: warning: URL routing is off: {error}");
             None
@@ -220,10 +211,25 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     } else {
         Some("Syncing Google Keep")
     };
+    let started_at = ui::now_utc();
     let notes = match client.snapshot(&creds, false, spinner_label) {
         Ok(notes) => notes,
-        Err(error) => return ui::report_error("pull", &error, format_name),
+        Err(error) => {
+            super::status_cache::StatusCache::record_failure(
+                &config, &error, started_at,
+            );
+            return ui::report_error("pull", &error, format_name);
+        }
     };
+    let bob_dir = args.bob_dir();
+    if let Some(observation) = super::status_cache::observe_default(
+        &notes, &bob_dir, started_at, "pull",
+    ) {
+        super::status_cache::StatusCache::record_observation(
+            &config,
+            observation,
+        );
+    }
 
     // Strict --id resolution before planning.
     if !args.id.is_empty()
@@ -232,7 +238,6 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         return ui::report_error("pull", &error, format_name);
     }
 
-    let bob_dir = args.bob_dir();
     let target_rel = PathBuf::from(config.target());
     let target_path = config.target_path(&bob_dir);
 
@@ -332,6 +337,9 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
 
     // Clip URL-only notes before the target check and the vault lock,
     // under the pull lock. A dry run only computes offline verdicts.
+    if !args.dry_run {
+        super::status_cache::StatusCache::invalidate(&config, ui::now_utc());
+    }
     let clips = run_clip_pre_pass(
         &plan,
         &bob_dir,
@@ -467,6 +475,8 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             None,
             &clips,
             &styler,
+            &notes,
+            &bob_dir,
         );
     }
 
@@ -607,6 +617,8 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
                             sha,
                             &clips,
                             &styler,
+                            &notes,
+                            &bob_dir,
                         );
                     }
                     Err(error) => {
@@ -626,6 +638,8 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             None,
             &clips,
             &styler,
+            &notes,
+            &bob_dir,
         );
     }
 
@@ -1129,6 +1143,8 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             commit_sha.clone(),
             &clips,
             &styler,
+            &notes,
+            &bob_dir,
         );
         if !args.quiet {
             for (index, item) in writes.iter().enumerate() {
@@ -1154,6 +1170,8 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         commit_sha,
         &clips,
         &styler,
+        &notes,
+        &bob_dir,
     )
 }
 
@@ -2121,6 +2139,45 @@ fn fault_injected(name: &str) -> bool {
     }
 }
 
+/// Re-observe remaining Keep notes after a pull whose archive outcomes
+/// are all known. An archive `Error` leaves the cache invalidated.
+fn record_post_pull(
+    config: &GkeepConfig,
+    notes: &[KeepNote],
+    bob_dir: &Path,
+    archive_status: &std::collections::BTreeMap<
+        String,
+        (ArchiveStatus, Option<String>),
+    >,
+) {
+    if archive_status
+        .values()
+        .any(|(status, _)| *status == ArchiveStatus::Error)
+    {
+        return;
+    }
+    let remaining: Vec<KeepNote> = notes
+        .iter()
+        .filter(|note| {
+            !archive_status
+                .get(&note.id)
+                .is_some_and(|(status, _)| status.is_success())
+        })
+        .cloned()
+        .collect();
+    if let Some(observation) = super::status_cache::observe_default(
+        &remaining,
+        bob_dir,
+        ui::now_utc(),
+        "pull",
+    ) {
+        super::status_cache::StatusCache::record_observation(
+            config,
+            observation,
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_with_archive(
     args: &PullArgs,
@@ -2133,6 +2190,8 @@ fn finish_with_archive(
     commit_sha: Option<String>,
     clips: &ClipSet,
     styler: &Styler,
+    notes: &[KeepNote],
+    bob_dir: &Path,
 ) -> i32 {
     let is_json = args.format.is_json();
     // Archive set: every verified write plus every pending/revised note.
@@ -2329,6 +2388,7 @@ fn finish_with_archive(
         commit_sha.clone(),
         false,
     );
+    record_post_pull(config, notes, bob_dir, &archive_status);
 
     let failed = count_failed(plan, verified, &archive_status, clips);
     let ok = failed == 0;

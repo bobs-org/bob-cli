@@ -107,6 +107,15 @@ fn git_log_names(vault: &Path) -> Vec<String> {
     gkeep_support::git_log_names(vault)
 }
 
+fn status_doc(state: &TempDir) -> Option<serde_json::Value> {
+    let path = state
+        .path()
+        .join("bob-cli")
+        .join("gkeep")
+        .join("status.json");
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+}
+
 fn journal_records(state: &TempDir) -> Vec<serde_json::Value> {
     let path = state
         .path()
@@ -2575,4 +2584,72 @@ fn ignored_target_parent_exclusion_and_fatal_git_are_truthful() {
     assert_eq!(read_target(env3.vault()), before);
     assert!(store_files(env3.vault()).is_empty());
     assert_eq!(fake3.call_count(), 1);
+}
+
+#[test]
+fn pull_no_archive_records_written_notes_as_pending() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-status-n");
+    init_git(env.vault());
+    let n1 = note("Call dentist")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    let out = run_pull(&env, &fake, &state, &["-n"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc = status_doc(&state).expect("status.json");
+    assert_eq!(doc["verified"], true);
+    assert!(doc["invalidated_at"].is_null());
+    assert_eq!(doc["observation"]["source"], "pull");
+    assert_eq!(doc["observation"]["pull"]["pending"], 1);
+    assert_eq!(doc["observation"]["pull"]["new"], 0);
+    assert_eq!(doc["observation"]["pull"]["total"], 1);
+}
+
+#[test]
+fn pull_archive_failure_stays_invalidated() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-status-arcfail");
+    init_git(env.vault());
+    let n1 = note("Call dentist")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.set_exit("archive", 3);
+    let out = run_pull(&env, &fake, &state, &[], &[]);
+    assert_ne!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc = status_doc(&state).expect("status.json");
+    assert!(
+        doc["invalidated_at"].is_string(),
+        "archive failure stays invalidated: {doc}"
+    );
+    assert_eq!(doc["observation"]["pull"]["new"], 1);
+}
+
+#[test]
+fn limited_and_id_pulls_still_record_the_default_count() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-status-limit");
+    let n1 = note("First")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    let n2 = note("Second")
+        .id("note-2")
+        .created("2026-09-26T08:00:00Z")
+        .build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1, n2]),
+    );
+    let limited = run_pull(&env, &fake, &state, &["-d", "-l", "1"], &[]);
+    assert_eq!(limited.status.code(), Some(0), "{}", stderr(&limited));
+    let doc = status_doc(&state).expect("status.json after -l 1");
+    assert_eq!(doc["observation"]["pull"]["total"], 2);
+    assert_eq!(doc["observation"]["pull"]["new"], 2);
+
+    let by_id = run_pull(&env, &fake, &state, &["-d", "-i", "note-1"], &[]);
+    assert_eq!(by_id.status.code(), Some(0), "{}", stderr(&by_id));
+    let doc = status_doc(&state).expect("status.json after -i");
+    assert_eq!(doc["observation"]["pull"]["total"], 2);
+    assert_eq!(doc["observation"]["source"], "pull");
 }

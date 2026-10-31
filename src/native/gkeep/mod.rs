@@ -17,6 +17,7 @@ mod model;
 mod plan;
 mod pull;
 pub(crate) mod render;
+mod status_cache;
 mod ui;
 
 use std::{ffi::OsString, iter};
