@@ -59,7 +59,9 @@ Press `Backspace` on an empty query to remove the last step. `Escape` clears
 all marks and keeps the sheet open; press it again to close. Marks last only
 while the sheet is open. A sequence appears as one row in RECENT, where it can
 be run again. **Bob: Rerun last command** reruns the whole sequence when its
-most recent run was a sequence step.
+most recent run was a sequence step. While it runs, the status-bar chip shows
+`N/M`, the current step title, and the sequence clock. When it finishes, one
+summary card offers Output, Copy, Rerun all, and Resume from k if it halted.
 
 ### Run a command with arguments
 
@@ -83,8 +85,9 @@ half-page movement, `g` / `G` for the top and bottom, `/` to search, and `w`
 to toggle wrapping. Press `y` to copy output, `Y` to copy the command,
 `r` to rerun, and `[` / `]` to step through run history. `:` returns to the
 list, `Escape` goes back, and `q` closes the sheet. **Bob: Show last output**
-opens the newest run; **Bob: Rerun last command** repeats its original
-arguments and preview setting.
+opens the newest run; **Bob: Rerun last command** repeats that command's
+original arguments and preview setting, or the whole sequence when the newest
+run was a sequence step.
 
 Run records and output files live under
 `${XDG_STATE_HOME:-~/.local/state}/bob-cli/command-mode/runs/`. This history is
