@@ -161,15 +161,8 @@ fn plus_query_ranks_candidates_and_scoped_descriptors_keep_exact_ranges() {
         .is_some_and(|suggestions| !suggestions.is_empty()));
 
     let global = result_all(temp.path(), "@@Cash+", 7);
-    assert_eq!(global.context, Some(CompletionContext::Task));
-    let picker = global.picker.as_ref().expect("global scoped picker");
-    assert_eq!(picker.scope_token, "@@cash+");
-    assert_eq!(picker.note_target.as_deref(), Some("cash.md"));
-    assert_eq!(picker.marker_range, Replacement { start: 0, end: 7 });
-    assert_eq!(
-        picker.trigger_removal_range,
-        Replacement { start: 6, end: 7 }
-    );
+    assert_eq!(global.context, None);
+    assert!(global.picker.is_none());
 }
 
 #[test]

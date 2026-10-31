@@ -4,7 +4,7 @@ use crate::support::*;
 use std::fs;
 
 #[test]
-fn capture_complete_global_declaration_replaces_only_the_active_component() {
+fn capture_complete_global_declaration_completes_only_the_route() {
     let temp = TempDir::new("bob-cli-capture-complete-global-route");
     let vault = temp.path().join("vault");
     write_file(&vault.join("food.md"), "# Food\n");
@@ -70,35 +70,22 @@ fn capture_complete_global_declaration_replaces_only_the_active_component() {
         .arg("--")
         .arg(child)
         .output()
-        .expect("run child-line global task completion");
+        .expect("run child-line global completion");
     assert_success(&child_output);
     let child_json: serde_json::Value =
         serde_json::from_str(stdout(&child_output).trim())
             .expect("complete JSON");
-    assert_eq!(child_json["context"], "task");
-    assert_eq!(child_json["candidates"][0]["route"], "cash");
-    assert_eq!(
-        child_json["replacement"],
-        serde_json::json!({ "start": 22, "end": 24 })
-    );
+    assert!(child_json["context"].is_null(), "{child_json}");
 }
 
 #[test]
-fn capture_complete_all_tasks_works_on_a_global_sub_bullet_declaration() {
+fn capture_complete_does_not_offer_a_global_parent_picker() {
     let temp = TempDir::new("bob-cli-capture-complete-global-all-tasks");
     let vault = temp.path().join("vault");
-    write_file(
-        &vault.join("file.md"),
-        concat!(
-            "- [ ] #task identified [created::2026-06-01] ^has-id\n",
-            "- [ ] #task needs id [created::2026-06-01]\n",
-        ),
-    );
     let draft = "@@file+\nnote";
     let cursor = draft.find('+').expect("plus") + 1;
     let output = bob_command()
         .arg("capture-complete")
-        .arg("-a")
         .arg("-b")
         .arg(&vault)
         .arg("-c")
@@ -112,14 +99,8 @@ fn capture_complete_all_tasks_works_on_a_global_sub_bullet_declaration() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
-    assert_eq!(json["context"], "task");
-    assert_eq!(
-        json["replacement"],
-        serde_json::json!({ "start": cursor, "end": cursor })
-    );
-    let ids = task_block_ids(&json);
-    assert!(ids.contains(&Some("has-id")), "{json}");
-    assert!(ids.contains(&None), "{json}");
+    assert!(json["context"].is_null(), "{json}");
+    assert!(json.get("picker").is_none(), "{json}");
 }
 
 #[test]

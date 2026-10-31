@@ -46,11 +46,14 @@ fn rewrite_draft_absorbs_a_parent_lines_marker_from_a_child_lines_bare_at_at() {
 }
 
 #[test]
-fn rewrite_draft_absorbs_a_sub_bullet_local_marker() {
+fn rewrite_draft_keeps_a_sub_bullet_local_marker_local() {
     let raw = "Buy stock @cash+goog-exit @@";
     let rewrite = rewrite_draft(raw, None);
-    assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
-    assert_eq!(rewrite.text, "Buy stock @@cash+goog-exit");
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+    assert!(
+        rewrite.notices[0].contains("cannot take an existing task destination")
+    );
 }
 
 #[test]
@@ -719,7 +722,7 @@ fn rewrite_draft_separator_toggle_exclusions() {
         ("@file:+", "@file:+".len()),
         ("@file:id#name+", "@file:id#name+".len()),
         ("@file:id=3+", "@file:id=3+".len()),
-        ("@@file:id+", "@@file:id+".len()),
+        ("@@file", "@@file".len()),
         ("@!file:id+", "@!file:id+".len()),
         ("^file:id+", "^file:id+".len()),
         ("&note:id+", "&note:id+".len()),
@@ -731,7 +734,7 @@ fn rewrite_draft_separator_toggle_exclusions() {
         ("@file+id+", "@file+id+".len()),
         ("@file+id!:", "@file+id!:".len()),
         ("@file+id#sec^", "@file+id#sec^".len()),
-        ("@@file+id:", "@@file+id:".len()),
+        ("@@file", "@@file".len()),
         ("@file+id!: ", "@file+id!: ".len()),
         ("@file+: ", "@file+: ".len()),
         ("@file+:", "@file+:".len()),

@@ -512,7 +512,7 @@ pub(crate) struct ParsedDependencyTarget {
     /// Existing dependent's block ID. `None` for a task this capture
     /// creates (its line is located by insertion, not by ID).
     pub(crate) block_id: Option<String>,
-    /// Whether the owner came from an inherited `@@route+id`
+    /// Whether the owner route came from an inherited `@@route`
     /// declaration rather than an explicit item marker.
     pub(crate) inherited: bool,
 }
@@ -725,17 +725,6 @@ pub(crate) struct ParsedGlobalDestination {
     pub(crate) end: usize,
     pub(crate) line: usize,
     pub(crate) route: String,
-    pub(crate) block_id: Option<String>,
-    pub(crate) kind: CaptureKind,
-}
-
-impl ParsedGlobalDestination {
-    pub(crate) fn mode_label(&self) -> &'static str {
-        match self.kind {
-            CaptureKind::SubBullet { .. } => "sub_bullet",
-            _ => "task",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

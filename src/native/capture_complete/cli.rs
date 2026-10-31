@@ -108,10 +108,9 @@ bullet marker itself, an orphaned nested line, or a cursor on a token in the mid
 successful empty result rather than an error.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
 missing route portion of '@^...', '@+...', '@:...', and '@#...', plus the route \
-component of a '@@', '@@fragment', or '@@route+...' declaration anywhere in the draft. Replacement \
-ranges for that declaration exclude both '@' sigils and the '+'. Parent-task \
-completion covers '@@route+fragment' the same way it covers '@route+fragment', \
-including -a/--all-tasks missing-ID candidates. An inherited global route also \
+component of a '@@' or '@@fragment' declaration anywhere in the draft. Replacement \
+ranges for that declaration exclude both '@' sigils. Parent-task completion \
+covers '@route+fragment', including -a/--all-tasks missing-ID candidates. An inherited global route also \
 becomes the current note for same-note wikilink heading/block completion unless \
 that item overrides it. Route completion is backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
@@ -176,8 +175,8 @@ must offer Add block ID rather than insert the row. A lone `+` is the \
 intentional dual-use case: completion opens this picker and its descriptor \
 returns the action continuation keys `0` through `9` and `+`, allowing an \
 editor to preserve the Pomodoro adjustment. Scoped `@route+id` and \
-`@@route+id` keep the `task` context, with picker scope and removal ranges \
-identifying the note-local parent marker. When either parent-task picker has \
+`@route+id` keeps the `task` context, with picker scope and removal ranges \
+identifying the note-local parent marker. The parent-task picker has \
 complete `&` or `*` modifiers on its item, `picker.relationship` reports the \
 resolved relationship rows (`raw`, `note_path`, `block_id`, and optional `text`). \
 Self-edges, dependency cycles, and project-resident conflicts set \
@@ -259,7 +258,7 @@ nothing for this field. The replacement covers the `((query` token \
 up to the cursor.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_type, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
+            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_type, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())

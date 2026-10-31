@@ -36,7 +36,6 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `URL %` / `URL % @route` | Queue with companion audio | [`URL %`](#url-listen) |
 | `-r route` | Force the URL (or task) route from the CLI | [`-r`](#cli-route) |
 | `@@route` | Shared task destination for unrouted items | [`@@route`](#global-route) |
-| `@@route+block-id` | Shared parent-task destination | [`@@route+block-id`](#global-parent) |
 | `@@template:` | Expand one capture per template row | [`@@template:`](#template) |
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
 | `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
@@ -189,27 +188,9 @@ Contract: [Routing and insertion](../capture.md#routing-and-insertion).
 
 A draft-wide destination for otherwise-unrouted items. It may sit anywhere.
 A plain `@@route` also routes default (routeless) refs as source `global`.
-`@@route+block-id` keeps refs as tasks.
 
 ```bash
 bob capture 'Buy milk @@work'
-```
-
-Contract: [Global destination declaration](../capture.md#global-destination-declaration).
-
-### `@@route+block-id` {#global-parent}
-
-Same declaration, but unrouted items become direct children of that existing
-task.
-
-```bash
-bob capture 'Check the parser @@work+prep'
-```
-
-```text { .no-copy title="Output" }
-✓ captured  work.md
-  under [ ] Prep the intake  ^prep
-  - Check the parser
 ```
 
 Contract: [Global destination declaration](../capture.md#global-destination-declaration).

@@ -652,7 +652,7 @@ fn completion_on_a_child_line_never_offers_a_leading_route() {
 }
 
 #[test]
-fn completion_on_a_global_declaration_excludes_both_sigils_and_plus() {
+fn completion_on_global_declarations_only_completes_the_route() {
     let route = field("@@fo", 4).expect("route");
     assert_eq!(route.context, CompletionContext::Route);
     assert_eq!(route.query, "fo");
@@ -660,11 +660,7 @@ fn completion_on_a_global_declaration_excludes_both_sigils_and_plus() {
 
     let raw = "@@Cash+goog\nnote";
     let plus = raw.find('+').expect("plus");
-    let task = field(raw, plus + 2).expect("task");
-    assert_eq!(task.context, CompletionContext::Task);
-    assert_eq!(task.route.as_deref(), Some("cash"));
-    assert_eq!(task.query, "g");
-    assert_eq!(task.replacement, (plus + 1, plus + 5));
+    assert_eq!(field(raw, plus + 2), None);
 }
 
 #[test]

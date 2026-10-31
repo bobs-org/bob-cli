@@ -284,14 +284,6 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
         repeated.diagnostics[0].message
     );
 
-    let global = editor("@@dev+id!\nTask");
-    assert_eq!(codes(&global), vec!["unsupported_explicit_toggle"]);
-    assert!(
-        global.diagnostics[0].message.contains("`@@`"),
-        "{}",
-        global.diagnostics[0].message
-    );
-
     for raw in [
         "@dev+id! s:1",
         "@dev+id! $2",
@@ -322,15 +314,6 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
         executed_repeated.contains("repeated"),
         "{executed_repeated}"
     );
-    let executed_global = parse_capture_draft_with_clip_control(
-        "@@dev+id!\nTask",
-        None,
-        None,
-        &CaptureParseOptions::routing_off(true),
-    )
-    .expect_err("global");
-    assert!(executed_global.contains("`@@`"), "{executed_global}");
-
     let literal = editor("Wow! @dev");
     assert!(literal.diagnostics.is_empty(), "{:?}", literal.diagnostics);
     assert_eq!(literal.body, "Wow!");

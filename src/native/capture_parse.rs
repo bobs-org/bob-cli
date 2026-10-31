@@ -169,7 +169,7 @@ those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%' clipboard marker still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
-global_destination object for a @@<route> or @@<route>+<block-id> \
+global_destination object for a @@<route> \
 declaration token anywhere in the draft, ordered blank-line-separated item summaries and ranges after \
 inheritance, the UTF-8 byte spans of every recognized token (including a \
 `task_type` span for `#<type>` markers), Obsidian wikilink \
@@ -672,9 +672,7 @@ struct ParseTaskComplete {
 struct GlobalDestinationParse {
     range: SourceRange,
     line: usize,
-    mode: EditorMode,
     route: Option<String>,
-    block_id: Option<String>,
     needs: Vec<Need>,
 }
 
@@ -2012,9 +2010,7 @@ fn global_destination_parse(
             end: global.end,
         },
         line: global.line,
-        mode: global.mode,
         route: global.route.clone(),
-        block_id: global.block_id.clone(),
         needs: global.needs.clone(),
     }
 }
@@ -2200,15 +2196,11 @@ fn print_human_success_with_styler(
         );
     }
     if let Some(global) = &result.global_destination {
-        let mut summary = global
+        let summary = global
             .route
             .as_deref()
             .unwrap_or("(incomplete)")
             .to_string();
-        if let Some(block_id) = global.block_id.as_deref() {
-            summary.push_str(" +");
-            summary.push_str(block_id);
-        }
         print_field(styler, "global", &summary);
     }
     if let Some(route) = result.route.as_deref() {
@@ -3361,10 +3353,10 @@ mod tests {
         assert_eq!(value["body"], "First task");
         assert_eq!(value["mode"], "task");
         assert_eq!(value["route"], "foo");
-        assert_eq!(value["global_destination"]["mode"], "task");
         assert_eq!(value["global_destination"]["route"], "foo");
         assert_eq!(value["global_destination"]["line"], 1);
-        assert!(value["global_destination"]["block_id"].is_null());
+        assert!(value["global_destination"].get("mode").is_none());
+        assert!(value["global_destination"].get("block_id").is_none());
         assert_eq!(
             value["global_destination"]["range"],
             json!({ "start": 0, "end": 5 })
@@ -3379,20 +3371,16 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_a_global_sub_bullet_declaration_and_local_override() {
-        let raw = "@@foo+a-id\nNote one\n\nIndependent @bar";
+    fn json_reports_global_route_with_no_mode_or_block_id_fields() {
+        let raw = "@@foo\nNote one\n\nIndependent @bar";
         let value = json(raw);
-        assert_eq!(value["mode"], "sub_bullet");
-        assert_eq!(value["route"], "foo");
-        assert_eq!(value["block_id"], "a-id");
-        assert_eq!(value["global_destination"]["mode"], "sub_bullet");
         assert_eq!(value["global_destination"]["route"], "foo");
-        assert_eq!(value["global_destination"]["block_id"], "a-id");
-        assert_eq!(value["items"][0]["mode"], "sub_bullet");
-        assert_eq!(value["items"][0]["block_id"], "a-id");
+        assert!(value["global_destination"].get("mode").is_none());
+        assert!(value["global_destination"].get("block_id").is_none());
+        assert_eq!(value["items"][0]["mode"], "task");
+        assert_eq!(value["items"][0]["route"], "foo");
         assert_eq!(value["items"][1]["mode"], "task");
         assert_eq!(value["items"][1]["route"], "bar");
-        assert!(value["items"][1]["block_id"].is_null());
     }
 
     #[test]

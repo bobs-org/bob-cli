@@ -18,8 +18,6 @@
   location: /reference/capture-syntax/#cli-route
 - query: "@@route"
   location: /reference/capture-syntax/#global-route
-- query: "@@route+block-id"
-  location: /reference/capture-syntax/#global-parent
 - query: "@@template:"
   location: /reference/capture-syntax/#template
 - query: "@route"

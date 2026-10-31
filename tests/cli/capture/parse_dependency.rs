@@ -392,20 +392,18 @@ fn child_line_dependency_belongs_to_the_item() {
 }
 
 #[test]
-fn inherited_parent_selects_the_existing_dependent() {
+fn inherited_route_does_not_select_an_existing_dependent() {
     let mut command = bob_command();
     command.arg("capture-parse").arg("-f").arg("json");
-    let output =
-        run_with_stdin(&mut command, "@@home+shop\n\nBuy milk &foo:bar\n");
+    let output = run_with_stdin(&mut command, "@@other\n\nBuy milk &foo:bar\n");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     assert_eq!(
         json["dependency_target"],
         serde_json::json!({
-            "kind": "existing_task",
-            "route": "home",
-            "block_id": "shop",
+            "kind": "new_task",
+            "route": "other",
             "inherited": true,
         })
     );

@@ -123,7 +123,7 @@ fn capture_help_lists_options_alphabetically() {
             && help.contains("@<route>^<block-id>")
             && help.contains("bob capture '@dev^foobar'")
             && help.contains("@@<route>")
-            && help.contains("@@<route>+<block-id>")
+            && !help.contains("@@<route>+<block-id>")
             && help.contains("printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n'")
             && !help.contains("--task-ref"),
         "expected public sub-bullet and ID-only help without hidden task ref:\n{help}"

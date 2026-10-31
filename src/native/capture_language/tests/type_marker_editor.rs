@@ -180,12 +180,16 @@ fn non_task_subjects_are_refused_with_the_shared_copy() {
 }
 
 #[test]
-fn global_existing_task_inheritance_rechecks_the_marker_subject() {
-    let raw = "@@sase+parent\n\nA child #fix";
+fn global_task_route_inheritance_keeps_type_markers_on_new_tasks() {
+    let raw = "@@sase\n\nA child #fix";
     let parse = editor(raw);
-    assert_eq!(parse.mode, EditorMode::SubBullet);
-    assert_eq!(codes(&parse), vec!["type_marker_not_applicable"]);
-    assert_eq!(parse.diagnostics[0].message, execute(raw).unwrap_err());
+    assert_eq!(parse.mode, EditorMode::Task);
+    assert!(codes(&parse).is_empty());
+    assert_eq!(parse.route.as_deref(), Some("sase"));
+    assert_eq!(
+        execute(raw).expect("task capture").route.as_deref(),
+        Some("sase")
+    );
 }
 
 #[test]

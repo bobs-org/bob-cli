@@ -258,16 +258,6 @@ fn forced_destination_global_and_clip_keep_tasks() {
         Some(RefParentSource::Global)
     );
 
-    // `@@notes+block-id` keeps task/sub-bullet semantics (never a ref).
-    let task_global =
-        draft_routing("@@notes+abc\nhttps://example.com/post", Some(&policy))
-            .expect("task global parses");
-    assert!(
-        !matches!(task_global.items[0].parsed.kind, CaptureKind::Ref(_)),
-        "got {:?}",
-        task_global.items[0].parsed.kind
-    );
-
     // A child bullet keeps the item a task.
     let child = draft_routing(
         "https://example.com/post\n- why it matters",
@@ -484,20 +474,12 @@ fn ref_parent_sources_cover_explicit_global_and_default() {
         .expect("default parses");
     assert_eq!(default.items[0].parsed.route, None);
     assert_eq!(default.items[0].ref_source, Some(RefParentSource::Default));
-    // Extra words, child lines, and `@@route+id` keep task behavior.
+    // Extra words and child lines keep task behavior.
     assert_task("https://example.com/post @sase extra", Some(&policy));
     let child =
         draft_routing("https://example.com/post @sase\n- why", Some(&policy))
             .expect("child parses");
     assert!(matches!(child.items[0].parsed.kind, CaptureKind::Task));
-    let task_global =
-        draft_routing("@@sase+abc\nhttps://example.com/post", Some(&policy))
-            .expect("task global parses");
-    assert!(
-        !matches!(task_global.items[0].parsed.kind, CaptureKind::Ref(_)),
-        "got {:?}",
-        task_global.items[0].parsed.kind
-    );
 }
 
 #[test]

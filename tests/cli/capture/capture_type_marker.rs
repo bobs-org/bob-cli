@@ -692,22 +692,13 @@ fn global_and_forced_routes_preserve_new_task_applicability() {
     );
     assert_eq!(global["task_theme"]["theme"]["name"], "FIX", "{global}");
 
-    for args in [
-        "@@sase+parent\n\nA child #fix",
-        "-r sase --task parent A child #fix",
-    ] {
-        let (_, error) = if args.starts_with("-r ") {
-            capture_error_json(
-                &vault,
-                &day_file,
-                &config,
-                &["-r", "sase", "--task", "parent", "A child #fix"],
-            )
-        } else {
-            capture_error_json(&vault, &day_file, &config, &[args])
-        };
-        assert_eq!(error["code"], "type_marker_not_applicable", "{error}");
-    }
+    let (_, error) = capture_error_json(
+        &vault,
+        &day_file,
+        &config,
+        &["-r", "sase", "--task", "parent", "A child #fix"],
+    );
+    assert_eq!(error["code"], "type_marker_not_applicable", "{error}");
 }
 
 #[test]

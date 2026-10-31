@@ -578,11 +578,8 @@ pub(super) enum LocalMarkerAbsorbability {
     NonAbsorbable,
 }
 
-/// Classify Rule A1's ordered payload source 1: `mode`/`block_id`/`section`
-/// close over the eight local destination marker forms the Vocabulary section
-/// defines, so this match is exhaustive over real (non-incomplete) markers.
-/// A project-note marker is never absorbable: a `@@` declaration that
-/// created a note would try to create the same note once per item.
+/// Only a plain task route can become a shared `@@` declaration. Markers that
+/// select an existing task, section, Pomodoro, or project note stay local.
 pub(super) fn classify_local_marker(
     marker: &LocalDestinationMarker,
 ) -> LocalMarkerAbsorbability {
@@ -591,14 +588,6 @@ pub(super) fn classify_local_marker(
             LocalMarkerAbsorbability::Absorbable(
                 marker.route.clone().unwrap_or_default(),
             )
-        }
-        EditorMode::SubBullet if marker.section.is_none() => {
-            let mut payload = marker.route.clone().unwrap_or_default();
-            if let Some(block_id) = &marker.block_id {
-                payload.push('+');
-                payload.push_str(block_id);
-            }
-            LocalMarkerAbsorbability::Absorbable(payload)
         }
         EditorMode::Task
         | EditorMode::SubBullet
@@ -629,7 +618,11 @@ pub(super) fn non_absorbable_marker_notice(
 ) -> String {
     let route = marker.route.as_deref().unwrap_or("route");
     match marker.mode {
-        EditorMode::Bullet | EditorMode::SubBullet => format!(
+        EditorMode::SubBullet => format!(
+            "@@ cannot take an existing task destination: leave {} on this item, or delete it and declare @@{route}",
+            marker.text
+        ),
+        EditorMode::Bullet => format!(
             "@@ cannot take a section: leave {} on this item, or delete it and declare @@{route}",
             marker.text
         ),
@@ -650,8 +643,8 @@ pub(super) fn non_absorbable_marker_notice(
             marker.text
         ),
         EditorMode::TaskToggle => format!(
-            "@@ cannot take a task toggle: leave {} on this item, or delete it",
-            marker.text
+            "@@ cannot take an existing task destination: leave {} on this item, or delete it and declare @@{route}",
+            marker.text,
         ),
         EditorMode::PomodoroAdjust => format!(
             "@@ cannot take a Pomodoro adjustment: leave {} on this item, or delete it",

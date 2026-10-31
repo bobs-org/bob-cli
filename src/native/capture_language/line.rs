@@ -310,8 +310,8 @@ pub(super) fn missing_capture_item_error() -> String {
     MISSING_CAPTURE_ITEM_ERROR.to_string()
 }
 
-pub(super) fn unsupported_global_destination_error(token: &str) -> String {
-    format!("{GLOBAL_DESTINATION_SHAPE_ERROR}; {token} is not supported")
+pub(super) fn unsupported_global_destination_error() -> String {
+    GLOBAL_DESTINATION_SHAPE_ERROR.to_string()
 }
 
 pub(super) fn pomodoro_note_route_conflict_error() -> String {

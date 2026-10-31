@@ -40,8 +40,6 @@ pub(crate) enum SpanKind {
     ProjectTaskLinkMarker,
     ProjectTaskBlockId,
     GlobalRoute,
-    GlobalSubBulletRoute,
-    GlobalSubBulletBlockId,
     PomodoroNote,
     Schedule,
     Priority,
@@ -112,8 +110,6 @@ impl SpanKind {
             Self::ProjectTaskLinkMarker => "project_task_link_marker",
             Self::ProjectTaskBlockId => "project_task_block_id",
             Self::GlobalRoute => "global_route",
-            Self::GlobalSubBulletRoute => "global_sub_bullet_route",
-            Self::GlobalSubBulletBlockId => "global_sub_bullet_block_id",
             Self::PomodoroNote => "pomodoro_note",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
@@ -404,7 +400,7 @@ pub(crate) struct DependencyTarget {
     /// Existing dependent's block ID, when one is known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) block_id: Option<String>,
-    /// Whether the owner came from an inherited `@@route+id` declaration
+    /// Whether the owner route came from an inherited `@@route` declaration
     /// rather than an explicit item marker. Omitted when false.
     #[serde(skip_serializing_if = "is_false")]
     pub(crate) inherited: bool,
@@ -482,7 +478,6 @@ pub(crate) struct EditorGlobalDestination {
     pub(crate) line: usize,
     pub(crate) mode: EditorMode,
     pub(crate) route: Option<String>,
-    pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
     pub(crate) inherit: bool,
 }

@@ -295,19 +295,13 @@ pub(crate) fn is_route_token(value: &str) -> bool {
 }
 
 pub(super) const GLOBAL_DESTINATION_SHAPE_ERROR: &str =
-    "global destination must be @@<route> or @@<route>+<block-id>";
+    "invalid `@@` declaration: `@@` takes a route (`@@foo`)";
 
 pub(super) const GLOBAL_DESTINATION_ROUTE_ERROR: &str =
     "global destination route must contain only A-Z, a-z, 0-9, '_' or '-'";
 
-pub(super) const GLOBAL_DESTINATION_BLOCK_ID_ERROR: &str =
-    "global destination block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
-
 pub(super) const MISSING_CAPTURE_ITEM_ERROR: &str =
     "global destination declaration has no capture item; add a capture item to this draft";
-
-pub(super) const GLOBAL_DESTINATION_PROJECT_NOTE_ERROR: &str =
-    "@@ cannot take a project note: leave @cash^goog-exit@ on this item, or delete it";
 
 pub(super) const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str = "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, or priority";
 

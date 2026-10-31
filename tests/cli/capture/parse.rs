@@ -308,19 +308,35 @@ fn capture_parse_json_reports_project_note_markers() {
         "{json}"
     );
 
-    let global = bob_command()
-        .arg("capture-parse")
-        .arg("-f")
-        .arg("json")
-        .arg("--")
-        .arg("@@cash^goog-exit@")
-        .env("BOB_DIR", &vault)
-        .output()
-        .expect("run project-note global declaration parse");
-    assert_success(&global);
-    let json: serde_json::Value = serde_json::from_str(stdout(&global).trim())
-        .expect("capture-parse JSON");
-    assert_eq!(json["diagnostics"][0]["code"], "invalid_global_destination");
+    for (input, expected_message) in [
+        (
+            "@@cash^goog-exit@",
+            "invalid `@@` declaration: `@@` takes a route (`@@foo`)",
+        ),
+        (
+            "@@cash+goog-exit\nTask",
+            "invalid `@@` declaration: `@@` takes a route (`@@foo`)",
+        ),
+    ] {
+        let global = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(input)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("run invalid global declaration parse");
+        assert_success(&global);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&global).trim())
+                .expect("capture-parse JSON");
+        assert_eq!(
+            json["diagnostics"][0]["code"],
+            "invalid_global_destination"
+        );
+        assert_eq!(json["diagnostics"][0]["message"], expected_message);
+    }
 }
 
 #[test]
@@ -1014,7 +1030,8 @@ fn capture_parse_reports_global_destination_metadata() {
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["route"], "foo");
     assert_eq!(json["global_destination"]["route"], "foo");
-    assert_eq!(json["global_destination"]["mode"], "task");
+    assert!(json["global_destination"].get("mode").is_none());
+    assert!(json["global_destination"].get("block_id").is_none());
     assert_eq!(json["global_destination"]["line"], 3);
     assert_eq!(json["items"][0]["route"], "foo");
     assert_eq!(json["items"][1]["route"], "foo");

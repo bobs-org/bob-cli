@@ -5,7 +5,6 @@ use super::item::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
-use super::tokens::*;
 use crate::native::url_routing::is_url_list_line;
 
 /// Split `raw` into physical lines on LF, CRLF, and bare CR alike, so pasted
@@ -687,31 +686,13 @@ pub(crate) fn parse_capture_text_with_clip_control(
     }
 
     let mut outcome = item_outcomes.into_iter().next().expect("one item");
-    // An inline `@@route+id` discovered after the initial parse still
-    // blocks the claim: re-parse a claimed Ref item so it becomes an
-    // ordinary task that inherits the global. A plain `@@route` upgrades
-    // a default (routeless) Ref to its global parent; an explicit local
-    // `@route` or forced `-r` keeps local precedence.
+    // A plain `@@route` upgrades a default (routeless) Ref to its global
+    // parent; an explicit local `@route` or forced `-r` keeps local precedence.
     if let Some(global) = &global
         && matches!(outcome.parsed.kind, CaptureKind::Ref(_))
+        && outcome.parsed.route.is_none()
     {
-        if global.block_id.is_some() {
-            // Disable ref claiming so the re-parse becomes the ordinary
-            // task that inherits the `@@route+id` global.
-            let global_options = CaptureParseOptions {
-                url_routing: None,
-                ..options.with_global(true)
-            };
-            outcome = parse_capture_item(
-                &draft.items[0],
-                forced_route,
-                forced_section,
-                &global_options,
-            )
-            .map_err(|error| error.message)?;
-        } else if outcome.parsed.route.is_none() {
-            outcome.parsed.route = Some(global.route.clone());
-        }
+        outcome.parsed.route = Some(global.route.clone());
     }
     if forced_route.is_none()
         && let Some(global) = &global
@@ -889,41 +870,14 @@ fn parse_ordinary_draft(
         declarations.extend(outcome.declarations.iter().copied());
     }
     let global = resolve_global_declaration_strict(&declarations)?;
-    // An inline `@@route+id` discovered after the initial parse still
-    // blocks the claim: re-parse those Ref items so they become ordinary
-    // tasks. A plain `@@route` upgrades default (routeless) Refs to the
-    // global parent; explicit local `@route` and forced `-r` keep local
-    // precedence.
+    // A plain `@@route` upgrades default (routeless) Refs to the global
+    // parent; explicit local `@route` and forced `-r` keep local precedence.
     if let Some(global_ref) = &global {
-        let global_options = CaptureParseOptions {
-            url_routing: None,
-            ..options.with_global(true)
-        };
-        for (index, outcome) in item_outcomes.iter_mut().enumerate() {
-            if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
-                if global_ref.block_id.is_some() {
-                    let item = &draft.items[index];
-                    let re = parse_capture_item(
-                        item,
-                        forced_route,
-                        forced_section,
-                        &global_options,
-                    )
-                    .map_err(|error| {
-                        CaptureItemParseError {
-                            code: error.code,
-                            message: format!(
-                                "capture item {} starting on line {}: {}",
-                                item.index + 1,
-                                item.line_start,
-                                error.message
-                            ),
-                        }
-                    })?;
-                    *outcome = re;
-                } else if outcome.parsed.route.is_none() {
-                    outcome.parsed.route = Some(global_ref.route.clone());
-                }
+        for outcome in &mut item_outcomes {
+            if matches!(outcome.parsed.kind, CaptureKind::Ref(_))
+                && outcome.parsed.route.is_none()
+            {
+                outcome.parsed.route = Some(global_ref.route.clone());
             }
         }
     }
@@ -1249,62 +1203,28 @@ pub(super) fn parse_global_destination_token(
     let rest = token
         .strip_prefix("@@")
         .ok_or_else(|| GLOBAL_DESTINATION_SHAPE_ERROR.to_string())?;
+    if rest.contains('+')
+        || rest.contains('#')
+        || rest.contains('^')
+        || rest.contains(':')
+    {
+        return Err(unsupported_global_destination_error());
+    }
     if rest.ends_with('!') {
         return Err(EXPLICIT_TOGGLE_GLOBAL_ERROR.to_string());
     }
-    if rest.contains('@') && (rest.contains('^') || rest.contains(':')) {
-        return Err(GLOBAL_DESTINATION_PROJECT_NOTE_ERROR.to_string());
+    if rest.is_empty() {
+        return Err(GLOBAL_DESTINATION_SHAPE_ERROR.to_string());
     }
-    if rest.contains('#') || rest.contains('^') || rest.contains(':') {
-        return Err(unsupported_global_destination_error(token));
+    if !is_route_token(rest) {
+        return Err(GLOBAL_DESTINATION_ROUTE_ERROR.to_string());
     }
-    match rest.split_once('+') {
-        Some((route, block_id)) => {
-            if route.is_empty() || !is_route_token(route) {
-                return Err(if route.is_empty() {
-                    GLOBAL_DESTINATION_SHAPE_ERROR.to_string()
-                } else {
-                    GLOBAL_DESTINATION_ROUTE_ERROR.to_string()
-                });
-            }
-            if block_id.is_empty() {
-                return Err(format!(
-                    "global destination requires a block ID: @@<route>+<block-id> (run 'bob capture-tasks -r {}' to list task block IDs)",
-                    route.to_ascii_lowercase()
-                ));
-            }
-            if !is_block_id(block_id) {
-                return Err(GLOBAL_DESTINATION_BLOCK_ID_ERROR.to_string());
-            }
-            Ok(ParsedGlobalDestination {
-                start,
-                end,
-                line,
-                route: route.to_ascii_lowercase(),
-                block_id: Some(block_id.to_string()),
-                kind: CaptureKind::SubBullet {
-                    target: SubBulletTarget::BlockId(block_id.to_string()),
-                    section: None,
-                },
-            })
-        }
-        None => {
-            if rest.is_empty() {
-                return Err(GLOBAL_DESTINATION_SHAPE_ERROR.to_string());
-            }
-            if !is_route_token(rest) {
-                return Err(GLOBAL_DESTINATION_ROUTE_ERROR.to_string());
-            }
-            Ok(ParsedGlobalDestination {
-                start,
-                end,
-                line,
-                route: rest.to_ascii_lowercase(),
-                block_id: None,
-                kind: CaptureKind::Task,
-            })
-        }
-    }
+    Ok(ParsedGlobalDestination {
+        start,
+        end,
+        line,
+        route: rest.to_ascii_lowercase(),
+    })
 }
 
 pub(super) fn inherit_global_destination(
@@ -1315,7 +1235,6 @@ pub(super) fn inherit_global_destination(
         return;
     }
     parsed.route = Some(global.route.clone());
-    parsed.kind = global.kind.clone();
 }
 
 pub(super) fn global_declarations_from_tokens<'a>(

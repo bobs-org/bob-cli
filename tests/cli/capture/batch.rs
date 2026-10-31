@@ -179,8 +179,8 @@ fn capture_global_destination_routes_unmarked_items_and_keeps_overrides() {
     assert_eq!(json["ok"], true);
     assert_eq!(json["text"], "First task");
     assert_eq!(json["route"], "foo");
-    assert_eq!(json["global_destination"]["mode"], "task");
     assert_eq!(json["global_destination"]["route"], "foo");
+    assert!(json["global_destination"].get("mode").is_none());
     assert!(json["global_destination"].get("block_id").is_none());
     let captures = json["captures"].as_array().expect("captures");
     assert_eq!(captures.len(), 3);
@@ -275,79 +275,28 @@ fn capture_global_destination_on_authored_child_line_applies_draft_wide() {
 }
 
 #[test]
-fn capture_global_sub_bullet_inserts_ordered_siblings_and_keeps_authored_children(
-) {
-    let temp = TempDir::new("bob-cli-capture-global-sub-bullet");
+fn capture_rejects_a_global_route_block_id_with_the_generic_declaration_error()
+{
+    let temp = TempDir::new("bob-cli-capture-global-route-block-id");
     let vault = temp.path().join("vault");
-    write_file(
-        &vault.join("foo.md"),
-        concat!(
-            "## Tasks\n",
-            "- [ ] #task Parent [created::2026-06-01] ^a-id\n",
-            "\t- existing\n",
-        ),
-    );
-    write_file(
-        &vault.join("bar.md"),
-        concat!(
-            "## Tasks\n",
-            "- [ ] #task Other [created::2026-06-01] ^b-id\n",
-        ),
-    );
+    fs::create_dir_all(&vault).expect("create vault");
 
-    let draft = concat!(
-        "@@foo+a-id\n",
-        "First note\n",
-        "- authored detail\n",
-        "\n",
-        "Second note\n",
-        "\n",
-        "Independent task @bar\n",
-        "\n",
-        "Different parent @bar+b-id\n",
-    );
     let output = bob_command()
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("-f")
-        .arg("json")
-        .arg(draft)
-        .env("BOB_NOW", "2026-06-15")
+        .arg("--dry-run")
+        .arg("@@foo+a-id\nFirst note")
         .output()
-        .expect("run global sub-bullet capture");
-
-    assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["global_destination"]["mode"], "sub_bullet");
-    assert_eq!(json["global_destination"]["route"], "foo");
-    assert_eq!(json["global_destination"]["block_id"], "a-id");
-    assert_eq!(json["captures"].as_array().expect("captures").len(), 4);
-    assert_eq!(json["captures"][0]["kind"], "sub_bullet");
-    assert_eq!(json["captures"][1]["kind"], "sub_bullet");
-    assert_eq!(json["captures"][2]["kind"], "task");
-    assert_eq!(json["captures"][2]["route"], "bar");
-    assert_eq!(json["captures"][3]["kind"], "sub_bullet");
-    assert_eq!(json["captures"][3]["route"], "bar");
-    assert_eq!(
-        fs::read_to_string(vault.join("foo.md")).expect("foo"),
-        concat!(
-            "## Tasks\n",
-            "- [ ] #task Parent [created::2026-06-01] ^a-id\n",
-            "\t- existing\n",
-            "\t- First note\n",
-            "\t\t- authored detail\n",
-            "\t- Second note\n",
-        )
-    );
-    let bar = fs::read_to_string(vault.join("bar.md")).expect("bar");
-    assert!(bar.contains("- [ ] #task Independent task [created::2026-06-15]"));
+        .expect("run capture with an unsupported global destination");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     assert!(
-        bar.contains("\t- Different parent")
-            || bar.contains("  - Different parent"),
-        "{bar}"
+        stderr(&output)
+            .contains("invalid `@@` declaration: `@@` takes a route (`@@foo`)"),
+        "{}",
+        format_output(&output)
     );
+    assert!(!vault.join("foo.md").exists());
 }
 
 #[test]

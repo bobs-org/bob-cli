@@ -817,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn global_batch_reports_one_block_with_two_added_rows() {
+    fn locally_routed_batch_reports_one_block_with_two_added_rows() {
         let dir = tempfile::tempdir().expect("tempdir");
         let vault = write_vault(
             &dir,
@@ -826,7 +826,10 @@ mod tests {
                 concat!("- [/] #task Parent ^capture\n", "\t- keep\n",),
             )],
         );
-        let batch = plan(&vault, "@@sase+capture\nfirst note\n\nsecond note");
+        let batch = plan(
+            &vault,
+            "first note @sase+capture\n\nsecond note @sase+capture",
+        );
         assert_eq!(batch.task_blocks.len(), 1);
         let block = &batch.task_blocks[0];
         assert_eq!(block.block_id.as_deref(), Some("capture"));

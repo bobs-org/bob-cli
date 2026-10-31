@@ -364,7 +364,7 @@ fn capture_url_with_markers_or_flags_stays_a_task() {
 }
 
 #[test]
-fn capture_inline_global_blocks_ref_claim() {
+fn capture_inline_global_routes_refs_and_rejects_parent_id_forms() {
     let temp = TempDir::new("bob-cli-capture-ref-inline-global");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -406,16 +406,20 @@ fn capture_inline_global_blocks_ref_claim() {
     assert_eq!(items[1]["ref_parent"]["token"], "groceries", "{json}");
     assert_eq!(items[1]["ref_parent"]["source"], "global", "{json}");
 
-    // `@@groceries+block-id` keeps task/sub-bullet semantics (never ref).
+    // A global parent-task selector is rejected with the generic declaration
+    // error instead of changing how the URL is classified.
     let mut command = capture(&temp, &vault, &["-d", "-f", "json"]);
     let output = run_with_stdin(
         &mut command,
         "Buy milk @@groceries+abc\n\nhttps://example.com/post",
     );
-    assert_success(&output);
-    let json = parse_json(&output);
-    let captures = json["captures"].as_array().expect("captures array");
-    assert_ne!(captures[1]["kind"], "ref", "{json}");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stdout(&output)
+            .contains("invalid `@@` declaration: `@@` takes a route (`@@foo`)"),
+        "{}",
+        format_output(&output)
+    );
 }
 
 #[test]

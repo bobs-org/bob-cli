@@ -1858,19 +1858,8 @@ pub(super) fn global_completion_field_at(
             cursor,
         );
     }
-    if let Some((route_part, block_part)) = rest.split_once('+') {
-        return completion_field_from_parts(
-            token,
-            CompletionParts {
-                sigil_len: 2,
-                route_part,
-                separator_len: 1,
-                right_part: block_part,
-                right_context: Some(CompletionContext::Task),
-                third: None,
-            },
-            cursor,
-        );
+    if rest.contains('+') {
+        return None;
     }
     completion_field_from_parts(
         token,

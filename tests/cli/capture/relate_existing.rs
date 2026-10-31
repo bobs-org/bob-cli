@@ -336,32 +336,6 @@ fn rx5_colon_alias_still_owns() {
     assert_exercise_blocked(&vault);
 }
 
-// RX6
-#[test]
-fn rx6_inherited_owner_writes_edge_only() {
-    for draft in [
-        "@@body+excercise\n&foo:bar\n",
-        "@@body+excercise\n\n&foo:bar\n",
-    ] {
-        let parsed = parse_stdin(draft);
-        assert_eq!(parsed["mode"], "task_dependency", "{draft:?}");
-        assert_eq!(parsed["dependency_target"]["inherited"], true, "{draft:?}");
-        assert_eq!(parsed["body"], "", "{draft:?}");
-
-        let (_temp, vault, day) = setup("bob-cli-rx6");
-        seed_standard(&vault);
-        let output = capture_stdin(&vault, &day, draft);
-        assert_success(&output);
-        assert_exercise_blocked(&vault);
-        let out = stdout(&output);
-        assert!(out.contains("updated  body.md"), "{draft:?}: {out}");
-        assert!(
-            out.contains("now depends on \"Buy shoes\""),
-            "{draft:?}: {out}"
-        );
-    }
-}
-
 // RX7
 #[test]
 fn rx7_closed_star_owner_is_refused() {

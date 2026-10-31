@@ -44,7 +44,6 @@ fn execution_inherits_a_global_task_route_unless_an_item_overrides() {
     .expect("parse");
     let global = draft.global.expect("global");
     assert_eq!(global.route, "foo");
-    assert_eq!(global.block_id, None);
     assert_eq!(draft.items[0].parsed.body, "First task");
     assert_eq!(draft.items[0].parsed.route.as_deref(), Some("foo"));
     assert_eq!(draft.items[0].parsed.kind, CaptureKind::Task);
@@ -52,39 +51,6 @@ fn execution_inherits_a_global_task_route_unless_an_item_overrides() {
     assert_eq!(draft.items[1].parsed.route.as_deref(), Some("bar"));
     assert_eq!(draft.items[2].parsed.body, "Third task");
     assert_eq!(draft.items[2].parsed.route.as_deref(), Some("foo"));
-}
-
-#[test]
-fn execution_inherits_a_global_sub_bullet_and_keeps_authored_children() {
-    let draft = parse_capture_draft_with_clip_control(
-        "@@foo+a-id\nFirst note\n- authored detail\n\nSecond note",
-        None,
-        None,
-        &CaptureParseOptions::routing_off(true),
-    )
-    .expect("parse");
-    assert_eq!(
-        draft.global.as_ref().unwrap().block_id.as_deref(),
-        Some("a-id")
-    );
-    assert_eq!(
-        draft.items[0].parsed.kind,
-        CaptureKind::SubBullet {
-            target: SubBulletTarget::BlockId("a-id".to_string()),
-            section: None,
-        }
-    );
-    assert_eq!(
-        sub_bullet_bodies(&draft.items[0].parsed.sub_bullets),
-        vec!["authored detail"]
-    );
-    assert_eq!(
-        draft.items[1].parsed.kind,
-        CaptureKind::SubBullet {
-            target: SubBulletTarget::BlockId("a-id".to_string()),
-            section: None,
-        }
-    );
 }
 
 #[test]
@@ -133,14 +99,11 @@ fn execution_an_explicit_toggle_item_participates_in_a_multi_item_draft() {
 #[test]
 fn execution_local_markers_override_a_global_declaration() {
     let draft = parse_capture_draft_with_clip_control(
-        "@@foo+a-id\nKeep\n\nBullet @bar#Ideas\n\nId @bar^b-id\n\nPomo @bar:p-id\n\nChild @bar+b-id\n\nNote #",
+        "@@foo\nKeep\n\nBullet @bar#Ideas\n\nId @bar^b-id\n\nPomo @bar:p-id\n\nChild @bar+b-id\n\nNote #",
         None,
         None, &CaptureParseOptions::routing_off(true))
     .expect("parse");
-    assert!(matches!(
-        draft.items[0].parsed.kind,
-        CaptureKind::SubBullet { .. }
-    ));
+    assert!(matches!(draft.items[0].parsed.kind, CaptureKind::Task));
     assert!(matches!(
         draft.items[1].parsed.kind,
         CaptureKind::Bullet { .. }
@@ -177,11 +140,12 @@ fn execution_rejects_a_declaration_only_draft() {
 
 #[test]
 fn execution_rejects_unsupported_global_forms() {
-    for (raw, needle) in [
-        ("@@foo#Ideas\nTask", "not supported"),
-        ("@@foo^id\nTask", "not supported"),
-        ("@@foo:id\nTask", "not supported"),
-        ("@@foo+id#sec\nTask", "not supported"),
+    for raw in [
+        "@@foo#Ideas\nTask",
+        "@@foo^id\nTask",
+        "@@foo:id\nTask",
+        "@@foo+id\nTask",
+        "@@foo+id!\nTask",
     ] {
         let error = parse_capture_draft_with_clip_control(
             raw,
@@ -190,7 +154,7 @@ fn execution_rejects_unsupported_global_forms() {
             &CaptureParseOptions::routing_off(true),
         )
         .unwrap_err();
-        assert!(error.contains(needle), "{raw}: {error}");
+        assert_eq!(error, GLOBAL_DESTINATION_SHAPE_ERROR, "{raw}");
     }
 }
 

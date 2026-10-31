@@ -81,7 +81,6 @@ pub(super) fn draft_related(
         .map(|scoring| {
             linked_for_item(
                 scoring.item,
-                parsed.global_destination.as_ref(),
                 &discovery.candidates,
                 &link_index,
                 &discovery.route_aliases,
@@ -340,7 +339,6 @@ fn discard_range(
 
 fn linked_for_item(
     item: &EditorItemParse,
-    global: Option<&capture_language::EditorGlobalDestination>,
     candidates: &[Candidate],
     index: &NoteIndex,
     route_aliases: &[(String, String)],
@@ -377,13 +375,6 @@ fn linked_for_item(
             ));
         }
     }
-    if let Some(global) = global.filter(|global| global.block_id.is_some())
-        && item.local_destination_markers.is_empty()
-        && let (Some(route), Some(block_id)) = (&global.route, &global.block_id)
-    {
-        targets.push((route.clone(), block_id.clone(), "parent".to_string()));
-    }
-
     let mut linked = BTreeSet::new();
     for (note, block_id, link) in targets {
         let note_path = route_aliases

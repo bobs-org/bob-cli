@@ -96,9 +96,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         .collect();
     let global_destination =
         parsed_draft.global.map(|global| GlobalDestinationSummary {
-            mode: global.mode_label(),
             route: global.route,
-            block_id: global.block_id,
         });
     let now = bob_env::current_datetime();
     let today = now.date();
@@ -656,9 +654,7 @@ pub(super) fn plan_capture_item(
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.
-    // It never flows through the toggle/link planners below. Inherited
-    // `@@route+id` items land as empty SubBullet owners and take the
-    // same path so they write the edge without an empty bullet.
+    // It never flows through the toggle/link planners below.
     if let Some(target) = relationship_only_existing_owner(&parsed) {
         if let Some(marker) = parsed.type_marker.clone() {
             let (route, block_id) = match &target {

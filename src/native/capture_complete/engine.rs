@@ -892,12 +892,7 @@ fn picker_descriptor(
             if plus_start >= field.replacement.0 {
                 return None;
             }
-            let prefix = if token.text.starts_with("@@") {
-                "@@"
-            } else {
-                "@"
-            };
-            let scope_token = format!("{prefix}{route}+");
+            let scope_token = format!("@{route}+");
             let marker_range = Replacement {
                 start: token.start,
                 end: field.replacement.1,

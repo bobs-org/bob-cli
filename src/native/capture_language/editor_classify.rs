@@ -104,56 +104,22 @@ pub(super) fn classify_global_token(token: &Token<'_>) -> TokenParse {
             ));
         }
     };
+    if rest.contains('+')
+        || rest.contains('#')
+        || rest.contains('^')
+        || rest.contains(':')
+    {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_global_destination",
+            &unsupported_global_destination_error(),
+        ));
+    }
     if rest.ends_with('!') {
         return TokenParse::Invalid(token_diagnostic(
             token,
             "unsupported_explicit_toggle",
             EXPLICIT_TOGGLE_GLOBAL_ERROR,
-        ));
-    }
-    if rest.contains('@') && (rest.contains('^') || rest.contains(':')) {
-        return TokenParse::Invalid(token_diagnostic(
-            token,
-            "invalid_global_destination",
-            GLOBAL_DESTINATION_PROJECT_NOTE_ERROR,
-        ));
-    }
-    if rest.contains('#') || rest.contains('^') || rest.contains(':') {
-        return TokenParse::Invalid(token_diagnostic(
-            token,
-            "invalid_global_destination",
-            &unsupported_global_destination_error(token.text),
-        ));
-    }
-    if let Some((route_part, block_part)) = rest.split_once('+') {
-        if !route_part.is_empty() && !is_route_token(route_part) {
-            return TokenParse::Invalid(token_diagnostic(
-                token,
-                "invalid_global_destination",
-                GLOBAL_DESTINATION_ROUTE_ERROR,
-            ));
-        }
-        if !block_part.is_empty() && !is_block_id(block_part) {
-            return TokenParse::Invalid(token_diagnostic(
-                token,
-                "invalid_global_destination",
-                GLOBAL_DESTINATION_BLOCK_ID_ERROR,
-            ));
-        }
-        return TokenParse::Marker(marker_parse(
-            token,
-            MarkerShape {
-                sigil_len: 2,
-                route_part,
-                separator_len: 1,
-                right_part: block_part,
-                route_kind: SpanKind::GlobalSubBulletRoute,
-                right_kind: SpanKind::GlobalSubBulletBlockId,
-                complete_mode: EditorMode::SubBullet,
-                right_need: Need::Task,
-                third: None,
-                suffix: None,
-            },
         ));
     }
     if rest.is_empty() {

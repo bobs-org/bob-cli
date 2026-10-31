@@ -388,10 +388,7 @@ pub(super) struct CaptureResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct GlobalDestinationSummary {
-    pub(super) mode: &'static str,
     pub(super) route: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) block_id: Option<String>,
 }
 
 impl CaptureResult {
@@ -1977,17 +1974,7 @@ pub(super) fn print_global_destination_summary(
 ) {
     let styler = Styler::detect();
     let route_label = format!("{}.md", global.route);
-    match global.block_id.as_deref() {
-        Some(block_id) => println!(
-            "{}  {} · under {}",
-            styler.dim("global"),
-            styler.cyan(&route_label),
-            styler.cyan(&format!("^{block_id}")),
-        ),
-        None => {
-            println!("{}  {}", styler.dim("global"), styler.cyan(&route_label),)
-        }
-    }
+    println!("{}  {}", styler.dim("global"), styler.cyan(&route_label));
 }
 
 /// Human lines for a reference item, matching the reading-queue

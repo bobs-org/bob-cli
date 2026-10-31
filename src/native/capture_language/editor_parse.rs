@@ -244,7 +244,7 @@ pub(super) fn duplicate_capture_marker_diagnostic(
 /// Unlike [`parse_capture_text_with_clip_control`] this never fails: an
 /// incomplete interactive marker (`@`, `@#`, `@route#`, `@:`, `@route:`,
 /// `@route:id#`, `@route:#name`, `@^`, `@route^`, `@+`, `@route+`, `@@`,
-/// `@@route+`, and their legacy `@!` aliases) is a valid editing state,
+/// `@@route`, and their legacy `@!` aliases) is a valid editing state,
 /// and an invalid marker component -- or line shape -- becomes a diagnostic
 /// instead of an error. Tokenization, terminal marker extraction, and
 /// marker classification all run through the same functions `bob capture`
@@ -286,25 +286,14 @@ pub(crate) fn parse_for_editor_with(
         &mut global_spans,
         &mut global_diagnostics,
     );
-    // An inline `@@route+id` discovered after the initial parse still
-    // blocks the claim: re-parse those Ref items so they become ordinary
-    // tasks. A plain `@@route` upgrades default (routeless) Refs to the
-    // global parent; explicit local `@route` keeps local precedence.
+    // A plain `@@route` upgrades default (routeless) Refs to the global
+    // parent; an explicit local `@route` keeps local precedence.
     if let Some(global_ref) = &global_destination {
-        let global_options = EditorParseOptions {
-            url_routing: None,
-            has_global_destination: true,
-        };
-        for (index, outcome) in item_outcomes.iter_mut().enumerate() {
-            if outcome.item.mode == EditorMode::Ref {
-                if global_ref.block_id.is_some() {
-                    *outcome = parse_editor_item_with(
-                        &draft.items[index],
-                        &global_options,
-                    );
-                } else if outcome.item.route.is_none() {
-                    outcome.item.route = global_ref.route.clone();
-                }
+        for outcome in &mut item_outcomes {
+            if outcome.item.mode == EditorMode::Ref
+                && outcome.item.route.is_none()
+            {
+                outcome.item.route = global_ref.route.clone();
             }
         }
     }
@@ -350,7 +339,6 @@ pub(crate) fn parse_for_editor_with(
                 continue;
             }
             inherit_editor_global_destination(item, global);
-            validate_inherited_type_marker(item, draft.items.get(item.index));
         }
     }
 
@@ -367,9 +355,7 @@ pub(crate) fn parse_for_editor_with(
                 .as_ref()
                 .and_then(|global| global.route.clone()),
             section: None,
-            block_id: global_destination
-                .as_ref()
-                .and_then(|global| global.block_id.clone()),
+            block_id: None,
             needs: global_destination
                 .as_ref()
                 .map(|global| global.needs.clone())
@@ -463,7 +449,6 @@ pub(super) fn parse_editor_global_declarations(
                     line: declaration.line_number,
                     mode: marker.mode,
                     route: marker.route,
-                    block_id: marker.block_id,
                     needs: marker.needs,
                     inherit: true,
                 }
@@ -476,7 +461,6 @@ pub(super) fn parse_editor_global_declarations(
                     line: declaration.line_number,
                     mode: EditorMode::Task,
                     route: None,
-                    block_id: None,
                     needs: Vec::new(),
                     inherit: false,
                 }
@@ -515,7 +499,7 @@ pub(super) fn inherit_editor_global_destination(
     item.mode = global.mode;
     item.route = global.route.clone();
     item.section = None;
-    item.block_id = global.block_id.clone();
+    item.block_id = None;
     item.needs = global.needs.clone();
     if item.dependencies.is_empty()
         && item.blocked_tasks.is_empty()
@@ -531,25 +515,13 @@ pub(super) fn inherit_editor_global_destination(
     if had_blocked_task_need && !item.needs.contains(&Need::BlockedTask) {
         item.needs.push(Need::BlockedTask);
     }
-    if let Some(block_id) = global.block_id.clone() {
-        // `@@route+id` selects the inherited existing parent: the item's
-        // modifiers apply to it.
-        item.dependency_target = Some(DependencyTarget {
-            kind: DependencyTargetKind::ExistingTask,
-            route: global.route.clone(),
-            block_id: Some(block_id),
-            inherited: true,
-        });
-        item.needs.retain(|need| *need != Need::DependencyTarget);
-        if item.body.is_empty() {
-            item.mode = EditorMode::TaskDependency;
-        }
-    } else if let Some(target) = item.dependency_target.as_mut() {
+    if let Some(target) = item.dependency_target.as_mut() {
         // A bare `@@route` routes a new dependent without naming a parent.
         if target.kind == DependencyTargetKind::NewTask
             && target.route.is_none()
         {
             target.route = global.route.clone();
+            target.inherited = global.route.is_some();
         }
     } else if had_target_need {
         // Still ownerless: a bare route never names the dependent.
@@ -1656,51 +1628,6 @@ fn type_marker_subject_for_editor(
         }
         _ => None,
     }
-}
-
-/// Global `@@route+id` inheritance can turn a locally parsed new task into
-/// an existing-task sub-bullet. Recheck the final editor subject so it agrees
-/// with execution after the destination is known.
-fn validate_inherited_type_marker(
-    parsed: &mut EditorItemParse,
-    source_item: Option<&CaptureItem<'_>>,
-) {
-    if parsed
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "type_marker_not_applicable")
-    {
-        return;
-    }
-    let Some(source_item) = source_item else {
-        return;
-    };
-    let occurrences =
-        super::type_marker::collect_item_with_clip_control(source_item, true);
-    let markers = occurrences
-        .iter()
-        .filter(|occurrence| occurrence.is_marker())
-        .collect::<Vec<_>>();
-    let [super::type_marker::TypeMarkerOccurrence::Complete(marker)] =
-        markers.as_slice()
-    else {
-        return;
-    };
-    let Some(subject) = type_marker_subject_for_editor(
-        parsed.mode,
-        parsed.pomodoro_close.is_some(),
-    ) else {
-        return;
-    };
-    parsed.diagnostics.push(Diagnostic {
-        severity: Severity::Error,
-        code: "type_marker_not_applicable",
-        message: super::type_marker::type_marker_not_applicable_error(
-            &marker.name,
-            subject,
-        ),
-        range: Some((marker.span.start, marker.span.end)),
-    });
 }
 
 pub(super) fn parse_editor_item_inner<'a>(

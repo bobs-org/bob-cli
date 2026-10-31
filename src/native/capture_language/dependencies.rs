@@ -1907,9 +1907,8 @@ pub(crate) fn resolve_execution_ownership(
 
 /// Finish dependency ownership after `@@` inheritance (draft resolution
 /// calls this right after `inherit_global_destination`): an ownerless
-/// item with an inherited `@@route+id` parent applies its modifiers to
-/// that parent, an ownerless item with an inherited route still needs
-/// task text, and anything still ownerless reports the diagnostic.
+/// item with an inherited route still needs task text, and anything still
+/// ownerless reports the diagnostic.
 pub(crate) fn finish_inherited_dependency_target(
     route: Option<&str>,
     kind: &CaptureKind,

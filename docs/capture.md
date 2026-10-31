@@ -80,8 +80,7 @@ anything is written, and any failure rolls the whole batch back.
 | `URL %` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced); exact standalone `@` remains a compatible alias |
 | `URL % @route` or `@route URL %` | Queue the reference with companion audio under that explicit parent (`@` also remains a compatible listen alias) |
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
-| `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; a plain declaration also routes default (routeless) refs (source `global`), while `@@route+block-id` keeps refs as tasks |
-| `@@route+block-id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
+| `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
 | `@@template:` | Expand one capture item per row from the following `{N}` template; captures exactly like the expansion |
 | `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
@@ -314,8 +313,8 @@ date uses the local date from `BOB_NOW`, `DATE`, or the system clock.
 ### Routing and insertion
 
 Automatic routing uses a leading `@route text` prefix when present; otherwise a
-trailing `text @route` suffix is used. A draft-wide `@@route` or
-`@@route+block-id` declaration, described below, supplies the same destination
+trailing `text @route` suffix is used. A draft-wide `@@route` declaration,
+described below, supplies the same destination
 to every item that has no local route or mode marker.
 Route names use `A-Z`, `a-z`, `0-9`, `_`, and `-`, are lower-cased, and write
 to `<route>.md` at the vault root. Existing target files, including
@@ -330,10 +329,9 @@ a `Tasks` section keep the older fallback of inserting after the last top-level
 
 ### Global destination declaration
 
-A global declaration is a whitespace-free `@@<route>` or
-`@@<route>+<block-id>` token anywhere in the draft. It may sit at the end of an
-item, on an authored child line, in the middle of a line, or on a line by
-itself:
+A global declaration is a whitespace-free `@@<route>` token anywhere in the
+draft. It may sit at the end of an item, on an authored child line, in the
+middle of a line, or on a line by itself:
 
 ```text
 Buy milk @@groceries
@@ -370,10 +368,8 @@ Second task
 ```
 
 `@@<route>` sends every otherwise-unrouted item to `<route>.md` as a task.
-`@@<route>+<block-id>` inserts every otherwise-unrouted item as its own direct
-child beneath that task, in source order; authored children stay nested under
-their own capture parent. Route and block-ID validation match `@route` and
-`@route+block-id`.
+Authored children stay nested under their own capture parent. Route validation
+matches `@route`.
 
 The declaration is metadata, never capture text: it is absent from item counts,
 semantic capture text, preview bodies, and note contents. A draft that contains
@@ -387,7 +383,7 @@ Buy milk @@bar
 ```
 
 Unsupported forms such as `@@foo#Ideas`, `@@foo^id`, `@@foo:id`,
-`@@foo^id@`, and `@@foo:id+` are errors
+`@@foo+id`, `@@foo^id@`, and `@@foo:id+` are errors
 rather than literal task text. Wrap `@@...` in inline code to keep it literal.
 
 An item-local marker still wins for that item. If the same item also owns the
@@ -590,10 +586,9 @@ Single-item success JSON keeps the legacy shape. A multi-item success keeps
 the first result in the legacy top-level fields and adds an ordered
 `captures` array containing every per-item result. When a `@@` declaration is
 present, success JSON also adds an optional top-level `global_destination`
-object with `mode`, `route`, and optional `block_id`. The declaration never
-creates an extra result. Human output numbers batch items as `1/N`, `2/N`,
-and so on, and prints a compact `global  foo.md` (or `global  foo.md · under
-^a-id`) summary when a declaration was used.
+object with `route`. The declaration never creates an extra result. Human
+output numbers batch items as `1/N`, `2/N`, and so on, and prints a compact
+`global  foo.md` summary when a declaration was used.
 
 ### Bulk templates
 
@@ -988,7 +983,7 @@ library hit queues nothing and shows `no new listen job was queued · to
 attach audio run: bob ref create <URL> -P <parent> -L`.
 
 Anything more — an extra word, `#tag`, `s:`, `$<N>`, a clipboard marker, an operator, a child
-line, a `@@route+block-id` declaration, task/destination flags beyond `-r`
+line, task/destination flags beyond `-r`
 (`-s -t -S -c`, `--task-ref`), or a second `@route` — keeps the item a task.
 `-R` also keeps it a task. Hosts without a dot (`http://go/x`, `localhost`),
 IP literals, and excluded hosts (see the
@@ -998,8 +993,8 @@ never silently creates a new note. A pasted blank-line-free block in which
 every line is a bare URL splits into one item per line, and each line is then
 classified on its own, so mixed lists queue the links and keep the rest as
 tasks. A plain `@@sase` routes default (routeless) refs to `sase` while an
-explicit local `@route` keeps local precedence; `@@sase+block-id` keeps the
-item a task. Ordinary task `@route` capture does not resolve aliases.
+explicit local `@route` keeps local precedence. Ordinary task `@route` capture
+does not resolve aliases.
 
 Submit never touches the network and returns at once: it writes a durable
 ref job staged with the resolved parent and a detached background worker
@@ -2123,7 +2118,6 @@ bullet.
 | Owner spelling | Meaning |
 | --- | --- |
 | `@route+id` | Canonical explicit owner; may lead or trail the relationship modifiers |
-| `@@route+id` | Inherited owner for otherwise ownerless items anywhere in the draft |
 | `@route:id` | Existing bare alias; with `&`/`*` it names the owner and never links it |
 | `^route:id` | Bare active-task alias; may lead or trail `&`/`*`, and never links it |
 
@@ -2334,7 +2328,6 @@ and `job.md#^cleanup` is Do cleanup tasks.
 | RX3 | `@body+excercise &foo:bar *job:cleanup` | cleanup → Exercise → Buy shoes |
 | RX4 | `^body:excercise &foo:bar`, `&foo:bar ^body:excercise`, `^body:excercise *job:cleanup` | Same relationship as RX1/RX2; parse owner is `existing_task` |
 | RX5 | `@body:excercise &foo:bar` | Existing bare `@route:id` alias behavior remains unchanged |
-| RX6 | `@@body+excercise` then `&foo:bar`, with or without a blank line | Edge only; no empty bullet; `inherited: true` |
 | RX7 | `@foo+old *job:cleanup`, `Note @foo+old *job:cleanup`; owner `[x]` or `[-]` | Refuse with the closed-owner `*` message; vault bytes are unchanged |
 | RX8 | `+ &foo:bar`, `+ex &foo:bar`, `&foo:bar +`, `*job:cleanup +ex` | Parse needs `task_parent`, no diagnostics; submit refuses with the exact `+` message above; never create a `+…` task |
 | RX9 | `@body+excercise &foo:bar $2`, `s:3`, or `%` | `relationship_needs_text` in parse and the identical execution error |
@@ -2390,8 +2383,7 @@ the item's task. Both write entries on `🪢 **LINKS:**` lines and let
 reconcile maintain the `🪢 **LINKED FROM:**` mirrors, exactly as
 [Task relations](task-relations.md) specifies. Owners use exactly the
 `&` / `*` spellings: task text creates the owner, `@route+id` names an
-existing owner, `@@route+id` is inherited, and bare `@route:id` /
-`^route:id` alias without linking. A relation-only existing-owner item
+existing owner, and bare `@route:id` / `^route:id` alias without linking. A relation-only existing-owner item
 uses mode `task_dependency` and reports `relationship_needs_text`, as
 `&` does.
 
@@ -4511,8 +4503,8 @@ is a deliberate deferral a future change can lift. Forced destination flags
 allowed and behave as described above. A `=<X>` / `=x` suffix is rejected on
 project notes with a message naming `@<route>^<block-id>+`; `!` stays
 reserved for the sub-bullet toggle and is not accepted on this family; a
-`@@<route>^<id>+` declaration fails as `invalid_global_destination`, since
-one declaration creating the same note per item is never what was meant; and
+`@@<route>^<id>+` declaration fails with `invalid @@ declaration: @@ takes a
+route (@@foo)`; and
 an empty block ID (`@<route>^+`) fails with the family's existing "requires
 a block ID" wording.
 
@@ -4728,7 +4720,7 @@ clients ignore them:
 
 A terminal `!` on the same marker-only shape, `@route+block-id!`, opts into
 the link-presence toggle. It is accepted only as the final byte of that
-exact marker: not on `@route+id#type`, `@@route+id`, body-bearing items,
+exact marker: not on `@route+id#type`, body-bearing items,
 authored children, clipboard, schedule, priority, or forced destination flags.
 Ordinary `!` in capture prose stays literal. An unlinked Ready `[ ]` task,
 or a Blocked `[?]` task whose own open prerequisites §13.5.1 can drop,
@@ -6000,8 +5992,8 @@ are byte-identical to today, and relations never appear in
 
 When the draft has a `@@` declaration, `global_destination` is an optional
 object with the declaration `range`, one-based physical `line`, effective
-`mode`, `route`, `block_id`, and `needs`. It is omitted when no declaration is
-present, so schema version 1 stays additive.
+`route`, and `needs`. It is omitted when no declaration is present, so schema
+version 1 stays additive.
 
 `pomodoro_start` is an optional object, omitted for every input without a
 start suffix or whole-item start, with the typed `raw` `<X>` text (excluding
@@ -6065,13 +6057,13 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `project_note_separator`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_explicit_toggle`, `task_type`, `global_route`,
-`global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
+`schedule`, `priority`, `clipboard`,
 `ref_url`, `ref_listen`,
 `interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `blocked_task_sigil`, `blocked_task_note`, `blocked_task_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, `wikilink_alias`,
 `wikilink_task_delimiter`, or `wikilink_task_query`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
-`@cash+` or `@@cash+`, the trailing `#` in `@cash:id#`, a task-type span in
+`@cash+`, the trailing `#` in `@cash:id#`, a task-type span in
 `@cash+id#`, the dangling `,` or `!` in `x1,` or `x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
 `@@` when the route is still empty too. For example, `x1,3!2` gives
 `[0,2) pomodoro_close`, `[2,5) pomodoro_close_in_progress`, and
@@ -6356,16 +6348,17 @@ order. A rewrite is idempotent: running it again on its own output is a
 no-op, because the claiming token is no longer bare.
 
 An item's single local marker that cannot be expressed as a declaration --
-`@route#Section`, `@route+block-id#section`, `@route^block-id`,
-`@route:block-id`, `@route^block-id@` as a project note,
-`@route+block-id` as a task toggle, a solo `@route:block-id…` / `^route:block-id…`
+`@route#Section`, `@route+block-id` as an existing task destination,
+`@route+block-id#section`, `@route^block-id`, `@route:block-id`,
+`@route^block-id@` as a project note, `@route+block-id!` as a task toggle,
+a solo `@route:block-id…` / `^route:block-id…`
 Pomodoro link, a `x[<N>][!<M>]` Pomodoro close (`pomodoro_close` is non-absorbable and
 close items are never rewritten), or a trailing bare `#`
 -- is left untouched; the result reports `changed: false` plus a
 `notices` entry naming the marker and why, e.g.
 `@@ cannot take a section: leave @notes#Ideas on this item, or delete it and declare @@notes`.
-For a task toggle the notice is
-`@@ cannot take a task toggle: leave @cash+goog-exit on this item, or delete it`,
+For an existing task destination the notice is
+`@@ cannot take an existing task destination: leave @cash+goog-exit on this item, or delete it and declare @@cash`,
 for a project note it is
 `@@ cannot take a project note: leave @cash^goog-exit@ on this item, or delete it`,
 and for a Pomodoro link it is
@@ -6456,11 +6449,10 @@ body text yet is still completed on the parent line, even though
 
 Route completion covers a bare `@`, a still-typing `@fragment`, and the
 missing route portion of `@^...`, `@+...`, `@:...`, and `@#...`, plus the route
-component of a `@@`, `@@fragment`, or `@@route+...` declaration anywhere in the
-draft. Replacement ranges for that declaration exclude both `@` sigils and the
-`+`. Parent-task
-completion covers `@@route+fragment` the same way it covers `@route+fragment`,
-including `--all-tasks` missing-ID candidates. An inherited global route also
+component of a `@@` or `@@fragment` declaration anywhere in the draft.
+Replacement ranges for that declaration exclude both `@` sigils. Parent-task
+completion covers `@route+fragment`, including `--all-tasks` missing-ID
+candidates. An inherited global route also
 becomes the current note for same-note wikilink heading/block completion unless
 that item overrides it. Route completion is backed by the same
 scan as `bob capture-targets`. For a template draft, completion runs against
@@ -6864,7 +6856,7 @@ and the open-editable pool documented under
 [Blocking existing tasks with '*'](#blocking-existing-tasks-with). Both parent-task contexts include an
 additive `picker` descriptor: `kind` is `parent_task`; `scope` is `vault`
 with `scope_token: "+"` for the bare selector, or `note` with the canonical
-`@route+` / `@@route+` scope token for scoped selection. `note_target` is
+`@route+` scope token for scoped selection. `note_target` is
 present only for note scope. `marker_range` covers the selector (or the
 scoped marker through its ID), and `trigger_removal_range` covers the full
 bare selector or only the `+` through the scoped ID. All offsets are

@@ -88,9 +88,9 @@ fn both_directions_keep_independent_lists_and_blocked_task_order() {
         "*job:send-batch"
     );
 
-    let inherited = parse_json("@@body+work\n*job:cleanup");
-    assert_eq!(inherited["mode"], "task_dependency");
-    assert_eq!(inherited["dependency_target"]["inherited"], true);
+    let explicit = parse_json("@body+work *job:cleanup");
+    assert_eq!(explicit["mode"], "task_dependency");
+    assert!(explicit["dependency_target"].get("inherited").is_none());
 }
 
 #[test]
