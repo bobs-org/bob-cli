@@ -3,7 +3,10 @@
 Pomodoro homes label work from the notes of the tasks linked under each ledger
 entry. The label is derived when Bob reads the ledger; Bob never writes a
 session name, home, or label back to a daily note. Open entries show a forecast.
-Closed entries show the attribution Stats counts.
+Closed entries show the attribution Stats counts. The `parts` keep each task's
+nearest home, while the label, chip, and dot name **root parents**
+([R2](#r2-root-parent), [R7](#r7-labels-chips-and-dots)): a session that links
+`bob` and its sub-project reads `bob`.
 
 This is the shared contract for Rust, the Obsidian ledger mirror, and clients
 that render Bob's JSON. Rust owns the meaning. Consumers may ignore new JSON
@@ -94,7 +97,9 @@ review tiers, capture routing, plan budget, or `bob projects` output.
 Roots are derived from today's note tree at read time, never written. A
 leftover `rollup:` frontmatter key is silently ignored: project rollup is
 retired and never regroups homes. Labels use the bare root stem (`sase`,
-`gtd`); buckets keep `unlinked` and `unfiled`.
+`gtd`); buckets keep `unlinked` and `unfiled`. Pomodoro labels, chips, and
+dots group by root parent as well ([R7](#r7-labels-chips-and-dots)), while
+`homes.parts` stay per nearest home.
 Hues follow R8:
 bob reports each root's area hue (R8); bars give every root they show a distinct
 colour (see stats.md). Stats splits each session per task first, then sums shares by root,
@@ -161,19 +166,38 @@ with no links has no parts and an empty label.
 
 ## R7 — Labels, chips, and dots
 
-Use a lowercase note stem for project and area labels. Use `unlinked` and
-`unfiled` for reserved buckets. Sort labels by share, descending;
-show up to two joined by ` · `, then append ` +N` for additional homes. A
-session with no homes has an empty label.
+The label, chip, and dot name **root parents** ([R2](#r2-root-parent)), not
+nearest homes. `homes.parts`, their shares and minutes, the lead home, and every
+Stats dimension keep the nearest-home granularity Stats needs. No JSON field is
+added, removed, or retyped. Derive the display fields in this order:
 
-The chip is the label unless suppressed for an unlinked session, or a name
-whose case-insensitive component set equals the set of home
-labels. An unfiled-only chip says `unfiled`.
+1. **Group parts by root parent.** A part's root is its home's root parent.
+   Bucket parts are their own root (`@unfiled`, `@unlinked`). A root's label is
+   the lowercase note stem of its path, or `unfiled` / `unlinked` for a bucket.
+2. **Root share** is the sum of its parts' whole-percent shares. **Root tasks**
+   is the sum of their task counts. **Root order** is the ledger order of its
+   first part.
+3. **Label.** Sort roots by share, descending, with ties kept in root order.
+   Show up to two root labels joined by ` · `, then append ` +N` for the rest. A
+   session with no homes has an empty label.
+4. **Chip.** The chip is the label unless it is suppressed for an unlinked
+   session, or when the session name's case-insensitive `+` component set equals
+   the set of **root** labels. An unfiled-only chip says `unfiled`. A `— SASE`
+   session that links only `sase_blog_notes` tasks therefore has no chip.
+5. **Dot.** Use a filled `●` for an attributed session and a hollow `○` for a
+   forecast. The dot takes the **lead root's** area hue. The lead root has the
+   most distinct tasks, with ties going to the first task in ledger order (the
+   rule Stats count mode uses for roots). A root's hue equals each of its parts'
+   hue, because the root lies on the same chain below the same top-level area,
+   so take it from the root's first part. `lead_home` is unchanged.
+6. **Tooltip.** The Obsidian ledger chip adds one tooltip line per root, in
+   label order: `<root> · N task(s)`, plus ` · Mm` when attributed.
 
-Use a filled `●` for an attributed session and a hollow `○` for a forecast.
-The dot takes the lead home's area hue. A chip never routes a capture, changes
-status, reorders a session, or feeds the plan budget. Homes are not capture
-`#name` targets; separate sessions remain separate.
+A session that links `bob#^…` tasks and `bob_command_mode_improvements#^prj`
+(a sub-project of `bob`) reads `○ bob`; its `parts` still list both homes. A
+chip never routes a capture, changes status, reorders a session, or feeds the
+plan budget. Homes are not capture `#name` targets; separate sessions remain
+separate.
 
 ## R8 — Area hues
 
@@ -237,7 +261,8 @@ Every emitting surface uses this additive shape:
 
 `state` is `attributed` for every closed entry and `forecast` for every open
 entry; `kind` is `work` or
-`unlinked`. `chip` and `hue` are nullable. Each part's kind is `project`,
+`unlinked`. `label`, `chip`, and `hue` name root parents ([R7](#r7-labels-chips-and-dots))
+while `parts` stay per nearest home. `chip` and `hue` are nullable. Each part's kind is `project`,
 `area`, or `bucket`. `share` is a whole percentage: minute-based for attributed
 sessions with a duration, and task-based when a closed entry has no duration or
 for forecasts. `minutes` is present on every attributed part; it is `0` when a
@@ -347,10 +372,10 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 
 | Case | What it proves |
 | --- | --- |
-| `subproject-archive-homes` | archive/ref chain, struck links, de-duplication |
+| `subproject-archive-homes` | archive/ref chain, struck links, de-duplication; sub-projects label as their root parent |
 | `resolution-and-lints` | archived/ref/project/area homes, cycles, explicit and fallback hues |
 | `ambiguous-basename` | duplicate basename resolves to `@unfiled`; the sole `rust_only` case |
-| `chips, forecast shares, empty forecasts, and session identity` | chip suppression, forecast and unlinked shapes, ties, named sessions |
+| `chips, forecast shares, empty forecasts, and session identity` | chip suppression by the root-label set, forecast and unlinked shapes, ties, named sessions |
 | `split-rounding-and-duration` | 50m across 3 tasks is 18/16/16; `[t:: 40m]` takes precedence over a 50m range |
 | `share-rounding` | equal task weights round to 34/33/33, giving the tied remainder to ledger order rather than the last part |
 | `gtd-root-across-days` | another day's rooted `^gtd` attributes to `gtd_daily`; an unrooted one is `@unfiled` |
@@ -361,6 +386,7 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 | `named-sessions-use-task-homes` | named sessions attribute through their task links; unrooted `^gtd` links are `@unfiled` |
 | `daily-note-task-home` | an unrooted daily-note task is `@unfiled` |
 | `root-fields` | set `[root::]` re-homes `^gtd` and inbox tasks, paren form, `sase_goals` rolls up with a lint, and missing/duplicate/invalid/no_home fall back; a closed task keeps attributing |
+| `root-parent-chips` | a project and its sub-project share one root label; a `root: true` project (and a quoted `"TRUE"`) is its own root; roots share-rank and tie-break by ledger order; the dot takes the lead root's hue while `lead_home` stays per home |
 
 ## Limits and rejected alternatives
 

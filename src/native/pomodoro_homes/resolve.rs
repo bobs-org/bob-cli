@@ -513,6 +513,15 @@ fn note_stem(path: &Path) -> String {
         .to_lowercase()
 }
 
+/// The lowercase label of a root parent (R7): the note stem for a real root,
+/// `unfiled` / `unlinked` for the reserved buckets.
+pub(super) fn root_label(root_parent: &str) -> String {
+    match root_parent.strip_prefix('@') {
+        Some(bucket) => bucket.to_lowercase(),
+        None => note_stem(Path::new(root_parent)),
+    }
+}
+
 pub(crate) fn unfiled_home() -> Home {
     unfiled_at(Vec::new())
 }

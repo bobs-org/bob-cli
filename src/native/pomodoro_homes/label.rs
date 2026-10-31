@@ -1,6 +1,10 @@
 use std::collections::BTreeSet;
 
-use super::json::HomePart;
+/// One root-parent bucket as the label and chip see it (R7).
+pub(super) struct LabelPart {
+    pub(super) label: String,
+    pub(super) share: u16,
+}
 
 pub(super) fn name_components(name: Option<&str>) -> Vec<String> {
     name.into_iter()
@@ -11,8 +15,9 @@ pub(super) fn name_components(name: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn label(parts: &[HomePart]) -> String {
-    let mut ranked = parts.iter().collect::<Vec<_>>();
+/// Rank root groups by share (ties keep root order), show two, count the rest.
+pub(super) fn label(roots: &[LabelPart]) -> String {
+    let mut ranked = roots.iter().collect::<Vec<_>>();
     ranked.sort_by(|left, right| right.share.cmp(&left.share));
     let shown = ranked
         .iter()
@@ -31,18 +36,18 @@ pub(super) fn label(parts: &[HomePart]) -> String {
 
 pub(super) fn chip(
     name: Option<&str>,
-    parts: &[HomePart],
+    roots: &[LabelPart],
     unlinked: bool,
 ) -> Option<String> {
     if unlinked {
         return None;
     }
-    let value = label(parts);
+    let value = label(roots);
     if value.is_empty() {
         return None;
     }
     let names = name_components(name).into_iter().collect::<BTreeSet<_>>();
-    let labels = parts
+    let labels = roots
         .iter()
         .map(|part| part.label.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();

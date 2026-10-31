@@ -10,9 +10,9 @@ use crate::native::{
 
 use super::{
     json::{HomePart, Homes},
-    label::{chip, label, percentages},
-    resolve::{path_string, unlinked_home},
-    Home, HomeResolver, HomeSource, SessionKind, SessionState,
+    label::{chip, label, percentages, LabelPart},
+    resolve::{path_string, root_label, unlinked_home},
+    Home, HomeResolver, HomeSource, Hue, SessionKind, SessionState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,7 +185,6 @@ pub(crate) fn attribute_session<S: HomeSource>(
             )
         })
         .collect::<Vec<_>>();
-    let display_label = label(&parts);
     let lead_home = grouped
         .iter()
         .max_by(|left, right| {
@@ -194,8 +193,26 @@ pub(crate) fn attribute_session<S: HomeSource>(
                 .then_with(|| right.first.cmp(&left.first))
         })
         .map(|group| group.home.clone());
-    let lead_hue = lead_home.as_ref().and_then(|home| home.hue);
-    let display_chip = chip(name, &parts, false);
+    // R7: the label, chip, and dot name root parents. `parts` and
+    // `lead_home` stay per nearest home.
+    let roots = root_groups(&grouped, &parts);
+    let root_labels = roots
+        .iter()
+        .map(|root| LabelPart {
+            label: root.label.clone(),
+            share: root.share,
+        })
+        .collect::<Vec<_>>();
+    let display_label = label(&root_labels);
+    let display_chip = chip(name, &root_labels, false);
+    let lead_hue = roots
+        .iter()
+        .max_by(|left, right| {
+            left.tasks
+                .cmp(&right.tasks)
+                .then_with(|| right.first.cmp(&left.first))
+        })
+        .and_then(|root| root.hue);
 
     SessionHomes {
         homes: Homes {
@@ -216,6 +233,42 @@ struct HomeGroup {
     tasks: u32,
     minutes: u32,
     first: usize,
+}
+
+/// Nearest-home parts bucketed by root parent (R7).
+struct RootGroup {
+    label: String,
+    share: u16,
+    tasks: u32,
+    first: usize,
+    hue: Option<Hue>,
+}
+
+/// Group `parts` by their home's root parent, in root order: the ledger
+/// order of each root's first part. A root's hue is its first part's hue.
+fn root_groups(grouped: &[HomeGroup], parts: &[HomePart]) -> Vec<RootGroup> {
+    let mut roots = Vec::<(String, RootGroup)>::new();
+    for (group, part) in grouped.iter().zip(parts) {
+        let key = &group.home.root_parent;
+        if let Some((_, root)) = roots.iter_mut().find(|(seen, _)| seen == key)
+        {
+            root.share += u16::from(part.share);
+            root.tasks += group.tasks;
+            root.first = root.first.min(group.first);
+        } else {
+            roots.push((
+                key.clone(),
+                RootGroup {
+                    label: root_label(key),
+                    share: u16::from(part.share),
+                    tasks: group.tasks,
+                    first: group.first,
+                    hue: group.home.hue,
+                },
+            ));
+        }
+    }
+    roots.into_iter().map(|(_, root)| root).collect()
 }
 
 fn deduplicated_links<S: HomeSource>(

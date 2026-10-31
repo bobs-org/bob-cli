@@ -50,7 +50,11 @@
     "gtd_daily.md": "---\ntype: [[area]]\nparent: [[gtd]]\n---\n",
     "sase_goals.md": "---\ntype: [[project]]\nparent: [[sase]]\n---\n",
     "inbox.md": "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\n---\n\n- [ ] #task Inbox sase [root:: sase] ^inbox-sase\n- [ ] #task Inbox paren (root:: sase) ^inbox-paren\n- [ ] #task Inbox goals [root:: sase_goals] ^inbox-goals\n- [ ] #task Inbox missing [root:: nope] ^inbox-missing\n- [ ] #task Inbox dup [root:: sase] [root:: gtd] ^inbox-dup\n- [ ] #task Inbox invalid [root:: [[sase]]] ^inbox-invalid\n- [ ] #task Inbox nohome [root:: unfiled] ^inbox-nohome\n- [x] #task Inbox closed [root:: sase] [completion:: 2026-10-01] ^inbox-closed\n",
-    "2026/20261028.md": "# 2026-10-28\n\n- [ ] #task [[gtd_daily]] [root:: gtd_daily] [created:: 2026-10-28] ^gtd\n\n## Pomodoros\n"
+    "2026/20261028.md": "# 2026-10-28\n\n- [ ] #task [[gtd_daily]] [root:: gtd_daily] [created:: 2026-10-28] ^gtd\n\n## Pomodoros\n",
+    "rooted_blog.md": "---\ntype: [[project]]\nparent: [[sase]]\nroot: true\n---\n",
+    "rooted_blog_notes.md": "---\ntype: [[project]]\nparent: [[rooted_blog]]\n---\n",
+    "quoted_root.md": "---\ntype: [[project]]\nparent: [[sase]]\nroot: \"TRUE\"\n---\n",
+    "quoted_root_child.md": "---\ntype: [[project]]\nparent: [[quoted_root]]\n---\n"
   },
   "cases": [
     {
@@ -64,8 +68,8 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "sase_blog_notes \u00b7 hack +1",
-          "chip": "sase_blog_notes \u00b7 hack +1",
+          "label": "sase \u00b7 bob",
+          "chip": "sase \u00b7 bob",
           "hue": "blue",
           "parts": [
             {
@@ -311,8 +315,8 @@
         {
           "state": "forecast",
           "kind": "work",
-          "label": "sase_blog",
-          "chip": "sase_blog",
+          "label": "sase",
+          "chip": "sase",
           "hue": "blue",
           "parts": [
             {
@@ -389,8 +393,8 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "hack",
-          "chip": "hack",
+          "label": "sase",
+          "chip": "sase",
           "hue": "blue",
           "parts": [
             {
@@ -449,8 +453,8 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "cycle_a",
-          "chip": "cycle_a",
+          "label": "cycle_b",
+          "chip": "cycle_b",
           "hue": null,
           "parts": [
             {
@@ -551,8 +555,8 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "sase_blog_notes",
-          "chip": "sase_blog_notes",
+          "label": "sase",
+          "chip": null,
           "hue": "blue",
           "parts": [
             {
@@ -571,8 +575,8 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "sase_blog_notes \u00b7 bob",
-          "chip": "sase_blog_notes \u00b7 bob",
+          "label": "sase \u00b7 bob",
+          "chip": null,
           "hue": "blue",
           "parts": [
             {
@@ -649,8 +653,8 @@
         {
           "state": "forecast",
           "kind": "work",
-          "label": "sase_blog_notes",
-          "chip": "sase_blog_notes",
+          "label": "sase",
+          "chip": null,
           "hue": "blue",
           "parts": [
             {
@@ -668,8 +672,8 @@
         {
           "state": "forecast",
           "kind": "work",
-          "label": "sase_blog_notes \u00b7 bob",
-          "chip": "sase_blog_notes \u00b7 bob",
+          "label": "sase \u00b7 bob",
+          "chip": "sase \u00b7 bob",
           "hue": "blue",
           "parts": [
             {
@@ -895,8 +899,8 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "sase_direct_child \u00b7 sase_grandchild",
-          "chip": "sase_direct_child \u00b7 sase_grandchild",
+          "label": "sase",
+          "chip": "sase",
           "hue": "blue",
           "parts": [
             {
@@ -1276,8 +1280,8 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "sase_goals",
-          "chip": "sase_goals",
+          "label": "sase",
+          "chip": "sase",
           "hue": "blue",
           "parts": [
             {
@@ -1383,6 +1387,144 @@
             {
               "key": "sase.md",
               "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "root-parent-chips",
+      "daily_path": "2026/20261018.md",
+      "expected_health": {
+        "unfiled_links": 0,
+        "ambiguous_links": 0,
+        "unresolved_links": 0,
+        "area_color_invalid": 0
+      },
+      "expected_lead_homes": [
+        "sase.md",
+        "rooted_blog_notes.md",
+        "bob.md",
+        "quoted_root_child.md"
+      ],
+      "pomodoros": "- [ ] () \u2014 BLOG\n  - [[sase#^a]]\n  - [[sase_blog_notes#^b]]\n- [x] (0900-0910 10m)\n  - [[rooted_blog_notes#^c]]\n  - [[rooted_blog#^d]]\n- [ ] ()\n  - [[sase_goals#^e]]\n  - [[sase_blog#^f]]\n  - [[bob#^g]]\n  - [[bob#^h]]\n- [x] (0920-0925 5m)\n  - [[quoted_root_child#^i]]\n",
+      "expected": [
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 50
+            },
+            {
+              "key": "sase_blog_notes.md",
+              "label": "sase_blog_notes",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 50
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "rooted_blog",
+          "chip": "rooted_blog",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "rooted_blog_notes.md",
+              "label": "rooted_blog_notes",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 5
+            },
+            {
+              "key": "rooted_blog.md",
+              "label": "rooted_blog",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "sase \u00b7 bob",
+          "chip": "sase \u00b7 bob",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase_goals.md",
+              "label": "sase_goals",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 25
+            },
+            {
+              "key": "sase_blog.md",
+              "label": "sase_blog",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 25
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 2,
+              "share": 50
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "quoted_root",
+          "chip": "quoted_root",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "quoted_root_child.md",
+              "label": "quoted_root_child",
               "kind": "project",
               "area": "dev.md",
               "area_label": "dev",
