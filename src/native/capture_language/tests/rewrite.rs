@@ -598,6 +598,39 @@ fn rewrite_draft_caret_plus_switches_to_plus() {
 }
 
 #[test]
+fn rewrite_draft_switches_sealed_project_note_separators() {
+    assert_switch(
+        "Do work @file^id@:",
+        "Do work @file:id@",
+        "@file^id@",
+        "@file:id@",
+        8,
+    );
+    assert_switch(
+        "Do work @file:id@^",
+        "Do work @file^id@",
+        "@file:id@",
+        "@file^id@",
+        8,
+    );
+
+    // The same separator, or `+`, after a seal stays literal.
+    for raw in [
+        "Do work @file^id@^",
+        "Do work @file:id@:",
+        "Do work @file^id@+",
+        "Do work @file:id@+",
+    ] {
+        let rewrite = switch_at(raw);
+        assert_eq!(rewrite.rule, None, "{raw}");
+        assert_eq!(rewrite.text, raw, "{raw}");
+    }
+
+    let sealed_offer = parse_for_editor("Do work @file:id@");
+    assert_eq!(sealed_offer.mode, EditorMode::PomodoroProjectNote);
+}
+
+#[test]
 fn rewrite_draft_separator_toggle_supports_three_way_reverse_from_plus() {
     assert_switch(
         "Do work @file:id+",

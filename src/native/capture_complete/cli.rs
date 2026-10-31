@@ -231,7 +231,7 @@ included; the replacement covers the whole `:` token, sigil included, \
 because accepting rewrites the query into the canonical `@route:block-id` \
 link. A whole-draft `/` token completes `task_goto`: the same rows and order as `task_link`, with `note_path` and absolute `target` for opening the task; the replacement covers the whole token and is never inserted. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `@` seal \
-directly after the `^` block-ID part is never part of the replacement; a `+` after a `:` block ID is the retired project-note form and offers nothing. A trailing ` :id` or ` ^id` on a \
+directly after the `^` or `:` block-ID part is never part of the replacement and reports intent `project_note`; a `+` after a `:` block ID is the retired project-note form and offers nothing. A trailing ` :id` or ` ^id` on a \
 first-level bullet of a project-note item completes as `project_task_block_id`, with empty candidates and an additive `block_id` object carrying intent `new`, the project-note stem, the sigil range, the bullet body, used IDs (`prj` plus sibling task IDs), and suggestions. An empty block-ID component \
 ('@route+#') returns a successful empty task-section list; an unresolvable \
 parent task returns a successful empty list plus one bounded warning. Other \

@@ -352,6 +352,64 @@ fn insert_caret_separator_span(
     }
 }
 
+fn apply_project_note_offer(
+    spans: &mut Vec<Span>,
+    exclude_last_placeholder: bool,
+) {
+    let len = spans.len();
+    for (index, span) in spans.iter_mut().enumerate() {
+        if span.kind == SpanKind::PomodoroName {
+            continue;
+        }
+        // The trailing placeholder for a missing `#name` belongs to the
+        // Pomodoro name, not to the sealed marker, so it keeps no modifier.
+        if exclude_last_placeholder
+            && index + 1 == len
+            && span.kind == SpanKind::InteractivePlaceholder
+        {
+            continue;
+        }
+        span.project_note = Some(ProjectNoteForm::Offer);
+    }
+}
+
+/// Insert the `:` separator span for a sealed offer marker. Mirrors
+/// [`insert_caret_separator_span`]: only when both route and block ID are
+/// present, with the offer modifier. `sigil_len` is 1, or 2 for legacy
+/// `@!` markers.
+fn insert_offer_separator_span(
+    token: &Token<'_>,
+    sigil_len: usize,
+    route_part: &str,
+    marker_parse: &mut MarkerParse,
+) {
+    if route_part.is_empty() {
+        return;
+    }
+    let has_right = marker_parse
+        .block_id
+        .as_ref()
+        .is_some_and(|id| !id.is_empty());
+    if !has_right {
+        return;
+    }
+    let sep_start = token.start + sigil_len + route_part.len();
+    let sep_span = Span {
+        start: sep_start,
+        end: sep_start + 1,
+        kind: SpanKind::ProjectNoteSeparator,
+        project_note: Some(ProjectNoteForm::Offer),
+    };
+    // Route span is first when present; separator sits right after it.
+    if marker_parse
+        .spans
+        .first()
+        .is_some_and(|span| span.kind == SpanKind::PomodoroRoute)
+    {
+        marker_parse.spans.insert(1, sep_span);
+    }
+}
+
 pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
     let marker = &token.text[1..];
     let (route_part, block_part) =
@@ -910,6 +968,39 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         Some(stripped) => stripped,
         None => block_part,
     };
+    // Sealed offer `@r:id@`, `@r:id@#name`, `@r:id@#"Lit Name"`: the `@`
+    // seal right after the block ID names the offer form, always in
+    // `pomodoro_project_note` mode. A seal with a session suffix, junk
+    // after the seal, or a misordered `#name@` is an error. The retired
+    // `+` teaching above already ran, so a `+` here is ordinary name
+    // charset, never a seal. A trailing `@` on the name without a block
+    // seal is the same misordered shape.
+    if block_part.contains('@')
+        || name_part.is_some_and(|name| name.ends_with('@'))
+    {
+        if let Some(raw) = start_part {
+            let message = if raw.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw).is_some()
+            {
+                POMODORO_CLOSE_PROJECT_NOTE_ERROR
+            } else {
+                POMODORO_START_PROJECT_NOTE_ERROR
+            };
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_project_note_marker",
+                message,
+            ));
+        }
+        return classify_pomodoro_offer_token(
+            token,
+            sigil_len,
+            route_part,
+            block_part,
+            name_part,
+            literal_name_part,
+        );
+    }
     if !block_part.is_empty() && !is_block_id(block_part) {
         return TokenParse::Invalid(token_diagnostic(
             token,
@@ -1236,6 +1327,224 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         }
         None => {
             marker_parse.pomodoro_close = close_spec;
+        }
+    }
+    TokenParse::Marker(marker_parse)
+}
+
+/// Classify a sealed offer `@r:id@` token (with optional `#name`):
+/// the `@` seal right after the block ID names the offer form, always in
+/// `pomodoro_project_note` mode with the offer span modifier. Mirrors the
+/// `^`-form seal handling in [`classify_task_block_id_token`]: the seal is
+/// a suffix span without a name, or an explicit span ahead of the name.
+fn classify_pomodoro_offer_token(
+    token: &Token<'_>,
+    sigil_len: usize,
+    route_part: &str,
+    block_part: &str,
+    name_part: Option<&str>,
+    literal_name_part: Option<&str>,
+) -> TokenParse {
+    // A trailing `@` on the name is a misordered seal, with or without a
+    // block seal.
+    if let Some(name) = name_part
+        && let Some(name_core) = name.strip_suffix('@')
+    {
+        let core = block_part.strip_suffix('@').unwrap_or(block_part);
+        if !name_core.is_empty() {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_project_note_marker",
+                &project_note_misordered_error_with(
+                    route_part, ':', core, name_core,
+                ),
+            ));
+        }
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_project_note_marker",
+            &invalid_project_note_marker_error_with(
+                route_part,
+                ':',
+                core,
+                Some(name_core),
+            ),
+        ));
+    }
+    // A clean seal ends the block part; anything else holding `@` is
+    // trailing junk after the seal.
+    let Some(sealed_core) = block_part.strip_suffix('@') else {
+        let junk_core = block_part.split('@').next().unwrap_or("");
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_project_note_marker",
+            &invalid_project_note_marker_error_with(
+                route_part, ':', junk_core, name_part,
+            ),
+        ));
+    };
+    if sealed_core.is_empty() {
+        // `@r:@` is an incomplete block ID with a typed seal: keep the
+        // placeholder path, mirroring the `^` form.
+        let mut marker_parse = marker_parse(
+            token,
+            MarkerShape {
+                sigil_len,
+                route_part,
+                separator_len: 1,
+                right_part: "",
+                route_kind: SpanKind::PomodoroRoute,
+                right_kind: SpanKind::PomodoroBlockId,
+                complete_mode: EditorMode::PomodoroProjectNote,
+                right_need: Need::PomodoroId,
+                third: None,
+                suffix: Some(MarkerSuffix {
+                    len: 1,
+                    kind: SpanKind::ProjectNoteOfferMarker,
+                }),
+            },
+        );
+        apply_project_note_offer(&mut marker_parse.spans, false);
+        return TokenParse::Marker(marker_parse);
+    }
+    if sealed_core.contains('@')
+        || sealed_core.contains('+')
+        || !is_block_id(sealed_core)
+    {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_project_note_marker",
+            &invalid_project_note_marker_error_with(
+                route_part,
+                ':',
+                sealed_core.trim_matches(['@', '+']),
+                name_part,
+            ),
+        ));
+    }
+    let Some(name) = name_part else {
+        let mut marker_parse = marker_parse(
+            token,
+            MarkerShape {
+                sigil_len,
+                route_part,
+                separator_len: 1,
+                right_part: sealed_core,
+                route_kind: SpanKind::PomodoroRoute,
+                right_kind: SpanKind::PomodoroBlockId,
+                complete_mode: EditorMode::PomodoroProjectNote,
+                right_need: Need::PomodoroId,
+                third: None,
+                suffix: Some(MarkerSuffix {
+                    len: 1,
+                    kind: SpanKind::ProjectNoteOfferMarker,
+                }),
+            },
+        );
+        insert_offer_separator_span(
+            token,
+            sigil_len,
+            route_part,
+            &mut marker_parse,
+        );
+        apply_project_note_offer(&mut marker_parse.spans, false);
+        if !sealed_core.is_empty() && route_part.is_empty() {
+            marker_parse.mode = EditorMode::PomodoroProjectNote;
+        }
+        return TokenParse::Marker(marker_parse);
+    };
+    if !name.is_empty()
+        && !is_pomodoro_selector_component(name)
+        && literal_name_part.is_none()
+    {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_pomodoro_name",
+            POMODORO_NAME_ERROR,
+        ));
+    }
+    let mut marker_parse = marker_parse(
+        token,
+        MarkerShape {
+            sigil_len,
+            route_part,
+            separator_len: 1,
+            right_part: sealed_core,
+            route_kind: SpanKind::PomodoroRoute,
+            right_kind: SpanKind::PomodoroBlockId,
+            complete_mode: EditorMode::PomodoroProjectNote,
+            right_need: Need::PomodoroId,
+            third: Some(MarkerThird {
+                // `@#` spans two bytes; the `@` seal gets its own span
+                // below and the `#` stays unspanned.
+                separator_len: 2,
+                part: name,
+                kind: SpanKind::PomodoroName,
+                need: Need::PomodoroName,
+            }),
+            suffix: None,
+        },
+    );
+    // `marker_parse` leaves the `@#` separator bytes uncovered, so span
+    // the `@` seal explicitly: ahead of the Pomodoro name, or split out of
+    // the `#` placeholder when the name is still missing.
+    let seal_start =
+        token.start + sigil_len + route_part.len() + 1 + sealed_core.len();
+    let seal_span = Span {
+        start: seal_start,
+        end: seal_start + 1,
+        kind: SpanKind::ProjectNoteOfferMarker,
+        project_note: Some(ProjectNoteForm::Offer),
+    };
+    if !name.is_empty() {
+        marker_parse
+            .spans
+            .insert(marker_parse.spans.len().saturating_sub(1), seal_span);
+    } else if marker_parse.spans.pop().is_some() {
+        marker_parse.spans.push(seal_span);
+        marker_parse.spans.push(Span {
+            start: seal_start + 1,
+            end: seal_start + 2,
+            kind: SpanKind::InteractivePlaceholder,
+            project_note: None,
+        });
+    }
+    insert_offer_separator_span(
+        token,
+        sigil_len,
+        route_part,
+        &mut marker_parse,
+    );
+    apply_project_note_offer(&mut marker_parse.spans, true);
+    // Resolve a `#"…"` literal name like the `@route:id#` path: a complete
+    // one reports its canonical name; an invalid one is an error; an
+    // unterminated one is an editing state.
+    if let Some(raw) = literal_name_part {
+        match super::pomodoro_literal::lex_exact_name_after_hash(raw, raw.len())
+        {
+            Some(lex) if lex.complete => {
+                match super::pomodoro_literal::canonicalize_exact_name(
+                    &lex.decoded,
+                ) {
+                    Some(canonical) => {
+                        marker_parse.section = Some(canonical);
+                    }
+                    None => {
+                        return TokenParse::Invalid(token_diagnostic(
+                            token,
+                            "invalid_pomodoro_name",
+                            POMODORO_NAME_ERROR,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                marker_parse.section = None;
+                marker_parse.mode = EditorMode::Incomplete;
+                if !marker_parse.needs.contains(&Need::PomodoroName) {
+                    marker_parse.needs.push(Need::PomodoroName);
+                }
+            }
         }
     }
     TokenParse::Marker(marker_parse)

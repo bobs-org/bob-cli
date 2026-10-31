@@ -340,6 +340,151 @@ fn capture_parse_json_reports_project_note_markers() {
 }
 
 #[test]
+fn capture_parse_json_reports_project_note_offer_spans_and_mode() {
+    // The offer seal reports `pomodoro_project_note` with the `offer`
+    // modifier on every marker span and the `project_note_offer_marker`
+    // seal kind; `#name` keeps no modifier.
+    let vault_temp = TempDir::new("bob-cli-capture-parse-offer");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish it @cash:goog-exit@#bugs")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse project-note offer marker");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "pomodoro_project_note");
+    assert_eq!(json["body"], "Finish it");
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["block_id"], "goog-exit");
+    assert_eq!(json["section"], "bugs");
+    assert_eq!(json["needs"], serde_json::json!([]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 10, "end": 15, "kind": "pomodoro_route", "project_note": "offer" },
+            { "start": 15, "end": 16, "kind": "project_note_separator", "project_note": "offer" },
+            { "start": 16, "end": 25, "kind": "pomodoro_block_id", "project_note": "offer" },
+            { "start": 25, "end": 26, "kind": "project_note_offer_marker", "project_note": "offer" },
+            {
+                "start": 27,
+                "end": 31,
+                "kind": "pomodoro_name",
+                "themes": [
+                    {
+                        "key": "bugs",
+                        "name": "bugs",
+                        "hue": "aqua",
+                        "hue_source": "hash",
+                        "known": false,
+                        "start": 27,
+                        "end": 31,
+                    },
+                ],
+            },
+        ])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty());
+
+    // A completed seal offers no picker and carries no needs; a trailing
+    // `#` opens Pomodoro-name completion.
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish it @cash:goog-exit@")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse sealed offer marker");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "pomodoro_project_note");
+    assert_eq!(json["needs"], serde_json::json!([]));
+
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish it @cash:goog-exit@#")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse offer name placeholder");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["needs"], serde_json::json!(["pomodoro_name"]));
+
+    // Route-less seals report the route need in the offer mode.
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @:goog-exit@")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse routeless offer marker");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "pomodoro_project_note");
+    assert!(json["route"].is_null());
+    assert_eq!(json["block_id"], "goog-exit");
+    assert_eq!(json["needs"], serde_json::json!(["route"]));
+
+    // Junk after the seal and misordered seals refuse with the offer
+    // teaching.
+    for (input, code, needle) in [
+        (
+            "Finish it @cash:goog-exit@x",
+            "invalid_project_note_marker",
+            "the project-note `@` ends the marker",
+        ),
+        (
+            "Finish it @cash:goog-exit#bugs@",
+            "invalid_project_note_marker",
+            "right after the block ID",
+        ),
+        (
+            "Finish it @cash:goog-exit@=3",
+            "invalid_project_note_marker",
+            "start suffix",
+        ),
+    ] {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(input)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("run bob capture-parse invalid offer marker");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("capture-parse JSON");
+        assert_eq!(json["diagnostics"][0]["code"], code, "{input}");
+        assert!(
+            json["diagnostics"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(needle)),
+            "{input}: {json}"
+        );
+    }
+}
+
+#[test]
 fn capture_parse_json_reports_project_task_ids_spans_and_mode() {
     let input = "Finish the Google exit packet! @cash^goog-exit@#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs";
     let output = bob_command()

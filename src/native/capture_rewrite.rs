@@ -110,14 +110,17 @@ skipped.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
 '@route+id', or '+' after '@route:id' or '@route^id' consumes that character \
-and switches the separator. For example, '@file:id+' becomes '@file+id', \
-'@file^id+' becomes '@file+id', '@file+id^' becomes '@file^id', and \
-'@file+id:' becomes '@file:id' (`switch_block_id_separator`). The caret stays \
-just past the unchanged ID. Only the token ending at --cursor is examined; \
-the key must sit against the ID with no space, and it must end the token. \
+and switches the separator. Typing ':' right after a sealed '@route^id@' \
+gives '@route:id@', and '^' after '@route:id@' gives '@route^id@'. For \
+example, '@file:id+' becomes '@file+id', '@file^id+' becomes '@file+id', \
+'@file+id^' becomes '@file^id', '@file+id:' becomes '@file:id', \
+'@file^id@:' becomes '@file:id@', and '@file:id@^' becomes '@file^id@' \
+(`switch_block_id_separator`). The caret stays just past the unchanged ID \
+(and seal, when sealed). Only the token ending at --cursor is examined; \
+the key must sit against the ID (or seal) with no space, and it must end the token. \
 Suffixes already inside the token ('#name', '=...'), '@@', '@!', standalone \
 '^route:id', '&note:id', '!note:id', project-task ':id'/'^id', incomplete \
-markers, same-separator repeats, sealed '@route^id@' markers, and tokens the \
+markers, same-separator repeats after a seal, '+' after a seal, and tokens the \
 contextual parser does not select are left unchanged. Without --cursor this \
 rule is skipped rather than searching the draft.\n\n\
 Relation-label pipe attach (requires --cursor): typing '|' after \

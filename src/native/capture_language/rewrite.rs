@@ -288,9 +288,12 @@ fn absorb_bare_declaration(
 
 /// Typing `^` immediately after a complete plain `@route:id` or `@route+id`,
 /// `:` after `@route^id` or `@route+id`, or `+` after `@route:id` consumes
-/// that trigger and switches the separator. The token must end at `cursor`;
-/// the stripped remainder must be the line's selected destination marker,
-/// complete, and free of `#`/`=`/`!` suffixes.
+/// that trigger and switches the separator. Typing `:` right after a sealed
+/// `@route^id@` gives `@route:id@`, and `^` after `@route:id@` gives
+/// `@route^id@`. The token must end at `cursor`; the stripped remainder
+/// must be the line's selected destination marker, complete, and free of
+/// `#`/`=`/`!` suffixes. The same separator, or `+`, after a seal stays
+/// literal.
 fn switch_block_id_separator(
     raw_text: &str,
     cursor: usize,
@@ -312,14 +315,15 @@ fn switch_block_id_separator(
     let token_start = token.start;
     let token_end = token.end;
     let stripped = &raw_text[token_start..stripped_end];
-    let (separator, route, id) = plain_block_id_parts(stripped)?;
+    let (separator, route, id, sealed) = plain_block_id_parts(stripped)?;
     let eligible = match trigger_char {
-        ':' => matches!(separator, '^' | '+'),
-        '^' => matches!(separator, ':' | '+'),
+        // After a seal only the other sealed separator switches; the
+        // same separator (or `+`) stays literal.
+        ':' => matches!(separator, '^' | '+') && (!sealed || separator == '^'),
+        '^' => matches!(separator, ':' | '+') && (!sealed || separator == ':'),
         // `+` after `@route^id` switches to `@route+id`, like every other
-        // separator. A sealed `@route^id@` never reaches here as a plain
-        // part, so it stays literal.
-        '+' => matches!(separator, ':' | '^'),
+        // separator. `+` after a sealed marker stays literal.
+        '+' => matches!(separator, ':' | '^') && !sealed,
         _ => false,
     };
     if !eligible {
@@ -335,11 +339,16 @@ fn switch_block_id_separator(
         stripped_end,
         stripped,
         separator,
+        sealed,
     ) {
         return None;
     }
 
-    let replacement = format!("@{route}{trigger_char}{id}");
+    let replacement = if sealed {
+        format!("@{route}{trigger_char}{id}@")
+    } else {
+        format!("@{route}{trigger_char}{id}")
+    };
     let summary = format!("Changed {stripped} to {replacement}");
     let edits = vec![TextEdit {
         start: token_start,
@@ -425,11 +434,11 @@ fn attach_relation_label(
     })
 }
 
-/// A complete plain `@route:id`, `@route^id`, or `@route+id` token: one `@`,
-/// exactly one separator, a valid route, a valid block ID, and no suffix
-/// family. A sealed `@route^id@` never parses here because `@` is not a
-/// plain separator and fails the block-ID check, so it stays literal.
-fn plain_block_id_parts(token: &str) -> Option<(char, &str, &str)> {
+/// A complete plain `@route:id`, `@route^id`, or `@route+id` token —
+/// or its sealed project-note form with one trailing `@` (`@route^id@`,
+/// `@route:id@`): one `@`, exactly one separator, a valid route, a valid
+/// block ID, and no suffix family. The returned flag reports the seal.
+fn plain_block_id_parts(token: &str) -> Option<(char, &str, &str, bool)> {
     let rest = token.strip_prefix('@')?;
     if token.starts_with("@@") || token.starts_with("@!") {
         return None;
@@ -444,8 +453,16 @@ fn plain_block_id_parts(token: &str) -> Option<(char, &str, &str)> {
     }
     let separator = separator_text.chars().next()?;
     let route = &rest[..index];
-    let id = &rest[index + separator_text.len()..];
-    (is_route_token(route) && is_block_id(id)).then_some((separator, route, id))
+    let raw_id = &rest[index + separator_text.len()..];
+    // One trailing `@` is the project-note seal; anything else holding
+    // `@` is not a plain marker.
+    let (id, sealed) = match raw_id.strip_suffix('@') {
+        Some(core) => (core, true),
+        None if raw_id.contains('@') => return None,
+        None => (raw_id, false),
+    };
+    (is_route_token(route) && is_block_id(id))
+        .then_some((separator, route, id, sealed))
 }
 
 fn candidate_selects_plain_marker(
@@ -454,6 +471,7 @@ fn candidate_selects_plain_marker(
     end: usize,
     stripped: &str,
     separator: char,
+    sealed: bool,
 ) -> bool {
     let draft = split_capture_draft(candidate);
     for item in &draft.items {
@@ -498,10 +516,14 @@ fn candidate_selects_plain_marker(
             if parse.marker_text.as_deref() != Some(stripped) {
                 return false;
             }
-            let mode_matches = match separator {
-                '^' => marker.mode == EditorMode::Task,
-                ':' => marker.mode == EditorMode::PomodoroTask,
-                '+' => matches!(
+            let mode_matches = match (separator, sealed) {
+                ('^', false) => marker.mode == EditorMode::Task,
+                (':', false) => marker.mode == EditorMode::PomodoroTask,
+                // A sealed candidate selects the matching project-note
+                // mode with no needs.
+                ('^', true) => marker.mode == EditorMode::ProjectNote,
+                (':', true) => marker.mode == EditorMode::PomodoroProjectNote,
+                ('+', false) => matches!(
                     marker.mode,
                     EditorMode::SubBullet | EditorMode::TaskToggle
                 ),

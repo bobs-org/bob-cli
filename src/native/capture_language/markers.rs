@@ -349,14 +349,23 @@ pub(super) const POMODORO_NAME_REQUIRED_ERROR: &str = "Pomodoro capture requires
 
 /// Misordered project-note marker: the `@` seal must sit right after the
 /// block ID, because an `@` after `#name` would be part of the Pomodoro
-/// name.
+/// name. `separator` selects the `^` create form or the `:` offer form.
 pub(super) fn project_note_misordered_error(
     route: &str,
     block_id: &str,
     name: &str,
 ) -> String {
+    project_note_misordered_error_with(route, '^', block_id, name)
+}
+
+pub(super) fn project_note_misordered_error_with(
+    route: &str,
+    separator: char,
+    block_id: &str,
+    name: &str,
+) -> String {
     format!(
-        "put the project-note `@` right after the block ID: `@{route}^{block_id}@#{name}` (an `@` after `#{name}` would be part of the Pomodoro name)"
+        "put the project-note `@` right after the block ID: `@{route}{separator}{block_id}@#{name}` (an `@` after `#{name}` would be part of the Pomodoro name)"
     )
 }
 
@@ -376,15 +385,23 @@ pub(super) fn project_note_name_required_error(
     route: &str,
     block_id: &str,
 ) -> String {
+    project_note_name_required_error_with(route, '^', block_id)
+}
+
+pub(super) fn project_note_name_required_error_with(
+    route: &str,
+    separator: char,
+    block_id: &str,
+) -> String {
     format!(
-        "project-note capture requires a Pomodoro name: `@{route}^{block_id}@#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)"
+        "project-note capture requires a Pomodoro name: `@{route}{separator}{block_id}@#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)"
     )
 }
 
 /// Retired `+` project-note form. A project note is sealed with `@`; the
 /// caller passes the typed token plus its route, block, and name parts so
-/// the message can teach the sealed replacement. Until the offer form lands,
-/// the copy names only `@<route>^<block-id>@`.
+/// the message can teach the sealed replacement. `:`-typed forms teach the
+/// offer replacement first; `^`-typed forms teach create first.
 pub(super) fn retired_project_note_marker_error(
     typed: &str,
     route: &str,
@@ -398,13 +415,51 @@ pub(super) fn retired_project_note_marker_error(
     } else {
         route_lower
     };
-    let replacement = match pomodoro_name {
-        Some(name) => format!("@{route_display}^{block_id}@#{name}"),
-        None => format!("@{route_display}^{block_id}@"),
+    // `:`-typed retirements (`@r:id+`) are the offer form; `^`-typed ones
+    // (`@r^id+`) are the create form. Caret `^r:id+` never reaches here.
+    let is_offer = typed.contains(':');
+    let (primary, secondary, secondary_hint) = match (is_offer, pomodoro_name) {
+        (true, Some(name)) => (
+            format!("@{route_display}:{block_id}@#{name}"),
+            format!("@{route_display}^{block_id}@#{name}"),
+            "to link none",
+        ),
+        (true, None) => (
+            format!("@{route_display}:{block_id}@"),
+            format!("@{route_display}^{block_id}@"),
+            "to link none",
+        ),
+        (false, Some(name)) => (
+            format!("@{route_display}^{block_id}@#{name}"),
+            format!("@{route_display}:{block_id}@#{name}"),
+            "to also choose which of its tasks to link",
+        ),
+        (false, None) => (
+            format!("@{route_display}^{block_id}@"),
+            format!("@{route_display}:{block_id}@"),
+            "to also choose which of its tasks to link",
+        ),
     };
-    let mut message = format!(
-        "`{typed}` is retired: a project note is sealed with `@`. Write `{replacement}`"
-    );
+    let mut message = if is_offer {
+        match pomodoro_name {
+            Some(_) => format!(
+                "`{typed}` is retired: a project note is sealed with `@`. Write `{primary}` to choose which of its tasks to link, or `{secondary}` to link none"
+            ),
+            None => format!(
+                "`{typed}` is retired: a project note is sealed with `@`. Write `{primary}` to choose which of its tasks to link, or `{secondary}` to link none"
+            ),
+        }
+    } else {
+        match pomodoro_name {
+            Some(_) => format!(
+                "`{typed}` is retired: a project note is sealed with `@`. Write `{primary}`, or `{secondary}` to also choose which of its tasks to link"
+            ),
+            None => format!(
+                "`{typed}` is retired: a project note is sealed with `@`. Write `{primary}`, or `{secondary}` to also choose which of its tasks to link"
+            ),
+        }
+    };
+    let _ = secondary_hint;
     if pomodoro_name.is_none() {
         message.push_str(&format!(
             " (`@{route_shown}+{block_id}` adds a sub-bullet under that task)"
@@ -414,17 +469,26 @@ pub(super) fn retired_project_note_marker_error(
 }
 
 /// A sealed project-note marker must end at the `@` seal: anything after it
-/// is never part of the marker.
+/// is never part of the marker. Defaults to the `^` create form.
 pub(super) fn invalid_project_note_marker_error(
     route: &str,
     block_id: &str,
     pomodoro_name: Option<&str>,
 ) -> String {
+    invalid_project_note_marker_error_with(route, '^', block_id, pomodoro_name)
+}
+
+pub(super) fn invalid_project_note_marker_error_with(
+    route: &str,
+    separator: char,
+    block_id: &str,
+    pomodoro_name: Option<&str>,
+) -> String {
     let base = match pomodoro_name {
         Some(name) if !name.is_empty() => {
-            format!("@{route}^{block_id}@#{name}")
+            format!("@{route}{separator}{block_id}@#{name}")
         }
-        _ => format!("@{route}^{block_id}@"),
+        _ => format!("@{route}{separator}{block_id}@"),
     };
     format!(
         "the project-note `@` ends the marker: write `{base}` or `{base}#<pomodoro>`"
@@ -435,7 +499,7 @@ pub(super) fn invalid_project_note_marker_error(
 /// the sealed project-note spelling.
 pub(super) fn sub_bullet_seal_hint_error(token: &str) -> String {
     format!(
-        "`{token}` adds a sub-bullet under an existing task; a new project note is `@cash^goog-exit@`"
+        "`{token}` adds a sub-bullet under an existing task; a new project note is `@cash^goog-exit@` (or `@cash:goog-exit@`)"
     )
 }
 

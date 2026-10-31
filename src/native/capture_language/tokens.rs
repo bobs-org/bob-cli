@@ -827,6 +827,9 @@ pub(super) struct ColonLinkParts {
     pub(super) pomodoro_name_is_literal: bool,
     pub(super) start: Option<PomodoroStartSpec>,
     pub(super) close: Option<PomodoroCloseSpec>,
+    /// True when the `@` seal closed the block ID (`@r:id@`): the caller
+    /// reports a `ProjectNote` offer instead of a Pomodoro task.
+    pub(super) sealed_offer: bool,
     /// Token-relative end of the route:block-id portion.
     pub(super) link_end: usize,
     /// Token-relative name span, regardless of whether it appeared before
@@ -1020,6 +1023,177 @@ pub(super) fn parse_colon_link_tail(
             Some((block, name)) => (block, Some(name)),
             None => (before_eq, None),
         };
+    // Sealed offer `@r:id@` (non-caret only): the `@` seal right after the
+    // block ID names the offer form. This takes precedence over the retired
+    // `+` teaching below, so `@r:id@+` reports trailing junk, not retirement.
+    // Caret `^r:id@` never reaches here (it returns the project error below).
+    if !caret && before_eq.contains('@') {
+        // Literal-aware `=` split so a `#"a=b"` name never looks like a
+        // session suffix: an Offer never takes `=` in any case.
+        let offer_literal_span: Option<(usize, usize)> =
+            rest.find('#').and_then(|hash| {
+                let after_hash = &rest[hash + 1..];
+                if !opens_exact_name(after_hash) {
+                    return None;
+                }
+                lex_exact_name_after_hash(after_hash, after_hash.len())
+                    .and_then(|lex| {
+                        lex.complete
+                            .then(|| (hash + 1, hash + 1 + lex.literal_len))
+                    })
+            });
+        let offer_split_at = match offer_literal_span {
+            Some((start, end)) => rest[..start]
+                .find('=')
+                .or_else(|| rest[end..].find('=').map(|offset| end + offset)),
+            None => rest.find('='),
+        };
+        if let Some(eq_index) = offer_split_at {
+            let raw_suffix = &rest[eq_index + 1..];
+            if raw_suffix.eq_ignore_ascii_case("x")
+                || link_close_after_x(raw_suffix).is_some()
+            {
+                return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
+            }
+            return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
+        }
+        // No suffix: parse `rest` (which equals `rest_before_start` here)
+        // as `id@[#name]`.
+        let (offer_block, offer_name) = match rest.split_once('#') {
+            Some((block, name)) => (block, Some(name)),
+            None => (rest, None),
+        };
+        // A trailing `@` on the name is a misordered seal, with or
+        // without a block seal.
+        if let Some(name) = offer_name
+            && let Some(name_core) = name.strip_suffix('@')
+        {
+            let core = offer_block.strip_suffix('@').unwrap_or(offer_block);
+            if !name_core.is_empty() {
+                return Err(project_note_misordered_error_with(
+                    route, ':', core, name_core,
+                ));
+            }
+            return Err(invalid_project_note_marker_error_with(
+                route,
+                ':',
+                core,
+                Some(name_core),
+            ));
+        }
+        if let Some(sealed_core) = offer_block.strip_suffix('@') {
+            if sealed_core.is_empty() {
+                return Err(if offer_name.is_some() {
+                    format!(
+                        "Pomodoro capture requires a block ID before the Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-tasks -r {}` to list task block IDs)",
+                        route.to_ascii_lowercase()
+                    )
+                } else {
+                    POMODORO_BLOCK_ID_ERROR.to_string()
+                });
+            }
+            if sealed_core.contains('@')
+                || sealed_core.contains('+')
+                || !is_block_id(sealed_core)
+            {
+                return Err(invalid_project_note_marker_error_with(
+                    route,
+                    ':',
+                    sealed_core.trim_matches(['@', '+']),
+                    offer_name,
+                ));
+            }
+            let sigil_len = if typed_token.starts_with("@!") { 2 } else { 1 };
+            let link_base = sigil_len + route.len() + 1;
+            match offer_name {
+                None => {
+                    return Ok(ColonLinkParts {
+                        block_id: sealed_core.to_string(),
+                        pomodoro_name: None,
+                        pomodoro_name_is_literal: false,
+                        start: None,
+                        close: None,
+                        sealed_offer: true,
+                        link_end: link_base + sealed_core.len() + 1,
+                        name_range: None,
+                        start_offset: None,
+                        bare_name: false,
+                        start_ranges: Vec::new(),
+                    });
+                }
+                Some("") => {
+                    return Err(project_note_name_required_error_with(
+                        route,
+                        ':',
+                        sealed_core,
+                    ));
+                }
+                Some(name) => {
+                    if opens_exact_name(name) {
+                        let Some(lex) =
+                            lex_exact_name_after_hash(name, name.len())
+                        else {
+                            return Err(POMODORO_NAME_ERROR.to_string());
+                        };
+                        if !lex.complete {
+                            return Err(project_note_name_required_error_with(
+                                route,
+                                ':',
+                                sealed_core,
+                            ));
+                        }
+                        let canonical = canonicalize_exact_name(&lex.decoded)
+                            .ok_or_else(|| {
+                            POMODORO_NAME_ERROR.to_string()
+                        })?;
+                        if name.len() != lex.literal_len {
+                            return Err(POMODORO_NAME_ERROR.to_string());
+                        }
+                        let name_start = link_base + sealed_core.len() + 1 + 1;
+                        return Ok(ColonLinkParts {
+                            block_id: sealed_core.to_string(),
+                            pomodoro_name: Some(canonical),
+                            pomodoro_name_is_literal: true,
+                            start: None,
+                            close: None,
+                            sealed_offer: true,
+                            link_end: link_base + sealed_core.len() + 1,
+                            name_range: Some((
+                                name_start,
+                                name_start + lex.literal_len,
+                            )),
+                            start_offset: None,
+                            bare_name: false,
+                            start_ranges: Vec::new(),
+                        });
+                    }
+                    if !is_pomodoro_selector_component(name) {
+                        return Err(POMODORO_NAME_ERROR.to_string());
+                    }
+                    let name_start = link_base + sealed_core.len() + 1 + 1;
+                    return Ok(ColonLinkParts {
+                        block_id: sealed_core.to_string(),
+                        pomodoro_name: Some(name.to_string()),
+                        pomodoro_name_is_literal: false,
+                        start: None,
+                        close: None,
+                        sealed_offer: true,
+                        link_end: link_base + sealed_core.len() + 1,
+                        name_range: Some((name_start, name_start + name.len())),
+                        start_offset: None,
+                        bare_name: false,
+                        start_ranges: Vec::new(),
+                    });
+                }
+            }
+        }
+        // `@` inside the block part without a clean seal: the seal ended
+        // the marker and the rest is trailing junk.
+        let junk_core = offer_block.split('@').next().unwrap_or("");
+        return Err(invalid_project_note_marker_error_with(
+            route, ':', junk_core, offer_name,
+        ));
+    }
     if let Some(stripped) = block_probe.strip_suffix('+') {
         if stripped.is_empty() {
             return Err(if name_probe.is_some() {
@@ -1259,6 +1433,7 @@ pub(super) fn parse_colon_link_tail(
                 .is_some_and(|parsed| parsed.name_is_literal),
         start,
         close,
+        sealed_offer: false,
         link_end: link_base + block_id.len(),
         name_range,
         start_offset: equals_offset,
@@ -1283,6 +1458,17 @@ pub(super) fn parse_pomodoro_route_token(
         return Err(POMODORO_ROUTE_ERROR.to_string());
     }
     let parts = parse_colon_link_tail(token, route, rest, false)?;
+    if parts.sealed_offer {
+        return Ok(RouteToken {
+            route: Some(route.to_ascii_lowercase()),
+            kind: CaptureKind::ProjectNote {
+                block_id: parts.block_id,
+                pomodoro_name: parts.pomodoro_name,
+                pomodoro_name_is_literal: parts.pomodoro_name_is_literal,
+                form: super::model::ProjectNoteForm::Offer,
+            },
+        });
+    }
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
         kind: CaptureKind::Pomodoro {

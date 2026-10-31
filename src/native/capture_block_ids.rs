@@ -119,13 +119,12 @@ pub(crate) fn build_block_id_field(
     let (allowed_character, allowed_description) =
         allowed_rule_for_marker(marker);
     let marker_range = marker_token_range(raw_text, request.replacement);
-    // Only the `^` marker carries the project-note intent (an `@` seal
-    // after the replacement). A `+` after a `:` block ID is the retired
-    // project-note form, which offers no completion.
-    let project_note = marker == '^'
-        && raw_text
-            .get(request.replacement.1..)
-            .is_some_and(|rest| rest.starts_with('@'));
+    // Either sealed separator carries the project-note intent (an `@`
+    // seal after the replacement). A `+` after a `:` block ID is the
+    // retired project-note form, which offers no completion.
+    let project_note = raw_text
+        .get(request.replacement.1..)
+        .is_some_and(|rest| rest.starts_with('@'));
     let intent = if project_note {
         BlockIdIntent::ProjectNote
     } else if marker == '^' {

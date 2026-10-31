@@ -1543,6 +1543,102 @@ fn execution_parses_project_note_markers() {
 }
 
 #[test]
+fn execution_parses_project_note_offer_markers() {
+    let parsed = execute("Finish it @cash:goog-exit@").expect("offer seal");
+    assert_eq!(parsed.route.as_deref(), Some("cash"));
+    assert_eq!(parsed.body, "Finish it");
+    assert_eq!(
+        parsed.kind,
+        CaptureKind::ProjectNote {
+            pomodoro_name_is_literal: false,
+            block_id: "goog-exit".to_string(),
+            pomodoro_name: None,
+            form: ProjectNoteForm::Offer,
+        }
+    );
+
+    let parsed =
+        execute("Finish it @cash:goog-exit@#bugs").expect("named offer");
+    assert_eq!(
+        parsed.kind,
+        CaptureKind::ProjectNote {
+            pomodoro_name_is_literal: false,
+            block_id: "goog-exit".to_string(),
+            pomodoro_name: Some("bugs".to_string()),
+            form: ProjectNoteForm::Offer,
+        }
+    );
+
+    let parsed = execute("Finish it @cash:goog-exit@#\"Lit Name\"")
+        .expect("literal offer name");
+    assert_eq!(
+        parsed.kind,
+        CaptureKind::ProjectNote {
+            pomodoro_name_is_literal: true,
+            block_id: "goog-exit".to_string(),
+            pomodoro_name: Some("LIT NAME".to_string()),
+            form: ProjectNoteForm::Offer,
+        }
+    );
+
+    // The retired `:` forms teach both sealed alternatives.
+    let error =
+        execute("Finish it @cash:goog-exit+").expect_err("retired offer");
+    assert!(
+        error.contains("is retired")
+            && error.contains("@cash:goog-exit@")
+            && error.contains("@cash^goog-exit@"),
+        "{error}"
+    );
+    let error = execute("Finish it @cash:goog-exit+#bugs")
+        .expect_err("retired named offer");
+    assert!(
+        error.contains("is retired")
+            && error.contains("@cash:goog-exit@#bugs")
+            && error.contains("@cash^goog-exit@#bugs"),
+        "{error}"
+    );
+
+    // Misordered seals, junk after the seal, and `=` suffixes refuse.
+    for (raw, needle) in [
+        (
+            "Finish it @cash:goog-exit#bugs@",
+            "right after the block ID: `@cash:goog-exit@#bugs`",
+        ),
+        (
+            "Finish it @cash:goog-exit@x",
+            "the project-note `@` ends the marker",
+        ),
+        (
+            "Finish it @cash:goog-exit@@",
+            "the project-note `@` ends the marker",
+        ),
+        (
+            "Finish it @cash:goog-exit@+",
+            "the project-note `@` ends the marker",
+        ),
+        ("Finish it @cash:goog-exit@=3", "start suffix `=<X>`"),
+        ("Finish it @cash:goog-exit@=x", "close suffix `=x`"),
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(error.contains(needle), "{raw}: {error}");
+    }
+
+    // A solo offer marker with no body is a missing-text error, never a
+    // Pomodoro link.
+    let error = execute("@cash:goog-exit@").expect_err("solo offer");
+    assert!(!error.is_empty(), "solo offer must fail");
+
+    // A route-less `@:id@` stays literal prose in execution (the editor
+    // reports the route need); an ID-less `@r:@` keeps the family wording.
+    let parsed = execute("Finish it @:goog-exit@").expect("route-less");
+    assert!(matches!(parsed.kind, CaptureKind::Task), "{parsed:?}");
+    assert_eq!(parsed.body, "Finish it @:goog-exit@", "{parsed:?}");
+    let error = execute("Finish it @cash:@").expect_err("missing ID");
+    assert_eq!(error, POMODORO_BLOCK_ID_ERROR, "{error}");
+}
+
+#[test]
 fn pomodoro_link_suffix_names_match_the_existing_hash_spelling() {
     for (short, established) in [
         ("@work:outline=bugs", "@work:outline#bugs="),

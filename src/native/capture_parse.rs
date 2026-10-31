@@ -327,7 +327,11 @@ list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
 `=name` items, and neither is ever rewritten. \
 A '@^id@' marker already carries the project-note intent: it reports mode \
 'project_note' with a 'route' need until the \
-route is typed. A '@^id+' or '@:id+' marker is the retired project-note form and \
+route is typed. A '@:id@' marker is the offer form: it reports mode \
+'pomodoro_project_note' with a 'route' need until the route is typed, and \
+every marker span carries the 'offer' project-note modifier with a \
+'project_note_offer_marker' seal span. A completed seal offers no picker and \
+carries no needs; a trailing '#' opens Pomodoro-name completion. A '@^id+' or '@:id+' marker is the retired project-note form and \
 reports a `retired_project_note_marker` diagnostic. In a project-note item, a trailing \
 ` :id` / ` ^id` word on a first-level task bullet names that task: ` :id` additionally makes it Next and \
 links it into the Pomodoro, reporting mode 'pomodoro_project_note' with a `project_task_link_marker` span over \
@@ -335,7 +339,7 @@ the `:` and a `project_task_block_id` span over the ID (` ^id` spans only the ID
 `sub_bullets` with a parallel `sub_bullet_task_ids` array of `null` or `{\"block_id\", \"link\"}` entries, and \
 `section` carries the marker's Pomodoro name. Misplaced, invalid, reserved, empty, or checkbox-carrying IDs report \
 `misplaced_project_task_id` or `invalid_project_task_id`, a repeated ID reports `duplicate_project_task_id`, and a \
-`#pomodoro` name with no ` :` task reports `unused_project_note_pomodoro`. A lone trailing `:` or `^` is an unfinished \
+`#pomodoro` name with no ` :` task reports `unused_project_note_pomodoro` (or the offer wording when the marker is sealed with ':'). A lone trailing `:` or `^` is an unfinished \
 ID: mode 'incomplete' needing `block_id` with an `interactive_placeholder` span over the sigil and no diagnostic. \
 Outside project-note items these words stay literal text. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
 today's Pomodoro ledger instead of creating one, and parses as \

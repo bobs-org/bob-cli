@@ -229,12 +229,12 @@ fn editor_reports_invalid_components_as_diagnostics() {
         (
             "Body @dev:bad.id+",
             "retired_project_note_marker",
-            "`@dev:bad.id+` is retired: a project note is sealed with `@`. Write `@dev^bad.id@` (`@dev+bad.id` adds a sub-bullet under that task)",
+            "`@dev:bad.id+` is retired: a project note is sealed with `@`. Write `@dev:bad.id@` to choose which of its tasks to link, or `@dev^bad.id@` to link none (`@dev+bad.id` adds a sub-bullet under that task)",
         ),
         (
             "Body @cash:goog-exit+#bugs",
             "retired_project_note_marker",
-            "`@cash:goog-exit+#bugs` is retired: a project note is sealed with `@`. Write `@cash^goog-exit@#bugs`",
+            "`@cash:goog-exit+#bugs` is retired: a project note is sealed with `@`. Write `@cash:goog-exit@#bugs` to choose which of its tasks to link, or `@cash^goog-exit@#bugs` to link none",
         ),
         (
             "Body @dev:id+!",

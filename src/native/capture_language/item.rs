@@ -1180,9 +1180,11 @@ fn parse_capture_item_masked<'a>(
     }
     if let CaptureKind::ProjectNote {
         pomodoro_name: Some(name),
+        form,
         ..
     } = &kind
         && !has_link_task
+        && *form == super::model::ProjectNoteForm::Create
     {
         return Err(unused_project_note_pomodoro_error(name));
     }

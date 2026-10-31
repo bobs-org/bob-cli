@@ -262,6 +262,29 @@ fn block_id_project_note_sigil_is_excluded_from_replacement() {
     assert_eq!(caret.replacement, (6, 7));
     assert_eq!(field("@sase^x@", 8), None);
 
+    // Either sealed separator reports the project-note intent with the
+    // seal excluded from the replacement; a completed seal offers no
+    // picker, while a trailing `#` opens name completion.
+    let offer = field("@sase:x@", 7).expect("offer block id");
+    assert_eq!(offer.context, CompletionContext::PomodoroBlockId);
+    assert_eq!(offer.route.as_deref(), Some("sase"));
+    assert_eq!(offer.query, "x");
+    assert_eq!(offer.replacement, (6, 7));
+    assert_eq!(field("@sase:x@", 8), None);
+
+    let named = field("@cash:goog-exit@#bugs", 10).expect("offer block id");
+    assert_eq!(named.context, CompletionContext::PomodoroBlockId);
+    assert_eq!(named.route.as_deref(), Some("cash"));
+    assert_eq!(named.query, "goog");
+    assert_eq!(named.replacement, (6, 15));
+
+    let name = field("@cash:goog-exit@#bu", 19).expect("offer name");
+    assert_eq!(name.context, CompletionContext::PomodoroName);
+    assert_eq!(name.route.as_deref(), Some("cash"));
+    assert_eq!(name.block_id.as_deref(), Some("goog-exit"));
+    assert_eq!(name.query, "bu");
+    assert_eq!(name.replacement, (17, 19));
+
     let named = field("@cash^goog-exit@#bugs", 10).expect("caret block id");
     assert_eq!(named.context, CompletionContext::TaskBlockId);
     assert_eq!(named.query, "goog");

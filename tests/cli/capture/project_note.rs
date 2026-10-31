@@ -5,6 +5,308 @@ use crate::support::*;
 use std::fs;
 
 #[test]
+fn capture_project_note_offer_reports_unselected_successors_without_linking() {
+    // A sealed `@route:id@` draft creates the project note and reports
+    // its open tasks as unselected successor offers. Nothing is linked
+    // by default: dry-run JSON matches the real run, and the daily note
+    // gains no project links.
+    let temp = TempDir::new("bob-cli-capture-project-note-offer");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
+    write_file(&day_file, day_before);
+    let input = "Finish the exit packet @cash:goog-exit@\n- Draft the memo\n- Collect paperwork\n- Call the bank :call-bank\n- Private #hide reminder\n";
+
+    let run = |dry_run: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        let output = run_with_stdin(&mut command, input);
+        assert_success(&output);
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
+    };
+    let dry: serde_json::Value = run(true);
+    assert_eq!(dry["dry_run"], true);
+    assert!(!vault.join("cash_goog_exit.md").exists());
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("dry run writes nothing"),
+        day_before
+    );
+
+    let json: serde_json::Value = run(false);
+    let mut masked = dry.clone();
+    masked["dry_run"] = serde_json::json!(false);
+    assert_eq!(masked, json, "dry-run JSON must equal real-run JSON");
+
+    assert_eq!(json["kind"], "project_note");
+    assert_eq!(json["project_note"]["form"], "offer");
+    let successors = json["project_note"]["successors"]
+        .as_array()
+        .expect("offer successors");
+    assert_eq!(successors.len(), 2, "{json}");
+    for (index, row) in successors.iter().enumerate() {
+        let offer = &row["offer"];
+        assert_eq!(offer["selected"], false, "{row}");
+        assert_eq!(offer["group"], "project", "{row}");
+        assert_eq!(offer["project"], "cash_goog_exit.md", "{row}");
+        assert_eq!(offer["n"], index as u64 + 1, "{row}");
+        assert_eq!(offer["block_id_needed"], true, "{row}");
+        assert_eq!(row["trigger"], "project_created", "{row}");
+        assert_eq!(row["previous_status_symbol"], " ", "{row}");
+        assert_eq!(row["status_symbol"], " ", "{row}");
+        assert_eq!(row["hide_removed"], false, "{row}");
+        assert!(row.get("link").is_none(), "{row}");
+        assert_eq!(row["unblocked_by"][0]["block_id"], "prj", "{row}");
+        assert!(
+            !offer["key"].as_str().unwrap_or_default().is_empty(),
+            "{row}"
+        );
+    }
+    assert_ne!(
+        successors[0]["offer"]["key"], successors[1]["offer"]["key"],
+        "offer keys stay distinct"
+    );
+    // Only the explicit ` :` bullet links.
+    assert_eq!(
+        json["project_note"]["task_links"].as_array().map(Vec::len),
+        Some(1),
+        "{json}"
+    );
+    assert_eq!(
+        json["project_note"]["task_links"][0]["block_id"],
+        "call-bank"
+    );
+    let groups = json["pull_in"]["groups"]
+        .as_array()
+        .expect("pull-in groups");
+    assert_eq!(groups.len(), 1, "{json}");
+    assert_eq!(groups[0]["folded"]["hidden"], 1, "{json}");
+    assert_eq!(groups[0]["folded"]["already_planned"], 1, "{json}");
+    assert_eq!(groups[0]["folded"]["sub_projects"], 0, "{json}");
+
+    let note = fs::read_to_string(vault.join("cash_goog_exit.md"))
+        .expect("read new project note");
+    assert!(note.contains("- [ ] #task Draft the memo"), "{note}");
+    assert!(note.contains("- [ ] #task Collect paperwork"), "{note}");
+    assert!(!note.contains("[fresh::"), "{note}");
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    // The explicit ` :call-bank` bullet links; the offers do not.
+    assert!(
+        day_after.contains("[[cash_goog_exit#^call-bank]]"),
+        "{day_after}"
+    );
+    assert!(!day_after.contains("draft-memo"), "{day_after}");
+    assert!(!day_after.contains("collect-paperwork"), "{day_after}");
+}
+
+#[test]
+fn capture_project_note_offer_all_picks_match_authored_colon_bullets() {
+    // Invariant 1: Offer `-p all` writes byte-for-byte the same files as
+    // Create with the equivalent authored ` :<id>` bullets.
+    let make_vault = |name: &str| {
+        let temp = TempDir::new(name);
+        let vault = temp.path().join("vault");
+        let day_file = vault.join("day.md");
+        write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+        write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+        (temp, vault, day_file)
+    };
+    let (_temp_a, vault_a, day_a) = make_vault("bob-cli-offer-all-a");
+    let (_temp_b, vault_b, day_b) = make_vault("bob-cli-offer-all-b");
+    let offer_input = "Finish the exit packet @cash:goog-exit@\n- Draft the memo\n- Collect paperwork\n";
+
+    let offer_output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault_a)
+            .arg("-f")
+            .arg("json")
+            .arg("-p")
+            .arg("all")
+            .env("BOB_DAY_FILE", &day_a)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        offer_input,
+    );
+    assert_success(&offer_output);
+    let offer_json: serde_json::Value =
+        serde_json::from_str(stdout(&offer_output).trim()).expect("offer JSON");
+    let successors = offer_json["project_note"]["successors"]
+        .as_array()
+        .expect("picked successors");
+    assert_eq!(successors.len(), 2, "{offer_json}");
+    let mut minted = Vec::new();
+    for row in successors {
+        assert_eq!(row["offer"]["selected"], true, "{row}");
+        assert_eq!(row["status_symbol"], "*", "{row}");
+        assert!(row.get("link").is_some(), "{row}");
+        minted.push(row["block_id"].as_str().expect("minted ID").to_string());
+    }
+
+    let authored_input = format!(
+        "Finish the exit packet @cash^goog-exit@\n- Draft the memo :{}\n- Collect paperwork :{}\n",
+        minted[0], minted[1]
+    );
+    let authored_output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault_b)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_b)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        &authored_input,
+    );
+    assert_success(&authored_output);
+
+    assert_eq!(
+        fs::read_to_string(vault_a.join("cash_goog_exit.md"))
+            .expect("read offer note"),
+        fs::read_to_string(vault_b.join("cash_goog_exit.md"))
+            .expect("read authored note"),
+        "picked rows render exactly like authored ` :` bullets"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_a).expect("read offer day"),
+        fs::read_to_string(&day_b).expect("read authored day"),
+        "picked links land exactly like authored ` :` links"
+    );
+}
+
+#[test]
+fn capture_project_note_offer_pick_validation_is_atomic() {
+    // Unknown and out-of-range picks, and `--require-pull-in-choice`
+    // refusals, write nothing: no project note and no daily-note edit.
+    let temp = TempDir::new("bob-cli-capture-project-note-offer-atomic");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
+    write_file(&day_file, day_before);
+    let input =
+        "Finish the exit packet @cash:goog-exit@\n- Draft the memo\n- Collect paperwork\n";
+
+    let run_flags = |flags: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        for flag in flags {
+            command.arg(flag);
+        }
+        command
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        run_with_stdin(&mut command, input)
+    };
+
+    // A numeric pick selects one offer; the key pick selects the same row.
+    let numbered = run_flags(&["--dry-run", "-p", "2"]);
+    assert_success(&numbered);
+    let numbered_json: serde_json::Value =
+        serde_json::from_str(stdout(&numbered).trim()).expect("numeric JSON");
+    let picked: Vec<&serde_json::Value> = numbered_json["project_note"]
+        ["successors"]
+        .as_array()
+        .expect("successors")
+        .iter()
+        .filter(|row| row["offer"]["selected"] == true)
+        .collect();
+    assert_eq!(picked.len(), 1, "{numbered_json}");
+    assert_eq!(picked[0]["text"], "Collect paperwork", "{numbered_json}");
+    let key = numbered_json["project_note"]["successors"][1]["offer"]["key"]
+        .as_str()
+        .expect("second offer key")
+        .to_string();
+    let keyed = run_flags(&["--dry-run", "-p", &key]);
+    assert_success(&keyed);
+    let keyed_json: serde_json::Value =
+        serde_json::from_str(stdout(&keyed).trim()).expect("key JSON");
+    assert_eq!(
+        keyed_json["project_note"]["successors"][1]["offer"]["selected"], true,
+        "{keyed_json}"
+    );
+
+    for (flags, code) in [
+        (vec!["--dry-run", "-p", "nope"], 2),
+        (vec!["--dry-run", "-p", "9"], 2),
+        (vec!["--dry-run", "--require-pull-in-choice"], 1),
+    ] {
+        let output = run_flags(&flags);
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            format_output(&output)
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("refusal JSON");
+        assert_eq!(json["ok"], false, "{json}");
+        assert!(!vault.join("cash_goog_exit.md").exists(), "{json}");
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("refusal writes nothing"),
+            day_before,
+            "{json}"
+        );
+    }
+    let required = run_flags(&["--dry-run", "--require-pull-in-choice"]);
+    let required_json: serde_json::Value =
+        serde_json::from_str(stdout(&required).trim()).expect("choice JSON");
+    assert!(
+        required_json.get("offers").is_some_and(|offers| {
+            offers.as_array().is_some_and(|rows| rows.len() == 2)
+        }),
+        "choice refusal carries the flat offers payload: {required_json}"
+    );
+
+    // A later batch item failure rolls the offer back atomically.
+    let rollback = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("-p")
+            .arg("all")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Finish the exit packet @cash:goog-exit@\n- Draft the memo\n\nSecond @cash:id+",
+    );
+    assert_eq!(
+        rollback.status.code(),
+        Some(2),
+        "{}",
+        format_output(&rollback)
+    );
+    assert!(!vault.join("cash_goog_exit.md").exists());
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("rollback writes nothing"),
+        day_before
+    );
+}
+
+#[test]
 fn capture_project_note_creates_plain_note_with_json_and_human_output() {
     let temp = TempDir::new("bob-cli-capture-project-note-plain");
     let vault = temp.path().join("vault");

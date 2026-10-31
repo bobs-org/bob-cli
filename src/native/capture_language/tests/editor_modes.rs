@@ -157,6 +157,46 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[Need::BlockId],
         ),
         (
+            "Body @dev:focus-123@",
+            EditorMode::PomodoroProjectNote,
+            Some("dev"),
+            None,
+            Some("focus-123"),
+            &[],
+        ),
+        (
+            "Body @:focus-123@",
+            EditorMode::PomodoroProjectNote,
+            None,
+            None,
+            Some("focus-123"),
+            &[Need::Route],
+        ),
+        (
+            "Body @dev:@",
+            EditorMode::Incomplete,
+            Some("dev"),
+            None,
+            None,
+            &[Need::PomodoroId],
+        ),
+        (
+            "Body @dev:focus-123@#bugs",
+            EditorMode::PomodoroProjectNote,
+            Some("dev"),
+            Some("bugs"),
+            Some("focus-123"),
+            &[],
+        ),
+        (
+            "Body @dev:focus-123@#",
+            EditorMode::Incomplete,
+            Some("dev"),
+            None,
+            Some("focus-123"),
+            &[Need::PomodoroName],
+        ),
+        (
             "Body @dev:focus-123",
             EditorMode::PomodoroTask,
             Some("dev"),
@@ -687,6 +727,53 @@ fn editor_spans_cover_every_marker_shape() {
                 SpanKind::TaskBlockId,
                 SpanKind::ProjectNoteMarker,
                 SpanKind::InteractivePlaceholder,
+            ],
+        ),
+        (
+            "Body @dev:focus-123@",
+            &[
+                SpanKind::PomodoroRoute,
+                SpanKind::ProjectNoteSeparator,
+                SpanKind::PomodoroBlockId,
+                SpanKind::ProjectNoteOfferMarker,
+            ],
+        ),
+        (
+            "Body @:focus-123@",
+            &[
+                SpanKind::InteractivePlaceholder,
+                SpanKind::PomodoroBlockId,
+                SpanKind::ProjectNoteOfferMarker,
+            ],
+        ),
+        (
+            "Body @dev:focus-123@#bugs",
+            &[
+                SpanKind::PomodoroRoute,
+                SpanKind::ProjectNoteSeparator,
+                SpanKind::PomodoroBlockId,
+                SpanKind::ProjectNoteOfferMarker,
+                SpanKind::PomodoroName,
+            ],
+        ),
+        (
+            "Body @dev:focus-123@#",
+            &[
+                SpanKind::PomodoroRoute,
+                SpanKind::ProjectNoteSeparator,
+                SpanKind::PomodoroBlockId,
+                SpanKind::ProjectNoteOfferMarker,
+                SpanKind::InteractivePlaceholder,
+            ],
+        ),
+        // Non-ASCII body bytes shift every span by bytes, not chars.
+        (
+            "café @dev:focus-123@",
+            &[
+                SpanKind::PomodoroRoute,
+                SpanKind::ProjectNoteSeparator,
+                SpanKind::PomodoroBlockId,
+                SpanKind::ProjectNoteOfferMarker,
             ],
         ),
         (
