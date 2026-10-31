@@ -82,6 +82,12 @@ impl AdapterClient {
         }
     }
 
+    /// The same client with a different adapter deadline.
+    pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Resolve the adapter command: the `BOB_GKEEP_ADAPTER` override, or
     /// `uv run --quiet --script <materialized adapter>`.
     pub(crate) fn resolve(config: &GkeepConfig) -> Result<Self, GkeepError> {
@@ -261,6 +267,7 @@ impl AdapterClient {
                 OsString::from("BOB_GKEEP_PARENT_PID"),
                 OsString::from(std::process::id().to_string()),
             )],
+            env_remove: Vec::new(),
             timeout: self.timeout,
         })
         .map_err(|error| {

@@ -24,6 +24,7 @@ pub(crate) const KNOWN_SLOTS: &[&str] = &[
 /// coverage tests.
 #[cfg(test)]
 pub(crate) const KNOWN_INVALIDATES: &[&str] = &[
+    "gkeep",
     "plugins",
     "references",
     "relations",
@@ -915,6 +916,7 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         network: true,
+        invalidates: &["gkeep"],
         ..reads(
             "gkeep-list",
             &["gkeep", "list"],
@@ -927,7 +929,7 @@ pub(crate) const ENTRIES: &[Row] = &[
     Row {
         adapter: Some("gkeep-pull"),
         network: true,
-        invalidates: &["tasks", "references"],
+        invalidates: &["tasks", "references", "gkeep"],
         ..writes(
             "gkeep-pull",
             &["gkeep", "pull"],
@@ -940,11 +942,24 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         network: true,
+        invalidates: &["gkeep"],
         ..reads(
             "gkeep-doctor",
             &["gkeep", "doctor"],
             "Keep setup check",
             &["keep", "inbox", "google", "gkeep", "doctor", "setup"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        network: true,
+        invalidates: &["gkeep"],
+        ..reads(
+            "gkeep-status",
+            &["gkeep", "status"],
+            "Keep count",
+            &["keep", "inbox", "google", "gkeep", "status", "count"],
             Presentation::Report,
             60,
         )

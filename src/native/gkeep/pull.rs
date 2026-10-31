@@ -10,6 +10,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use fs2::FileExt;
@@ -160,7 +161,7 @@ fn maybe_run_before_rename_hook() {
 #[cfg(not(debug_assertions))]
 fn maybe_run_before_rename_hook() {}
 
-fn pull_lock_path() -> PathBuf {
+pub(super) fn pull_lock_path() -> PathBuf {
     bob_env::bob_cli_state_dir().join("gkeep").join("pull.lock")
 }
 
@@ -1603,6 +1604,11 @@ fn shell_quote_clip_url(url: &str) -> String {
     }
 }
 
+/// How long `acquire_pull_lock` retries a contended lock (see
+/// `bob gkeep status`'s momentary shared probe).
+const PULL_LOCK_RETRY: Duration = Duration::from_secs(2);
+const PULL_LOCK_STEP: Duration = Duration::from_millis(100);
+
 fn acquire_pull_lock() -> Result<File, GkeepError> {
     let path = pull_lock_path();
     if let Some(parent) = path.parent()
@@ -1626,18 +1632,28 @@ fn acquire_pull_lock() -> Result<File, GkeepError> {
                 format!("open pull lock {}: {error}", path.display()),
             )
         })?;
-    match file.try_lock_exclusive() {
-        Ok(()) => Ok(file),
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-            Err(GkeepError::runtime(
-                "lock",
-                "another bob gkeep pull is already running".to_string(),
-            ))
+    // `bob gkeep status` probes this lock with a momentary shared lock, so
+    // a brief WouldBlock is not another pull: retry before giving up.
+    let start = Instant::now();
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok(file),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if start.elapsed() >= PULL_LOCK_RETRY {
+                    return Err(GkeepError::runtime(
+                        "lock",
+                        "another bob gkeep pull is already running".to_string(),
+                    ));
+                }
+                std::thread::sleep(PULL_LOCK_STEP);
+            }
+            Err(error) => {
+                return Err(GkeepError::runtime(
+                    "lock",
+                    format!("lock {}: {error}", path.display()),
+                ));
+            }
         }
-        Err(error) => Err(GkeepError::runtime(
-            "lock",
-            format!("lock {}: {error}", path.display()),
-        )),
     }
 }
 
@@ -3362,6 +3378,34 @@ fn json_pull_report_with_error(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn pull_lock_tolerates_a_momentary_status_probe() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let _state = crate::native::env::TestEnvGuard::set(&[(
+            "XDG_STATE_HOME",
+            Some(dir.path().as_os_str()),
+        )]);
+        let path = pull_lock_path();
+        fs::create_dir_all(path.parent().expect("lock dir")).expect("mkdir");
+        let probe = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open probe");
+        FileExt::try_lock_shared(&probe).expect("shared probe lock");
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            drop(probe);
+        });
+        let started = Instant::now();
+        let guard = acquire_pull_lock().expect("retries past the probe");
+        assert!(started.elapsed() >= Duration::from_millis(300));
+        releaser.join().expect("releaser thread");
+        drop(guard);
+    }
 
     #[test]
     fn prompt_accepts_default_reprompts_unknown_and_stops_on_eof() {

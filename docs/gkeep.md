@@ -11,7 +11,9 @@ only after its current content is verified in the vault. Typical order:
 `bob gkeep pull -d` to preview the exact Markdown, `bob gkeep pull -n` to
 write without archiving, then `bob gkeep pull` to write and archive.
 `bob gkeep login` is the one-time setup; `bob gkeep doctor` diagnoses the
-setup. Tests never touch live Keep: set `BOB_GKEEP_ADAPTER` to a fake adapter.
+setup. `bob gkeep status` prints the cached count of notes a pull would take
+plus the open `gkeep_inbox.md` task count, for status bars and scripts. Tests
+never touch live Keep: set `BOB_GKEEP_ADAPTER` to a fake adapter.
 
 ## Contents
 
@@ -21,6 +23,7 @@ setup. Tests never touch live Keep: set `BOB_GKEEP_ADAPTER` to a fake adapter.
 - [Configuration](#configuration)
 - [List](#list)
 - [Pull](#pull)
+- [Status](#status)
 - [Rendering and escaping](#rendering-and-escaping)
 - [Import history, ledger, and journal](#import-history-ledger-and-journal)
 - [Migration](#migration)
@@ -40,6 +43,7 @@ bob gkeep migrate-markers [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|j
 bob gkeep migrate-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
+bob gkeep status [-b|--bob-dir DIR] [-f|--format human|json] [-m|--max-age DURATION] [-r|--refresh]
 ```
 
 Upgrade every host that runs pulls before relying on marker-free imports:
@@ -119,13 +123,16 @@ gkeep:
   device_id: 3f9c0a1b2c3d4e5f # optional hex; default derived from email
   target: gkeep_inbox.md # optional; vault-relative; default gkeep_inbox.md
   timeout_secs: 300 # optional adapter timeout
+  check_interval: 30m # optional; `status -r` re-checks Keep when the cache is older (5m–24h, or off)
 ```
 
 Parsing follows the `highlights` pattern exactly: a missing file gives the
 defaults, unknown keys are ignored, and invalid YAML is an error. Resolving
 validates: `email` must contain `@`; `device_id` must be 1–16 hex digits;
 `target` must be vault-relative and end in `.md` (a `..` component is
-rejected); `timeout_secs` must be greater than 0.
+rejected); `timeout_secs` must be greater than 0; `check_interval` must be
+`Nm` or `Nh` between `5m` and `24h`, or `off` (YAML `false` also means off).
+`check_interval` only governs `bob gkeep status -r`; see [Status](#status).
 
 The default device id is `hex(sha256("bob-gkeep-device:" +
 lowercase(email)))[..16]`, so every host presents one stable Android device
@@ -307,6 +314,171 @@ Failure matrix:
 | A note changed in Keep during the pull | Left in Keep (`changed`); exit 1 |
 | A note gone, trashed, or deleted | Reported (`missing`); exit 1 |
 | Vault not a Git worktree | Writes and verifies, `commit: null`, archives |
+
+## Status
+
+`bob gkeep status` answers two questions in one call: how many Keep notes a
+default `bob gkeep pull` would act on, and how many top-level tasks in
+`gkeep_inbox.md` are open. It exists for status bars (the Obsidian footer
+reads it) and scripts. It observes and never pulls, archives, or edits the
+vault.
+
+```text
+💡 Keep    3 to pull · 1 new · 1 link → reading queue · 1 pending archive · 1 pinned stays   checked 4m ago
+📥 Inbox   1 open in gkeep_inbox.md
+→ bob gkeep pull
+```
+
+Other Keep lines: `✓ clear · 1 pinned stays   checked 4m ago`;
+`3 to pull, as of 14:02 · offline since 14:05 · next try about 14:45` plus a
+`hint:` line; `not checked yet · run bob gkeep status -r`;
+`sign-in expired · run bob gkeep login`; and
+`not set up on this host · run bob gkeep login`. With `-r`, one dim line says
+what happened (`checked Keep just now` or `skipped: fresh · next check
+14:33`). The `→ bob gkeep pull` line prints only when the count is above 0.
+Times are Bob's local clock.
+
+### What the count means
+
+The Keep count is the actionable set of a default pull (no `-i`, `-p`, `-S`,
+`-l`, or `-R`), classified by the same planner `list` uses, so a Keep count
+of 0 is exactly `✓ Keep inbox is clear`. It is a partition:
+
+| Field | Counts |
+| --- | --- |
+| `new` | New notes that become tasks |
+| `links` | URL-only notes a pull clips into the reading queue |
+| `revised` | Notes edited in Keep since their import |
+| `pending` | Already imported; a pull only archives them |
+
+`stays` (`pinned`, `shared`, `empty`) lists notes a default pull leaves in
+Keep; they are not part of `total`. The inbox count is the top-level tasks
+(lines with the `#task` global filter) in `gkeep.target` whose status is not
+`x`, `X`, or `-`; blocked `[?]`, next `[*]`, and in-progress `[/]` tasks
+count, and untagged checklist children never do. It is read from the target
+note alone, so it is always live.
+
+### Cache only, or one check
+
+By default `status` is **cache only**: no token read, no adapter, no network,
+and no ledger scan. It prints the last observation bob recorded on this host.
+`list`, `pull` (dry or real), `doctor`, and `login` record an observation as
+a side effect of the snapshot they already took, so a human who runs them
+keeps the count current for free. A real `pull` marks the cache stale before
+its first write and records the post-pull count when every archive outcome is
+known; an interrupted or partly failed pull leaves it stale, never an
+optimistic 0.
+
+`-r, --refresh` runs at most one Keep check, and only if every gate below
+allows it. `-m, --max-age DURATION` (`0`, `90s`, `15m`, `2h`) replaces the
+freshness gate for that call, and `-r -m 0` is a **forced** check.
+
+The gates run in this order; the first that applies sets `refresh.skipped`:
+
+| # | `skipped` | Gate |
+| --- | --- | --- |
+| 1 | `unconfigured` | No `gkeep.email`. |
+| 2 | `auth` | Credentials were rejected. Forced checks too; run `login`, or any human-run gkeep command that succeeds. |
+| 3 | `busy` | A `bob gkeep pull` holds `pull.lock`. |
+| 4 | `in_flight` | Another `status -r` is already checking. |
+| 5 | `floor` | A status-initiated Keep contact happened in the last 60 s. Forced checks too. |
+| 6 | `backoff` | A `rate_limited` backoff is open. Forced checks too. |
+| 7 | `backoff` | An `offline`, `locked`, or `error` backoff is open (forced checks bypass it). |
+| 8 | `off` / `fresh` | `check_interval: off` with no `-m`; or the observation is newer than `-m` (default `check_interval`) and no pull has invalidated it. |
+| 9 | `budget` | 48 automatic checks already ran this local day (forced checks bypass it and are not counted). |
+
+When a check runs, bob reads the token **without ever prompting**, snapshots
+Keep with a 30 s deadline (independent of `gkeep.timeout_secs`), classifies
+with default pull options, and records the observation or the failure.
+Backoff grows with consecutive failures of the same state, with ±10%
+deterministic jitter: `offline` 5 min × 2^(n−1) up to 2 h, `error` 30 min ×
+2^(n−1) up to 2 h, `rate_limited` 60 min × 2^(n−1) up to 6 h, and `locked`
+a flat 30 min. At the default `30m`, an attended eight-hour day makes about 16
+checks; overnight, or while nobody is using the vault, none, because clients
+only ask while someone is present. `check_interval: off` is the kill switch.
+
+### Never prompts
+
+The token read runs `token_command` with `sh -c` and stdin set to
+`/dev/null`, stdout piped, and stderr captured (only one scrubbed line is
+kept, with token-shaped words redacted). `GPG_TTY` is removed and
+`--pinentry-mode error --batch` is appended to `PASSWORD_STORE_GPG_OPTS`, so
+`pass` fails instead of asking for a passphrase. A 10 s deadline kills the
+whole process group. Any failure, timeout, or empty output is the `locked`
+state (the cached count stays, marked stale); a sign-in cookie in the store
+is `auth`. Human-run commands keep their interactive prompt, and a failed
+interactive token read is never recorded. After a reboot, run `bob gkeep
+list` once in a terminal to unlock `gpg`.
+
+On macOS, a Keychain-backed `token_command` such as
+`security find-generic-password -s gkeep -a you@example.com -w` is the usual
+way to get a token that never needs a passphrase dialog; point
+`gkeep.token_command` at it.
+
+### States and the JSON document
+
+`bob gkeep status -f json` (always `schema_version: 1`; fields are only ever
+added) carries no note titles, bodies, or secrets:
+
+```json
+{
+  "schema_version": 1, "ok": true, "configured": true,
+  "keep": {
+    "state": "ok", "verified": true, "stale": false,
+    "in_flight": false, "busy": false,
+    "checked_at": "2026-10-31T14:03:11Z",
+    "next_check_at": "2026-10-31T14:33:11Z",
+    "source": "status",
+    "pull": {"total": 3, "new": 1, "links": 1, "revised": 0, "pending": 1},
+    "stays": {"pinned": 1, "shared": 0, "empty": 0},
+    "error": null,
+    "refresh": {"ran": true, "skipped": null}
+  },
+  "inbox": {"path": "gkeep_inbox.md", "exists": true, "open": 1}
+}
+```
+
+- `state` is `unconfigured`, `unverified` (nothing has succeeded or failed on
+  this host yet), `ok`, `offline` (network or deadline), `locked` (token
+  unreadable without a prompt), `rate_limited`, `auth` (credentials
+  rejected), or `error` (adapter crash, protocol, internal, dependency). A
+  recorded failure state wins over `ok`/`unverified`.
+- `verified`: a Keep check has succeeded on this host for the current
+  config (account, device id, token command, and target).
+- `stale`: the count is last-known, not current: a failure state with a prior
+  observation, or a pull changed Keep after the observation started.
+- `busy` and `in_flight` are transient probes and never persisted.
+- `checked_at` is when the last successful snapshot started; `null` when none.
+- `next_check_at` is the earliest time an automatic `-r` could contact Keep;
+  `null` when automatic checks will not run (`check_interval: off`, `auth`,
+  `unconfigured`). Clients schedule from it and never re-implement backoff.
+- `source` names the command that produced the observation (`status`, `list`,
+  `pull`, `doctor`, `login`). `pull` and `stays` are `null` until an
+  observation exists.
+- `error` is `null` when `ok`, else `{kind, message, hint, since, failures}`
+  with one scrubbed message line.
+- `refresh` appears only with `-r`: `ran` says whether Keep was contacted;
+  `skipped` is one of the gate names above, else `null`.
+- `inbox.open` is `null` (and `exists` false) when the target note is
+  missing.
+
+A missing config file, a missing `gkeep:` section, or a missing `gkeep.email`
+is not an error: `status` prints `configured: false` and exits 0.
+
+### The status cache
+
+The cache is `${XDG_STATE_HOME:-~/.local/state}/bob-cli/gkeep/status.json`
+(directory `0700`, file `0600`, written by temp file plus rename). It is
+host-local, never in the vault, and never holds a token. It stores the
+observation, the last failure and its count, the invalidation time, the last
+contact time, and the day's automatic-check budget, and it is keyed to the
+account, device id, token command, and target, so changing any of them starts
+a fresh, unverified cache. `status.lock` serializes writers, so a slow check
+can never overwrite a newer pull result, and `status-check.lock` is the
+single-flight lock held for a whole `-r` check. A real `pull` waits up to two
+seconds for `pull.lock`, so the momentary probe `status` takes can never fail
+it. Recording never changes a command's exit code or stdout; a failed cache
+write prints one warning on stderr.
 
 ## Rendering and escaping
 
@@ -514,6 +686,12 @@ TTY) with an optional dim `  hint: …` line, for example
 `{"schema_version":1,"ok":false,"error":{"kind":…,"message":…,"hint":…}}` to
 stdout.
 
+`bob gkeep status` exits 0 whenever it prints a status document, because
+states such as `offline`, `locked`, and `auth` are data, not failures. It
+exits 2 for clap usage errors (such as a bad `-m` duration) and for an
+unreadable or invalid `gkeep` config; under `-f json` the config error is
+the generic error document with `kind: "config"`.
+
 ## JSON output
 
 Every JSON document carries `schema_version: 1`.
@@ -594,6 +772,8 @@ preview in `markdown`. An archive crash reports exactly one document with
 `ok: false`, every due note as `archive: "error"` with the adapter message
 as `detail`, and the top-level `error` object.
 
+`status -f json` is documented under [Status](#states-and-the-json-document).
+
 `doctor -f json` reports `{ok, checks[]}` with
 `checks[]: {name, status: "ok|warn|fail|skip", summary, hint}` where `hint`
 may be `null` and `ok` is false (with exit 1) when any check fails. Check
@@ -604,7 +784,8 @@ names are `config|account|token|adapter|keep|target|git`.
 The master token is equivalent to a password: it lives in `pass` (via
 `token_command` / `token_store_command`), travels only over stdin to the
 adapter, and never appears in argv, logs, errors, or JSON. The adapter state
-cache and the journal are `0600`. Revoke access by removing the Android
+cache, the status cache, and the journal are `0600`; `status` reads the token
+without a prompt and never writes it anywhere. Revoke access by removing the Android
 device in the Google account.
 
 ## Known limits
@@ -615,7 +796,8 @@ the task). There is no scheduled runner: draining the inbox is a manual
 `bob gkeep pull`, not a `bob nightly` step. Google throttling surfaces as a
 `rate_limit` error within seconds: the adapter retries HTTP 429 at most
 three times (2 s, then 4 s) and treats rate-limit 403s as `rate_limit`,
-not `auth`.
+not `auth`. `bob gkeep status` only observes: it never pulls on its own, so
+the no-scheduled-runner rule still holds.
 
 ## Environment
 

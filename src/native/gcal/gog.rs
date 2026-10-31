@@ -522,6 +522,7 @@ impl Gog {
             args,
             stdin,
             env: Vec::new(),
+            env_remove: Vec::new(),
             timeout: self.timeout,
         })
         .map_err(|error| {

@@ -20,6 +20,7 @@ Commands:
   migrate-markers  Remove Google Keep bookkeeping markers from task Markdown (offline)
   migrate-tasks    Backfill compact Keep links on open tasks (offline)
   pull             Move Keep inbox notes into gkeep_inbox.md, then archive them in Keep
+  status           Show how many Keep notes a pull would take and how many gkeep_inbox.md tasks are open
   help             Print this message or the help of the given subcommand(s)
 
 Options:
@@ -54,6 +55,8 @@ Examples:
   bob gkeep pull               Write, verify, commit, then archive in Keep
   bob gkeep pull -i 3f9c2e1    Pull one note by its REF from `bob gkeep list`
   bob gkeep doctor             Diagnose credentials, adapter, and connectivity
+  bob gkeep status             Show the cached count a pull would take (no network)
+  bob gkeep status -r          Re-check Keep if it is due and allowed
   bob gkeep login              One-time setup of the Keep master token
 
 Environment:

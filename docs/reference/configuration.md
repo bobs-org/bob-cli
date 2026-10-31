@@ -236,6 +236,7 @@ See [URL routing](../ref.md#url-routing),
 | `gkeep.device_id` | 1–16 hexadecimal digits | Derived from the configured email | Stable Keep device identifier. |
 | `gkeep.target` | Vault-relative `.md` path with no parent-directory component | `gkeep_inbox.md` | Destination for imported tasks. |
 | `gkeep.timeout_secs` | Positive integer | `300` | Adapter request timeout in seconds. |
+| `gkeep.check_interval` | `Nm` or `Nh` from `5m` to `24h`, or `off` (`false` also means off) | `30m` | How old the cached count may get before `bob gkeep status -r` re-checks Keep; `off` stops automatic checks. |
 
 The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 [Google Keep contract](../gkeep.md#configuration).

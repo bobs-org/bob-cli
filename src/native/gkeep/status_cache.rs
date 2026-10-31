@@ -100,13 +100,22 @@ impl StatusCache {
     /// Load the cache for `config`. Missing, corrupt, version-mismatched,
     /// or different-key files load as empty.
     ///
-    /// Production readers land in the auto-checks phase.
-    #[allow(dead_code)]
+    /// Lock-free and side-effect-free: writers replace the file with an
+    /// atomic rename, so a reader sees the old or the new document.
     pub(super) fn load(config: &GkeepConfig) -> CacheDoc {
-        match with_lock(&status_dir(), || Ok(load_doc(&status_dir(), config))) {
-            Ok(doc) => doc,
-            Err(_) => empty_doc(config),
-        }
+        load_doc(&status_dir(), config)
+    }
+
+    /// Note a status-initiated Keep contact at `now`: arms the 60 s
+    /// floor and, for an automatic (not forced) check, counts one
+    /// against the local day's budget.
+    pub(super) fn begin_check(
+        config: &GkeepConfig,
+        now: DateTime<Utc>,
+        day: &str,
+        forced: bool,
+    ) {
+        warn_write(begin_check_at(&status_dir(), config, now, day, forced));
     }
 
     /// Record a successful default-pull observation.
@@ -221,7 +230,7 @@ pub(super) fn observe_default(
     Some(Observation::from_default_plan(&plan, started_at, source))
 }
 
-fn status_dir() -> PathBuf {
+pub(super) fn status_dir() -> PathBuf {
     bob_env::bob_cli_state_dir().join("gkeep")
 }
 
@@ -237,11 +246,11 @@ fn config_key(config: &GkeepConfig) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn fmt_utc(at: DateTime<Utc>) -> String {
+pub(super) fn fmt_utc(at: DateTime<Utc>) -> String {
     at.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-fn parse_utc(stamp: &str) -> Option<DateTime<Utc>> {
+pub(super) fn parse_utc(stamp: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(stamp)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
@@ -259,6 +268,7 @@ fn failure_state(kind: &str) -> Option<&'static str> {
         "network" | "timeout" => Some("offline"),
         "rate_limit" => Some("rate_limited"),
         "auth" => Some("auth"),
+        "locked" => Some("locked"),
         "adapter" | "protocol" | "internal" | "dependency" => Some("error"),
         _ => None,
     }
@@ -439,6 +449,33 @@ fn record_failure_at(
             write_doc(dir, &doc)?;
         }
         Ok(())
+    })
+}
+
+fn begin_check_at(
+    dir: &Path,
+    config: &GkeepConfig,
+    now: DateTime<Utc>,
+    day: &str,
+    forced: bool,
+) -> io::Result<()> {
+    with_lock(dir, || {
+        let mut doc = load_doc(dir, config);
+        doc.last_contact_at = Some(fmt_utc(now));
+        if !forced {
+            match &mut doc.budget {
+                Some(budget) if budget.day == day => {
+                    budget.used = budget.used.saturating_add(1);
+                }
+                _ => {
+                    doc.budget = Some(Budget {
+                        day: day.to_string(),
+                        used: 1,
+                    });
+                }
+            }
+        }
+        write_doc(dir, &doc)
     })
 }
 
@@ -684,6 +721,7 @@ mod tests {
         assert_eq!(failure_state("timeout"), Some("offline"));
         assert_eq!(failure_state("rate_limit"), Some("rate_limited"));
         assert_eq!(failure_state("auth"), Some("auth"));
+        assert_eq!(failure_state("locked"), Some("locked"));
         assert_eq!(failure_state("adapter"), Some("error"));
     }
 
@@ -714,6 +752,46 @@ mod tests {
         assert_eq!(observation.pull.total, 3);
         assert_eq!(observation.stays.pinned, 1);
         assert_eq!(observation.source, "list");
+    }
+
+    #[test]
+    fn begin_check_arms_floor_and_counts_automatic_budget() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = config();
+        begin_check_at(
+            dir.path(),
+            &config,
+            ts("2026-10-31T14:00:00Z"),
+            "2026-10-31",
+            false,
+        )
+        .expect("automatic");
+        begin_check_at(
+            dir.path(),
+            &config,
+            ts("2026-10-31T14:10:00Z"),
+            "2026-10-31",
+            true,
+        )
+        .expect("forced");
+        let loaded = load_doc(dir.path(), &config);
+        assert_eq!(
+            loaded.last_contact_at.as_deref(),
+            Some("2026-10-31T14:10:00Z")
+        );
+        let budget = loaded.budget.expect("budget");
+        assert_eq!((budget.day.as_str(), budget.used), ("2026-10-31", 1));
+
+        begin_check_at(
+            dir.path(),
+            &config,
+            ts("2026-11-01T09:00:00Z"),
+            "2026-11-01",
+            false,
+        )
+        .expect("next day");
+        let budget = load_doc(dir.path(), &config).budget.expect("budget");
+        assert_eq!((budget.day.as_str(), budget.used), ("2026-11-01", 1));
     }
 
     #[test]

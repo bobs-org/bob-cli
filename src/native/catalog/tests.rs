@@ -297,7 +297,9 @@ fn required_keyword_lookups() {
     }
     for query in ["keep", "inbox"] {
         let ids = by_keyword(query);
-        for expected in ["gkeep-list", "gkeep-pull", "gkeep-doctor"] {
+        for expected in
+            ["gkeep-list", "gkeep-pull", "gkeep-doctor", "gkeep-status"]
+        {
             assert!(
                 ids.contains(expected),
                 "{query} should find {expected}: {ids:?}"
@@ -390,8 +392,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 60);
-    assert_eq!(ENTRIES.len(), 60);
+    assert_eq!(catalog.entries.len(), 61);
+    assert_eq!(ENTRIES.len(), 61);
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog
         .entries

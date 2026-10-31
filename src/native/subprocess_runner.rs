@@ -23,6 +23,8 @@ pub(crate) struct RunSpec {
     pub args: Vec<OsString>,
     pub stdin: Option<Vec<u8>>,
     pub env: Vec<(OsString, OsString)>,
+    /// Variables removed from the child's inherited environment.
+    pub env_remove: Vec<OsString>,
     pub timeout: Duration,
 }
 
@@ -129,6 +131,9 @@ fn spawn(spec: &RunSpec) -> io::Result<std::process::Child> {
     loop {
         let mut command = Command::new(&spec.program);
         command.args(&spec.args);
+        for key in &spec.env_remove {
+            command.env_remove(key);
+        }
         for (key, value) in &spec.env {
             command.env(key, value);
         }

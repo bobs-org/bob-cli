@@ -6,12 +6,17 @@
 
 use crate::native::env as bob_env;
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::Duration,
 };
 
 use super::{super::config as bob_config, ui::warn};
-use crate::native::gkeep::GkeepError;
+use crate::native::{
+    gkeep::GkeepError,
+    subprocess_runner::{self, RunSpec},
+};
 
 /// Resolved `bob gkeep` configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +27,56 @@ pub(crate) struct GkeepConfig {
     device_id: String,
     target: String,
     timeout_secs: u64,
+    check_interval: CheckInterval,
 }
+
+/// How often an automatic `bob gkeep status -r` may contact Keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckInterval {
+    /// Check when the cached observation is older than this.
+    Every(Duration),
+    /// Automatic checks are off (`-r` still works with `-m`).
+    Off,
+}
+
+impl CheckInterval {
+    /// Parse `Nm`, `Nh`, or `off` (case-insensitive); 5m to 24h.
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
+        let trimmed = text.trim().to_ascii_lowercase();
+        if trimmed == "off" || trimmed == "false" {
+            return Ok(Self::Off);
+        }
+        let bad = || {
+            format!(
+                "gkeep.check_interval {text:?} must be a duration like \
+                 30m or 2h between 5m and 24h, or off"
+            )
+        };
+        let (digits, unit_secs) = if let Some(rest) = trimmed.strip_suffix('m')
+        {
+            (rest, 60)
+        } else if let Some(rest) = trimmed.strip_suffix('h') {
+            (rest, 3600)
+        } else {
+            return Err(bad());
+        };
+        let count: u64 = digits.parse().map_err(|_| bad())?;
+        let secs = count.checked_mul(unit_secs).ok_or_else(bad)?;
+        if !(MIN_CHECK_INTERVAL_SECS..=MAX_CHECK_INTERVAL_SECS).contains(&secs)
+        {
+            return Err(bad());
+        }
+        Ok(Self::Every(Duration::from_secs(secs)))
+    }
+}
+
+const MIN_CHECK_INTERVAL_SECS: u64 = 5 * 60;
+const MAX_CHECK_INTERVAL_SECS: u64 = 24 * 3600;
+/// Default `check_interval`: attended hours stay near 16 checks a day.
+pub(crate) const DEFAULT_CHECK_INTERVAL: CheckInterval =
+    CheckInterval::Every(Duration::from_secs(30 * 60));
+/// Deadline for the never-prompting token read.
+const UNATTENDED_TOKEN_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Default `token_command`: prints the `aas_et/…` master token.
 pub(crate) const DEFAULT_TOKEN_COMMAND: &str = "pass show gkeep/master_token";
@@ -47,26 +101,36 @@ impl GkeepConfig {
         Self::resolve_at(&bob_config::config_path(), email_override)
     }
 
+    /// Resolve for `bob gkeep status`: `Ok(None)` when Keep is not
+    /// configured (no config file, no `gkeep:` section, or no
+    /// `gkeep.email`); every other problem is a setup error.
+    pub(crate) fn resolve_optional() -> Result<Option<Self>, GkeepError> {
+        Self::resolve_optional_at(&bob_config::config_path())
+    }
+
+    fn resolve_optional_at(path: &Path) -> Result<Option<Self>, GkeepError> {
+        let settings = load_settings(path)?;
+        if settings
+            .email
+            .as_deref()
+            .is_none_or(|e| e.trim().is_empty())
+        {
+            return Ok(None);
+        }
+        Self::from_settings(settings, None).map(Some)
+    }
+
     fn resolve_at(
         path: &Path,
         email_override: Option<&str>,
     ) -> Result<Self, GkeepError> {
-        let settings =
-            bob_config::load_gkeep_config(path).map_err(|error| {
-                let message = match error {
-                    bob_config::ConfigError::Read(message)
-                    | bob_config::ConfigError::Invalid(message) => message,
-                };
-                GkeepError::setup(
-                    "config",
-                    format!("read the gkeep config: {message}"),
-                )
-                .with_hint(
-                    "set BOB_CONFIG_FILE or run 'chezmoi apply \
-                         ~/.config/bob/config.yml'",
-                )
-            })?;
+        Self::from_settings(load_settings(path)?, email_override)
+    }
 
+    fn from_settings(
+        settings: bob_config::GkeepSettings,
+        email_override: Option<&str>,
+    ) -> Result<Self, GkeepError> {
         let email = email_override
             .map(str::trim)
             .filter(|email| !email.is_empty())
@@ -130,6 +194,12 @@ impl GkeepConfig {
             ));
         }
 
+        let check_interval = match settings.check_interval.as_deref() {
+            Some(text) => CheckInterval::parse(text)
+                .map_err(|message| GkeepError::setup("config", message))?,
+            None => DEFAULT_CHECK_INTERVAL,
+        };
+
         Ok(Self {
             email,
             token_command: settings
@@ -141,6 +211,7 @@ impl GkeepConfig {
             device_id,
             target,
             timeout_secs,
+            check_interval,
         })
     }
 
@@ -162,6 +233,12 @@ impl GkeepConfig {
     /// The adapter timeout in seconds.
     pub(crate) fn timeout_secs(&self) -> u64 {
         self.timeout_secs
+    }
+
+    /// How stale a cached observation may get before an automatic
+    /// `status -r` contacts Keep.
+    pub(crate) fn check_interval(&self) -> CheckInterval {
+        self.check_interval
     }
 
     /// The command `login` pipes a fresh token into.
@@ -188,7 +265,15 @@ impl GkeepConfig {
             device_id: device_id.to_string(),
             target: DEFAULT_TARGET.to_string(),
             timeout_secs,
+            check_interval: DEFAULT_CHECK_INTERVAL,
         }
+    }
+
+    /// A test config with a custom token command.
+    #[cfg(test)]
+    pub(crate) fn with_token_command(mut self, command: &str) -> Self {
+        self.token_command = command.to_string();
+        self
     }
 
     /// The target note path under `bob_dir`.
@@ -269,6 +354,121 @@ impl GkeepConfig {
             TokenShape::MasterToken => Ok((token, TokenShape::MasterToken)),
         }
     }
+}
+
+impl GkeepConfig {
+    /// Read the master token without ever prompting.
+    ///
+    /// Runs `token_command` with `sh -c`: stdin is empty, stdout is
+    /// piped, stderr is captured (only a scrubbed first line is kept),
+    /// `GPG_TTY` is removed, and `--pinentry-mode error --batch` is
+    /// appended to `PASSWORD_STORE_GPG_OPTS` so `pass` fails instead of
+    /// asking for a passphrase. A 10 s deadline kills the whole process
+    /// group. Any failure, timeout, or empty output is a `locked` error;
+    /// a sign-in cookie is `auth`. The token never appears in an error.
+    pub(crate) fn read_token_unattended(&self) -> Result<String, GkeepError> {
+        self.read_token_unattended_within(UNATTENDED_TOKEN_DEADLINE)
+    }
+
+    fn read_token_unattended_within(
+        &self,
+        deadline: Duration,
+    ) -> Result<String, GkeepError> {
+        let mut gpg_opts =
+            bob_env::var_os("PASSWORD_STORE_GPG_OPTS").unwrap_or_default();
+        if !gpg_opts.is_empty() {
+            gpg_opts.push(" ");
+        }
+        gpg_opts.push("--pinentry-mode error --batch");
+        let locked = |message: String| {
+            GkeepError::runtime("locked", message).with_hint(
+                "run `bob gkeep list` in a terminal once to unlock the token",
+            )
+        };
+        let output = subprocess_runner::run(&RunSpec {
+            program: PathBuf::from("sh"),
+            args: vec![
+                OsString::from("-c"),
+                OsString::from(&self.token_command),
+            ],
+            stdin: None,
+            env: vec![(OsString::from("PASSWORD_STORE_GPG_OPTS"), gpg_opts)],
+            env_remove: vec![OsString::from("GPG_TTY")],
+            timeout: deadline,
+        })
+        .map_err(|error| locked(format!("run the token command: {error}")))?;
+        if output.timed_out {
+            return Err(locked(format!(
+                "the token command did not finish within {}s without a \
+                 prompt",
+                deadline.as_secs().max(1)
+            )));
+        }
+        if output.status != Some(0) {
+            return Err(locked(with_detail(
+                "the token command failed without a prompt",
+                &output.stderr,
+            )));
+        }
+        let token = output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        if token.is_empty() {
+            return Err(locked(with_detail(
+                "the token command printed no token",
+                &output.stderr,
+            )));
+        }
+        if TokenShape::classify(&token) == TokenShape::SignInCookie {
+            return Err(GkeepError::runtime(
+                "auth",
+                "the stored token is a sign-in cookie, not a master token"
+                    .to_string(),
+            )
+            .with_hint("run `bob gkeep login`"));
+        }
+        Ok(token)
+    }
+}
+
+/// `message`, plus the first non-empty stderr line with token-shaped
+/// words redacted and the line capped.
+fn with_detail(message: &str, stderr: &str) -> String {
+    let Some(line) = stderr.lines().map(str::trim).find(|l| !l.is_empty())
+    else {
+        return message.to_string();
+    };
+    let scrubbed = line
+        .split_whitespace()
+        .map(|word| {
+            if word.starts_with("aas_et/") || word.starts_with("oauth2_4/") {
+                "[redacted]"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let capped: String = scrubbed.chars().take(160).collect();
+    format!("{message}: {capped}")
+}
+
+fn load_settings(path: &Path) -> Result<bob_config::GkeepSettings, GkeepError> {
+    bob_config::load_gkeep_config(path).map_err(|error| {
+        let message = match error {
+            bob_config::ConfigError::Read(message)
+            | bob_config::ConfigError::Invalid(message) => message,
+        };
+        GkeepError::setup("config", format!("read the gkeep config: {message}"))
+            .with_hint(
+                "set BOB_CONFIG_FILE or run 'chezmoi apply \
+                 ~/.config/bob/config.yml'",
+            )
+    })
 }
 
 /// Whether `device_id` is 1–16 hex digits.
@@ -489,6 +689,178 @@ mod tests {
         let (token, shape) = config.read_token().expect("unknown kept");
         assert_eq!(token, "weird");
         assert_eq!(shape, TokenShape::Unknown);
+    }
+
+    #[test]
+    fn check_interval_parses_minutes_hours_and_off() {
+        let every = |secs| CheckInterval::Every(Duration::from_secs(secs));
+        assert_eq!(CheckInterval::parse("30m"), Ok(every(1800)));
+        assert_eq!(CheckInterval::parse(" 5m "), Ok(every(300)));
+        assert_eq!(CheckInterval::parse("2H"), Ok(every(7200)));
+        assert_eq!(CheckInterval::parse("24h"), Ok(every(86400)));
+        assert_eq!(CheckInterval::parse("off"), Ok(CheckInterval::Off));
+        assert_eq!(CheckInterval::parse("OFF"), Ok(CheckInterval::Off));
+        for bad in [
+            "4m", "25h", "1441m", "0m", "30", "m", "", "1d", "1.5h", "-5m",
+        ] {
+            assert!(
+                CheckInterval::parse(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_check_interval_defaults_and_validates() {
+        let dir = fresh_dir();
+        let config =
+            resolve_with(&dir, "gkeep:\n  email: a@b.c\n", None).expect("ok");
+        assert_eq!(config.check_interval(), DEFAULT_CHECK_INTERVAL);
+        for (value, expected) in [
+            ("2h", CheckInterval::Every(Duration::from_secs(7200))),
+            ("off", CheckInterval::Off),
+            ("false", CheckInterval::Off),
+        ] {
+            let config = resolve_with(
+                &dir,
+                &format!("gkeep:\n  email: a@b.c\n  check_interval: {value}\n"),
+                None,
+            )
+            .expect("valid interval");
+            assert_eq!(config.check_interval(), expected, "{value}");
+        }
+        for value in ["1m", "48h", "30", "true"] {
+            let error = resolve_with(
+                &dir,
+                &format!("gkeep:\n  email: a@b.c\n  check_interval: {value}\n"),
+                None,
+            )
+            .expect_err(&format!("{value} must fail"));
+            assert_eq!(error.exit_code(), 2, "{value}");
+            assert_eq!(error.kind(), "config", "{value}");
+        }
+    }
+
+    #[test]
+    fn resolve_optional_treats_missing_setup_as_unconfigured() {
+        let dir = fresh_dir();
+        let at = |text: &str| {
+            let path = dir.path().join("optional.yml");
+            std::fs::write(&path, text).expect("write config");
+            GkeepConfig::resolve_optional_at(&path)
+        };
+        assert_eq!(at("").expect("empty file"), None);
+        assert_eq!(at("other: 1\n").expect("no gkeep section"), None);
+        assert_eq!(at("gkeep:\n  target: x.md\n").expect("no email"), None);
+        assert!(at("gkeep:\n  email: a@b.c\n")
+            .expect("configured")
+            .is_some());
+        assert_eq!(
+            GkeepConfig::resolve_optional_at(Path::new(
+                "/definitely/missing.yml"
+            ))
+            .expect("missing file"),
+            None
+        );
+        let error = at("gkeep: [unterminated").expect_err("invalid yaml");
+        assert_eq!(error.exit_code(), 2);
+        let error =
+            at("gkeep:\n  email: not-an-email\n").expect_err("bad email");
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    fn unattended(
+        command: &str,
+        deadline: Duration,
+    ) -> Result<String, GkeepError> {
+        GkeepConfig::for_tests("a@b.c", "abc123", 30)
+            .with_token_command(command)
+            .read_token_unattended_within(deadline)
+    }
+
+    #[test]
+    fn unattended_read_returns_the_first_line() {
+        let token = unattended(
+            "printf '\\n  aas_et/quiet \\n'",
+            Duration::from_secs(5),
+        )
+        .expect("token reads");
+        assert_eq!(token, "aas_et/quiet");
+    }
+
+    #[test]
+    fn unattended_read_failures_are_locked_without_leaking() {
+        for command in [
+            "exit 3",
+            "printf ''",
+            "cat",
+            "echo 'gpg: aas_et/leaky failed' >&2; exit 2",
+        ] {
+            let error = unattended(command, Duration::from_secs(5))
+                .expect_err(&format!("{command} must fail"));
+            assert_eq!(error.kind(), "locked", "{command}");
+            assert!(!error.message().contains("aas_et/leaky"), "{command}");
+            assert!(error.hint().is_some(), "{command}");
+        }
+        let error = unattended(
+            "echo 'gpg: aas_et/leaky failed' >&2; exit 2",
+            Duration::from_secs(5),
+        )
+        .expect_err("fails");
+        assert!(
+            error.message().contains("[redacted]"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn unattended_read_kills_a_command_that_outlives_the_deadline() {
+        let started = std::time::Instant::now();
+        let error = unattended("sleep 30", Duration::from_millis(300))
+            .expect_err("deadline");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(error.kind(), "locked");
+        assert!(
+            error.message().contains("did not finish"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn unattended_read_reports_a_sign_in_cookie_as_auth() {
+        let error =
+            unattended("printf 'oauth2_4/cookie\\n'", Duration::from_secs(5))
+                .expect_err("cookie must fail");
+        assert_eq!(error.kind(), "auth");
+        assert!(!error.message().contains("oauth2_4/cookie"));
+    }
+
+    #[test]
+    fn unattended_read_appends_pinentry_options() {
+        // Overrides are thread-local; GPG_TTY removal is covered by the
+        // `bob gkeep status` integration test, which controls the env.
+        let _opts = bob_env::TestEnvGuard::set(&[(
+            "PASSWORD_STORE_GPG_OPTS",
+            Some(std::ffi::OsStr::new("--quiet")),
+        )]);
+        let token = unattended(
+            "case \"$PASSWORD_STORE_GPG_OPTS\" in \
+               '--quiet --pinentry-mode error --batch') echo aas_et/hardened;; \
+               *) exit 8;; esac",
+            Duration::from_secs(5),
+        );
+        assert_eq!(token.expect("hardened env"), "aas_et/hardened");
+
+        let _unset =
+            bob_env::TestEnvGuard::set(&[("PASSWORD_STORE_GPG_OPTS", None)]);
+        let token = unattended(
+            "[ \"$PASSWORD_STORE_GPG_OPTS\" = '--pinentry-mode error --batch' ] \
+             && echo aas_et/bare",
+            Duration::from_secs(5),
+        );
+        assert_eq!(token.expect("bare opts"), "aas_et/bare");
     }
 
     #[test]

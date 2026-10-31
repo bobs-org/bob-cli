@@ -4,7 +4,7 @@
 //! default, and help block. Later phases implement the handlers; they
 //! change only `doctor.rs`, `list.rs`, `login.rs`, and `pull.rs`.
 
-use std::{ffi::OsString, path::PathBuf};
+use std::{ffi::OsString, path::PathBuf, time::Duration};
 
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
@@ -26,7 +26,7 @@ pub(crate) fn build_cli() -> ClapCommand {
              the vault.",
         )
         .after_help(
-            "Running `bob gkeep` with no command runs `bob gkeep list`.\n\nExamples:\n  bob gkeep                    Show both inboxes and what `pull` would do\n  bob gkeep list -s vault      Show only gkeep_inbox.md tasks (no network)\n  bob gkeep pull -d            Preview the exact Markdown a pull would write\n  bob gkeep pull -n            Write and verify tasks, but leave notes in Keep\n  bob gkeep pull               Write, verify, commit, then archive in Keep\n  bob gkeep pull -i 3f9c2e1    Pull one note by its REF from `bob gkeep list`\n  bob gkeep doctor             Diagnose credentials, adapter, and connectivity\n  bob gkeep login              One-time setup of the Keep master token\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`",
+            "Running `bob gkeep` with no command runs `bob gkeep list`.\n\nExamples:\n  bob gkeep                    Show both inboxes and what `pull` would do\n  bob gkeep list -s vault      Show only gkeep_inbox.md tasks (no network)\n  bob gkeep pull -d            Preview the exact Markdown a pull would write\n  bob gkeep pull -n            Write and verify tasks, but leave notes in Keep\n  bob gkeep pull               Write, verify, commit, then archive in Keep\n  bob gkeep pull -i 3f9c2e1    Pull one note by its REF from `bob gkeep list`\n  bob gkeep doctor             Diagnose credentials, adapter, and connectivity\n  bob gkeep status             Show the cached count a pull would take (no network)\n  bob gkeep status -r          Re-check Keep if it is due and allowed\n  bob gkeep login              One-time setup of the Keep master token\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`",
         )
         .disable_help_flag(true)
         .arg(all_arg())
@@ -40,6 +40,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(migrate_markers_command())
         .subcommand(migrate_tasks_command())
         .subcommand(pull_command())
+        .subcommand(status_command())
 }
 
 fn doctor_command() -> ClapCommand {
@@ -164,6 +165,90 @@ fn pull_command() -> ClapCommand {
 
 fn pull_after_help() -> &'static str {
     "A note is archived only after its current content is verifiably in the vault: written atomically, fsynced, re-read and parsed, and committed when the vault is a Git worktree. Notes edited in Keep during a pull stay in Keep; the next pull writes the revision. Nothing is ever deleted from Keep. URL-only notes are clipped into the reading queue under a trailing @route, -P/--parent, a TTY prompt, or gkeep_inbox; -R keeps them as tasks instead.\n\nExamples:\n  bob gkeep pull --dry-run\n  bob gkeep pull\n  bob gkeep pull -d\n  bob gkeep pull -n\n  bob gkeep pull -i 3f9c2e1\n  bob gkeep pull -f json\n  bob gkeep pull -R\n  bob gkeep pull -P sase\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`"
+}
+
+fn status_command() -> ClapCommand {
+    ClapCommand::new("status")
+        .about(
+            "Show how many Keep notes a pull would take and how many \
+             gkeep_inbox.md tasks are open",
+        )
+        .long_about(
+            "Show how many Keep notes a default `bob gkeep pull` would \
+             take, and how many top-level tasks in gkeep_inbox.md are \
+             open.\n\n\
+             By default this reads only bob's cached Keep observation \
+             (kept per host in bob's state directory) plus the target \
+             note: no token read, no adapter, no network. `list`, `pull`, \
+             `doctor`, and `login` refresh that cache as a side effect.\n\n\
+             With -r/--refresh, bob runs at most one check that never \
+             prompts: the token is read without a passphrase prompt, and \
+             Keep is contacted only when bob's gates allow it (fresh \
+             cache, 60 s floor, single flight, a running pull, failure \
+             backoff, and a daily budget). -m/--max-age overrides the \
+             freshness gate for this call; `-r -m 0` forces a check, but \
+             never past a sign-in error, a rate limit, a running pull, or \
+             the floor.\n\n\
+             Exit status is 0 whenever a status prints; states such as \
+             offline or locked are data. Bad usage or an invalid gkeep \
+             config exits 2. A host without a gkeep.email prints \
+             `configured: false` and exits 0.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(human_format_arg())
+        .arg(help_arg())
+        .arg(max_age_arg())
+        .arg(refresh_arg())
+        .after_help(status_after_help())
+}
+
+fn status_after_help() -> &'static str {
+    "Examples:\n  bob gkeep status\n  bob gkeep status -f json\n  bob gkeep status -r\n  bob gkeep status -r -m 15m\n  bob gkeep status -r -m 0 -f json\n\nDurations for -m: 0, 90s, 15m, 2h.\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`"
+}
+
+fn max_age_arg() -> Arg {
+    Arg::new("max-age")
+        .long("max-age")
+        .short('m')
+        .value_name("DURATION")
+        .value_parser(parse_max_age)
+        .help(
+            "With -r, treat a cached count younger than DURATION (0, 90s, \
+             15m, 2h) as fresh; 0 forces a check",
+        )
+}
+
+fn refresh_arg() -> Arg {
+    Arg::new("refresh")
+        .long("refresh")
+        .short('r')
+        .action(ArgAction::SetTrue)
+        .help("Run one never-prompting Keep check if the gates allow it")
+}
+
+/// Parse `-m`: `0`, or whole seconds/minutes/hours (`90s`, `15m`, `2h`).
+pub(crate) fn parse_max_age(text: &str) -> Result<Duration, String> {
+    let trimmed = text.trim().to_ascii_lowercase();
+    if trimmed == "0" {
+        return Ok(Duration::ZERO);
+    }
+    let bad = || format!("{text:?} is not a duration; use 0, 90s, 15m, or 2h");
+    let (digits, unit_secs) = if let Some(rest) = trimmed.strip_suffix('s') {
+        (rest, 1)
+    } else if let Some(rest) = trimmed.strip_suffix('m') {
+        (rest, 60)
+    } else if let Some(rest) = trimmed.strip_suffix('h') {
+        (rest, 3600)
+    } else {
+        return Err(bad());
+    };
+    let count: u64 = digits.parse().map_err(|_| bad())?;
+    count
+        .checked_mul(unit_secs)
+        .filter(|secs| *secs <= 366 * 24 * 3600)
+        .map(Duration::from_secs)
+        .ok_or_else(bad)
 }
 
 fn all_arg() -> Arg {
@@ -506,6 +591,45 @@ impl PullArgs {
     }
 }
 
+/// Typed `status` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatusArgs {
+    /// Vault root override before `BOB_DIR` fallback.
+    pub bob_dir: Option<PathBuf>,
+    /// Output format.
+    pub format: HumanFormat,
+    /// Freshness override for `-r`; `Some(0)` forces a check.
+    pub max_age: Option<Duration>,
+    /// Run one never-prompting Keep check when the gates allow it.
+    pub refresh: bool,
+}
+
+impl StatusArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            format: HumanFormat::from_matches(matches),
+            max_age: matches.get_one::<Duration>("max-age").copied(),
+            refresh: matches.get_flag("refresh"),
+        }
+    }
+
+    /// The vault root: `--bob-dir`, else `BOB_DIR` or `~/bob`.
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+
+    /// The error-reporting format name.
+    pub(crate) fn error_format(&self) -> &'static str {
+        self.format.as_str()
+    }
+
+    /// Whether `-m 0` asks for a forced check.
+    pub(crate) fn forced(&self) -> bool {
+        self.max_age == Some(Duration::ZERO)
+    }
+}
+
 /// Typed `migrate-markers` arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MigrateArgs {
@@ -736,6 +860,65 @@ mod tests {
             "login",
         ));
         assert_eq!(args.email, None);
+    }
+
+    #[test]
+    fn status_args_pin_defaults_and_options() {
+        let args = StatusArgs::from_matches(&sub_matches_for(
+            &["bob gkeep", "status"],
+            "status",
+        ));
+        assert_eq!(args.bob_dir(), bob_env::bob_dir());
+        assert_eq!(args.format, HumanFormat::Human);
+        assert_eq!(args.max_age, None);
+        assert!(!args.refresh);
+        assert!(!args.forced());
+
+        let args = StatusArgs::from_matches(&sub_matches_for(
+            &[
+                "bob gkeep",
+                "status",
+                "-b",
+                "~/vault",
+                "-f",
+                "json",
+                "-m",
+                "0",
+                "-r",
+            ],
+            "status",
+        ));
+        assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
+        assert_eq!(args.format, HumanFormat::Json);
+        assert_eq!(args.max_age, Some(Duration::ZERO));
+        assert!(args.refresh);
+        assert!(args.forced());
+        assert_eq!(args.error_format(), "json");
+
+        let args = StatusArgs::from_matches(&sub_matches_for(
+            &["bob gkeep", "status", "--max-age", "15m", "--refresh"],
+            "status",
+        ));
+        assert_eq!(args.max_age, Some(Duration::from_secs(900)));
+        assert!(!args.forced());
+    }
+
+    #[test]
+    fn max_age_parses_durations_and_rejects_the_rest() {
+        for (text, secs) in [("0", 0), ("90s", 90), ("15m", 900), ("2h", 7200)]
+        {
+            assert_eq!(
+                parse_max_age(text),
+                Ok(Duration::from_secs(secs)),
+                "{text}"
+            );
+        }
+        for text in ["", "15", "m", "-5m", "1.5h", "5d", "15 m x"] {
+            assert!(parse_max_age(text).is_err(), "{text:?} must fail");
+        }
+        assert!(build_cli()
+            .try_get_matches_from(["bob gkeep", "status", "-m", "soon"])
+            .is_err());
     }
 
     #[test]

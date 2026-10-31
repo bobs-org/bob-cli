@@ -17,6 +17,7 @@ mod model;
 mod plan;
 mod pull;
 pub(crate) mod render;
+mod status;
 mod status_cache;
 mod ui;
 
@@ -24,6 +25,7 @@ use std::{ffi::OsString, iter};
 
 pub(crate) use cli::{
     DoctorArgs, ListArgs, LoginArgs, MigrateArgs, MigrateTasksArgs, PullArgs,
+    StatusArgs,
 };
 // Later phases import the rest directly: `super::cli::ListFormat`,
 // `super::config::GkeepConfig`, `super::model::KeepNote`,
@@ -129,6 +131,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("pull", sub_matches)) => {
             pull::run(&PullArgs::from_matches(sub_matches))
+        }
+        Some(("status", sub_matches)) => {
+            status::run(&StatusArgs::from_matches(sub_matches))
         }
         Some(("migrate-markers", sub_matches)) => {
             migrate::run(&MigrateArgs::from_matches(sub_matches))

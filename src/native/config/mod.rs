@@ -135,6 +135,9 @@ pub(crate) struct GkeepSettings {
     pub(crate) device_id: Option<String>,
     pub(crate) target: Option<String>,
     pub(crate) timeout_secs: Option<u64>,
+    /// `gkeep.check_interval` as written (`30m`, `2h`, `off`); YAML
+    /// `false` is normalized to `off`. Validated when resolved.
+    pub(crate) check_interval: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -514,6 +517,8 @@ struct RawGkeep {
     target: Option<String>,
     #[serde(default)]
     timeout_secs: Option<u64>,
+    #[serde(default)]
+    check_interval: Option<serde_yaml::Value>,
 }
 
 pub(crate) fn parse_priority_property(
@@ -617,17 +622,31 @@ pub(crate) fn parse_gkeep_config(
         ConfigError::Invalid(format!("parse {}: {error}", path.display()))
     })?;
 
-    Ok(config
-        .gkeep
-        .map(|raw| GkeepSettings {
-            email: raw.email,
-            token_command: raw.token_command,
-            token_store_command: raw.token_store_command,
-            device_id: raw.device_id,
-            target: raw.target,
-            timeout_secs: raw.timeout_secs,
-        })
-        .unwrap_or_default())
+    let Some(raw) = config.gkeep else {
+        return Ok(GkeepSettings::default());
+    };
+    let check_interval = match raw.check_interval {
+        None | Some(serde_yaml::Value::Null) => None,
+        Some(serde_yaml::Value::String(text)) => Some(text),
+        Some(serde_yaml::Value::Bool(false)) => Some("off".to_string()),
+        Some(other) => {
+            return Err(ConfigError::Invalid(format!(
+                "gkeep.check_interval in {} must be a duration such as \
+                 30m or 2h, or off (got {})",
+                path.display(),
+                serde_yaml::to_string(&other).unwrap_or_default().trim()
+            )));
+        }
+    };
+    Ok(GkeepSettings {
+        email: raw.email,
+        token_command: raw.token_command,
+        token_store_command: raw.token_store_command,
+        device_id: raw.device_id,
+        target: raw.target,
+        timeout_secs: raw.timeout_secs,
+        check_interval,
+    })
 }
 
 /// Parse `highlights.table_layout` (`auto | records | grid`, default
@@ -1181,6 +1200,7 @@ gkeep:
   device_id: 3f9c0a1b2c3d4e5f
   target: gkeep_inbox.md
   timeout_secs: 300
+  check_interval: 30m
   future_key: ignored
 "#,
             Path::new("/config.yml"),
@@ -1198,8 +1218,39 @@ gkeep:
                 device_id: Some("3f9c0a1b2c3d4e5f".to_string()),
                 target: Some("gkeep_inbox.md".to_string()),
                 timeout_secs: Some(300),
+                check_interval: Some("30m".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn gkeep_check_interval_accepts_strings_and_false() {
+        for (text, expected) in [
+            ("check_interval: 2h", Some("2h")),
+            ("check_interval: \"off\"", Some("off")),
+            ("check_interval: false", Some("off")),
+            ("check_interval: ~", None),
+            ("email: a@b.c", None),
+        ] {
+            let settings = parse_gkeep_config(
+                &format!("gkeep:\n  {text}\n"),
+                Path::new("/config.yml"),
+            )
+            .expect("valid check_interval");
+            assert_eq!(settings.check_interval.as_deref(), expected, "{text}");
+        }
+        for text in ["check_interval: true", "check_interval: 30"] {
+            let error = parse_gkeep_config(
+                &format!("gkeep:\n  {text}\n"),
+                Path::new("/config.yml"),
+            )
+            .expect_err("non-duration check_interval fails");
+            assert!(
+                matches!(&error, ConfigError::Invalid(message)
+                    if message.contains("gkeep.check_interval")),
+                "{text}: {error:?}"
+            );
+        }
     }
 
     #[test]

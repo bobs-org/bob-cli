@@ -104,6 +104,12 @@ const TABLE: &[Entry] = &[
         arg: "source",
         kind: Kind::FreeText,
     },
+    // `gkeep status --max-age` is a free-form duration (0, 90s, 15m, 2h).
+    Entry {
+        path: &["gkeep", "status"],
+        arg: "max-age",
+        kind: Kind::FreeText,
+    },
     // `gkeep pull --parent` names a routable parent note.
     Entry {
         path: &["gkeep", "pull"],
