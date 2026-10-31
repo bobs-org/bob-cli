@@ -354,9 +354,11 @@ tombstones journaled rows whose line is gone (never re-created), and files
 each created Event Task under a past, running, or planned MEET Pomodoro in
 the same write. A removed or moved link is never re-added. An unchanged
 calendar can still write the Events stamp when the stamp is due (missing,
-malformed, edited, misplaced, duplicated, or later than now). Age never
-makes a stamp due: the line means last change. A plan that is
-byte-identical after that step writes nothing and appends nothing. Sync keeps a
+malformed, edited, misplaced, duplicated, later than now, or from an
+earlier minute). The stamp shows the last sync run, and every run at a
+new minute rewrites it, even when the calendar is unchanged. A
+same-minute rerun writes nothing. A plan that is byte-identical after
+that step writes nothing and appends nothing. Sync keeps a
 blank line between the `## Events` heading and its first line, and adds the gap
 to an existing section that lacks it, even when there are no calendar changes.
 
@@ -428,12 +430,15 @@ that day in Google Calendar; the human report echoes `↻ synced 14:05 ·
 you@example.com` with no URL. Sync never creates an Events section just to hold
 a stamp. A hand-written section that sync reconciles gets one.
 
-The stamp means last change. Sync rewrites it when rows, links, the heading
-gap, or the stamp itself changed, and when the existing line is missing,
-malformed, edited, misplaced, duplicated, or later than now. An otherwise
-unchanged run leaves it byte-identical. Ledger Tools never paints the line
-stale. Bob owns the line: an edit is replaced and a deleted line returns on
-the next sync. Tombstones and "propose once" do not apply.
+The stamp shows the last sync run. Every run at a new minute rewrites it,
+even when the calendar is unchanged. A same-minute rerun writes nothing.
+Sync also rewrites it when rows, links, the heading gap, or the stamp
+itself changed, and when the existing line is missing, malformed, edited,
+misplaced, duplicated, or later than now. Each run at a new minute
+rewrites the daily note, and vault-sync commits it. Ledger Tools never
+paints the line stale. Bob owns the line: an edit is replaced and a
+deleted line returns on the next sync. Tombstones and "propose once" do
+not apply.
 
 A day whose stamp names a different Google account than this run uses is
 refused (`account_changed`, exit 2) so a switch cannot cancel the old
@@ -505,15 +510,15 @@ conflict policy would quarantine live ledger edits if another host wrote
 today's note. Set `gcal.writer` to the Mac's host label; other hosts may
 still run `list`, `calendars`, `doctor`, and `sync -d` after their own login.
 
-Two triggers run sync on the writer, and every run is idempotent:
+Two triggers run sync on the writer:
 
-- A Mac LaunchAgent, installed beside the vault-sync agent, runs
-  `bob gcal sync -q` at load and every 5 minutes, so invitations accepted
-  later in the day still land; see
-  [background triggers](vault-git-sync.md#background-triggers).
+- On demand (`bob gcal sync`, including via `bob gcal sync -D tomorrow`).
 - Bob Ledger Tools runs `bob gcal sync -q -f json` once when today's daily
   note is created in Obsidian
   ([Calendar Events](reference/plugins/bob-ledger-tools.md#calendar-events)).
+
+There is no periodic sync, so invitations accepted later in the day land
+on the next run.
 
 ## Event inclusion
 

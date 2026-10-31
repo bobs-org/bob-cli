@@ -121,18 +121,26 @@ impl GcalEnv {
     /// A `bob` command isolated to this vault and config.
     ///
     /// `BOB_GCAL_GOG` is removed unless a test installs [`FakeGog`].
+    /// The child env is explicit: host shells export `DATE=date`, and an
+    /// inherited `BOB_NOW` would pin the stamp to another test's clock.
     pub(crate) fn command(&self) -> Command {
         let mut command = Command::new(BOB_BIN);
+        let path = std::env::var_os("PATH");
+        let tmpdir = std::env::var_os("TMPDIR");
+        let ld_library_path = std::env::var_os("LD_LIBRARY_PATH");
+        command.env_clear();
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
+        if let Some(tmpdir) = tmpdir {
+            command.env("TMPDIR", tmpdir);
+        }
+        if let Some(ld_library_path) = ld_library_path {
+            command.env("LD_LIBRARY_PATH", ld_library_path);
+        }
         command
             .env("BOB_DIR", self.vault())
             .env("BOB_CONFIG_FILE", self.config())
-            .env_remove("BOB_GCAL_GOG")
-            .env_remove("BOB_GCAL_ASSUME_TTY")
-            .env_remove("SSH_CONNECTION")
-            .env_remove("SSH_TTY")
-            .env_remove("DISPLAY")
-            .env_remove("WAYLAND_DISPLAY")
-            .env_remove("BOB_GCAL_BROWSER")
             .env("HOSTNAME", HOST)
             .env("BOB_NOW", NOW)
             .env("NO_COLOR", "1")

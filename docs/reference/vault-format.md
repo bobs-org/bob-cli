@@ -359,7 +359,7 @@ its local block link under a Pomodoro.
 
 `bob gcal sync` writes rows in this shape, with a blank line between the
 `## Events` heading and the section's first line. That first line is Bob's
-Events stamp: which Google account last changed the section, and when. A written Event Task carries a
+Events stamp: which Google account last synced the section, and when. A written Event Task carries a
 `📅` identity badge (Google's event link, also the adoption key), an optional
 `📹` join badge, and an optional `📍` maps badge for a non-URL location, then
 `[root::]`, then `[type:: MEET]` only when needed, then a `^block-id` minted

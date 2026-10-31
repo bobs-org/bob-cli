@@ -238,13 +238,6 @@ launchd starts that command through `/bin/sh -c`, which `exec`s
 Apple-signed `/bin/sh` instead of the ad-hoc `bob` binary that `cargo install` replaces.
 `launchctl print` shows `program = /bin/sh`.
 
-A second LaunchAgent runs `bob gcal sync -q` at load and every 5 minutes
-through the same `/bin/sh -c` `exec` wrapper, with the same `HOME` and `PATH`
-(which must include gog's directory). Its label, plist, and log files follow
-the vault-sync agent's names with `bob-gcal-sync` in place of
-`bob-vault-sync`, so the same `launchctl` commands manage it. The vault-sync
-agent commits its writes ([gcal.md](gcal.md#where-it-runs)).
-
 Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttled to one pull per 5 s) and before a ⌘R refresh, so references pushed from athena or apollo show up without waiting for the 15 s LaunchAgent.
 
 ## Mac scheduled maintenance

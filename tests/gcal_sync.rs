@@ -792,13 +792,10 @@ fn sync_at(
     now: &str,
 ) -> std::process::Output {
     let mut command = env.command();
-    command.env("BOB_NOW", now);
     let mut full = vec!["gcal", "sync"];
     full.extend(args);
-    fake.install(&mut command)
-        .args(full)
-        .output()
-        .expect("run sync")
+    fake.install(&mut command).env("BOB_NOW", now);
+    command.args(full).output().expect("run sync")
 }
 
 fn today_stamp(time: &str) -> String {
@@ -810,7 +807,7 @@ fn today_stamp(time: &str) -> String {
 }
 
 #[test]
-fn stamp_is_byte_identical_across_idle_runs() {
+fn stamp_refreshes_every_run_without_row_churn() {
     let env = GcalEnv::new("bob-cli-gcal-sync-stamp-idle");
     prepare(&env);
     let fake = FakeGog::new(&env, "fake-gog");
@@ -827,24 +824,82 @@ fn stamp_is_byte_identical_across_idle_runs() {
     );
     let journal_count = journal_lines(&env).len();
 
-    let second = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 12:20:00");
-    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
-    assert_eq!(today_note(&env), note, "12:20 must be byte-identical");
+    let same_minute =
+        sync_at(&env, &fake, &["-f", "json"], "2026-10-30 12:00:40");
+    assert_eq!(
+        same_minute.status.code(),
+        Some(0),
+        "{}",
+        stderr(&same_minute)
+    );
+    assert_eq!(
+        today_note(&env),
+        note,
+        "same-minute rerun is byte-identical"
+    );
     assert_eq!(journal_lines(&env).len(), journal_count);
     let report: Value =
-        serde_json::from_str(&stdout(&second)).expect("JSON report");
+        serde_json::from_str(&stdout(&same_minute)).expect("JSON report");
     assert_eq!(report["status"], "unchanged");
     assert_eq!(report["stamp"]["account"], "you@example.com");
     assert_eq!(report["stamp"]["synced_at"], "2026-10-30T12:00");
     assert_eq!(report["stamp"]["refreshed"], false);
 
-    let later = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 13:00:00");
+    let dry = sync_at(&env, &fake, &["-d"], "2026-10-30 12:20:00");
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    let dry_json =
+        sync_at(&env, &fake, &["-d", "-f", "json"], "2026-10-30 12:20:00");
+    assert_eq!(dry_json.status.code(), Some(0), "{}", stderr(&dry_json));
+    let dry_report: Value =
+        serde_json::from_str(&stdout(&dry_json)).expect("JSON dry-run");
+    assert_eq!(dry_report["stamp"]["synced_at"], "2026-10-30T12:20");
+    assert_eq!(dry_report["stamp"]["refreshed"], true);
+    let diff = stdout(&dry);
+    assert!(
+        diff.contains(&format!("-{}", today_stamp("12:00"))),
+        "diff={diff}\njson={dry_report}"
+    );
+    assert!(
+        diff.contains(&format!("+{}", today_stamp("12:20"))),
+        "diff={diff}\njson={dry_report}"
+    );
+    assert_eq!(today_note(&env), note, "dry run writes nothing");
+
+    let later = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 12:20:00");
     assert_eq!(later.status.code(), Some(0), "{}", stderr(&later));
-    assert_eq!(today_note(&env), note, "on_change never ages the stamp out");
+    let refreshed = today_note(&env);
+    let before: Vec<&str> = note.lines().collect();
+    let after: Vec<&str> = refreshed.lines().collect();
+    assert_eq!(before.len(), after.len());
+    let diffs: Vec<(&str, &str)> = before
+        .iter()
+        .zip(after.iter())
+        .filter(|(old, new)| old != new)
+        .map(|(old, new)| (*old, *new))
+        .collect();
+    assert_eq!(diffs.len(), 1, "{diffs:?}");
+    assert_eq!(diffs[0].0, today_stamp("12:00"));
+    assert_eq!(diffs[0].1, today_stamp("12:20"));
+    assert_eq!(journal_lines(&env).len(), journal_count);
     let later_report: Value =
         serde_json::from_str(&stdout(&later)).expect("JSON report");
-    assert_eq!(later_report["status"], "unchanged");
-    assert_eq!(later_report["stamp"]["refreshed"], false);
+    assert_eq!(later_report["status"], "written");
+    assert_eq!(later_report["rows"].as_array().map(Vec::len), Some(0));
+    assert_eq!(later_report["stamp"]["synced_at"], "2026-10-30T12:20");
+    assert_eq!(later_report["stamp"]["refreshed"], true);
+
+    let human = sync_at(&env, &fake, &[], "2026-10-30 13:00:00");
+    assert_eq!(human.status.code(), Some(0), "{}", stderr(&human));
+    assert!(
+        stdout(&human).contains("✓ Events unchanged · stamp refreshed"),
+        "{}",
+        stdout(&human)
+    );
+    assert!(
+        stdout(&human).contains("↻ synced 13:00 · you@example.com"),
+        "{}",
+        stdout(&human)
+    );
 }
 
 #[test]
@@ -1012,12 +1067,34 @@ fn missing_paragraph_gap_is_repaired_without_journal_churn() {
 
     let idle = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 13:00:00");
     assert_eq!(idle.status.code(), Some(0), "{}", stderr(&idle));
-    assert_eq!(today_note(&env), note, "idle run is byte-identical");
-    assert_eq!(journal_lines(&env).len(), journal_count);
-    let report: Value =
+    let idle_report: Value =
         serde_json::from_str(&stdout(&idle)).expect("JSON report");
-    assert_eq!(report["stamp"]["synced_at"], "2026-10-30T12:20");
-    assert_eq!(report["stamp"]["refreshed"], false);
+    let after = today_note(&env);
+    assert_eq!(idle_report["stamp"]["synced_at"], "2026-10-30T13:00");
+    assert_eq!(idle_report["stamp"]["refreshed"], true);
+    assert!(
+        after.contains(&format!(
+            "{}\n\nPersonal notes for the day.\n",
+            today_stamp("13:00")
+        )),
+        "json={idle_report}\n{after}"
+    );
+    assert_eq!(journal_lines(&env).len(), journal_count);
+    assert_eq!(idle_report["status"], "written");
+
+    let same = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 13:00:20");
+    assert_eq!(same.status.code(), Some(0), "{}", stderr(&same));
+    assert_eq!(
+        today_note(&env),
+        after,
+        "same-minute rerun is byte-identical"
+    );
+    assert_eq!(journal_lines(&env).len(), journal_count);
+    let same_report: Value =
+        serde_json::from_str(&stdout(&same)).expect("JSON report");
+    assert_eq!(same_report["status"], "unchanged");
+    assert_eq!(same_report["stamp"]["synced_at"], "2026-10-30T13:00");
+    assert_eq!(same_report["stamp"]["refreshed"], false);
 }
 
 #[test]

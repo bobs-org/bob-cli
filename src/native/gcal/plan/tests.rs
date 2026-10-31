@@ -230,7 +230,7 @@ fn new_section_plan_is_idempotent() {
 }
 
 #[test]
-fn on_change_does_not_refresh_for_age() {
+fn every_run_refreshes_an_older_stamp() {
     let first = run(
         "# Day\n\n## Pomodoros\n",
         vec![occurrence("event", "Planning", true, "0900-0930", 540)],
@@ -243,13 +243,21 @@ fn on_change_does_not_refresh_for_age() {
         false,
     );
 
-    assert_eq!(later.contents, first.contents);
-    assert!(!later.stamp_refreshed);
-    assert!(
-        later.contents.contains(&stamp_line(12, 0)),
-        "{}",
-        later.contents
-    );
+    assert!(later.changed);
+    assert!(later.stamp_refreshed);
+    let before: Vec<&str> = first.contents.lines().collect();
+    let after: Vec<&str> = later.contents.lines().collect();
+    assert_eq!(before.len(), after.len());
+    let diffs: Vec<(usize, &str, &str)> = before
+        .iter()
+        .zip(after.iter())
+        .enumerate()
+        .filter(|(_, (old, new))| old != new)
+        .map(|(index, (old, new))| (index, *old, *new))
+        .collect();
+    assert_eq!(diffs.len(), 1, "{diffs:?}");
+    assert_eq!(diffs[0].1, stamp_line(12, 0));
+    assert_eq!(diffs[0].2, stamp_line(18, 0));
 }
 
 #[test]
@@ -418,9 +426,20 @@ fn canonical_stamp_directly_above_prose_gains_one_separator() {
     );
     let idle =
         run_at(&plan.contents, Vec::new(), ACCOUNT, now_at(13, 0), false);
-    assert!(!idle.changed, "{}", idle.contents);
-    assert_eq!(idle.contents, plan.contents);
-    assert!(!idle.stamp_refreshed);
+    let thirteen = stamp_line(13, 0);
+    assert!(idle.changed, "{}", idle.contents);
+    assert!(idle.stamp_refreshed);
+    assert_eq!(
+        idle.contents,
+        format!(
+            "## Events\n\n{thirteen}\n\nPersonal notes for the day.\n\n## Pomodoros\n"
+        )
+    );
+    let same =
+        run_at(&idle.contents, Vec::new(), ACCOUNT, now_at(13, 0), false);
+    assert!(!same.changed, "{}", same.contents);
+    assert_eq!(same.contents, idle.contents);
+    assert!(!same.stamp_refreshed);
 }
 
 #[test]
@@ -469,6 +488,52 @@ fn stamp_blank_before_list_is_preserved_on_refresh() {
         plan.contents
     );
     assert!(plan.stamp_refreshed);
+}
+
+#[test]
+fn stamp_only_refresh_leaves_meet_lines_below_events_unmoved() {
+    let stamp = stamp_line(12, 0);
+    let input = format!(
+        concat!(
+            "## Events\n\n",
+            "{stamp}\n",
+            "- [ ] #task **0900-0930** Standup [📅](https://calendar.google.com/event?eid=meet \"Open in Google Calendar\") ^standup\n",
+            "\n",
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] () — MEET\n",
+            "\t- [[#^standup]]\n",
+        ),
+        stamp = stamp,
+    );
+    let meet_line = input
+        .lines()
+        .position(|line| line.contains("— MEET"))
+        .expect("MEET")
+        + 1;
+    let later = run_at(&input, Vec::new(), ACCOUNT, now_at(18, 0), true);
+    assert!(later.changed);
+    assert!(later.stamp_refreshed);
+    assert!(later.pomodoro_entries.is_empty());
+    let later_meet = later
+        .contents
+        .lines()
+        .position(|line| line.contains("— MEET"))
+        .expect("MEET")
+        + 1;
+    assert_eq!(later_meet, meet_line);
+    let before: Vec<&str> = input.lines().collect();
+    let after: Vec<&str> = later.contents.lines().collect();
+    assert_eq!(before.len(), after.len());
+    let diffs: Vec<(usize, &str, &str)> = before
+        .iter()
+        .zip(after.iter())
+        .enumerate()
+        .filter(|(_, (old, new))| old != new)
+        .map(|(index, (old, new))| (index, *old, *new))
+        .collect();
+    assert_eq!(diffs.len(), 1, "{diffs:?}");
+    assert_eq!(diffs[0].2, stamp_line(18, 0));
 }
 
 fn empty_ledger() -> &'static str {

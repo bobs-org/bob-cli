@@ -5,8 +5,9 @@
 //! lines), adopts crash-recovery rows by their `📅` URL, tombstones
 //! journaled rows whose line is gone, and files each created Event Task
 //! under a past, running, or planned MEET Pomodoro in the same write. It
-//! keeps a blank line under the `## Events` heading, then writes the
-//! Bob-owned Events stamp as its last step. When the computed contents
+//! keeps a blank line under the `## Events` heading, then writes or
+//! refreshes the Bob-owned Events stamp as its last step. A run at a
+//! later minute rewrites only that stamp. When the computed contents
 //! equal the input, the plan reports no change and carries no records.
 
 use std::{
@@ -1291,7 +1292,8 @@ fn parse_hhmm(value: &str) -> Option<u16> {
     Some(hour * 60 + minute)
 }
 
-/// Write or keep the Events stamp as the last planning step.
+/// Write or refresh the Events stamp as the last planning step.
+/// A stamp whose minute is not this run's minute is due.
 fn plan_stamp(
     input: &SyncPlanInput<'_>,
     working: &mut WorkingNote,

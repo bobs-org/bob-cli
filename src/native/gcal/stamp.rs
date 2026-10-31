@@ -2,8 +2,8 @@
 //!
 //! Grammar: `*↻ synced <when> · [<account>](<day-url>)*`
 //!
-//! `stamp_refresh = on_change`: age never makes a stamp due. The line
-//! means "last change". The painter never marks it stale.
+//! The stamp records the last sync run. Every run at a new minute
+//! rewrites it. The painter never marks it stale.
 
 use std::ops::Range;
 
@@ -13,14 +13,9 @@ use crate::native::{event_task, markdown};
 
 use super::{render, GcalError};
 
-/// Minutes after which an otherwise-unchanged stamp would be rewritten.
-/// `None` because `stamp_refresh = on_change`: age never makes a stamp
-/// due.
-pub(crate) const STAMP_HEARTBEAT_MINUTES: Option<i64> = None;
-
 /// Minutes after which today's stamp would paint as stale.
-/// `None` because `stamp_refresh = on_change`: the painter never marks
-/// a stamp stale.
+/// `None` because sync runs on demand, so the painter never marks a
+/// stamp stale.
 #[allow(dead_code)] // plugin-paint reads this contract; CLI never paints.
 pub(crate) const STAMP_STALE_AFTER_MINUTES: Option<i64> = None;
 
@@ -148,7 +143,9 @@ pub(crate) fn parse(line: &str, note_day: NaiveDate) -> Option<Stamp> {
 }
 
 /// A stamp is due when it is missing, malformed, not canonical, not in
-/// the slot, duplicated, or later than `now`. Age never makes it due.
+/// the slot, duplicated, or from a different minute than `now`. A stamp
+/// from any earlier minute is due. `now` is the minute the caller
+/// passes in.
 pub(crate) fn is_due(
     lines: &[&str],
     events_range: Range<usize>,
@@ -163,7 +160,7 @@ pub(crate) fn is_due(
     let Some(parsed) = parse(lines[index], note_day) else {
         return true;
     };
-    if parsed.synced_at > now {
+    if parsed.synced_at != now {
         return true;
     }
     if render(&parsed.account, parsed.synced_at, note_day) != lines[index] {
@@ -177,12 +174,6 @@ pub(crate) fn is_due(
             && !is_list_item(line)
             && markdown::atx_heading(line).is_none()
     }) {
-        return true;
-    }
-    if let Some(minutes) = STAMP_HEARTBEAT_MINUTES
-        && now.signed_duration_since(parsed.synced_at)
-            >= chrono::Duration::minutes(minutes)
-    {
         return true;
     }
     false
@@ -484,15 +475,15 @@ mod tests {
     }
 
     #[test]
-    fn age_never_makes_a_stamp_due() {
+    fn older_stamp_is_due() {
         let note_day = day();
         let written = at(12, 0);
-        let later = at(18, 0);
         let canonical = render("you@example.com", written, note_day);
         let text = format!("## Events\n\n{canonical}\n## Pomodoros\n");
         let (lines, range) = events(&text);
-        assert!(!is_due(&lines, range, later, note_day));
-        assert_eq!(STAMP_HEARTBEAT_MINUTES, None);
+        assert!(!is_due(&lines, range.clone(), written, note_day));
+        assert!(is_due(&lines, range.clone(), at(12, 1), note_day));
+        assert!(is_due(&lines, range, at(18, 0), note_day));
         assert_eq!(STAMP_STALE_AFTER_MINUTES, None);
     }
 
