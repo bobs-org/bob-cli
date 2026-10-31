@@ -580,7 +580,7 @@ fn capture_library_hits_are_unchanged() {
     let output = capture(
         &temp,
         &vault,
-        &["-f", "json", "https://example.com/captured %"],
+        &["-f", "json", "https://example.com/captured @"],
     )
     .output()
     .expect("run known percent-listen capture");
@@ -1025,7 +1025,7 @@ fn failed_percent_listen_worker_keeps_listen_retry_guidance() {
     let (listen_log, listen_path) = setup_fake_listen_sase(&temp);
 
     let output =
-        capture(&temp, &vault, &["-f", "json", "https://example.com/post %"])
+        capture(&temp, &vault, &["-f", "json", "https://example.com/post @"])
             .env("BOB_HIGHLIGHTS_CURL", &curl)
             .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
             .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
@@ -1353,8 +1353,8 @@ fn explicit_url_clip_forms_keep_the_clipboard_path() {
             shell_single_quote(path_str(&marker))
         ),
     );
-    let marked_url = format!("{ARTICLE_URL} %1");
-    let listen_url = format!("{ARTICLE_URL} %");
+    let marked_url = format!("{ARTICLE_URL} %c");
+    let listen_url = format!("{ARTICLE_URL} %c");
 
     for args in [
         vec!["-d", "-f", "json", marked_url.as_str()],

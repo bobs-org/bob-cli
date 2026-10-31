@@ -35,7 +35,7 @@ pub(super) fn reject_task_toggle_conflicts(
     }
     if parsed.clip.is_some() {
         return Err(CaptureError::usage(
-            "task toggle capture cannot be combined with % clipboard markers",
+            "task toggle capture cannot be combined with %c",
         ));
     }
     if parsed.scheduled_offset.is_some() {
@@ -87,7 +87,7 @@ pub(super) fn reject_pomodoro_adjust_conflicts(
     }
     if parsed.clip.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro adjustment `+N`/`-N` cannot be combined with % clipboard markers; capture the adjustment alone",
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with %c; capture the adjustment alone",
         ));
     }
     if parsed.scheduled_offset.is_some() {
@@ -240,7 +240,7 @@ pub(super) fn reject_pomodoro_shift_conflicts(
     }
     if parsed.clip.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro shift `++N`/`--N` cannot be combined with % clipboard markers; capture the shift alone",
+            "Pomodoro shift `++N`/`--N` cannot be combined with %c; capture the shift alone",
         ));
     }
     if parsed.scheduled_offset.is_some() {

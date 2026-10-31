@@ -483,11 +483,6 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
-        arg: "clip",
-        kind: Kind::FreeText,
-    },
-    Entry {
-        path: &[],
         arg: "cursor",
         kind: Kind::FreeText,
     },

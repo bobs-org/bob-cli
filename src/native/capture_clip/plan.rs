@@ -8,7 +8,7 @@ use super::{
     },
     model::FileReservations,
     render::{inline_output, lines_output},
-    rendered_header, ClipMode, ClipOutput, ClipPlan, ClipReservations,
+    ClipMode, ClipOutput, ClipPlan, ClipReservations, ClipStatus,
 };
 
 pub(super) const MAX_ATTACHMENT_COUNT: usize = 10;
@@ -18,39 +18,24 @@ pub(super) const MAX_LINES: usize = 10;
 #[cfg(test)]
 pub(crate) fn plan(
     bob_dir: &Path,
-    header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
     indent: &str,
 ) -> Result<ClipPlan, String> {
     let mut reservations = ClipReservations::default();
-    plan_with_reservations(
-        bob_dir,
-        header,
-        clipboard,
-        now,
-        indent,
-        &mut reservations,
-    )
+    plan_with_reservations(bob_dir, clipboard, now, indent, &mut reservations)
 }
 
 pub(crate) fn plan_with_reservations(
     bob_dir: &Path,
-    header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
     indent: &str,
     reservations: &mut ClipReservations,
 ) -> Result<ClipPlan, String> {
     let start = reservations.files.files.len();
-    let output = plan_entry(
-        bob_dir,
-        header,
-        clipboard,
-        now,
-        indent,
-        &mut reservations.files,
-    )?;
+    let output =
+        plan_entry(bob_dir, clipboard, now, indent, &mut reservations.files)?;
     Ok(ClipPlan {
         output,
         files: reservations.files.files[start..].to_vec(),
@@ -86,17 +71,10 @@ pub(crate) fn plan_history_with_reservations(
         .iter()
         .enumerate()
         .map(|(index, clipboard)| {
-            plan_entry(
-                bob_dir,
-                None,
-                clipboard,
-                now,
-                indent,
-                &mut reservations.files,
-            )
-            .map_err(|error| {
-                format!("clipboard history entry {}: {error}", index + 1)
-            })
+            plan_entry(bob_dir, clipboard, now, indent, &mut reservations.files)
+                .map_err(|error| {
+                    format!("clipboard history entry {}: {error}", index + 1)
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let lines = entries
@@ -109,7 +87,8 @@ pub(crate) fn plan_history_with_reservations(
         .collect();
     Ok(ClipPlan {
         output: ClipOutput {
-            header: None,
+            status: ClipStatus::Read,
+            count: None,
             mode: ClipMode::History,
             lines,
             attachments,
@@ -122,13 +101,11 @@ pub(crate) fn plan_history_with_reservations(
 
 fn plan_entry(
     bob_dir: &Path,
-    header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
     indent: &str,
     reservations: &mut FileReservations,
 ) -> Result<ClipOutput, String> {
-    let header = header.map(rendered_header);
     let lines = clipboard.split('\n').collect::<Vec<_>>();
     let path_states = lines
         .iter()
@@ -157,7 +134,6 @@ fn plan_entry(
         }
         return plan_attachments(
             bob_dir,
-            header.as_deref(),
             path_states.iter().filter_map(|state| match state {
                 PathState::File(path) => Some(path.as_path()),
                 _ => None,
@@ -168,21 +144,14 @@ fn plan_entry(
     }
 
     if let Some(items) = flat_unordered_list_items(&lines) {
-        return Ok(lines_output(header.as_deref(), &items, indent));
+        return Ok(lines_output(&items, indent));
     }
 
     if lines.len() == 1 {
         return if lines[0].chars().count() > MAX_INLINE_CHARACTERS {
-            plan_snippet(
-                bob_dir,
-                header.as_deref(),
-                clipboard,
-                now,
-                indent,
-                reservations,
-            )
+            plan_snippet(bob_dir, clipboard, now, indent, reservations)
         } else {
-            Ok(inline_output(header.as_deref(), lines[0], indent))
+            Ok(inline_output(lines[0], indent))
         };
     }
 
@@ -190,17 +159,10 @@ fn plan_entry(
         || lines.iter().any(|line| line.trim().is_empty())
         || lines.iter().any(|line| is_structural_line(line))
     {
-        return plan_snippet(
-            bob_dir,
-            header.as_deref(),
-            clipboard,
-            now,
-            indent,
-            reservations,
-        );
+        return plan_snippet(bob_dir, clipboard, now, indent, reservations);
     }
 
-    Ok(lines_output(header.as_deref(), &lines, indent))
+    Ok(lines_output(&lines, indent))
 }
 
 fn flat_unordered_list_items<'a>(lines: &[&'a str]) -> Option<Vec<&'a str>> {

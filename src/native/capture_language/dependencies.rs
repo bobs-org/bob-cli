@@ -17,8 +17,7 @@ use super::draft::{classify_authored_line, AuthoredLineClass};
 use super::editor_model::{DependencyEntry, RelationEntry, Span, SpanKind};
 use super::editor_parse::tokenize_line_with_spans;
 use super::markers::{
-    is_escaped_priority_token, is_priority_marker_token, parse_clip_token,
-    parse_schedule_token,
+    is_escaped_priority_token, is_priority_marker_token, parse_schedule_token,
 };
 use super::model::{
     CaptureItem, CaptureKind, ParsedDependency, ParsedDependencyTarget,
@@ -525,14 +524,14 @@ pub(crate) struct LineDependencies {
 /// Pomodoro-note marker, and schedule/priority/clipboard markers (whole
 /// or still-typed). Skipped tokens stay in the stream for terminal-marker
 /// extraction and route selection; only modifiers are directive.
-pub(crate) fn is_trailing_transparent(text: &str, parse_clip: bool) -> bool {
+pub(crate) fn is_trailing_transparent(text: &str, _parse_clip: bool) -> bool {
     text.starts_with('@')
         || text == "#"
         || text == "s:"
         || parse_schedule_token(text).is_some()
         || is_priority_marker_token(text)
         || is_escaped_priority_token(text)
-        || (parse_clip && parse_clip_token(text).is_some())
+        || super::directive::is_directive_token(text)
 }
 
 fn escaped_star_is_in_modifier_run(
@@ -1690,22 +1689,26 @@ pub(crate) fn incomplete_relation_label_error() -> String {
 }
 
 /// First `$<N>`, retired `p:<N>`, `s:<N>`, or clipboard token on the parent
-/// line.
+/// line. `%c` is masked before this pass, so `has_clip` names that extra
+/// when no leftover token remains.
 pub(crate) fn first_relationship_text_token<'a>(
     tokens: &[Token<'a>],
-    parse_clip: bool,
+    has_clip: bool,
 ) -> Option<&'a str> {
-    tokens.iter().find_map(|token| {
-        if is_priority_marker_token(token.text)
-            || parse_schedule_token(token.text).is_some()
-        {
-            return Some(token.text);
-        }
-        if parse_clip && parse_clip_token(token.text).is_some() {
-            return Some(token.text);
-        }
-        None
-    })
+    tokens
+        .iter()
+        .find_map(|token| {
+            if is_priority_marker_token(token.text)
+                || parse_schedule_token(token.text).is_some()
+            {
+                return Some(token.text);
+            }
+            if super::directive::is_directive_token(token.text) {
+                return Some(token.text);
+            }
+            None
+        })
+        .or(has_clip.then_some("%c"))
 }
 
 /// `#name`, `=…`, or `!` on an existing-owner marker: a Pomodoro action,

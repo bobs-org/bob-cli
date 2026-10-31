@@ -231,7 +231,7 @@ pub(super) fn reject_pomodoro_link_conflicts(
     }
     if parsed.clip.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro link capture cannot be combined with % clipboard markers",
+            "Pomodoro link capture cannot be combined with %c",
         ));
     }
     if parsed.scheduled_offset.is_some() {

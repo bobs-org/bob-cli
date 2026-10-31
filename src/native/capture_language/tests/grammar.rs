@@ -287,7 +287,7 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
     for raw in [
         "@dev+id! s:1",
         "@dev+id! $2",
-        "@dev+id! %",
+        "@dev+id! %c",
         "@dev+id!\n- child",
         "body @dev+id!",
     ] {
@@ -396,7 +396,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         "Do work @sase:deep-fix#c++",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("pomodoro with plus name");
     assert_eq!(parsed.route.as_deref(), Some("sase"));
@@ -415,7 +415,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         "Do work @sase:deep-fix#bob+sase",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("pomodoro with infix plus");
     assert_eq!(
@@ -433,7 +433,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         "Add context @sase+goog-exit#a+b",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     );
     assert_eq!(sub_bullet, Err(SUB_BULLET_SECTION_ERROR.to_string()));
 
@@ -695,7 +695,7 @@ fn lua_composes_clipboard_terminal_markers_around_every_picker_token() {
     ];
 
     for (token, mode, route, section, block_id, needs) in cases {
-        for marker in ["%", "%03", "%build_log"] {
+        for marker in ["%c", "%c3"] {
             for raw in [
                 format!("Body {marker} {token}"),
                 format!("Body {token} {marker}"),
@@ -719,61 +719,61 @@ fn lua_clipboard_composition_body_follows_bob_terminal_extraction() {
     // structured spans. A clipboard marker that precedes an incomplete
     // marker still stays in the body, because `is_route_marker` (shared
     // with execution) only recognizes complete route tokens.
-    assert_eq!(editor("Body % @Dev:focus-123").body, "Body");
-    assert_eq!(editor("Body @Dev:focus-123 %").body, "Body");
-    assert_eq!(editor("Body @Dev+ %build_log").body, "Body");
-    assert_eq!(editor("Body % @Dev+").body, "Body %");
-    assert_eq!(editor("Body @Dev^ %build_log").body, "Body");
-    assert_eq!(editor("Body % @Dev^").body, "Body %");
+    assert_eq!(editor("Body %c @Dev:focus-123").body, "Body");
+    assert_eq!(editor("Body @Dev:focus-123 %c").body, "Body");
+    assert_eq!(editor("Body @Dev+ %c").body, "Body");
+    assert_eq!(editor("Body %c @Dev+").body, "Body");
+    assert_eq!(editor("Body @Dev^ %c").body, "Body");
+    assert_eq!(editor("Body %c @Dev^").body, "Body");
 }
 
 #[test]
 fn lua_preserves_crossed_clipboard_and_schedule_markers() {
     let cases: &[CrossedMarkerCase] = &[
         (
-            "Body @Notes# % s:2",
+            "Body @Notes# %c s:2",
             EditorMode::Bullet,
             Some("notes"),
             None,
             "Body",
         ),
         (
-            "Body @Notes# s:2 %03",
+            "Body @Notes# s:2 %c3",
             EditorMode::Bullet,
             Some("notes"),
             None,
             "Body",
         ),
         (
-            "Body % @Notes# s:2",
+            "Body %c @Notes# s:2",
             EditorMode::Bullet,
             Some("notes"),
             None,
             "Body",
         ),
         (
-            "Body s:2 @Notes# %build_log",
+            "Body s:2 @Notes# %c",
             EditorMode::Bullet,
             Some("notes"),
             None,
             "Body",
         ),
         (
-            "Body @:focus-123 % s:0",
+            "Body @:focus-123 %c s:0",
             EditorMode::Incomplete,
             None,
             Some("focus-123"),
             "Body",
         ),
         (
-            "Body @Dev+ s:10 %build_log",
+            "Body @Dev+ s:10 %c",
             EditorMode::Incomplete,
             Some("dev"),
             None,
             "Body",
         ),
         (
-            "Body @Dev^ s:10 %build_log",
+            "Body @Dev^ s:10 %c",
             EditorMode::Incomplete,
             Some("dev"),
             None,
@@ -877,9 +877,8 @@ fn lua_leaves_invalid_or_unsupported_terminal_regions_to_bob_capture() {
     // These stay literal for both parsers: the terminal token is not a
     // marker Bob accepts, so nothing is extracted and nothing routes.
     for raw in [
-        "Idea @Notes# %0",
-        "Idea @Notes# %bad.header",
-        "Idea @Notes# %18446744073709551616",
+        "Idea @Notes# 50%",
+        "Idea @Notes# 100%",
         "Idea @Notes# s:18446744073709551616",
         "Idea @Notes# $18446744073709551616",
     ] {
@@ -893,10 +892,8 @@ fn lua_leaves_invalid_or_unsupported_terminal_regions_to_bob_capture() {
     // kind before it stops at the duplicate or non-marker, so the body
     // loses that token while the route stays unresolved.
     for (raw, body) in [
-        ("Idea @Notes# % %3", "Idea @Notes# %"),
         ("Idea @Notes# s:1 s:2", "Idea @Notes# s:1"),
-        ("Idea @Notes# % s:1 %build_log", "Idea @Notes# %"),
-        ("Idea @Notes# middle %", "Idea @Notes# middle"),
+        ("Idea @Notes# middle 50%", "Idea @Notes# middle 50%"),
         ("Idea @Notes# $1 $2", "Idea @Notes# $1"),
     ] {
         let parse = editor(raw);
@@ -907,12 +904,12 @@ fn lua_leaves_invalid_or_unsupported_terminal_regions_to_bob_capture() {
 
     // Delta from Lua: Bob resolves plain `@route` and `@route#prefix`
     // tokens itself, so these are complete captures rather than "none".
-    let parse = editor("Task @dev %");
+    let parse = editor("Task @dev %c");
     assert_eq!(parse.mode, EditorMode::Task);
     assert_eq!(parse.route.as_deref(), Some("dev"));
     assert_eq!(parse.body, "Task");
 
-    let parse = editor("Idea @notes#Ideas %");
+    let parse = editor("Idea @notes#Ideas %c");
     assert_eq!(parse.mode, EditorMode::Bullet);
     assert_eq!(parse.section.as_deref(), Some("Ideas"));
     assert_eq!(parse.body, "Idea");
@@ -1032,7 +1029,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
         "=3",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect_err("forced");
     assert_eq!(forced, POMODORO_START_FORCED_ERROR, "{forced}");
@@ -1328,14 +1325,14 @@ fn execution_parses_three_component_sub_bullet_markers() {
         ("note $2 @foo+bar#Q&A", "note", "Q&A", None, Some(2)),
         ("note @foo+bar#Q&A $2", "note", "Q&A", None, Some(2)),
         (
-            "note %log @foo+bar#non-goals",
+            "note %c @foo+bar#non-goals",
             "note",
             "non-goals",
             None,
             None,
         ),
         (
-            "note @foo+bar#non-goals %log",
+            "note @foo+bar#non-goals %c",
             "note",
             "non-goals",
             None,
@@ -2052,7 +2049,7 @@ fn execution_forced_route_keeps_retired_and_special_markers_literal() {
         "Do thing @dev::id @dev+parent @dev^new-id",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     assert_eq!(parsed.route.as_deref(), Some("work"));
@@ -2171,7 +2168,7 @@ fn execution_claims_trailing_hash_types_but_leaves_midline_hash_text() {
         "Fix #now",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("forced route with type marker");
     assert_eq!(forced.route.as_deref(), Some("work"));
@@ -2180,7 +2177,7 @@ fn execution_claims_trailing_hash_types_but_leaves_midline_hash_text() {
         "Fix #now note",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("forced route");
     assert_eq!(parsed.body, "Fix #now note");
@@ -2244,7 +2241,7 @@ fn task_link_query_rejects_single_colon_tokens_with_teaching_errors() {
         ":dee",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect_err("forced query");
     assert!(forced.contains("opens the task picker"), "{forced}");
@@ -2510,7 +2507,7 @@ fn relationship_only_owner_refuses_text_extras() {
     for (raw, token) in [
         ("@body+excercise &foo:bar $2", "$2"),
         ("@body+excercise &foo:bar s:3", "s:3"),
-        ("@body+excercise &foo:bar %", "%"),
+        ("@body+excercise &foo:bar %c", "%c"),
         ("@body+excercise &foo:bar $2 s:3", "$2"),
     ] {
         let expected =
@@ -2659,7 +2656,7 @@ fn bang_claim_covers_the_contract_table() {
         "!sase:fix-flaky\n- child",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect_err("child lines are invalid");
     assert!(child_error.contains("its child lines"), "{child_error}");
@@ -2669,7 +2666,7 @@ fn bang_claim_covers_the_contract_table() {
         "!fix\n- child",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("incomplete plus child is prose");
     assert!(matches!(
@@ -2705,7 +2702,7 @@ fn bang_claim_covers_the_contract_table() {
         "!sase:fix-flaky",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect_err("forced route is invalid");
     assert!(

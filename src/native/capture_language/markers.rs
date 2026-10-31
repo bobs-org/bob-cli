@@ -3,8 +3,6 @@
 use super::editor_model::*;
 use super::model::*;
 use super::tokens::*;
-use crate::native::capture_clip;
-use std::num::NonZeroUsize;
 
 /// Parse one whitespace-free token as a schedule offset (`s:<N>`), returning
 /// the non-negative day count. Invalid or overflowing tokens stay literal.
@@ -79,24 +77,7 @@ enum ExtractedTerminal {
     Retired,
 }
 
-pub(super) fn parse_clip_token(token: &str) -> Option<ClipRequest> {
-    let header = token.strip_prefix('%')?;
-    if header.is_empty() {
-        return Some(ClipRequest::Current { header: None });
-    }
-    if header.bytes().all(|byte| byte.is_ascii_digit()) {
-        return header
-            .parse::<usize>()
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .map(|count| ClipRequest::History { count });
-    }
-    capture_clip::is_valid_header(header).then(|| ClipRequest::Current {
-        header: Some(header.to_string()),
-    })
-}
-
-/// Remove schedule and clipboard markers from the terminal marker region.
+/// Remove schedule markers from the terminal marker region.
 /// Each marker kind is extracted at most once, in either order, on either
 /// side of a trailing route token. A duplicate or non-marker stops parsing.
 ///
@@ -105,12 +86,10 @@ pub(super) fn parse_clip_token(token: &str) -> Option<ClipRequest> {
 /// always receives an empty list and discards it.
 pub(crate) fn extract_terminal_markers<T: ParseToken>(
     tokens: &mut Vec<T>,
-    parse_clip_markers: bool,
+    _parse_clip_markers: bool,
 ) -> (TerminalMarkers, Vec<(SpanKind, usize, usize)>) {
     let marker_like = |token: &str| {
-        parse_schedule_token(token).is_some()
-            || is_priority_marker_token(token)
-            || (parse_clip_markers && parse_clip_token(token).is_some())
+        parse_schedule_token(token).is_some() || is_priority_marker_token(token)
     };
     let route_index = if tokens
         .last()
@@ -147,7 +126,6 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
         match extract_terminal_marker(
             tokens[index].text(),
             tokens[index].span(),
-            parse_clip_markers,
             &mut markers,
         ) {
             Some(ExtractedTerminal::Span(kind)) => {
@@ -179,7 +157,6 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
             match extract_terminal_marker(
                 tokens[index].text(),
                 tokens[index].span(),
-                parse_clip_markers,
                 &mut markers,
             ) {
                 Some(ExtractedTerminal::Span(kind)) => {
@@ -213,7 +190,6 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
 fn extract_terminal_marker(
     token: &str,
     span: Option<(usize, usize)>,
-    parse_clip_markers: bool,
     markers: &mut TerminalMarkers,
 ) -> Option<ExtractedTerminal> {
     if let Some(offset) = parse_schedule_token(token) {
@@ -239,13 +215,6 @@ fn extract_terminal_marker(
             span,
         });
         return Some(ExtractedTerminal::Retired);
-    }
-    if parse_clip_markers
-        && let Some(clip) = parse_clip_token(token)
-        && markers.clip.is_none()
-    {
-        markers.clip = Some(clip);
-        return Some(ExtractedTerminal::Span(SpanKind::Clipboard));
     }
     None
 }

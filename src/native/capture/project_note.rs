@@ -12,7 +12,7 @@ pub(super) fn reject_project_note_conflicts(
     }
     if parsed.clip.is_some() {
         return Err(CaptureError::usage(
-            "project-note capture cannot be combined with % clipboard markers",
+            "project-note capture cannot be combined with %c",
         ));
     }
     Ok(())

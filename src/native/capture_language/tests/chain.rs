@@ -11,7 +11,7 @@ fn execute_draft(raw: &str) -> Result<ParsedCaptureDraft, String> {
         raw,
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
 }
 
@@ -23,7 +23,7 @@ fn execute_forced(
         raw,
         forced_route,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
 }
 

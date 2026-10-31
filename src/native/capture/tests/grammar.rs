@@ -217,16 +217,9 @@ fn extracts_trailing_schedule_from_terminal_region() {
 #[test]
 fn extracts_clip_and_schedule_markers_from_terminal_region() {
     let cases = [
+        ("body %c", "body", None, None, ClipRequest::Current, None),
         (
-            "body %",
-            "body",
-            None,
-            None,
-            ClipRequest::Current { header: None },
-            None,
-        ),
-        (
-            "body %20",
+            "body %c20",
             "body",
             None,
             None,
@@ -236,93 +229,79 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
             None,
         ),
         (
-            "body %log @notes",
+            "body %c @notes",
             "body",
             Some("notes"),
             None,
-            ClipRequest::Current {
-                header: Some("log".to_string()),
-            },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body s:1 % @groceries",
+            "body s:1 %c @groceries",
             "body",
             Some("groceries"),
             Some(1),
-            ClipRequest::Current { header: None },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body % s:1 @groceries",
+            "body %c s:1 @groceries",
             "body",
             Some("groceries"),
             Some(1),
-            ClipRequest::Current { header: None },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body @groceries s:1 %log",
+            "body @groceries s:1 %c",
             "body",
             Some("groceries"),
             Some(1),
-            ClipRequest::Current {
-                header: Some("log".to_string()),
-            },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body %log @groceries s:1",
+            "body %c @groceries s:1",
             "body",
             Some("groceries"),
             Some(1),
-            ClipRequest::Current {
-                header: Some("log".to_string()),
-            },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body s:1 @groceries %log",
+            "body s:1 @groceries %c",
             "body",
             Some("groceries"),
             Some(1),
-            ClipRequest::Current {
-                header: Some("log".to_string()),
-            },
+            ClipRequest::Current,
             None,
         ),
         (
-            "@groceries body %foo_bar",
+            "@groceries body %c",
             "body",
             Some("groceries"),
             None,
-            ClipRequest::Current {
-                header: Some("foo_bar".to_string()),
-            },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body %log @dev:blockid",
+            "body %c @dev:blockid",
             "body",
             Some("dev"),
             None,
-            ClipRequest::Current {
-                header: Some("log".to_string()),
-            },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body %log @notes#Ideas",
+            "body %c @notes#Ideas",
             "body",
             Some("notes"),
             None,
-            ClipRequest::Current {
-                header: Some("log".to_string()),
-            },
+            ClipRequest::Current,
             None,
         ),
         (
-            "body %3 s:2 @groceries",
+            "body %c3 s:2 @groceries",
             "body",
             Some("groceries"),
             Some(2),
@@ -332,7 +311,7 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
             None,
         ),
         (
-            "body @groceries %3 s:2",
+            "body @groceries %c3 s:2",
             "body",
             Some("groceries"),
             Some(2),
@@ -342,7 +321,7 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
             None,
         ),
         (
-            "body %2 @notes#Ideas",
+            "body %c2 @notes#Ideas",
             "body",
             Some("notes"),
             None,
@@ -352,7 +331,7 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
             None,
         ),
         (
-            "body @dev:blockid %2",
+            "body @dev:blockid %c2",
             "body",
             Some("dev"),
             None,
@@ -362,23 +341,22 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
             None,
         ),
         (
-            "body $2 s:1 % @groceries",
+            "body $2 s:1 %c @groceries",
             "body",
             Some("groceries"),
             Some(1),
-            ClipRequest::Current { header: None },
+            ClipRequest::Current,
             Some(2),
         ),
         (
-            "body @groceries %log $3 s:4",
+            "body @groceries %c $3 s:4",
             "body",
             Some("groceries"),
             Some(4),
-            ClipRequest::Current {
-                header: Some("log".to_string()),
-            },
+            ClipRequest::Current,
             Some(3),
         ),
+        ("body %c1", "body", None, None, ClipRequest::Current, None),
     ];
 
     for (raw, body, route, scheduled, clip, priority) in cases {
@@ -393,93 +371,55 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
 }
 
 #[test]
-fn clip_markers_are_terminal_forgiving_and_can_be_disabled() {
-    for raw in ["save % now", "body %bad!", "body 50%", "body 100%"] {
+fn clip_directives_claim_edges_and_leave_prose_alone() {
+    for raw in ["save % now", "body 50%", "body 100%", "https://ex.com/a%25"] {
         let parsed = parse_capture_text(raw, None).expect("literal text");
         assert_eq!(parsed.body, raw, "{raw}");
         assert_eq!(parsed.clip, None, "{raw}");
     }
 
-    let parsed = super::parse_capture_text_with_clip_control(
-        "body %log",
-        None,
-        None,
-        &CaptureParseOptions::routing_off(false),
-    )
-    .expect("disabled clip marker");
-    assert_eq!(parsed.body, "body %log");
+    let parsed = parse_capture_text("body \\%c", None).expect("escaped clip");
+    assert_eq!(parsed.body, "body %c");
     assert_eq!(parsed.clip, None);
 
     let parsed =
-        super::super::parse_capture_text("body %log", Some("work"), None)
+        super::super::parse_capture_text("body %c", Some("work"), None)
             .expect("forced route still extracts marker");
     assert_eq!(parsed.body, "body");
     assert_eq!(parsed.route.as_deref(), Some("work"));
-    assert_eq!(
-        parsed.clip,
-        Some(ClipRequest::Current {
-            header: Some("log".to_string())
-        })
-    );
+    assert_eq!(parsed.clip, Some(ClipRequest::Current));
 
     let parsed = super::super::parse_capture_text(
-        "body %section_clip",
+        "body %c",
         Some("notes"),
         Some("Ideas"),
     )
     .expect("forced section still extracts marker");
     assert_eq!(parsed.body, "body");
-    assert_eq!(
-        parsed.clip,
-        Some(ClipRequest::Current {
-            header: Some("section_clip".to_string())
-        })
-    );
+    assert_eq!(parsed.clip, Some(ClipRequest::Current));
     assert!(matches!(
         parsed.kind,
         CaptureKind::Bullet { exact: true, .. }
     ));
 
-    let parsed = parse_capture_text("body %first %second", None)
-        .expect("one marker extracted");
-    assert_eq!(parsed.body, "body %first");
-    assert_eq!(
-        parsed.clip,
-        Some(ClipRequest::Current {
-            header: Some("second".to_string())
-        })
-    );
+    let error = parse_capture_text("body %c %c", None)
+        .expect_err("duplicate clip directives");
+    assert!(error.message.contains("directive (%c)"), "{error:?}");
 
-    let parsed = parse_capture_text("body %2 %3", None)
-        .expect("one numeric marker extracted");
-    assert_eq!(parsed.body, "body %2");
-    assert_eq!(
-        parsed.clip,
-        Some(ClipRequest::History {
-            count: NonZeroUsize::new(3).expect("nonzero")
-        })
-    );
+    let error = parse_capture_text("body %", None).expect_err("incomplete");
+    assert!(error.message.contains("`%` is incomplete"), "{error:?}");
 
-    for raw in ["body %0", "body %184467440737095516160"] {
-        let parsed = parse_capture_text(raw, None).expect("literal numeric");
-        assert_eq!(parsed.body, raw, "{raw}");
-        assert_eq!(parsed.clip, None, "{raw}");
-    }
-    for (raw, count) in [("body %1", 1), ("body %01", 1), ("body %3", 3)] {
-        let parsed = parse_capture_text(raw, None).expect("history marker");
-        assert_eq!(parsed.body, "body", "{raw}");
-        assert_eq!(
-            parsed.clip,
-            Some(ClipRequest::History {
-                count: NonZeroUsize::new(count).expect("nonzero")
-            }),
-            "{raw}"
+    for raw in ["body %n", "body %log", "body %3", "body %C"] {
+        let error = parse_capture_text(raw, None).expect_err("unknown");
+        assert!(
+            error.message.contains("is not a capture directive"),
+            "{raw}: {error:?}"
         );
     }
-
-    let error = parse_capture_text("%", None)
-        .expect_err("marker-only capture has no parent text");
-    assert_eq!(error.kind, CaptureErrorKind::Usage);
+    for raw in ["body %c0", "body %c01"] {
+        let error = parse_capture_text(raw, None).expect_err("invalid count");
+        assert!(error.message.contains("is invalid"), "{raw}: {error:?}");
+    }
 }
 
 #[test]
@@ -642,7 +582,7 @@ fn parses_named_pomodoro_routes_in_terminal_positions() {
             None,
             "after-tui-fix",
         ),
-        ("Do thing %log @Dev:Foo-Bar#Q&A", "Do thing", None, "Q&A"),
+        ("Do thing %c @Dev:Foo-Bar#Q&A", "Do thing", None, "Q&A"),
     ];
 
     for (raw, body, scheduled_offset, name) in cases {
@@ -718,35 +658,35 @@ fn parses_task_block_id_routes_in_terminal_positions_with_schedules() {
 #[test]
 fn parses_sub_bullet_routes_with_precedence_and_terminal_markers() {
     let cases = [
-        ("@Cash+Goog-Exit Called today", "Called today", None, None),
-        ("Called today @Cash+Goog-Exit", "Called today", None, None),
+        ("@Cash+Goog-Exit Called today", "Called today", None, false),
+        ("Called today @Cash+Goog-Exit", "Called today", None, false),
         (
             "Called today s:1 @Cash+Goog-Exit",
             "Called today",
             Some(1),
-            None,
+            false,
         ),
         (
             "Called today @Cash+Goog-Exit s:1",
             "Called today",
             Some(1),
-            None,
+            false,
         ),
         (
-            "Called today %log @Cash+Goog-Exit",
+            "Called today %c @Cash+Goog-Exit",
             "Called today",
             None,
-            Some("log"),
+            true,
         ),
         (
-            "Called today @Cash+Goog-Exit %log",
+            "Called today @Cash+Goog-Exit %c",
             "Called today",
             None,
-            Some("log"),
+            true,
         ),
     ];
 
-    for (raw, body, scheduled_offset, clip_header) in cases {
+    for (raw, body, scheduled_offset, has_clip) in cases {
         let parsed = parse_capture_text(raw, None)
             .unwrap_or_else(|error| panic!("{raw}: {error:?}"));
         assert_eq!(parsed.body, body, "{raw}");
@@ -762,9 +702,7 @@ fn parses_sub_bullet_routes_with_precedence_and_terminal_markers() {
         );
         assert_eq!(
             parsed.clip,
-            clip_header.map(|header| ClipRequest::Current {
-                header: Some(header.to_string())
-            }),
+            has_clip.then_some(ClipRequest::Current),
             "{raw}"
         );
     }

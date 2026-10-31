@@ -860,12 +860,12 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "@sase:deep-fix#c++ Do work",
         "Do work @sase:deep-fix#bob+sase",
         "Called today @Cash+Goog-Exit",
-        "Called today %log @Cash+Goog-Exit",
+        "Called today %c @Cash+Goog-Exit",
         "Called today @Cash+Goog-Exit s:1",
         "Postgres 17 minimum @foo+bar#requirements",
         "@foo+bar#requirements Postgres 17 minimum",
         "Postgres 17 minimum @foo+bar#requirements s:1",
-        "Postgres 17 minimum %log @foo+bar#requirements",
+        "Postgres 17 minimum %c @foo+bar#requirements",
         "Postgres 17 minimum @foo+bar#q-and-a",
         "Postgres 17 minimum @foo+bar#Q&A",
         "Finish the Google exit packet! @cash^goog-exit@#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs",
@@ -879,15 +879,15 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "@foo#bar Some note",
         "Some note @foo#",
         "@foo# Some note",
-        "body $2 s:1 % @groceries",
-        "body @groceries %log $3 s:4",
+        "body $2 s:1 %c @groceries",
+        "body @groceries %c $3 s:4",
         "Jot @notes#time:box",
         "take s:1 pill",
         "save % now",
-        "body %bad!",
+        "body 50%",
         "remembered to bump the timeout #",
-        "paste the failing output % #",
-        "paste the failing output # %",
+        "paste the failing output %c #",
+        "paste the failing output # %c",
         "Finish it @cash^goog-exit@",
         "x",
         "x1",
@@ -942,7 +942,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             raw,
             None,
             None,
-            &CaptureParseOptions::routing_off(true),
+            &CaptureParseOptions::routing_off(),
         )
         .unwrap_or_else(|error| panic!("{raw}: {error}"));
         let parse = editor(raw);
@@ -1728,7 +1728,7 @@ fn interactive_markers_are_the_only_divergence_from_execution() {
             raw,
             None,
             None,
-            &CaptureParseOptions::routing_off(true),
+            &CaptureParseOptions::routing_off(),
         )
         .unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(executed.kind, CaptureKind::Task, "{raw}");
@@ -1765,7 +1765,7 @@ fn interactive_markers_are_the_only_divergence_from_execution() {
             raw,
             None,
             None,
-            &CaptureParseOptions::routing_off(true),
+            &CaptureParseOptions::routing_off(),
         )
         .expect_err(raw);
 
@@ -1849,7 +1849,7 @@ fn caret_close_conflicts_agree_with_execution() {
             raw,
             None,
             None,
-            &CaptureParseOptions::routing_off(true),
+            &CaptureParseOptions::routing_off(),
         )
         .expect_err(raw);
         let parse = editor(raw);
@@ -1866,7 +1866,7 @@ fn caret_close_conflicts_agree_with_execution() {
         child,
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect_err(child);
     let parse = editor(child);

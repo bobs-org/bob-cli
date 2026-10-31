@@ -11,23 +11,22 @@ use super::{
     clipboard::{merge_history_candidates, normalize_clipboard_output},
     clipy::read_clipy_history,
     files::{percent_decode, sanitize_file_name, sha256_hex, snippet_slug},
-    is_valid_header,
     persist::TEMP_COUNTER,
     plan::{
         is_structural_line, MAX_ATTACHMENT_COUNT, MAX_INLINE_CHARACTERS,
         MAX_LINES,
     },
     render::rendered_lines,
-    rendered_header, ClipMode, ClipPlan,
+    ClipMode, ClipPlan,
 };
 
 fn plan(
     bob_dir: &Path,
-    header: Option<&str>,
+    _header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
 ) -> Result<ClipPlan, String> {
-    super::plan(bob_dir, header, clipboard, now, "  ")
+    super::plan(bob_dir, clipboard, now, "  ")
 }
 
 fn plan_history(
@@ -51,15 +50,6 @@ fn test_root(label: &str) -> PathBuf {
 fn test_now() -> NaiveDateTime {
     NaiveDateTime::parse_from_str("2026-07-15 13:14:15", "%Y-%m-%d %H:%M:%S")
         .expect("time")
-}
-
-#[test]
-fn formats_headers() {
-    assert_eq!(rendered_header("clip"), "CLIP");
-    assert_eq!(rendered_header("foo_bar_baz"), "FOO BAR BAZ");
-    assert_eq!(rendered_header("foo-bar2"), "FOO-BAR2");
-    assert!(is_valid_header("A_b-2"));
-    assert!(!is_valid_header("bad!"));
 }
 
 #[test]
@@ -321,10 +311,7 @@ fn recognizes_and_renders_flat_unordered_lists() {
         .expect("headed list")
         .output;
     assert_eq!(headed.mode, ClipMode::Lines);
-    assert_eq!(
-        headed.lines,
-        ["  - **BUILD LOG:**", "    - first", "    - second"]
-    );
+    assert_eq!(headed.lines, ["  - first", "  - second"]);
 }
 
 #[test]
@@ -396,35 +383,30 @@ fn renders_inline_lines_and_long_text_modes() {
     let now = test_now();
     let headerless_inline =
         plan(root, None, "hello", now).expect("headerless inline");
-    assert_eq!(headerless_inline.output.header, None);
     assert_eq!(headerless_inline.output.mode, ClipMode::Inline);
     assert_eq!(headerless_inline.output.lines, ["  - hello"]);
     let single_json = serde_json::to_value(&headerless_inline.output)
         .expect("single output JSON");
+    assert_eq!(single_json["status"], "read");
     assert_eq!(single_json["entries"], serde_json::json!([]));
+    assert!(single_json.get("header").is_none());
 
     let inline = plan(root, Some("clip"), "hello", now).expect("headed inline");
-    assert_eq!(inline.output.header.as_deref(), Some("CLIP"));
     assert_eq!(inline.output.mode, ClipMode::Inline);
-    assert_eq!(inline.output.lines, ["  - **CLIP:** hello"]);
+    assert_eq!(inline.output.lines, ["  - hello"]);
 
     let headerless_lines =
         plan(root, None, "one\ntwo", now).expect("headerless lines");
-    assert_eq!(headerless_lines.output.header, None);
     assert_eq!(headerless_lines.output.mode, ClipMode::Lines);
     assert_eq!(headerless_lines.output.lines, ["  - one", "  - two"]);
 
     let lines = plan(root, Some("log"), "one\ntwo", now).expect("headed lines");
     assert_eq!(lines.output.mode, ClipMode::Lines);
-    assert_eq!(
-        lines.output.lines,
-        ["  - **LOG:**", "    - one", "    - two"]
-    );
+    assert_eq!(lines.output.lines, ["  - one", "  - two"]);
 
     let long = "x".repeat(MAX_INLINE_CHARACTERS + 1);
     let headerless_snippet =
         plan(root, None, &long, now).expect("headerless snippet");
-    assert_eq!(headerless_snippet.output.header, None);
     assert_eq!(headerless_snippet.output.mode, ClipMode::Snippet);
     assert_eq!(
         headerless_snippet.output.lines,
@@ -435,7 +417,7 @@ fn renders_inline_lines_and_long_text_modes() {
     assert_eq!(snippet.output.mode, ClipMode::Snippet);
     assert_eq!(
         snippet.output.lines,
-        ["  - **CLIP:** [[file/clip-20260715-131415-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]]"]
+        ["  - [[file/clip-20260715-131415-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]]"]
     );
     assert_eq!(
         snippet.output.snippet.as_deref(),
@@ -446,21 +428,10 @@ fn renders_inline_lines_and_long_text_modes() {
 #[test]
 fn tab_indent_renders_every_clipboard_shape() {
     assert_eq!(
-        rendered_lines(None, &["one".to_string(), "two".to_string()], "\t"),
+        rendered_lines(&["one".to_string(), "two".to_string()], "\t"),
         ["\t- one", "\t- two"]
     );
-    assert_eq!(
-        rendered_lines(Some("CLIP"), &["one".to_string()], "\t"),
-        ["\t- **CLIP:** one"]
-    );
-    assert_eq!(
-        rendered_lines(
-            Some("CLIP"),
-            &["one".to_string(), "two".to_string()],
-            "\t",
-        ),
-        ["\t- **CLIP:**", "\t\t- one", "\t\t- two"]
-    );
+    assert_eq!(rendered_lines(&["one".to_string()], "\t"), ["\t- one"]);
 
     let root = test_root("tab-indent-shapes");
     let vault = root.join("vault");
@@ -469,19 +440,15 @@ fn tab_indent_renders_every_clipboard_shape() {
     fs::write(&attachment, b"image").expect("attachment");
     let attachment_plan = super::plan(
         &vault,
-        Some("photo"),
         attachment.to_str().expect("UTF-8 attachment path"),
         test_now(),
         "\t",
     )
     .expect("tab-indented attachment");
-    assert_eq!(
-        attachment_plan.output.lines,
-        ["\t- **PHOTO:** ![[img/image.png|400]]"]
-    );
+    assert_eq!(attachment_plan.output.lines, ["\t- ![[img/image.png|400]]"]);
 
     let snippet_plan =
-        super::plan(&vault, None, "# Structured\n\nbody", test_now(), "\t")
+        super::plan(&vault, "# Structured\n\nbody", test_now(), "\t")
             .expect("tab-indented snippet");
     assert_eq!(
         snippet_plan.output.lines,
@@ -513,7 +480,7 @@ fn classifies_paths_structured_text_and_attachment_limits() {
     assert_eq!(attachment.output.mode, ClipMode::Attachments);
     assert_eq!(
         attachment.output.lines,
-        ["  - **PHOTO:** ![[img/hello world.png|400]]"]
+        ["  - ![[img/hello world.png|400]]"]
     );
     let quoted = plan(
         &vault,
@@ -536,15 +503,13 @@ fn classifies_paths_structured_text_and_attachment_limits() {
     assert_eq!(
         multiple.output.lines,
         [
-            "  - **CLIP:**",
-            "    - ![[img/hello world.png|400]]",
-            "    - [[file/document.pdf]]",
+            "  - ![[img/hello world.png|400]]",
+            "  - [[file/document.pdf]]",
         ]
     );
 
     let headerless_attachment =
         plan(&vault, None, &uri, test_now()).expect("headerless attachment");
-    assert_eq!(headerless_attachment.output.header, None);
     assert_eq!(
         headerless_attachment.output.lines,
         ["  - ![[img/hello world.png|400]]"]
@@ -721,7 +686,6 @@ fn aggregate_planner_flattens_entries_and_reserves_all_paths() {
         plan_history(&vault, &clipboards, test_now()).expect("aggregate");
 
     assert_eq!(plan.output.mode, ClipMode::History);
-    assert_eq!(plan.output.header, None);
     assert_eq!(plan.output.entries.len(), clipboards.len());
     assert_eq!(plan.output.lines[0], "  - inline");
     assert_eq!(&plan.output.lines[1..3], ["  - line one", "  - line two"]);

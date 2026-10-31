@@ -209,7 +209,7 @@ fn execution_batch_parser_prefixes_item_and_line_context() {
         "parent\n\nsecond\n  - orphan",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .unwrap_err();
     assert_eq!(
@@ -296,9 +296,9 @@ fn execution_rejects_duplicate_schedule_priority_and_clip_markers_across_lines()
     assert!(execute("@work parent $1\n- child $2")
         .unwrap_err()
         .contains("priority marker"));
-    assert!(execute("@work parent %\n- child %")
+    assert!(execute("@work parent %c\n- child %c")
         .unwrap_err()
-        .contains("clipboard marker"));
+        .contains("directive (%c)"));
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn execution_treats_bare_dollar_as_priority_level_one() {
         "foo bar baz @bob $",
         "foo bar baz $ @bob",
         "foo bar baz $ s:3 @bob",
-        "foo bar baz $2 % @bob",
+        "foo bar baz $2 %c @bob",
         "foo bar baz &dep:id $ @bob",
     ] {
         let parsed =
@@ -398,7 +398,7 @@ fn execution_forced_route_keeps_child_markers_literal() {
         "parent\n- child @home",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     assert_eq!(parsed.route.as_deref(), Some("work"));
@@ -527,7 +527,7 @@ fn execution_rejects_duplicate_global_declarations_by_line() {
         "@@foo\nBuy milk @@bar",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .unwrap_err();
     assert!(error.contains("duplicate global destination"), "{error}");

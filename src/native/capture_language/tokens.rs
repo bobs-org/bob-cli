@@ -2097,7 +2097,7 @@ pub(super) const POMODORO_LINK_CHILD_CONFLICT_ERROR: &str =
     "Pomodoro link capture cannot be combined with authored child bullets";
 
 pub(super) const POMODORO_LINK_CLIP_CONFLICT_ERROR: &str =
-    "Pomodoro link capture cannot be combined with % clipboard markers";
+    "Pomodoro link capture cannot be combined with %c";
 
 pub(super) const POMODORO_LINK_SCHEDULE_CONFLICT_ERROR: &str =
     "Pomodoro link capture cannot be combined with s:<N>";
@@ -2106,7 +2106,7 @@ pub(super) const POMODORO_LINK_PRIORITY_CONFLICT_ERROR: &str =
     "Pomodoro link capture cannot be combined with $<N>";
 
 /// Remaining parent tokens after relationship modifiers (and, when those
-/// were present, trailing `$`/`s:`/`%` markers) leave. Used so a bare
+/// were present, trailing `$`/`s:`/`%c` markers) leave. Used so a bare
 /// `^route:id` owner alias works in both leading and trailing position.
 fn relation_stripped_parent_tokens<'a>(
     parent_line: RawLine<'a>,
@@ -2228,6 +2228,7 @@ pub(super) enum CaretItemKind {
 pub(super) fn classify_caret_item<'a>(
     item: &CaptureItem<'a>,
     parent_line: RawLine<'a>,
+    has_clip: bool,
 ) -> Option<CaretItem<'a>> {
     let original = tokenize_line_with_spans(&parent_line);
     let (stripped, deps) = relation_stripped_parent_tokens(parent_line);
@@ -2244,7 +2245,7 @@ pub(super) fn classify_caret_item<'a>(
         return None;
     }
     let solo_parent = parent_tokens.len() == 1;
-    // Relationship extras (`$<N>`/`s:`/`%`/children) are not caret-link
+    // Relationship extras (`$<N>`/`s:`/`%c`/children) are not caret-link
     // conflicts: ownership emits `relationship_needs_text` instead.
     let single_line = if has_relations {
         true
@@ -2341,8 +2342,13 @@ pub(super) fn classify_caret_item<'a>(
             close_complete,
             close_drop,
         } => {
-            let conflict =
-                caret_item_conflict(&parent_tokens, solo_parent, single_line);
+            let conflict = caret_item_conflict(
+                &parent_tokens,
+                solo_parent,
+                single_line,
+                has_clip,
+                has_relations,
+            );
             Some(CaretItem {
                 token: *first,
                 solo_parent,
@@ -2377,8 +2383,13 @@ pub(super) fn classify_caret_item<'a>(
             close_drop,
             separator_range,
         } => {
-            let conflict =
-                caret_item_conflict(&parent_tokens, solo_parent, single_line);
+            let conflict = caret_item_conflict(
+                &parent_tokens,
+                solo_parent,
+                single_line,
+                has_clip,
+                has_relations,
+            );
             Some(CaretItem {
                 token: *first,
                 solo_parent,
@@ -2398,8 +2409,13 @@ pub(super) fn classify_caret_item<'a>(
             })
         }
         CaretTokenShape::CloseInvalid { message, range } => {
-            let conflict =
-                caret_item_conflict(&parent_tokens, solo_parent, single_line);
+            let conflict = caret_item_conflict(
+                &parent_tokens,
+                solo_parent,
+                single_line,
+                has_clip,
+                has_relations,
+            );
             Some(CaretItem {
                 token: *first,
                 solo_parent,
@@ -2422,7 +2438,15 @@ fn caret_item_conflict(
     parent_tokens: &[Token<'_>],
     solo_parent: bool,
     single_line: bool,
+    has_clip: bool,
+    has_relations: bool,
 ) -> Option<String> {
+    // `%c` is masked before this pass, so clip extras arrive as `has_clip`
+    // rather than a leftover `%` token. Relationship extras stay on the
+    // ownership path.
+    if has_clip && !has_relations && solo_parent && single_line {
+        return Some(POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string());
+    }
     if solo_parent && single_line {
         None
     } else if !solo_parent {
@@ -2438,6 +2462,10 @@ fn caret_item_conflict(
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                (has_clip && !has_relations)
+                    .then(|| POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string())
             })
             .or_else(|| Some(POMODORO_LINK_SHAPE_ERROR.to_string()))
     } else {
@@ -2544,7 +2572,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                         }
                         if extra.starts_with('%') {
                             return Err(
-                                "Pomodoro link capture cannot be combined with % clipboard markers"
+                                "Pomodoro link capture cannot be combined with %c"
                                     .to_string(),
                             );
                         }
@@ -2630,7 +2658,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                         }
                         if extra.starts_with('%') {
                             return Err(
-                                "Pomodoro link capture cannot be combined with % clipboard markers"
+                                "Pomodoro link capture cannot be combined with %c"
                                     .to_string(),
                             );
                         }

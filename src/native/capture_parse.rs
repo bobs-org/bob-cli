@@ -65,6 +65,8 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             cancels_source: span.cancels_source,
             completes_source: span.completes_source,
             project_note: span.project_note,
+            directive: span.directive,
+            count: span.count,
         })
         .collect();
     TemplateProtocolParse { route, spans }
@@ -166,7 +168,7 @@ The grammar parse is lexical and read-only. For Pomodoro-name spans, the \
 command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
---bob-dir. A '%' clipboard marker still succeeds.\n\n\
+--bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> \
@@ -374,7 +376,7 @@ spans. Body text keeps its established mode and gains a `dependency_target` \
 with an explicit `@note+task-id` (or the narrow bare `@note:id` / \
 `^note:id` aliases, leading or trailing) reports mode 'task_dependency' \
 with an `existing_task` target. A bare existing owner with `$<N>`, \
-`s:<N>`, `%…`, or child bullets reports a `relationship_needs_text` \
+`s:<N>`, `%c`, or child bullets reports a `relationship_needs_text` \
 diagnostic. An \
 ownerless `&note:block-id` reports mode 'incomplete' needing \
 `dependency_target`, and a partial `&`, `&query`, or `&note:` needs \
@@ -762,6 +764,13 @@ pub(crate) struct CaptureParseSpan {
     /// every span of a project-note marker token except the Pomodoro name.
     #[serde(default, skip_serializing_if = "is_no_parse_project_note")]
     pub(crate) project_note: Option<super::capture_language::ProjectNoteForm>,
+    /// Named directive (`"clip"`). Present on a complete `%c` / `%c<N>`
+    /// token; omitted for a bare `%` and for unknown tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) directive: Option<&'static str>,
+    /// History count for `%c<N>` when N ≥ 2. Omitted for `%c` / `%c1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) count: Option<usize>,
 }
 
 fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
@@ -950,6 +959,7 @@ impl CaptureParseResult {
             parse.spans,
             capture_links::wikilink_spans(&input),
         ));
+        stamp_directive_spans(&mut spans, &input);
         fill_span_gaps(
             &mut spans,
             capture_task_wikilinks::wikilink_task_spans(&input),
@@ -1110,6 +1120,7 @@ impl CaptureParseResult {
                     &row_parse.pomodoro_close,
                     &row_parse.items,
                     (row.range.start, row.range.end),
+                    &instance.text,
                 ) {
                     let mapped_range = map_instance_range(
                         diagnostic.range,
@@ -1237,6 +1248,7 @@ impl CaptureParseResult {
             &analysis,
             &row_summaries,
         );
+        stamp_directive_spans(&mut spans, &input);
         fill_span_gaps(
             &mut spans,
             capture_task_wikilinks::wikilink_task_spans(&masked),
@@ -1276,7 +1288,7 @@ impl CaptureParseResult {
         diagnostics.extend(instance_diagnostics);
 
         // Instance parses are the source of truth for clipboard: the masked
-        // copy (`xxx %`) reads as a clipboard marker while a `URL %` row
+        // copy (`xxx %c`) reads as a clipboard marker while a `URL %` row
         // expands to a Listen reference. Only the session check runs here.
         if let Some(diagnostic) = refusal_diagnostic(
             &parsed.spans,
@@ -1285,6 +1297,7 @@ impl CaptureParseResult {
             &parsed.pomodoro_close,
             &parsed.items,
             (template_range.start, template_range.end),
+            &masked,
         ) && diagnostic.code != "template_clipboard"
         {
             refusal_diagnostics.push(diagnostic);
@@ -1520,6 +1533,29 @@ fn stamp_cancel_spans(
     }
 }
 
+fn stamp_directive_spans(spans: &mut [CaptureParseSpan], input: &str) {
+    for span in spans {
+        if span.kind != capture_language::SpanKind::Directive {
+            continue;
+        }
+        let Some(token) = input.get(span.start..span.end) else {
+            continue;
+        };
+        let Some(rest) = token.strip_prefix("%c") else {
+            continue;
+        };
+        span.directive = Some("clip");
+        if rest.is_empty() {
+            continue;
+        }
+        if let Ok(count) = rest.parse::<usize>()
+            && count > 1
+        {
+            span.count = Some(count);
+        }
+    }
+}
+
 fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
     spans
         .into_iter()
@@ -1532,6 +1568,8 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             cancels_source: false,
             completes_source: false,
             project_note: span.project_note,
+            directive: None,
+            count: None,
         })
         .collect()
 }
@@ -1566,6 +1604,8 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                     cancels_source: false,
                     completes_source: false,
                     project_note: candidate.project_note,
+                    directive: None,
+                    count: None,
                 });
             }
             cursor = cursor.max(end);
@@ -1583,6 +1623,8 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                 cancels_source: false,
                 completes_source: false,
                 project_note: candidate.project_note,
+                directive: None,
+                count: None,
             });
         }
         spans.append(&mut additions);
@@ -1678,6 +1720,8 @@ fn template_spans(
                     cancels_source: false,
                     completes_source: false,
                     project_note: span.project_note,
+                    directive: None,
+                    count: None,
                 });
             }
             cursor = cursor.max(placeholder.range.end);
@@ -1692,6 +1736,8 @@ fn template_spans(
                 cancels_source: false,
                 completes_source: false,
                 project_note: span.project_note,
+                directive: None,
+                count: None,
             });
         }
     }
@@ -1706,6 +1752,8 @@ fn template_spans(
             cancels_source: false,
             completes_source: false,
             project_note: None,
+            directive: None,
+            count: None,
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -1718,6 +1766,8 @@ fn template_spans(
             cancels_source: false,
             completes_source: false,
             project_note: None,
+            directive: None,
+            count: None,
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -1730,6 +1780,8 @@ fn template_spans(
             cancels_source: false,
             completes_source: false,
             project_note: None,
+            directive: None,
+            count: None,
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));
@@ -1911,16 +1963,23 @@ fn refusal_diagnostic(
     pomodoro_close: &Option<PomodoroCloseSpec>,
     items: &[EditorItemParse],
     fallback_range: (usize, usize),
+    source: &str,
 ) -> Option<Diagnostic> {
     use capture_language::SpanKind;
 
-    if let Some(span) =
-        spans.iter().find(|span| span.kind == SpanKind::Clipboard)
-    {
+    if let Some(span) = spans.iter().find(|span| {
+        span.kind == SpanKind::Directive
+            && source.get(span.start..span.end).is_some_and(|token| {
+                token.strip_prefix("%c").is_some_and(|rest| {
+                    rest.is_empty()
+                        || rest.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            })
+    }) {
         return Some(Diagnostic {
             severity: Severity::Error,
             code: "template_clipboard",
-            message: "a template can't capture the clipboard: `%` would repeat once per row".to_string(),
+            message: "a template can't capture the clipboard: `%c` would repeat once per row".to_string(),
             range: Some((span.start, span.end)),
         });
     }
@@ -2849,7 +2908,7 @@ mod tests {
         assert_eq!(json("note @dev^focus-1")["mode"], "task");
         assert_eq!(json("note @dev^")["mode"], "incomplete");
 
-        let value = json("body $2 s:1 % @groceries");
+        let value = json("body $2 s:1 %c @groceries");
         assert_eq!(value["body"], "body");
         assert_eq!(
             value["spans"]
@@ -2858,7 +2917,7 @@ mod tests {
                 .iter()
                 .map(|span| span["kind"].as_str().expect("kind"))
                 .collect::<Vec<_>>(),
-            vec!["priority", "schedule", "clipboard", "route"]
+            vec!["priority", "schedule", "directive", "route"]
         );
     }
 

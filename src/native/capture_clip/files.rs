@@ -11,7 +11,7 @@ use crate::native::env as bob_env;
 use super::{
     model::{FileReservations, PlannedFileKind},
     render::rendered_lines,
-    AttachmentKind, AttachmentOutput, ClipMode, ClipOutput,
+    AttachmentKind, AttachmentOutput, ClipMode, ClipOutput, ClipStatus,
 };
 
 pub(super) const IMAGE_EMBED_WIDTH: usize = 400;
@@ -116,7 +116,6 @@ fn hex(byte: u8) -> Option<u8> {
 
 pub(super) fn plan_attachments<'a>(
     bob_dir: &Path,
-    header: Option<&str>,
     sources: impl IntoIterator<Item = &'a Path>,
     indent: &str,
     reservations: &mut FileReservations,
@@ -164,10 +163,11 @@ pub(super) fn plan_attachments<'a>(
         .iter()
         .map(attachment_reference)
         .collect::<Vec<_>>();
-    let lines = rendered_lines(header, &references, indent);
+    let lines = rendered_lines(&references, indent);
 
     Ok(ClipOutput {
-        header: header.map(str::to_string),
+        status: ClipStatus::Read,
+        count: None,
         mode: ClipMode::Attachments,
         lines,
         attachments,
@@ -321,7 +321,6 @@ pub(super) fn sanitize_file_name(name: &str) -> String {
 
 pub(super) fn plan_snippet(
     bob_dir: &Path,
-    header: Option<&str>,
     clipboard: &str,
     now: NaiveDateTime,
     indent: &str,
@@ -369,9 +368,10 @@ pub(super) fn plan_snippet(
         PlannedFileKind::Snippet,
     );
     Ok(ClipOutput {
-        header: header.map(str::to_string),
+        status: ClipStatus::Read,
+        count: None,
         mode: ClipMode::Snippet,
-        lines: rendered_lines(header, &[format!("[[{reference}]]")], indent),
+        lines: rendered_lines(&[format!("[[{reference}]]")], indent),
         attachments: Vec::new(),
         snippet: Some(saved),
         entries: Vec::new(),

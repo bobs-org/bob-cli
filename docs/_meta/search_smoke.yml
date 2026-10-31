@@ -136,9 +136,9 @@
   location: /reference/capture-syntax/#dollar-priority
 - query: "%"
   location: /reference/capture-syntax/#percent-clipboard
-- query: "%N"
+- query: "%c"
   location: /reference/capture-syntax/#percent-clipboard
-- query: "%header"
+- query: "%c<N>"
   location: /reference/capture-syntax/#percent-clipboard
 - query: "#<type>"
   location: /reference/capture-syntax/#hash-type

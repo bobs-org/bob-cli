@@ -11,7 +11,6 @@ use crate::native::url_routing::{RefIntent, UrlRoutingPolicy};
 /// routing policy. Only the lexical URL-list split stays live without it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CaptureParseOptions<'a> {
-    pub(crate) parse_clip_markers: bool,
     pub(crate) url_routing: Option<&'a UrlRoutingPolicy>,
     /// A forced destination or clip flag (`-r -s -t -S -c`, `--task-ref`)
     /// keeps the item a task.
@@ -25,9 +24,8 @@ impl<'a> CaptureParseOptions<'a> {
     /// Routing-off options: reference items never claim (tests only;
     /// production passes the loaded policy or explicit `None`).
     #[cfg(test)]
-    pub(crate) fn routing_off(parse_clip_markers: bool) -> Self {
+    pub(crate) fn routing_off() -> Self {
         Self {
-            parse_clip_markers,
             url_routing: None,
             explicit_destination: false,
             has_global_destination: false,
@@ -580,8 +578,25 @@ pub(crate) struct RetiredPriority {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ClipRequest {
-    Current { header: Option<String> },
+    Current,
     History { count: NonZeroUsize },
+}
+
+impl ClipRequest {
+    pub(crate) fn from_count(count: NonZeroUsize) -> Self {
+        if count.get() == 1 {
+            Self::Current
+        } else {
+            Self::History { count }
+        }
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        match self {
+            Self::Current => 1,
+            Self::History { count } => count.get(),
+        }
+    }
 }
 
 pub(crate) struct RouteToken {

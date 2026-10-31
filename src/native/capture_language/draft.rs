@@ -650,10 +650,7 @@ pub(crate) fn parse_capture_text_with_clip_control(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureText, String> {
-    let draft = split_capture_draft_with_clip_control(
-        raw_text,
-        options.parse_clip_markers,
-    );
+    let draft = split_capture_draft_with_clip_control(raw_text, true);
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
         return Err(if global.is_some() {
@@ -833,10 +830,7 @@ fn parse_ordinary_draft(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, CaptureItemParseError> {
-    let draft = split_capture_draft_with_clip_control(
-        raw_text,
-        options.parse_clip_markers,
-    );
+    let draft = split_capture_draft_with_clip_control(raw_text, true);
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
         return Err(if global.is_some() {
@@ -999,9 +993,6 @@ fn template_instance_options<'a>(
     options: &CaptureParseOptions<'a>,
 ) -> CaptureParseOptions<'a> {
     CaptureParseOptions {
-        // A template cannot repeat clipboard capture. Recognize markers even
-        // for --no-clip so live preview and submission agree.
-        parse_clip_markers: true,
         has_global_destination: false,
         ..*options
     }
@@ -1108,7 +1099,7 @@ fn template_clipboard_error(row: usize, line: usize) -> String {
     template_row_error(
         row,
         line,
-        "a template can't capture the clipboard: `%` would repeat once per row"
+        "a template can't capture the clipboard: `%c` would repeat once per row"
             .to_string(),
     )
 }

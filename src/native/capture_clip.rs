@@ -18,10 +18,9 @@ mod tests;
 pub(crate) use clipboard::{read_clipboard, read_clipboard_history};
 pub(crate) use model::{
     AttachmentKind, AttachmentOutput, ClipMode, ClipOutput, ClipPlan,
-    ClipReservations,
+    ClipReservations, ClipStatus,
 };
 pub(crate) use persist::{append_cleanup_message, cleanup_created};
 #[cfg(test)]
 pub(crate) use plan::{plan, plan_history};
 pub(crate) use plan::{plan_history_with_reservations, plan_with_reservations};
-pub(crate) use render::{is_valid_header, rendered_header};

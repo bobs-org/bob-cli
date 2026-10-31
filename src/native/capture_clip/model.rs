@@ -3,7 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::Serialize;
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,17 +31,80 @@ pub(crate) struct AttachmentOutput {
     pub(crate) reused: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ClipStatus {
+    Read,
+    NotRead,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClipOutput {
-    pub(crate) header: Option<String>,
+    pub(crate) status: ClipStatus,
+    pub(crate) count: Option<usize>,
     pub(crate) mode: ClipMode,
     pub(crate) lines: Vec<String>,
     pub(crate) attachments: Vec<AttachmentOutput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) snippet: Option<String>,
     // bob-mac-capture decodes clip collections as required fields; omitting
-    // empty entries broke every `%` capture in the app.
+    // empty entries broke every `%c` capture in the app.
     pub(crate) entries: Vec<ClipOutput>,
+}
+
+impl ClipOutput {
+    pub(crate) fn not_read(count: usize) -> Self {
+        Self {
+            status: ClipStatus::NotRead,
+            count: Some(count),
+            mode: ClipMode::Inline,
+            lines: Vec::new(),
+            attachments: Vec::new(),
+            snippet: None,
+            entries: Vec::new(),
+        }
+    }
+}
+
+impl ClipPlan {
+    pub(crate) fn not_read(count: usize) -> Self {
+        Self {
+            output: ClipOutput::not_read(count),
+            files: Vec::new(),
+        }
+    }
+}
+
+impl Serialize for ClipOutput {
+    fn serialize<S: Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match self.status {
+            ClipStatus::NotRead => {
+                let mut state = serializer.serialize_struct("ClipOutput", 2)?;
+                state.serialize_field("status", &self.status)?;
+                state.serialize_field("count", &self.count.unwrap_or(0))?;
+                state.end()
+            }
+            ClipStatus::Read => {
+                let mut field_count = 5;
+                if self.snippet.is_some() {
+                    field_count += 1;
+                }
+                let mut state =
+                    serializer.serialize_struct("ClipOutput", field_count)?;
+                state.serialize_field("status", &self.status)?;
+                state.serialize_field("mode", &self.mode)?;
+                state.serialize_field("lines", &self.lines)?;
+                state.serialize_field("attachments", &self.attachments)?;
+                if let Some(snippet) = &self.snippet {
+                    state.serialize_field("snippet", snippet)?;
+                }
+                state.serialize_field("entries", &self.entries)?;
+                state.end()
+            }
+        }
+    }
 }
 
 impl ClipOutput {

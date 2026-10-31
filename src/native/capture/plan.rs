@@ -51,11 +51,9 @@ pub(super) fn plan_capture_batch_with_config_path(
     routing: Option<&UrlRoutingPolicy>,
     config_path: Option<&Path>,
 ) -> Result<PlannedCaptureBatch, CaptureError> {
-    let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
     // A forced `-r` route is an allowed explicit ref parent; every other
     // forced destination or clip flag keeps the item a task.
     let options = CaptureParseOptions {
-        parse_clip_markers,
         url_routing: routing,
         explicit_destination: request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
@@ -71,7 +69,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     )?;
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
         return Err(CaptureError::usage_code(
-            "a template can't capture the clipboard: `%` would repeat once per row",
+            "a template can't capture the clipboard: `%c` would repeat once per row",
             "template_clipboard",
         ));
     }
@@ -832,7 +830,9 @@ pub(super) fn plan_capture_item(
             }
         }
     }
-    if let Some(clip) = request.forced_clip.as_ref() {
+    if parsed.clip.is_none()
+        && let Some(clip) = request.forced_clip.as_ref()
+    {
         parsed.clip = Some(clip.clone());
     }
     // Forced `--task`/`--route` rewrites the kind to SubBullet after
@@ -1361,28 +1361,22 @@ pub(super) fn plan_capture_item(
         render_authored_sub_bullets(&parsed.sub_bullets, indent)
     };
     let clip_plan = match parsed.clip.as_ref() {
-        Some(ClipRequest::Current { header }) => {
-            let clipboard =
-                capture_clip::read_clipboard().map_err(CaptureError::io)?;
-            Some(
-                capture_clip::plan_with_reservations(
-                    &request.bob_dir,
-                    header.as_deref(),
-                    &clipboard,
-                    now,
-                    child_indent.as_deref().unwrap_or("\t"),
-                    clip_reservations,
-                )
-                .map_err(CaptureError::io)?,
-            )
+        Some(clip) if request.no_clip => {
+            if request.dry_run {
+                Some(capture_clip::ClipPlan::not_read(clip.count()))
+            } else {
+                return Err(CaptureError::usage_code(
+                    capture_language::clip_not_read_error(),
+                    "clip_not_read",
+                ));
+            }
         }
-        Some(ClipRequest::History { count }) if count.get() == 1 => {
+        Some(ClipRequest::Current) => {
             let clipboard =
                 capture_clip::read_clipboard().map_err(CaptureError::io)?;
             Some(
                 capture_clip::plan_with_reservations(
                     &request.bob_dir,
-                    None,
                     &clipboard,
                     now,
                     child_indent.as_deref().unwrap_or("\t"),

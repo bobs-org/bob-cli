@@ -87,7 +87,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | trailing `#` | Plain-text note on the current Pomodoro | [trailing `#`](#trailing-hash) |
 | `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
 | `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
-| `%` / `%N` / `%header` | Capture clipboard content as child bullets | [`%`](#percent-clipboard) |
+| `%c` / `%c<N>` | Capture clipboard content as child bullets | [`%c`](#percent-clipboard) |
 | `#<type>` | Type a new task or retype its existing target | [`#<type>`](#hash-type) |
 
 ## Overloaded markers
@@ -114,6 +114,7 @@ what they attach to, not as one global operator.
 | `@` | `@@route` | Draft-wide destination |
 | `@` | `x@<N>` / `=name@<X>` | Timing or keep-list typed last (`=bugs@3` means `=3#bugs`) |
 | `@` | `URL @route` | Explicit reference parent |
+| `@` | `URL @` | Compatible listen alias |
 | `@` | right after `@route^block-id` / `@route:block-id` | Project-note seal: `^…@` creates the note, `:…@` also offers its tasks |
 | `*` | `*note:block-id` | Blocked-task (star) link |
 | `*` | `x*` | Park Task Links on close |
@@ -126,7 +127,8 @@ what they attach to, not as one global operator.
 | `!` | `!note:block-id` | Complete an existing task |
 | `!` | `x!` | Complete Task Links on close |
 | `%` | `URL %` | Request companion audio |
-| `%` | trailing `%` | Clipboard capture |
+| `%` | trailing `%c` / `%c<N>` | Clipboard capture |
+| `%` | trailing `%` | Incomplete directive |
 
 Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
 
@@ -1302,23 +1304,25 @@ envelope:
 
 Contract: [Scheduling and priority](../capture.md#scheduling-and-priority).
 
-### `%` / `%N` / `%header` {#percent-clipboard}
+### `%c` / `%c<N>` {#percent-clipboard}
 
-Capture clipboard content as child bullets. `%`, `%N`, and `%header` are
-the spellings. `-n, --no-clip` keeps trailing `%` literal. `-c, --clip`
-forces clipboard capture. Clipboard backends are stubbed in this isolated
-fixture, so the example keeps `%` literal.
+Capture clipboard content as child bullets. `%c` reads the live clipboard
+once; `%c3` reads three values. `-c, --clip` forces a clipboard read as if
+`%c` were written. `-n, --no-clip` never reads the clipboard: a dry run
+reports `clip.status: not_read`, and a real capture refuses. Mid-line `50%`
+stays prose. Clipboard backends are stubbed in this isolated fixture, so
+the example keeps the percent as body text.
 
 ```bash
-bob capture --no-clip 'Keep the percent @work %'
+bob capture 'Keep 50% @work'
 ```
 
 ```text { .no-copy title="Output" }
 ✓ captured  work.md
-  - [ ] #task Keep the percent % [created::2026-10-20]
+  - [ ] #task Keep 50% [created::2026-10-20]
 ```
 
-Contract: [Clipboard](../capture.md#clipboard).
+Contract: [Directives (`%`)](../capture.md#directives) · [Clipboard](../capture.md#clipboard).
 
 ### `#<type>` {#hash-type}
 

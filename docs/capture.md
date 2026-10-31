@@ -26,6 +26,7 @@ workflow guide.
   - [Bulk templates](#bulk-templates)
     - [Saved templates](#saved-templates)
   - [Authored sub-bullets](#authored-sub-bullets)
+  - [Directives (`%`)](#directives)
   - [Clipboard](#clipboard)
   - [Saving links to your reading queue](#saving-links-to-your-reading-queue)
   - [Task with a requested block ID](#task-with-a-requested-block-id)
@@ -146,7 +147,8 @@ anything is written, and any failure rolls the whole batch back.
 | trailing bare `#` | Plain-text note on a Pomodoro; bare `#` does not open task-type completion |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
-| `%`, `%N`, `%header` | Capture clipboard content as child bullets |
+| `%c` / `%c<N>` | Capture clipboard content as child bullets (`%c` is one live value; `%c3` is three) |
+| `%` | Incomplete directive except as the `URL %` listen marker; add `%c` or write `\%` to keep a literal `%` |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
@@ -673,7 +675,7 @@ Pomodoro; the normal `plan.max_links` warning applies. Use `@route^apply-{1}`
 when rows should create plain Ready tasks that you link as you work them.
 
 Templates refuse other `@@` declarations, clipboard capture, and Pomodoro
-session operators. This includes `%` markers even with `--no-clip`, `--clip`,
+session operators. This includes `%c` even with `--no-clip` or `--clip`,
 whole-item forms such as `=`, `x`, `+N`, and `++N`, and start/close suffixes
 on task markers. `URL %` remains allowed when it is the reference listen
 marker. In a `{0}`-only template, keep the marker on its URL by quoting the
@@ -699,7 +701,7 @@ problem in draft order and writes nothing:
 | `template_unterminated_quote` | Quoted field has no closing quote |
 | `template_row_arity` | Template row 3 (line 7) has 4 fields but the template uses `{0}`–`{2}` |
 | `template_global_declaration` | A template draft can't declare `@@` destinations; put the destination in the template line |
-| `template_clipboard` | A template can't capture the clipboard: `%` would repeat once per row |
+| `template_clipboard` | A template can't capture the clipboard: `%c` would repeat once per row |
 | `template_session_operator` | A template can't drive the Pomodoro session; capture `=`, `x`, `+N`, and `++N` on their own |
 | `template_too_large` | Expanded template exceeds the 1 MiB limit |
 | `template_row_incomplete` | `capture-parse` reports an incomplete expanded item on its row |
@@ -836,40 +838,50 @@ Authored children render before clipboard children and the priority
 schedule log, so the full block order is: parent line, authored children,
 clipboard children, then the schedule log.
 
+### Directives (`%`)
+
+A `%` token at either edge of any physical line, with only other markers
+between it and that edge, is a capture directive. Mid-line tokens such as
+`50%` or a URL `%25` stay prose. `\%c` at an edge captures the text without
+the backslash; mid-line `\%` stays verbatim.
+
+This grammar recognizes:
+
+| Token | Meaning |
+| --- | --- |
+| `%c` | Read the live clipboard into child bullets of this item |
+| `%c<N>` (N ≥ 2) | Live clipboard plus history, N values in all. `%c1` is `%c` |
+| `%` | Incomplete on a task (add `%c`, or write `\%`). On a bare URL it still requests companion audio (`URL %`) |
+| anything else (`%3`, `%C`, `%clip`, `%build_log`) | `unknown_directive` |
+
+`%c0`, a leading zero (`%c01`), and a count that overflows `usize` are
+invalid (`unknown_directive`). Each directive appears at most once per item
+(`duplicate_capture_marker`, label `directive (%c)`). Letters are lowercase
+only.
+
+See [Clipboard](#clipboard) for what `%c` reads.
+
 ### Clipboard
 
-Append one of these whitespace-delimited terminal markers to capture clipboard
+Append `%c` or `%c<N>` at either edge of any physical line to capture clipboard
 content beneath the new task or bullet:
 
-- `%` captures the live clipboard once without a header.
-- `%<positive integer>` captures exactly that many values without headers: the
-  live clipboard first, followed by recent history newest first. For example,
-  `bob capture research links %3` captures three values. For ordinary
-  non-reference task text, `%1` is equivalent to `%`, leading zeroes are
-  accepted, and `%0` stays literal.
-- `%<nonnumeric header>` captures the live clipboard once under an explicit
-  header. Headers accept letters, digits, `_`, and `-`, render in uppercase,
-  and replace underscores with spaces; for example, `%build_log` renders
-  `**BUILD LOG:**`.
+- `%c` captures the live clipboard once.
+- `%c<N>` (N ≥ 2) captures exactly that many values: the live clipboard
+  first, followed by recent history newest first. For example,
+  `bob capture research links %c3` captures three values. `%c1` is
+  equivalent to `%c`.
 
-The grammar is context-dependent for an eligible URL-only reference: exact
-standalone `URL %` requests companion audio before clipboard parsing, so it
-does not read the clipboard even in live preview's `--no-clip` mode. Use
-`URL %1` or `--clip URL` to explicitly request clipboard capture for a URL;
-non-reference `text %`, `%N`, and `%header` keep their clipboard meanings.
-
-The marker composes with `s:<N>`, `$<N>`, ordinary routes, bullet routes,
-ID-only task routes, and Pomodoro routes in either terminal order. Invalid
-`%...` tokens and `%` tokens in the middle of the body stay literal. A counted capture requires every
-requested entry to read, normalize, classify, and plan successfully;
-insufficient or invalid history aborts the capture instead of writing a
-partial result.
+The marker composes with `s:<N>`, `$<N>`, `#<type>`, ordinary routes, bullet
+routes, ID-only task routes, and Pomodoro routes in either terminal order. A
+counted capture requires every requested entry to read, normalize, classify,
+and plan successfully; insufficient or invalid history aborts the capture
+instead of writing a partial result.
 
 Clipboard content is rendered according to its shape:
 
 - One text line up to 1,000 characters becomes an inline child bullet.
-- Two to ten flat text lines become child bullets, nested beneath an explicit
-  header when one is present.
+- Two to ten flat text lines become child bullets.
 - One to ten top-level unordered Markdown list items using `-`, `*`, or `+`
   become child bullets. Their source list markers and separating whitespace are
   removed while inline Markdown, including checkbox text, is preserved.
@@ -889,8 +901,8 @@ index labels, container bullets, or separators.
 Clipboard children use the target note's dominant tab-or-two-space indentation
 and fall back to a tab, matching the sub-bullet capture rule.
 
-Without a header, one item is written as a direct child and multiple items are
-written as direct sibling children:
+One item is written as a direct child and multiple items are written as
+direct sibling children:
 
 ```markdown
 - [ ] #task Parent
@@ -917,18 +929,6 @@ is normalized beneath the captured parent without doubling the source markers:
 	- [ ] third checkbox item
 ```
 
-An explicit header stays inline for one item and owns a nested list for
-multiple items:
-
-```markdown
-- [ ] #task Parent
-	- **BUILD LOG:** clipboard text
-- [ ] #task Another parent
-	- **BUILD LOG:**
-		- first line
-		- second line
-```
-
 Attachment names are sanitized for Obsidian links. An existing identical file
 is reused; differing content receives an eight-character SHA-256 suffix. Up to
 ten attachment paths may be pasted at once. Clipboard text must be non-empty
@@ -937,12 +937,12 @@ copied file path. Clipboard and note edits are planned before anything is
 written, and newly created clipboard files are removed if the note write fails.
 `--dry-run` performs the same planning but creates no directories or files.
 
-Use `-c, --clip[=HEADER]` to force clipboard capture without a marker. Bare
-`--clip` captures without a header, while `--clip=build_log` supplies an
-explicit header. Both forms force a single live value and keep `%` tokens in
-the captured text literal. A numeric header can be requested unambiguously with
-`--clip=20`; use `-n, --no-clip` when a genuine trailing `%N` or other `%...`
-token should remain literal. `--clip` and `--no-clip` conflict.
+Use `-c, --clip` to force a clipboard read as if `%c` were written. It injects
+a live-clipboard request only when the item has no `%c` already, so
+`%c3 --clip` still reads three values. Use `-n, --no-clip` to never read the
+clipboard, even when `%c` is written: a dry run reports
+`clip: {"status": "not_read", "count": N}`, and a real capture refuses with
+`clip_not_read`. `--clip` and `--no-clip` conflict.
 
 ### Saving links to your reading queue
 
@@ -966,20 +966,17 @@ comment.
 Append a standalone `%` immediately after the URL (the next
 whitespace-delimited token on the same line, one or more spaces/tabs) to
 request companion audio: `https://example.blog.com/somepost %` clips like
-`bob ref create <URL> -P <resolved-parent> -L`. The shipped standalone `@`
-spelling remains a compatible alias. `URL % @sase` and `@sase URL %`
-combine listen with an explicit parent; `URL %` alone uses the default,
-`@@route` global, or `-r` forced parent. Do not attach the directive to the
-URL, or put it in a query, fragment, encoded `%25`/`%40`, or userinfo — those
-bytes stay part of the URL. One optional `<...>` wrapper around the URL is
-still accepted. Exact `URL %` takes reference precedence over clipboard
-parsing; `URL %1`, `--clip URL`, and `-R 'URL %'` explicitly keep the
-clipboard/task path. Outside an admitted reference shape, `%` keeps its
-clipboard meaning, and `--no-clip` leaves ordinary clipboard markers
-literal. In live preview, `--no-clip` does not suppress a recognized URL
-reference listen marker. A non-URL bare `@` and prefixes such as `@sa`
-remain route completion, and completing a claimed listen marker never
-replaces it (a separate ` @sa` after `URL %` still completes the parent). A marked item
+`bob ref create <URL> -P <resolved-parent> -L`. `URL % @sase` and
+`@sase URL %` combine listen with an explicit parent; `URL %` alone uses the
+default, `@@route` global, or `-r` forced parent. Do not attach the marker
+to the URL, or put it in a query, fragment, encoded `%25`/`%40`, or userinfo —
+those bytes stay part of the URL. One optional `<...>` wrapper around the URL
+is still accepted. Exact standalone `@` is still a compatible listen
+spelling. Exact `URL %` takes reference precedence over the directive
+lexer; `--clip URL` and `-R 'URL %c'` keep the clipboard/task path. A non-URL
+bare `@` and prefixes such as `@sa` remain route completion, and completing a
+claimed listen marker never replaces it (a separate ` @sa` after `URL %`
+still completes the parent). A marked item
 prints `queued … · Listen` with `· companion audio requested`; it needs a
 configured `highlights.listen_command`. Inline intake files the PDF and MP3
 together, and a queued capture is paired by `bob ref scan -i` or the local
@@ -2203,7 +2200,7 @@ offending token is named in the message; for example:
 `$2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar $2`)
 ```
 
-The same template applies to `s:3`, a clipboard token such as `%header`, and
+The same template applies to `s:3`, a clipboard directive such as `%c`, and
 `child bullets`. To write a child bullet, add parent task text to the owner
 line, as in `Waiting @body+excercise &foo:bar` followed by `- detail`.
 
@@ -4976,7 +4973,7 @@ an invariant error. The new bullet is appended at the end of the
 selected entry's child block, reusing existing child indentation when
 possible.
 
-The marker composes with `%...` and `--clip` in either terminal order, since
+The marker composes with `%c` and `--clip` in either terminal order, since
 "capture what I just copied onto this Pomodoro" is a plausible use, but it is
 rejected alongside `s:<N>`, `$<N>`, any `@route` token, and `--route`, since
 a plain Pomodoro bullet has no field for a schedule, priority, or routed
@@ -4984,7 +4981,7 @@ destination:
 
 | Marker                                                         | With `#` |
 | ---------------------------------------------------------------| -------- |
-| `%`, `%<N>`, `%<header>`, `--clip[=HEADER]`                     | allowed  |
+| `%c`, `%c<N>`, `--clip`                                         | allowed  |
 | `s:<N>`                                                         | rejected |
 | `$<N>`                                                         | rejected |
 | `@route`, `@route#Sec`, `@route:id`, `@route:id#name`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
@@ -5055,7 +5052,7 @@ shift the selected task's line.
 Useful options:
 
 - `-b, --bob-dir DIR`: Bob vault root; defaults to `BOB_DIR` or `~/bob`
-- `-c, --clip[=HEADER]`: force clipboard capture, optionally with a header
+- `-c, --clip`: force a clipboard read as if `%c` were written
 - `-d, --dry-run`: plan and report without writing notes or clipboard files
 - `-E, --expand`: print a template draft's expansion and exit before vault
   access or planning
@@ -5064,7 +5061,7 @@ Useful options:
   `<N|KEY>=<NOTE>` moves it, `<N|KEY>=` keeps it in its inbox, `keep` keeps
   every otherwise unanswered candidate; repeatable. See
   [Routing inbox tasks out](#routing-inbox-tasks-out)
-- `-n, --no-clip`: keep trailing `%...` clipboard markers literal
+- `-n, --no-clip`: never read the clipboard, even when `%c` is written; a dry run reports `clip.status: not_read`, and a real capture refuses
 - `-R, --no-ref`: keep bare links as inbox tasks instead of queueing a
   background reference job
 - `-p, --pull-in PICKS`: select successor offers to link (`all`, `none`,
@@ -5170,21 +5167,21 @@ in bold and the configured range in parentheses. `schedule_log` is omitted
 when `$<N>` was not given, or when `s:<N>` won the scheduled date and no roll
 happened.
 
-Clipboard captures additionally include a `clip` object. Single captures keep
-the existing shape: `header`, `mode` (`"inline"`, `"lines"`, `"attachments"`,
-or `"snippet"`), `lines` (the exact rendered child lines), `attachments`, and
-`entries`. Leaf clips emit `entries: []`. Each attachment has `source`,
-vault-relative `saved`, `kind` (`"image"` or `"file"`), and `reused` fields.
-Snippet results also include the vault-relative `snippet` path. The `header`
-value is `null` when the capture omitted a header and is the rendered string
-(for example, `"BUILD LOG"`) when one was explicit.
+Clipboard captures additionally include a `clip` object. A dry run under
+`--no-clip` reports only `{"status": "not_read", "count": N}`. A clip that
+was read reports `"status": "read"` plus `mode` (`"inline"`, `"lines"`,
+`"attachments"`, `"snippet"`, or `"history"`), `lines` (the exact rendered
+child lines), `attachments`, and `entries`. Leaf clips emit `entries: []`.
+Each attachment has `source`, vault-relative `saved`, `kind` (`"image"` or
+`"file"`), and `reused` fields. Snippet results also include the
+vault-relative `snippet` path. There is no `header` field.
 
-Counted histories above one use `mode: "history"`, `header: null`, flattened
-`lines`, and attachment records aggregated in entry order. Their `entries`
-array contains one ordinary headerless clip object per requested value, keeping
-entry boundaries and any owning `snippet` path explicit. The aggregate omits a
-singular `snippet` field. `%1` uses the unchanged single-capture shape.
-`task_line` remains the parent line only, and non-clipboard JSON omits `clip`.
+Counted histories above one use `mode: "history"`, flattened `lines`, and
+attachment records aggregated in entry order. Their `entries` array contains
+one ordinary clip object per requested value, keeping entry boundaries and
+any owning `snippet` path explicit. The aggregate omits a singular `snippet`
+field. `%c1` uses the single-capture shape. `task_line` remains the parent
+line only, and non-clipboard JSON omits `clip`.
 
 ID-only task results use kind `"task"` and additionally include `block_id`.
 They omit `day_file`, `block_link`, and `pomodoro_link_placement`.
@@ -5772,9 +5769,9 @@ each supplied or prompted component, emits only the canonical colon marker,
 and retains staged values when validation or capture fails. Existing `@`,
 `@#`, and `@route#` picker flows are unchanged.
 
-Supported terminal `%`, `%N`, `%header`, `s:<N>`, and `$<N>` markers may
+Supported terminal `%c`, `%c<N>`, `s:<N>`, and `$<N>` markers may
 appear on either side of these interactive `@...` tokens and survive the
-target, section, block-ID, or task picker. For example, `<task> @sase# %`
+target, section, block-ID, or task picker. For example, `<task> @sase# %c`
 opens the section picker for `sase.md`; the panel consumes only `@sase#`, and
 `bob capture` still owns clipboard, schedule, and priority interpretation
 after the section is chosen.
@@ -6090,7 +6087,7 @@ JSON output is a single versioned object:
 
 `input` is the raw text as received, before whitespace normalization. `body` is
 the normalized capture body after terminal `s:<N>`, `$<N>`, and applicable
-`%...` markers and the recognized `@...` token are removed, matching what `bob capture` would
+`%c` directives and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
 `pomodoro_project_note`, `pomodoro_adjust`, `pomodoro_shift`,
@@ -6099,8 +6096,10 @@ first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. A whole-item bare link reports mode `ref` with one
 `ref_url` span covering the whole token, `<>` included. In an eligible URL
 reference, exact standalone `URL %` (or compatible `URL @`) adds
-`ref_listen: true` and a `ref_listen` span over the directive; `-R` keeps it a
-`task` so parse and capture always agree. A solo `@route:block-id…` item reports
+`ref_listen: true` and a `ref_listen` span over the marker; `-R` keeps it a
+`task` so parse and capture always agree. A complete `%c` / `%c<N>` span has
+kind `directive` with `directive: "clip"` (and `count` when N > 1). A bare
+`%` span that is not listen is kind `directive` with need `directive`. A solo `@route:block-id…` item reports
 `pomodoro_link` with the `pomodoro_route` / `pomodoro_block_id` /
 `pomodoro_name` / `pomodoro_start` spans (or `pomodoro_close` plus the two
 list spans for an `=x…` suffix); the `^` spelling reports the same

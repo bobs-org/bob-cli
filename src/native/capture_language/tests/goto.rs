@@ -60,7 +60,7 @@ fn goto_claim_covers_every_table_query_row() {
         "/fix",
         Some("work"),
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect_err("forced query");
     assert!(forced.contains("opens the Go To picker"), "{forced}");

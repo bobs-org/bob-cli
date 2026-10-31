@@ -196,7 +196,7 @@ fn template_placeholders_split_capture_spans_and_refusals_are_reported() {
         .iter()
         .any(|span| span["start"] == placeholder + 3));
 
-    let clipboard = parse_json("@@template:\nDo {0} %\n\nvalue\n");
+    let clipboard = parse_json("@@template:\nDo {0} %c\n\nvalue\n");
     assert!(clipboard["diagnostics"]
         .as_array()
         .unwrap()
@@ -264,7 +264,7 @@ fn template_clipboard_follows_expanded_instances() {
         listen["diagnostics"]
     );
 
-    let literal = "@@template:\n{0} task %\n\nvalue1\nvalue2\n";
+    let literal = "@@template:\n{0} task %c\n\nvalue1\nvalue2\n";
     let value = parse_json(literal);
     let clipboard: Vec<_> = value["diagnostics"]
         .as_array()
@@ -273,13 +273,13 @@ fn template_clipboard_follows_expanded_instances() {
         .filter(|entry| entry["code"] == "template_clipboard")
         .collect();
     assert_eq!(clipboard.len(), 1);
-    let percent = literal.find('%').unwrap();
+    let percent = literal.find("%c").unwrap();
     assert_eq!(
         clipboard[0]["range"],
-        serde_json::json!([percent, percent + 1])
+        serde_json::json!([percent, percent + 2])
     );
 
-    let row_clip = parse_json("@@template:\nTask {0}\n\na %\n");
+    let row_clip = parse_json("@@template:\nTask {0}\n\na %c\n");
     assert!(
         row_clip["diagnostics"]
             .as_array()

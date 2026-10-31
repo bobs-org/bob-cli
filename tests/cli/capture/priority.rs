@@ -421,7 +421,7 @@ fn capture_priority_with_clip_orders_clip_children_before_schedule_log() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .args(["buy", "milk", "$1", "%"])
+        .args(["buy", "milk", "$1", "%c"])
         .env("BOB_CLIPBOARD_CMD", &clipboard)
         .env("BOB_NOW", "2026-06-15 10:11:12")
         .env("BOB_CONFIG_FILE", &config)

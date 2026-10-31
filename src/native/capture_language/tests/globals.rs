@@ -39,7 +39,7 @@ fn execution_inherits_a_global_task_route_unless_an_item_overrides() {
         "@@Foo\nFirst task\n\nSecond task @bar\n\nThird task",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     let global = draft.global.expect("global");
@@ -59,7 +59,7 @@ fn execution_an_ensure_next_item_participates_normally_in_a_multi_item_draft() {
         "First task @dev\n\n@cash+goog-exit\n\nThird task @dev",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     assert_eq!(draft.items.len(), 3);
@@ -82,7 +82,7 @@ fn execution_an_explicit_toggle_item_participates_in_a_multi_item_draft() {
         "First task @dev\n\n@cash+goog-exit!\n\nThird task @dev",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     assert_eq!(draft.items.len(), 3);
@@ -101,7 +101,7 @@ fn execution_local_markers_override_a_global_declaration() {
     let draft = parse_capture_draft_with_clip_control(
         "@@foo\nKeep\n\nBullet @bar#Ideas\n\nId @bar^b-id\n\nPomo @bar:p-id\n\nChild @bar+b-id\n\nNote #",
         None,
-        None, &CaptureParseOptions::routing_off(true))
+        None, &CaptureParseOptions::routing_off())
     .expect("parse");
     assert!(matches!(draft.items[0].parsed.kind, CaptureKind::Task));
     assert!(matches!(
@@ -132,7 +132,7 @@ fn execution_rejects_a_declaration_only_draft() {
         "@@foo",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .unwrap_err();
     assert_eq!(error, MISSING_CAPTURE_ITEM_ERROR);
@@ -151,7 +151,7 @@ fn execution_rejects_unsupported_global_forms() {
             raw,
             None,
             None,
-            &CaptureParseOptions::routing_off(true),
+            &CaptureParseOptions::routing_off(),
         )
         .unwrap_err();
         assert_eq!(error, GLOBAL_DESTINATION_SHAPE_ERROR, "{raw}");
@@ -164,7 +164,7 @@ fn execution_accepts_a_later_declaration_only_line() {
         "First task\n\n@@foo\nSecond",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     assert_eq!(draft.global.as_ref().unwrap().line, 3);
@@ -178,7 +178,7 @@ fn execution_strips_inline_declarations_before_terminal_markers() {
         "Buy milk s:2 @@Groceries",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     let global = draft.global.expect("global");
@@ -195,7 +195,7 @@ fn execution_warns_when_a_local_marker_shadows_its_declaration() {
         "Buy milk @dev @@groceries\n\nOther",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     assert_eq!(draft.items[0].parsed.route.as_deref(), Some("dev"));
@@ -250,7 +250,7 @@ fn task_complete_items_skip_global_inheritance() {
         "@@cash\n\n!sase:x",
         None,
         None,
-        &CaptureParseOptions::routing_off(true),
+        &CaptureParseOptions::routing_off(),
     )
     .expect("parse");
     assert_eq!(draft.items.len(), 1);

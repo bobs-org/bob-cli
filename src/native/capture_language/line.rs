@@ -245,7 +245,7 @@ impl AggregateMarkers {
     ) -> Result<(), String> {
         if let Some(clip) = markers.clip {
             if self.clip.is_some() {
-                return Err(duplicate_marker_error("clipboard marker (%)"));
+                return Err(duplicate_marker_error("directive (%c)"));
             }
             self.clip = Some(clip);
         }

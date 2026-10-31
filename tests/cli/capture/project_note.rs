@@ -758,7 +758,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg("json")
         .arg("@cash^x1@")
         .arg("Body")
-        .arg("%")
+        .arg("%c")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
         .expect("run clip capture");
@@ -766,9 +766,8 @@ fn capture_project_note_rejections_leave_no_partial_write() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
     assert!(
-        json["error"].as_str().is_some_and(|error| error.contains(
-            "project-note capture cannot be combined with % clipboard markers"
-        )),
+        json["error"].as_str().is_some_and(|error| error
+            .contains("project-note capture cannot be combined with %c")),
         "{json}"
     );
     assert!(!vault.join("cash_x1.md").exists());

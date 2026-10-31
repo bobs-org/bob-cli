@@ -18,7 +18,7 @@ use std::ffi::OsString;
 
 /// One declared `--long` flag: `takes_separate_value` is true when the flag
 /// consumes the next argv token as its value (`--route NAME`); false for
-/// switch flags and for `require_equals` options such as `--clip`.
+/// switch flags.
 pub(crate) struct LongFlag {
     pub name: &'static str,
     pub takes_separate_value: bool,
@@ -88,8 +88,8 @@ pub(crate) fn capture_spec() -> GuardSpec {
     GuardSpec {
         longs: LONGS,
         short_values: "bfiprstS",
-        short_flags: "dEhnR",
-        equals_only_shorts: "c",
+        short_flags: "cdEhnR",
+        equals_only_shorts: "",
     }
 }
 
@@ -321,7 +321,7 @@ mod tests {
             vec!["--format", "json", "--dry-run", "hello"],
             vec!["-f", "json", "--", "--anything"],
             vec!["-b", "/tmp/vault", "--route", "notes", "hello"],
-            vec!["--clip=HDR", "hello"],
+            vec!["--clip", "hello"],
             vec!["--", "--require-pull-in-choice-x"],
             vec!["--2"],
             vec!["--", "--2"],
@@ -377,8 +377,8 @@ mod tests {
         let spec = capture_spec();
         for argv in [
             ["-cn", "--bogus"].as_slice(),
-            ["-nc=HDR", "--bogus"].as_slice(),
-            ["-c=HDR", "-f", "json", "--bogus"].as_slice(),
+            ["-nc", "--bogus"].as_slice(),
+            ["-c", "-f", "json", "--bogus"].as_slice(),
             ["-cf", "json", "--bogus"].as_slice(),
         ] {
             let hit = find_unknown_long_flag(&args(argv), &spec)

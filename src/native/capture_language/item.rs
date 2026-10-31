@@ -383,12 +383,20 @@ pub(super) fn parse_capture_item<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, CaptureItemParseError> {
-    let occurrences = super::type_marker::collect_item_with_clip_control(
-        item,
-        options.parse_clip_markers,
+    let occurrences =
+        super::type_marker::collect_item_with_clip_control(item, true);
+    let type_masked_source =
+        super::type_marker::masked_source(item, &occurrences);
+    let type_masked_item =
+        super::type_marker::masked_item(item, &type_masked_source);
+    let directive_occurrences =
+        super::directive::collect_item(&type_masked_item);
+    let masked_source = super::directive::masked_source(
+        &type_masked_item,
+        &directive_occurrences,
     );
-    let masked_source = super::type_marker::masked_source(item, &occurrences);
-    let mut masked_item = super::type_marker::masked_item(item, &masked_source);
+    let mut masked_item =
+        super::directive::masked_item(&type_masked_item, &masked_source);
     let marker_only =
         super::type_marker::marker_only_child_lines(item, &occurrences);
     masked_item
@@ -401,12 +409,22 @@ pub(super) fn parse_capture_item<'a>(
     {
         return Err(type_marker_only_error(&occurrences));
     }
+    if let Some(parent) = masked_item.lines.first()
+        && normalize_task_text(parent.raw.text).is_empty()
+        && directive_occurrences.iter().any(|item| item.is_marker())
+    {
+        return Err(directive_only_error(&directive_occurrences));
+    }
 
+    let clip = super::directive::resolve(&directive_occurrences)
+        .ok()
+        .and_then(|directives| directives.clip);
     let parsed = parse_capture_item_masked(
         &masked_item,
         forced_route,
         forced_section,
         options,
+        clip,
     );
     let mut outcome = match parsed {
         Ok(outcome) => outcome,
@@ -416,12 +434,20 @@ pub(super) fn parse_capture_item<'a>(
             {
                 return Err(type_marker_only_error(&occurrences));
             }
+            if error == missing_text_error()
+                && directive_occurrences.iter().any(|item| item.is_marker())
+            {
+                return Err(directive_only_error(&directive_occurrences));
+            }
             // Keep the established parser's diagnostics for malformed
             // underlying forms. Marker-only items are handled above so they
             // never collapse to the generic missing-text copy.
             return Err(CaptureItemParseError::generic(error));
         }
     };
+
+    apply_directives(&mut outcome.parsed, &directive_occurrences)?;
+    refuse_clip_on_incompatible_kind(&outcome.parsed)?;
 
     let markers = occurrences
         .iter()
@@ -522,6 +548,68 @@ fn remap_type_marker_declarations<'a>(
         .collect()
 }
 
+fn apply_directives(
+    parsed: &mut ParsedCaptureText,
+    occurrences: &[super::directive::DirectiveOccurrence],
+) -> Result<(), CaptureItemParseError> {
+    match super::directive::resolve(occurrences) {
+        Ok(directives) => {
+            if parsed.clip.is_none() {
+                parsed.clip = directives.clip;
+            }
+            Ok(())
+        }
+        Err((message, code, _)) => {
+            Err(CaptureItemParseError::coded(code, message))
+        }
+    }
+}
+
+fn refuse_clip_on_incompatible_kind(
+    parsed: &ParsedCaptureText,
+) -> Result<(), CaptureItemParseError> {
+    if parsed.clip.is_none() {
+        return Ok(());
+    }
+    let message = match &parsed.kind {
+        CaptureKind::PomodoroLink { .. } => {
+            "Pomodoro link capture cannot be combined with %c"
+        }
+        CaptureKind::PomodoroAdjust { .. } => {
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with %c; capture the adjustment alone"
+        }
+        CaptureKind::PomodoroShift { .. } => {
+            "Pomodoro shift `++N`/`--N` cannot be combined with %c; capture the shift alone"
+        }
+        CaptureKind::PomodoroClose { .. } => {
+            "Pomodoro close `x` cannot be combined with %c; capture the close alone"
+        }
+        CaptureKind::PomodoroStart { .. } => {
+            "Pomodoro start `=<X>` cannot be combined with %c; capture the start alone"
+        }
+        CaptureKind::TaskComplete { .. } => {
+            "task complete cannot be combined with %c"
+        }
+        CaptureKind::ProjectNote { .. } => {
+            "project-note capture cannot be combined with %c"
+        }
+        _ => return Ok(()),
+    };
+    Err(CaptureItemParseError::generic(message.to_string()))
+}
+
+fn directive_only_error(
+    occurrences: &[super::directive::DirectiveOccurrence],
+) -> CaptureItemParseError {
+    match super::directive::resolve(occurrences) {
+        Err((message, code, _)) => CaptureItemParseError::coded(code, message),
+        Ok(directives) if directives.clip.is_some() => {
+            CaptureItemParseError::generic(missing_text_error())
+        }
+        Ok(_) => CaptureItemParseError::generic(missing_text_error()),
+    }
+}
+
 fn type_marker_only_error(
     occurrences: &[super::type_marker::TypeMarkerOccurrence],
 ) -> CaptureItemParseError {
@@ -570,6 +658,7 @@ fn parse_capture_item_masked<'a>(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
+    clip: Option<ClipRequest>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, String> {
     let Some((parent_line, child_lines)) = item.lines.split_first() else {
         return Err(missing_text_error());
@@ -645,8 +734,7 @@ fn parse_capture_item_masked<'a>(
     // remaining tokens unchanged. Ownership is decided once the finished
     // item kind is known; ownerless items retry after `@@` inheritance in
     // draft resolution.
-    let item_dependencies =
-        scan_item_dependencies(item, options.parse_clip_markers);
+    let item_dependencies = scan_item_dependencies(item, true);
     let invalid = [
         item_dependencies
             .invalid
@@ -748,8 +836,9 @@ fn parse_capture_item_masked<'a>(
     )? {
         return Ok(outcome);
     }
-    if let Some(outcome) =
-        claim_reference_item(item, options, has_dependencies, forced_route)
+    if clip.is_none()
+        && let Some(outcome) =
+            claim_reference_item(item, options, has_dependencies, forced_route)
     {
         return Ok(outcome);
     }
@@ -762,18 +851,13 @@ fn parse_capture_item_masked<'a>(
         parent_line.raw.text,
         parent_line.raw.start,
         true,
-        options.parse_clip_markers,
+        true,
     );
     let parent_tokens = unescape_execution_tokens(
         parent_tokens,
         &parent_line_dependencies.escapes,
     );
-    let parent_outcome = resolve_line(
-        parent_tokens,
-        true,
-        detect_route,
-        options.parse_clip_markers,
-    )?;
+    let parent_outcome = resolve_line(parent_tokens, true, detect_route, true)?;
     declarations.extend(global_declarations_from_tokens(
         parent_outcome.declarations,
         parent_line.line_number,
@@ -807,6 +891,7 @@ fn parse_capture_item_masked<'a>(
     }
 
     let mut aggregate = AggregateMarkers::default();
+    aggregate.clip = clip;
     aggregate.absorb(parent_outcome.markers, parent_outcome.route)?;
 
     let mut sub_bullets = Vec::new();
@@ -835,16 +920,11 @@ fn parse_capture_item_masked<'a>(
             child_line.text,
             child_line.start,
             false,
-            options.parse_clip_markers,
+            true,
         );
         let tokens =
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
-        let outcome = resolve_line(
-            tokens,
-            false,
-            detect_route,
-            options.parse_clip_markers,
-        )?;
+        let outcome = resolve_line(tokens, false, detect_route, true)?;
         declarations.extend(global_declarations_from_tokens(
             outcome.declarations,
             line_number,
@@ -902,7 +982,7 @@ fn parse_capture_item_masked<'a>(
                 &item_dependencies,
                 marker_text.as_deref().unwrap_or("@route:id"),
                 &parent_tokens,
-                options.parse_clip_markers,
+                aggregate.clip.is_some(),
                 !sub_bullets.is_empty(),
             ));
         }
@@ -913,9 +993,8 @@ fn parse_capture_item_masked<'a>(
         }
         if !has_dependencies {
             if aggregate.clip.is_some() {
-                return Err(
-                    "Pomodoro link capture cannot be combined with % clipboard markers".to_string(),
-                );
+                return Err("Pomodoro link capture cannot be combined with %c"
+                    .to_string());
             }
             if aggregate.scheduled_offset.is_some() {
                 return Err(
@@ -1107,7 +1186,7 @@ fn parse_capture_item_masked<'a>(
             &item_dependencies,
             local_destination_marker.as_deref().unwrap_or("@route+id"),
             &parent_tokens,
-            options.parse_clip_markers,
+            aggregate.clip.is_some(),
             !sub_bullets.is_empty(),
         ));
     }

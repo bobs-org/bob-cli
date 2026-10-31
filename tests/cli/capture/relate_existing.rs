@@ -461,8 +461,8 @@ fn rx9_relationship_needs_text_in_parse_and_execute() {
             "`s:3` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar s:3`)",
         ),
         (
-            "@body+excercise &foo:bar %",
-            "`%` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar %`)",
+            "@body+excercise &foo:bar %c",
+            "`%c` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar %c`)",
         ),
         (
             "@body+excercise &foo:bar $2 s:3",

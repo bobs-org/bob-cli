@@ -194,7 +194,7 @@ fn template_clipboard_markers_refuse_even_with_no_clip() {
             command.arg("--no-clip");
         }
         let output = command
-            .arg("@@template:\nTask {0} %\n\nvalue\n")
+            .arg("@@template:\nTask {0} %c\n\nvalue\n")
             .output()
             .expect("run clipboard-marker refusal");
         assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
@@ -679,7 +679,7 @@ fn template_url_listen_marker_is_not_clipboard_capture() {
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
         .args(["--dry-run", "--no-clip", "-f", "json"])
-        .arg("@@template:\n{0}\n\n\"https://example.com/one %\"\n")
+        .arg("@@template:\n{0}\n\n\"https://example.com/one @\"\n")
         .output()
         .expect("run URL listen template");
     assert_success(&output);

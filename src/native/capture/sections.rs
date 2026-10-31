@@ -16,7 +16,7 @@ pub(super) fn parse_capture_text(
         raw_text,
         forced_route,
         forced_section,
-        &capture_language::CaptureParseOptions::routing_off(true),
+        &capture_language::CaptureParseOptions::routing_off(),
     )
 }
 

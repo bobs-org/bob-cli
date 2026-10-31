@@ -240,7 +240,7 @@ fn marker_at(draft: &str, item: &EditorItemParse) -> usize {
                 span.kind,
                 SpanKind::Schedule
                     | SpanKind::Priority
-                    | SpanKind::Clipboard
+                    | SpanKind::Directive
                     | SpanKind::PomodoroStart
                     | SpanKind::PomodoroStartDrop
                     | SpanKind::PomodoroClose

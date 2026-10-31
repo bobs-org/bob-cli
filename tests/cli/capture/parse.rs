@@ -1005,7 +1005,7 @@ fn capture_parse_never_touches_the_vault_or_clipboard() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("save this %build_log @dev:focus-1")
+        .arg("save this %c @dev:focus-1")
         .env("BOB_DIR", &missing)
         .env("BOB_CLIPBOARD_CMD", "/nonexistent/clipboard-command")
         .output()
@@ -1035,7 +1035,7 @@ fn capture_parse_never_touches_the_vault_or_clipboard() {
         .arg("-b")
         .arg(&missing)
         .arg("--")
-        .arg("save this %build_log @dev:focus-1")
+        .arg("save this %c @dev:focus-1")
         .env("BOB_CLIPBOARD_CMD", "/nonexistent/clipboard-command")
         .output()
         .expect("run bob capture without a vault");

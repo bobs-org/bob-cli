@@ -172,7 +172,7 @@ impl SeenMarkers {
             let seen = match span.kind {
                 SpanKind::Schedule => &mut self.schedule,
                 SpanKind::Priority => &mut self.priority,
-                SpanKind::Clipboard => &mut self.clip,
+                SpanKind::Directive => &mut self.clip,
                 _ => continue,
             };
             if *seen {
@@ -222,7 +222,7 @@ pub(super) fn terminal_marker_label(kind: SpanKind) -> &'static str {
     match kind {
         SpanKind::Schedule => "schedule marker (s:<N>)",
         SpanKind::Priority => "priority marker ($<N>)",
-        SpanKind::Clipboard => "clipboard marker (%)",
+        SpanKind::Directive => "directive (%c)",
         _ => "capture marker",
     }
 }
@@ -1402,21 +1402,35 @@ pub(super) fn parse_editor_item_with<'a>(
 ) -> EditorItemOutcome<'a> {
     let occurrences =
         super::type_marker::collect_item_with_clip_control(item, true);
-    if occurrences.is_empty() {
-        return parse_editor_item_inner(item, options);
+    let type_masked_source =
+        super::type_marker::masked_source(item, &occurrences);
+    let type_masked_item =
+        super::type_marker::masked_item(item, &type_masked_source);
+    let directive_occurrences =
+        super::directive::collect_item(&type_masked_item);
+    let has_clip = super::directive::resolve(&directive_occurrences)
+        .ok()
+        .and_then(|directives| directives.clip)
+        .is_some();
+    if occurrences.is_empty() && directive_occurrences.is_empty() {
+        return parse_editor_item_inner(item, options, false);
     }
-    // Type markers are transparent to every existing claim: run the whole
-    // established parse on the offset-preserving masked view (marker bytes
-    // become spaces, so every range still indexes the original draft), then
-    // re-slice borrowed declarations back to the original text and attach
-    // the marker's own spans, needs, and diagnostics.
-    let masked_source = super::type_marker::masked_source(item, &occurrences);
+    // Type markers and % directives are transparent to every existing
+    // claim: run the established parse on the offset-preserving masked
+    // view (marker bytes become spaces, so every range still indexes the
+    // original draft), then re-slice borrowed declarations back to the
+    // original text and attach each marker's spans, needs, and diagnostics.
+    let masked_source = super::directive::masked_source(
+        &type_masked_item,
+        &directive_occurrences,
+    );
     let skips = super::type_marker::marker_only_child_lines(item, &occurrences);
-    let mut masked_item = super::type_marker::masked_item(item, &masked_source);
+    let mut masked_item =
+        super::directive::masked_item(&type_masked_item, &masked_source);
     masked_item
         .lines
         .retain(|line| !skips.contains(&(line.raw.start, line.raw.end)));
-    let inner = parse_editor_item_inner(&masked_item, options);
+    let inner = parse_editor_item_inner(&masked_item, options, has_clip);
     let declarations =
         remap_type_marker_declarations(inner.declarations, item.source);
     let mut outcome = EditorItemOutcome {
@@ -1424,6 +1438,7 @@ pub(super) fn parse_editor_item_with<'a>(
         declarations,
     };
     attach_type_marker_metadata(&mut outcome.item, &occurrences);
+    attach_directive_metadata(&mut outcome.item, &directive_occurrences);
     outcome
 }
 
@@ -1578,6 +1593,142 @@ fn attach_type_marker_metadata(
     parsed.spans.sort_by_key(|span| (span.start, span.end));
 }
 
+fn attach_directive_metadata(
+    parsed: &mut EditorItemParse,
+    occurrences: &[super::directive::DirectiveOccurrence],
+) {
+    let markers = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.is_marker())
+        .collect::<Vec<_>>();
+    if markers.is_empty() {
+        return;
+    }
+    for marker in &markers {
+        let span = marker.span();
+        parsed.spans.push(Span {
+            start: span.start,
+            end: span.end,
+            kind: SpanKind::Directive,
+            project_note: None,
+        });
+    }
+    match super::directive::resolve(occurrences) {
+        Ok(directives) => {
+            if directives.clip.is_some() {
+                attach_clip_incompatible_kind(parsed);
+            }
+        }
+        Err((message, code, span)) => {
+            if code == "duplicate_capture_marker" {
+                parsed.diagnostics.push(duplicate_capture_marker_diagnostic(
+                    message,
+                    (span.start, span.end),
+                ));
+            } else if code == "incomplete_directive" {
+                if !parsed.needs.contains(&Need::Directive) {
+                    parsed.needs.push(Need::Directive);
+                }
+                parsed.mode = EditorMode::Incomplete;
+            } else {
+                parsed.diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code,
+                    message,
+                    range: Some((span.start, span.end)),
+                });
+            }
+        }
+    }
+    parsed.spans.sort_by_key(|span| (span.start, span.end));
+}
+
+fn attach_clip_incompatible_kind(parsed: &mut EditorItemParse) {
+    if parsed.diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.code,
+            "invalid_pomodoro_link"
+                | "unsupported_explicit_toggle"
+                | "relationship_needs_text"
+        )
+    }) {
+        return;
+    }
+    let (code, message) = match parsed.mode {
+        EditorMode::PomodoroLink => (
+            "invalid_pomodoro_link",
+            POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string(),
+        ),
+        EditorMode::PomodoroAdjust => (
+            "invalid_pomodoro_adjust",
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with %c; capture the adjustment alone"
+                .to_string(),
+        ),
+        EditorMode::PomodoroShift => (
+            "invalid_pomodoro_shift",
+            "Pomodoro shift `++N`/`--N` cannot be combined with %c; capture the shift alone"
+                .to_string(),
+        ),
+        EditorMode::PomodoroClose => (
+            "invalid_pomodoro_close",
+            "Pomodoro close `x` cannot be combined with %c; capture the close alone"
+                .to_string(),
+        ),
+        EditorMode::PomodoroStart => (
+            "invalid_pomodoro_start",
+            "Pomodoro start `=<X>` cannot be combined with %c; capture the start alone"
+                .to_string(),
+        ),
+        EditorMode::TaskComplete => (
+            "invalid_task_complete",
+            "task complete cannot be combined with %c".to_string(),
+        ),
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => (
+            "invalid_project_note",
+            "project-note capture cannot be combined with %c".to_string(),
+        ),
+        _ => return,
+    };
+    let range = parsed
+        .spans
+        .iter()
+        .find_map(|span| {
+            matches!(
+                span.kind,
+                SpanKind::ActiveTaskRoute | SpanKind::PomodoroRoute
+            )
+            .then_some(span.start)
+        })
+        .and_then(|start| {
+            parsed
+                .spans
+                .iter()
+                .rev()
+                .find(|span| {
+                    matches!(
+                        span.kind,
+                        SpanKind::ActiveTaskBlockId
+                            | SpanKind::PomodoroBlockId
+                            | SpanKind::ActiveTaskRoute
+                            | SpanKind::PomodoroRoute
+                    )
+                })
+                .map(|span| (start, span.end))
+        })
+        .or_else(|| {
+            parsed.spans.iter().find_map(|span| {
+                (span.kind == SpanKind::Directive)
+                    .then_some((span.start, span.end))
+            })
+        });
+    parsed.diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code,
+        message,
+        range,
+    });
+}
+
 /// Map an editor mode to the shared type-marker subject judgment. New-task
 /// modes are judged by their body; existing-target link, toggle, and
 /// dependency modes accept the marker; incomplete, dependency, and picker
@@ -1633,6 +1784,7 @@ fn type_marker_subject_for_editor(
 pub(super) fn parse_editor_item_inner<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
+    has_clip: bool,
 ) -> EditorItemOutcome<'a> {
     if let Some(task_goto) = parse_editor_task_goto_item(item) {
         return task_goto;
@@ -1652,12 +1804,13 @@ pub(super) fn parse_editor_item_inner<'a>(
     if let Some(adjustment) = parse_editor_adjust_item(item) {
         return attach_operator_dependency_rejection(adjustment, item);
     }
-    if let Some(reference) = parse_editor_ref_item(item, options) {
+    if !has_clip && let Some(reference) = parse_editor_ref_item(item, options) {
         return reference;
     }
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut seen = SeenMarkers::default();
+    seen.clip = has_clip;
     let mut declarations = Vec::new();
     let mut local_destination_marker = None;
     let mut local_destination_markers = Vec::new();
@@ -1685,7 +1838,7 @@ pub(super) fn parse_editor_item_inner<'a>(
     let mut item_dependencies = ItemDependencySet::default();
     item_dependencies.absorb(&parent_parse.dependencies);
 
-    let caret = classify_caret_item(item, parent_line);
+    let caret = classify_caret_item(item, parent_line, has_clip);
 
     let mut body = parent_parse.body;
     let mut has_local_destination = parent_parse.has_destination_marker;
@@ -1954,7 +2107,7 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
     }
 
-    // A `=x` close suffix cannot combine with `s:<N>`, `$<N>`, or `%`:
+    // A `=x` close suffix cannot combine with `s:<N>`, `$<N>`, or `%c`:
     // report `invalid_pomodoro_close` on the conflicting marker itself,
     // mirroring `bob capture`'s strict execution errors. Applies to both
     // solo links and body-bearing task captures.
@@ -1986,7 +2139,7 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
         if seen.clip
             && let Some(span) =
-                spans.iter().find(|span| span.kind == SpanKind::Clipboard)
+                spans.iter().find(|span| span.kind == SpanKind::Directive)
         {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -2715,7 +2868,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         span.kind,
                         SpanKind::Schedule
                             | SpanKind::Priority
-                            | SpanKind::Clipboard
+                            | SpanKind::Directive
                     )
                 })
                 .min_by_key(|span| span.start)
@@ -2724,6 +2877,10 @@ pub(super) fn parse_editor_item_inner<'a>(
                     item.source.get(span.start..span.end).unwrap_or("$2"),
                     Some((span.start, span.end)),
                 )
+            } else if seen.clip {
+                // `%c` is masked before this pass, so the directive span is
+                // attached later. Name the extra from the seeded clip flag.
+                ("%c", None)
             } else {
                 let child_range = item.lines.iter().skip(1).find_map(|line| {
                     matches!(

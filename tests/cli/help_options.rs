@@ -66,18 +66,18 @@ fn capture_help_lists_options_alphabetically() {
     assert!(
         help.contains("BOB_CLIPBOARD_CMD")
             && help.contains("BOB_CLIPBOARD_HISTORY_CMD")
-            && help.contains("%<positive integer>")
-            && help.contains("%<nonnumeric header>")
+            && help.contains("%c")
+            && help.contains("%c<N>")
             && help.contains("--clip")
             && help.contains("--no-clip")
-            && help.contains(
-                "ordinary non-reference text, '%1' is equivalent to '%'"
-            )
-            && help.contains("'%0' stays literal")
-            && help.contains("bob capture research links %3")
-            && help.contains("Bare --clip also captures without a header")
+            && help.contains("'%c1' is equivalent to '%c'")
+            && help.contains("bob capture research links %c3")
+            && help.contains("Force a clipboard read as if %c were written")
+            && help
+                .contains("Never read the clipboard, even when %c is written")
             && help.contains("flat unordered Markdown")
             && help.contains("source list markers removed")
+            && !help.contains("%<nonnumeric header>")
             && !help.contains("bare '%' renders as '**CLIP:**'"),
         "expected clipboard capture help:\n{help}"
     );

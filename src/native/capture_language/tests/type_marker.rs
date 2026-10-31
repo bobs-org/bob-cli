@@ -1,7 +1,6 @@
 use super::super::model::RawLine;
 use super::super::type_marker::{
-    completion_at_raw, masked_line, scan_line, scan_line_with_clip_control,
-    TypeMarkerOccurrence,
+    completion_at_raw, masked_line, scan_line, TypeMarkerOccurrence,
 };
 use super::*;
 
@@ -188,20 +187,20 @@ fn malformed_masked_operators_keep_their_existing_errors() {
 }
 
 #[test]
-fn marker_edge_transparency_follows_clip_parsing_options() {
-    let raw = "Fix the parser #fix %";
+fn marker_edge_transparency_includes_clip_directives() {
+    let raw = "Fix the parser #fix %c";
     assert_eq!(scan_line(raw, 0).len(), 1);
-    assert!(scan_line_with_clip_control(raw, 0, false).is_empty());
 
     let parsed = parse_capture_text_with_clip_control(
         raw,
         None,
         None,
-        &CaptureParseOptions::routing_off(false),
+        &CaptureParseOptions::routing_off(),
     )
-    .expect("without clip parsing, percent remains task text");
-    assert_eq!(parsed.body, raw);
-    assert!(parsed.type_marker.is_none());
+    .expect("clip directives stay transparent next to type markers");
+    assert_eq!(parsed.body, "Fix the parser");
+    assert!(parsed.type_marker.is_some());
+    assert_eq!(parsed.clip, Some(ClipRequest::Current));
 }
 
 #[test]

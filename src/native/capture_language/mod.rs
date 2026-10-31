@@ -18,6 +18,7 @@ mod close_log;
 mod close_selection;
 mod completion;
 mod dependencies;
+mod directive;
 mod draft;
 mod editor_classify;
 mod editor_model;
@@ -51,6 +52,9 @@ pub(crate) use self::completion::relation_label_token_at;
 pub(crate) use self::completion::CompletionContext;
 pub(crate) use self::completion::CompletionField;
 pub(crate) use self::dependencies::close_blocked_task_error;
+pub(crate) use self::directive::clip_not_read_error;
+#[cfg(test)]
+pub(crate) use self::directive::incomplete_directive_error;
 #[cfg(test)]
 pub(crate) use self::draft::parse_capture_draft_with_clip_control;
 pub(crate) use self::draft::parse_capture_draft_with_clip_control_coded;

@@ -43,7 +43,8 @@ pub(crate) enum SpanKind {
     PomodoroNote,
     Schedule,
     Priority,
-    Clipboard,
+    /// A whole `%` directive token, including a bare `%` and `%c`/`%c<N>`.
+    Directive,
     DependencySigil,
     DependencyNote,
     DependencyBlockId,
@@ -113,7 +114,7 @@ impl SpanKind {
             Self::PomodoroNote => "pomodoro_note",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
-            Self::Clipboard => "clipboard",
+            Self::Directive => "directive",
             Self::DependencySigil => "dependency_sigil",
             Self::DependencyNote => "dependency_note",
             Self::DependencyBlockId => "dependency_block_id",
@@ -250,6 +251,8 @@ pub(crate) enum Need {
     PomodoroName,
     /// A `#` marker is still open: name the task type to finish it.
     TaskType,
+    /// A `%` marker is still open: name the directive to finish it.
+    Directive,
     Task,
     TaskSection,
     ActiveTask,
@@ -287,6 +290,7 @@ impl Need {
             Self::PomodoroId => "pomodoro_id",
             Self::PomodoroName => "pomodoro_name",
             Self::TaskType => "task_type",
+            Self::Directive => "directive",
             Self::Task => "task",
             Self::TaskSection => "task_section",
             Self::ActiveTask => "active_task",

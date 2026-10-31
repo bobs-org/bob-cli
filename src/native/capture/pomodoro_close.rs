@@ -521,7 +521,7 @@ pub(super) fn reject_pomodoro_close_conflicts(
     }
     if parsed.clip.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro close `=x` cannot be combined with % clipboard markers; capture the close alone",
+            "Pomodoro close `=x` cannot be combined with %c; capture the close alone",
         ));
     }
     if parsed.scheduled_offset.is_some() {

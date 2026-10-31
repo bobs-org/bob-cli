@@ -88,7 +88,7 @@ fn plan_worked_example_matches_documented_offsets() {
 
 #[test]
 fn editor_reports_terminal_marker_spans() {
-    let raw = "body $2 s:1 % @groceries";
+    let raw = "body $2 s:1 %c @groceries";
     let parse = editor(raw);
     assert_eq!(parse.body, "body");
     assert_eq!(parse.mode, EditorMode::Task);
@@ -98,8 +98,8 @@ fn editor_reports_terminal_marker_spans() {
         vec![
             (5, 7, SpanKind::Priority),
             (8, 11, SpanKind::Schedule),
-            (12, 13, SpanKind::Clipboard),
-            (14, 24, SpanKind::Route),
+            (12, 14, SpanKind::Directive),
+            (15, 25, SpanKind::Route),
         ]
     );
 }
@@ -459,8 +459,8 @@ fn editor_reports_solo_at_pomodoro_links() {
             "Pomodoro link capture cannot be combined with $<N>",
         ),
         (
-            "@sase:deep-fix %",
-            "Pomodoro link capture cannot be combined with % clipboard markers",
+            "@sase:deep-fix %c",
+            "Pomodoro link capture cannot be combined with %c",
         ),
     ] {
         let parse = editor(raw);
@@ -686,8 +686,8 @@ fn editor_reports_caret_near_misses_and_conflicts() {
             "Pomodoro link capture cannot be combined with $<N>",
         ),
         (
-            "^sase:deep-fix %",
-            "Pomodoro link capture cannot be combined with % clipboard markers",
+            "^sase:deep-fix %c",
+            "Pomodoro link capture cannot be combined with %c",
         ),
         (
             "^sase:deep-fix==",
