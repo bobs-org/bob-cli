@@ -25,3 +25,5 @@ promotion does. Successors are computed when the gesture runs and are never stor
 None is linked automatically: each becomes a [[successor-offer]], and only a picked
 one is linked under its Pomodoro destination and raised to Next. Only a picked
 existing task is stamped fresh, never a task the capture itself creates.
+In Bob Mac Capture, project creation opens the Pull-In card with a New project context
+and no offers marked.

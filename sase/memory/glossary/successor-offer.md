@@ -20,3 +20,5 @@ note's open tasks, never its `^prj`. Offers are not linked until explicitly pick
 a pick links the task and raises it to Next. A pick of an existing task also stamps
 it fresh, while a task the same capture creates is never stamped. See
 [[decisions:unblocked-tasks-are-offered]].
+The Mac Pull-In card labels offers from capture-created projects as a new project and
+starts with nothing marked.

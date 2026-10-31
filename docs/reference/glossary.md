@@ -372,6 +372,8 @@ note's open tasks, never its `^prj`. Offers are not linked until explicitly pick
 a pick links the task and raises it to Next. A pick of an existing task also stamps
 it fresh, while a task the same capture creates is never stamped. See
 [Unblocked Tasks Are Offered, Never Auto-Linked](../develop/decisions.md#unblocked-tasks-are-offered).
+The Mac Pull-In card labels offers from capture-created projects as a new project and
+starts with nothing marked.
 
 ### Task Dependency Link {#task-dependency-link}
 
@@ -462,6 +464,8 @@ promotion does. Successors are computed when the gesture runs and are never stor
 None is linked automatically: each becomes a [Successor Offer](#successor-offer), and only a picked
 one is linked under its Pomodoro destination and raised to Next. Only a picked
 existing task is stamped fresh, never a task the capture itself creates.
+In Bob Mac Capture, project creation opens the Pull-In card with a New project context
+and no offers marked.
 
 ### Task Type {#task-type}
 
