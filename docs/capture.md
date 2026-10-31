@@ -3158,9 +3158,10 @@ are the only escapes inside the quotes. The token runs through the closing
 quote, and a literal without its closing quote (`=#"DEEP`) is an incomplete
 editing state, never a mistake. The bare `=name` spelling never takes quotes:
 `="BOB"` is ordinary prose. Every `#name` position takes the literal —
-named starts, link suffixes (`@route:id#"…"`, `@route+id#"…"`,
-`^route:id#"…"`), project-note bullets, toggles, and close positions — so one
-rule holds everywhere. A named start claims its item and is never
+named starts, link suffixes (`@route:id#"…"`, `^route:id#"…"`),
+project-note bullets, and close positions — so one rule holds everywhere
+(`#"NAME"` type literals follow the same quoting rule; see
+`### Typing tasks with #<type>`). A named start claims its item and is never
 prose: an exact token (the item's only text, on exactly one physical line)
 starts the session, and anything else is a precise error. Unchanged: `=`
 without a name, every close form, `= #foo` and `= bugs` (a bare `=` with prose stays prose),
@@ -6464,10 +6465,10 @@ covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-task-sections`; the candidate
 `replacement` is the section slug (`future-work` for `FUTURE WORK`).
 Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
-`@route:#prefix`, `@route:id=name` (e.g. `@work:outline=bu|`), and `@route+id#prefix` or a bare `@route+id#` while the item
-has no body text; only the route
+`@route:#prefix`, and `@route:id=name` (e.g. `@work:outline=bu|`); only the route
 must already resolve because the Pomodoro list does not depend on the block
-ID. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` suffix is never
+ID. A marker-only `@route+id#` (no body text, no authored children) and
+`@route^id#`, including the empty `#`, complete `task_type` instead. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` suffix is never
 a completion field when it is timing/close: block and name replacement ranges end before the `=`, a
 cursor inside a timing suffix returns an empty success, and accepting a candidate
 preserves the typed suffix. A cursor inside a suffix name (`=name`) is the `pomodoro_name` field described above. The `=x[<N>][!<M>][~<K>]` close suffix behaves the same way: it
@@ -6529,7 +6530,7 @@ and an “again” row in the start context.
 
 In `pomodoro_name` only, capture completion is task-aware: body-bearing
 items use the destination note default, while a resolved
-`@route:block-id#`, `^route:block-id#`, or `@route+id#` uses that task's
+`@route:block-id#` or `^route:block-id#` uses that task's
 suggestion. The response adds top-level `theme_suggestion` (null when there
 is none), and one candidate at most adds `suggested: true` plus
 `suggestion_label`. A known suggestion with no matching open entry adds a

@@ -116,7 +116,7 @@ becomes the current note for same-note wikilink heading/block completion unless 
 that item overrides it. Route completion is backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
 backed by the same scan as `bob capture-sections`. Task-section completion \
-covers '@route+id#prefix' and a bare '@route+id#', backed by the same \
+covers '@route+id#prefix' and a bare '@route+id#' once the item has body text, backed by the same \
 scanner as `bob capture-task-sections`; replacement text is the section \
 slug. Pomodoro-name completion covers '@route:id#prefix', a bare \
 '@route:id#', '@route:#prefix', '@route^id+#prefix', and a bare '@route^id+#'; \
@@ -213,7 +213,11 @@ the replacement covers the whole `!` token, sigil included, and the response car
 vault-scoped `picker` descriptor plus the `!`/`[` continuation keys on a bare `!`. \
 A marker-position `#<type>` token at either line edge completes `task_type`: the \
 replacement covers the whole marker, `query` is the decoded type name, and \
-`subject` says `new` or `existing`. Configured rows follow config order for \
+`subject` says `new` or `existing`. The attached '@route^block-id#...' suffix \
+completes `task_type` (subject `new`), and a marker-only '@route+block-id#...' \
+suffix completes `task_type` (subject `existing`), including an empty '#'; an \
+attached suffix replacement never adds a space, and a bare unattached '#' \
+returns no `task_type` context. Configured rows follow config order for \
 an empty query; hidden types remain available on exact matches. Candidates \
 carry Bob's theme refs, current and inherited annotations, and a `set`, \
 `clear`, or `keep` effect. An unconfigured typed name appears as a refused \

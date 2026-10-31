@@ -457,7 +457,8 @@ another thin client of that service (see `docs/capture.md`
   `task_type` context at either item edge and accepts full `#<slug>` or
   quoted `#"NAME"` replacements. Bare `#` remains a Pomodoro note and does
   not open the type menu. Marker-only `@route+block-id#` uses this context for
-  an existing-task Ensure Next. Empty queries list configured types in
+  an existing-task Ensure Next, and `@route^block-id#` (the new-task attached
+  form, including an empty `#`) uses it too. Empty queries list configured types in
   config order; hidden types appear on exact matches. An unknown typed row
   carries `refused: "type_not_configured"` and near-name suggestions. Shell completion puts
   them in the `task types` group, with the last-use date and day count or
