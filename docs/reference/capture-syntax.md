@@ -33,7 +33,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | --- | --- | --- |
 | Bare public URL | Queue a reference job under `mac_inbox` | [Bare public URL](#bare-public-url) |
 | `URL @route` / `@route URL` | Queue the reference under that route | [`URL @route`](#url-at-route) |
-| `URL %` / `URL % @route` | Queue with companion audio | [`URL %`](#url-listen) |
+| `URL %l` / `URL %l @route` | Queue with companion audio | [`URL %l`](#url-listen) |
 | `-r route` | Force the URL (or task) route from the CLI | [`-r`](#cli-route) |
 | `@@route` | Shared task destination for unrouted items | [`@@route`](#global-route) |
 | `@@template:` | Expand one capture per template row | [`@@template:`](#template) |
@@ -84,7 +84,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `@route+block-id#section` | Child under that task's ALL-CAPS section | [`@route+block-id#section`](#plus-child-section) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
 | `@route+block-id!` | Toggle that task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
-| trailing `#` | Plain-text note on the current Pomodoro | [trailing `#`](#trailing-hash) |
+| `%n` | Plain-text note on the current Pomodoro | [`%n`](#trailing-hash) |
 | `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
 | `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
 | `%c` / `%c<N>` | Capture clipboard content as child bullets | [`%c`](#percent-clipboard) |
@@ -103,7 +103,7 @@ what they attach to, not as one global operator.
 | `+` | `@route+block-id` | Child under an existing task, or Ensure Next when the item has no other text |
 | `+` | `@route^block-id` / `@route:block-id` (typed last) | Switch to `@route+block-id` |
 | `+` | after `#name` | Part of the Pomodoro name (`BUGS+`) |
-| `#` | trailing bare `#` | Pomodoro note |
+| `%n` | `%n` at an item edge | Pomodoro note |
 | `#` | `@route#Section` | Heading in that note |
 | `#` | free-standing `#<type>` at an item edge | Type the new task or retype its selected task; unconfigured names refuse |
 | `#` | `@route^id#<type>` at an item edge | Type the new task with that block ID |
@@ -114,7 +114,7 @@ what they attach to, not as one global operator.
 | `@` | `@@route` | Draft-wide destination |
 | `@` | `x@<N>` / `=name@<X>` | Timing or keep-list typed last (`=bugs@3` means `=3#bugs`) |
 | `@` | `URL @route` | Explicit reference parent |
-| `@` | `URL @` | Compatible listen alias |
+| `%l` | `URL %l` | Request companion audio |
 | `@` | right after `@route^block-id` / `@route:block-id` | Project-note seal: `^…@` creates the note, `:…@` also offers its tasks |
 | `*` | `*note:block-id` | Blocked-task (star) link |
 | `*` | `x*` | Park Task Links on close |
@@ -126,7 +126,7 @@ what they attach to, not as one global operator.
 | `~~` | `~~old~~` | Strikethrough, never a relation marker |
 | `!` | `!note:block-id` | Complete an existing task |
 | `!` | `x!` | Complete Task Links on close |
-| `%` | `URL %` | Request companion audio |
+| `%` | bare `%` | Incomplete directive |
 | `%` | trailing `%c` / `%c<N>` | Clipboard capture |
 | `%` | trailing `%` | Incomplete directive |
 
@@ -311,11 +311,11 @@ bob capture --dry-run 'https://example.com/article @work'
 
 Contract: [Saving links to your reading queue](../capture.md#saving-links-to-your-reading-queue).
 
-### `URL %` {#url-listen}
+### `URL %l` {#url-listen}
 
 Queue the reference with companion audio (`ref.listen` true). Parent
 selection matches a bare URL: default, `@@route` global, or `-r`. Exact
-standalone `@` remains a compatible listen alias. `URL % @route` / `@route URL %`
+there is no `@` alias. `URL %l @route` / `@route URL %l`
 sets an explicit parent.
 
 ```bash
@@ -1241,9 +1241,9 @@ Contract: [Task Link toggle](../capture.md#task-link-toggle).
 
 ## Pomodoro notes
 
-### trailing `#` {#trailing-hash}
+### `%n` {#trailing-hash}
 
-A trailing bare `#` is a plain-text note on a Pomodoro, not a routed task.
+`%n` at an item edge is a plain-text note on a Pomodoro, not a routed task.
 
 ```bash
 bob capture 'remembered the timeout #'
@@ -1329,7 +1329,7 @@ Contract: [Directives (`%`)](../capture.md#directives) · [Clipboard](../capture
 Type a new task at either item edge (`#fix Fix it`, `Fix it #fix`), or retype
 an existing task the item targets. Slugs start with an ASCII letter and use
 letters, digits, and hyphens; quoted literals allow spaces and punctuation
-(`#"DEEP WORK"`). A bare `#` remains a Pomodoro note or prose and does not
+(`#"DEEP WORK"`). A bare `#` stays literal prose and does not
 open task-type completion. `t:` is ordinary prose. Escape `\#fix` to keep
 the literal hash text in the body.
 

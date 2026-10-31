@@ -2036,15 +2036,15 @@ fn percent_and_at_listen_markers_survive_keep_pull_planning() {
     let notes = vec![
         note("")
             .id("percent")
-            .text("https://arxiv.org/pdf/2609.12039 % @sase")
+            .text("https://arxiv.org/pdf/2609.12039 %l @sase")
             .build(),
         note("")
             .id("at-alias")
-            .text("https://example.com/post @")
+            .text("https://example.com/post %l")
             .build(),
         note("")
             .id("prose")
-            .text("Read https://example.com/post %")
+            .text("Read https://example.com/post %l")
             .build(),
     ];
     fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", notes));

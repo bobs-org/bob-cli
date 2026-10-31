@@ -735,7 +735,7 @@ fn capture_sub_bullet_errors_are_actionable_in_human_and_json_modes() {
 
 #[test]
 fn capture_pomodoro_note_reports_running_entry_block() {
-    // A `#` Pomodoro note under the running entry is auto-detected: no
+    // A `%n` Pomodoro note under the running entry is auto-detected: no
     // planner ref is pushed for Pomodoro notes.
     let temp = TempDir::new("bob-cli-capture-pomodoro-note-running");
     let vault = temp.path().join("vault");
@@ -751,7 +751,7 @@ fn capture_pomodoro_note_reports_running_entry_block() {
         &vault,
         &day_file,
         "2026-07-10 10:00:00",
-        &["quick note #"],
+        &["quick note %n"],
     );
     assert_eq!(json["kind"], "pomodoro_note");
     assert_eq!(
@@ -795,7 +795,7 @@ fn capture_pomodoro_note_reports_running_entry_block() {
 
 #[test]
 fn capture_pomodoro_note_reports_last_completed_entry_block() {
-    // With no running entry, `#` lands under the last completed entry,
+    // With no running entry, `%n` lands under the last completed entry,
     // and auto-detection reports that block.
     let temp = TempDir::new("bob-cli-capture-pomodoro-note-completed");
     let vault = temp.path().join("vault");
@@ -812,7 +812,7 @@ fn capture_pomodoro_note_reports_last_completed_entry_block() {
         &vault,
         &day_file,
         "2026-07-10 10:00:00",
-        &["quick note #"],
+        &["quick note %n"],
     );
     assert_eq!(json["kind"], "pomodoro_note");
     assert_eq!(

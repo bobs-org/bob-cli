@@ -535,6 +535,7 @@ fn marker_only_task_toggle(
             &masked_item,
             &super::model::EditorParseOptions::routing_off(),
             false,
+            false,
         )
         .item
         .mode,

@@ -417,7 +417,7 @@ configured cancel and complete relation labels mark their `relation_label` \
 spans with `cancels_source` and `completes_source`. Relations never block, \
 consume, promote, or schedule anything. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
-it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
+it is not an incomplete Pomodoro marker. A `%n` directive reports mode \
 'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \
 combining it with an '@route' marker, 's:<N>', or '$<N>' on the same item \
 reports a 'pomodoro_note_conflict' diagnostic instead of failing outright. \
@@ -546,8 +546,7 @@ struct CaptureParseResult {
     relation_grammar: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ref_parent: Option<RefParentParse>,
-    /// Whether the standalone `%` marker (or compatible `@` alias)
-    /// requested companion audio.
+    /// Whether the `%l` directive requested companion audio.
     /// Additive schema-version-1 field: omitted when false, so every
     /// older input keeps its exact JSON shape.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -764,8 +763,9 @@ pub(crate) struct CaptureParseSpan {
     /// every span of a project-note marker token except the Pomodoro name.
     #[serde(default, skip_serializing_if = "is_no_parse_project_note")]
     pub(crate) project_note: Option<super::capture_language::ProjectNoteForm>,
-    /// Named directive (`"clip"`). Present on a complete `%c` / `%c<N>`
-    /// token; omitted for a bare `%` and for unknown tokens.
+    /// Named directive (`"clip"`, `"note"`, `"listen"`). Present on a
+    /// complete `%c` / `%c<N>`, `%n`, or `%l` token; omitted for a bare `%`
+    /// and for unknown tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) directive: Option<&'static str>,
     /// History count for `%c<N>` when N ≥ 2. Omitted for `%c` / `%c1`.
@@ -1541,6 +1541,14 @@ fn stamp_directive_spans(spans: &mut [CaptureParseSpan], input: &str) {
         let Some(token) = input.get(span.start..span.end) else {
             continue;
         };
+        if token == "%n" {
+            span.directive = Some("note");
+            continue;
+        }
+        if token == "%l" {
+            span.directive = Some("listen");
+            continue;
+        }
         let Some(rest) = token.strip_prefix("%c") else {
             continue;
         };

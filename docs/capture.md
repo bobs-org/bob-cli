@@ -79,8 +79,8 @@ anything is written, and any failure rolls the whole batch back.
 | --- | --- |
 | Bare public URL | Queue a reference job under `mac_inbox` when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
 | `URL @route` or `@route URL` | Queue the reference under that route (aliases resolve; source `explicit`) |
-| `URL %` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced); exact standalone `@` remains a compatible alias |
-| `URL % @route` or `@route URL %` | Queue the reference with companion audio under that explicit parent (`@` also remains a compatible listen alias) |
+| `URL %l` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced); there is no `@` alias |
+| `URL %l @route` or `@route URL %l` | Queue the reference with companion audio under that explicit parent (`%l` is the only listen spelling) |
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
 | `@@template:` | Expand one capture item per row from the following `{N}` template; captures exactly like the expansion |
@@ -144,11 +144,11 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
 | `@route+block-id#<type>` with no other text | Ensure Next and retype that existing task; this attached marker applies only when the whole item has no body or authored children |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
-| trailing bare `#` | Plain-text note on a Pomodoro; bare `#` does not open task-type completion |
+| `%n` | Plain-text note on a Pomodoro; `%n` does not open task-type completion |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%c` / `%c<N>` | Capture clipboard content as child bullets (`%c` is one live value; `%c3` is three) |
-| `%` | Incomplete directive except as the `URL %` listen marker; add `%c` or write `\%` to keep a literal `%` |
+| `%` | Incomplete directive except on a bare URL where `%l` requests companion audio; add `%c`, `%n`, `%l` or write `\%` to keep a literal `%` |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
@@ -413,7 +413,7 @@ stdin remain composable.
 Each real item resolves in this order:
 
 1. An item-local route or mode marker wins. That includes `@bar`, `@bar+b-id`,
-   `@bar#...`, `@bar^...`, `@bar:...`, `@bar^id@`, and a trailing bare `#`.
+   `@bar#...`, `@bar^...`, `@bar:...`, `@bar^id@`, and a `%n`.
 2. Otherwise inherit the complete `@@...` declaration.
 3. Otherwise keep today's `mac_inbox.md` task default.
 
@@ -495,7 +495,7 @@ backslash).
 Add a free-standing `#<type>` marker at either item edge (`#fix Fix it`,
 `Fix it #fix`). A slug starts with an ASCII letter and uses letters, digits,
 and hyphens (`#fix`, `#deep-work`); quote spaces or punctuation
-(`#"DEEP WORK"`, `#"Q&A"`). A bare `#` stays a Pomodoro note or prose and
+(`#"DEEP WORK"`, `#"Q&A"`). A bare `#` stays literal prose and
 does not open the type menu. Escape a marker as `\#fix` to keep the literal
 `#fix` text in the body. The retired `t:` spelling is ordinary prose.
 
@@ -677,7 +677,7 @@ when rows should create plain Ready tasks that you link as you work them.
 Templates refuse other `@@` declarations, clipboard capture, and Pomodoro
 session operators. This includes `%c` even with `--no-clip` or `--clip`,
 whole-item forms such as `=`, `x`, `+N`, and `++N`, and start/close suffixes
-on task markers. `URL %` remains allowed when it is the reference listen
+on task markers. `URL %l` remains allowed when it is the reference listen
 marker. In a `{0}`-only template, keep the marker on its URL by quoting the
 row (`"https://example.com/one %"`) or by putting `%` in the template
 (`{0} %` covers the all-listen case); an unquoted
@@ -851,7 +851,7 @@ This grammar recognizes:
 | --- | --- |
 | `%c` | Read the live clipboard into child bullets of this item |
 | `%c<N>` (N ≥ 2) | Live clipboard plus history, N values in all. `%c1` is `%c` |
-| `%` | Incomplete on a task (add `%c`, or write `\%`). On a bare URL it still requests companion audio (`URL %`) |
+| `%` | Incomplete on a task (add `%c`, `%n`, `%l`, or write `\%`). On a bare URL `%l` requests companion audio (`URL %l`) |
 | anything else (`%3`, `%C`, `%clip`, `%build_log`) | `unknown_directive` |
 
 `%c0`, a leading zero (`%c01`), and a count that overflows `usize` are
@@ -966,16 +966,15 @@ comment.
 Append a standalone `%` immediately after the URL (the next
 whitespace-delimited token on the same line, one or more spaces/tabs) to
 request companion audio: `https://example.blog.com/somepost %` clips like
-`bob ref create <URL> -P <resolved-parent> -L`. `URL % @sase` and
-`@sase URL %` combine listen with an explicit parent; `URL %` alone uses the
+`bob ref create <URL> -P <resolved-parent> -L`. `URL %l @sase` and
+`@sase URL %l` combine listen with an explicit parent; `URL %l` alone uses the
 default, `@@route` global, or `-r` forced parent. Do not attach the marker
 to the URL, or put it in a query, fragment, encoded `%25`/`%40`, or userinfo —
 those bytes stay part of the URL. One optional `<...>` wrapper around the URL
 is still accepted. Exact standalone `@` is still a compatible listen
-spelling. Exact `URL %` takes reference precedence over the directive
-lexer; `--clip URL` and `-R 'URL %c'` keep the clipboard/task path. A non-URL
+spelling. Exact `URL %l` is a directive like `%c`; `--clip URL` and `-R 'URL %c'` keep the clipboard/task path. A non-URL
 bare `@` and prefixes such as `@sa` remain route completion, and completing a
-claimed listen marker never replaces it (a separate ` @sa` after `URL %`
+claimed listen marker never replaces it (a separate ` @sa` after `URL %l`
 still completes the parent). A marked item
 prints `queued … · Listen` with `· companion audio requested`; it needs a
 configured `highlights.listen_command`. Inline intake files the PDF and MP3
@@ -1039,7 +1038,7 @@ never attaches audio or upgrades an existing job.
 outside `needs` (explicit token, inherited global route, or `mac_inbox`;
 source `explicit|global|default`), and a local route token keeps its ordinary
 `route` span. An eligible URL listen reference also reports
-`ref_listen: true` and a `ref_listen` span over the standalone `%` (or
+`ref_listen: true` and a `directive` span over `%l` (
 compatible `@`) token; both additions are omitted when listen is false.
 Route completion also matches `project_name_aliases` with
 `match_kind: "alias"` after canonical prefix matches.
@@ -4952,7 +4951,7 @@ actual move. Relocation is never described as later duplicate removal through
 
 ### Pomodoro notes
 
-Append a bare trailing `#` marker to capture the item as a plain-text
+Append a bare `%n` marker to capture the item as a plain-text
 sub-bullet on a Pomodoro instead of a task. For example,
 `bob capture 'remembered to bump the timeout #'` writes:
 
@@ -4987,7 +4986,7 @@ destination:
 | `@route`, `@route#Sec`, `@route:id`, `@route:id#name`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
 | `--route` / `--section` / `--task` / `--task-ref` / `--task-section` | rejected |
 
-Only a trailing bare `#` is recognized; a leading `#` or a `#` in the middle
+Only a `%n` is recognized; a leading `#` or a `#` in the middle
 of the body stays literal text, and `#<section-prefix>` keeps its existing
 meaning as a bullet-section marker (see below) rather than a Pomodoro note.
 
@@ -5801,7 +5800,7 @@ pickers: `<task> @^block-id@` still prompts only for the destination, while
 `@^<id>@` reports the project-note mode with `needs: ["route"]` and a bare
 `<task> @route^block-id@` is complete. The `:` family seals the same way:
 `<task> @route:block-id@` is a complete offer-form project note (mode
-`pomodoro_project_note`), `@:<id>@` needs a route, a trailing `#` after the
+`pomodoro_project_note`), `@:<id>@` needs a route, a `%n` after the
 seal opens Pomodoro-name completion, and a completed seal offers no picker.
 The retired `<task> @:block-id+` spelling offers nothing. Once the project note is addressed, typing ` :` or
 ` ^` at the end of a first-level task bullet opens the New ID flow: the
@@ -6055,7 +6054,7 @@ and `@^id@` and `@:id@` carry the project-note intent with `needs: ["route"]`
 spelling (`@:id+`, `@route:id+`, `@route:id+#name`) is a
 `retired_project_note_marker` diagnostic teaching both `@`-sealed forms. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;
-it is not an incomplete Pomodoro marker. A trailing bare `#` is a complete
+it is not an incomplete Pomodoro marker. A `%n` directive is a complete
 `pomodoro_note`, not an incomplete section marker. Complete and in-progress Obsidian links such as `[[sase`,
 `![[sase]]`, `[[sase#Design|Spec]]`, and `[[#^block-id]]` also parse for
 semantic highlighting. An invalid marker component, a malformed continuation
@@ -6095,8 +6094,8 @@ write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. A whole-item bare link reports mode `ref` with one
 `ref_url` span covering the whole token, `<>` included. In an eligible URL
-reference, exact standalone `URL %` (or compatible `URL @`) adds
-`ref_listen: true` and a `ref_listen` span over the marker; `-R` keeps it a
+reference, exact `URL %l` adds
+`ref_listen: true` and a `directive` span over `%l`; `-R` keeps it a
 `task` so parse and capture always agree. A complete `%c` / `%c<N>` span has
 kind `directive` with `directive: "clip"` (and `count` when N > 1). A bare
 `%` span that is not listen is kind `directive` with need `directive`. A solo `@route:block-id…` item reports
@@ -6125,7 +6124,7 @@ daily note is involved: a project note with at least one ` :` task is
 because it reads the ledger to place its offers. A lone
 `:` or `^` ending a first-level bullet is an unfinished ID: mode
 `incomplete` with `needs: ["block_id"]` and an `interactive_placeholder`
-span over the sigil, never a diagnostic. A bare trailing `#` reports `pomodoro_note` with
+span over the sigil, never a diagnostic. A `%n` directive reports `pomodoro_note` with
 `route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
 that marker with `@route`, `s:<N>`, or `$<N>` on the same item still reports
 mode `pomodoro_note` plus a `pomodoro_note_conflict` diagnostic; `bob capture`
@@ -6278,7 +6277,7 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `wikilink_heading`, `wikilink_block_id`, `wikilink_alias`,
 `wikilink_task_delimiter`, or `wikilink_task_query`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
-`@cash+`, the trailing `#` in `@cash:id#`, a task-type span in
+`@cash+`, the `%n` in `@cash:id#`, a task-type span in
 `@cash+id#`, the dangling `,` or `!` in `x1,` or `x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
 `@@` when the route is still empty too. For example, `x1,3!2` gives
 `[0,2) pomodoro_close`, `[2,5) pomodoro_close_in_progress`, and
@@ -6320,7 +6319,7 @@ Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
-`pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
+`pomodoro_note_conflict` (a `%n` directive on the same item as `@route`,
 `s:<N>`, or `$<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
 authored bullet, or a two-space nested authored bullet),
@@ -6590,7 +6589,7 @@ An item's single local marker that cannot be expressed as a declaration --
 `@route^block-id@` as a project note, `@route+block-id!` as a task toggle,
 a solo `@route:block-id…` / `^route:block-id…`
 Pomodoro link, a `x[<N>][!<M>]` Pomodoro close (`pomodoro_close` is non-absorbable and
-close items are never rewritten), or a trailing bare `#`
+close items are never rewritten), or a `%n`
 -- is left untouched; the result reports `changed: false` plus a
 `notices` entry naming the marker and why, e.g.
 `@@ cannot take a section: leave @notes#Ideas on this item, or delete it and declare @@notes`.

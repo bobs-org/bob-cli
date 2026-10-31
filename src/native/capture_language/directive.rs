@@ -2,26 +2,27 @@
 //!
 //! Directives sit at either edge of any physical line of an item, with only
 //! other markers between the token and that edge. This phase recognizes
-//! `%c` / `%c<N>`; every other `%…` token at an edge is unknown, and a
-//! bare `%` is incomplete. Later phases extend [`Directives`] with note,
-//! template, and listen.
+//! `%c` / `%c<N>`, `%n`, and `%l`; every other `%…` token at an edge is
+//! unknown, and a bare `%` is incomplete. Later phases extend [`Directives`]
+//! with template.
 
 use super::dependencies::{
     is_trailing_transparent, protected_ranges, scan_line_blocked_tasks,
     scan_line_dependencies, ScannedDependency,
 };
 use super::draft::split_physical_lines;
+use super::editor_parse::tokenize_line_with_spans;
 use super::model::{CaptureItem, ClipRequest, RawLine, Token};
+use super::relations::scan_line_relations;
 use super::relations::ScannedRelation;
-use super::{
-    editor_parse::tokenize_line_with_spans, relations::scan_line_relations,
-};
 use std::num::NonZeroUsize;
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Directives {
     pub(crate) clip: Option<ClipRequest>,
+    pub(crate) note: bool,
+    pub(crate) listen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +51,8 @@ pub(crate) enum DirectiveOccurrence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DirectiveKind {
     Clip { count: NonZeroUsize },
+    Note,
+    Listen,
 }
 
 impl DirectiveOccurrence {
@@ -88,14 +91,18 @@ pub(crate) fn is_directive_token(text: &str) -> bool {
 }
 
 pub(crate) fn incomplete_directive_error() -> String {
-    "`%` is incomplete: add a directive (`%c`), or write `\\%` to keep a literal `%`"
+    "`%` is incomplete: add a directive (`%c`, `%n`, `%l`), or write `\\%` to keep a literal `%`"
         .to_string()
 }
 
 pub(crate) fn unknown_directive_error(token: &str) -> String {
     format!(
-        "`{token}` is not a capture directive; write `%c` or `%c3`, or `\\{token}` to keep the text"
+        "`{token}` is not a capture directive; write `%c`, `%n`, or `%l`, or `\\{token}` to keep the text"
     )
+}
+
+pub(crate) fn directive_not_applicable_error() -> String {
+    "`%l` queues companion audio for a bare URL".to_string()
 }
 
 pub(crate) fn invalid_clip_count_error(token: &str) -> String {
@@ -243,6 +250,18 @@ fn classify_token(token: &str, span: Range<usize>) -> DirectiveOccurrence {
     if let Some(rest) = token.strip_prefix("%c") {
         return classify_clip(token, rest, span);
     }
+    if token == "%n" {
+        return DirectiveOccurrence::Complete {
+            kind: DirectiveKind::Note,
+            span,
+        };
+    }
+    if token == "%l" {
+        return DirectiveOccurrence::Complete {
+            kind: DirectiveKind::Listen,
+            span,
+        };
+    }
     DirectiveOccurrence::Unknown {
         span,
         raw: token.to_string(),
@@ -314,62 +333,7 @@ pub(crate) fn collect_item(item: &CaptureItem<'_>) -> Vec<DirectiveOccurrence> {
     }
     found.sort_by_key(|occurrence| occurrence.span().start);
     found.dedup_by(|left, right| left.span() == right.span());
-    // `URL %` / `URL % @route` / `@route URL %` still request companion
-    // audio until the `%l` phase deletes the standalone listen marker.
-    found.retain(|occurrence| !occurrence_is_listen_percent(item, occurrence));
     found
-}
-
-fn occurrence_is_listen_percent(
-    item: &CaptureItem<'_>,
-    occurrence: &DirectiveOccurrence,
-) -> bool {
-    if !matches!(occurrence, DirectiveOccurrence::Incomplete { .. }) {
-        return false;
-    }
-    if item.lines.len() != 1 {
-        return false;
-    }
-    let line = &item.lines[0].raw;
-    let tokens = tokenize_line_with_spans(line);
-    percent_token_is_listen(&tokens, occurrence.span())
-}
-
-fn percent_token_is_listen(tokens: &[Token<'_>], span: &Range<usize>) -> bool {
-    let Some(index) = tokens
-        .iter()
-        .position(|token| token.start == span.start && token.end == span.end)
-    else {
-        return false;
-    };
-    if tokens[index].text != "%" {
-        return false;
-    }
-    match tokens {
-        [url, _] if index == 1 => {
-            crate::native::url_routing::classify_token(url.text).is_some()
-        }
-        [url, _, route] if index == 1 => {
-            crate::native::url_routing::classify_token(url.text).is_some()
-                && is_plain_at_route(route.text)
-        }
-        [route, url, _] if index == 2 => {
-            crate::native::url_routing::classify_token(url.text).is_some()
-                && is_plain_at_route(route.text)
-        }
-        _ => false,
-    }
-}
-
-fn is_plain_at_route(text: &str) -> bool {
-    let Some(name) = text.strip_prefix('@') else {
-        return false;
-    };
-    !name.is_empty()
-        && !name.starts_with('@')
-        && !name.contains('#')
-        && !name.contains(':')
-        && !name.contains('+')
 }
 
 /// Same-length line copy with directive tokens blanked. Escapes lose only
@@ -430,6 +394,25 @@ pub(crate) fn masked_tokens<'a>(line: &RawLine<'a>) -> Vec<Token<'a>> {
         .collect()
 }
 
+fn directive_discriminant(occurrence: &DirectiveOccurrence) -> Option<u8> {
+    match occurrence {
+        DirectiveOccurrence::Complete { kind, .. } => Some(match kind {
+            DirectiveKind::Clip { .. } => 0,
+            DirectiveKind::Note => 1,
+            DirectiveKind::Listen => 2,
+        }),
+        _ => None,
+    }
+}
+
+fn duplicate_label(discriminant: u8) -> &'static str {
+    match discriminant {
+        0 => "directive (%c)",
+        1 => "directive (%n)",
+        _ => "directive (%l)",
+    }
+}
+
 pub(crate) fn resolve(
     occurrences: &[DirectiveOccurrence],
 ) -> Result<Directives, (String, &'static str, Range<usize>)> {
@@ -437,36 +420,79 @@ pub(crate) fn resolve(
         .iter()
         .filter(|occurrence| occurrence.is_marker())
         .collect::<Vec<_>>();
-    if markers.len() > 1 {
+    // Each directive appears at most once per item; different directives
+    // compose (`%n %c`). A repeated letter refuses as a duplicate.
+    let mut seen: Vec<u8> = Vec::new();
+    for marker in &markers {
+        if let Some(discriminant) = directive_discriminant(marker) {
+            if seen.contains(&discriminant) {
+                let span = marker.span().clone();
+                return Err((
+                    super::line::duplicate_marker_error(duplicate_label(
+                        discriminant,
+                    )),
+                    "duplicate_capture_marker",
+                    span,
+                ));
+            }
+            seen.push(discriminant);
+        }
+    }
+    // Two markers where at least one is incomplete/unknown/invalid is a
+    // duplicate; report the second marker.
+    let non_complete = markers
+        .iter()
+        .filter(|marker| directive_discriminant(marker).is_none())
+        .count();
+    if markers.len() > 1 && non_complete > 0 {
         let span = markers[1].span().clone();
+        // When the duplicate is a repeated complete kind it was already
+        // reported above; here the label is generic.
         return Err((
             super::line::duplicate_marker_error("directive (%c)"),
             "duplicate_capture_marker",
             span,
         ));
     }
-    let Some(occurrence) = markers.first() else {
-        return Ok(Directives { clip: None });
+    let mut directives = Directives {
+        clip: None,
+        note: false,
+        listen: false,
     };
-    match occurrence {
-        DirectiveOccurrence::Complete { .. } => Ok(Directives {
-            clip: occurrence.clip_request(),
-        }),
-        DirectiveOccurrence::Incomplete { span } => Err((
-            incomplete_directive_error(),
-            "incomplete_directive",
-            span.clone(),
-        )),
-        DirectiveOccurrence::Unknown { span, raw } => Err((
-            unknown_directive_error(raw),
-            "unknown_directive",
-            span.clone(),
-        )),
-        DirectiveOccurrence::Invalid { span, message, .. } => {
-            Err((message.clone(), "unknown_directive", span.clone()))
+    for occurrence in markers {
+        match occurrence {
+            DirectiveOccurrence::Complete { kind, .. } => match kind {
+                DirectiveKind::Clip { .. } => {
+                    directives.clip = occurrence.clip_request();
+                }
+                DirectiveKind::Note => directives.note = true,
+                DirectiveKind::Listen => directives.listen = true,
+            },
+            DirectiveOccurrence::Incomplete { span } => {
+                return Err((
+                    incomplete_directive_error(),
+                    "incomplete_directive",
+                    span.clone(),
+                ));
+            }
+            DirectiveOccurrence::Unknown { span, raw } => {
+                return Err((
+                    unknown_directive_error(raw),
+                    "unknown_directive",
+                    span.clone(),
+                ));
+            }
+            DirectiveOccurrence::Invalid { span, message, .. } => {
+                return Err((
+                    message.clone(),
+                    "unknown_directive",
+                    span.clone(),
+                ));
+            }
+            DirectiveOccurrence::Escaped { .. } => {}
         }
-        DirectiveOccurrence::Escaped { .. } => Ok(Directives { clip: None }),
     }
+    Ok(directives)
 }
 
 fn authored_body(line: &str) -> (usize, &str) {

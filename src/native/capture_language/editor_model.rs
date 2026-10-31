@@ -40,10 +40,9 @@ pub(crate) enum SpanKind {
     ProjectTaskLinkMarker,
     ProjectTaskBlockId,
     GlobalRoute,
-    PomodoroNote,
     Schedule,
     Priority,
-    /// A whole `%` directive token, including a bare `%` and `%c`/`%c<N>`.
+    /// A whole `%` directive token (`%c`/`%c<N>`, `%n`, `%l`, bare `%`).
     Directive,
     DependencySigil,
     DependencyNote,
@@ -58,8 +57,6 @@ pub(crate) enum SpanKind {
     RelationLabel,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
-    /// The standalone `%` listen marker (or compatible `@` alias).
-    RefListen,
     TaskCompleteSigil,
     TaskCompleteNote,
     TaskCompleteBlockId,
@@ -111,7 +108,6 @@ impl SpanKind {
             Self::ProjectTaskLinkMarker => "project_task_link_marker",
             Self::ProjectTaskBlockId => "project_task_block_id",
             Self::GlobalRoute => "global_route",
-            Self::PomodoroNote => "pomodoro_note",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
             Self::Directive => "directive",
@@ -127,7 +123,6 @@ impl SpanKind {
             Self::RelationLabelSeparator => "relation_label_separator",
             Self::RelationLabel => "relation_label",
             Self::RefUrl => "ref_url",
-            Self::RefListen => "ref_listen",
             Self::TaskCompleteSigil => "task_complete_sigil",
             Self::TaskCompleteNote => "task_complete_note",
             Self::TaskCompleteBlockId => "task_complete_block_id",

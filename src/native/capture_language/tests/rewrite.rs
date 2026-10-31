@@ -76,7 +76,7 @@ fn rewrite_draft_reports_rule_a5_notices_for_non_absorbable_markers() {
         ("note @dev^id @@", "cannot take a block ID"),
         ("note @dev:id @@", "cannot take a Pomodoro link"),
         ("note @dev:id#bugs @@", "cannot take a Pomodoro link"),
-        ("note this # @@", "cannot take a Pomodoro note"),
+        ("note this %n @@", "cannot take a Pomodoro note"),
         ("note @dev^id@ @@", "cannot take a project note"),
         ("note @dev^id@#bugs @@", "cannot take a project note"),
         (

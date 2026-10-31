@@ -139,18 +139,8 @@ pub(crate) fn display_url(cleaned: &str) -> String {
     format!("{head}…{tail}")
 }
 
-/// Standalone reference listen marker: exactly `%` or the compatible `@`
-/// alias. A standalone marker requests companion audio in an eligible
-/// reference shape; in other contexts `%` keeps its clipboard meaning and
-/// `@route` still selects a parent. Attached forms, `%25`/`%40`, queries,
-/// fragments, and userinfo remain part of the URL and never count as this
-/// directive.
-pub(crate) fn is_standalone_listen_marker(token: &str) -> bool {
-    matches!(token, "%" | "@")
-}
-
 /// Reference intent: the classified URL plus whether companion audio was
-/// requested with the standalone listen marker. The URL identity
+/// requested with the `%l` directive. The URL identity
 /// (`original`/`cleaned`/`dedupe_key`/display/network target) never
 /// includes the directive.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,11 +179,10 @@ impl std::ops::DerefMut for RefIntent {
     }
 }
 
-/// Lexical URL-list line test: a single whitespace-free token,
-/// optionally `<…>`-wrapped, with an `http`/`https` scheme that parses
-/// with `url::Url::parse`, or a URL plus a standalone listen marker
-/// (`URL %` or the compatible `URL @`) with one or more spaces/tabs between
-/// them. No policy, validation, or config.
+/// Lexical URL-list line test: a single bare URL, or a bare URL plus
+/// the `%l` listen directive, optionally `<…>`-wrapped, with an
+/// `http`/`https` scheme that parses with `url::Url::parse`. No policy,
+/// validation, or config.
 pub(crate) fn is_url_list_line(line: &str) -> bool {
     if line.is_empty() {
         return false;
@@ -204,40 +193,29 @@ pub(crate) fn is_url_list_line(line: &str) -> bool {
     }
     let tokens: Vec<&str> = line.split_whitespace().collect();
     match tokens.as_slice() {
-        [single] => {
-            if single.is_empty() || single.chars().any(char::is_whitespace) {
-                return false;
-            }
-            let inner = match strip_single_brackets(single) {
-                Some(inner) => inner,
-                None => return false,
-            };
-            if inner.is_empty() || inner.chars().any(char::is_whitespace) {
-                return false;
-            }
-            let lower = inner.to_lowercase();
-            if !lower.starts_with("http://") && !lower.starts_with("https://") {
-                return false;
-            }
-            url::Url::parse(&inner).is_ok()
-        }
-        // `URL %` / `URL @`: exactly one URL plus the standalone marker.
-        [url, marker] if is_standalone_listen_marker(marker) => {
-            let inner = match strip_single_brackets(url) {
-                Some(inner) => inner,
-                None => return false,
-            };
-            if inner.is_empty() || inner.chars().any(char::is_whitespace) {
-                return false;
-            }
-            let lower = inner.to_lowercase();
-            if !lower.starts_with("http://") && !lower.starts_with("https://") {
-                return false;
-            }
-            url::Url::parse(&inner).is_ok()
-        }
+        [single] => is_url_list_token(single),
+        // `URL %l`: a bare URL plus the listen directive.
+        [url, marker] if *marker == "%l" => is_url_list_token(url),
         _ => false,
     }
+}
+
+fn is_url_list_token(token: &str) -> bool {
+    if token.is_empty() || token.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let inner = match strip_single_brackets(token) {
+        Some(inner) => inner,
+        None => return false,
+    };
+    if inner.is_empty() || inner.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let lower = inner.to_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return false;
+    }
+    url::Url::parse(&inner).is_ok()
 }
 
 #[cfg(test)]

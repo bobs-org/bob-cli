@@ -16,9 +16,7 @@ use super::pomodoro_literal::{
 use super::project_tasks::*;
 use super::start_selection::*;
 use super::tokens::*;
-use crate::native::url_routing::{
-    classify_token, is_standalone_listen_marker, RefIntent, RoutingEntry,
-};
+use crate::native::url_routing::{classify_token, RefIntent, RoutingEntry};
 
 pub(super) struct ParsedCaptureItemOutcome<'a> {
     pub(super) index: usize,
@@ -102,11 +100,8 @@ fn reject_operator_dependencies(
 /// Resolve a plain `@route` token to its route name. Returns `None`
 /// unless the token is exactly `@route` (case-insensitive) with no `#`
 /// section or other suffix, the parsed kind is `Task`, and the route is
-/// a known route token. A standalone `%` listen marker (or `@` alias) never resolves.
+/// a known route token.
 fn plain_ref_route(text: &str) -> Option<String> {
-    if is_standalone_listen_marker(text) {
-        return None;
-    }
     let parsed = parse_route_token(text)?;
     let route = parsed.route?;
     if !matches!(parsed.kind, CaptureKind::Task) {
@@ -128,22 +123,20 @@ fn plain_ref_route(text: &str) -> Option<String> {
 /// An admitted bare URL is a reference when it has exactly one ordinary
 /// leading or trailing `@route`, a forced `-r` route, or no route at all
 /// (the default inbox; a plain `@@route` declaration upgrades it to a
-/// global parent during draft resolution), plus an optional standalone
-/// `%` listen marker (or compatible `@` alias) immediately after the URL.
-/// `URL %` requests companion audio; `URL % @route` and `@route URL %`
-/// request it with an explicit parent. The compatible alias works in the
-/// same positions. The body/URL intent excludes the route and listen
-/// tokens. Policy-gated markers (`-R`, excluded hosts, disabled
+/// global parent during draft resolution). When `listen` is true (the
+/// `%l` directive was typed) the claim produces a listen reference;
+/// otherwise it produces a plain reference. The body/URL intent excludes
+/// the route token. Policy-gated markers (`-R`, excluded hosts, disabled
 /// routing, child lines, extra words/tags, schedule/priority/clipboard,
 /// dependencies, operators, task refs, destination flags beyond `-r`)
-/// retain existing task or diagnostic behavior. `URL @route %`,
-/// `URL % %`, attached `path@`, queries/fragments, and encoded forms
-/// stay unsupported and fall through.
+/// retain existing task or diagnostic behavior. Attached `path@`,
+/// queries/fragments, and encoded forms stay unsupported and fall through.
 fn claim_reference_item<'a>(
     item: &CaptureItem<'a>,
     options: &CaptureParseOptions<'_>,
     has_dependencies: bool,
     forced_route: Option<&str>,
+    listen: bool,
 ) -> Option<ParsedCaptureItemOutcome<'a>> {
     let policy = options.url_routing?;
     if options.explicit_destination || has_dependencies || item.lines.len() != 1
@@ -165,6 +158,11 @@ fn claim_reference_item<'a>(
         // A forced `-r` route is the explicit parent; otherwise the item
         // claims with no local route and draft resolution applies a plain
         // `@@route` global or leaves the default inbox.
+        let kind = if listen {
+            CaptureKind::Ref(RefIntent::with_listen(intent))
+        } else {
+            CaptureKind::Ref(RefIntent::without_listen(intent))
+        };
         if let Some(forced) = forced_route {
             let route = normalize_forced_route(forced).ok()?;
             return Some(parsed_capture_item_outcome(
@@ -173,7 +171,7 @@ fn claim_reference_item<'a>(
                     body: token.text.to_string(),
                     clip: None,
                     route: Some(route),
-                    kind: CaptureKind::Ref(RefIntent::without_listen(intent)),
+                    kind,
                     scheduled_offset: None,
                     priority_level: None,
                     sub_bullets: Vec::new(),
@@ -193,7 +191,7 @@ fn claim_reference_item<'a>(
                 body: token.text.to_string(),
                 clip: None,
                 route: None,
-                kind: CaptureKind::Ref(RefIntent::without_listen(intent)),
+                kind,
                 scheduled_offset: None,
                 priority_level: None,
                 sub_bullets: Vec::new(),
@@ -208,70 +206,17 @@ fn claim_reference_item<'a>(
         ));
     }
     if tokens.len() == 2 {
-        // `URL %` / `URL @`: listen with default/global/forced parent. The marker
-        // is item-local and whitespace-delimited; attached `@` stays part
-        // of the URL and never claims here.
-        if is_standalone_listen_marker(tokens[1].text)
-            && let Some(intent) = classify_token(tokens[0].text)
-        {
-            if !policy.admits(&intent, RoutingEntry::Capture) {
-                return None;
-            }
-            if let Some(forced) = forced_route {
-                let route = normalize_forced_route(forced).ok()?;
-                return Some(parsed_capture_item_outcome(
-                    item,
-                    ParsedCaptureText {
-                        body: tokens[0].text.to_string(),
-                        clip: None,
-                        route: Some(route),
-                        kind: CaptureKind::Ref(RefIntent::with_listen(intent)),
-                        scheduled_offset: None,
-                        priority_level: None,
-                        sub_bullets: Vec::new(),
-                        dependencies: Vec::new(),
-                        blocked_tasks: Vec::new(),
-                        relations: Vec::new(),
-                        dependency_target: None,
-                        type_marker: None,
-                    },
-                    Vec::new(),
-                    Some(format!("--route {forced}")),
-                ));
-            }
-            return Some(parsed_capture_item_outcome(
-                item,
-                ParsedCaptureText {
-                    body: tokens[0].text.to_string(),
-                    clip: None,
-                    route: None,
-                    kind: CaptureKind::Ref(RefIntent::with_listen(intent)),
-                    scheduled_offset: None,
-                    priority_level: None,
-                    sub_bullets: Vec::new(),
-                    dependencies: Vec::new(),
-                    blocked_tasks: Vec::new(),
-                    relations: Vec::new(),
-                    dependency_target: None,
-                    type_marker: None,
-                },
-                Vec::new(),
-                None,
-            ));
+        if forced_route.is_some() && !listen {
+            return None;
         }
-        if forced_route.is_some() {
+        if forced_route.is_some() && listen {
+            // A forced route with `%l` only claims a lone URL; a second
+            // token alongside the URL stays an ordinary task.
             return None;
         }
         // Exactly one URL plus exactly one ordinary `@route`, in either
         // order. Anything else (extra words, tags, markers, `+`/`:`/`#`
-        // shapes, a leading `@` listen marker) falls through to the
-        // generic task path.
-        if tokens
-            .iter()
-            .any(|token| is_standalone_listen_marker(token.text))
-        {
-            return None;
-        }
+        // shapes) falls through to the generic task path.
         let first_intent = classify_token(tokens[0].text);
         let second_intent = classify_token(tokens[1].text);
         let (url_token, route_token) =
@@ -287,13 +232,18 @@ fn claim_reference_item<'a>(
             return None;
         }
         let route = plain_ref_route(route_token.text)?;
+        let kind = if listen {
+            CaptureKind::Ref(RefIntent::with_listen(intent))
+        } else {
+            CaptureKind::Ref(RefIntent::without_listen(intent))
+        };
         return Some(parsed_capture_item_outcome(
             item,
             ParsedCaptureText {
                 body: url_token.text.to_string(),
                 clip: None,
                 route: Some(route),
-                kind: CaptureKind::Ref(RefIntent::without_listen(intent)),
+                kind,
                 scheduled_offset: None,
                 priority_level: None,
                 sub_bullets: Vec::new(),
@@ -306,73 +256,6 @@ fn claim_reference_item<'a>(
             Vec::new(),
             Some(route_token.text.to_string()),
         ));
-    }
-    if tokens.len() == 3 && forced_route.is_none() {
-        // `URL % @route` (trailing explicit parent with listen) and
-        // `@route URL %` (leading explicit parent with listen). Every
-        // other three-token shape (`URL @route %`, `URL % %`, extra
-        // words) stays an ordinary task/diagnostic.
-        if is_standalone_listen_marker(tokens[1].text) {
-            let url_token = tokens[0];
-            let route_token = tokens[2];
-            let intent = classify_token(url_token.text)?;
-            if !policy.admits(&intent, RoutingEntry::Capture) {
-                return None;
-            }
-            let route = plain_ref_route(route_token.text)?;
-            return Some(parsed_capture_item_outcome(
-                item,
-                ParsedCaptureText {
-                    body: url_token.text.to_string(),
-                    clip: None,
-                    route: Some(route),
-                    kind: CaptureKind::Ref(RefIntent::with_listen(intent)),
-                    scheduled_offset: None,
-                    priority_level: None,
-                    sub_bullets: Vec::new(),
-                    dependencies: Vec::new(),
-                    blocked_tasks: Vec::new(),
-                    relations: Vec::new(),
-                    dependency_target: None,
-                    type_marker: None,
-                },
-                Vec::new(),
-                Some(route_token.text.to_string()),
-            ));
-        }
-        if is_standalone_listen_marker(tokens[2].text) {
-            let route_token = tokens[0];
-            let url_token = tokens[1];
-            // The middle token must be the URL and the last token the
-            // standalone marker; a leading listen-marker shape never claims.
-            if is_standalone_listen_marker(route_token.text) {
-                return None;
-            }
-            let intent = classify_token(url_token.text)?;
-            if !policy.admits(&intent, RoutingEntry::Capture) {
-                return None;
-            }
-            let route = plain_ref_route(route_token.text)?;
-            return Some(parsed_capture_item_outcome(
-                item,
-                ParsedCaptureText {
-                    body: url_token.text.to_string(),
-                    clip: None,
-                    route: Some(route),
-                    kind: CaptureKind::Ref(RefIntent::with_listen(intent)),
-                    scheduled_offset: None,
-                    priority_level: None,
-                    sub_bullets: Vec::new(),
-                    dependencies: Vec::new(),
-                    blocked_tasks: Vec::new(),
-                    relations: Vec::new(),
-                    dependency_target: None,
-                    type_marker: None,
-                },
-                Vec::new(),
-                Some(route_token.text.to_string()),
-            ));
-        }
     }
     None
 }
@@ -416,15 +299,22 @@ pub(super) fn parse_capture_item<'a>(
         return Err(directive_only_error(&directive_occurrences));
     }
 
-    let clip = super::directive::resolve(&directive_occurrences)
-        .ok()
-        .and_then(|directives| directives.clip);
+    let resolved = super::directive::resolve(&directive_occurrences).ok();
+    let clip = resolved
+        .as_ref()
+        .and_then(|directives| directives.clip.clone());
+    let note = resolved.as_ref().is_some_and(|directives| directives.note);
+    let listen = resolved
+        .as_ref()
+        .is_some_and(|directives| directives.listen);
     let parsed = parse_capture_item_masked(
         &masked_item,
         forced_route,
         forced_section,
         options,
         clip,
+        note,
+        listen,
     );
     let mut outcome = match parsed {
         Ok(outcome) => outcome,
@@ -659,6 +549,8 @@ fn parse_capture_item_masked<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
     clip: Option<ClipRequest>,
+    note: bool,
+    listen: bool,
 ) -> Result<ParsedCaptureItemOutcome<'a>, String> {
     let Some((parent_line, child_lines)) = item.lines.split_first() else {
         return Err(missing_text_error());
@@ -836,9 +728,38 @@ fn parse_capture_item_masked<'a>(
     )? {
         return Ok(outcome);
     }
+    if listen && clip.is_some() {
+        return Err(super::directive::directive_not_applicable_error());
+    }
+    if listen && note {
+        return Err(super::directive::directive_not_applicable_error());
+    }
+    if listen {
+        if let Some(outcome) = claim_reference_item(
+            item,
+            options,
+            has_dependencies,
+            forced_route,
+            true,
+        ) {
+            if clip.is_some() {
+                return Err(super::directive::directive_not_applicable_error());
+            }
+            return Ok(outcome);
+        }
+        return Err(super::directive::directive_not_applicable_error());
+    }
+    if note && forced_route.is_some() {
+        return Err(pomodoro_note_forced_route_conflict_error());
+    }
     if clip.is_none()
-        && let Some(outcome) =
-            claim_reference_item(item, options, has_dependencies, forced_route)
+        && let Some(outcome) = claim_reference_item(
+            item,
+            options,
+            has_dependencies,
+            forced_route,
+            false,
+        )
     {
         return Ok(outcome);
     }
@@ -1164,10 +1085,19 @@ fn parse_capture_item_masked<'a>(
         .route
         .as_ref()
         .map(|route| route.marker_text.clone());
+    if note && aggregate.route.is_some() {
+        return Err(pomodoro_note_route_conflict_error());
+    }
     let (route, kind) = match aggregate.route {
         Some(line_route) => (line_route.token.route, line_route.token.kind),
         None => (None, CaptureKind::Task),
     };
+    let kind = if note {
+        CaptureKind::PomodoroNote
+    } else {
+        kind
+    };
+    let route = if note { None } else { route };
     // Schedule, priority, and clipboard markers stay task-creation
     // modifiers: a dependency-only item carrying them mixes a second
     // action into an existing-task update instead of failing silently.

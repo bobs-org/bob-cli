@@ -8,9 +8,9 @@
   location: /reference/capture-syntax/#url-at-route
 - query: "@route URL"
   location: /reference/capture-syntax/#url-at-route
-- query: "URL %"
+- query: "URL %l"
   location: /reference/capture-syntax/#url-listen
-- query: "URL % @route"
+- query: "URL %l @route"
   location: /reference/capture-syntax/#url-listen
 - query: "-r"
   location: /reference/capture-syntax/#cli-route
@@ -126,7 +126,7 @@
   location: /reference/capture-syntax/#plus-ensure-next
 - query: "@route+block-id!"
   location: /reference/capture-syntax/#plus-toggle
-- query: "trailing #"
+- query: "%n"
   location: /reference/capture-syntax/#trailing-hash
 - query: "s:<N>"
   location: /reference/capture-syntax/#s-schedule

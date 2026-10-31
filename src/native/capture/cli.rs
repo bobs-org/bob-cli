@@ -28,7 +28,8 @@ into one item per operator, so `+2 x` means `+2`, blank line, `x`. A \
 '@@<route>' declaration token anywhere in the draft \
 is metadata, not a capture item: every otherwise-unrouted item inherits that \
 destination, while an item-local @route, @route+id, @route#..., @route^..., \
-@route:..., or trailing '#' marker still wins for that item. A declaration-only draft \
+or @route:... marker still wins for that item. A `%n` item ignores the \
+declaration and always files a Pomodoro note. A declaration-only draft \
 fails. Do not combine a textual @@ declaration with --route, --section, --task, \
 or --task-section. Each item's first nonblank line is normalized and \
 becomes that item's parent, formatted as a #task with a [created::] stamp unless a \
@@ -92,12 +93,15 @@ item; unknown names are refused with a suggestion. With a named Pomodoro, the \
 marker must agree with its type or capture refuses. Retyping stages the \
 field before the gesture and relocates the live Task Link to agree; a strict-cap \
 refusal fails before any write.\n\n\
-Append a lowercase '%c' or '%c<N>' directive at either edge of any physical \
-line, with only other markers between it and that edge, to read the clipboard \
-into child bullets of this item. '%c' captures one live value; '%c<N>' \
-(N ≥ 2) captures that many values, starting with the live clipboard and then \
-recent history newest first. '%c1' is equivalent to '%c'. The directive \
-composes with s:<N>, $<N>, #<type>, and every route kind. Each value is classified separately: \
+Append a `%` directive at either edge of any physical line, with only \
+other markers between it and that edge. `%c` reads the clipboard into child \
+bullets of this item; `%c<N>` (N ≥ 2) captures that many values, starting \
+with the live clipboard and then recent history newest first. '%c1' is \
+equivalent to '%c'. `%n` files the item as a Pomodoro note (see below) and \
+composes with `%c`. `%l` queues a bare-URL reference with companion audio \
+(see below); anywhere else it refuses. Each directive appears at most once \
+per item. `%c` composes with s:<N>, $<N>, #<type>, and every route kind. \
+Each clipboard value is classified separately: \
 small text stays inline; 2-10 flat text lines and 1-10 flat unordered Markdown \
 list items become child bullets, with source list markers removed; copied file \
 paths are saved under img/ or file/; and long or other Markdown-structured text \
@@ -105,8 +109,7 @@ is preserved in a timestamped file/clip-*.md snippet. Clipboard children use \
 the target note's dominant tab-or-two-space indentation and fall back to a tab. \
 History captures fail without writing \
 unless the exact requested count succeeds. A bare '%' is incomplete. \
-Mid-line tokens such as '50%' stay prose. For an eligible URL-only reference, \
-exact standalone 'URL @' requests companion audio. Use --clip to force a \
+Mid-line tokens such as '50%' stay prose. Use --clip to force a \
 clipboard read as if '%c' were written. Use --no-clip to never read the \
 clipboard, even when '%c' is written: a dry run reports clip.status \
 not_read, and a real capture refuses. Clipboard failures abort before the note \
@@ -447,15 +450,17 @@ a matching link is already there every such link is removed with the lane \
 unchanged. To retype during an explicit toggle, put '#<type>' after the bang, \
 as in '@<route>+<block-id>! #<type>'; \
 '@<route>+<block-id>#<type>!' is refused.\n\n\
-Append a bare trailing '#' to capture the item as a plain-text sub-bullet on a \
-Pomodoro instead of a task. It renders as '- <body>' with no [created::] stamp, \
-no '#task' marker, and no block ID. The daily note comes from BOB_DAY_FILE or \
-<bob-dir>/YYYY/YYYYMMDD.md. Capture prefers the single open timed entry in its \
-Pomodoros section, otherwise the last completed entry, and otherwise the first \
-open entry, appending the new bullet at the end of that entry's child block. \
-The marker composes with \
-'%c' and --clip but is rejected alongside 's:<N>', '$<N>', '@route', and \
---route.\n\n\
+Append `%n` at either edge of any physical line to capture the item as a \
+plain-text sub-bullet on a Pomodoro instead of a task. It renders as \
+'- <body>' with no [created::] stamp, no '#task' marker, and no block ID. \
+The daily note comes from BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. \
+Capture prefers the single open timed entry in its Pomodoros section, \
+otherwise the last completed entry, and otherwise the first open entry, \
+appending the new bullet at the end of that entry's child block. The marker \
+composes with '%c' and --clip but is rejected alongside 's:<N>', '$<N>', \
+'@route', '#<type>', and --route; a draft-wide '@@route' does not apply to \
+a `%n` item. Append `%l` at either edge of a bare-URL item to queue the \
+reference with companion audio; anywhere else `%l` refuses.\n\n\
 Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \
@@ -467,8 +472,7 @@ matching non-H1 section is preferred; a \
 matching H1 heading is used only when no non-H1 heading matches. The marker may \
 lead ('@notes#Ideas jot idea') or trail ('jot idea @notes#Ideas') the body. \
 A standalone terminal '#<section-prefix>' marker (not appended to an @route \
-token) is still not accepted and fails with a usage error; a standalone bare \
-'#' is the Pomodoro-note marker described above, not a bullet marker.\n\n\
+token) is still not accepted and fails with a usage error.\n\n\
 Use --route with --section to force bullet mode while keeping @tokens literal. \
 The section title is matched exactly, case insensitively, against non-Tasks \
 headings (generated status-group headings under Tasks are skipped); if no \
@@ -484,7 +488,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk '$2'\n  bob capture research rust '$4' @dev\n  bob capture buy milk %c\n  bob capture research links %c3\n  bob capture investigate %c @dev:blockid\n  bob capture --clip -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash^goog-exit@' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit@\\n- Draft the resignation memo\\n' | bob capture
   printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture
-  printf 'Finish the Google exit packet! @cash:goog-exit@\\n- Draft the resignation memo\\n- Collect paperwork\\n' | bob capture\n  bob capture -p all -- '@cash:goog-exit@' 'Finish the Google exit packet!'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  bob capture -- --anything\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture 'x'\n  bob capture 'x2'\n  bob capture 'x1!2'\n  bob capture 'x!1@2'\n  bob capture 'x1~2'\n  bob capture 'x0'\n  printf 'x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf 'x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=bugs'\n  bob capture '=3#bugs'\n  bob capture '=bugs@3'\n  bob capture 'x =bugs'\n  bob capture '@sase:deep-fix=bugs'\n  bob capture 'x =~2'\n  printf 'x\\n\\n=\\n' | bob capture\n  bob capture '+2 x'\n  bob capture 'x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  bob capture -i 1=health -- '@mac_inbox:route-task'\n  printf -- '-2\\n\\nx\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output %c #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@template:\\nApply to {0}! @job^apply-{1}\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",        )
+  printf 'Finish the Google exit packet! @cash:goog-exit@\\n- Draft the resignation memo\\n- Collect paperwork\\n' | bob capture\n  bob capture -p all -- '@cash:goog-exit@' 'Finish the Google exit packet!'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  bob capture -- --anything\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture 'x'\n  bob capture 'x2'\n  bob capture 'x1!2'\n  bob capture 'x!1@2'\n  bob capture 'x1~2'\n  bob capture 'x0'\n  printf 'x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf 'x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=bugs'\n  bob capture '=3#bugs'\n  bob capture '=bugs@3'\n  bob capture 'x =bugs'\n  bob capture '@sase:deep-fix=bugs'\n  bob capture 'x =~2'\n  printf 'x\\n\\n=\\n' | bob capture\n  bob capture '+2 x'\n  bob capture 'x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  bob capture -i 1=health -- '@mac_inbox:route-task'\n  printf -- '-2\\n\\nx\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout %n\n  bob capture paste the failing output %c %n\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@template:\\nApply to {0}! @job^apply-{1}\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",        )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
         .arg(clip_arg())

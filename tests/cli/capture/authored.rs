@@ -561,7 +561,7 @@ fn capture_bare_terminal_marker_authored_children_nest_one_level_deeper() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("Parent #\n- child detail")
+        .arg("Parent %n\n- child detail")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()

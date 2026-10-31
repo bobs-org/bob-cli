@@ -60,45 +60,6 @@ fn resolve_line_inner<'a>(
 
     let token_texts = tokens.iter().map(|token| token.text).collect::<Vec<_>>();
 
-    // The bare `#` Pomodoro-note marker claims the route/mode slot from the
-    // final token position, exactly like an `@route` token does, but it
-    // never has a partially-typed form and never coexists with one.
-    if tokens
-        .last()
-        .is_some_and(|token| is_pomodoro_note_marker(token.text))
-    {
-        if !detect_route {
-            return Err(pomodoro_note_forced_route_conflict_error());
-        }
-        let marker_text = tokens.last().expect("last token").text.to_string();
-        tokens.pop();
-        if tokens.is_empty() {
-            return Err(missing_text_error());
-        }
-        if (leading
-            && tokens
-                .first()
-                .is_some_and(|token| is_route_marker(token.text)))
-            || tokens
-                .last()
-                .is_some_and(|token| is_route_marker(token.text))
-        {
-            return Err(pomodoro_note_route_conflict_error());
-        }
-        return Ok(LineOutcome {
-            body: join_parse_tokens(&tokens, &markers.priority_escapes),
-            markers,
-            route: Some(LineRoute {
-                token: RouteToken {
-                    route: None,
-                    kind: CaptureKind::PomodoroNote,
-                },
-                marker_text,
-            }),
-            declarations,
-        });
-    }
-
     if !detect_route {
         return Ok(LineOutcome {
             body: join_parse_tokens(&tokens, &markers.priority_escapes),
@@ -169,9 +130,6 @@ fn resolve_line_inner<'a>(
                 return Err(missing_text_error());
             }
         } else {
-            if rest.iter().any(|token| token.text == "#") {
-                return Err(pomodoro_note_route_conflict_error());
-            }
             return Ok(LineOutcome {
                 body: join_parse_tokens(rest, &markers.priority_escapes),
                 markers,
@@ -191,9 +149,6 @@ fn resolve_line_inner<'a>(
         && !rest.is_empty()
         && let Some(token) = parse_terminal_route_token(last.text)?
     {
-        if rest.iter().any(|token| token.text == "#") {
-            return Err(pomodoro_note_route_conflict_error());
-        }
         return Ok(LineOutcome {
             body: join_parse_tokens(rest, &markers.priority_escapes),
             markers,
@@ -315,20 +270,19 @@ pub(super) fn unsupported_global_destination_error() -> String {
 }
 
 pub(super) fn pomodoro_note_route_conflict_error() -> String {
-    "the '#' Pomodoro-note marker cannot be combined with an @route marker"
-        .to_string()
+    "`%n` cannot be combined with an @route marker".to_string()
 }
 
 pub(super) fn pomodoro_note_forced_route_conflict_error() -> String {
-    "the '#' Pomodoro-note marker cannot be combined with --route".to_string()
+    "`%n` cannot be combined with --route".to_string()
 }
 
 pub(super) fn pomodoro_note_schedule_conflict_error() -> String {
-    "the '#' Pomodoro-note marker cannot be combined with 's:<N>'".to_string()
+    "`%n` cannot be combined with 's:<N>'".to_string()
 }
 
 pub(super) fn pomodoro_note_priority_conflict_error() -> String {
-    "the '#' Pomodoro-note marker cannot be combined with '$<N>'".to_string()
+    "`%n` cannot be combined with '$<N>'".to_string()
 }
 
 pub(crate) fn normalize_task_text(raw_text: &str) -> String {

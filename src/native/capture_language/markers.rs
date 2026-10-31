@@ -232,20 +232,13 @@ fn record_priority_escape(
 }
 
 pub(super) fn is_route_marker(token: &str) -> bool {
-    is_pomodoro_note_marker(token)
-        || parse_route_token(token).is_some()
+    parse_route_token(token).is_some()
         || (is_sub_bullet_marker_candidate(token)
             && parse_sub_bullet_route_token(token).is_ok())
         || (is_task_block_id_marker_candidate(token)
             && parse_task_block_id_route_token(token).is_ok())
         || (is_pomodoro_marker_candidate(token)
             && parse_pomodoro_route_token(token).is_ok())
-}
-
-/// The bare `#` token: a Pomodoro-note marker, recognized only in the
-/// terminal marker region.
-pub(super) fn is_pomodoro_note_marker(token: &str) -> bool {
-    token == "#"
 }
 
 pub(super) fn normalize_forced_route(route: &str) -> Result<String, String> {

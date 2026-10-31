@@ -99,7 +99,7 @@ fn execution_an_explicit_toggle_item_participates_in_a_multi_item_draft() {
 #[test]
 fn execution_local_markers_override_a_global_declaration() {
     let draft = parse_capture_draft_with_clip_control(
-        "@@foo\nKeep\n\nBullet @bar#Ideas\n\nId @bar^b-id\n\nPomo @bar:p-id\n\nChild @bar+b-id\n\nNote #",
+        "@@foo\nKeep\n\nBullet @bar#Ideas\n\nId @bar^b-id\n\nPomo @bar:p-id\n\nChild @bar+b-id\n\nNote %n",
         None,
         None, &CaptureParseOptions::routing_off())
     .expect("parse");

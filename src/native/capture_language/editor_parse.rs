@@ -10,9 +10,7 @@ use super::markers::*;
 use super::model::*;
 use super::project_tasks::*;
 use super::tokens::*;
-use crate::native::url_routing::{
-    classify_token, is_standalone_listen_marker, RoutingEntry,
-};
+use crate::native::url_routing::{classify_token, RoutingEntry};
 
 /// Remap one physical line's own tokenizer output into the original
 /// multi-line text's byte offsets, so every span an editor receives always
@@ -85,11 +83,6 @@ pub(super) fn parse_editor_line<'a>(
 
     let mut diagnostics = Vec::new();
     if let Some(diagnostic) = retired_priority_marker_diagnostic(&markers) {
-        diagnostics.push(diagnostic);
-    }
-    if let Some(diagnostic) =
-        pomodoro_note_conflict_diagnostic(&tokens, leading)
-    {
         diagnostics.push(diagnostic);
     }
 
@@ -1029,12 +1022,8 @@ pub(super) fn parse_editor_parent_task_item<'a>(
     })
 }
 
-/// Resolve a plain `@route` token for the editor ref path. A
-/// standalone `%` listen marker (or compatible `@` alias) never resolves.
+/// Resolve a plain `@route` token for the editor ref path.
 fn editor_plain_ref_route(text: &str) -> Option<String> {
-    if is_standalone_listen_marker(text) {
-        return None;
-    }
     let parsed = parse_route_token(text)?;
     let route = parsed.route?;
     if !matches!(parsed.kind, CaptureKind::Task) {
@@ -1053,17 +1042,16 @@ fn editor_plain_ref_route(text: &str) -> Option<String> {
 /// A whole-item bare URL admitted by the routing policy: mode `ref`
 /// with one `ref_url` span over the URL token, `<>` included, plus an
 /// ordinary `route` span when exactly one plain `@route` token leads or
-/// trails it, plus a `ref_listen` span over a standalone `%` or compatible
-/// `@` immediately after the URL. `URL %`/`URL @`,
-/// `URL % @route`/`URL @ @route`, and `@route URL %`/`@route URL @`
-/// request companion audio. Anything else (extra text, child
-/// lines, markers, `@@`, dependencies, `URL @route %`, `URL % %`) falls through to the
-/// generic path, exactly like execution. A bare URL remains submittable
-/// and never acquires a required `needs` entry merely because a client
-/// can offer a parent picker.
+/// trails it. When `listen` is true (the `%l` directive was typed) the
+/// claim produces a listen reference; otherwise a plain reference.
+/// Anything else (extra text, child lines, markers, `@@`) falls through
+/// to the generic path, exactly like execution. A bare URL remains
+/// submittable and never acquires a required `needs` entry merely because
+/// a client can offer a parent picker.
 fn parse_editor_ref_item<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
+    listen: bool,
 ) -> Option<EditorItemOutcome<'a>> {
     let policy = options.url_routing?;
     if item.lines.len() != 1 {
@@ -1096,7 +1084,7 @@ fn parse_editor_ref_item<'a>(
                 section: None,
                 block_id: None,
                 needs: Vec::new(),
-                ref_listen: false,
+                ref_listen: listen,
                 pomodoro_start: None,
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
@@ -1121,64 +1109,6 @@ fn parse_editor_ref_item<'a>(
         });
     }
     if tokens.len() == 2 {
-        // `URL %` / `URL @`: listen with default/global parent.
-        if is_standalone_listen_marker(tokens[1].text)
-            && let Some(intent) = classify_token(tokens[0].text)
-        {
-            if !policy.admits(&intent, RoutingEntry::Capture) {
-                return None;
-            }
-            return Some(EditorItemOutcome {
-                item: EditorItemParse {
-                    index: item.index,
-                    start: item.start,
-                    end: item.end,
-                    line_start: item.line_start,
-                    line_end: item.line_end,
-                    body: tokens[0].text.to_string(),
-                    mode: EditorMode::Ref,
-                    route: None,
-                    section: None,
-                    block_id: None,
-                    needs: Vec::new(),
-                    ref_listen: true,
-                    pomodoro_start: None,
-                    pomodoro_adjust: None,
-                    pomodoro_shift: None,
-                    pomodoro_close: None,
-                    dependencies: Vec::new(),
-                    blocked_tasks: Vec::new(),
-                    relations: Vec::new(),
-                    dependency_target: None,
-                    task_complete: None,
-                    spans: vec![
-                        Span {
-                            start: tokens[0].start,
-                            end: tokens[0].end,
-                            kind: SpanKind::RefUrl,
-                            project_note: None,
-                        },
-                        Span {
-                            start: tokens[1].start,
-                            end: tokens[1].end,
-                            kind: SpanKind::RefListen,
-                            project_note: None,
-                        },
-                    ],
-                    diagnostics: Vec::new(),
-                    sub_bullets: Vec::new(),
-                    has_local_destination: false,
-                    local_destination_markers: Vec::new(),
-                },
-                declarations: Vec::new(),
-            });
-        }
-        if tokens
-            .iter()
-            .any(|token| is_standalone_listen_marker(token.text))
-        {
-            return None;
-        }
         let first_intent = classify_token(tokens[0].text);
         let second_intent = classify_token(tokens[1].text);
         let (url_token, route_token) =
@@ -1207,7 +1137,7 @@ fn parse_editor_ref_item<'a>(
                 section: None,
                 block_id: None,
                 needs: Vec::new(),
-                ref_listen: false,
+                ref_listen: listen,
                 pomodoro_start: None,
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
@@ -1247,146 +1177,6 @@ fn parse_editor_ref_item<'a>(
             declarations: Vec::new(),
         });
     }
-    if tokens.len() == 3 {
-        // `URL % @route`: trailing explicit parent with listen.
-        if is_standalone_listen_marker(tokens[1].text) {
-            let url_token = tokens[0];
-            let route_token = tokens[2];
-            let intent = classify_token(url_token.text)?;
-            if !policy.admits(&intent, RoutingEntry::Capture) {
-                return None;
-            }
-            let route = editor_plain_ref_route(route_token.text)?;
-            return Some(EditorItemOutcome {
-                item: EditorItemParse {
-                    index: item.index,
-                    start: item.start,
-                    end: item.end,
-                    line_start: item.line_start,
-                    line_end: item.line_end,
-                    body: url_token.text.to_string(),
-                    mode: EditorMode::Ref,
-                    route: Some(route.clone()),
-                    section: None,
-                    block_id: None,
-                    needs: Vec::new(),
-                    ref_listen: true,
-                    pomodoro_start: None,
-                    pomodoro_adjust: None,
-                    pomodoro_shift: None,
-                    pomodoro_close: None,
-                    dependencies: Vec::new(),
-                    blocked_tasks: Vec::new(),
-                    relations: Vec::new(),
-                    dependency_target: None,
-                    task_complete: None,
-                    spans: vec![
-                        Span {
-                            start: url_token.start,
-                            end: url_token.end,
-                            kind: SpanKind::RefUrl,
-                            project_note: None,
-                        },
-                        Span {
-                            start: tokens[1].start,
-                            end: tokens[1].end,
-                            kind: SpanKind::RefListen,
-                            project_note: None,
-                        },
-                        Span {
-                            start: route_token.start,
-                            end: route_token.end,
-                            kind: SpanKind::Route,
-                            project_note: None,
-                        },
-                    ],
-                    diagnostics: Vec::new(),
-                    sub_bullets: Vec::new(),
-                    has_local_destination: true,
-                    local_destination_markers: vec![LocalDestinationMarker {
-                        start: route_token.start,
-                        end: route_token.end,
-                        text: route_token.text.to_string(),
-                        mode: EditorMode::Ref,
-                        route: Some(route),
-                        block_id: None,
-                        section: None,
-                    }],
-                },
-                declarations: Vec::new(),
-            });
-        }
-        // `@route URL %`: leading explicit parent with listen.
-        if is_standalone_listen_marker(tokens[2].text)
-            && !is_standalone_listen_marker(tokens[0].text)
-        {
-            let route_token = tokens[0];
-            let url_token = tokens[1];
-            let intent = classify_token(url_token.text)?;
-            if !policy.admits(&intent, RoutingEntry::Capture) {
-                return None;
-            }
-            let route = editor_plain_ref_route(route_token.text)?;
-            return Some(EditorItemOutcome {
-                item: EditorItemParse {
-                    index: item.index,
-                    start: item.start,
-                    end: item.end,
-                    line_start: item.line_start,
-                    line_end: item.line_end,
-                    body: url_token.text.to_string(),
-                    mode: EditorMode::Ref,
-                    route: Some(route.clone()),
-                    section: None,
-                    block_id: None,
-                    needs: Vec::new(),
-                    ref_listen: true,
-                    pomodoro_start: None,
-                    pomodoro_adjust: None,
-                    pomodoro_shift: None,
-                    pomodoro_close: None,
-                    dependencies: Vec::new(),
-                    blocked_tasks: Vec::new(),
-                    relations: Vec::new(),
-                    dependency_target: None,
-                    task_complete: None,
-                    spans: vec![
-                        Span {
-                            start: route_token.start,
-                            end: route_token.end,
-                            kind: SpanKind::Route,
-                            project_note: None,
-                        },
-                        Span {
-                            start: url_token.start,
-                            end: url_token.end,
-                            kind: SpanKind::RefUrl,
-                            project_note: None,
-                        },
-                        Span {
-                            start: tokens[2].start,
-                            end: tokens[2].end,
-                            kind: SpanKind::RefListen,
-                            project_note: None,
-                        },
-                    ],
-                    diagnostics: Vec::new(),
-                    sub_bullets: Vec::new(),
-                    has_local_destination: true,
-                    local_destination_markers: vec![LocalDestinationMarker {
-                        start: route_token.start,
-                        end: route_token.end,
-                        text: route_token.text.to_string(),
-                        mode: EditorMode::Ref,
-                        route: Some(route),
-                        block_id: None,
-                        section: None,
-                    }],
-                },
-                declarations: Vec::new(),
-            });
-        }
-    }
     None
 }
 
@@ -1408,12 +1198,17 @@ pub(super) fn parse_editor_item_with<'a>(
         super::type_marker::masked_item(item, &type_masked_source);
     let directive_occurrences =
         super::directive::collect_item(&type_masked_item);
-    let has_clip = super::directive::resolve(&directive_occurrences)
-        .ok()
-        .and_then(|directives| directives.clip)
+    let resolved = super::directive::resolve(&directive_occurrences).ok();
+    let has_clip = resolved
+        .as_ref()
+        .and_then(|directives| directives.clip.clone())
         .is_some();
+    let has_note = resolved.as_ref().is_some_and(|directives| directives.note);
+    let has_listen = resolved
+        .as_ref()
+        .is_some_and(|directives| directives.listen);
     if occurrences.is_empty() && directive_occurrences.is_empty() {
-        return parse_editor_item_inner(item, options, false);
+        return parse_editor_item_inner(item, options, false, false);
     }
     // Type markers and % directives are transparent to every existing
     // claim: run the established parse on the offset-preserving masked
@@ -1430,16 +1225,70 @@ pub(super) fn parse_editor_item_with<'a>(
     masked_item
         .lines
         .retain(|line| !skips.contains(&(line.raw.start, line.raw.end)));
-    let inner = parse_editor_item_inner(&masked_item, options, has_clip);
+    let inner =
+        parse_editor_item_inner(&masked_item, options, has_clip, has_listen);
     let declarations =
         remap_type_marker_declarations(inner.declarations, item.source);
     let mut outcome = EditorItemOutcome {
         item: inner.item,
         declarations,
     };
+    if has_note {
+        apply_note_directive(&mut outcome.item);
+    }
     attach_type_marker_metadata(&mut outcome.item, &occurrences);
     attach_directive_metadata(&mut outcome.item, &directive_occurrences);
+    if has_listen {
+        apply_listen_directive(&mut outcome.item);
+    }
     outcome
+}
+
+fn apply_note_directive(parsed: &mut EditorItemParse) {
+    if parsed.mode == EditorMode::PomodoroNote {
+        return;
+    }
+    if parsed.route.is_some() || parsed.has_local_destination {
+        parsed.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "pomodoro_note_conflict",
+            message: pomodoro_note_route_conflict_error(),
+            range: None,
+        });
+        return;
+    }
+    parsed.mode = EditorMode::PomodoroNote;
+    parsed.route = None;
+    parsed.section = None;
+    parsed.block_id = None;
+    parsed.has_local_destination = false;
+    parsed.local_destination_markers.clear();
+}
+
+fn apply_listen_directive(parsed: &mut EditorItemParse) {
+    if parsed.mode == EditorMode::Ref && parsed.ref_listen {
+        return;
+    }
+    // `%l` only applies to bare-URL reference items; anything else gets
+    // the directive error instead of silently capturing as a task.
+    if parsed
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "directive_not_applicable")
+    {
+        return;
+    }
+    let range = parsed
+        .spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Directive)
+        .map(|span| (span.start, span.end));
+    parsed.diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: "directive_not_applicable",
+        message: super::directive::directive_not_applicable_error(),
+        range,
+    });
 }
 
 /// Re-slice borrowed global declarations back to the original draft text.
@@ -1785,6 +1634,7 @@ pub(super) fn parse_editor_item_inner<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
     has_clip: bool,
+    has_listen: bool,
 ) -> EditorItemOutcome<'a> {
     if let Some(task_goto) = parse_editor_task_goto_item(item) {
         return task_goto;
@@ -1804,8 +1654,16 @@ pub(super) fn parse_editor_item_inner<'a>(
     if let Some(adjustment) = parse_editor_adjust_item(item) {
         return attach_operator_dependency_rejection(adjustment, item);
     }
-    if !has_clip && let Some(reference) = parse_editor_ref_item(item, options) {
-        return reference;
+    if !has_clip {
+        if let Some(reference) =
+            parse_editor_ref_item(item, options, has_listen)
+        {
+            return reference;
+        }
+        if has_listen {
+            // `%l` on a non-reference shape falls through to the generic
+            // task path; `apply_listen_directive` reports it.
+        }
     }
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();

@@ -21,7 +21,7 @@ fn capture_bare_terminal_marker_writes_pomodoro_note_under_current_pomodoro() {
         .arg("json")
         .arg("jot")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -74,7 +74,7 @@ fn capture_bare_terminal_marker_human_output_shows_the_ledger_entry() {
         .arg(&vault)
         .arg("jot")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -105,7 +105,7 @@ fn capture_bare_terminal_marker_falls_back_to_the_last_completed_pomodoro() {
         .arg("json")
         .arg("note")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -142,7 +142,7 @@ fn capture_bare_terminal_marker_falls_back_to_the_first_future_pomodoro() {
         .arg("json")
         .arg("note")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -182,7 +182,7 @@ fn capture_bare_terminal_marker_selects_the_last_of_two_completed_pomodoros() {
         .arg("json")
         .arg("note")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -219,7 +219,7 @@ fn capture_bare_terminal_marker_multiple_open_timed_pomodoros_is_io_error() {
         .arg(&vault)
         .arg("note")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -275,7 +275,7 @@ fn capture_bare_terminal_marker_preflight_failures_leave_daily_note_untouched()
             .arg(&vault)
             .arg("note")
             .arg("this")
-            .arg("#")
+            .arg("%n")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 13:40:00")
             .output()
@@ -323,7 +323,7 @@ fn capture_bare_terminal_marker_dry_run_reports_plan_and_writes_nothing() {
         .arg("json")
         .arg("note")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()
@@ -349,7 +349,7 @@ fn capture_bare_terminal_marker_batch_items_land_under_the_same_pomodoro_in_orde
     let day_file = vault.join("day.md");
     write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
 
-    let draft = concat!("first note #", "\n", "\n", "second note #");
+    let draft = concat!("first note %n", "\n", "\n", "second note %n");
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -380,7 +380,7 @@ fn capture_bare_terminal_marker_batch_items_stack_under_the_same_completed_pomod
     let day_file = vault.join("day.md");
     write_file(&day_file, "## Pomodoros\n\n- [x] Done (0900-0930)\n");
 
-    let draft = concat!("first note #", "\n", "\n", "second note #");
+    let draft = concat!("first note %n", "\n", "\n", "second note %n");
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -419,7 +419,7 @@ fn capture_bare_terminal_marker_keeps_crlf_line_endings() {
         .arg(&vault)
         .arg("note")
         .arg("this")
-        .arg("#")
+        .arg("%n")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .output()

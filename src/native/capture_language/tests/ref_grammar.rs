@@ -220,7 +220,7 @@ fn forced_destination_global_and_clip_keep_tasks() {
     assert_eq!(forced_ref.body, "https://example.com/post");
 
     let forced_listen = parse_capture_text_with_clip_control(
-        "https://example.com/post @",
+        "https://example.com/post %l",
         Some("notes"),
         None,
         &routing_options(Some(&policy)),
@@ -246,7 +246,7 @@ fn forced_destination_global_and_clip_keep_tasks() {
     assert_eq!(draft.items[0].ref_source, Some(RefParentSource::Global));
 
     let global_listen =
-        draft_routing("@@notes\nhttps://example.com/post @", Some(&policy))
+        draft_routing("@@notes\nhttps://example.com/post %l", Some(&policy))
             .expect("global listen reference parses");
     let CaptureKind::Ref(intent) = &global_listen.items[0].parsed.kind else {
         panic!("expected ref, got {:?}", global_listen.items[0].parsed.kind);
@@ -432,16 +432,16 @@ fn editor_url_list_items_each_report_ref() {
     assert_eq!(ranges.len(), 2);
     assert!(ranges[0].1 <= ranges[1].0, "spans must not overlap");
 
-    let mixed = "https://example.com/é @\nhttps://example.com/b";
+    let mixed = "https://example.com/é %l\nhttps://example.com/b";
     let parse = editor_routing(mixed, Some(&policy));
     assert_eq!(parse.items.len(), 2);
     assert!(parse.items[0].ref_listen);
     assert!(!parse.items[1].ref_listen);
-    let listen_start = mixed.find('@').expect("listen marker byte offset");
+    let listen_start = mixed.find('%').expect("listen marker byte offset");
     assert!(parse.spans.iter().any(|span| {
-        span.kind == SpanKind::RefListen
+        span.kind == SpanKind::Directive
             && span.start == listen_start
-            && span.end == listen_start + 1
+            && span.end == listen_start + 2
     }));
 }
 
@@ -519,55 +519,54 @@ fn editor_ref_route_spans_use_byte_offsets_including_utf8() {
 }
 
 #[test]
-fn standalone_percent_and_at_listen_markers_request_companion_audio() {
-    use crate::native::url_routing::{
-        is_standalone_listen_marker, is_url_list_line,
-    };
+fn percent_l_directive_requests_companion_audio() {
+    use crate::native::url_routing::is_url_list_line;
 
     let policy = open_policy();
-    // Reference listen recognition is exact and context-dependent: `%` and
-    // the compatible `@` alias, never a clipboard header/count or URL bytes.
-    assert!(is_standalone_listen_marker("@"));
-    assert!(is_standalone_listen_marker("%"));
-    assert!(!is_standalone_listen_marker("@sase"));
-    assert!(!is_standalone_listen_marker("%1"));
-    assert!(!is_standalone_listen_marker("%header"));
-    assert!(!is_standalone_listen_marker("https://example.com/path@"));
-    assert!(!is_standalone_listen_marker("%40"));
-    // Lexical URL lists accept either listen spelling with spaces/tabs.
-    assert!(is_url_list_line("https://example.com/a @"));
-    assert!(is_url_list_line("https://example.com/a\t@"));
-    assert!(is_url_list_line("https://example.com/a %"));
-    assert!(is_url_list_line("https://example.com/a\t%"));
-    assert!(!is_url_list_line("  https://example.com/a @"));
+    // `%l` is the only listen spelling; bare `%` is an incomplete
+    // directive and a bare `@` stays ordinary task text.
+    assert!(is_url_list_line("https://example.com/a"));
+    assert!(!is_url_list_line("https://example.com/a @"));
+    assert!(!is_url_list_line("https://example.com/a\t@"));
+    assert!(!is_url_list_line("https://example.com/a %"));
+    assert!(!is_url_list_line("https://example.com/a\t%"));
+    assert!(!is_url_list_line("  https://example.com/a"));
     assert!(!is_url_list_line("https://example.com/a @ @"));
     // Attached `@` stays a single-token URL line, never a listen split.
     assert!(is_url_list_line("https://example.com/path@"));
 
-    // Both spellings claim the same reference intent; the body excludes
-    // only the standalone marker, leaving URL identity untouched. Bare
-    // `%` is an incomplete directive everywhere except these listen
-    // shapes, which stay until `%l` replaces them.
-    let percent = execute_routing("https://example.com/post %", Some(&policy))
-        .expect("URL % claims");
-    let CaptureKind::Ref(intent) = &percent.kind else {
-        panic!("expected ref, got {:?}", percent.kind);
+    // `%l` claims the same reference intent; the body excludes only the
+    // directive, leaving URL identity untouched.
+    let listen = execute_routing("https://example.com/post %l", Some(&policy))
+        .expect("URL %l claims");
+    let CaptureKind::Ref(intent) = &listen.kind else {
+        panic!("expected ref, got {:?}", listen.kind);
     };
     assert!(intent.listen);
-    assert_eq!(percent.body, "https://example.com/post");
+    assert_eq!(listen.body, "https://example.com/post");
     assert_eq!(intent.cleaned, "https://example.com/post");
-    assert!(percent.route.is_none());
+    assert!(listen.route.is_none());
 
+    // Bare `%` is incomplete even on a URL; `%l` elsewhere refuses.
+    assert_eq!(
+        execute_routing("https://example.com/post %", Some(&policy))
+            .unwrap_err(),
+        crate::native::capture_language::incomplete_directive_error()
+    );
     assert_eq!(
         execute_routing("read this %", Some(&policy)).unwrap_err(),
         crate::native::capture_language::incomplete_directive_error()
     );
+    assert_eq!(
+        execute_routing("remember this %l", Some(&policy)).unwrap_err(),
+        crate::native::capture_language::directive::directive_not_applicable_error()
+    );
 
     for raw in [
-        "<https://example.com/post> %",
-        "https://example.com/post\t%",
-        "<https://example.com/post> @",
-        "https://example.com/post\t@",
+        "<https://example.com/post> %l",
+        "https://example.com/post\t%l",
+        "%l https://example.com/post",
+        "https://example.com/post %l",
     ] {
         let parsed = execute_routing(raw, Some(&policy))
             .unwrap_or_else(|error| panic!("{raw}: {error}"));
@@ -578,37 +577,17 @@ fn standalone_percent_and_at_listen_markers_request_companion_audio() {
         assert_eq!(intent.cleaned, "https://example.com/post", "{raw}");
     }
 
-    let parsed = execute_routing("https://example.com/post @", Some(&policy))
-        .expect("URL @ claims");
-    let CaptureKind::Ref(intent) = &parsed.kind else {
-        panic!("expected ref, got {:?}", parsed.kind);
-    };
-    assert!(intent.listen);
-    assert_eq!(parsed.body, "https://example.com/post");
-    assert_eq!(intent.cleaned, "https://example.com/post");
-    assert!(parsed.route.is_none());
+    // Old `URL %` / `URL @` spellings no longer claim listen.
+    assert_not_ref("https://example.com/post %", Some(&policy));
+    // `URL @` stays a task (a lone `@` is not a route).
+    let plain_at = execute_routing("https://example.com/post @", Some(&policy))
+        .expect("URL @ parses as task");
+    assert!(matches!(plain_at.kind, CaptureKind::Task));
 
-    let alias_with_route =
-        execute_routing("https://example.com/post @ @sase", Some(&policy))
-            .expect("URL @ @route alias claims");
-    let CaptureKind::Ref(intent) = &alias_with_route.kind else {
-        panic!("expected ref, got {:?}", alias_with_route.kind);
-    };
-    assert!(intent.listen);
-    assert_eq!(alias_with_route.route.as_deref(), Some("sase"));
-    let leading_alias =
-        execute_routing("@sase https://example.com/post @", Some(&policy))
-            .expect("@route URL @ alias claims");
-    let CaptureKind::Ref(intent) = &leading_alias.kind else {
-        panic!("expected ref, got {:?}", leading_alias.kind);
-    };
-    assert!(intent.listen);
-    assert_eq!(leading_alias.route.as_deref(), Some("sase"));
-
-    // `URL % @sase`: listen with trailing explicit parent.
+    // `URL %l @sase`: listen with trailing explicit parent.
     let parsed =
-        execute_routing("https://example.com/post % @sase", Some(&policy))
-            .expect("URL % @route claims");
+        execute_routing("https://example.com/post %l @sase", Some(&policy))
+            .expect("URL %l @route claims");
     let CaptureKind::Ref(intent) = &parsed.kind else {
         panic!("expected ref, got {:?}", parsed.kind);
     };
@@ -616,31 +595,10 @@ fn standalone_percent_and_at_listen_markers_request_companion_audio() {
     assert_eq!(parsed.body, "https://example.com/post");
     assert_eq!(parsed.route.as_deref(), Some("sase"));
 
-    // `@sase URL %`: listen with leading explicit parent.
+    // `@sase URL %l`: listen with leading explicit parent.
     let parsed =
-        execute_routing("@sase https://example.com/post %", Some(&policy))
-            .expect("leading route URL % claims");
-    let CaptureKind::Ref(intent) = &parsed.kind else {
-        panic!("expected ref, got {:?}", parsed.kind);
-    };
-    assert!(intent.listen);
-    assert_eq!(parsed.route.as_deref(), Some("sase"));
-
-    // `URL @ @sase`: listen with trailing explicit parent.
-    let parsed =
-        execute_routing("https://example.com/post @ @sase", Some(&policy))
-            .expect("URL @ @route claims");
-    let CaptureKind::Ref(intent) = &parsed.kind else {
-        panic!("expected ref, got {:?}", parsed.kind);
-    };
-    assert!(intent.listen);
-    assert_eq!(parsed.body, "https://example.com/post");
-    assert_eq!(parsed.route.as_deref(), Some("sase"));
-
-    // `@sase URL @`: listen with leading explicit parent.
-    let parsed =
-        execute_routing("@sase https://example.com/post @", Some(&policy))
-            .expect("leading route URL @ claims");
+        execute_routing("@sase https://example.com/post %l", Some(&policy))
+            .expect("leading route URL %l claims");
     let CaptureKind::Ref(intent) = &parsed.kind else {
         panic!("expected ref, got {:?}", parsed.kind);
     };
@@ -648,9 +606,8 @@ fn standalone_percent_and_at_listen_markers_request_companion_audio() {
     assert_eq!(parsed.route.as_deref(), Some("sase"));
 
     // Unsupported shapes stay tasks/diagnostics, never refs.
-    assert_not_ref("https://example.com/post @sase %", Some(&policy));
-    assert_not_ref("https://example.com/post % %", Some(&policy));
-    assert_not_ref("Read https://example.com/post @", Some(&policy));
+    assert_not_ref("https://example.com/post %l %l", Some(&policy));
+    assert_not_ref("Read https://example.com/post %l", Some(&policy));
 
     // Attached `@` stays part of the URL, never a marker.
     let parsed = execute_routing("https://example.com/path@", Some(&policy))
@@ -660,8 +617,8 @@ fn standalone_percent_and_at_listen_markers_request_companion_audio() {
     };
     assert!(!intent.listen);
 
-    // Editor: `%` reports ref with listen and both spans.
-    let parse = editor_routing("https://example.com/post %", Some(&policy));
+    // Editor: `%l` reports ref with listen and a directive span.
+    let parse = editor_routing("https://example.com/post %l", Some(&policy));
     assert_eq!(parse.mode, EditorMode::Ref);
     assert_eq!(parse.body, "https://example.com/post");
     assert!(parse.ref_listen);
@@ -669,25 +626,18 @@ fn standalone_percent_and_at_listen_markers_request_companion_audio() {
     assert!(parse
         .spans
         .iter()
-        .any(|span| span.kind == SpanKind::RefListen));
-    let alias = editor_routing("https://example.com/post @", Some(&policy));
-    assert_eq!(alias.mode, EditorMode::Ref);
-    assert!(alias.ref_listen);
-    assert!(alias
-        .spans
-        .iter()
-        .any(|span| span.kind == SpanKind::RefListen));
-    // Unmarked editor has no listen span.
+        .any(|span| span.kind == SpanKind::Directive));
+    // Unmarked editor has no listen and no directive span.
     let plain = editor_routing("https://example.com/post", Some(&policy));
     assert!(!plain.ref_listen);
     assert!(!plain
         .spans
         .iter()
-        .any(|span| span.kind == SpanKind::RefListen));
+        .any(|span| span.kind == SpanKind::Directive));
 
-    // URL lists split percent-marked and unmarked lines independently.
+    // URL lists split listen-marked and unmarked lines independently.
     let draft = draft_routing(
-        "https://example.com/a %\nhttps://example.com/b\n",
+        "https://example.com/a %l\nhttps://example.com/b\n",
         Some(&policy),
     )
     .expect("mixed list splits");
@@ -709,30 +659,4 @@ fn standalone_percent_and_at_listen_markers_request_companion_audio() {
         panic!("expected ref");
     };
     assert!(!second_intent.listen);
-
-    // Completion preserves the listen directive and completes a separate
-    // route token that follows it.
-    assert!(crate::native::capture_language::completion_field_at(
-        "https://example.com/post @",
-        "https://example.com/post @".len()
-    )
-    .is_none());
-    let route_draft = "https://example.com/post @ @sa";
-    assert_eq!(
-        crate::native::capture_language::completion_field_at(
-            route_draft,
-            route_draft.len()
-        )
-        .map(|field| field.context),
-        Some(crate::native::capture_language::CompletionContext::Route)
-    );
-    let alias_route_draft = "https://example.com/post @ @sa";
-    assert_eq!(
-        crate::native::capture_language::completion_field_at(
-            alias_route_draft,
-            alias_route_draft.len()
-        )
-        .map(|field| field.context),
-        Some(crate::native::capture_language::CompletionContext::Route)
-    );
 }

@@ -226,7 +226,21 @@ fn absorb_bare_declaration(
             .local_destination_markers
             .as_slice()
         {
-            [] => {}
+            [] => {
+                // A `%n` Pomodoro-note item owns no local destination
+                // marker, but a bare `@@` still cannot absorb it.
+                if item_outcomes[item_index].item.mode
+                    == EditorMode::PomodoroNote
+                {
+                    return unchanged_rewrite(
+                        raw_text,
+                        cursor,
+                        vec![format!(
+                            "@@ cannot take a Pomodoro note: leave %n on this item, or delete it"
+                        )],
+                    );
+                }
+            }
             [marker] => {
                 return match classify_local_marker(marker) {
                     LocalMarkerAbsorbability::Absorbable(payload) => {

@@ -14,8 +14,7 @@ use super::model::{note_ref, KeepNote};
 use super::GkeepError;
 use crate::native::config::ConfigError;
 use crate::native::url_routing::{
-    classify_token, is_standalone_listen_marker, RefIntent, RoutingEntry,
-    UrlRoutingPolicy,
+    classify_token, RefIntent, RoutingEntry, UrlRoutingPolicy,
 };
 
 /// Planner inputs: the pull/list selection flags.
@@ -383,8 +382,8 @@ fn url_only_body_tokens(
             }
             Some((RefIntent::without_listen(intent), None))
         }
-        // `URL %` / `URL @`: listen with existing parent selection.
-        [url_token, marker] if is_standalone_listen_marker(marker) => {
+        // `URL %l`: listen with existing parent selection.
+        [url_token, marker] if *marker == "%l" => {
             let intent = classify_token(url_token)?;
             if !policy.admits(&intent, RoutingEntry::Gkeep) {
                 return None;
@@ -398,9 +397,9 @@ fn url_only_body_tokens(
             Some((RefIntent::with_listen(intent), None))
         }
         [url_token, route_token] => {
-            // Listen markers are handled above; a second token that is not a
-            // plain route (including a second `@`) stays an ordinary note.
-            if is_standalone_listen_marker(route_token) {
+            // `%l` is handled above; a second token that is not a plain
+            // route stays an ordinary note.
+            if *route_token == "%l" {
                 return None;
             }
             let route = parse_trailing_route(route_token)?;
@@ -416,11 +415,9 @@ fn url_only_body_tokens(
             }
             Some((RefIntent::without_listen(intent), Some(route)))
         }
-        // `URL % @route`: listen with trailing explicit parent.
-        [url_token, marker, route_token]
-            if is_standalone_listen_marker(marker) =>
-        {
-            if is_standalone_listen_marker(route_token) {
+        // `URL %l @route`: listen with trailing explicit parent.
+        [url_token, marker, route_token] if *marker == "%l" => {
+            if *route_token == "%l" {
                 return None;
             }
             let route = parse_trailing_route(route_token)?;
@@ -888,21 +885,14 @@ mod tests {
             (
                 "percent body",
                 "",
-                "https://arxiv.org/pdf/2609.12039 %",
+                "https://arxiv.org/pdf/2609.12039 %l",
                 None,
             ),
-            ("percent title", "https://example.com/title %", "", None),
-            ("at alias", "", "https://example.com/post @", None),
+            ("percent title", "https://example.com/title %l", "", None),
             (
-                "at alias with route",
+                "listen with route",
                 "",
-                "https://example.com/routed @ @sase",
-                Some("sase"),
-            ),
-            (
-                "percent with route",
-                "",
-                "https://example.com/post % @sase",
+                "https://example.com/post %l @sase",
                 Some("sase"),
             ),
         ];

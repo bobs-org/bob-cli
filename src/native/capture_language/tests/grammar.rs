@@ -1403,7 +1403,7 @@ fn execution_three_component_marker_composes_on_multiline_first_line_only() {
 #[test]
 fn execution_keeps_pomodoro_note_and_other_families_unchanged() {
     let parsed =
-        execute("remembered to bump the timeout #").expect("bare hash");
+        execute("remembered to bump the timeout %n").expect("bare hash");
     assert_eq!(parsed.kind, CaptureKind::PomodoroNote);
     assert_eq!(parsed.body, "remembered to bump the timeout");
 

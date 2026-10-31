@@ -638,9 +638,9 @@ fn capture_parse_json_reports_pomodoro_note_mode_and_span() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("note #")
+        .arg("note %n")
         .output()
-        .expect("run bob capture-parse on a bare #");
+        .expect("run bob capture-parse on a %n directive");
 
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
@@ -651,7 +651,7 @@ fn capture_parse_json_reports_pomodoro_note_mode_and_span() {
     assert_eq!(json["needs"], serde_json::json!([]));
     assert_eq!(
         json["spans"],
-        serde_json::json!([{ "start": 5, "end": 6, "kind": "pomodoro_note" }])
+        serde_json::json!([{ "start": 5, "end": 7, "kind": "directive", "directive": "note" }])
     );
     assert!(json["diagnostics"].as_array().unwrap().is_empty());
 
@@ -660,9 +660,9 @@ fn capture_parse_json_reports_pomodoro_note_mode_and_span() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("note # @work")
+        .arg("note %n @work")
         .output()
-        .expect("run bob capture-parse on a conflicting # and @route");
+        .expect("run bob capture-parse on a conflicting %n and @route");
 
     assert_success(&conflict);
     let json: serde_json::Value =
@@ -987,7 +987,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("remembered to bump the timeout #")
+        .arg("remembered to bump the timeout %n")
         .output()
         .expect("run bare hash parse");
     assert_success(&pomodoro_note);

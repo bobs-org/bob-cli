@@ -228,9 +228,9 @@ else — an empty title with a link body, an empty body with a link title, a
 title equal to the link, or a page title equal to the shared-link preview
 title — is clipped inline to an intake PDF instead of becoming a task. The
 trailing route and listen marker never become part of the clip target.
-`URL %` (or the compatible `URL @`) requests companion audio like
-`bob ref create <URL> -P <parent> -L`; `URL % @route` adds an explicit
-parent (the compatible alias form is `URL @ @route`). The listen marker
+`URL %l` requests companion audio like
+`bob ref create <URL> -P <parent> -L`; `URL %l @route` adds an explicit
+parent. The listen marker
 must immediately follow the URL.
 Pull messages name the selected parent (`would clip →
 sase`, `filed → <pdf> → <note> → sase`, `queued → <pdf> (<reason>) → sase`,
@@ -244,7 +244,7 @@ after `bob ref scan`. Lists, notes
 with attachments, shared notes (even with `-S`), multi-link (beyond one
 trailing route) or link-plus-prose notes, corporate short links, IP
 literals, and `highlights.url_routing.exclude_hosts` entries stay tasks.
-`URL @route %`, duplicate markers, attached `path@`, and leading routes stay
+duplicate markers, attached `path@`, and leading routes stay
 ordinary notes. Non-reference percent markers retain clipboard semantics in
 capture; URL `%1` explicitly requests that path.
 Pinned notes included with `-p` follow the rule like any other note. A

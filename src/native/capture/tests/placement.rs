@@ -585,8 +585,8 @@ fn edge_hash_markers_are_task_types_not_legacy_bullet_selectors() {
 
 #[test]
 fn bare_trailing_hash_resolves_pomodoro_note() {
-    let parsed = parse_capture_text("Some note #", None)
-        .expect("bare trailing # is the Pomodoro-note marker");
+    let parsed = parse_capture_text("Some note %n", None)
+        .expect("%n is the Pomodoro-note marker");
     assert_eq!(parsed.body, "Some note");
     assert_eq!(parsed.route, None);
     assert_eq!(parsed.kind, CaptureKind::PomodoroNote);
@@ -615,11 +615,11 @@ fn forced_route_accepts_terminal_type_marker_but_keeps_middle_hashtag() {
 
 #[test]
 fn marker_only_bullet_input_is_usage_error() {
-    let error = parse_capture_text("#", None).expect_err("marker only");
+    let error = parse_capture_text("%n", None).expect_err("marker only");
     assert_eq!(error.kind, CaptureErrorKind::Usage);
 
     let error =
-        parse_capture_text("#", Some("Work")).expect_err("forced marker only");
+        parse_capture_text("%n", Some("Work")).expect_err("forced marker only");
     assert_eq!(error.kind, CaptureErrorKind::Usage);
 }
 

@@ -580,7 +580,7 @@ fn capture_library_hits_are_unchanged() {
     let output = capture(
         &temp,
         &vault,
-        &["-f", "json", "https://example.com/captured @"],
+        &["-f", "json", "https://example.com/captured %l"],
     )
     .output()
     .expect("run known percent-listen capture");
@@ -975,7 +975,7 @@ fn percent_listen_reference_runs_existing_worker_and_installs_audio() {
     let fake = FakeClip::new(&temp, "fake");
     let curl = write_article_curl(temp.path());
     let (listen_log, listen_path) = setup_fake_listen_sase(&temp);
-    let url = format!("{ARTICLE_URL} %");
+    let url = format!("{ARTICLE_URL} %l");
 
     let output = capture(&temp, &vault, &["-f", "json", url.as_str()])
         .env("BOB_HIGHLIGHTS_CURL", &curl)
@@ -1024,16 +1024,19 @@ fn failed_percent_listen_worker_keeps_listen_retry_guidance() {
     let curl = write_article_curl(temp.path());
     let (listen_log, listen_path) = setup_fake_listen_sase(&temp);
 
-    let output =
-        capture(&temp, &vault, &["-f", "json", "https://example.com/post @"])
-            .env("BOB_HIGHLIGHTS_CURL", &curl)
-            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-            .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
-            .env("PATH", &listen_path)
-            .env("FAKE_LISTEN_LOG", &listen_log)
-            .env("BOB_REF_JOBS_KICK", "off")
-            .output()
-            .expect("queue percent-listen reference");
+    let output = capture(
+        &temp,
+        &vault,
+        &["-f", "json", "https://example.com/post %l"],
+    )
+    .env("BOB_HIGHLIGHTS_CURL", &curl)
+    .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+    .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+    .env("PATH", &listen_path)
+    .env("FAKE_LISTEN_LOG", &listen_log)
+    .env("BOB_REF_JOBS_KICK", "off")
+    .output()
+    .expect("queue percent-listen reference");
     assert_success(&output);
     assert_eq!(parse_json(&output)["ref"]["listen"], true);
 
@@ -1234,7 +1237,7 @@ fn percent_listen_reference_never_reads_clipboard_and_queues_listen_job() {
             shell_single_quote(path_str(&marker))
         ),
     );
-    let draft = format!("{ARXIV_PDF_URL} %");
+    let draft = format!("{ARXIV_PDF_URL} %l");
 
     let parsed = bob_command()
         .arg("capture-parse")
@@ -1251,9 +1254,9 @@ fn percent_listen_reference_never_reads_clipboard_and_queues_listen_job() {
     assert_eq!(parsed_json["mode"], "ref", "{parsed_json}");
     assert_eq!(parsed_json["ref_listen"], true, "{parsed_json}");
     assert!(parsed_json["spans"].as_array().unwrap().iter().any(|span| {
-        span["kind"] == "ref_listen"
+        span["kind"] == "directive"
             && span["start"] == ARXIV_PDF_URL.len() + 1
-            && span["end"] == ARXIV_PDF_URL.len() + 2
+            && span["end"] == ARXIV_PDF_URL.len() + 3
     }));
     assert!(!marker.exists(), "parse must not read clipboard");
 

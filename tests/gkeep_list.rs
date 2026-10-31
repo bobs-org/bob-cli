@@ -827,11 +827,11 @@ fn url_only_note_shows_ref_hint_and_json_verdict() {
         .build();
     let percent_listen_note = note("")
         .id("note-3")
-        .text("https://arxiv.org/pdf/2609.12039 %")
+        .text("https://arxiv.org/pdf/2609.12039 %l")
         .build();
     let at_listen_note = note("")
         .id("note-4")
-        .text("https://example.com/post @")
+        .text("https://example.com/post %l")
         .build();
     fake.respond(
         "snapshot",

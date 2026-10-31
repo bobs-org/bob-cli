@@ -53,42 +53,12 @@ pub(super) fn select_marker_token(
 
     if tokens.len() >= 2 {
         let last = tokens.len() - 1;
-        if is_pomodoro_note_marker(tokens[last].text) {
-            return Some((
-                last,
-                TokenParse::Marker(pomodoro_note_marker_parse(&tokens[last])),
-            ));
-        }
         if let Some(parse) = classify_editor_token(&tokens[last]) {
             return Some((last, parse));
         }
     }
 
     None
-}
-
-/// The bare `#` token never has a partially-typed form, needs nothing else,
-/// and -- unlike every `@...` marker -- is only ever recognized as the final
-/// token of a line, so it is classified directly in
-/// [`select_marker_token`]'s trailing slot rather than through
-/// [`classify_editor_token`] (which a leading check also consults).
-pub(super) fn pomodoro_note_marker_parse(token: &Token<'_>) -> MarkerParse {
-    MarkerParse {
-        mode: EditorMode::PomodoroNote,
-        route: None,
-        section: None,
-        block_id: None,
-        needs: Vec::new(),
-        spans: vec![Span {
-            start: token.start,
-            end: token.end,
-            kind: SpanKind::PomodoroNote,
-            project_note: None,
-        }],
-        requires_body: false,
-        pomodoro_start: None,
-        pomodoro_close: None,
-    }
 }
 
 /// Classify one `@...` token, returning `None` when the token is not
@@ -2150,48 +2120,6 @@ pub(super) fn retired_priority_marker_diagnostic(
         code: "retired_priority_marker",
         message: retired_priority_marker_error(&retired.token),
         range: retired.span,
-    })
-}
-
-/// Diagnose a same-line combination of the bare `#` Pomodoro-note marker
-/// with an `@route`-shaped marker, mirroring [`resolve_line`]'s route
-/// conflict rejection so the editor and `bob capture` never disagree.
-/// Schedule (`s:<N>`) and priority (`$<N>`) conflicts are item-wide and
-/// diagnosed separately in [`parse_editor_item`] once the whole item's mode
-/// is known; a forced `--route` conflict never reaches the editor, which has
-/// no forced-route flag.
-pub(super) fn pomodoro_note_conflict_diagnostic(
-    tokens: &[Token<'_>],
-    leading: bool,
-) -> Option<Diagnostic> {
-    let texts: Vec<&str> = tokens.iter().map(|token| token.text).collect();
-    if !texts.contains(&"#") {
-        return None;
-    }
-    let hash = tokens.iter().find(|token| token.text == "#")?;
-
-    let conflict = match texts.last() {
-        Some(&"#") => {
-            let remaining = &texts[..texts.len() - 1];
-            (leading
-                && remaining
-                    .first()
-                    .is_some_and(|token| is_route_marker(token)))
-                || remaining.last().is_some_and(|token| is_route_marker(token))
-        }
-        Some(&last) => {
-            (leading
-                && texts.first().is_some_and(|token| is_route_marker(token)))
-                || is_route_marker(last)
-        }
-        None => false,
-    };
-
-    conflict.then(|| Diagnostic {
-        severity: Severity::Error,
-        code: "pomodoro_note_conflict",
-        message: pomodoro_note_route_conflict_error(),
-        range: Some((hash.start, hash.end)),
     })
 }
 

@@ -679,7 +679,7 @@ fn template_url_listen_marker_is_not_clipboard_capture() {
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
         .args(["--dry-run", "--no-clip", "-f", "json"])
-        .arg("@@template:\n{0}\n\n\"https://example.com/one @\"\n")
+        .arg("@@template:\n{0}\n\n\"https://example.com/one %l\"\n")
         .output()
         .expect("run URL listen template");
     assert_success(&output);
@@ -693,7 +693,7 @@ fn template_url_listen_marker_is_not_clipboard_capture() {
 
     let unquoted = capture(&temp, &vault)
         .args(["--dry-run", "--no-clip", "-f", "json"])
-        .arg("@@template:\n{0}\n\nhttps://example.com/one %\n")
+        .arg("@@template:\n{0}\n\nhttps://example.com/one %l\n")
         .output()
         .expect("run unquoted URL listen template");
     assert_eq!(
