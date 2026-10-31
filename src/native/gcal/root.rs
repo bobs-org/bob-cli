@@ -27,11 +27,30 @@ pub(crate) struct RootRejection {
     pub fix: String,
 }
 
+/// How the chosen root was selected. Distinguishes series memory from
+/// Google-owned sources without string-matching the `"learned from"` label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RootSourceKind {
+    #[default]
+    None,
+    /// Source 1: series memory of an earlier `[root::]` edit.
+    SeriesMemory,
+    /// Title-ending or description-only `@route` token.
+    Token,
+    /// Event colour mapping (`gcal.colors`).
+    Colour,
+    /// Calendar-level `root`.
+    Calendar,
+    /// Config default (`gcal.root`).
+    Default,
+}
+
 /// Chosen root and user-facing provenance for one Event Task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EventRoot {
     pub value: Option<String>,
     pub source: Option<String>,
+    pub kind: RootSourceKind,
     pub hue: Option<Hue>,
     pub warnings: Vec<String>,
     pub title: String,
@@ -61,7 +80,13 @@ pub(crate) fn choose_event_root(
         };
         match validate_root_candidate(vault, daily_rel, &learned.root) {
             Ok(target) => {
-                return chosen(target, label, warnings, title);
+                return chosen(
+                    target,
+                    label,
+                    RootSourceKind::SeriesMemory,
+                    warnings,
+                    title,
+                );
             }
             Err(rejection) => warnings.push(rejection_message(
                 &format!("series memory ({})", learned.root),
@@ -85,6 +110,7 @@ pub(crate) fn choose_event_root(
                         return chosen(
                             target,
                             format!("@{route}"),
+                            RootSourceKind::Token,
                             warnings,
                             title,
                         );
@@ -124,6 +150,7 @@ pub(crate) fn choose_event_root(
                 return chosen(
                     target,
                     format!("colour {color}"),
+                    RootSourceKind::Colour,
                     warnings,
                     title,
                 );
@@ -141,6 +168,7 @@ pub(crate) fn choose_event_root(
                 return chosen(
                     target,
                     format!("calendar {calendar_name}"),
+                    RootSourceKind::Calendar,
                     warnings,
                     title,
                 );
@@ -153,12 +181,19 @@ pub(crate) fn choose_event_root(
     }
 
     match validate_root_candidate(vault, daily_rel, config.root()) {
-        Ok(target) => chosen(target, "default".to_string(), warnings, title),
+        Ok(target) => chosen(
+            target,
+            "default".to_string(),
+            RootSourceKind::Default,
+            warnings,
+            title,
+        ),
         Err(rejection) => {
             warnings.push(rejection_message("default", &rejection));
             EventRoot {
                 value: None,
                 source: None,
+                kind: RootSourceKind::None,
                 hue: None,
                 warnings,
                 title,
@@ -170,12 +205,14 @@ pub(crate) fn choose_event_root(
 fn chosen(
     target: RootTarget,
     source: String,
+    kind: RootSourceKind,
     warnings: Vec<String>,
     title: String,
 ) -> EventRoot {
     EventRoot {
         value: Some(target.name),
         source: Some(source),
+        kind,
         hue: target.home.hue,
         warnings,
         title,
@@ -398,6 +435,7 @@ mod tests {
         );
         assert_eq!(root.value.as_deref(), Some("body"));
         assert_eq!(root.source.as_deref(), Some("@body"));
+        assert_eq!(root.kind, RootSourceKind::Token);
         assert_eq!(root.title, "Dentist");
         assert!(root.warnings.is_empty());
     }
@@ -416,6 +454,7 @@ mod tests {
         );
         assert_eq!(root.value.as_deref(), Some("job"));
         assert_eq!(root.source.as_deref(), Some("colour tomato"));
+        assert_eq!(root.kind, RootSourceKind::Colour);
         assert_eq!(root.title, "Dentist @missing");
         assert!(root.warnings[0].starts_with("route_unknown"));
     }
@@ -434,6 +473,7 @@ mod tests {
         );
         assert_eq!(calendar.value.as_deref(), Some("health"));
         assert_eq!(calendar.source.as_deref(), Some("calendar Personal"));
+        assert_eq!(calendar.kind, RootSourceKind::Calendar);
         assert!(calendar.warnings[0].contains("missing"));
         assert!(calendar.warnings[0].contains("fix:"));
 
@@ -446,6 +486,7 @@ mod tests {
             None,
         );
         assert_eq!(invalid_default.value, None);
+        assert_eq!(invalid_default.kind, RootSourceKind::None);
         assert!(invalid_default.warnings[0].contains("default rejected"));
     }
 }

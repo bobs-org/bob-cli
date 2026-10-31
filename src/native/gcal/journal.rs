@@ -33,8 +33,8 @@ pub(crate) struct OccurrenceState {
     pub row: Option<RowRecord>,
     pub link: bool,
     pub gone: bool,
-    /// Once-reported lifecycle notices (`kept_edit`, `worked_kept`,
-    /// `now_maybe`, `awaiting_reply`, …).
+    /// Once-reported lifecycle notices (`kept_edit`, `kept_root`,
+    /// `worked_kept`, `now_maybe`, `awaiting_reply`, …).
     pub flags: HashSet<String>,
 }
 

@@ -476,6 +476,11 @@ fn build_occurrences(
                 location: event.event.location.clone(),
                 root: root_value,
                 source: root_source,
+                root_kind: event
+                    .root
+                    .as_ref()
+                    .map(|root| root.kind)
+                    .unwrap_or_default(),
                 qualifier,
                 spans,
                 needs_type,

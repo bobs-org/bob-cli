@@ -5,6 +5,10 @@ aliases:
   - gcal propose-once
   - read-only gcal
 summary: Google Calendar stays read-only; Bob writes each row and link once, updates only untouched Google spans, tombstones deletions, and cancels only untouched tasks.
+metadata:
+  status: superseded-in-part
+  superseded_by:
+    - decisions:gcal-root-follows-google-until-edited
 ---
 
 # Bob Gcal Is Read-Only And Proposes Once
@@ -36,3 +40,7 @@ outside `## Events` and the MEET ledger).
 Evidence: `plan:202610/bob_gcal_daily_events.md`,
 `docs/gcal.md` § Reconciling Google-side changes, and
 `tests/gcal_lifecycle.rs`.
+
+Superseded in part: the `[root::]` ownership clause is retired; an Event
+Task's `[root::]` follows Google's chosen root until you edit it. See
+[[decisions:gcal-root-follows-google-until-edited]].

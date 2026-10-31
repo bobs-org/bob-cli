@@ -36,6 +36,7 @@ use super::{
         AbsentVerdict, KeptNotice, LearnedSeries, LifecycleItem,
     },
     render::{render_context_row, render_task_row, ContextRowInput},
+    root::RootSourceKind,
     stamp::{self, Stamp},
 };
 
@@ -56,6 +57,8 @@ pub(crate) struct PlannedOccurrence {
     pub location: Option<String>,
     pub root: Option<String>,
     pub source: Option<String>,
+    /// How `root` was chosen; series memory never reroutes existing rows.
+    pub root_kind: RootSourceKind,
     /// Context-row qualifier (`maybe`, `free`, `day 2 of 2`); tasks ignore it.
     pub qualifier: Option<String>,
     /// Short SHA-256 hashes of each managed span, for the journal.
@@ -205,7 +208,7 @@ pub(crate) struct SyncPlan {
     pub rows_adopted: Vec<AdoptedRow>,
     pub rows_gone: Vec<GoneRow>,
     pub links_added: Vec<PlannedLink>,
-    /// Google-owned spans replaced in place on still-included rows.
+    /// Google-owned spans and unedited `[root::]` values replaced in place.
     pub rows_updated: Vec<PlannedRow>,
     /// Untouched tasks cancelled for declined, deleted, or moved events.
     pub rows_cancelled: Vec<CancelledRow>,
@@ -431,7 +434,8 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
     // A no-op plan writes nothing and appends nothing: identical
     // contents and no records. A tombstone-only run leaves the note
     // alone but still records `gcal.gone`, so it is not a no-op; kept
-    // notices and series learning likewise append journal records.
+    // notices, series learning, and root reroutes likewise append
+    // journal records.
     let records_empty = plan.rows_added.is_empty()
         && plan.rows_adopted.is_empty()
         && plan.rows_gone.is_empty()
@@ -468,8 +472,11 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
 /// title, and badge spans and replace each span whose current text
 /// still matches the journal hash. A span that differs from both the
 /// journal and the fresh render is Bryan's edit: it is kept and
-/// reported once. The checkbox, `[root::]`, `[type::]`, and block ID
-/// are never rewritten.
+/// reported once. An unedited `[root::]` follows Google's chosen root
+/// (never series memory); a root Bryan edited is kept and reported
+/// once when Google later routes elsewhere. `[type:: MEET]` is added
+/// on a reroute only when the line has no type field. The checkbox
+/// and block ID are never rewritten.
 #[allow(clippy::too_many_arguments)]
 fn apply_span_updates(
     input: &SyncPlanInput<'_>,
@@ -530,36 +537,68 @@ fn apply_span_updates(
     }
     // Context qualifiers (`maybe`, `free`, `day N of M`) track the fresh
     // inclusion while the row is otherwise clean.
-    if !occurrence.task
+    let qualifier_changed = !occurrence.task
         && spans.qualifier != occurrence.qualifier
-        && edited.is_empty()
-    {
+        && edited.is_empty();
+    if qualifier_changed {
         spans.qualifier.clone_from(&occurrence.qualifier);
     }
     if !edited.is_empty() {
-        let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
-        let flagged = input
-            .journal
-            .get(&(key, input.day_string.clone()))
-            .is_some_and(|state| state.flags.contains("kept_edit"));
-        if !flagged {
-            plan.kept.push(KeptNotice {
-                calendar_id: occurrence.calendar_id.clone(),
-                event_id: occurrence.event_id.clone(),
-                title: occurrence.title.clone(),
-                detail: format!("kept your edit to {}", edited.join(" and ")),
-                flag: "kept_edit".to_string(),
-            });
-        }
-        return;
+        push_kept_once(
+            input,
+            plan,
+            &occurrence.calendar_id,
+            &occurrence.event_id,
+            occurrence.title.clone(),
+            format!("kept your edit to {}", edited.join(" and ")),
+            "kept_edit",
+        );
     }
-    if !hashes_changed
-        && (occurrence.task || spans.qualifier == occurrence.qualifier)
+    let root_action = root_update_action(occurrence, journaled, &current_line);
+    if let RootAction::Keep {
+        current,
+        fresh,
+        source,
+    } = &root_action
     {
+        push_kept_once(
+            input,
+            plan,
+            &occurrence.calendar_id,
+            &occurrence.event_id,
+            occurrence.title.clone(),
+            kept_root_detail(current.as_deref(), fresh, source.as_deref()),
+            "kept_root",
+        );
+    }
+    let apply_spans =
+        edited.is_empty() && (hashes_changed || qualifier_changed);
+    let apply_root = matches!(root_action, RootAction::Reroute { .. });
+    if !apply_spans && !apply_root {
         return;
     }
-    working.lines[line_index] = spans.rebuild();
-    if replaced_time {
+    let mut line = if apply_spans {
+        spans.rebuild()
+    } else {
+        current_line
+    };
+    let (root, source) =
+        if let RootAction::Reroute { value, source } = &root_action {
+            if occurrence.needs_type
+                && matches!(
+                    crate::native::task_theme::parse_task_theme(&line),
+                    crate::native::task_theme::TaskThemeState::None
+                )
+            {
+                line = crate::native::task_theme::set_task_theme(&line, "MEET");
+            }
+            line = crate::native::task_root::set_task_root(&line, value);
+            (Some(value.clone()), source.clone())
+        } else {
+            (journaled.root.clone(), journaled.source.clone())
+        };
+    working.lines[line_index] = line;
+    if apply_spans && replaced_time {
         reslot_block(
             working,
             line_index,
@@ -567,6 +606,11 @@ fn apply_span_updates(
             occurrence.start_min,
         );
     }
+    let record_spans = if edited.is_empty() {
+        updated
+    } else {
+        journaled.spans.clone()
+    };
     plan.rows_updated.push(PlannedRow {
         calendar_id: occurrence.calendar_id.clone(),
         event_id: occurrence.event_id.clone(),
@@ -575,12 +619,85 @@ fn apply_span_updates(
         block_id: journaled.block_id.clone(),
         url: occurrence.html_link.clone(),
         row_kind: journaled.row_kind.clone(),
-        spans: updated,
-        root: journaled.root.clone(),
-        source: journaled.source.clone(),
+        spans: record_spans,
+        root,
+        source,
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
     });
+}
+
+/// What to do with one journaled task row's `[root::]`.
+enum RootAction {
+    Skip,
+    Reroute {
+        value: String,
+        source: Option<String>,
+    },
+    Keep {
+        current: Option<String>,
+        fresh: String,
+        source: Option<String>,
+    },
+}
+
+fn nonempty_root(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn root_update_action(
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+    line: &str,
+) -> RootAction {
+    if journaled.row_kind != "task" || !occurrence.task {
+        return RootAction::Skip;
+    }
+    let Some(fresh) = nonempty_root(occurrence.root.as_deref()) else {
+        return RootAction::Skip;
+    };
+    if occurrence.root_kind == RootSourceKind::SeriesMemory {
+        return RootAction::Skip;
+    }
+    let current_owned = line_root(line);
+    let current = nonempty_root(current_owned.as_deref()).map(str::to_string);
+    if current.as_deref() == Some(fresh) {
+        return RootAction::Skip;
+    }
+    let recorded = nonempty_root(journaled.root.as_deref());
+    if current.as_deref() == recorded {
+        return RootAction::Reroute {
+            value: fresh.to_string(),
+            source: occurrence.source.clone(),
+        };
+    }
+    if Some(fresh) != recorded {
+        return RootAction::Keep {
+            current,
+            fresh: fresh.to_string(),
+            source: occurrence.source.clone(),
+        };
+    }
+    RootAction::Skip
+}
+
+fn kept_root_detail(
+    current: Option<&str>,
+    fresh: &str,
+    source: Option<&str>,
+) -> String {
+    let yours = match current {
+        Some(value) => format!("[root:: {value}]"),
+        None => "[root::]".to_string(),
+    };
+    match source {
+        Some(source) => {
+            format!(
+                "kept your {yours}; Google now routes to {fresh} ({source})"
+            )
+        }
+        None => format!("kept your {yours}; Google now routes to {fresh}"),
+    }
 }
 
 /// Re-slot one row together with its child block at its time-ordered

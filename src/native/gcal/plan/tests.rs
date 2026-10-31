@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::native::gcal::{
     journal::{occurrence_key, span_hash, OccurrenceState, RowRecord},
-    render, stamp,
+    render,
+    root::RootSourceKind,
+    stamp,
 };
 
 const ACCOUNT: &str = "you@example.com";
@@ -49,6 +51,7 @@ fn occurrence(
         location: None,
         root: None,
         source: None,
+        root_kind: RootSourceKind::None,
         qualifier: None,
         spans,
         needs_type: false,
@@ -78,6 +81,113 @@ fn with_phase(
 ) -> PlannedOccurrence {
     occurrence.link_phase = Some(phase);
     occurrence
+}
+
+fn with_root(
+    mut occurrence: PlannedOccurrence,
+    root: &str,
+    source: &str,
+    kind: RootSourceKind,
+    needs_type: bool,
+) -> PlannedOccurrence {
+    occurrence.root = Some(root.to_string());
+    occurrence.source = Some(source.to_string());
+    occurrence.root_kind = kind;
+    occurrence.needs_type = needs_type;
+    occurrence
+}
+
+fn run_with_journal(
+    contents: &str,
+    occurrences: Vec<PlannedOccurrence>,
+    journal: &BTreeMap<(String, String), OccurrenceState>,
+) -> SyncPlan {
+    plan_sync(&SyncPlanInput {
+        contents,
+        is_today: false,
+        occurrences,
+        journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now: now_at(12, 0),
+    })
+}
+
+fn journal_from_added(
+    plan: &SyncPlan,
+) -> BTreeMap<(String, String), OccurrenceState> {
+    let mut journal = BTreeMap::new();
+    for row in &plan.rows_added {
+        let (key, mut state) = journal_task(
+            &row.event_id,
+            &row.block_id,
+            row.url.as_deref(),
+            false,
+        );
+        if let Some(record) = state.row.as_mut() {
+            record.spans.clone_from(&row.spans);
+            record.root.clone_from(&row.root);
+            record.source.clone_from(&row.source);
+            record.series_id.clone_from(&row.series_id);
+        }
+        journal.insert(key, state);
+    }
+    journal
+}
+
+fn overlay_updated(
+    mut journal: BTreeMap<(String, String), OccurrenceState>,
+    plan: &SyncPlan,
+) -> BTreeMap<(String, String), OccurrenceState> {
+    for row in &plan.rows_updated {
+        let key = (
+            occurrence_key(&row.calendar_id, &row.event_id),
+            "2026-10-30".to_string(),
+        );
+        if let Some(record) =
+            journal.get_mut(&key).and_then(|state| state.row.as_mut())
+        {
+            record.spans.clone_from(&row.spans);
+            record.root.clone_from(&row.root);
+            record.source.clone_from(&row.source);
+        }
+    }
+    for notice in &plan.kept {
+        let key = (
+            occurrence_key(&notice.calendar_id, &notice.event_id),
+            "2026-10-30".to_string(),
+        );
+        if let Some(state) = journal.get_mut(&key) {
+            state.flags.insert(notice.flag.clone());
+        }
+    }
+    journal
+}
+
+fn row_line(contents: &str, block_id: &str) -> String {
+    let needle = format!("^{block_id}");
+    contents
+        .lines()
+        .find(|line| line.contains(&needle))
+        .unwrap_or_else(|| panic!("no row {needle} in:\n{contents}"))
+        .to_string()
+}
+
+fn seed_task(
+    occ: PlannedOccurrence,
+) -> (
+    String,
+    BTreeMap<(String, String), OccurrenceState>,
+    PlannedOccurrence,
+    String,
+) {
+    let first = run(empty_ledger(), vec![occ.clone()]);
+    let block_id = first.rows_added[0].block_id.clone();
+    let journal = journal_from_added(&first);
+    (first.contents, journal, occ, block_id)
 }
 
 fn run(contents: &str, occurrences: Vec<PlannedOccurrence>) -> SyncPlan {
@@ -1064,4 +1174,286 @@ fn replanning_output_with_journal_is_idempotent() {
     });
     assert_eq!(second.contents, first.contents);
     assert!(!second.changed);
+}
+
+#[test]
+fn unedited_root_reroutes_to_token_and_adds_meet_type() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    occ.root = Some("love".to_string());
+    occ.source = Some("@love".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    occ.needs_type = true;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: love]"), "{row}");
+    assert!(row.contains("[type:: MEET]"), "{row}");
+    assert!(
+        row.contains("[root:: love] [type:: MEET]"),
+        "theme first, then root: {row}"
+    );
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].root.as_deref(), Some("love"));
+    assert_eq!(plan.rows_updated[0].source.as_deref(), Some("@love"));
+}
+
+#[test]
+fn unedited_root_reroute_skips_type_when_not_needed() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    occ.root = Some("love".to_string());
+    occ.source = Some("@love".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    occ.needs_type = false;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: love]"), "{row}");
+    assert!(!row.contains("[type::]"), "{row}");
+}
+
+#[test]
+fn existing_type_survives_a_reroute() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    let row = row_line(&contents, &block_id);
+    let typed = row.replace("[root:: meet]", "[root:: meet] [type:: CHORE]");
+    let contents = contents.replace(&row, &typed);
+    occ.root = Some("love".to_string());
+    occ.source = Some("@love".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    occ.needs_type = true;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: love]"), "{row}");
+    assert!(row.contains("[type:: CHORE]"), "{row}");
+    assert!(!row.contains("[type:: MEET]"), "{row}");
+}
+
+#[test]
+fn colour_calendar_and_default_reroute_unedited_roots() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    occ.root = Some("job".to_string());
+    occ.source = Some("colour tomato".to_string());
+    occ.root_kind = RootSourceKind::Colour;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: job]"), "{row}");
+    assert_eq!(
+        plan.rows_updated[0].source.as_deref(),
+        Some("colour tomato")
+    );
+}
+
+#[test]
+fn done_row_still_reroutes() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    let row = row_line(&contents, &block_id);
+    let done = row.replacen("- [ ]", "- [x]", 1);
+    let contents = contents.replace(&row, &done);
+    occ.root = Some("body".to_string());
+    occ.source = Some("@body".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.starts_with("- [x] #task"), "{row}");
+    assert!(row.contains("[root:: body]"), "{row}");
+}
+
+#[test]
+fn edited_root_is_kept_and_reported_once() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    let row = row_line(&contents, &block_id);
+    let edited = row.replace("[root:: meet]", "[root:: job]");
+    let contents = contents.replace(&row, &edited);
+    occ.root = Some("love".to_string());
+    occ.source = Some("@love".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    let plan = run_with_journal(&contents, vec![occ.clone()], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: job]"), "{row}");
+    assert!(!row.contains("[root:: love]"), "{row}");
+    assert_eq!(plan.rows_updated.len(), 0);
+    assert_eq!(plan.kept.len(), 1);
+    assert_eq!(plan.kept[0].flag, "kept_root");
+    assert!(
+        plan.kept[0].detail.contains(
+            "kept your [root:: job]; Google now routes to love (@love)"
+        ),
+        "{}",
+        plan.kept[0].detail
+    );
+
+    let journal = overlay_updated(journal, &plan);
+    let again = run_with_journal(&plan.contents, vec![occ], &journal);
+    assert!(again.kept.is_empty(), "{:?}", again.kept);
+    assert!(again.rows_updated.is_empty());
+}
+
+#[test]
+fn series_memory_never_rewrites_an_existing_root() {
+    let mut occ = with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    );
+    occ.series_id = Some("series-standup".to_string());
+    let (contents, journal, mut occ, block_id) = seed_task(occ);
+    occ.root = Some("job".to_string());
+    occ.source = Some("learned from your 2026-10-29 edit".to_string());
+    occ.root_kind = RootSourceKind::SeriesMemory;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(plan.rows_updated.is_empty());
+    assert!(plan.kept.is_empty());
+}
+
+#[test]
+fn missing_fresh_root_never_removes_an_existing_root() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    occ.root = None;
+    occ.source = None;
+    occ.root_kind = RootSourceKind::None;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: meet]"), "{row}");
+    assert!(plan.rows_updated.is_empty());
+}
+
+#[test]
+fn kept_title_edit_still_reroutes() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    let row = row_line(&contents, &block_id);
+    let edited = row.replace("Standup", "Standup!!");
+    let contents = contents.replace(&row, &edited);
+    occ.root = Some("love".to_string());
+    occ.source = Some("@love".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("Standup!!"), "{row}");
+    assert!(row.contains("[root:: love]"), "{row}");
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].root.as_deref(), Some("love"));
+    assert_eq!(
+        plan.rows_updated[0].spans,
+        journal
+            .values()
+            .next()
+            .and_then(|state| state.row.as_ref())
+            .map(|row| row.spans.clone())
+            .expect("journaled spans")
+    );
+    assert_eq!(plan.kept.len(), 1);
+    assert_eq!(plan.kept[0].flag, "kept_edit");
+}
+
+#[test]
+fn edited_root_still_gets_a_time_update() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    let row = row_line(&contents, &block_id);
+    let edited = row.replace("[root:: meet]", "[root:: job]");
+    let contents = contents.replace(&row, &edited);
+    occ.time_label = "1000-1030".to_string();
+    occ.start_min = 600;
+    occ.end_min = 630;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("**1000-1030**"), "{row}");
+    assert!(row.contains("[root:: job]"), "{row}");
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].root.as_deref(), Some("meet"));
+    assert!(plan.kept.is_empty());
+}
+
+#[test]
+fn missing_root_gains_one() {
+    let (contents, journal, mut occ, block_id) =
+        seed_task(occurrence("standup", "Standup", true, "0900-0930", 540));
+    let row = row_line(&contents, &block_id);
+    assert!(!row.contains("[root::]"), "{row}");
+    occ.root = Some("love".to_string());
+    occ.source = Some("@love".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    occ.needs_type = true;
+    let plan = run_with_journal(&contents, vec![occ], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: love] [type:: MEET]"), "{row}");
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].root.as_deref(), Some("love"));
+}
+
+#[test]
+fn root_reroute_is_idempotent() {
+    let (contents, journal, mut occ, block_id) = seed_task(with_root(
+        occurrence("standup", "Standup", true, "0900-0930", 540),
+        "meet",
+        "default",
+        RootSourceKind::Default,
+        false,
+    ));
+    occ.root = Some("love".to_string());
+    occ.source = Some("@love".to_string());
+    occ.root_kind = RootSourceKind::Token;
+    occ.needs_type = true;
+    let plan = run_with_journal(&contents, vec![occ.clone()], &journal);
+    let row = row_line(&plan.contents, &block_id);
+    assert!(row.contains("[root:: love]"), "{row}");
+    let journal = overlay_updated(journal, &plan);
+    let again = run_with_journal(&plan.contents, vec![occ], &journal);
+    assert!(!again.changed);
+    assert!(again.rows_updated.is_empty());
 }

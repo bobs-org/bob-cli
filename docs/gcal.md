@@ -451,8 +451,8 @@ account, or set `gcal.account` to the stamp's account.
 | --- | --- | --- |
 | Checkbox | You | Never changed, except cancelling an untouched task (see below) |
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
-| `[root::]` | Precedence | Written once; your edits win, are never rewritten, and teach the series |
-| `[type::]`, block ID | Bob, once | Never rewritten |
+| `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
+| `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Child bullets (meeting notes) | You | Never touched |
 | MEET Task Link | Bob, once | Never re-added or moved; removed only by a cancel |
 | MEET Pomodoro entries | Bob, once | Created only in the write that adds their first link; never started, closed, retimed, renamed, or moved afterwards |
@@ -477,8 +477,11 @@ render of its event:
   last wrote is replaced in place. A span that differs from both is your
   edit: it is kept and reported once as a `kept_edit` warning. A time
   change re-slots the row together with its child block to keep time
-  order. The checkbox, `[root::]`, `[type::]`, and block ID are never
-  rewritten.
+  order. The checkbox and block ID are never rewritten. An unedited
+  `[root::]` follows Google's chosen root (never series memory) and
+  gains `[type:: MEET]` when the line has none; an existing `[type::]`
+  stays. A `[root::]` you edited is kept and reported once as a
+  `kept_root` warning when Google later routes elsewhere.
 - A Maybe context row whose RSVP went Yes upgrades in place to an Event
   Task and is filed under a MEET by phase. A Yes task row whose RSVP went
   Maybe stays a task and is reported once.
@@ -555,6 +558,11 @@ If the default root also fails, list shows no root and `doctor` reports the
 invalid default. Root sources are reported as `learned from your 2026-10-29
 edit`, `@body`, `colour tomato`, `calendar Health`, or `default`. The VAULT
 column reports the same roots beside the note.
+
+Adding, changing, or removing a token, or a colour, calendar, or default
+change, reroutes unedited existing rows on the next sync. Sync has no
+periodic trigger, so run `bob gcal sync` or wait for the next daily-note
+sync.
 
 ## Exit status
 

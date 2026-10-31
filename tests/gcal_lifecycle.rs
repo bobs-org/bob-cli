@@ -119,7 +119,7 @@ fn span_updates_rewrite_clean_spans_and_reslot() {
 
     // Google renames the visit, moves it earlier, and moves the venue.
     let mut patch = serde_json::Map::new();
-    patch.insert("summary".to_string(), "Dentist deep clean".into());
+    patch.insert("summary".to_string(), "Dentist deep clean @body".into());
     patch.insert(
         "start".to_string(),
         serde_json::json!({"dateTime": "2026-10-30T07:30:00-04:00"}),
@@ -668,6 +668,148 @@ fn series_edit_teaches_and_reteaches_the_root() {
         .cloned()
         .expect("series root re-taught");
     assert_eq!(relearned["root"], "meet");
+}
+
+#[test]
+fn unedited_root_reroutes_when_google_adds_a_token() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reroute-token");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![standup_event("standup-1")]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let first = today_note(&env);
+    let row = first
+        .lines()
+        .find(|line| line.contains("Weekly 1:1"))
+        .unwrap_or_else(|| panic!("no standup row:\n{first}"))
+        .to_string();
+    assert!(row.contains("[root:: meet]"), "{row}");
+
+    let mut event = standup_event("standup-1");
+    event["summary"] = "Weekly 1:1 @body".into();
+    fake.events_json(&events_envelope(vec![event]));
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("Weekly 1:1"))
+        .unwrap_or_else(|| panic!("no standup row:\n{note}"))
+        .to_string();
+    assert!(row.contains("**0900-0930** Weekly 1:1"), "{row}");
+    assert!(!row.contains("@body"), "{row}");
+    assert!(row.contains("[root:: body]"), "{row}");
+    assert!(row.contains("[type:: MEET]"), "{row}");
+    let journal = journal_lines(&env);
+    let row_record = last_row_for(&journal, "standup-1");
+    assert_eq!(row_record["root"]["value"], "body");
+    assert_eq!(row_record["root"]["source"], "@body");
+    let doc = json_stdout(&output);
+    let updated = doc["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["action"] == "updated")
+        .cloned()
+        .expect("updated row");
+    assert_eq!(updated["root"], "body");
+    assert_eq!(updated["source"], "@body");
+}
+
+#[test]
+fn unedited_root_reroutes_when_google_colour_changes() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reroute-colour");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![standup_event("standup-1")]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(today_note(&env).contains("[root:: meet]"));
+
+    let mut event = standup_event("standup-1");
+    event["colorId"] = "11".into();
+    fake.events_json(&events_envelope(vec![event]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("Weekly 1:1"))
+        .unwrap_or_else(|| panic!("no standup row:\n{note}"))
+        .to_string();
+    assert!(row.contains("[root:: job]"), "{row}");
+    assert!(
+        stdout(&output).contains("~ task"),
+        "updated row reported: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn bob_reroute_does_not_teach_the_series() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reroute-no-learn");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![standup_event("standup-1")]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let mut event = standup_event("standup-1");
+    event["summary"] = "Weekly 1:1 @body".into();
+    fake.events_json(&events_envelope(vec![event.clone()]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let before = journal_lines(&env)
+        .iter()
+        .filter(|line| line["kind"] == "gcal.series_root")
+        .count();
+    assert_eq!(before, 0, "Bob's rewrite must not teach the series");
+
+    event["id"] = "standup-2".into();
+    event["htmlLink"] =
+        "https://calendar.google.com/event?eid=standup-2".into();
+    fake.events_json(&events_envelope(vec![
+        {
+            let mut first = standup_event("standup-1");
+            first["summary"] = "Weekly 1:1 @body".into();
+            first
+        },
+        event,
+    ]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let after = journal_lines(&env)
+        .iter()
+        .filter(|line| line["kind"] == "gcal.series_root")
+        .count();
+    assert_eq!(after, before, "Bob's rewrite must not teach the series");
+    let note = today_note(&env);
+    let rows: Vec<&str> = note
+        .lines()
+        .filter(|line| line.contains("Weekly 1:1"))
+        .collect();
+    assert_eq!(rows.len(), 2, "{note}");
+    assert!(
+        rows.iter().all(|row| row.contains("[root:: body]")),
+        "{note}"
+    );
+}
+
+#[test]
+fn dry_run_diff_shows_the_root_change() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reroute-diff");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![standup_event("standup-1")]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let before = today_note(&env);
+
+    let mut event = standup_event("standup-1");
+    event["summary"] = "Weekly 1:1 @body".into();
+    fake.events_json(&events_envelope(vec![event]));
+    let output = sync_output(&env, &fake, &["-d"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let diff = stdout(&output);
+    assert!(diff.contains("[root:: meet]"), "{diff}");
+    assert!(diff.contains("[root:: body]"), "{diff}");
+    assert_eq!(today_note(&env), before, "dry-run must not write");
 }
 
 #[test]
