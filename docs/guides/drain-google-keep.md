@@ -94,6 +94,12 @@ the target note plus import receipts. A URL-only Keep note clips into the
 reading queue during this pull instead of becoming a task; see
 [Save a link to your reading queue](save-link-to-reading-queue.md).
 
+## See the count in Obsidian
+
+The Ledger Tools desktop status bar shows the Keep count beside the open-task
+count in `gkeep_inbox.md`. It uses bob's cached status and asks bob to check
+Keep only while Obsidian is attended. See the [`bob gkeep status` contract](../gkeep.md#status).
+
 ## If it goes wrong
 
 Exit 2 is setup: missing config, no token, unknown `-i`, or a missing target
