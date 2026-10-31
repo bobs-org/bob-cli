@@ -44,6 +44,23 @@ Pomodoro session rows are available for starting, stopping, extending, and
 shortening a session. Free-text `bob capture TEXT` is not part of command
 mode; use the dedicated capture workflow for free-text capture.
 
+### Run a sequence
+
+Press `Ctrl+M` on a bob command row to mark it as the next step. Mark more rows
+in order; the sequence tray shows the steps, and `Ctrl+M` on a marked row
+removes it. Only bob commands can be marked. Press `Enter` to run the marked
+steps, or `Ctrl+Enter` to run them without the review card. If a step needs
+confirmation or is preview-first, `Enter` shows one card to review the whole
+sequence first. Steps run one at a time and stop after a failure, unknown
+result, or stopped run. A step that finishes with a needs-attention result
+continues to the next step.
+
+Press `Backspace` on an empty query to remove the last step. `Escape` clears
+all marks and keeps the sheet open; press it again to close. Marks last only
+while the sheet is open. A sequence appears as one row in RECENT, where it can
+be run again. **Bob: Rerun last command** reruns the whole sequence when its
+most recent run was a sequence step.
+
 ### Run a command with arguments
 
 Select a command and press `Tab` to enter argument mode. Type the arguments;
