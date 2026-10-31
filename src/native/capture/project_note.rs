@@ -341,7 +341,8 @@ pub(super) fn plan_project_note_item(
     }
 
     let project_link_guard: Option<LinkGuardJson> = if project_blocked
-        && rendered.named_tasks.iter().any(|task| task.link)
+        && (form == ProjectNoteForm::Offer
+            || rendered.named_tasks.iter().any(|task| task.link))
     {
         Some(LinkGuardJson {
             reasons: vec!["project_schedule".to_string()],

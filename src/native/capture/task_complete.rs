@@ -1050,7 +1050,38 @@ pub(super) fn apply_successor_net_post_pass(
                     &tasks_settings,
                 )
             });
+            for row in vec.iter_mut() {
+                refresh_project_offer_final_position(
+                    row,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                );
+            }
         }
+    }
+}
+
+fn refresh_project_offer_final_position(
+    row: &mut TaskCompleteUnblockedJson,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) {
+    if row.offer.is_none()
+        || row.trigger != crate::native::task_complete::PROJECT_CREATED_TRIGGER
+    {
+        return;
+    }
+    let Some(task) =
+        successor_task_lookup(&*row, planner, bob_dir, tasks_settings)
+    else {
+        return;
+    };
+    row.line = task.line_index + 1;
+    if row.status_symbol != task.status {
+        row.status_symbol = task.status;
+        row.status_name = status_name_for(bob_dir, task.status);
     }
 }
 
@@ -1080,7 +1111,7 @@ fn keep_unblocked_row(
         } else if in_live {
             return false;
         }
-        if matches!(row.status_symbol, ' ' | '*')
+        if matches!(row.status_symbol, ' ' | '*' | '/')
             && successor_task_status(row, planner, bob_dir, tasks_settings)
                 == Some('?')
         {
@@ -1170,25 +1201,50 @@ fn successor_task_lookup(
             task.block_id.as_deref() == Some(row.block_id.as_str())
         });
     }
-    if let Some(task) = tasks
+    if row.trigger == crate::native::task_complete::PROJECT_CREATED_TRIGGER {
+        // Project-created ID-less rows have no stable block identity, so
+        // resolve by cleaned description plus the frozen duplicate ordinal
+        // encoded in the offer key (`path@digest` or `path@digest~N`).
+        // Line numbers shift when later items insert context, and raw
+        // `row.text` keeps inline fields like `[type:: ...]`, so compare
+        // cleaned text on both sides.
+        let settings = note_tasks::read_settings(bob_dir);
+        let expected = note_tasks::clean_description(
+            &row.text,
+            &settings.global_filter,
+            None,
+        );
+        let ordinal = row
+            .offer
+            .as_ref()
+            .map(|offer| offer_key_duplicate_ordinal(&offer.key))
+            .unwrap_or(1);
+        let mut matches = tasks.iter().filter(|task| {
+            task.block_id.is_none()
+                && note_tasks::clean_description(
+                    &task.description,
+                    &settings.global_filter,
+                    None,
+                ) == expected
+        });
+        if let Some(task) = matches.nth(ordinal.saturating_sub(1)) {
+            return Some(task.clone());
+        }
+        return None;
+    }
+    tasks
         .iter()
         .find(|task| task.line_index + 1 == row.line)
         .cloned()
-    {
-        return Some(task);
-    }
-    if row.trigger != crate::native::task_complete::PROJECT_CREATED_TRIGGER {
-        return None;
-    }
-    let settings = note_tasks::read_settings(bob_dir);
-    tasks.into_iter().find(|task| {
-        task.block_id.is_none()
-            && note_tasks::clean_description(
-                &task.description,
-                &settings.global_filter,
-                None,
-            ) == row.text
-    })
+}
+
+fn offer_key_duplicate_ordinal(key: &str) -> usize {
+    key.rsplit('~')
+        .next()
+        .and_then(|suffix| suffix.parse::<usize>().ok())
+        .filter(|_| key.contains('~'))
+        .unwrap_or(1)
+        .max(1)
 }
 
 fn project_has_open_work(

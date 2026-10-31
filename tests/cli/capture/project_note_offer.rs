@@ -461,6 +461,78 @@ fn offer_blocked_project_offers_nothing_and_links_nothing() {
 }
 
 #[test]
+fn offer_future_project_without_colon_bullet_still_reports_schedule_guard() {
+    // A future project schedule blocks the whole note even when the draft
+    // has only ordinary and caret-ID bullets: no offers, no links, and the
+    // `project_schedule` guard applies for default selection and `-p all`.
+    // The project is still created with its blocked residents and the daily
+    // note is untouched.
+    for flags in [&[] as &[&str], &["-p", "all"]] {
+        let fixture = Fixture::plain("bob-cli-offer-blocked-no-colon");
+        let day_before = fixture.day();
+        let json = fixture.json(
+            concat!(
+                "Finish packet s:3 @cash:pkt@\n",
+                "- Draft memo\n",
+                "- Collect docs ^collect-docs\n",
+            ),
+            flags,
+        );
+        assert_eq!(json["ok"], true, "{json}");
+        assert_eq!(json["project_note"]["form"], "offer");
+        assert_eq!(
+            json["project_note"]["successors"],
+            serde_json::json!([]),
+            "{json}"
+        );
+        assert_eq!(json["pull_in"]["offer_count"], 0, "{json}");
+        assert_eq!(json["pull_in"]["picked_count"], 0, "{json}");
+        assert_eq!(
+            json["link_guard"]["reasons"],
+            serde_json::json!(["project_schedule"]),
+            "{json}"
+        );
+        assert_eq!(
+            json["project_note"]["task_links"],
+            serde_json::json!([]),
+            "{json}"
+        );
+        assert_eq!(
+            fixture.day(),
+            day_before,
+            "a blocked project links nothing"
+        );
+        let snapshot = fixture.snapshot();
+        let note = &snapshot["cash_pkt.md"];
+        assert!(note.contains("#prj_is_blocked"), "{note}");
+        assert!(note.contains("Draft memo"), "{note}");
+        assert!(note.contains("Collect docs"), "{note}");
+    }
+
+    // This path stages neither offers nor actual links, so it never reads
+    // the daily note: it succeeds when the day file is absent.
+    let bare = Fixture::plain("bob-cli-offer-blocked-no-day");
+    fs::remove_file(&bare.day_file).expect("remove day note");
+    let bare_json = bare.json(
+        concat!(
+            "Finish packet s:3 @cash:pkt@\n",
+            "- Draft memo\n",
+            "- Collect docs ^collect-docs\n",
+        ),
+        &["-p", "all"],
+    );
+    assert_eq!(bare_json["ok"], true, "{bare_json}");
+    assert_eq!(
+        bare_json["link_guard"]["reasons"],
+        serde_json::json!(["project_schedule"]),
+        "{bare_json}"
+    );
+    assert!(!bare.day_file.exists());
+    let bare_note = &bare.snapshot()["cash_pkt.md"];
+    assert!(bare_note.contains("#prj_is_blocked"), "{bare_note}");
+}
+
+#[test]
 fn offer_named_pomodoro_is_created_only_when_a_pick_lands_there() {
     let draft =
         "Finish packet @cash:pkt@#admin\n- Draft memo\n- Collect docs\n";
@@ -686,6 +758,222 @@ fn offer_is_dropped_when_a_later_item_closes_or_links_the_created_task() {
         .map(|row| row["text"].as_str().expect("text"))
         .collect();
     assert_eq!(picked_texts, vec!["Collect docs", "Plain memo"]);
+}
+
+fn assert_offer_lines_match_final_note(
+    fixture: &Fixture,
+    json: &serde_json::Value,
+) {
+    let snapshot = fixture.snapshot();
+    let note = snapshot
+        .get("cash_pkt.md")
+        .unwrap_or_else(|| panic!("cash_pkt.md missing: {json}"));
+    let lines: Vec<&str> = note.lines().collect();
+    for row in successors(json) {
+        let line = row["line"].as_u64().expect("line") as usize;
+        let text = row["text"].as_str().expect("text");
+        let block_id = row["block_id"].as_str().expect("block id");
+        let actual = lines
+            .get(line - 1)
+            .unwrap_or_else(|| panic!("line {line} missing in {note}"));
+        assert!(
+            actual.contains("#task"),
+            "line {line} is not a task for {text}: {actual}\n{note}\n{json}"
+        );
+        // The bare text (without checkbox) must appear on its own line.
+        // For typed rows the `[type:: ...]` field stays in the text.
+        let first_token = text.split_whitespace().next().expect("token");
+        assert!(
+            actual.contains(first_token),
+            "line {line} does not address its own task {text}: {actual}\n{note}\n{json}"
+        );
+        assert!(
+            actual.contains(text),
+            "line {line} does not contain its full text {text}: {actual}\n{note}\n{json}"
+        );
+        if block_id.is_empty() {
+            assert!(
+                !actual.contains('^'),
+                "unselected row must not acquire a committed ID: {actual}\n{json}"
+            );
+        } else {
+            assert!(
+                actual.contains(&format!("^{block_id}")),
+                "line {line} does not carry its block ID ^{block_id}: {actual}\n{json}"
+            );
+        }
+    }
+}
+
+#[test]
+fn offer_line_shift_updates_final_lines_instead_of_trusting_old_lines() {
+    // A later item that adds nested context under `^anchor` shifts the
+    // ID-less task down two lines. The net pass must refresh the reported
+    // final line; the old line now holds plain context, not the task.
+    let draft = concat!(
+        "Finish packet @cash:pkt@\n",
+        "- Anchor ^anchor\n",
+        "- Draft memo\n",
+        "\n",
+        "Add context @cash_pkt+anchor\n",
+        "- extra detail\n",
+    );
+    let fixture = Fixture::plain("bob-cli-offer-line-shift");
+    let json = fixture.json(draft, &[]);
+    assert_eq!(json["ok"], true, "{json}");
+    let rows = successors(&json);
+    assert_eq!(rows.len(), 2, "{json}");
+    assert_offer_lines_match_final_note(&fixture, &json);
+    let note = &fixture.snapshot()["cash_pkt.md"];
+    // The ID-less task actually lives at line 16 after the two inserted
+    // context lines (13 anchor, 14-15 context, 16 draft).
+    let draft_row = rows
+        .iter()
+        .find(|row| row["text"] == "Draft memo")
+        .expect("draft row");
+    assert_eq!(draft_row["line"], 16, "{json}\n{note}");
+    assert_eq!(draft_row["block_id"], "", "{json}");
+}
+
+#[test]
+fn offer_typed_line_shift_keeps_typed_offer_with_fields() {
+    // The same shift with a `[type:: FIX]` ID-less task: cleaning must
+    // strip inline fields on both sides, or the still-valid typed offer
+    // is dropped.
+    let draft = concat!(
+        "Finish packet @cash:pkt@\n",
+        "- Anchor ^anchor\n",
+        "- Fix the bug [type:: FIX]\n",
+        "\n",
+        "Add context @cash_pkt+anchor\n",
+        "- extra detail\n",
+    );
+    let fixture = Fixture::typed("bob-cli-offer-typed-shift");
+    let json = fixture.json(draft, &[]);
+    assert_eq!(json["ok"], true, "{json}");
+    let rows = successors(&json);
+    assert_eq!(rows.len(), 2, "{json}");
+    assert_offer_lines_match_final_note(&fixture, &json);
+    assert!(
+        rows.iter()
+            .any(|row| row["text"].as_str() == Some("Fix the bug [type:: FIX]")),
+        "{json}"
+    );
+}
+
+#[test]
+fn offer_duplicate_descriptions_keep_distinct_final_lines() {
+    // Two ID-less tasks share one cleaned description. The net pass must
+    // use the frozen duplicate ordinal, not the stale line, or the second
+    // row matches the first task's line.
+    let draft = concat!(
+        "Finish packet @cash:pkt@\n",
+        "- Anchor ^anchor\n",
+        "- Draft memo\n",
+        "- Draft memo\n",
+        "\n",
+        "Add context @cash_pkt+anchor\n",
+        "- extra detail\n",
+    );
+    let fixture = Fixture::plain("bob-cli-offer-duplicate-shift");
+    let json = fixture.json(draft, &[]);
+    assert_eq!(json["ok"], true, "{json}");
+    let rows = successors(&json);
+    assert_eq!(rows.len(), 3, "{json}");
+    assert_offer_lines_match_final_note(&fixture, &json);
+    let mut reported: Vec<u64> = rows
+        .iter()
+        .map(|row| row["line"].as_u64().expect("line"))
+        .collect();
+    reported.sort_unstable();
+    assert_eq!(reported, vec![13, 16, 17], "{json}");
+}
+
+#[test]
+fn offer_selected_pick_keeps_frozen_identity_across_line_shift() {
+    // Picks keep the same frozen identity in preview/submit and across
+    // numeric/key selection; unselected rows never acquire committed IDs.
+    let draft = concat!(
+        "Finish packet @cash:pkt@\n",
+        "- Anchor ^anchor\n",
+        "- Draft memo\n",
+        "\n",
+        "Add context @cash_pkt+anchor\n",
+        "- extra detail\n",
+    );
+    let preview = Fixture::plain("bob-cli-offer-pick-preview");
+    let preview_json = preview.json(draft, &["--dry-run", "-p", "all"]);
+    let committed = Fixture::plain("bob-cli-offer-pick-commit");
+    let committed_json = committed.json(draft, &["-p", "all"]);
+    for json in [&preview_json, &committed_json] {
+        let rows = successors(json);
+        assert_eq!(rows.len(), 2, "{json}");
+        assert!(
+            rows.iter().all(|row| row["offer"]["selected"] == true),
+            "{json}"
+        );
+    }
+    // Only the committed run writes the note; the dry-run preview has no
+    // file to check lines against, but both must share frozen keys.
+    assert_offer_lines_match_final_note(&committed, &committed_json);
+    let preview_keys: Vec<&str> = successors(&preview_json)
+        .iter()
+        .map(|row| row["offer"]["key"].as_str().expect("key"))
+        .collect();
+    let committed_keys: Vec<&str> = successors(&committed_json)
+        .iter()
+        .map(|row| row["offer"]["key"].as_str().expect("key"))
+        .collect();
+    assert_eq!(preview_keys, committed_keys, "preview/submit keep keys");
+
+    // A partial pick leaves the unselected ID-less row without an ID.
+    let partial = Fixture::plain("bob-cli-offer-pick-partial");
+    let partial_json = partial.json(draft, &["-p", "1"]);
+    let rows = successors(&partial_json);
+    assert_eq!(rows.len(), 2, "{partial_json}");
+    assert_eq!(rows[0]["offer"]["selected"], true);
+    assert_eq!(rows[1]["offer"]["selected"], false);
+    assert_eq!(rows[1]["block_id"], "");
+    assert_offer_lines_match_final_note(&partial, &partial_json);
+}
+
+#[test]
+fn offer_pending_blocked_by_later_dependency_is_dropped_like_ready_and_next() {
+    // A later batch item that adds an open prerequisite blocks the created
+    // task. Ready, Next, and Pending offers must all disappear; the
+    // pre-fix filter only covered Ready/Next, leaving Pending offered.
+    let fixture = Fixture::plain("bob-cli-offer-pending-blocked");
+    write_file(
+        &fixture.vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n# Cash\n- [ ] #task Gate ^gate\n",
+    );
+    write_file(
+        &fixture
+            .vault
+            .join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        &blocked_tasks_settings_json(""),
+    );
+    let draft = concat!(
+        "Finish packet @cash:pkt@\n",
+        "- Ready work ^ready\n",
+        "- [*] Next work ^next\n",
+        "- [/] Pending work ^pending\n",
+        "\n",
+        "@cash_pkt+ready &cash:gate\n",
+        "\n",
+        "@cash_pkt+next &cash:gate\n",
+        "\n",
+        "@cash_pkt+pending &cash:gate\n",
+    );
+    let json = fixture.json(draft, &["--dry-run"]);
+    assert_eq!(json["ok"], true, "{json}");
+    assert_eq!(
+        json["project_note"]["successors"],
+        serde_json::json!([]),
+        "{json}"
+    );
+    assert_eq!(json["pull_in"]["offer_count"], 0, "{json}");
+    assert_eq!(json["pull_in"]["picked_count"], 0, "{json}");
 }
 
 #[test]
