@@ -188,6 +188,41 @@ fn ensure_next_retype_sets_field_and_moves_link() {
 }
 
 #[test]
+fn ensure_next_attached_literal_retypes_before_placing_the_task_link() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-type-existing-ensure-literal",
+        &project(Some("WRITE"), "- [ ] #task Fix parser ^parser\n"),
+        "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^parser]]\n- [ ] () — DEEP WORK\n",
+    );
+    write_file(
+        &config,
+        concat!(
+            "plan:\n  max_themes: 30\n",
+            "types:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n  \"DEEP WORK\": violet\n",
+        ),
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["@sase+parser#\"DEEP WORK\""],
+        false,
+    );
+    assert_eq!(json["task_theme"]["theme"]["name"], "DEEP WORK", "{json}");
+    assert_eq!(json["pomodoro_link_action"], "moved", "{json}");
+    assert_eq!(
+        json["pomodoro_link_destination"]["name"], "DEEP WORK",
+        "{json}"
+    );
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(
+        day.contains("- [ ] () — DEEP WORK\n  - [[sase#^parser]]"),
+        "{day}"
+    );
+    assert!(!day.contains("BUILD\n  - [[sase#^parser]]"), "{day}");
+}
+
+#[test]
 fn toggle_retype_sets_field() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-type-existing-toggle",

@@ -215,12 +215,9 @@ zsh<TAB>Print the zsh completion adapter<TAB>commands<TAB>space
 
 Existing rows were measured 2026-10-02 on `apollo` (debug build) against
 the real vault (`BOB_DIR=~/bob`), 20 samples after one warmup. The
-task-type rows were measured 2026-10-30 with the rebuilt debug binary and
-the same vault. Each command had one warmup followed by 20 wall-clock
-samples; p50 is the median and p95 uses nearest rank. The requests were
-`capture-complete --cursor 17 --format json -- 'Fix the parser #f'`,
-`capture-parse --format json -- 'Fix the parser #f'`, and
-`bob __complete zsh --protocol 1 --suffix '' -- bob capture Fix the parser #f`.
+task-type rows were measured 2026-10-31 on `apollo` against the same vault,
+using debug builds and 200 interleaved rounds with one warmup per case.
+Base `00ca6d0c` used `t:f`; HEAD used `#f`. p50 and p95 use nearest rank.
 `__complete` never writes, so measuring on the real vault is safe.
 
 | Slot | p50 | p95 |
@@ -230,15 +227,19 @@ samples; p50 is the median and p95 uses nearest rank. The requests were
 | `capture --route dev --task <TAB>` (vault) | 13.5 ms | 16.3 ms |
 | `capture fix it @dev:<TAB>` (capture text) | 14.5 ms | 17.4 ms |
 | `capture-pomodoro-name --pomodoro-ref <TAB>` (vault) | 11.5 ms | 15.9 ms |
-| `capture-complete Fix the parser #f` (task type) | 36.8 ms | 41.7 ms |
-| `capture-parse Fix the parser #f` (task type) | 36.2 ms | 53.6 ms |
-| `__complete zsh … Fix the parser #f` (task type) | 46.7 ms | 59.9 ms |
+| `capture-complete Fix the parser #f` (task type) | 16.6 ms | 22.2 ms |
+| `capture-parse Fix the parser #f` (task type) | 22.0 ms | 32.3 ms |
+| `__complete zsh … Fix the parser #f` (task type) | 31.2 ms | 41.0 ms |
 
 Structural p95 is under 20 ms. Vault slots, including task type, are under
-the 75 ms target (150 ms deadline). Against the pre-change p95 baselines of
-55.6 ms, 44.7 ms, and 68.6 ms for these three task-type requests, completion
-and zsh protocol remain within +5 ms; `capture-parse` is 3.9 ms above its
-49.7 ms limit.
+the 75 ms target (150 ms deadline). In the paired run, HEAD minus base was:
+`capture-parse` −13.7 ms p50 / −20.4 ms p95 (base 35.7/52.7 ms, HEAD
+22.0/32.3 ms); `capture-complete` −21.2/−31.9 ms (37.8/54.1 ms to
+16.6/22.2 ms); and zsh protocol −21.1/−30.6 ms (52.3/71.6 ms to
+31.2/41.0 ms). All three p95 deltas are within the +5 ms budget. The paired
+delta is the useful comparison under shared-host load because interleaved
+base and HEAD samples experience similar load, while absolute p95 can shift
+with the host load between runs.
 
 ## Installing
 

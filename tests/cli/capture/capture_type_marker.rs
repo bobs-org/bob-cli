@@ -340,6 +340,106 @@ fn unknown_hyphenated_slug_is_refused() {
 }
 
 #[test]
+fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
+    let (temp, vault, day_file, config) = fixture(
+        "bob-capture-type-marker-refusal-copy",
+        &project(Some("WRITE"), "- [ ] #task Existing task ^parser\n"),
+        "## Pomodoros\n- [x] (0800-0830) — CHORUS\n- [x] (0830-0900) — CHORE\n- [ ] () — FIX\n",
+    );
+    write_file(
+        &config,
+        concat!(
+            "plan:\n  max_themes: 30\n",
+            "types:\n",
+            "  BUILD: yellow\n",
+            "  FIX: blue\n",
+            "  CHORE: magenta\n",
+            "  CHORUS: red\n",
+            "  \"DEEP WORK\": violet\n",
+            "  WRITE: green\n",
+        ),
+    );
+
+    let configured = format!(
+        "`#builds` is not one of your task types; did you mean `#build`? Add BUILDS under `types:` in {} to use it, or write `\\#builds` to keep it as a tag",
+        config.display()
+    );
+    let two_suggestions = format!(
+        "`#chores` is not one of your task types; did you mean `#chore` or `#chorus`? Add CHORES under `types:` in {} to use it, or write `\\#chores` to keep it as a tag",
+        config.display()
+    );
+    let no_suggestion = format!(
+        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it, or write `\\#fxi` to keep it as a tag",
+        config.display()
+    );
+    let literal = format!(
+        "`#\"DEEP WURK\"` is not one of your task types; did you mean `#\"DEEP WORK\"`? Add DEEP WURK under `types:` in {} to use it, or write `\\#\"DEEP WURK\"` to keep it as a tag",
+        config.display()
+    );
+    let project_hint = format!(
+        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id+#fxi`)",
+        config.display()
+    );
+    let ensure_hint = format!(
+        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it (to link the task under the FXI Pomodoro, write `^sase:parser#fxi`)",
+        config.display()
+    );
+    let heading_hint = format!(
+        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it, or write `\\#fxi` to keep it as a tag (for a bullet under a heading, write `@sase#fxi`)",
+        config.display()
+    );
+    let before = snapshot_files(temp.path());
+    for (draft, expected) in [
+        ("Fix it #builds", configured.as_str()),
+        ("Fix it #chores", two_suggestions.as_str()),
+        ("Fix it #fxi", no_suggestion.as_str()),
+        ("Fix it #\"DEEP WURK\"", literal.as_str()),
+        ("@sase^new-id#fxi Fix it", project_hint.as_str()),
+        ("@sase+parser#fxi", ensure_hint.as_str()),
+        ("#fxi Fix it @sase", heading_hint.as_str()),
+    ] {
+        for dry_run in [false, true] {
+            let args = if dry_run {
+                vec!["-d", draft]
+            } else {
+                vec![draft]
+            };
+            let (_, json) =
+                capture_error_json(&vault, &day_file, &config, &args);
+            assert_eq!(json["code"], "type_not_configured", "{json}");
+            let error = json["error"].as_str().unwrap();
+            let copy = error
+                .strip_prefix("capture item 1 starting on line 1: ")
+                .unwrap_or(error);
+            assert_eq!(copy, expected, "{draft:?}: {json}");
+            assert_eq!(snapshot_files(temp.path()), before, "{draft:?}");
+        }
+    }
+
+    write_file(&config, "plan:\n  max_themes: 30\n");
+    let no_vocabulary_hint = format!(
+        "`#fxi` is not a task type yet: no Pomodoro has used FXI and no `types:` vocabulary is configured; add `types:` to {} (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id+#fxi`)",
+        config.display()
+    );
+    let before_no_vocabulary = snapshot_files(temp.path());
+    for dry_run in [false, true] {
+        let args = if dry_run {
+            vec!["-d", "@sase^new-id#fxi Fix it"]
+        } else {
+            vec!["@sase^new-id#fxi Fix it"]
+        };
+        let (_, json) = capture_error_json(&vault, &day_file, &config, &args);
+        assert_eq!(json["code"], "type_not_configured", "{json}");
+        let error = json["error"].as_str().unwrap();
+        let copy = error
+            .strip_prefix("capture item 1 starting on line 1: ")
+            .unwrap_or(error);
+        assert_eq!(copy, no_vocabulary_hint, "{json}");
+        assert_eq!(snapshot_files(temp.path()), before_no_vocabulary);
+    }
+}
+
+#[test]
 fn vocabulary_is_authoritative_and_history_is_the_fallback() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-capture-type-marker-acceptance",
@@ -487,6 +587,38 @@ fn exact_block_ids_and_template_rows_keep_the_marker() {
     assert_eq!(template["template"]["row_count"], 1, "{template}");
     assert_eq!(template["text"], "Task parser", "{template}");
     assert_eq!(template["task_theme"]["theme"]["name"], "FIX", "{template}");
+}
+
+#[test]
+fn leading_attached_project_marker_accepts_a_spaced_literal() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-type-marker-leading-attached",
+        &project(Some("WRITE"), ""),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    write_file(
+        &config,
+        concat!(
+            "plan:\n  max_themes: 30\n",
+            "types:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n  \"DEEP WORK\": violet\n",
+        ),
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["@sase^parser#\"DEEP WORK\" Fix the parser"],
+        false,
+    );
+    assert_eq!(json["block_id"], "parser", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "DEEP WORK", "{json}");
+    assert!(
+        json["task_line"]
+            .as_str()
+            .unwrap()
+            .contains("[type:: DEEP WORK]"),
+        "{json}"
+    );
 }
 
 #[test]

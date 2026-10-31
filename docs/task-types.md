@@ -459,7 +459,10 @@ types:
 - **Warning code.** One code everywhere: `theme_not_configured`
   (`SNACK isn't one of your types`, plus `; did you mean
   CHORE?` when the similarity rule matches a configured type). Warnings
-  never block anything; there is no strict mode. Surfaces: type-name
+  never block anything; there is no strict mode. The capture `#<type>`
+  marker has one stated exception: it refuses unconfigured names with
+  `type_not_configured` ([Typed captures](capture.md#typing-tasks-with-type)).
+  Surfaces: type-name
   menus scope Recent rows to configured types (never-used configured
   types rank after used ones in config order, the empty-query cap rises
   from 5 to 12, `similar_to` draws only from visible configured types,

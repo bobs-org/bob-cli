@@ -274,16 +274,18 @@ anything is written, and any failure rolls the whole batch back.
 | `@cash^goog-exit+#bugs` | New project note with its ` :id` Task Links under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task section |
 | `@cash:goog-exit+`, `@cash:goog-exit+#bugs` | Retired project-note forms; use `@cash^goog-exit+` / `@cash^goog-exit+#bugs` and put ` :<id>` on the task bullets instead |
 | `@sase:deep-fix#bugs+` | Pomodoro-linked task under the Pomodoro named `BUGS+`; a trailing `+` after a `#name` stays part of the Pomodoro name |
-| `Fix it @sase #now` | Error: a trailing `#tag` must be appended to an `@route` token (`@foo#bar`); `#now` was retired |
-| `Fix it #now @sase` | Error: a `#tag` before the route is a retired bullet marker, like any other `#tag` |
-| `@sase:deep-fix #now` | Error: a trailing `#tag` must be appended to an `@route` token (`@foo#bar`) |
-| `Fix it @sase #n` | Error: a trailing `#tag` must be appended to an `@route` token (`@foo#bar`) |
+| `Fix it @sase #now` | Refused with `type_not_configured` unless `NOW` is configured; the bare `@sase` route adds the heading hint |
+| `Fix it #now @sase` | Refused with `type_not_configured` unless `NOW` is configured; the bare `@sase` route adds the heading hint |
+| `@sase:deep-fix #now` | Refused with `type_not_configured` unless `NOW` is configured |
+| `Fix it @sase #n` | Refused with `type_not_configured` unless `N` is configured; the bare `@sase` route adds the heading hint |
+| `Fix it @sase^parser#fxi` | Refused with the project-note hint for `@sase^parser+#fxi` |
+| `@sase+parser#fxi` | Refused with the Pomodoro-link hint for `^sase:parser#fxi` |
 
-A `#` after `@route+id` follows the item's mode: with no body text it names a
-Pomodoro for the task toggle, and once body text is present it names an
-ALL-CAPS task section for the child bullet. A `#` in the middle of the body
-stays ordinary text. `@route::id` is retired; use `@route^id` for an ordinary
-task with a block ID.
+A `#<type>` suffix after `@route^id` types the new task. After
+`@route+id`, it retypes the existing task when the item has no body text or
+authored children; with body text, the suffix names the ALL-CAPS task section
+for the child bullet. A `#` in the middle of the body stays ordinary text.
+`@route::id` is retired; use `@route^id` for an ordinary task with a block ID.
 
 Leading `@route text` is accepted only on an item's first physical line. Later
 lines in the same item take trailing markers only. `@@...` has no such
@@ -501,6 +503,15 @@ has no task body or authored children. With a body,
 whole-item link or a relationship-only owner also retypes its existing
 subject task. Each item accepts one marker, and a marker alone still needs a
 task.
+
+Attached forms work at either item edge, including a leading route such as
+`@sase^parser#fix Fix the parser`. Attached literals may contain spaces, for
+example `@sase^parser#"DEEP WORK"`. An unconfigured name refuses with
+`type_not_configured`: Bob may suggest up to two marker spellings with
+`did you mean`, then explains how to add the type or escape the marker. An
+attached project-task marker adds a project-note hint; a marker on a bare
+`@route` adds a heading hint; a marker-only `@route+id` adds a Pomodoro-link
+hint.
 
 Exactly one marker per item. A second marker fails with the duplicate
 `type marker (#<type>)` error. The marker types the item's subject task; it
@@ -1066,9 +1077,10 @@ invalid or missing `BOB_DAY_FILE` has no effect. The retired
 
 The `#now` weekly-bet tag was retired: the Next lane took over what it
 tracked, and Today is read from the ledger at render time (see
-`docs/plan.md`). A trailing `#now` is now the ordinary trailing-tag error
-like any other `#tag`, and a `#now` in the body stays plain text. Existing
-vault lines that still carry `#now` keep working — the text is ignored.
+`docs/plan.md`). A `#now` at an item edge is an ordinary unknown-type
+refusal unless `NOW` is configured. Write `\#now` to keep it as an ordinary
+tag. Existing vault lines that still carry `#now` keep working — the text
+is ignored.
 
 ### `p:<N>` is retired
 

@@ -3,8 +3,8 @@
 use super::*;
 use crate::native::{
     capture_language::{
-        resolve_accepted_type_name, resolve_exact_type_name,
-        unmatched_type_display,
+        replacement_for, resolve_accepted_type_name, resolve_exact_type_name,
+        unmatched_type_display, TypeMarker, TypeMarkerAttachment,
     },
     config::themes::ThemeSources,
     plan_budget::{normalize_component, split_components},
@@ -159,8 +159,7 @@ impl CaptureTaskThemeContext {
         planner: &mut CaptureBatchPlanner,
         target: &Path,
         task_line: &str,
-        marker_name: &str,
-        marker_literal: bool,
+        marker: &TypeMarker,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<AppliedTaskTheme, CaptureError> {
         self.refresh_residence_snapshot(planner);
@@ -173,12 +172,10 @@ impl CaptureTaskThemeContext {
             let catalog = self.catalog.as_ref().expect("loaded theme catalog");
             let Some(found) = resolve_accepted_type_name(
                 catalog,
-                marker_name,
-                marker_literal,
+                &marker.name,
+                marker.literal,
             ) else {
-                return Err(
-                    self.type_not_configured_error(marker_name, catalog)
-                );
+                return Err(self.type_not_configured_error(marker, catalog));
             };
             found
         };
@@ -356,8 +353,7 @@ impl CaptureTaskThemeContext {
         target: &Path,
         route: &str,
         block_id: &str,
-        marker_name: &str,
-        marker_literal: bool,
+        marker: &TypeMarker,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<ExistingTypeMarkerApplication, CaptureError> {
         self.refresh_residence_snapshot(planner);
@@ -387,7 +383,8 @@ impl CaptureTaskThemeContext {
             );
             let _ = description;
             return Err(CaptureError::usage(format!(
-                "`#{marker_name}` needs an open task: ^{block_id} is {}; closed tasks keep their fields as history",
+                "`{}` needs an open task: ^{block_id} is {}; closed tasks keep their fields as history",
+                marker.authored,
                 task.status_name
             )));
         }
@@ -402,12 +399,10 @@ impl CaptureTaskThemeContext {
             let catalog = self.catalog.as_ref().expect("loaded theme catalog");
             let Some(found) = resolve_accepted_type_name(
                 catalog,
-                marker_name,
-                marker_literal,
+                &marker.name,
+                marker.literal,
             ) else {
-                return Err(
-                    self.type_not_configured_error(marker_name, catalog)
-                );
+                return Err(self.type_not_configured_error(marker, catalog));
             };
             found
         };
@@ -809,25 +804,79 @@ impl CaptureTaskThemeContext {
 
     fn type_not_configured_error(
         &self,
-        marker_name: &str,
+        marker: &TypeMarker,
         catalog: &Catalog,
     ) -> CaptureError {
-        let marker = format!("#{marker_name}");
-        let escaped = format!("\\{marker}");
-        let canonical = unmatched_type_display(marker_name);
-        let similar = catalog.similar_to(&canonical);
+        let authored = &marker.authored;
+        let escaped = format!("\\{authored}");
+        let canonical = unmatched_type_display(&marker.name);
+        let attached = matches!(
+            &marker.attachment,
+            TypeMarkerAttachment::ProjectTask { .. }
+                | TypeMarkerAttachment::ExistingTask { .. }
+        );
+        let hint = match &marker.attachment {
+            TypeMarkerAttachment::ProjectTask { route, block_id } => Some(
+                format!(
+                    " (for a project note whose ` :{block_id}` tasks go under the {canonical} Pomodoro, write `{route}^{block_id}+{authored}`)"
+                ),
+            ),
+            TypeMarkerAttachment::ExistingTask { route, block_id } => {
+                let route = route.strip_prefix('@').unwrap_or(route);
+                Some(format!(
+                    " (to link the task under the {canonical} Pomodoro, write `^{route}:{block_id}{authored}`)"
+                ))
+            }
+            TypeMarkerAttachment::Free => marker.heading_route.as_ref().map(
+                |route| {
+                    let name = authored.strip_prefix('#').unwrap_or(authored);
+                    format!(
+                        " (for a bullet under a heading, write `{route}#{name}`)"
+                    )
+                },
+            ),
+        }
+        .unwrap_or_default();
         let message = if catalog.configured_themes().is_some() {
-            let suggestion = similar
-                .first()
-                .map(|name| format!("; did you mean `#{name}`?"))
-                .unwrap_or_default();
+            let suggestions = catalog
+                .similar_to(&canonical)
+                .into_iter()
+                .take(2)
+                .map(|name| replacement_for(&name, &normalize_component(&name)))
+                .collect::<Vec<_>>();
+            let add = if suggestions.is_empty() { "add" } else { "Add" };
+            let separator = if suggestions.is_empty() { ";" } else { "" };
+            let suggestion = if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; did you mean {}?",
+                    suggestions
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                )
+            };
+            if attached {
+                format!(
+                    "`{authored}` is not one of your task types{suggestion}{separator} {add} {canonical} under `types:` in {} to use it{hint}",
+                    self.config_path.display()
+                )
+            } else {
+                format!(
+                    "`{authored}` is not one of your task types{suggestion}{separator} {add} {canonical} under `types:` in {} to use it, or write `{escaped}` to keep it as a tag{hint}",
+                    self.config_path.display()
+                )
+            }
+        } else if attached {
             format!(
-                "`{marker}` is not one of your task types{suggestion}; add `{canonical}` under `types:` in {}, or write `{escaped}` to keep it as a tag",
+                "`{authored}` is not a task type yet: no Pomodoro has used {canonical} and no `types:` vocabulary is configured; add `types:` to {}{hint}",
                 self.config_path.display()
             )
         } else {
             format!(
-                "`{marker}` is not a task type yet: no Pomodoro has used {canonical} and no `types:` vocabulary is configured; add `types:` to {}, or write `{escaped}` to keep it as a tag",
+                "`{authored}` is not a task type yet: no Pomodoro has used {canonical} and no `types:` vocabulary is configured; add `types:` to {}, or write `{escaped}` to keep it as a tag{hint}",
                 self.config_path.display()
             )
         };

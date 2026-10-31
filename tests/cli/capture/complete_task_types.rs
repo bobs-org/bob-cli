@@ -258,6 +258,47 @@ fn attached_ensure_next_type_uses_existing_subject_without_extra_space() {
 }
 
 #[test]
+fn attached_project_task_empty_suffix_is_new_and_keeps_suffix_replacements() {
+    let temp = TempDir::new("bob-cli-complete-task-types-project-attached");
+    let (vault, config) = fixture(temp.path(), true);
+
+    let empty = complete_end(
+        temp.path(),
+        &vault,
+        &config,
+        "Fix the parser @dev^new-id#",
+    );
+    assert_eq!(empty["context"], "task_type");
+    assert_eq!(empty["subject"], "new");
+    assert_eq!(empty["query"], "");
+    assert_eq!(empty["candidates"][0]["replacement"], "#build");
+
+    let draft = "@dev^new-id#f Fix the parser";
+    let typed = complete(temp.path(), &vault, &config, draft, 13);
+    assert_eq!(typed["context"], "task_type");
+    assert_eq!(typed["subject"], "new");
+    assert_eq!(
+        typed["replacement"],
+        serde_json::json!({"start": 11, "end": 13})
+    );
+    let fix = typed["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "FIX")
+        .unwrap();
+    assert_eq!(fix["replacement"], "#fix");
+
+    for draft in [
+        "Fix the parser @dev^current#\"DEEP W",
+        "@dev+current#\"DEEP W",
+    ] {
+        let partial = complete_end(temp.path(), &vault, &config, draft);
+        assert_eq!(partial["context"], "task_type", "{draft:?}");
+    }
+}
+
+#[test]
 fn literal_replacement_child_and_second_line_triggers_work() {
     let temp = TempDir::new("bob-cli-complete-task-types-literal");
     let (vault, config) = fixture(temp.path(), true);

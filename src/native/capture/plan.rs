@@ -683,13 +683,7 @@ pub(super) fn plan_capture_item(
                 &block_id,
             )?;
             let applied = task_theme_context.apply_type_marker_to_existing(
-                planner,
-                &absolute,
-                &route,
-                &block_id,
-                &marker.name,
-                marker.literal,
-                warnings,
+                planner, &absolute, &route, &block_id, &marker, warnings,
             )?;
             let mut planned = plan_dependency_only_item(
                 request,
@@ -879,13 +873,7 @@ pub(super) fn plan_capture_item(
                 block_id,
             )?;
             let applied = task_theme_context.apply_type_marker_to_existing(
-                planner,
-                &target,
-                route,
-                block_id,
-                &marker.name,
-                marker.literal,
-                warnings,
+                planner, &target, route, block_id, &marker, warnings,
             )?;
             Some((original, applied))
         } else {
@@ -1079,13 +1067,7 @@ pub(super) fn plan_capture_item(
                 block_id,
             )?;
             let applied = task_theme_context.apply_type_marker_to_existing(
-                planner,
-                &target,
-                route,
-                block_id,
-                &marker.name,
-                marker.literal,
-                warnings,
+                planner, &target, route, block_id, &marker, warnings,
             )?;
             Some((original, applied))
         } else {
@@ -1364,8 +1346,7 @@ pub(super) fn plan_capture_item(
                 planner,
                 &target,
                 &capture_line,
-                &marker.name,
-                marker.literal,
+                marker,
                 warnings,
             )?;
             capture_line = applied.task_line;

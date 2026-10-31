@@ -2,6 +2,9 @@
   {"input":"#fix Fix the parser","body":"Fix the parser","type":"fix"},
   {"input":"Fix the parser #fix","body":"Fix the parser","type":"fix"},
   {"input":"@sase #fix Fix the parser","body":"Fix the parser","type":"fix"},
+  {"input":"Fix the parser @sase^parser#fix","body":"Fix the parser","type":"fix"},
+  {"input":"@sase^parser#fix Fix the parser","body":"Fix the parser","type":"fix"},
+  {"input":"Fix the parser @sase^parser#\"DEEP WORK\"","body":"Fix the parser","type":"DEEP WORK"},
   {"input":"Fix the parser\n- check the lexer #fix","body":"Fix the parser","type":"fix"},
   {"input":"Fix the parser\n#fix","body":"Fix the parser","type":"fix"},
   {"input":"Fix the parser\n- #fix","body":"Fix the parser","type":"fix"}

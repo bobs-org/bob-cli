@@ -26,8 +26,21 @@ use std::ops::Range;
 pub(crate) struct TypeMarker {
     pub(crate) name: String,
     pub(crate) literal: bool,
+    /// The exact authored token, including its sigil and literal quotes.
+    pub(crate) authored: String,
+    pub(crate) attachment: TypeMarkerAttachment,
+    /// Authored bare route on this item, when a free-standing marker can
+    /// use the heading-bullet teaching hint.
+    pub(crate) heading_route: Option<String>,
     pub(crate) span: Range<usize>,
     pub(crate) name_span: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TypeMarkerAttachment {
+    Free,
+    ProjectTask { route: String, block_id: String },
+    ExistingTask { route: String, block_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +231,12 @@ fn scan_line_with_positions(
     candidates
         .into_iter()
         .filter_map(|mut candidate| {
+            if let TypeMarkerOccurrence::Complete(marker) =
+                &mut candidate.occurrence
+                && matches!(&marker.attachment, TypeMarkerAttachment::Free)
+            {
+                marker.heading_route = item.and_then(bare_route_on_item);
+            }
             let leading = edge_run_is_transparent(
                 body,
                 0,
@@ -233,8 +252,10 @@ fn scan_line_with_positions(
             if !leading && !trailing {
                 return None;
             }
+            let attached =
+                candidate.edge_start != candidate.occurrence.span().start;
             shift_occurrence(&mut candidate.occurrence, base + body_start);
-            Some((candidate.occurrence, leading))
+            Some((candidate.occurrence, leading && !attached))
         })
         .collect()
 }
@@ -402,15 +423,40 @@ fn attached_route_candidate(
         AttachedRouteKind::ExistingTask
     };
     let marker_start = token_start + hash;
-    let candidate = parse_candidate(line, marker_start, marker_start, false);
+    let mut candidate =
+        parse_candidate(line, marker_start, marker_start, false);
+    let edge_end = candidate.edge_end;
+    let attachment = match attached {
+        AttachedRouteKind::ProjectTask => {
+            let (route, block_id) = prefix
+                .split_once('^')
+                .expect("validated project-task route");
+            TypeMarkerAttachment::ProjectTask {
+                route: route.to_string(),
+                block_id: block_id.to_string(),
+            }
+        }
+        AttachedRouteKind::ExistingTask => {
+            let (route, block_id) = prefix
+                .split_once('+')
+                .expect("validated existing-task route");
+            TypeMarkerAttachment::ExistingTask {
+                route: route.to_string(),
+                block_id: block_id.to_string(),
+            }
+        }
+    };
+    if let TypeMarkerOccurrence::Complete(marker) = &mut candidate.occurrence {
+        marker.attachment = attachment;
+    }
     Some((
         Candidate {
             occurrence: candidate.occurrence,
             // The marker bytes attach to the route token. Treat them as a
             // trailing field for replacement spacing even when the whole
             // route token is at the line's leading edge.
-            edge_start: marker_start,
-            edge_end: token_end,
+            edge_start: token_start,
+            edge_end,
         },
         attached,
     ))
@@ -569,6 +615,9 @@ fn parse_candidate(
                 TypeMarkerOccurrence::Complete(TypeMarker {
                     name: lex.decoded,
                     literal: true,
+                    authored: line[start..marker_end].to_string(),
+                    attachment: TypeMarkerAttachment::Free,
+                    heading_route: None,
                     span: start..marker_end,
                     name_span: content_start + open_len..marker_end - close_len,
                 }),
@@ -611,6 +660,9 @@ fn parse_candidate(
                 TypeMarkerOccurrence::Complete(TypeMarker {
                     name: slug.to_string(),
                     literal: false,
+                    authored: line[start..candidate_end].to_string(),
+                    attachment: TypeMarkerAttachment::Free,
+                    heading_route: None,
                     span: start..candidate_end,
                     name_span: content_start..candidate_end,
                 }),
@@ -655,6 +707,51 @@ fn whitespace_tokens(line: &str) -> Vec<(usize, usize)> {
         tokens.push((token_start, line.len()));
     }
     tokens
+}
+
+fn bare_route_on_item(item: &CaptureItem<'_>) -> Option<String> {
+    let lines = split_physical_lines(item.source);
+    for item_line in &item.lines {
+        let Some(line) = lines.iter().find(|line| {
+            line.start <= item_line.raw.start && item_line.raw.start <= line.end
+        }) else {
+            continue;
+        };
+        let protected = protected_ranges(line.text);
+        for (start, end) in whitespace_tokens(line.text) {
+            let token = &line.text[start..end];
+            if protected.iter().any(|(protected_start, protected_end)| {
+                *protected_start < end && start < *protected_end
+            }) {
+                continue;
+            }
+            if !token.starts_with('@')
+                || token[1..]
+                    .chars()
+                    .any(|character| matches!(character, ':' | '^' | '+' | '#'))
+            {
+                continue;
+            }
+            if super::tokens::parse_route_token(token).is_some_and(|parsed| {
+                matches!(parsed.kind, super::model::CaptureKind::Task)
+            }) {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Format a type's marker spelling for completion or refusal suggestions.
+pub(crate) fn replacement_for(name: &str, key: &str) -> String {
+    let slug = super::line::selector_slug(name);
+    if slug.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && normalize_component(&slug) == key
+    {
+        format!("#{slug}")
+    } else {
+        format!("#\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+    }
 }
 
 fn edge_run_is_transparent(

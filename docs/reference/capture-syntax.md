@@ -105,6 +105,9 @@ what they attach to, not as one global operator.
 | `+` | after `#name` | Part of the Pomodoro name (`BUGS+`) |
 | `#` | trailing bare `#` | Pomodoro note |
 | `#` | `@route#Section` | Heading in that note |
+| `#` | free-standing `#<type>` at an item edge | Type the new task or retype its selected task; unconfigured names refuse |
+| `#` | `@route^id#<type>` at an item edge | Type the new task with that block ID |
+| `#` | `@route+id#<type>` with no body or children | Retype the existing task and ensure Next |
 | `#` | `@route+id#section` with body text | ALL-CAPS task section |
 | `#` | `@route:id#pomodoro` / `=name` | Named Pomodoro (`=bugs` and `=#bugs` are one token) |
 | `@` | `@route…` | Route / destination token |
@@ -154,7 +157,8 @@ These are not valid commands. Bob teaches the replacement.
 | `==x` | Error: close with `x` |
 | `@route:id+` / `@route:id+#pomodoro` | Retired project-note forms; write `@route^id+` |
 | `@route::id` | Retired ordinary block-ID form; write `@route^id` |
-| `#now` / a free `#tag` next to `@route` | Retired; heading and Pomodoro `#` attach to the route token |
+| `#now` / a free `#tag` at an item edge | Refused with `type_not_configured` unless the name is configured; a bare `@route` adds the heading hint |
+| `t:fix` | Ordinary prose; `t:` is retired as a type marker |
 | `x#bugs` | Error: `x` always closes the running session; write `x =bugs` to close then start |
 
 Contract: [Retired close spellings](../capture.md#retired-close-spellings).
@@ -1153,8 +1157,8 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### `@route+block-id#section` {#plus-child-section}
 
-Child bullet under an ALL-CAPS section of that task. With no other text, `#`
-names a Pomodoro instead (Ensure Next / move).
+Child bullet under an ALL-CAPS section of that task. With no other text or
+children, the suffix is a task type ([`#<type>`](#hash-type)).
 
 ```bash
 bob capture 'Need a parser @work+prep#requirements'
@@ -1172,9 +1176,9 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 `@route+block-id` with no other text ensures the task is Next and relocates
 its existing open-Pomodoro Task Link to today's implicit current/next
-Pomodoro. `#pomodoro` moves the subtree to that named open Pomodoro,
-creating a named future Pomodoro when missing. Own-prerequisite Blocked
-targets drop those links first.
+Pomodoro. `@route+block-id#<type>` retypes the task first, so the link lands
+by its new type. Use `^route:block-id#NAME` to link under a named Pomodoro.
+Own-prerequisite Blocked targets drop those links first.
 
 ```bash
 bob capture '@work+outline'

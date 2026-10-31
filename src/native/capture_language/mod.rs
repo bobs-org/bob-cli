@@ -136,5 +136,7 @@ pub(crate) use self::type_marker::resolve_exact_type_name;
 pub(crate) use self::type_marker::scan_line;
 pub(crate) use self::type_marker::unmatched_type_display;
 pub(crate) use self::type_marker::ResolvedTypeName;
-pub(crate) use self::type_marker::TypeMarker;
 pub(crate) use self::type_marker::TypeMarkerOccurrence;
+pub(crate) use self::type_marker::{
+    replacement_for, TypeMarker, TypeMarkerAttachment,
+};

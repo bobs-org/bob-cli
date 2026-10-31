@@ -344,6 +344,39 @@ fn masked_items_match_their_baseline_across_grammar_families() {
     );
     // Unicode bytes move every later offset.
     check_masking_parity("Fix 🧰 it", "#fix Fix 🧰 it", 0, "#fix ");
+    // Attached markers mask to the route token on either edge. Quoted
+    // suffixes stay whole even though their names contain whitespace.
+    check_masking_parity(
+        "Fix the parser @sase^parser",
+        "Fix the parser @sase^parser#fix",
+        27,
+        "#fix",
+    );
+    check_masking_parity(
+        "Fix the parser @sase^parser",
+        "Fix the parser @sase^parser#\"DEEP WORK\"",
+        27,
+        "#\"DEEP WORK\"",
+    );
+    check_masking_parity(
+        "@sase^parser Fix the parser",
+        "@sase^parser#fix Fix the parser",
+        12,
+        "#fix",
+    );
+    check_masking_parity("@sase+parser", "@sase+parser#fix", 12, "#fix");
+    check_masking_parity(
+        "@sase+parser",
+        "@sase+parser#\"DEEP WORK\"",
+        12,
+        "#\"DEEP WORK\"",
+    );
+    check_masking_parity(
+        "@sase+parser &notes:spec",
+        "@sase+parser#fix &notes:spec",
+        12,
+        "#fix",
+    );
     // Markers on child lines type the parent item.
     check_masking_parity(
         "Fix it\n- check details",
@@ -374,6 +407,57 @@ fn masked_items_match_their_baseline_across_grammar_families() {
         })
         .collect();
     assert_eq!(var.items[1].spans, shifted);
+}
+
+#[test]
+fn attached_literal_spans_touch_route_ids_and_incomplete_literals_need_type() {
+    for raw in [
+        "Fix it @sase^parser#\"DEEP WORK\"",
+        "Fix it @sase^parser#“DEEP WORK”",
+        "@sase+parser#\"DEEP WORK\"",
+        "@sase+parser#“DEEP WORK”",
+    ] {
+        let parse = editor(raw);
+        let item = &parse.items[0];
+        let marker = item
+            .spans
+            .iter()
+            .find(|span| span.kind == SpanKind::TaskType)
+            .expect("attached task type span");
+        let id = item
+            .spans
+            .iter()
+            .find(|span| {
+                matches!(
+                    span.kind,
+                    SpanKind::TaskBlockId | SpanKind::TaskToggleBlockId
+                )
+            })
+            .expect("route block ID span");
+        assert_eq!(id.end, marker.start, "{raw:?}");
+        let mut spans = item.spans.clone();
+        spans.sort_by_key(|span| (span.start, span.end));
+        assert!(
+            spans.windows(2).all(|pair| pair[0].end <= pair[1].start),
+            "overlapping spans for {raw:?}: {spans:?}"
+        );
+    }
+
+    for raw in [
+        "Fix it @sase^parser#\"DEEP",
+        "Fix it @sase^parser#\"DEEP W",
+        "Fix it @sase^parser#“DEEP W",
+        "@sase+parser#\"DEEP W",
+    ] {
+        assert!(editor(raw).needs.contains(&Need::TaskType), "{raw:?}");
+    }
+}
+
+#[test]
+fn attached_project_marker_stays_midline_only_when_route_is_not_at_an_edge() {
+    let raw = "Fix @sase^id#fix the parser";
+    let parse = editor(raw);
+    assert!(task_type_spans(&parse).is_empty());
 }
 
 #[test]

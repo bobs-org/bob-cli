@@ -9,8 +9,10 @@ use super::{
 };
 use crate::native::{
     capture,
-    capture_language::EditorItemParse,
-    capture_language::{resolve_accepted_type_name, selector_slug},
+    capture_language::{
+        replacement_for, resolve_accepted_type_name, selector_slug,
+    },
+    capture_language::{EditorItemParse, SpanKind},
     env,
     plan_budget::normalize_component,
     pomodoro_themes::{self, preselect::MenuSuggestion, Catalog, ThemeRef},
@@ -87,20 +89,34 @@ fn build_inner(
     // reserves `dependency_target` for relationship owners, so also read the
     // route and block id from the existing-link form here. An empty `#` on
     // that link makes the editor mode incomplete while it reports the need.
+    let has_new_task_id = editor_item.is_some_and(|item| {
+        item.spans
+            .iter()
+            .any(|span| span.kind == SpanKind::TaskBlockId)
+    });
     let whole_item_link = editor_item.filter(|item| {
         matches!(
             item.mode,
             crate::native::capture_language::EditorMode::PomodoroLink
                 | crate::native::capture_language::EditorMode::Incomplete
-        ) && item.block_id.is_some()
+        ) && item
+            .spans
+            .iter()
+            .any(|span| span.kind == SpanKind::PomodoroRoute)
+            && item
+                .spans
+                .iter()
+                .any(|span| span.kind == SpanKind::PomodoroBlockId)
     });
     let whole_item_toggle = editor_item.filter(|item| {
-        item.mode == crate::native::capture_language::EditorMode::TaskToggle
-            && item.block_id.is_some()
+        item.spans
+            .iter()
+            .any(|span| span.kind == SpanKind::TaskToggleBlockId)
     });
-    let subject = if existing.is_some()
-        || whole_item_link.is_some()
-        || whole_item_toggle.is_some()
+    let subject = if !has_new_task_id
+        && (existing.is_some()
+            || whole_item_link.is_some()
+            || whole_item_toggle.is_some())
     {
         "existing"
     } else {
@@ -388,16 +404,5 @@ fn candidate(
         hidden,
         similar_to,
         refused,
-    }
-}
-
-fn replacement_for(name: &str, key: &str) -> String {
-    let slug = selector_slug(name);
-    if slug.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-        && normalize_component(&slug) == key
-    {
-        format!("#{slug}")
-    } else {
-        format!("#\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
     }
 }
