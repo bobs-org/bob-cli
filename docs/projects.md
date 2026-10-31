@@ -358,7 +358,23 @@ tasks not pulled in`, `Removed the BUILD link · project is Blocked`, or
 the same kind of project note directly, with no Obsidian window open: see
 [Project notes](capture.md#project-notes). Task bullets in that capture can
 name their IDs with a trailing ` ^<id>`, or name them and link them into the
-Pomodoro with a trailing ` :<id>`. In the `<ctrl+=>` child
+Pomodoro with a trailing ` :<id>`.
+
+Capture's `@route:id@` is promotion at birth. It creates the same note, then
+offers the new project's open tasks as successors of its `^prj` with the same
+KEYS, numbering, and `-p` selection as the picker above, through the
+[Successor offers](task-dependencies.md#12-successor-offers) contract
+(`trigger: "project_created"`). Differences from nav promotion: there is no
+source task or live link to take over, so picks are placed by task type or
+`#name` rather than at an anchor; only open Ready, Next, and Pending rows are
+offered (a blocked project, `[?]` rows, and the `^prj` are never offered or
+linked, and `#hide` and explicit ` :` rows fold into counts); nothing links
+without an explicit pick (`-p`), and a pick is written exactly like an authored
+` :<id>` bullet. Unlike an existing task picked from a Done gesture or nav
+promotion, a task the same capture creates is **not** stamped fresh. See
+[Offer a new project's tasks](capture.md#offer-a-new-projects-tasks).
+
+In the `<ctrl+=>` child
 note picker, future-scheduled projects show a `calendar-clock` chip immediately
 before the status pill; its date comes from the child's `^prj` inline
 `[scheduled::]` field, not project frontmatter. The chip says `Tomorrow`, `Jul 16`, or `Jul 16, 2027`

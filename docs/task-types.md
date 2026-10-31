@@ -642,7 +642,8 @@ component.
 Forms: a new Pomodoro-linked task (`<text> @route:id#NAME`), a
 whole-item existing-task link (`@route:id#NAME` or `^route:id#NAME`),
 the equivalent `=name` shorthands, and
-project-note ` :<id>` bullets under a named `+#NAME`. Link guards,
+project-note ` :<id>` bullets (and picked project offers) under a `#NAME`
+after the seal. Link guards,
 unnamed links, ordinary toggles, close gestures, and `bob ref today`
 never write this field. A batch re-evaluates suggestions against its
 staged note snapshot, and the task field is committed with that

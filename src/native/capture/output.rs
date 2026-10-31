@@ -4023,7 +4023,7 @@ fn print_human_unblocked_row(
             .block_link
             .rsplit_once('^')
             .filter(|_| link.block_id_created)
-            .map(|(_, id)| format!(" · added ^{id}"))
+            .map(|(_, id)| format!(" · added ^{}", id.trim_end_matches("]]")))
             .unwrap_or_default();
         println!(
             "{prefix}{verb} {head}  {locator} → {destination}{minted}{project_label}"

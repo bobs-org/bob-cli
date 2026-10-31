@@ -928,12 +928,15 @@ the NEW and TICKLER review tiers resurface unpicked work.
 - **Offer (D).** A task this gesture fully unblocked that would have
   been auto-linked under the old successor-link rule, plus every
   available open resident of a project whose `^prj` this gesture
-  recovered, plus each §12.10 pull-in. One row per task identity.
+  recovered, plus each §12.10 pull-in, plus — for capture's sealed
+  `@route:id@` — each eligible open task of the project note that capture
+  creates (trigger `project_created`, §12.5). One row per task identity.
 - **Pick / selection.** The input that chooses which offers to link.
   Nothing is pre-checked. ↵ applies the marked rows, or the highlighted
   row when none are marked; Esc means none.
 - **Groups.** `hand_off` (direct dependents), `project` (residents of an
-  unblocked project), `project_finished` (§12.10 pull-ins).
+  unblocked project, or of a project note capture just created),
+  `project_finished` (§12.10 pull-ins).
 - **Destination.** Where a picked link is inserted. Hand-offs and
   pull-ins use the §12.3 anchor (slot / closing / inherit). Project
   residents use the earliest anchor among `preds(R)` (the tasks that
@@ -971,6 +974,7 @@ offers.
 | `bob capture` closes that complete links: `x` with embeds, `x!M`, `x!`, `^route:id=x…` | bob-cli |
 | complete-label commit (`~` / `~~` or nav Links / Linked-from with a `relations.complete_labels` label) | bob-cli / bob-navigation-hotkeys |
 | Alt+] / Alt+[ status cycling into Done | task-status-cycler |
+| `bob capture '<text> @route:id@'` — a sealed project note. This is the one trigger that completes nothing: the project's creation is the gesture, and its rows say `trigger: "project_created"` | bob-cli |
 
 The same complete gestures produce project offers and project-finished
 pull-in offers (§12.10).
@@ -979,6 +983,15 @@ Promotion is not a Done gesture, but nav's Create project note from task offers
 the new project's open tasks with the same picker, KEYS, and PICK rule. Only
 the trigger, the anchor, and consumption differ — see
 [Promotion successors](projects.md#promotion-successors).
+
+Capture's `@route:id@` is promotion at birth: it creates the project note
+and offers the open tasks it just rendered, with the same numbering, keys,
+and `-p` selection. There is no predecessor and no live link to take over,
+so `unblocked_by` names the new `^prj`, destinations come from the normal
+type and `#name` placement (§12.3's slot and closing anchors do not apply),
+and a pick is written exactly like an authored ` :<id>` project-note bullet.
+A task that capture itself creates is never stamped fresh (§12.4). See
+[Offer a new project's tasks](capture.md#offer-a-new-projects-tasks).
 
 It **never** prompts, offers, or links on any of the following:
 
@@ -1216,7 +1229,12 @@ planned pass in Obsidian (plan → choose → apply). Selection is an
 - **Freshness.** Picked rows stamp like a manual link. Unpicked
   recoveries never stamp; they keep the WRITE rule
   ([freshness.md §5](freshness.md#5-who-stamps)). An unpicked Ready
-  recovery can still surface as TICKLER tomorrow.
+  recovery can still surface as TICKLER tomorrow. The one exception to
+  "picked rows stamp" is a `project_created` pick: the task was created
+  by the same capture, creation never stamps, so it gets no
+  `[fresh::]`. Its picked write is the authored ` :<id>` project-note
+  write (Next, or `[?]` under a resolved schedule; ID minted when
+  missing), not the manual-link write above.
 - **Schedule.** Never touched: no `scheduled` change and no Schedule Log
   line. Eligible offers have no future date by definition.
 - **Fields.** No `[id::]` / `[dependsOn::]` writes; the hooks own those.
@@ -1304,9 +1322,11 @@ stale `[ ]` resident).
 
 - The existing fields keep their meaning; `unblocked` stays on
   `task_complete` and is new on `pomodoro_close`.
-- `trigger` is `"dependency"` or `"project_empty"`. Every existing
-  successor row says `"dependency"`; a missing key means an older bob.
-  Project pull-in rows say `"project_empty"` (§12.10).
+- `trigger` is `"dependency"`, `"project_empty"`, or
+  `"project_created"`. Every existing successor row says
+  `"dependency"`; a missing key means an older bob. Project pull-in
+  rows say `"project_empty"` (§12.10). Rows for a project note created
+  by capture's `@route:id@` say `"project_created"`.
 - `hide_removed` is true when this gesture removed a whole-token
   `#hide` from the row's task. Existing successor rows send `false`.
 - The row `text` of a project (`^prj`) row is the post-write
@@ -1340,6 +1360,48 @@ stale `[ ]` resident).
   - The cycler-only model adds `failed` and `cancelled`; Rust never
     emits them.
   - `breaker` and `not_planned_today` are never emitted again.
+
+**Project-created rows (`project_note.successors`)**
+
+A capture item `@route:id@` (Capture's
+[Offer a new project's tasks](capture.md#offer-a-new-projects-tasks))
+reports its offers on the item's `project_note` object, not under
+`task_complete` or `pomodoro_close`, as an additive pair:
+
+- `form`: `"offer"`. Absent for the `^` create form.
+- `successors`: rows in the exact `unblocked[]` shape above (the array
+  may be empty); absent for the create form. A client that reads every
+  offered row must read this array too.
+
+Each row has `trigger: "project_created"`, `inbox: false`,
+`hide_removed: false`, `previous_status_*` from the pre-pick render,
+final `status_*`, `line`, and `block_id` after any pick, and
+`unblocked_by` naming `{note_path: <new note>, block_id: "prj",
+text: <^prj text>}`. `offer.group` is `"project"`, `offer.project` is
+the new note's basename, and `offer.destination.entry_role` uses the
+existing `typed` / `created` / `implicit` vocabulary (`implicit` sets
+`fallback: true`); placement is sequential, so a named Pomodoro that
+would be created by the first landing is `created` for that row and
+`typed` for the next. `offer.key` is `<basename>#^<id>` for a row with a
+block ID and `<basename>@<digest>` otherwise, computed with
+`note_tasks::stable_task_key` on the render **before** any pick, so it is
+the same in preview and submit after IDs are minted or tasks retyped.
+Rows are numbered in note order after any other offers in the draft
+(order key `(1, (usize::MAX, usize::MAX), basename, line)`: after
+recovered-project offers).
+
+A **picked** row has `offer.selected: true`, `status_symbol` `*` (or `?`
+under a resolved schedule), a normal `link`, and **also** appears in
+`project_note.task_links`, because a pick is an authored-style ` :` link.
+Clients must not count it twice. Only open Ready / Next / Pending rows
+are offered; the `^prj`, the generated placeholder, blocked, closed, and
+unknown-status rows are not. Explicit ` :` children fold under
+`already_planned`, `#hide` rows under `hidden`, in the project's
+`pull_in.groups` entry (`sub_projects` is `0`). A project blocked by a
+future schedule reports `successors: []`, the `project_schedule`
+`link_guard`, and nothing links. A later batch item that closes, blocks,
+or links a created task drops its offer (SL20 below); a pick survives
+only when its final task and link do.
 
 **`still_blocked[]` rows**
 
@@ -2068,9 +2130,13 @@ subprocess argument, absent from `--help`): when offers exist and no
 
 Same exit status (1) and shape conventions as the
 `plan_theme_cap_exceeded` refusal. `code` appears on these two
-refusals; every other capture failure omits it.
+refusals; every other capture failure omits it. Offers from a project
+note created by `@route:id@` take part in the refusal, the flat `offers`
+payload, and the pick validation like any other offer, and the refusal
+writes neither the project note nor the daily note.
 
-Human output: numbered `offer N` rows under group headers. A dry-run
+Human output: numbered `offer N` rows under group headers (a project
+created by capture's `@route:id@` prints `New project <basename>`). A dry-run
 hint shows `-p 1,2 · -p all`. A real run without a pick says the
 offers were not pulled in and names Obsidian / Bob Mac Capture /
 Ctrl+Shift+Enter as the way to link later.

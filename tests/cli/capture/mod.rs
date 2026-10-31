@@ -57,6 +57,7 @@ mod pomodoros_agenda;
 mod priority;
 mod project_close;
 mod project_note;
+mod project_note_offer;
 mod project_pull_in;
 mod r#ref;
 mod ref_grammar;

@@ -112,6 +112,8 @@
   location: /reference/capture-syntax/#link-then-close
 - query: "@route^block-id@"
   location: /reference/capture-syntax/#project-note-seal
+- query: "@route:block-id@"
+  location: /reference/capture-syntax/#project-note-offer
 - query: ":id"
   location: /reference/capture-syntax/#project-colon-child
 - query: "^id"

@@ -51,6 +51,7 @@ workflow guide.
     - [Logging work while closing](#logging-work-while-closing)
   - [Chaining session operators on one line](#chaining-session-operators-on-one-line)
   - [Project notes](#project-notes)
+    - [Offer a new project's tasks](#offer-a-new-projects-tasks)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
   - [Task Link toggle](#task-link-toggle)
   - [Pomodoro notes](#pomodoro-notes)
@@ -133,6 +134,8 @@ anything is written, and any failure rolls the whole batch back.
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
 | `@route^block-id@` | Create the project note `<route>_<block_id>.md`; the `^prj` task is never linked and the daily note is untouched |
 | `@route^block-id@#pomodoro` | Same; ` :<id>` Task Links go under the named open Pomodoro, creating that named future Pomodoro when missing |
+| `@route:block-id@` | Create the same project note, then **offer** its open task rows as successors of the new `^prj`; explicit ` :<id>` bullets still link, and nothing else links until you pick it with `-p/--pull-in` |
+| `@route:block-id@#pomodoro` | Same; explicit links and picked offers go under the named Pomodoro, which is created only when something lands there |
 | `- <task> :<task-id>` (project-note bullet) | Name the task, make it Next (`[*]`, or `[?]` when scheduled), and link `[[<stem>#^<task-id>]]` into the Pomodoro the task's type places, or the `#pomodoro` one |
 | `- <task> ^<task-id>` (project-note bullet) | Name the task only: `- [ ] #task <task> [created::DATE] ^<task-id>` |
 | `@route+block-id` | Ordinary child bullet under an existing task |
@@ -271,7 +274,10 @@ anything is written, and any failure rolls the whole batch back.
 | `- -` | Two bare adjustments in a row; lines made only of bare operators are chains, not prose |
 | `@cash^goog-exit@` | New project note `cash_goog_exit.md`; the `@` is a project-note seal, not a sub-bullet |
 | `@cash^goog-exit@#bugs` | New project note with its ` :id` Task Links under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task section |
-| `@cash^goog-exit+`, `@cash^goog-exit+#bugs`, `@cash:goog-exit+`, `@cash:goog-exit+#bugs` | Retired project-note forms; use `@cash^goog-exit@` / `@cash^goog-exit@#bugs` |
+| `@cash:goog-exit@` | New project note `cash_goog_exit.md`, then its open tasks are offered; only `-p` picks (and explicit ` :id` bullets) are linked |
+| `@cash:goog-exit@#bugs` | Same; links and picks go under the Pomodoro named `BUGS` |
+| `@cash^goog-exit+`, `@cash^goog-exit+#bugs`, `@cash:goog-exit+`, `@cash:goog-exit+#bugs` | Retired project-note forms; the error teaches `@cash:goog-exit@` (choose tasks to link) and `@cash^goog-exit@` (link none), with `#bugs` carried over |
+| `@cash^goog-exit#bugs@`, `@cash:goog-exit#bugs@` | Error: the `@` seal goes right after the block ID (`@cash:goog-exit@#bugs`); after `#bugs` it would be part of the Pomodoro name |
 | `@sase:deep-fix#bugs+` | Pomodoro-linked task under the Pomodoro named `BUGS+`; a trailing `+` after a `#name` stays part of the Pomodoro name |
 | `Fix it @sase #now` | Refused with `type_not_configured` unless `NOW` is configured; the bare `@sase` route adds the heading hint |
 | `Fix it #now @sase` | Refused with `type_not_configured` unless `NOW` is configured; the bare `@sase` route adds the heading hint |
@@ -2699,7 +2705,9 @@ clean `text` and named ledger entries:
 
 The batch also carries top-level `pull_in` on every success (`supported:
 true`, `offer_count`, `choice`, `picked_count`). Dry-run JSON equals
-real-run JSON with the same flags, including `--pull-in`. To pull in
+real-run JSON with the same flags, including `--pull-in`. A sealed
+`@route:id@` project note contributes its tasks to the same offer set
+([Offer a new project's tasks](#offer-a-new-projects-tasks)). To pull in
 numbered offers, pass `-p 1,2`, `-p all`, or `-p none`:
 
 ```text
@@ -4313,11 +4321,13 @@ keys), and no SASE memory changes.
 
 ### Project notes
 
-Use a leading or trailing `@<route>^<block-id>+` marker to create a brand-new
-sub-project note instead of a task. A `#<pomodoro>` name after the `+`
-(`@<route>^<block-id>+#<pomodoro>`) picks the Pomodoro that ` :<id>` Task
+Use a leading or trailing `@<route>^<block-id>@` marker to create a brand-new
+sub-project note instead of a task. A `#<pomodoro>` name after the seal
+(`@<route>^<block-id>@#<pomodoro>`) picks the Pomodoro that ` :<id>` Task
 Links go under. Task bullets name their IDs with a trailing ` :<id>` (link
-into the Pomodoro) or ` ^<id>` (name only). For example:
+into the Pomodoro) or ` ^<id>` (name only). To also be offered the new
+note's open tasks, write `@<route>:<block-id>@` instead; see
+[Offer a new project's tasks](#offer-a-new-projects-tasks). For example:
 
 ```text
 Finish the Google exit packet! @cash^goog-exit@#admin
@@ -4445,7 +4455,9 @@ reserved. A bare trailing `:` or `^` is an unfinished ID and fails with a
 message naming the ` :<block-id>` / ` ^<block-id>` spelling.
 
 A project note with at least one ` :` task reads the daily note and needs a
-`## Pomodoros` section; with none, the daily note is never read. Missing
+`## Pomodoros` section; with none, the daily note is never read (the offer
+form also reads it when a task is eligible to be offered, as described
+under [Offer a new project's tasks](#offer-a-new-projects-tasks)). Missing
 file, no eligible Pomodoro, multiple open timed entries, and "ledger already
 contains `[[…]]`" errors reuse the existing Pomodoro-task messages. The note
 and the daily note are staged together, so any failure writes nothing, and
@@ -4464,18 +4476,30 @@ empty remaining body, or an authored checkbox on a `:` task (`` `:foo` makes
 the task Next and links it, so it takes no `[x]` checkbox; remove the
 checkbox or write ` ^foo` to keep it ``).
 
-Retired forms fail with a message that teaches the new spelling. `@cash:goog-exit+` →
-`` `@cash:goog-exit+` is retired: a project note is sealed with `@`. Write
-`@cash^goog-exit@` (`@cash+goog-exit` adds a sub-bullet under that task) ``
-(with `#bugs`, the suggestion is `@cash^goog-exit@#bugs`). A misordered `@`
-also teaches the fix: `@cash^goog-exit#bugs@` →
-`` put the project-note `@` right after the block ID:
-`@cash^goog-exit@#bugs` (an `@` after `#bugs` would be part of the Pomodoro
-name) ``. `@cash^goog-exit#bugs` parses as a typed task with type `bugs`, not
-a project note; to link a task under a Pomodoro, use `@cash:goog-exit#bugs`.
-`@cash^goog-exit+` is retired the same way:
+Retired forms fail with a message that teaches the new spelling.
+`@cash^goog-exit+` →
 `` `@cash^goog-exit+` is retired: a project note is sealed with `@`. Write
-`@cash^goog-exit@` (`@cash+goog-exit` adds a sub-bullet under that task) ``.
+`@cash^goog-exit@`, or `@cash:goog-exit@` to also choose which of its tasks
+to link (`@cash+goog-exit` adds a sub-bullet under that task) ``, and
+`@cash:goog-exit+` →
+`` `@cash:goog-exit+` is retired: a project note is sealed with `@`. Write
+`@cash:goog-exit@` to choose which of its tasks to link, or
+`@cash^goog-exit@` to link none (`@cash+goog-exit` adds a sub-bullet under
+that task) ``. With a `#bugs` name, both suggestions keep it
+(`@cash:goog-exit@#bugs`) and the sub-bullet hint is dropped. A misordered
+`@` also teaches the fix: `@cash^goog-exit#bugs@` (or `@cash:goog-exit#bugs@`)
+→ `` put the project-note `@` right after the block ID:
+`@cash^goog-exit@#bugs` (an `@` after `#bugs` would be part of the Pomodoro
+name) ``. Text after the seal is refused the same way (`@cash:goog-exit@x`,
+`@cash:goog-exit@@`, and `@cash:goog-exit@+` →
+`` the project-note `@` ends the marker: write `@cash:goog-exit@` or
+`@cash:goog-exit@#<pomodoro>` ``), and `@cash+goog-exit@` explains that `+`
+adds a sub-bullet while a new project note is `@cash^goog-exit@` (or
+`@cash:goog-exit@`). `@cash^goog-exit#bugs` parses as a typed task with type
+`bugs`, not a project note; to link a task under a Pomodoro, use
+`@cash:goog-exit#bugs`. A leading `^cash:goog-exit@` is not a capture form
+(`` `^route:block-id@` is not a capture form; create a project note with
+`@route^block-id@` ``).
 
 The parent note `<route>.md` must already exist and be an area or
 non-terminal project note — the same rule `bob capture-targets` lists routes
@@ -4501,12 +4525,181 @@ is a deliberate deferral a future change can lift. Forced destination flags
 (`--route`, `--section`, `--task`, `--task-ref`, `--task-section`) keep
 `@tokens` literal, so they never reach this family. `s:<N>` and `$<N>` are
 allowed and behave as described above. A `=<X>` / `=x` suffix is rejected on
-project notes with a message naming `@<route>^<block-id>+`; `!` stays
+project notes with a message naming `@<route>^<block-id>@`; `!` stays
 reserved for the sub-bullet toggle and is not accepted on this family; a
-`@@<route>^<id>+` declaration fails with `invalid @@ declaration: @@ takes a
-route (@@foo)`; and
-an empty block ID (`@<route>^+`) fails with the family's existing "requires
-a block ID" wording.
+`@@<route>^<id>@` or `@@<route>:<id>@` declaration fails with `invalid @@
+declaration: @@ takes a route (@@foo)`; and an empty block ID
+(`@<route>^@`, `@<route>:@`) fails with the family's existing "requires a
+block ID" wording. A solo `@<route>:<block-id>@` with no body gets the
+missing-text error; it is never read as a link.
+
+#### Offer a new project's tasks {#offer-a-new-projects-tasks}
+
+`@<route>:<block-id>@` creates exactly the note `@<route>^<block-id>@` would,
+then offers that note's open tasks as **successors** of its new `^prj` task. It
+is the same pull-in protocol a managed Done gesture uses
+([task-dependencies.md §12](task-dependencies.md#12-successor-offers)): the
+offers are numbered, keyed, and previewed, and **nothing is linked until you
+pick it**. Explicit ` :<id>` bullets keep linking exactly as they do under
+`@<route>^<block-id>@`. For example, given an area `cash.md` and a daily note
+with a Pomodoro:
+
+```text
+Finish the exit packet @cash:goog-exit@#admin
+- Draft the memo
+- Collect paperwork ^paperwork
+- Call the bank :call-bank
+- Private #hide reminder
+```
+
+Capture creates `cash_goog_exit.md`, links `:call-bank` under `ADMIN`, and
+offers the first two task rows in note order. The `#hide` row is folded, and
+the lifecycle `^prj` task and the generated
+`(REPLACE WITH TASK DESCRIPTION)` placeholder are never offered or linked.
+A dry run reports each offer unselected (excerpt):
+
+```json
+{
+  "kind": "project_note",
+  "project_note": {
+    "basename": "cash_goog_exit.md",
+    "form": "offer",
+    "task_links": [
+      { "block_id": "call-bank", "block_link": "[[cash_goog_exit#^call-bank]]", "text": "Call the bank", "task_line": "- [*] #task Call the bank [created::2026-09-20] ^call-bank" }
+    ],
+    "successors": [
+      {
+        "note_path": "cash_goog_exit.md",
+        "block_id": "",
+        "line": 13,
+        "text": "Draft the memo",
+        "previous_status_symbol": " ",
+        "status_symbol": " ",
+        "inbox": false,
+        "hide_removed": false,
+        "unblocked_by": [
+          { "note_path": "cash_goog_exit.md", "block_id": "prj", "text": "Finish the exit packet" }
+        ],
+        "trigger": "project_created",
+        "offer": {
+          "key": "cash_goog_exit.md@f5985784",
+          "n": 1,
+          "group": "project",
+          "selected": false,
+          "block_id_needed": true,
+          "project": "cash_goog_exit.md",
+          "destination": {
+            "day_file": "day.md",
+            "entry_name": "ADMIN",
+            "entry_role": "typed",
+            "fallback": false
+          }
+        }
+      }
+    ]
+  },
+  "pull_in": {
+    "supported": true,
+    "offer_count": 2,
+    "choice": null,
+    "picked_count": 0,
+    "groups": [
+      {
+        "group": "project",
+        "project": "cash_goog_exit.md",
+        "folded": { "hidden": 1, "already_planned": 1, "sub_projects": 0 }
+      }
+    ]
+  }
+}
+```
+
+The human dry run prints a `New project cash_goog_exit.md` header over
+numbered `offer N` rows (`-p 1,2`):
+
+```text
+[dry-run] ok would link   /…/day.md
+  under ADMIN (created)
+  - [[cash_goog_exit#^draft-memo]]
+  - [[cash_goog_exit#^paperwork]]
+  - [[cash_goog_exit#^call-bank]]
+  New project cash_goog_exit.md
+  offer 1  would link [ ] → [*] Draft the memo  cash_goog_exit.md ^draft-memo → new ADMIN session · added ^draft-memo
+  offer 2  would link [ ] → [*] Collect paperwork  cash_goog_exit.md ^paperwork → ADMIN
+```
+
+Choose with the normal pull-in flags:
+
+- Without `-p`, or with `-p none`, the project note is created and only the
+  explicit ` :call-bank` link is written; both offers stay unselected.
+- `-p 1,3` selects offers by number, `-p cash_goog_exit.md#^paperwork`
+  selects one by key, and `-p all` selects every offer. Numbers run `1..k`
+  in note order and continue after any other offers in the same draft, so a
+  `!` completion that offers a dependent comes first (the project's offers
+  sort after recovered-project offers). A key is `<basename>#^<id>` for a
+  row that already has a block ID and `<basename>@<digest>` for one that does
+  not. Keys come from the note as rendered **before** any pick, so a
+  preview's keys still match on submit after IDs are minted or tasks
+  retyped.
+- A stale, unknown, or out-of-range pick is a teaching error that lists the
+  current offers and writes nothing.
+- `--require-pull-in-choice` with no `-p` refuses when offers exist, with
+  `code: pull_in_choice_required` and the flat `offers` array, and writes
+  **neither** the project note **nor** the daily note, so a client can ask
+  before anything is written.
+
+Every pick is exactly an authored ` :<id>` bullet. `-p all` writes the same
+files, byte for byte, as `@<route>^<block-id>@` with every offered bullet
+authored as ` :<id>`, using the IDs the pick minted:
+
+- The picked task becomes Next (`[*]`, or `[?]` under a resolved
+  `s:<N>` schedule, exactly as ` :` tasks do), is linked into the Pomodoro
+  its type places (or the `#pomodoro` one), and is retyped by `#name`. A
+  row with no ID is given one, chosen so it never collides with an authored
+  ID, with `prj`, or with another minted ID.
+- The pick is **not** stamped `[fresh:: …]`. Picking an *existing* task from
+  a Done gesture stamps it fresh; a task this capture creates never is,
+  because creation never stamps.
+- A picked row appears twice in the report on purpose: once in
+  `project_note.successors` with `offer.selected: true` and a `link`, and once
+  in `project_note.task_links`, because it is a ` :` link. Count it once.
+
+What is offered is conservative. Only open Ready (`[ ]`), Next (`[*]`),
+and Pending (`[/]`) rows from `## Tasks` (including a merged authored `TASKS`
+section) are offered, with their ` ^<id>` kept as the offer's ID. Blocked,
+completed, canceled, and unknown-status rows, section headings, and
+note-only bullets are not offered. Tasks that already end in ` :<id>`
+count under `already_planned`, and `#hide` tasks under `hidden`, in the
+`pull_in.groups` fold (`sub_projects` is always `0`). A project with
+nothing to offer reports `"successors": []`, and without an explicit ` :`
+task it never reads the daily note.
+
+Each offer's `destination` previews where its link would land, using the
+usual vocabulary: `typed` when the task's type or the `#name` chooses an
+existing Pomodoro, `created` when that Pomodoro would be created, and
+`implicit` (with `fallback: true`) when it falls back to the current or next
+open Pomodoro. Placement is sequential, so with `#admin` and no `ADMIN`
+Pomodoro yet, the first offer is `created` and the next is `typed`. A named
+Pomodoro placeholder is written **only when a link actually lands there**: an
+unpicked offer never creates one. Because the preview needs the destinations,
+a draft with an eligible offer reads the daily note even under
+`-p none`, and fails with the usual missing-file or no-eligible-Pomodoro
+error when it cannot. A `#admin` name on a note with neither an open task to
+offer nor an explicit ` :` task is refused:
+`` `#admin` picks the Pomodoro for this project's task links, but it has no
+open task to offer or ` :` task to link; add a task bullet or remove
+`#admin` ``.
+
+A **blocked project** offers nothing. When `s:<N>` puts the project's
+schedule in the future, the existing `project_schedule` link guard applies:
+`successors` is `[]`, the `link_guard` reports `project_schedule`, and
+explicit ` :` tasks stay unlinked, even under `-p all`.
+
+Offers take part in the batch like any other successor. A later item that
+closes, blocks, or links a task this item created drops that task's offer
+(and a pick survives only when its final task and link do), and the whole
+draft stays atomic: a failure in a later item, an unknown pick, or a
+refusal writes nothing, including the project note.
 
 ### Sub-bullets under existing tasks
 
@@ -4877,6 +5070,9 @@ Useful options:
 - `-p, --pull-in PICKS`: select successor offers to link (`all`, `none`,
   or a comma list of offer numbers and/or keys; see
   [task-dependencies.md §12.14](task-dependencies.md#1214-cli-selection)).
+  Offers come from managed Done gestures and from a `@route:id@` project
+  note ([Offer a new project's tasks](#offer-a-new-projects-tasks));
+  numbers continue across the whole draft.
   Hidden `--require-pull-in-choice` (no short alias, absent from
   `--help`) refuses write-free with `code: pull_in_choice_required`
   when offers exist and no `--pull-in` was given
@@ -5068,7 +5264,19 @@ of `## Tasks` lines written, including the placeholder when it is kept),
 `## Tasks`), and `task_links` — always present, possibly empty — with one
 `{"block_id", "block_link", "text", "task_line"}` entry per `:` task in
 source order. `block_link` is `[[<stem>#^<id>]]` and `task_line` is the
-rendered `[*]`/`[?]` task line. When at least one link was written, the
+rendered `[*]`/`[?]` task line. The offer form (`@<route>:<id>@`) adds two
+optional fields, both omitted for the `^` form: `form: "offer"` and
+`successors`, an array (possibly empty) of rows in the
+`task_complete.unblocked` shape, one per eligible task in note order, each
+with `trigger: "project_created"`, `inbox: false`, `hide_removed: false`,
+`unblocked_by` naming the new `^prj`, and an `offer` object whose `group` is
+`"project"` and whose `project` is the new basename. A picked row carries
+`offer.selected: true`, its final status, line, and `block_id`, and a normal
+successor `link`; it is **also** listed in `task_links`, so clients must not
+count it twice. The project's fold is reported under
+`pull_in.groups` (`{group: "project", project, folded}`), and the
+rows join the batch's numbered offers, refusals, and `offers` payloads. See
+[Offer a new project's tasks](#offer-a-new-projects-tasks). When at least one link was written, the
 result also reports the top-level `day_file`, `pomodoro_link_placement`
 (from the first insertion), `pomodoro_name` (canonical, when named), and
 `creates_pomodoro` fields with their `pomodoro_task` meanings.
@@ -5082,7 +5290,9 @@ sections <titles>` line, then — when links were written — `✓ linked
 ` (created)` when a named Pomodoro was created, one dim `- [[stem#^id]]`
 line per link, and the hint that `bob projects sync` adds the parent's
 Sub-projects line and `bob task reconcile` reconciles Blocked state, since
-neither is written here. When links were written, their Pomodoro also appears
+neither is written here. The offer form prints a `New project <basename>`
+header over its numbered `offer N` rows before that hint, and a dry run adds
+the usual `-p 1,2 · -p all` hint when nothing was picked. When links were written, their Pomodoro also appears
 in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).
 
@@ -5592,8 +5802,11 @@ deliberately route-only and never offers existing task block IDs for that side.
 Appending the `@` seal carries the project-note intent through the same
 pickers: `<task> @^block-id@` still prompts only for the destination, while
 `@^<id>@` reports the project-note mode with `needs: ["route"]` and a bare
-`<task> @route^block-id@` is complete. The retired `<task> @:block-id+`
-spelling offers nothing. Once the project note is addressed, typing ` :` or
+`<task> @route^block-id@` is complete. The `:` family seals the same way:
+`<task> @route:block-id@` is a complete offer-form project note (mode
+`pomodoro_project_note`), `@:<id>@` needs a route, a trailing `#` after the
+seal opens Pomodoro-name completion, and a completed seal offers no picker.
+The retired `<task> @:block-id+` spelling offers nothing. Once the project note is addressed, typing ` :` or
 ` ^` at the end of a first-level task bullet opens the New ID flow: the
 panel offers a `project_task_block_id` completion with the project-note stem
 as its scope, body-derived suggestions, and the sibling IDs (plus `prj`) as
@@ -5840,9 +6053,10 @@ separator, returns an empty success. In Work Log text under or on the
 close line, marker and block-link completion are suppressed and note and heading
 completion keep working. The picker's in-progress
 `@^`, `@route^`, `@^id`, `@:`, `@route:`, and `@:id` spellings are unchanged,
-and `@^id@` carries the project-note intent with `needs: ["route"]`. A `:` project-note
+and `@^id@` and `@:id@` carry the project-note intent with `needs: ["route"]`
+(the `:` form reports `pomodoro_project_note`). A retired `:` project-note
 spelling (`@:id+`, `@route:id+`, `@route:id+#name`) is a
-`retired_project_note_marker` diagnostic teaching the `^` form instead. The retired
+`retired_project_note_marker` diagnostic teaching both `@`-sealed forms. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;
 it is not an incomplete Pomodoro marker. A trailing bare `#` is a complete
 `pomodoro_note`, not an incomplete section marker. Complete and in-progress Obsidian links such as `[[sase`,
@@ -5907,7 +6121,9 @@ spec, and `section` set to the typed name, also with `needs: []`, while
 unchanged. The `project_note` / `pomodoro_project_note` split
 mirrors the `task` / `pomodoro_task` one, so a client can tell whether the
 daily note is involved: a project note with at least one ` :` task is
-`pomodoro_project_note`, and a `^`-only one stays `project_note`. A lone
+`pomodoro_project_note`, and a `^`-only one stays `project_note`. The `:`
+(offer) form always reports `pomodoro_project_note`, even with no ` :` bullet,
+because it reads the ledger to place its offers. A lone
 `:` or `^` ending a first-level bullet is an unfinished ID: mode
 `incomplete` with `needs: ["block_id"]` and an `interactive_placeholder`
 span over the sigil, never a diagnostic. A bare trailing `#` reports `pomodoro_note` with
@@ -6054,7 +6270,7 @@ generic capture/block presentation.
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
-`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `project_note_separator`, `sub_bullet_route`,
+`pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `project_note_offer_marker`, `project_note_separator`, `sub_bullet_route`,
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_explicit_toggle`, `task_type`, `global_route`,
 `schedule`, `priority`, `clipboard`,
@@ -6070,11 +6286,29 @@ marks the part of a marker the user has not filled in yet: the trailing `+` in
 `[5,7) pomodoro_close_complete`; `x1,3!2~4` adds
 `[7,9) pomodoro_close_drop`. Link forms put these spans after the route and
 block-ID spans. A project-note marker adds a `project_note_separator` span
-covering the `^` byte and a `project_note_marker` span covering the `@` seal;
-its route and block-ID components keep their base-family span kinds
-(`task_block_id_route` / `task_block_id`), and its `#name` keeps the
-`pomodoro_name` span. Every span of the marker token except the Pomodoro name
-carries `"project_note": "create"`. An accepted task ID on a project-note
+covering the `^` or `:` byte and a seal span covering the `@`: `project_note_marker`
+for the `^` (create) form and `project_note_offer_marker` for the `:` (offer)
+form. Its route and block-ID components keep their base-family span kinds
+(`task_block_id_route` / `task_block_id` for `^`, `pomodoro_route` /
+`pomodoro_block_id` for `:`), and its `#name` keeps the `pomodoro_name` span
+(with its `themes` metadata, and no modifier). Every span of the marker token
+except the Pomodoro name — route, separator, block ID, seal, and any
+`interactive_placeholder` standing in for a missing route or ID — carries the
+optional span field `"project_note": "create"` or `"project_note": "offer"`;
+it is omitted everywhere else, so other drafts stay byte-identical. For
+`Finish it @cash:goog-exit@#admin` (UTF-8 byte offsets):
+
+| Bytes | Text | `kind` | `project_note` |
+| --- | --- | --- | --- |
+| 10–15 | `@cash` | `pomodoro_route` (`task_block_id_route` for `^`) | `offer` |
+| 15–16 | `:` | `project_note_separator` | `offer` |
+| 16–25 | `goog-exit` | `pomodoro_block_id` (`task_block_id` for `^`) | `offer` |
+| 25–26 | `@` | `project_note_offer_marker` (`project_note_marker` for `^`) | `offer` |
+| 27–32 | `admin` | `pomodoro_name` (with `themes`) | — |
+
+Older clients that do not know the modifier or the new kinds still see the
+base-family route and block-ID kinds, so route and block-ID completion keep
+working, and an unrecognized seal kind is a neutral span. An accepted task ID on a project-note
 bullet adds a `project_task_link_marker` span over the `:` sigil only, plus a
 `project_task_block_id` span over the ID for both sigils; the `^` sigil gets
 no span, just as other separators never do. Wikilink spans cover syntax only;
@@ -6086,7 +6320,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching the `@` seal), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `#name` with no ` :` task, ranged on the name), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
 `s:<N>`, or `$<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -6254,8 +6488,12 @@ back through the command is a no-op.
 plain `@route:id` or `@route+id`, `:` after `@route^id` or `@route+id`, or `+`
 after `@route:id` or `@route^id` consumes that character and switches the
 separator. A plain `@route+block-id` can switch back to `@route:id` with `:`
-or to `@route^block-id` with `^`. A sealed `@route^block-id@` marker never
-toggles and stays literal. `--cursor` is required: only the token ending at
+or to `@route^block-id` with `^`. A sealed project-note marker toggles
+between its two forms instead: `:` typed right after `@route^block-id@` gives
+`@route:block-id@` (create becomes offer), and `^` after `@route:block-id@`
+gives `@route^block-id@`. The same separator, or `+`, after a seal stays
+literal, and nothing toggles once a `#name` follows the seal. `--cursor` is
+required: only the token ending at
 that caret is examined, so the command never searches the draft for a toggle.
 The new key must sit against the ID with no intervening whitespace and must
 end the token (end of input or a following whitespace boundary). Inserting it
@@ -6283,8 +6521,8 @@ destination. Route and ID spelling, surrounding whitespace, CRLF,
 schedule/priority/dependency markers, and other items stay byte-for-byte.
 Suffixes already inside the marker (`#name`, `=...`), `@@`, `@!`, standalone
 `^route:id`, `&note:id`, `!note:id`, project-task `:id`/`^id`, incomplete or
-malformed markers, same-separator repeats, sealed `@route^id@` markers, and
-marker-looking prose the contextual parser does not select are left unchanged.
+malformed markers, same-separator repeats, `+` after a sealed
+`@route^id@` / `@route:id@` marker, and marker-looking prose the contextual parser does not select are left unchanged.
 This is an editor assist: `bob capture` and `bob capture-parse` keep the
 literal `@file:id+` text.
 
@@ -6578,7 +6816,11 @@ The right-hand side of `@route^block-id` completes as `task_block_id` once
 the route resolves, with empty `candidates` and the additive `block_id`
 object below. A project-note `@` directly after either block-ID part is the
 sigil, never part of the replacement: `@sase^x@` at cursor 7 returns
-`task_block_id` with replacement `{6, 7}`; `@sase:x+` returns no context, a cursor after the sigil (and before `#` for `^`) returns an empty
+`task_block_id` with replacement `{6, 7}`, and `@sase:x@` at cursor 7 returns
+`pomodoro_block_id` with the same replacement and `intent: "project_note"`
+(either separator followed by the seal means "this ID names a new project
+note"; no new intent value exists, because older clients map unknown intents
+to `link`); `@sase:x+` returns no context, a cursor after the sigil (and before `#`) returns an empty
 success, and a `+` after `#name` stays part of the Pomodoro name. A solo
 leading `^` token instead completes active tasks: while the
 cursor is in the `route:block-id` part (including an empty part) the context
@@ -6923,8 +7165,8 @@ duplicate check sees, deduplicated by first occurrence in document order with
 `status_name`, and the description as `text`, while other lines carry
 `task: false`, null status fields, and the line with its list marker and
 trailing `^id` removed, trimmed to 160 characters; `[]` when the note is
-missing and for `project_note` intent). Intent is `project_note` when `+`
-follows the ID part; `^` is otherwise always `new`; `:` is `link` exactly when
+missing and for `project_note` intent). Intent is `project_note` when the `@`
+seal follows the ID part of either the `^` or the `:` form; `^` is otherwise always `new`; `:` is `link` exactly when
 the whole-item parse would classify the item as `pomodoro_link` once a valid
 ID fills the part (marker-only items), else `new` (items with text, `s:`/`$<N>`
 /`%` markers, child-line and batch positions behave the same way). The
