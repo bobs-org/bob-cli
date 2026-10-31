@@ -25,8 +25,9 @@ mention entries.
 
 Open a task that another task names in its title, a child note, or a
 Cancel / Schedule / Work / Rotten Log entry, with a block link such as
-`[[note#^id]]`. Confirm the LINKED FROM row shows a `💬 mentioned in`
-or `💬 embedded in` pill, then the other task's chip. A quote line
+`[[note#^id]]`. The fastest way to write such a link is `((` in
+Obsidian or Bob Mac Capture. Confirm the LINKED FROM row shows a
+`💬 mentioned in` or `💬 embedded in` pill, then the other task's chip. A quote line
 appears for prose mentions that still have other letters or digits on
 the line. Title and sole-link mentions have no quote, because the chip
 already says it.
