@@ -802,7 +802,7 @@ fn capture_strict_mode_refuses_project_note_path() {
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-07-10 13:40:00")
             .env("BOB_CONFIG_FILE", &config),
-        "Body @cash^human1+#NEWT\n- Draft the memo :draft-memo\n",
+        "Body @cash^human1@#NEWT\n- Draft the memo :draft-memo\n",
     );
     assert_eq!(
         output.status.code(),

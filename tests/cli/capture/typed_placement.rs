@@ -429,7 +429,7 @@ fn bare_project_note_tasks_place_by_their_own_types() {
         .env("BOB_CONFIG_FILE", &config);
     let output = run_with_stdin(
         &mut command,
-        "Finish packet! @cash^proj3+\n- Draft memo :draft-memo\n- Fix bug [type:: FIX] :fix-bug\n",
+        "Finish packet! @cash^proj3@\n- Draft memo :draft-memo\n- Fix bug [type:: FIX] :fix-bug\n",
     );
     assert_success(&output);
     let json: serde_json::Value =

@@ -99,6 +99,12 @@ pub(super) fn parse_sub_bullet_route_token(
         });
     }
     if !is_block_id(block_id) {
+        if block_id.ends_with('@') {
+            return Err(sub_bullet_seal_hint_error(token));
+        }
+        if block_id.contains('@') {
+            return Err(sub_bullet_seal_hint_error(token));
+        }
         return Err(SUB_BULLET_BLOCK_ID_ERROR.to_string());
     }
     let section = match section {
@@ -504,31 +510,148 @@ pub(super) fn parse_task_block_id_route_token(
         return Err(TASK_BLOCK_ID_ROUTE_ERROR.to_string());
     }
     // Split the part after `^` at the first `#` into the block part and an
-    // optional Pomodoro name. The project-note `+` sits immediately after
-    // the block ID: with it, a `+` after `#name` is ordinary Pomodoro-name
-    // charset (so `@r^id+#c++` names `c++`); without it, a trailing `+` is
-    // a misordered marker and a bare `#name` is missing the `+`.
+    // optional Pomodoro name. The project-note `@` seal sits immediately
+    // after the block ID: with it, an `@` after `#name` is a misordered
+    // seal; without it, a bare `#name` is missing the seal. A trailing `+`
+    // immediately after the block ID is the retired project-note form.
     if let Some((block_part, name)) = block_id.split_once('#') {
-        let Some(block_core) = block_part.strip_suffix('+') else {
-            if let Some(name_core) = name.strip_suffix('+') {
+        // Retired `+` form takes precedence so `@r^id+#name` teaches the
+        // seal even when the name itself ends with `@`.
+        if let Some(retired_core) = block_part.strip_suffix('+') {
+            return Err(retired_project_note_marker_error(
+                token,
+                route,
+                retired_core,
+                Some(name),
+            ));
+        }
+        if let Some(sealed_core) = block_part.strip_suffix('@') {
+            if sealed_core.ends_with('@')
+                || sealed_core.ends_with('+')
+                || sealed_core.contains('@')
+            {
+                return Err(invalid_project_note_marker_error(
+                    route,
+                    sealed_core,
+                    Some(name),
+                ));
+            }
+            // A `=` anywhere after the seal is a session suffix on a
+            // project note, which stays rejected.
+            if block_id.contains('=') {
+                let raw = block_id
+                    .split_once('=')
+                    .map(|(_, raw)| raw)
+                    .unwrap_or_default();
+                if raw.eq_ignore_ascii_case("x")
+                    || link_close_after_x(raw).is_some()
+                {
+                    return Err(POMODORO_CLOSE_PROJECT_NOTE_ERROR.to_string());
+                }
+                return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
+            }
+            if sealed_core.is_empty() || !is_block_id(sealed_core) {
+                return Err(TASK_BLOCK_ID_ERROR.to_string());
+            }
+            if name.is_empty() {
+                return Err(project_note_name_required_error(
+                    route,
+                    sealed_core,
+                ));
+            }
+            // An `@` after the Pomodoro name is a misordered seal: the seal
+            // belongs right after the block ID.
+            if let Some(name_core) = name.strip_suffix('@') {
+                // A name that is only `@` (i.e. `@r^id@@#` split
+                // differently) is handled below as trailing junk; here the
+                // name has other content plus a trailing seal.
+                if !name_core.is_empty() {
+                    return Err(project_note_misordered_error(
+                        route,
+                        sealed_core,
+                        name_core,
+                    ));
+                }
+            }
+            if name.ends_with('@') {
+                return Err(invalid_project_note_marker_error(
+                    route,
+                    sealed_core,
+                    Some(name.trim_end_matches('@')),
+                ));
+            }
+            if opens_exact_name(name) {
+                // `#"NAME"` exact-name literal: runs through the closing
+                // quote; unterminated refuses like a missing name.
+                let Some(lex) = lex_exact_name_after_hash(name, name.len())
+                else {
+                    return Err(POMODORO_NAME_ERROR.to_string());
+                };
+                if !lex.complete {
+                    return Err(project_note_name_required_error(
+                        route,
+                        sealed_core,
+                    ));
+                }
+                let canonical = canonicalize_exact_name(&lex.decoded)
+                    .ok_or_else(|| POMODORO_NAME_ERROR.to_string())?;
+                if name.len() != lex.literal_len {
+                    return Err(POMODORO_NAME_ERROR.to_string());
+                }
+                return Ok(RouteToken {
+                    route: Some(route.to_ascii_lowercase()),
+                    kind: CaptureKind::ProjectNote {
+                        block_id: sealed_core.to_string(),
+                        pomodoro_name: Some(canonical),
+                        pomodoro_name_is_literal: true,
+                        form: super::model::ProjectNoteForm::Create,
+                    },
+                });
+            }
+            if !is_pomodoro_selector_component(name) {
+                return Err(POMODORO_NAME_ERROR.to_string());
+            }
+            return Ok(RouteToken {
+                route: Some(route.to_ascii_lowercase()),
+                kind: CaptureKind::ProjectNote {
+                    block_id: sealed_core.to_string(),
+                    pomodoro_name: Some(name.to_string()),
+                    pomodoro_name_is_literal: false,
+                    form: super::model::ProjectNoteForm::Create,
+                },
+            });
+        }
+        // No seal on the block part.
+        if let Some(name_core) = name.strip_suffix('@') {
+            if !name_core.is_empty() {
                 return Err(project_note_misordered_error(
                     route, block_part, name_core,
                 ));
             }
-            return Err(project_note_name_without_plus_error(
-                route, block_part, name,
+            return Err(invalid_project_note_marker_error(
+                route,
+                block_part,
+                Some(name_core),
             ));
-        };
-        if block_core.ends_with('+') {
-            return Err(TASK_BLOCK_ID_ERROR.to_string());
         }
-        // A `=` anywhere after the `+` is a session suffix on a project
-        // note, which stays rejected.
-        if block_id.contains('=') {
-            let raw = block_id
-                .split_once('=')
-                .map(|(_, raw)| raw)
-                .unwrap_or_default();
+        if block_part.ends_with('@') || block_part.contains('@') {
+            return Err(invalid_project_note_marker_error(
+                route,
+                block_part.trim_end_matches('@'),
+                Some(name),
+            ));
+        }
+        return Err(project_note_name_without_plus_error(
+            route, block_part, name,
+        ));
+    }
+    if block_id.contains('=') {
+        let (before_eq, raw) = block_id.split_once('=').unwrap_or_default();
+        // The project-note `=` message applies only when the text before
+        // the first `=` ends with the project-note seal (for example
+        // `@dev^foo@=3`); otherwise this is an ordinary invalid block ID,
+        // as before the epic.
+        if before_eq.ends_with('@') {
             if raw.eq_ignore_ascii_case("x")
                 || link_close_after_x(raw).is_some()
             {
@@ -536,56 +659,12 @@ pub(super) fn parse_task_block_id_route_token(
             }
             return Err(POMODORO_START_PROJECT_NOTE_ERROR.to_string());
         }
-        if block_core.is_empty() || !is_block_id(block_core) {
-            return Err(TASK_BLOCK_ID_ERROR.to_string());
-        }
-        if name.is_empty() {
-            return Err(project_note_name_required_error(route, block_core));
-        }
-        if opens_exact_name(name) {
-            // `#"NAME"` exact-name literal: runs through the closing
-            // quote; unterminated refuses like a missing name.
-            let Some(lex) = lex_exact_name_after_hash(name, name.len()) else {
-                return Err(POMODORO_NAME_ERROR.to_string());
-            };
-            if !lex.complete {
-                return Err(project_note_name_required_error(
-                    route, block_core,
-                ));
-            }
-            let canonical = canonicalize_exact_name(&lex.decoded)
-                .ok_or_else(|| POMODORO_NAME_ERROR.to_string())?;
-            if name.len() != lex.literal_len {
-                return Err(POMODORO_NAME_ERROR.to_string());
-            }
-            return Ok(RouteToken {
-                route: Some(route.to_ascii_lowercase()),
-                kind: CaptureKind::ProjectNote {
-                    block_id: block_core.to_string(),
-                    pomodoro_name: Some(canonical),
-                    pomodoro_name_is_literal: true,
-                },
-            });
-        }
-        if !is_pomodoro_selector_component(name) {
-            return Err(POMODORO_NAME_ERROR.to_string());
-        }
-        return Ok(RouteToken {
-            route: Some(route.to_ascii_lowercase()),
-            kind: CaptureKind::ProjectNote {
-                block_id: block_core.to_string(),
-                pomodoro_name: Some(name.to_string()),
-                pomodoro_name_is_literal: false,
-            },
-        });
-    }
-    if block_id.contains('=') {
-        let (before_eq, raw) = block_id.split_once('=').unwrap_or_default();
-        // The project-note `=` message applies only when the text before
-        // the first `=` ends with the project-note `+` (for example
-        // `@dev^foo+=3`); otherwise this is an ordinary invalid block ID,
-        // as before the epic.
+        // A retired `+` before `=` still teaches the seal.
         if before_eq.ends_with('+') {
+            let retired_core = before_eq.strip_suffix('+').unwrap_or(before_eq);
+            // Only the block portion before `=` matters for the hint; the
+            // name probe is None because `=` splits before `#`.
+            let _ = retired_core;
             if raw.eq_ignore_ascii_case("x")
                 || link_close_after_x(raw).is_some()
             {
@@ -595,29 +674,105 @@ pub(super) fn parse_task_block_id_route_token(
         }
         return Err(TASK_BLOCK_ID_ERROR.to_string());
     }
-    // A single trailing `+` immediately after the block ID is the
-    // project-note sigil. `is_block_id` accepts only letters, digits, and
-    // `-`, so the slot was previously a hard error and takes nothing away.
-    let (block_id, project_note) = match block_id.strip_suffix('+') {
-        Some(stripped) => (stripped, true),
-        None => (block_id, false),
-    };
+    // `!` never belongs in a caret marker: it stays a block-ID error and
+    // never becomes a toggle.
+    if block_id.contains('!') {
+        return Err(TASK_BLOCK_ID_ERROR.to_string());
+    }
+    // A retired trailing `+` immediately after the block ID teaches the
+    // seal. A single trailing `@` immediately after the block ID is the
+    // project-note seal. `is_block_id` accepts only letters, digits, and
+    // `-`, so the seal slot was previously a hard error.
+    if let Some(retired_core) = block_id.strip_suffix('+') {
+        // `@r^id+` with an empty core (i.e. `@r^+`) is an invalid block ID,
+        // not a retired marker.
+        if retired_core.is_empty() || !is_block_id(retired_core) {
+            // An `@` inside the retired core (for example `@r^a@b+`) is
+            // trailing junk after a seal.
+            if retired_core.contains('@') {
+                return Err(invalid_project_note_marker_error(
+                    route,
+                    retired_core.trim_matches('@'),
+                    None,
+                ));
+            }
+            return Err(TASK_BLOCK_ID_ERROR.to_string());
+        }
+        return Err(retired_project_note_marker_error(
+            token,
+            route,
+            retired_core,
+            None,
+        ));
+    }
+    if let Some(sealed_core) = block_id.strip_suffix('@') {
+        if sealed_core.is_empty() {
+            return Err(TASK_BLOCK_ID_ERROR.to_string());
+        }
+        if !is_block_id(sealed_core) {
+            // Extra seal characters (`@@`, `@+`, `@x`) end at the first
+            // seal: anything after it is trailing junk.
+            if sealed_core.contains('@')
+                || sealed_core.ends_with('+')
+                || block_id.contains("@@")
+            {
+                return Err(invalid_project_note_marker_error(
+                    route,
+                    sealed_core.trim_matches(['@', '+']),
+                    None,
+                ));
+            }
+            // An `@` inside the ID without a clean seal (for example
+            // `@r^a@b`) is trailing junk after the seal position.
+            if block_id.matches('@').count() > 1 || sealed_core.contains('@') {
+                return Err(invalid_project_note_marker_error(
+                    route,
+                    sealed_core.trim_matches('@'),
+                    None,
+                ));
+            }
+            return Err(TASK_BLOCK_ID_ERROR.to_string());
+        }
+        // A second `@` or `+` hiding inside the sealed core means the seal
+        // was followed by more marker text.
+        if sealed_core.contains('@') || sealed_core.contains('+') {
+            return Err(invalid_project_note_marker_error(
+                route,
+                sealed_core,
+                None,
+            ));
+        }
+        return Ok(RouteToken {
+            route: Some(route.to_ascii_lowercase()),
+            kind: CaptureKind::ProjectNote {
+                block_id: sealed_core.to_string(),
+                pomodoro_name: None,
+                pomodoro_name_is_literal: false,
+                form: super::model::ProjectNoteForm::Create,
+            },
+        });
+    }
+    // Any `@` inside a non-sealed block ID is a misplaced seal: the seal
+    // must end the marker.
+    if block_id.contains('@') {
+        // `@r^@` (empty ID plus seal) stays an invalid block ID.
+        if block_id.trim_matches('@').is_empty() {
+            return Err(TASK_BLOCK_ID_ERROR.to_string());
+        }
+        return Err(invalid_project_note_marker_error(
+            route,
+            block_id.trim_matches('@'),
+            None,
+        ));
+    }
     if !is_block_id(block_id) {
         return Err(TASK_BLOCK_ID_ERROR.to_string());
     }
 
     Ok(RouteToken {
         route: Some(route.to_ascii_lowercase()),
-        kind: if project_note {
-            CaptureKind::ProjectNote {
-                block_id: block_id.to_string(),
-                pomodoro_name: None,
-                pomodoro_name_is_literal: false,
-            }
-        } else {
-            CaptureKind::TaskWithBlockId {
-                block_id: block_id.to_string(),
-            }
+        kind: CaptureKind::TaskWithBlockId {
+            block_id: block_id.to_string(),
         },
     })
 }
@@ -885,6 +1040,22 @@ pub(super) fn parse_colon_link_tail(
             stripped,
             name_probe,
         ));
+    }
+    // A trailing `@` seal after the block ID is a project-note attempt.
+    // Through the caret (`^route:id@`) it teaches the `@route^id@` form;
+    // through `@route:id@` it stays an invalid block ID, exactly as today.
+    if block_probe.ends_with('@') && caret {
+        if block_probe.trim_matches('@').is_empty() {
+            return Err(if name_probe.is_some() {
+                format!(
+                    "Pomodoro capture requires a block ID before the Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-tasks -r {}` to list task block IDs)",
+                    route.to_ascii_lowercase()
+                )
+            } else {
+                POMODORO_BLOCK_ID_ERROR.to_string()
+            });
+        }
+        return Err(POMODORO_LINK_PROJECT_ERROR.to_string());
     }
     // Split the additive session suffix before `#` handling: the first `=`
     // separates the old marker from the suffix. `x`/`X` is a close; anything
@@ -1635,11 +1806,17 @@ fn classify_caret_close_suffix(
         Some((block, name)) => (block, Some(name)),
         None => (before_eq, None),
     };
-    let (block_id, project_note) = match block_raw.strip_suffix('+') {
+    let (block_id, project_note) = match block_raw.strip_suffix('@') {
         Some(stripped) => (stripped, true),
         None => (block_raw, false),
     };
     if project_note {
+        return CaretTokenShape::Invalid(
+            POMODORO_LINK_PROJECT_ERROR.to_string(),
+        );
+    }
+    // A retired `+` seal on a caret link also teaches the `@` spelling.
+    if block_raw.ends_with('+') {
         return CaretTokenShape::Invalid(
             POMODORO_LINK_PROJECT_ERROR.to_string(),
         );

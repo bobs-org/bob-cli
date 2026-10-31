@@ -251,10 +251,10 @@ Contract: [Area Note](glossary.md#area-note), [Inbox File](glossary.md#inbox-fil
 ### Project notes
 
 Frontmatter `type: "[[project]]"`. The `^prj` task states the completion
-criteria. Capture `@route^block-id+` creates
+criteria. Capture `@route^block-id@` creates
 `<route>_<block_id>.md` (hyphens in the id become underscores).
 
-Verified create (`bob capture '@work^intake-flow+' 'Ship the intake flow'`):
+Verified create (`bob capture '@work^intake-flow@' 'Ship the intake flow'`):
 
 ```yaml
 ---
@@ -454,7 +454,7 @@ vault/
 ├── mac_inbox.md             # default capture target (area / inbox)
 ├── gkeep_inbox.md           # default bob gkeep pull target
 ├── work.md                  # area note; @work
-├── work_intake_flow.md      # project note from @work^intake-flow+
+├── work_intake_flow.md      # project note from @work^intake-flow@
 ├── 2026/20261020.md         # daily note / Pomodoro ledger
 ├── dash.md                  # dashboard (not a capture route)
 ├── done/                    # bob task archive

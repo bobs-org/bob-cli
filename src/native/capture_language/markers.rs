@@ -306,6 +306,9 @@ pub(super) const GLOBAL_DESTINATION_BLOCK_ID_ERROR: &str =
 pub(super) const MISSING_CAPTURE_ITEM_ERROR: &str =
     "global destination declaration has no capture item; add a capture item to this draft";
 
+pub(super) const GLOBAL_DESTINATION_PROJECT_NOTE_ERROR: &str =
+    "@@ cannot take a project note: leave @cash^goog-exit@ on this item, or delete it";
+
 pub(super) const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str = "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, or priority";
 
 pub(super) const EXPLICIT_TOGGLE_NAMED_ERROR: &str = "explicit toggle `!` cannot follow a task type; write `@<route>+<block-id>! #<type>`";
@@ -350,55 +353,95 @@ pub(super) const POMODORO_NAME_ERROR: &str =
 
 pub(super) const POMODORO_NAME_REQUIRED_ERROR: &str = "Pomodoro capture requires a Pomodoro name: `@<route>:<block-id>#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)";
 
-/// Misordered project-note marker: the `+` must sit right after the block
-/// ID, because a `+` after `#name` is part of the Pomodoro name.
+/// Misordered project-note marker: the `@` seal must sit right after the
+/// block ID, because an `@` after `#name` would be part of the Pomodoro
+/// name.
 pub(super) fn project_note_misordered_error(
     route: &str,
     block_id: &str,
     name: &str,
 ) -> String {
     format!(
-        "put the project-note `+` right after the block ID: `@{route}^{block_id}+#{name}` (a `+` after `#{name}` would be part of the Pomodoro name)"
+        "put the project-note `@` right after the block ID: `@{route}^{block_id}@#{name}` (an `@` after `#{name}` would be part of the Pomodoro name)"
     )
 }
 
-/// Pomodoro name on a `^` project-note marker without the `+` sigil.
+/// Pomodoro name on a `^` project-note marker without the `@` seal.
 pub(super) fn project_note_name_without_plus_error(
     route: &str,
     block_id: &str,
     name: &str,
 ) -> String {
     format!(
-        "`#{name}` after `@{route}^{block_id}` needs the project-note `+` (`@{route}^{block_id}+#{name}`); to link a task under a Pomodoro, use `@{route}:{block_id}#{name}`"
+        "`#{name}` after `@{route}^{block_id}` needs the project-note `@` (`@{route}^{block_id}@#{name}`); to link a task under a Pomodoro, use `@{route}:{block_id}#{name}`"
     )
 }
 
-/// Empty Pomodoro name on a `^` project-note marker (`@route^id+#`).
+/// Empty Pomodoro name on a `^` project-note marker (`@route^id@#`).
 pub(super) fn project_note_name_required_error(
     route: &str,
     block_id: &str,
 ) -> String {
     format!(
-        "project-note capture requires a Pomodoro name: `@{route}^{block_id}+#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)"
+        "project-note capture requires a Pomodoro name: `@{route}^{block_id}@#<pomodoro>` (run `bob capture-pomodoros` to list today's Pomodoros)"
     )
 }
 
-/// Retired `:` project-note form. A project note never links its own `^prj`
-/// task; the caller passes the typed token plus its route, block, and name
-/// parts so the message can teach the `^` replacement.
+/// Retired `+` project-note form. A project note is sealed with `@`; the
+/// caller passes the typed token plus its route, block, and name parts so
+/// the message can teach the sealed replacement. Until the offer form lands,
+/// the copy names only `@<route>^<block-id>@`.
 pub(super) fn retired_project_note_marker_error(
     typed: &str,
     route: &str,
     block_id: &str,
     pomodoro_name: Option<&str>,
 ) -> String {
-    let route = if route.is_empty() { "<route>" } else { route };
+    let route_display = if route.is_empty() { "<route>" } else { route };
+    let route_lower = route.to_ascii_lowercase();
+    let route_shown = if route.is_empty() {
+        "<route>".to_string()
+    } else {
+        route_lower
+    };
     let replacement = match pomodoro_name {
-        Some(name) => format!("@{route}^{block_id}+#{name}"),
-        None => format!("@{route}^{block_id}+"),
+        Some(name) => format!("@{route_display}^{block_id}@#{name}"),
+        None => format!("@{route_display}^{block_id}@"),
+    };
+    let mut message = format!(
+        "`{typed}` is retired: a project note is sealed with `@`. Write `{replacement}`"
+    );
+    if pomodoro_name.is_none() {
+        message.push_str(&format!(
+            " (`@{route_shown}+{block_id}` adds a sub-bullet under that task)"
+        ));
+    }
+    message
+}
+
+/// A sealed project-note marker must end at the `@` seal: anything after it
+/// is never part of the marker.
+pub(super) fn invalid_project_note_marker_error(
+    route: &str,
+    block_id: &str,
+    pomodoro_name: Option<&str>,
+) -> String {
+    let base = match pomodoro_name {
+        Some(name) if !name.is_empty() => {
+            format!("@{route}^{block_id}@#{name}")
+        }
+        _ => format!("@{route}^{block_id}@"),
     };
     format!(
-        "`{typed}` is retired: a project note never links its own `^prj` task. Write `{replacement}` and end each task bullet you want in the Pomodoro with ` :<id>`"
+        "the project-note `@` ends the marker: write `{base}` or `{base}#<pomodoro>`"
+    )
+}
+
+/// A `+` after a sub-bullet block ID is a sub-bullet, never a seal. Teach
+/// the sealed project-note spelling.
+pub(super) fn sub_bullet_seal_hint_error(token: &str) -> String {
+    format!(
+        "`{token}` adds a sub-bullet under an existing task; a new project note is `@cash^goog-exit@`"
     )
 }
 
@@ -417,7 +460,7 @@ pub(super) const POMODORO_START_SHAPE_ERROR: &str = "Pomodoro start suffix must 
 pub(super) const POMODORO_START_OVERFLOW_ERROR: &str =
     "Pomodoro start suffix is too large; use a smaller duration or offset";
 
-pub(super) const POMODORO_START_PROJECT_NOTE_ERROR: &str = "Pomodoro start suffix `=<X>` applies only to `@<route>:<block-id>` task captures, not project-note `@<route>^<block-id>+` forms";
+pub(super) const POMODORO_START_PROJECT_NOTE_ERROR: &str = "Pomodoro start suffix `=<X>` applies only to `@<route>:<block-id>` task captures, not project-note `@<route>^<block-id>@` forms";
 
 pub(crate) const POMODORO_START_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `s:<N>`; a scheduled Blocked task cannot start its session";
 
@@ -429,7 +472,7 @@ pub(super) const POMODORO_LINK_INCOMPLETE_ERROR: &str = "incomplete Pomodoro lin
 
 pub(super) const POMODORO_LINK_NAME_INCOMPLETE_ERROR: &str = "incomplete Pomodoro link; finish the Pomodoro name `^<route>:<block-id>#<pomodoro>`";
 
-pub(super) const POMODORO_LINK_PROJECT_ERROR: &str = "`^route:block-id+` is not a capture form; create a project note with `@route^block-id+`";
+pub(super) const POMODORO_LINK_PROJECT_ERROR: &str = "`^route:block-id@` is not a capture form; create a project note with `@route^block-id@`";
 
 pub(super) const POMODORO_LINK_TOGGLE_ERROR: &str = "Pomodoro link `^route:block-id!` is a task toggle; use `@route+block-id!` for the explicit toggle";
 
@@ -663,7 +706,7 @@ pub(super) fn pomodoro_close_hash_error(name: &str) -> String {
     }
 }
 
-pub(super) const POMODORO_CLOSE_PROJECT_NOTE_ERROR: &str = "Pomodoro close suffix `=x` applies only to `@<route>:<block-id>` task captures, not project-note `@<route>^<block-id>+` forms";
+pub(super) const POMODORO_CLOSE_PROJECT_NOTE_ERROR: &str = "Pomodoro close suffix `=x` applies only to `@<route>:<block-id>` task captures, not project-note `@<route>^<block-id>@` forms";
 
 pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `s:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 

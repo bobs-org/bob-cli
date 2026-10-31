@@ -69,7 +69,7 @@ fn exact_name_link_reports_canonical_name() {
     assert_eq!(parsed.section.as_deref(), Some("SASE V18"));
     assert!(parsed.needs.is_empty());
 
-    let parsed = editor(r#"Do work @cash^goog-exit+#"DEEP WORK""#);
+    let parsed = editor(r#"Do work @cash^goog-exit@#"DEEP WORK""#);
     assert_eq!(parsed.mode, EditorMode::ProjectNote);
     assert_eq!(parsed.section.as_deref(), Some("DEEP WORK"));
     assert!(parsed.needs.is_empty());

@@ -59,12 +59,12 @@ impl RewriteRule {
 
 /// Apply the capture grammar's editor typing assists to `raw_text`.
 ///
-/// With an explicit `cursor`, a complete plain `@route:id` / `@route^id`
-/// marker that just grew a supported separator (`^`, `:`, or `+`) is
-/// rewritten to the trigger's spelling and the appended trigger is dropped.
-/// A `+` separator can also switch to `:` or `^`. That rule never searches
-/// the draft: no cursor means absorption-only, matching the historical `@@`
-/// contract.
+/// With an explicit `cursor`, a complete plain `@route:id` / `@route^id` /
+/// `@route+id` marker that just grew a supported separator (`^`, `:`, or
+/// `+`) is rewritten to the trigger's spelling and the appended trigger is
+/// dropped. A `+` after `@route^id` switches to `@route+id`, like every
+/// other separator. That rule never searches the draft: no cursor means
+/// absorption-only, matching the historical `@@` contract.
 ///
 /// With an explicit `cursor` right after a standalone `@@@` token at the
 /// end of a physical line, that token starts a template draft: it is erased
@@ -316,8 +316,10 @@ fn switch_block_id_separator(
     let eligible = match trigger_char {
         ':' => matches!(separator, '^' | '+'),
         '^' => matches!(separator, ':' | '+'),
-        // `@route^id+` is the project-note form and stays literal.
-        '+' => separator == ':',
+        // `+` after `@route^id` switches to `@route+id`, like every other
+        // separator. A sealed `@route^id@` never reaches here as a plain
+        // part, so it stays literal.
+        '+' => matches!(separator, ':' | '^'),
         _ => false,
     };
     if !eligible {
@@ -425,8 +427,8 @@ fn attach_relation_label(
 
 /// A complete plain `@route:id`, `@route^id`, or `@route+id` token: one `@`,
 /// exactly one separator, a valid route, a valid block ID, and no suffix
-/// family. The plus form is used only as the starting point for reverse
-/// separator toggles; `@route^id+` remains the project-note form.
+/// family. A sealed `@route^id@` never parses here because `@` is not a
+/// plain separator and fails the block-ID check, so it stays literal.
 fn plain_block_id_parts(token: &str) -> Option<(char, &str, &str)> {
     let rest = token.strip_prefix('@')?;
     if token.starts_with("@@") || token.starts_with("@!") {

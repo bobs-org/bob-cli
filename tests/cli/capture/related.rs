@@ -253,7 +253,7 @@ fn bulk_draft_anchors_dedupe_linked_tasks_and_project_modes() {
         "Install new UPS battery @dev\n\n",
         "Order a replacement UPS battery @dev\n\n",
         "Read `unique-inline-code` safely @dev\n\n",
-        "Project heading to check @ship^generated-plan+\n\n",
+        "Project heading to check @ship^generated-plan@\n\n",
         "Start Pomodoro task title @dev:new-pomodoro-task",
     );
     let result = related_json(&vault, draft, &[]);

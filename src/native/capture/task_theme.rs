@@ -818,7 +818,7 @@ impl CaptureTaskThemeContext {
         let hint = match &marker.attachment {
             TypeMarkerAttachment::ProjectTask { route, block_id } => Some(
                 format!(
-                    " (for a project note whose ` :{block_id}` tasks go under the {canonical} Pomodoro, write `{route}^{block_id}+{authored}`)"
+                    " (for a project note whose ` :{block_id}` tasks go under the {canonical} Pomodoro, write `{route}^{block_id}@{authored}`)"
                 ),
             ),
             TypeMarkerAttachment::ExistingTask { route, block_id } => {

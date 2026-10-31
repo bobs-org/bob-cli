@@ -1252,6 +1252,9 @@ pub(super) fn parse_global_destination_token(
     if rest.ends_with('!') {
         return Err(EXPLICIT_TOGGLE_GLOBAL_ERROR.to_string());
     }
+    if rest.contains('@') && (rest.contains('^') || rest.contains(':')) {
+        return Err(GLOBAL_DESTINATION_PROJECT_NOTE_ERROR.to_string());
+    }
     if rest.contains('#') || rest.contains('^') || rest.contains(':') {
         return Err(unsupported_global_destination_error(token));
     }

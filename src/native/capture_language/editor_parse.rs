@@ -74,7 +74,12 @@ pub(super) fn parse_editor_line<'a>(
     let (markers, marker_spans) = extract_terminal_markers(&mut tokens, true);
     let mut terminal_spans: Vec<Span> = marker_spans
         .into_iter()
-        .map(|(kind, start, end)| Span { start, end, kind })
+        .map(|(kind, start, end)| Span {
+            start,
+            end,
+            kind,
+            project_note: None,
+        })
         .collect();
     terminal_spans.extend(dependencies.spans.iter().copied());
 
@@ -777,6 +782,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
                 start: token.start,
                 end: token.end,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             }],
             diagnostics: Vec::new(),
             sub_bullets: Vec::new(),
@@ -823,6 +829,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
                 start: token.start,
                 end: token.end,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             }],
             diagnostics: Vec::new(),
             sub_bullets: Vec::new(),
@@ -894,6 +901,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                 start,
                 end,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             }],
             Vec::new(),
         )),
@@ -916,16 +924,19 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                         start: dependency.start,
                         end: dependency.start + 1,
                         kind: SpanKind::TaskCompleteSigil,
+                        project_note: None,
                     },
                     Span {
                         start: dependency.start + 1,
                         end: dependency.block_start - 1,
                         kind: SpanKind::TaskCompleteNote,
+                        project_note: None,
                     },
                     Span {
                         start: dependency.block_start,
                         end: dependency.block_end,
                         kind: SpanKind::TaskCompleteBlockId,
+                        project_note: None,
                     },
                 ],
                 Vec::new(),
@@ -1010,6 +1021,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
         start: token.start,
         end: token.end,
         kind: SpanKind::InteractivePlaceholder,
+        project_note: None,
     });
     spans.sort_by_key(|span| (span.start, span.end));
     Some(EditorItemOutcome {
@@ -1126,6 +1138,7 @@ fn parse_editor_ref_item<'a>(
                     start: token.start,
                     end: token.end,
                     kind: SpanKind::RefUrl,
+                    project_note: None,
                 }],
                 diagnostics: Vec::new(),
                 sub_bullets: Vec::new(),
@@ -1171,11 +1184,13 @@ fn parse_editor_ref_item<'a>(
                             start: tokens[0].start,
                             end: tokens[0].end,
                             kind: SpanKind::RefUrl,
+                            project_note: None,
                         },
                         Span {
                             start: tokens[1].start,
                             end: tokens[1].end,
                             kind: SpanKind::RefListen,
+                            project_note: None,
                         },
                     ],
                     diagnostics: Vec::new(),
@@ -1235,11 +1250,13 @@ fn parse_editor_ref_item<'a>(
                         start: url_token.start,
                         end: url_token.end,
                         kind: SpanKind::RefUrl,
+                        project_note: None,
                     },
                     Span {
                         start: route_token.start,
                         end: route_token.end,
                         kind: SpanKind::Route,
+                        project_note: None,
                     },
                 ],
                 diagnostics: Vec::new(),
@@ -1296,16 +1313,19 @@ fn parse_editor_ref_item<'a>(
                             start: url_token.start,
                             end: url_token.end,
                             kind: SpanKind::RefUrl,
+                            project_note: None,
                         },
                         Span {
                             start: tokens[1].start,
                             end: tokens[1].end,
                             kind: SpanKind::RefListen,
+                            project_note: None,
                         },
                         Span {
                             start: route_token.start,
                             end: route_token.end,
                             kind: SpanKind::Route,
+                            project_note: None,
                         },
                     ],
                     diagnostics: Vec::new(),
@@ -1363,16 +1383,19 @@ fn parse_editor_ref_item<'a>(
                             start: route_token.start,
                             end: route_token.end,
                             kind: SpanKind::Route,
+                            project_note: None,
                         },
                         Span {
                             start: url_token.start,
                             end: url_token.end,
                             kind: SpanKind::RefUrl,
+                            project_note: None,
                         },
                         Span {
                             start: tokens[2].start,
                             end: tokens[2].end,
                             kind: SpanKind::RefListen,
+                            project_note: None,
                         },
                     ],
                     diagnostics: Vec::new(),
@@ -1485,6 +1508,7 @@ fn attach_type_marker_metadata(
             start: span.start,
             end: span.end,
             kind: SpanKind::TaskType,
+            project_note: None,
         });
     }
     // Like execution, duplicates refuse before any subject judgment.
@@ -2091,6 +2115,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             start: token.start,
                             end: token.end,
                             kind: SpanKind::InteractivePlaceholder,
+                            project_note: None,
                         });
                     }
                 }
@@ -2109,12 +2134,14 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 start: token.start,
                                 end: token.start + 1,
                                 kind: SpanKind::ProjectTaskLinkMarker,
+                                project_note: None,
                             });
                         }
                         spans.push(Span {
                             start: token.start + 1,
                             end: token.end,
                             kind: SpanKind::ProjectTaskBlockId,
+                            project_note: None,
                         });
                     }
                 }
@@ -2199,11 +2226,13 @@ pub(super) fn parse_editor_item_inner<'a>(
                     start: token_start,
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
+                    project_note: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + link_end,
                     kind: SpanKind::ActiveTaskBlockId,
+                    project_note: None,
                 });
                 if let Some((name_start, name_end)) = name_range
                     && name_end > name_start
@@ -2212,6 +2241,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         start: token_start + name_start,
                         end: token_start + name_end,
                         kind: SpanKind::PomodoroName,
+                        project_note: None,
                     });
                 }
                 if let Some(offset) = start_offset {
@@ -2220,12 +2250,14 @@ pub(super) fn parse_editor_item_inner<'a>(
                             start: token_start + offset,
                             end: token_start + offset + 2,
                             kind: SpanKind::PomodoroClose,
+                            project_note: None,
                         });
                         if let Some((start, end)) = close_in_progress {
                             spans.push(Span {
                                 start: token_start + start,
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroCloseInProgress,
+                                project_note: None,
                             });
                         }
                         if let Some((start, end)) = close_park {
@@ -2233,6 +2265,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 start: token_start + start,
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroClosePark,
+                                project_note: None,
                             });
                         }
                         if let Some((start, end)) = close_complete {
@@ -2240,6 +2273,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 start: token_start + start,
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroCloseComplete,
+                                project_note: None,
                             });
                         }
                         if let Some((start, end)) = close_drop {
@@ -2247,6 +2281,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 start: token_start + start,
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroCloseDrop,
+                                project_note: None,
                             });
                         }
                     } else {
@@ -2256,6 +2291,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                                     start: token_start + start,
                                     end: token_start + end,
                                     kind: SpanKind::PomodoroStart,
+                                    project_note: None,
                                 });
                             }
                         }
@@ -2317,22 +2353,26 @@ pub(super) fn parse_editor_item_inner<'a>(
                     start: token_start,
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
+                    project_note: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + link_end,
                     kind: SpanKind::ActiveTaskBlockId,
+                    project_note: None,
                 });
                 spans.push(Span {
                     start: token_start + suffix_offset,
                     end: token_start + suffix_offset + 2,
                     kind: SpanKind::PomodoroClose,
+                    project_note: None,
                 });
                 if let Some((start, end)) = close_in_progress {
                     spans.push(Span {
                         start: token_start + start,
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseInProgress,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = close_park {
@@ -2340,6 +2380,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         start: token_start + start,
                         end: token_start + end,
                         kind: SpanKind::PomodoroClosePark,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = close_complete {
@@ -2347,6 +2388,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                         start: token_start + start,
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseComplete,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = close_drop {
@@ -2354,12 +2396,14 @@ pub(super) fn parse_editor_item_inner<'a>(
                         start: token_start + start,
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseDrop,
+                        project_note: None,
                     });
                 }
                 spans.push(Span {
                     start: token_start + separator_range.0,
                     end: token_start + separator_range.1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 local_destination_markers.push(LocalDestinationMarker {
                     start: token_start,
@@ -2444,6 +2488,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     start: token_start,
                     end: token_end,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
             }
             CaretItemKind::NamePartial {
@@ -2469,11 +2514,13 @@ pub(super) fn parse_editor_item_inner<'a>(
                     start: token_start,
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
+                    project_note: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + link_end,
                     kind: SpanKind::ActiveTaskBlockId,
+                    project_note: None,
                 });
                 for (start, end) in start_ranges {
                     if end > start {
@@ -2481,6 +2528,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             start: token_start + start,
                             end: token_start + end,
                             kind: SpanKind::PomodoroStart,
+                            project_note: None,
                         });
                     }
                 }
@@ -2488,6 +2536,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     start: token_start + name_range.0 - 1,
                     end: token_start + name_range.0,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
             }
             CaretItemKind::TimingIncomplete {
@@ -2514,11 +2563,13 @@ pub(super) fn parse_editor_item_inner<'a>(
                     start: token_start,
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
+                    project_note: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + timing_link_end,
                     kind: SpanKind::ActiveTaskBlockId,
+                    project_note: None,
                 });
                 for (start, end) in timing_ranges {
                     if end > start {
@@ -2526,6 +2577,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                             start: token_start + start,
                             end: token_start + end,
                             kind: SpanKind::PomodoroStart,
+                            project_note: None,
                         });
                     }
                 }
@@ -2533,11 +2585,13 @@ pub(super) fn parse_editor_item_inner<'a>(
                     start: token_start + timing_name_range.0,
                     end: token_start + timing_name_range.1,
                     kind: SpanKind::PomodoroName,
+                    project_note: None,
                 });
                 spans.push(Span {
                     start: token_start + separator_range.0,
                     end: token_start + separator_range.1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
             }
             CaretItemKind::Invalid { message } => {

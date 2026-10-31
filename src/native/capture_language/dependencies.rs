@@ -793,6 +793,7 @@ fn extract_line_relation<'a>(
                     } else {
                         SpanKind::DependencySigil
                     },
+                    project_note: None,
                 });
                 result.spans.push(Span {
                     start: entry.note_start,
@@ -802,6 +803,7 @@ fn extract_line_relation<'a>(
                     } else {
                         SpanKind::DependencyNote
                     },
+                    project_note: None,
                 });
                 result.spans.push(Span {
                     start: entry.block_start,
@@ -811,6 +813,7 @@ fn extract_line_relation<'a>(
                     } else {
                         SpanKind::DependencyBlockId
                     },
+                    project_note: None,
                 });
                 if sigil == b'*' {
                     result.blocked_entries.push(entry.clone());
@@ -832,6 +835,7 @@ fn extract_line_relation<'a>(
                     start: *start,
                     end: *end,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 if sigil == b'*' {
                     result.blocked_partials.push((*start, *end));
@@ -853,6 +857,7 @@ fn extract_line_relation<'a>(
                     start: invalid.start,
                     end: invalid.end,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 if sigil == b'*' {
                     result.blocked_invalid.push(invalid.clone());
@@ -1085,22 +1090,26 @@ fn extract_line_relations<'a>(
                     start: entry.start,
                     end: entry.start + entry.sigil_len(),
                     kind: SpanKind::RelationSigil,
+                    project_note: None,
                 });
                 result.spans.push(Span {
                     start: entry.note_start,
                     end: entry.note_end,
                     kind: SpanKind::RelationNote,
+                    project_note: None,
                 });
                 result.spans.push(Span {
                     start: entry.block_start,
                     end: entry.block_end,
                     kind: SpanKind::RelationBlockId,
+                    project_note: None,
                 });
                 if let Some(separator) = entry.separator {
                     result.spans.push(Span {
                         start: separator.0,
                         end: separator.1,
                         kind: SpanKind::RelationLabelSeparator,
+                        project_note: None,
                     });
                 }
                 if let (Some(label_start), Some(label_end)) =
@@ -1110,6 +1119,7 @@ fn extract_line_relations<'a>(
                         start: label_start,
                         end: label_end,
                         kind: SpanKind::RelationLabel,
+                        project_note: None,
                     });
                 }
                 result.relation_entries.push(entry.clone());
@@ -1128,6 +1138,7 @@ fn extract_line_relations<'a>(
                     start: *start,
                     end: *end,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 result.relation_target_partials.push((*start, *end));
             }
@@ -1145,6 +1156,7 @@ fn extract_line_relations<'a>(
                     start: *start,
                     end: *end,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 result.relation_label_partials.push((*start, *end));
             }
@@ -1162,6 +1174,7 @@ fn extract_line_relations<'a>(
                     start: invalid.start,
                     end: invalid.end,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 result.relation_invalid.push(InvalidDependency {
                     raw: invalid.raw.clone(),

@@ -838,9 +838,9 @@ pub(crate) fn shell_completion(
         }
         CompletionContext::TaskBlockId
         | CompletionContext::ProjectTaskBlockId => {
-            // A new ID (`@route^id`), a project-note `+`, or a trailing
-            // ` :id` / ` ^id`: no safe rows (suggestions live in the
-            // additive `block_id` object, not candidates).
+            // A new ID (`@route^id`), a project-note `@` seal, or a
+            // trailing ` :id` / ` ^id`: no safe rows (suggestions live in
+            // the additive `block_id` object, not candidates).
             return Ok(Some(ShellCompletion { marker_start, rows }));
         }
         CompletionContext::WikilinkNote
@@ -853,7 +853,7 @@ pub(crate) fn shell_completion(
 
 /// A value ending in a continuation character expects more typing.
 pub(super) fn ends_in_continuation(value: &str) -> bool {
-    value.ends_with([':', '+', '#', '=', '^'])
+    value.ends_with([':', '+', '#', '=', '^', '@'])
 }
 
 fn task_type_description(item: &super::model::TaskTypeCandidate) -> String {

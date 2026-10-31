@@ -74,8 +74,8 @@ fn rewrite_draft_reports_rule_a5_notices_for_non_absorbable_markers() {
         ("note @dev:id @@", "cannot take a Pomodoro link"),
         ("note @dev:id#bugs @@", "cannot take a Pomodoro link"),
         ("note this # @@", "cannot take a Pomodoro note"),
-        ("note @dev^id+ @@", "cannot take a project note"),
-        ("note @dev^id+#bugs @@", "cannot take a project note"),
+        ("note @dev^id@ @@", "cannot take a project note"),
+        ("note @dev^id@#bugs @@", "cannot take a project note"),
         (
             "@sase:deep-fix @@",
             "@@ cannot take a Pomodoro link: leave @sase:deep-fix on this item, or delete it",
@@ -574,8 +574,18 @@ fn rewrite_draft_switches_plus_markers_with_unicode_crlf_and_schedule() {
 }
 
 #[test]
-fn rewrite_draft_caret_plus_stays_a_project_note_marker() {
-    let raw = "@file^id+";
+fn rewrite_draft_caret_plus_switches_to_plus() {
+    assert_switch(
+        "Do work @file^id+",
+        "Do work @file+id",
+        "@file^id",
+        "@file+id",
+        8,
+    );
+    assert_switch("@file^id+", "@file+id", "@file^id", "@file+id", 0);
+
+    // A sealed project-note marker never toggles.
+    let raw = "@file^id@";
     let rewrite = switch_at(raw);
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
@@ -715,7 +725,7 @@ fn rewrite_draft_separator_toggle_exclusions() {
         ("&note:id+", "&note:id+".len()),
         ("!note:id+", "!note:id+".len()),
         (":id+", ":id+".len()),
-        ("^id+", "^id+".len()),
+        ("^id@", "^id@".len()),
         ("see @file:id+ here", "see @file:id+".len()),
         ("Do work @file:i+d", "Do work @file:i+".len()),
         ("@file+id+", "@file+id+".len()),
@@ -725,10 +735,10 @@ fn rewrite_draft_separator_toggle_exclusions() {
         ("@file+id!: ", "@file+id!: ".len()),
         ("@file+: ", "@file+: ".len()),
         ("@file+:", "@file+:".len()),
-        ("@file^id+", "@file^id+".len()),
+        ("@file^id@", "@file^id@".len()),
         ("@file:id=3^", "@file:id=3^".len()),
-        ("@file^id+^", "@file^id+^".len()),
-        ("@file^id+#bugs:", "@file^id+#bugs:".len()),
+        ("@file^id@^", "@file^id@^".len()),
+        ("@file^id@#bugs:", "@file^id@#bugs:".len()),
         ("@@file:id^", "@@file:id^".len()),
         ("@!file:id^", "@!file:id^".len()),
         ("^file:id^", "^file:id^".len()),

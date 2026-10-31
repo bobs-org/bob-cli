@@ -77,7 +77,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | Work Log | Log work onto the close's worked tasks | [Work Log](#x-work-log) |
 | `+2 x` / `x =` | Chain session operators on one line | [Operator chain](#operator-chain) |
 | `@route:block-id=x` | Link that task, then close | [`@route:block-id=x`](#link-then-close) |
-| `@route^block-id+` | Create a project note | [`@route^block-id+`](#project-plus) |
+| `@route^block-id@` | Create a project note | [`@route^block-id@`](#project-note-seal) |
 | `:id` | Project-note child: name, Next, and link | [`:id` child](#project-colon-child) |
 | `^id` | Project-note child: name only | [`^id` child](#project-caret-child) |
 | `@route+block-id` | Child bullet under an existing task | [`@route+block-id`](#plus-child) |
@@ -101,7 +101,7 @@ what they attach to, not as one global operator.
 | `+` | `++[N]` alone | Shift the running session later |
 | `+` | `+query` / lone `+` | Parent-task picker |
 | `+` | `@route+block-id` | Child under an existing task, or Ensure Next when the item has no other text |
-| `+` | `@route^block-id+` | Create a project note |
+| `+` | `@route^block-id@` | Create a project note |
 | `+` | after `#name` | Part of the Pomodoro name (`BUGS+`) |
 | `#` | trailing bare `#` | Pomodoro note |
 | `#` | `@route#Section` | Heading in that note |
@@ -155,7 +155,7 @@ These are not valid commands. Bob teaches the replacement.
 | --- | --- |
 | `==`, `==<X>`, `==#name` | Retired restart/swap; write one `=` (`=`, `=3`, `=bugs`) |
 | `==x` | Error: close with `x` |
-| `@route:id+` / `@route:id+#pomodoro` | Retired project-note forms; write `@route^id+` |
+| `@route:id+` / `@route:id+#pomodoro` | Retired project-note forms; write `@route^id@` |
 | `@route::id` | Retired ordinary block-ID form; write `@route^id` |
 | `#now` / a free `#tag` at an item edge | Refused with `type_not_configured` unless the name is configured; a bare `@route` adds the heading hint |
 | `t:fix` | Ordinary prose; `t:` is retired as a type marker |
@@ -1084,7 +1084,7 @@ Contract: [Closing the running Pomodoro](../capture.md#closing-the-running-pomod
 
 ## Project captures
 
-### `@route^block-id+` {#project-plus}
+### `@route^block-id@` {#project-note-seal}
 
 Create the project note `<route>_<block_id>.md` (hyphens in the block ID
 become underscores). The `^prj` task is never linked and the daily note is
@@ -1092,7 +1092,7 @@ untouched. `#pomodoro` on this form sends ` :id` Task Links under that named
 open Pomodoro.
 
 ```bash
-bob capture '@work^intake-flow+' 'Ship the intake flow'
+bob capture '@work^intake-flow@' 'Ship the intake flow'
 ```
 
 ```text { .no-copy title="Output" }
@@ -1119,7 +1119,7 @@ Next (`[*]`, or `[?]` when scheduled), and links `[[<stem>#^<task-id>]]`
 into the current/next Pomodoro, or the `#pomodoro` one.
 
 ```bash
-bob capture '@work^intake-flow+' 'Ship the intake flow' '- Name the stages :stages'
+bob capture '@work^intake-flow@' 'Ship the intake flow' '- Name the stages :stages'
 ```
 
 ```bob-task
@@ -1322,7 +1322,7 @@ inventory labels are excluded. Unknown names fail transactionally with
 item has no body or authored children; with body text, `#section` remains a
 task-section selector. `@route^block-id#type` types the new task with that
 explicit block ID. Named Pomodoro owners such as `@route:block-id#NAME`,
-`^route:block-id#NAME`, `=#NAME`, and project-note `@route^block-id+#NAME`
+`^route:block-id#NAME`, `=#NAME`, and project-note `@route^block-id@#NAME`
 keep their existing meanings.
 
 When the item also names a Pomodoro, the type marker must agree with the

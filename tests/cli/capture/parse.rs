@@ -182,7 +182,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @cash^goog-exit+")
+        .arg("Do work @cash^goog-exit@")
         .env("BOB_DIR", &vault)
         .output()
         .expect("run bob capture-parse project-note caret marker");
@@ -199,9 +199,10 @@ fn capture_parse_json_reports_project_note_markers() {
     assert_eq!(
         json["spans"],
         serde_json::json!([
-            { "start": 8, "end": 13, "kind": "task_block_id_route" },
-            { "start": 14, "end": 23, "kind": "task_block_id" },
-            { "start": 23, "end": 24, "kind": "project_note_marker" },
+            { "start": 8, "end": 13, "kind": "task_block_id_route", "project_note": "create" },
+            { "start": 13, "end": 14, "kind": "project_note_separator", "project_note": "create" },
+            { "start": 14, "end": 23, "kind": "task_block_id", "project_note": "create" },
+            { "start": 23, "end": 24, "kind": "project_note_marker", "project_note": "create" },
         ])
     );
     assert!(json["diagnostics"].as_array().unwrap().is_empty());
@@ -211,7 +212,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @cash^goog-exit+#bugs")
+        .arg("Do work @cash^goog-exit@#bugs")
         .env("BOB_DIR", &vault)
         .output()
         .expect("run bob capture-parse project-note pomodoro marker");
@@ -228,9 +229,10 @@ fn capture_parse_json_reports_project_note_markers() {
     assert_eq!(
         json["spans"],
         serde_json::json!([
-            { "start": 8, "end": 13, "kind": "task_block_id_route" },
-            { "start": 14, "end": 23, "kind": "task_block_id" },
-            { "start": 23, "end": 24, "kind": "project_note_marker" },
+            { "start": 8, "end": 13, "kind": "task_block_id_route", "project_note": "create" },
+            { "start": 13, "end": 14, "kind": "project_note_separator", "project_note": "create" },
+            { "start": 14, "end": 23, "kind": "task_block_id", "project_note": "create" },
+            { "start": 23, "end": 24, "kind": "project_note_marker", "project_note": "create" },
             {
                 "start": 25,
                 "end": 29,
@@ -266,7 +268,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @^focus-123+")
+        .arg("Do work @^focus-123@")
         .env("BOB_DIR", &vault)
         .output()
         .expect("run bob capture-parse routeless project-note marker");
@@ -301,7 +303,7 @@ fn capture_parse_json_reports_project_note_markers() {
             .as_str()
             .is_some_and(|message| {
                 message.contains("is retired")
-                    && message.contains("@cash^goog-exit+#bugs")
+                    && message.contains("@cash^goog-exit@#bugs")
             }),
         "{json}"
     );
@@ -311,7 +313,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@@cash^goog-exit+")
+        .arg("@@cash^goog-exit@")
         .env("BOB_DIR", &vault)
         .output()
         .expect("run project-note global declaration parse");
@@ -323,7 +325,7 @@ fn capture_parse_json_reports_project_note_markers() {
 
 #[test]
 fn capture_parse_json_reports_project_task_ids_spans_and_mode() {
-    let input = "Finish the Google exit packet! @cash^goog-exit+#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs";
+    let input = "Finish the Google exit packet! @cash^goog-exit@#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs";
     let output = bob_command()
         .arg("capture-parse")
         .arg("-f")
@@ -392,7 +394,7 @@ fn capture_parse_json_reports_project_task_ids_spans_and_mode() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Do work @cash^goog-exit+")
+        .arg("Do work @cash^goog-exit@")
         .output()
         .expect("run plain project-note parse");
     assert_success(&plain);
@@ -426,7 +428,7 @@ fn capture_parse_json_reports_project_task_ids_spans_and_mode() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("Finish it @cash^x+\n- Draft :")
+        .arg("Finish it @cash^x@\n- Draft :")
         .output()
         .expect("run unfinished task-ID parse");
     assert_success(&unfinished);

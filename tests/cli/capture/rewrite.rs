@@ -417,7 +417,7 @@ fn capture_parse_keeps_project_note_plus_literal() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@work^prep+")
+        .arg("@work^prep@")
         .output()
         .expect("run capture-parse on project-note marker");
 

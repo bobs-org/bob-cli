@@ -69,6 +69,7 @@ pub(super) fn plan_project_note_item(
         block_id,
         pomodoro_name,
         pomodoro_name_is_literal,
+        ..
     } = parsed.kind.clone()
     else {
         return Err(CaptureError::io(

@@ -223,7 +223,7 @@ fn existing_subjects_accept_markers() {
 fn bodiless_forms_need_a_task_like_their_masked_parse() {
     // These masked forms never parse, so execution fails them with missing
     // text and the editor needs a task instead of refusing a capture.
-    for raw in ["@notes#Ideas #fix", "@cash^new+ #fix", "@sase# #fix"] {
+    for raw in ["@notes#Ideas #fix", "@cash^new@ #fix", "@sase# #fix"] {
         let parse = editor(raw);
         assert_eq!(codes(&parse), vec!["type_marker_needs_task"], "{raw:?}");
         assert_eq!(
@@ -404,6 +404,7 @@ fn masked_items_match_their_baseline_across_grammar_families() {
             start: span.start + " #fix".len(),
             end: span.end + " #fix".len(),
             kind: span.kind,
+            project_note: None,
         })
         .collect();
     assert_eq!(var.items[1].spans, shifted);

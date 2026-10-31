@@ -57,6 +57,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
         start: token_start,
         end: token_end,
         kind: span_kind,
+        project_note: None,
     };
     let exact = parent_trimmed.len() == prefix_len && item.lines.len() == 1;
     if !exact {
@@ -309,6 +310,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
         start: token_start,
         end: token_start + prefix_len,
         kind: SpanKind::PomodoroStart,
+        project_note: None,
     }];
     if name.is_empty() {
         // Bare tokens never have an empty name; only `=#` uses the
@@ -319,6 +321,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 start: hash_start,
                 end: hash_start + 1,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
         }
     } else {
@@ -326,6 +329,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
             start: name_start,
             end: name_end,
             kind: SpanKind::PomodoroName,
+            project_note: None,
         });
     }
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
@@ -464,6 +468,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 start: token_start + timing_offset,
                 end: token_start + timing_offset + 1,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
             // Add drop span if a valid drop was typed before the dangling `@`.
             if let DropLex::Valid(_, range) = &drop_lex {
@@ -471,6 +476,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                     start: range.0,
                     end: range.1,
                     kind: SpanKind::PomodoroStartDrop,
+                    project_note: None,
                 });
                 timing_spans.sort_by_key(|span| span.start);
             }
@@ -492,6 +498,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 start,
                 end,
                 kind: SpanKind::PomodoroStart,
+                project_note: None,
             });
             spans.sort_by_key(|span| span.start);
         }
@@ -511,6 +518,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                     start: range.0,
                     end: range.1,
                     kind: SpanKind::PomodoroStartDrop,
+                    project_note: None,
                 });
                 return Some(editor_named_valid_outcome(
                     item,
@@ -527,12 +535,14 @@ pub(super) fn parse_editor_named_start_item<'a>(
                         start: range.0,
                         end: range.1,
                         kind: SpanKind::PomodoroStartDrop,
+                        project_note: None,
                     });
                 }
                 spans.push(Span {
                     start: sep_range.0,
                     end: sep_range.1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 return Some(editor_start_drop_incomplete_outcome(
                     item,
@@ -632,6 +642,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
             start: token_start + timing_offset,
             end: token_start + timing_offset + 1,
             kind: SpanKind::InteractivePlaceholder,
+            project_note: None,
         });
         timing_spans.sort_by_key(|span| span.start);
         // With extra text or child lines, a dangling `@` still reports the
@@ -1032,6 +1043,7 @@ pub(super) fn parse_editor_start_item<'a>(
             token_end
         },
         kind: SpanKind::PomodoroStart,
+        project_note: None,
     };
     enum DropLex {
         None,
@@ -1065,6 +1077,7 @@ pub(super) fn parse_editor_start_item<'a>(
             start: range.0,
             end: range.1,
             kind: SpanKind::PomodoroStartDrop,
+            project_note: None,
         });
     }
     if let Some((timing_offset, timing_after)) = timing.as_ref()
@@ -1074,6 +1087,7 @@ pub(super) fn parse_editor_start_item<'a>(
             start: token_start + timing_offset,
             end: token_start + timing_offset + 1 + timing_after.len(),
             kind: SpanKind::PomodoroStart,
+            project_note: None,
         });
         valid_spans.sort_by_key(|span| span.start);
     }
@@ -1127,6 +1141,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     start: token_start + timing_offset,
                     end: token_start + timing_offset + 1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 return Some(editor_start_timing_incomplete_outcome(
                     item,
@@ -1237,6 +1252,7 @@ pub(super) fn parse_editor_start_item<'a>(
             start: token_start + timing_offset,
             end: token_start + timing_offset + 1,
             kind: SpanKind::InteractivePlaceholder,
+            project_note: None,
         });
         return Some(editor_start_timing_incomplete_outcome(
             item,
@@ -1344,12 +1360,14 @@ pub(super) fn parse_editor_start_item<'a>(
                     start: range.0,
                     end: range.1,
                     kind: SpanKind::PomodoroStartDrop,
+                    project_note: None,
                 });
             }
             spans.push(Span {
                 start: sep_range.0,
                 end: sep_range.1,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
             Some(editor_start_drop_incomplete_outcome(
                 item,
@@ -1427,6 +1445,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start: token_start,
                         end: token_start + len,
                         kind: SpanKind::PomodoroStart,
+                        project_note: None,
                     },
                     pomodoro_double_start_error(token_text),
                     Some((token_start, token_start + len)),
@@ -1472,6 +1491,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 start: token_start,
                 end: token_start + first.len(),
                 kind: SpanKind::PomodoroStart,
+                project_note: None,
             },
             pomodoro_double_close_error(first, &close_spelling),
             Some((token_start, token_start + first.len())),
@@ -1491,6 +1511,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 start: token_start,
                 end: token_start + first.len(),
                 kind: SpanKind::PomodoroClose,
+                project_note: None,
             }],
             Vec::new(),
             vec![Diagnostic {
@@ -1507,6 +1528,7 @@ pub(super) fn parse_editor_close_item<'a>(
         start: token_start,
         end: token_start + 1,
         kind: SpanKind::PomodoroClose,
+        project_note: None,
     };
     // `x#…` is a claimed close near miss with a teaching error, whether or
     // not the item carries extra text or child lines. It used to be prose.
@@ -1562,6 +1584,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseInProgress,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = lex.park_range {
@@ -1569,6 +1592,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroClosePark,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = lex.complete_range {
@@ -1576,6 +1600,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseComplete,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = lex.drop_range {
@@ -1583,6 +1608,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseDrop,
+                        project_note: None,
                     });
                 }
                 return Some(editor_close_outcome(
@@ -1602,6 +1628,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseInProgress,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.park_range {
@@ -1609,6 +1636,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroClosePark,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.complete_range {
@@ -1616,6 +1644,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseComplete,
+                        project_note: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.drop_range {
@@ -1623,12 +1652,14 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseDrop,
+                        project_note: None,
                     });
                 }
                 spans.push(Span {
                     start: incomplete.separator_range.0,
                     end: incomplete.separator_range.1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 return Some(editor_close_outcome(
                     item,
@@ -1695,6 +1726,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             start,
                             end,
                             kind: SpanKind::PomodoroCloseInProgress,
+                            project_note: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.park_range {
@@ -1702,6 +1734,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             start,
                             end,
                             kind: SpanKind::PomodoroClosePark,
+                            project_note: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.complete_range {
@@ -1709,6 +1742,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             start,
                             end,
                             kind: SpanKind::PomodoroCloseComplete,
+                            project_note: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.drop_range {
@@ -1716,12 +1750,14 @@ pub(super) fn parse_editor_close_item<'a>(
                             start,
                             end,
                             kind: SpanKind::PomodoroCloseDrop,
+                            project_note: None,
                         });
                     }
                     spans.push(Span {
                         start: incomplete.separator_range.0,
                         end: incomplete.separator_range.1,
                         kind: SpanKind::InteractivePlaceholder,
+                        project_note: None,
                     });
                     EditorSelection::Incomplete(incomplete, spans)
                 }
@@ -1738,6 +1774,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 start,
                 end,
                 kind: SpanKind::PomodoroCloseInProgress,
+                project_note: None,
             });
         }
         if let Some((start, end)) = lex.park_range {
@@ -1745,6 +1782,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 start,
                 end,
                 kind: SpanKind::PomodoroClosePark,
+                project_note: None,
             });
         }
         if let Some((start, end)) = lex.complete_range {
@@ -1752,6 +1790,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 start,
                 end,
                 kind: SpanKind::PomodoroCloseComplete,
+                project_note: None,
             });
         }
         if let Some((start, end)) = lex.drop_range {
@@ -1759,6 +1798,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 start,
                 end,
                 kind: SpanKind::PomodoroCloseDrop,
+                project_note: None,
             });
         }
         spans
@@ -1819,6 +1859,7 @@ pub(super) fn parse_editor_close_item<'a>(
                             start,
                             end,
                             kind: SpanKind::PomodoroCloseLogIndex,
+                            project_note: None,
                         });
                     }
                 }
@@ -1842,6 +1883,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start: dangling.index_range.0,
                         end: dangling.index_range.1,
                         kind: SpanKind::InteractivePlaceholder,
+                        project_note: None,
                     });
                 }
                 base_spans.sort_by_key(|span| (span.start, span.end));
@@ -1983,6 +2025,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     start: index_range.0,
                     end: index_range.1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 spans.sort_by_key(|span| (span.start, span.end));
                 return Some(editor_close_outcome(
@@ -2004,6 +2047,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 start: index_range.0,
                 end: index_range.1,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
             base_spans.sort_by_key(|span| (span.start, span.end));
             let mut spec =
@@ -2046,6 +2090,7 @@ pub(super) fn parse_editor_close_item<'a>(
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseLogIndex,
+                        project_note: None,
                     });
                 }
                 spans.sort_by_key(|span| (span.start, span.end));
@@ -2069,6 +2114,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseLogIndex,
+                    project_note: None,
                 });
             }
             base_spans.sort_by_key(|span| (span.start, span.end));

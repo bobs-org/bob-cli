@@ -297,7 +297,7 @@ fn star_twins_of_ampersand_rejections_name_the_sigil() {
     assert_star_named_rejection("-5 *job:cleanup");
     assert_star_named_rejection("Buy milk @notes#Ideas *job:cleanup");
     assert_star_named_rejection("*job:cleanup @body:excercise#name");
-    assert_star_named_rejection("@job^cleanup+ *job:other");
+    assert_star_named_rejection("@job^cleanup@ *job:other");
     let close = parse_json("New thing @mac_inbox:new-thing=x *job:cleanup");
     let close_messages = diagnostic_messages(&close);
     assert!(

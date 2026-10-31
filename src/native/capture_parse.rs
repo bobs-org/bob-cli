@@ -64,6 +64,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             themes: span.themes,
             cancels_source: span.cancels_source,
             completes_source: span.completes_source,
+            project_note: span.project_note,
         })
         .collect();
     TemplateProtocolParse { route, spans }
@@ -324,9 +325,9 @@ and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' (or \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
 list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
 `=name` items, and neither is ever rewritten. \
-A '@^id+' marker already carries the project-note intent: it reports mode \
+A '@^id@' marker already carries the project-note intent: it reports mode \
 'project_note' with a 'route' need until the \
-route is typed. A '@:id+' marker is the retired project-note form and \
+route is typed. A '@^id+' or '@:id+' marker is the retired project-note form and \
 reports a `retired_project_note_marker` diagnostic. In a project-note item, a trailing \
 ` :id` / ` ^id` word on a first-level task bullet names that task: ` :id` additionally makes it Next and \
 links it into the Pomodoro, reporting mode 'pomodoro_project_note' with a `project_task_link_marker` span over \
@@ -731,6 +732,12 @@ struct CaptureParseItem {
     template_row: Option<TemplateRowParse>,
 }
 
+fn is_no_parse_project_note(
+    form: &Option<super::capture_language::ProjectNoteForm>,
+) -> bool {
+    form.is_none()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CaptureParseSpan {
     pub(crate) start: usize,
@@ -749,6 +756,10 @@ pub(crate) struct CaptureParseSpan {
     /// its source task (`relations.complete_labels`). Omitted otherwise.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) completes_source: bool,
+    /// Sealed project-note modifier (`"create"` or `"offer"`). Present on
+    /// every span of a project-note marker token except the Pomodoro name.
+    #[serde(default, skip_serializing_if = "is_no_parse_project_note")]
+    pub(crate) project_note: Option<super::capture_language::ProjectNoteForm>,
 }
 
 fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
@@ -1518,6 +1529,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            project_note: span.project_note,
         })
         .collect()
 }
@@ -1551,6 +1563,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                     themes: Vec::new(),
                     cancels_source: false,
                     completes_source: false,
+                    project_note: candidate.project_note,
                 });
             }
             cursor = cursor.max(end);
@@ -1567,6 +1580,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                 themes: Vec::new(),
                 cancels_source: false,
                 completes_source: false,
+                project_note: candidate.project_note,
             });
         }
         spans.append(&mut additions);
@@ -1661,6 +1675,7 @@ fn template_spans(
                     themes: Vec::new(),
                     cancels_source: false,
                     completes_source: false,
+                    project_note: span.project_note,
                 });
             }
             cursor = cursor.max(placeholder.range.end);
@@ -1674,6 +1689,7 @@ fn template_spans(
                 themes: Vec::new(),
                 cancels_source: false,
                 completes_source: false,
+                project_note: span.project_note,
             });
         }
     }
@@ -1687,6 +1703,7 @@ fn template_spans(
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            project_note: None,
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -1698,6 +1715,7 @@ fn template_spans(
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            project_note: None,
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -1709,6 +1727,7 @@ fn template_spans(
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            project_note: None,
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));

@@ -364,7 +364,7 @@ fn open_notes_project_note_with_task_links() {
     let (_temp, vault, day) = open_vault("bob-cli-open-notes-project");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     write_file(&day, "## Pomodoros\n- [ ] (1330-1400) Work\n");
-    let input = "Finish the Google exit packet! @cash^goog-exit+#admin\n\
+    let input = "Finish the Google exit packet! @cash^goog-exit@#admin\n\
          - Draft the resignation memo :draft-memo\n";
     let dry = project_note_json(&vault, &day, input, true);
     let json = project_note_json(&vault, &day, input, false);

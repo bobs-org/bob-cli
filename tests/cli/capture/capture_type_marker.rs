@@ -377,7 +377,7 @@ fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
         config.display()
     );
     let project_hint = format!(
-        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id+#fxi`)",
+        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id@#fxi`)",
         config.display()
     );
     let ensure_hint = format!(
@@ -418,7 +418,7 @@ fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
 
     write_file(&config, "plan:\n  max_themes: 30\n");
     let no_vocabulary_hint = format!(
-        "`#fxi` is not a task type yet: no Pomodoro has used FXI and no `types:` vocabulary is configured; add `types:` to {} (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id+#fxi`)",
+        "`#fxi` is not a task type yet: no Pomodoro has used FXI and no `types:` vocabulary is configured; add `types:` to {} (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id@#fxi`)",
         config.display()
     );
     let before_no_vocabulary = snapshot_files(temp.path());

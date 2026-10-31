@@ -34,6 +34,9 @@ pub(crate) enum SpanKind {
     TaskToggleBlockId,
     TaskToggleExplicitToggle,
     ProjectNoteMarker,
+    ProjectNoteSeparator,
+    #[allow(dead_code)]
+    ProjectNoteOfferMarker,
     ProjectTaskLinkMarker,
     ProjectTaskBlockId,
     GlobalRoute,
@@ -104,6 +107,8 @@ impl SpanKind {
             Self::TaskToggleBlockId => "task_toggle_block_id",
             Self::TaskToggleExplicitToggle => "task_toggle_explicit_toggle",
             Self::ProjectNoteMarker => "project_note_marker",
+            Self::ProjectNoteSeparator => "project_note_separator",
+            Self::ProjectNoteOfferMarker => "project_note_offer_marker",
             Self::ProjectTaskLinkMarker => "project_task_link_marker",
             Self::ProjectTaskBlockId => "project_task_block_id",
             Self::GlobalRoute => "global_route",
@@ -144,11 +149,17 @@ impl SpanKind {
     }
 }
 
+fn is_no_project_note(form: &Option<super::model::ProjectNoteForm>) -> bool {
+    form.is_none()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct Span {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) kind: SpanKind,
+    #[serde(default, skip_serializing_if = "is_no_project_note")]
+    pub(crate) project_note: Option<super::model::ProjectNoteForm>,
 }
 
 /// The full documented severity vocabulary of the `capture-parse` JSON

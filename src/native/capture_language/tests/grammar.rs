@@ -1450,9 +1450,9 @@ fn execution_keeps_pomodoro_note_and_other_families_unchanged() {
 fn project_note_markers_stay_in_their_families() {
     // (token, sub-bullet, task-block-ID, pomodoro)
     let cases: &[(&str, bool, bool, bool)] = &[
-        ("@cash^goog-exit+", false, true, false),
-        ("@cash^goog-exit+#bugs", false, true, false),
-        ("@cash^goog-exit#bugs+", false, true, false),
+        ("@cash^goog-exit@", false, true, false),
+        ("@cash^goog-exit@#bugs", false, true, false),
+        ("@cash^goog-exit#bugs@", false, true, false),
         ("@cash:goog-exit+", false, false, true),
         ("@cash:goog-exit+#bugs", false, false, true),
         // A `+` inside the Pomodoro name is name charset, not a sigil.
@@ -1479,7 +1479,7 @@ fn project_note_markers_stay_in_their_families() {
 
 #[test]
 fn execution_parses_project_note_markers() {
-    let parsed = execute("Finish it @cash^goog-exit+").expect("caret plus");
+    let parsed = execute("Finish it @cash^goog-exit@").expect("caret seal");
     assert_eq!(parsed.route.as_deref(), Some("cash"));
     assert_eq!(parsed.body, "Finish it");
     assert_eq!(
@@ -1488,12 +1488,13 @@ fn execution_parses_project_note_markers() {
             pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: None,
+            form: ProjectNoteForm::Create,
         }
     );
 
     // A named project-note marker parses at the token level; the item
     // level rejects it as unused until task bullets can name IDs.
-    let token = parse_task_block_id_route_token("@cash^goog-exit+#bugs")
+    let token = parse_task_block_id_route_token("@cash^goog-exit@#bugs")
         .expect("named project note");
     assert_eq!(token.route.as_deref(), Some("cash"));
     assert_eq!(
@@ -1502,11 +1503,12 @@ fn execution_parses_project_note_markers() {
             pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: Some("bugs".to_string()),
+            form: ProjectNoteForm::Create,
         }
     );
 
-    // A `+` inside the Pomodoro name is name charset, not a sigil.
-    let token = parse_task_block_id_route_token("@cash^goog-exit+#c++")
+    // A `+` inside the Pomodoro name is name charset, not a seal.
+    let token = parse_task_block_id_route_token("@cash^goog-exit@#c++")
         .expect("plus in project-note pomodoro name");
     assert_eq!(
         token.kind,
@@ -1514,6 +1516,7 @@ fn execution_parses_project_note_markers() {
             pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: Some("c++".to_string()),
+            form: ProjectNoteForm::Create,
         }
     );
 
@@ -1640,20 +1643,20 @@ fn pomodoro_link_suffix_shared_timing_validation_matches_standalone() {
 #[test]
 fn execution_rejects_project_note_shape_errors() {
     // A `#pomodoro` name with no ` :` task is unused.
-    let error = execute("Finish it @cash^goog-exit+#bugs")
+    let error = execute("Finish it @cash^goog-exit@#bugs")
         .expect_err("unused pomodoro name");
     assert_eq!(error, unused_project_note_pomodoro_error("bugs"));
 
-    // A `+` after `#name` is part of the Pomodoro name: the `+` belongs
+    // An `@` after `#name` is a misordered seal: the seal belongs
     // right after the block ID.
-    let error = execute("Finish it @cash^goog-exit#bugs+")
+    let error = execute("Finish it @cash^goog-exit#bugs@")
         .expect_err("misordered plus");
     assert_eq!(
         error,
         project_note_misordered_error("cash", "goog-exit", "bugs")
     );
 
-    // Without the project-note `+`, `#name` types the task with that block ID.
+    // Without the project-note `@` seal, `#name` types the task with that block ID.
     let typed_task = execute("Finish it @cash^goog-exit#bugs")
         .expect("new task with a type marker");
     assert_eq!(typed_task.body, "Finish it");
@@ -1664,15 +1667,15 @@ fn execution_rejects_project_note_shape_errors() {
     assert_eq!(typed_task.type_marker.as_ref().unwrap().name, "bugs");
 
     // An empty name asks for one.
-    let error = execute("Finish it @cash^goog-exit+#")
+    let error = execute("Finish it @cash^goog-exit@#")
         .expect_err("empty pomodoro name");
     assert_eq!(error, project_note_name_required_error("cash", "goog-exit"));
 
     // Session suffixes stay rejected on project notes.
-    let error = execute("Finish it @cash^goog-exit+=3")
+    let error = execute("Finish it @cash^goog-exit@=3")
         .expect_err("start suffix on project note");
     assert_eq!(error, POMODORO_START_PROJECT_NOTE_ERROR);
-    let error = execute("Finish it @cash^goog-exit+#bugs=x")
+    let error = execute("Finish it @cash^goog-exit@#bugs=x")
         .expect_err("close suffix on project note");
     assert_eq!(error, POMODORO_CLOSE_PROJECT_NOTE_ERROR);
 
@@ -1692,21 +1695,21 @@ fn execution_rejects_project_note_shape_errors() {
     // `!` stays reserved for the explicit sub-bullet toggle: these keep
     // their existing block-ID errors and never become toggles.
     let error =
-        execute("Finish it @cash^goog-exit+!").expect_err("caret plus bang");
+        execute("Finish it @cash^goog-exit@!").expect_err("caret seal bang");
     assert_eq!(error, TASK_BLOCK_ID_ERROR);
     let error =
         execute("Finish it @cash:goog-exit+!").expect_err("colon plus bang");
     assert_eq!(error, POMODORO_BLOCK_ID_ERROR);
-    assert!(exact_explicit_toggle_prefix("@cash^goog-exit+!").is_none());
+    assert!(exact_explicit_toggle_prefix("@cash^goog-exit@!").is_none());
     assert!(exact_explicit_toggle_prefix("@cash:goog-exit+!").is_none());
 }
 
 #[test]
 fn global_declaration_rejects_project_note_shapes() {
     for token in [
-        "@@cash^goog-exit+",
-        "@@cash^goog-exit+#bugs",
-        "@@cash:goog-exit+",
+        "@@cash^goog-exit@",
+        "@@cash^goog-exit@#bugs",
+        "@@cash:goog-exit@",
     ] {
         let declaration = Token {
             text: token,
@@ -1728,7 +1731,7 @@ fn global_declaration_rejects_project_note_shapes() {
 #[test]
 fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
     let parsed = execute(
-        "Finish the Google exit packet! @cash^goog-exit+#admin\n\
+        "Finish the Google exit packet! @cash^goog-exit@#admin\n\
          - Draft the resignation memo :draft-memo\n\
          \x20 - keep it short\n\
          - Call Morgan Stanley about the 401k :call-ms\n\
@@ -1744,6 +1747,7 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
             pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: Some("admin".to_string()),
+            form: ProjectNoteForm::Create,
         }
     );
     assert_eq!(
@@ -1787,7 +1791,7 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
     );
 
     // A project note without a `#pomodoro` name still accepts task IDs.
-    let parsed = execute("Finish it @cash^x+\n- Draft the memo :draft-memo")
+    let parsed = execute("Finish it @cash^x@\n- Draft the memo :draft-memo")
         .expect("link without pomodoro name");
     assert_eq!(
         parsed.sub_bullets[0].task_id,
@@ -1800,7 +1804,7 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
     // The project-note marker may sit on a child line: the trailing
     // `@route…` marker is set aside before the last word is lexed.
     let parsed =
-        execute("Finish it\n- Draft :d @cash^x+").expect("child-line marker");
+        execute("Finish it\n- Draft :d @cash^x@").expect("child-line marker");
     assert_eq!(parsed.route.as_deref(), Some("cash"));
     assert_eq!(parsed.body, "Finish it");
     assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["Draft"]);
@@ -1814,13 +1818,13 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
 
     // Trailing item-wide markers are set aside before the last word is
     // lexed, so both spellings below name `draft-memo`.
-    let parsed = execute("Finish it @cash^x+\n- Draft memo :draft-memo s:2")
+    let parsed = execute("Finish it @cash^x@\n- Draft memo :draft-memo s:2")
         .expect("schedule marker after the ID");
     assert_eq!(parsed.scheduled_offset, Some(2));
     assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["Draft memo"]);
     assert!(parsed.sub_bullets[0].task_id.is_some());
     let parsed =
-        execute("Finish it @cash^x+\n- Draft memo :draft-memo @cash^x+")
+        execute("Finish it @cash^x@\n- Draft memo :draft-memo @cash^x@")
             .expect_err("duplicate route marker");
     assert!(parsed.contains("may appear on only one line"), "{parsed}");
 }
@@ -1828,74 +1832,74 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
 #[test]
 fn execution_rejects_project_task_id_rule_violations_verbatim() {
     // The parent line's own task is always `^prj` and is never linked.
-    let error = execute("Finish it :foo @cash^x+").expect_err("parent task ID");
+    let error = execute("Finish it :foo @cash^x@").expect_err("parent task ID");
     assert_eq!(error, misplaced_parent_task_id_error(":foo"));
 
     // Only first-level child bullets can be named.
-    let error = execute("Finish it @cash^x+\n- Draft\n  - nested :foo")
+    let error = execute("Finish it @cash^x@\n- Draft\n  - nested :foo")
         .expect_err("nested task ID");
     assert_eq!(error, misplaced_nested_task_id_error(":foo"));
 
     // Shape and charset come before reserved, placement, empty body,
     // checkbox, and duplicate checks.
     let error =
-        execute("Finish it @cash^x+\n- Draft :a_b").expect_err("charset");
+        execute("Finish it @cash^x@\n- Draft :a_b").expect_err("charset");
     assert_eq!(error, invalid_project_task_id_charset_error("a_b"));
 
     // `prj` is reserved in any letter case, even on a nested bullet
     // (reserved precedes placement).
     for token in [":PRJ", "^prj"] {
-        let error = execute(&format!("Finish it @cash^x+\n- Draft {token}"))
+        let error = execute(&format!("Finish it @cash^x@\n- Draft {token}"))
             .expect_err("reserved");
         assert_eq!(error, reserved_project_task_id_error(&token[1..]));
     }
-    let error = execute("Finish it @cash^x+\n- Draft\n  - nested :PRJ")
+    let error = execute("Finish it @cash^x@\n- Draft\n  - nested :PRJ")
         .expect_err("reserved on nested");
     assert_eq!(error, reserved_project_task_id_error("PRJ"));
 
     // An empty remaining body names no task.
-    let error = execute("Finish it @cash^x+\n- :foo").expect_err("empty body");
+    let error = execute("Finish it @cash^x@\n- :foo").expect_err("empty body");
     assert_eq!(error, empty_project_task_body_error(2));
 
     // A `:` task takes no authored checkbox.
     let error =
-        execute("Finish it @cash^x+\n- [x] Foo :foo").expect_err("checkbox");
+        execute("Finish it @cash^x@\n- [x] Foo :foo").expect_err("checkbox");
     assert_eq!(error, checkbox_project_task_id_error("foo", 'x'));
 
     // A `^` task keeps its authored checkbox.
     let parsed =
-        execute("Finish it @cash^x+\n- [x] Foo ^foo").expect("caret checkbox");
+        execute("Finish it @cash^x@\n- [x] Foo ^foo").expect("caret checkbox");
     assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["[x] Foo"]);
 
     // Duplicate IDs compare exact and case-sensitive and name both draft
     // lines; `:` and `^` share the namespace.
-    let error = execute("Finish it @cash^x+\n- One :same\n- Two :same")
+    let error = execute("Finish it @cash^x@\n- One :same\n- Two :same")
         .expect_err("duplicate");
     assert_eq!(error, duplicate_project_task_id_error("same", 2, 3));
-    let error = execute("Finish it @cash^x+\n- One :same\n- Two ^same")
+    let error = execute("Finish it @cash^x@\n- One :same\n- Two ^same")
         .expect_err("cross-sigil duplicate");
     assert_eq!(error, duplicate_project_task_id_error("same", 2, 3));
-    let parsed = execute("Finish it @cash^x+\n- One :Same\n- Two :same")
+    let parsed = execute("Finish it @cash^x@\n- One :Same\n- Two :same")
         .expect("case-sensitive distinct");
     assert!(parsed.sub_bullets[1].task_id.is_some());
 
     // Checkbox precedes duplicate: the first error is deterministic.
-    let error = execute("Finish it @cash^x+\n- [x] Foo :same\n- Bar :same")
+    let error = execute("Finish it @cash^x@\n- [x] Foo :same\n- Bar :same")
         .expect_err("checkbox before duplicate");
     assert_eq!(error, checkbox_project_task_id_error("same", 'x'));
 
     // A lone sigil ending a first-level bullet is unfinished.
     let error =
-        execute("Finish it @cash^x+\n- Draft :").expect_err("lone colon");
+        execute("Finish it @cash^x@\n- Draft :").expect_err("lone colon");
     assert_eq!(error, unfinished_project_task_id_error(':'));
     let error =
-        execute("Finish it @cash^x+\n- Draft ^").expect_err("lone caret");
+        execute("Finish it @cash^x@\n- Draft ^").expect_err("lone caret");
     assert_eq!(error, unfinished_project_task_id_error('^'));
 
     // A lone sigil on the parent or a nested bullet stays literal.
-    let parsed = execute("Finish it : @cash^x+").expect("lone parent sigil");
+    let parsed = execute("Finish it : @cash^x@").expect("lone parent sigil");
     assert_eq!(parsed.body, "Finish it :");
-    let parsed = execute("Finish it @cash^x+\n- Draft\n  - nested :")
+    let parsed = execute("Finish it @cash^x@\n- Draft\n  - nested :")
         .expect("lone nested sigil");
     assert_eq!(
         sub_bullet_bodies(&parsed.sub_bullets),
@@ -1903,7 +1907,7 @@ fn execution_rejects_project_task_id_rule_violations_verbatim() {
     );
 
     // A `^`-only project note with a `#pomodoro` name is still unused.
-    let error = execute("Finish it @cash^x+#bugs\n- Doc ^docs")
+    let error = execute("Finish it @cash^x@#bugs\n- Doc ^docs")
         .expect_err("unused pomodoro");
     assert_eq!(error, unused_project_note_pomodoro_error("bugs"));
 }
@@ -1911,7 +1915,7 @@ fn execution_rejects_project_task_id_rule_violations_verbatim() {
 #[test]
 fn execution_evaluates_project_note_markers_parents_and_children_in_order() {
     // Step 1 (marker token) beats step 3 (children).
-    let error = execute("Finish it @cash^goog-exit#bugs+\n- :foo")
+    let error = execute("Finish it @cash^goog-exit#bugs@\n- :foo")
         .expect_err("marker first");
     assert_eq!(
         error,
@@ -1920,16 +1924,16 @@ fn execution_evaluates_project_note_markers_parents_and_children_in_order() {
 
     // Step 2 (parent line) beats step 3 (children).
     let error =
-        execute("Finish it :foo @cash^x+\n- :bar").expect_err("parent first");
+        execute("Finish it :foo @cash^x@\n- :bar").expect_err("parent first");
     assert_eq!(error, misplaced_parent_task_id_error(":foo"));
 
     // Step 3 runs in source order: the first child's error wins.
-    let error = execute("Finish it @cash^x+\n- Draft :a_b\n- Other :c_d")
+    let error = execute("Finish it @cash^x@\n- Draft :a_b\n- Other :c_d")
         .expect_err("first child first");
     assert_eq!(error, invalid_project_task_id_charset_error("a_b"));
 
     // Step 4 (unused `#pomodoro`) runs last.
-    let error = execute("Finish it @cash^x+#bugs\n- Draft :a_b")
+    let error = execute("Finish it @cash^x@#bugs\n- Draft :a_b")
         .expect_err("child before unused");
     assert_eq!(error, invalid_project_task_id_charset_error("a_b"));
 }
@@ -1946,7 +1950,7 @@ fn execution_keeps_task_id_lookalikes_literal_outside_project_notes() {
     // Smileys, times, and mid-body markers never lex, even in a project
     // note; a trailing `:1` still names the task.
     let parsed =
-        execute("Finish it @cash^x+\n- ratio 3 :1\n- done 10:30\n- smile :-)")
+        execute("Finish it @cash^x@\n- ratio 3 :1\n- done 10:30\n- smile :-)")
             .expect("lookalikes");
     assert_eq!(
         sub_bullet_bodies(&parsed.sub_bullets),
@@ -1983,10 +1987,10 @@ fn execution_keeps_equals_wording_off_caret_tokens_without_plus() {
         let error = execute(raw).expect_err("task-block-ID error");
         assert_eq!(error, TASK_BLOCK_ID_ERROR, "{raw}");
     }
-    let error = execute("Finish it @cash^goog-exit+=3")
+    let error = execute("Finish it @cash^goog-exit@=3")
         .expect_err("start suffix on project note");
     assert_eq!(error, POMODORO_START_PROJECT_NOTE_ERROR);
-    let error = execute("Finish it @cash^goog-exit+#bugs=x")
+    let error = execute("Finish it @cash^goog-exit@#bugs=x")
         .expect_err("close suffix on project note");
     assert_eq!(error, POMODORO_CLOSE_PROJECT_NOTE_ERROR);
 }
@@ -1994,9 +1998,9 @@ fn execution_keeps_equals_wording_off_caret_tokens_without_plus() {
 #[test]
 fn execution_rejects_checkbox_only_project_task_ids() {
     for raw in [
-        "Finish it @cash^x+\n- [x] ^foo",
-        "Finish it @cash^x+\n- [ ] ^foo",
-        "Finish it @cash^x+\n- [x] :foo",
+        "Finish it @cash^x@\n- [x] ^foo",
+        "Finish it @cash^x@\n- [ ] ^foo",
+        "Finish it @cash^x@\n- [x] :foo",
     ] {
         let error = execute(raw).expect_err("empty body");
         assert_eq!(error, empty_project_task_body_error(2), "{raw}");

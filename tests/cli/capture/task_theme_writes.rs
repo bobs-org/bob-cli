@@ -573,7 +573,7 @@ fn named_project_note_bullets_retype_linked_tasks() {
         &vault,
         &day_file,
         &config,
-        "Ship it @sase^exit+#fix\n- Draft the memo :draft-memo\n",
+        "Ship it @sase^exit@#fix\n- Draft the memo :draft-memo\n",
         false,
     );
     assert_eq!(json["kind"], "project_note", "{json}");

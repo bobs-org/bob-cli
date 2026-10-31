@@ -19,7 +19,7 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^goog-exit+")
+        .arg("@cash^goog-exit@")
         .arg("Finish the Google exit packet!")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .env("TZ", "UTC0")
@@ -85,7 +85,7 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("@cash^second-note+")
+        .arg("@cash^second-note@")
         .arg("Second body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .env("TZ", "UTC0")
@@ -106,8 +106,8 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
 #[test]
 fn capture_project_note_retired_colon_forms_fail_with_teaching_errors() {
     for (name, marker, teaching) in [
-        ("implicit", "@cash:impl1+", "@cash^impl1+"),
-        ("named", "@cash:open1+#bugs", "@cash^open1+#bugs"),
+        ("implicit", "@cash:impl1+", "@cash^impl1@"),
+        ("named", "@cash:open1+#bugs", "@cash^open1@#bugs"),
     ] {
         let temp =
             TempDir::new(&format!("bob-cli-capture-project-note-{name}"));
@@ -136,9 +136,7 @@ fn capture_project_note_retired_colon_forms_fail_with_teaching_errors() {
             serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
         assert!(
             json["error"].as_str().is_some_and(|error| {
-                error.contains("is retired")
-                    && error.contains(teaching)
-                    && error.contains(" :<id>")
+                error.contains("is retired") && error.contains(teaching)
             }),
             "{json}"
         );
@@ -164,7 +162,7 @@ fn capture_project_note_named_caret_form_rejects_the_unused_pomodoro() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^goog-exit+#bugs")
+        .arg("@cash^goog-exit@#bugs")
         .arg("Body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .env("TZ", "UTC0")
@@ -188,7 +186,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
     let vault = temp.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
 
-    let input = "Parent @cash^auth1+\n- Call Morgan Stanley\n- FUTURE WORK\n  - nested detail\n";
+    let input = "Parent @cash^auth1@\n- Call Morgan Stanley\n- FUTURE WORK\n  - nested detail\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -221,7 +219,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
     assert!(contents.contains("- nested detail"), "{contents}");
 
     let tasks_input =
-        "Parent @cash^tasks1+\n- TASKS\n  - merged note\n- Real task\n";
+        "Parent @cash^tasks1@\n- TASKS\n  - merged note\n- Real task\n";
     let tasks_output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -270,7 +268,7 @@ fn capture_project_note_schedule_and_priority_write_inline_date_and_log() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^sched1+")
+        .arg("@cash^sched1@")
         .arg("Body")
         .arg("s:2")
         .env("BOB_NOW", "2026-09-20 14:31:07")
@@ -305,7 +303,7 @@ fn capture_project_note_schedule_and_priority_write_inline_date_and_log() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^prio1+")
+        .arg("@cash^prio1@")
         .arg("Body")
         .arg("$4")
         .env("BOB_NOW", "2026-09-20 14:31:07")
@@ -351,7 +349,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^x1+")
+        .arg("@cash^x1@")
         .arg("Body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
@@ -376,7 +374,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^x1+")
+        .arg("@cash^x1@")
         .arg("Body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
@@ -403,7 +401,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^x1+")
+        .arg("@cash^x1@")
         .arg("Body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
@@ -428,7 +426,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^x1+")
+        .arg("@cash^x1@")
         .arg("Body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
@@ -456,7 +454,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash^x1+")
+        .arg("@cash^x1@")
         .arg("Body")
         .arg("%")
         .env("BOB_NOW", "2026-09-20 14:31:07")
@@ -479,7 +477,7 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg(&vault)
         .arg("--clip")
         .arg("--")
-        .arg("@cash^x1+")
+        .arg("@cash^x1@")
         .arg("Body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
@@ -543,14 +541,14 @@ fn capture_project_note_rejections_leave_no_partial_write() {
         .arg("--route")
         .arg("cash")
         .arg("--")
-        .arg("@cash^lit1+ Body")
+        .arg("@cash^lit1@ Body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .output()
         .expect("run forced route capture");
     assert_success(&output);
     assert!(!vault.join("cash_lit1.md").exists());
     let routed = fs::read_to_string(vault.join("cash.md")).expect("read cash");
-    assert!(routed.contains("@cash^lit1+"), "{routed}");
+    assert!(routed.contains("@cash^lit1@"), "{routed}");
 }
 
 #[test]
@@ -565,7 +563,7 @@ fn capture_project_note_dry_run_and_batch_parenting_and_rollback() {
         .arg("-d")
         .arg("-f")
         .arg("json")
-        .arg("@cash^dry1+")
+        .arg("@cash^dry1@")
         .arg("Preview body")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .env("TZ", "UTC0")
@@ -581,7 +579,7 @@ fn capture_project_note_dry_run_and_batch_parenting_and_rollback() {
     let batch = TempDir::new("bob-cli-capture-project-note-batch");
     let vault = batch.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
-    let input = "First @cash^first1+\n\nSecond @cash_first1^second1+\n";
+    let input = "First @cash^first1@\n\nSecond @cash_first1^second1@\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -606,7 +604,7 @@ fn capture_project_note_dry_run_and_batch_parenting_and_rollback() {
     let rollback = TempDir::new("bob-cli-capture-project-note-rollback");
     let vault = rollback.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
-    let failing = "First @cash^ok1+\n\nSecond @cash^ok1+\n";
+    let failing = "First @cash^ok1@\n\nSecond @cash^ok1@\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -633,7 +631,7 @@ fn capture_project_note_task_links_write_the_worked_example() {
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
 
-    let input = "Finish the Google exit packet! @cash^goog-exit+#admin\n\
+    let input = "Finish the Google exit packet! @cash^goog-exit@#admin\n\
          - Draft the resignation memo :draft-memo\n  - keep it short\n\
          - Call Morgan Stanley about the 401k :call-ms\n\
          - Collect the equity paperwork ^equity-docs\n\
@@ -743,7 +741,7 @@ fn capture_project_note_task_links_write_the_worked_example() {
             .env("BOB_DAY_FILE", &human_day)
             .env("BOB_NOW", "2026-09-20 14:31:07")
             .env("TZ", "UTC0"),
-        "Body @cash^human1+#admin\n- Draft the memo :draft-memo\n",
+        "Body @cash^human1@#admin\n- Draft the memo :draft-memo\n",
     );
     assert_success(&human);
     let out = stdout(&human);
@@ -762,7 +760,7 @@ fn capture_project_note_task_links_use_the_implicit_pomodoro() {
     write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
 
     let input =
-        "Body @cash^impl1+\n- Draft the memo :draft-memo\n- File it ^file-it\n";
+        "Body @cash^impl1@\n- Draft the memo :draft-memo\n- File it ^file-it\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -802,7 +800,7 @@ fn capture_project_note_task_links_use_the_implicit_pomodoro() {
         &day_file,
         "## Pomodoros\n- [ ] (1330-1400) Work\n- [ ] () — ADMIN\n",
     );
-    let input = "Body @cash^exist1+#admin\n- Draft the memo :draft-memo\n";
+    let input = "Body @cash^exist1@#admin\n- Draft the memo :draft-memo\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -837,7 +835,7 @@ fn capture_project_note_task_links_dry_run_batch_and_rollback() {
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
     write_file(&day_file, day_before);
-    let input = "Body @cash^drylink1+\n- Draft the memo :draft-memo\n";
+    let input = "Body @cash^drylink1@\n- Draft the memo :draft-memo\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -898,7 +896,7 @@ fn capture_project_note_task_links_dry_run_batch_and_rollback() {
     let day_file = vault.join("day.md");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
-    let input = "First @cash^batch1+\n- Alpha task :alpha\n\nSecond @cash^batch2+\n- Beta task :beta\n";
+    let input = "First @cash^batch1@\n- Alpha task :alpha\n\nSecond @cash^batch2@\n- Beta task :beta\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -929,7 +927,7 @@ fn capture_project_note_task_links_dry_run_batch_and_rollback() {
     let day_before =
         "## Pomodoros\n- [ ] (1330-1400) Work\n  - [[cash_dup2#^dup]]\n";
     write_file(&day_file, day_before);
-    let input = "Body @cash^dup2+\n- Draft the memo :dup\n";
+    let input = "Body @cash^dup2@\n- Draft the memo :dup\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -960,7 +958,7 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
     let missing = TempDir::new("bob-cli-capture-project-note-link-noday");
     let vault = missing.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
-    let input = "Body @cash^noday1+\n- Draft the memo :draft-memo\n";
+    let input = "Body @cash^noday1@\n- Draft the memo :draft-memo\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -987,7 +985,7 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
     let caret = TempDir::new("bob-cli-capture-project-note-caret-noday");
     let vault = caret.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
-    let input = "Body @cash^caretn1+\n- Draft the memo ^draft-memo\n";
+    let input = "Body @cash^caretn1@\n- Draft the memo ^draft-memo\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -1018,7 +1016,7 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
     write_file(&day_file, day_before);
-    let input = "Body @cash^caretd1+\n- Draft the memo ^draft-memo\n";
+    let input = "Body @cash^caretd1@\n- Draft the memo ^draft-memo\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -1044,7 +1042,7 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
     write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
     write_blocked_tasks_settings(&vault);
     let input = concat!(
-        "Body @cash^schedlink1+ s:2\n",
+        "Body @cash^schedlink1@ s:2\n",
         "- Draft the memo :draft-memo\n",
         "- Review blocker ^review-blocker\n",
         "- Plain follow-up\n",
@@ -1123,7 +1121,7 @@ fn capture_project_note_task_links_report_the_resolved_pomodoro_name() {
         &day_file,
         "## Pomodoros\n- [ ] (1330-1400) Work\n- [ ] () — ADMIN\n",
     );
-    let input = "Finish it @cash^y+#adm\n- Draft :dr\n";
+    let input = "Finish it @cash^y@#adm\n- Draft :dr\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -1155,7 +1153,7 @@ fn capture_project_note_task_links_report_the_resolved_pomodoro_name() {
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-20 14:31:07")
             .env("TZ", "UTC0"),
-        "Finish it @cash^y2+#adm\n- Draft :dr2\n",
+        "Finish it @cash^y2@#adm\n- Draft :dr2\n",
     );
     assert_success(&human);
     let out = stdout(&human);
@@ -1174,7 +1172,7 @@ fn capture_project_note_reports_created_pomodoro_block() {
     let day_before = "## Pomodoros\n- [ ] (1330-1400) Work\n";
     write_file(&day_file, day_before);
     let input =
-        "Finish packet! @cash^goog-exit+#admin\n- Draft memo :draft-memo\n- Call bank :call-ms\n";
+        "Finish packet! @cash^goog-exit@#admin\n- Draft memo :draft-memo\n- Call bank :call-ms\n";
 
     let run = |dry_run: bool| {
         let mut command = bob_command();

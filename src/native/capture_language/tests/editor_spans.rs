@@ -197,14 +197,14 @@ fn editor_reports_invalid_components_as_diagnostics() {
             TASK_BLOCK_ID_ERROR,
         ),
         (
-            "Body @dev^id+!",
+            "Body @dev^id@!",
             "invalid_task_block_id",
             TASK_BLOCK_ID_ERROR,
         ),
         (
-            "Body @dev^focus-123#bugs+",
+            "Body @dev^focus-123#bugs@",
             "invalid_project_note_marker",
-            "put the project-note `+` right after the block ID: `@dev^focus-123+#bugs` (a `+` after `#bugs` would be part of the Pomodoro name)",
+            "put the project-note `@` right after the block ID: `@dev^focus-123@#bugs` (an `@` after `#bugs` would be part of the Pomodoro name)",
         ),
         (
             "Body @bad.route:id",
@@ -229,12 +229,12 @@ fn editor_reports_invalid_components_as_diagnostics() {
         (
             "Body @dev:bad.id+",
             "retired_project_note_marker",
-            "`@dev:bad.id+` is retired: a project note never links its own `^prj` task. Write `@dev^bad.id+` and end each task bullet you want in the Pomodoro with ` :<id>`",
+            "`@dev:bad.id+` is retired: a project note is sealed with `@`. Write `@dev^bad.id@` (`@dev+bad.id` adds a sub-bullet under that task)",
         ),
         (
             "Body @cash:goog-exit+#bugs",
             "retired_project_note_marker",
-            "`@cash:goog-exit+#bugs` is retired: a project note never links its own `^prj` task. Write `@cash^goog-exit+#bugs` and end each task bullet you want in the Pomodoro with ` :<id>`",
+            "`@cash:goog-exit+#bugs` is retired: a project note is sealed with `@`. Write `@cash^goog-exit@#bugs`",
         ),
         (
             "Body @dev:id+!",
@@ -327,8 +327,8 @@ fn mixed_separators_keep_the_first_family_and_do_not_steal_section_suffixes() {
     let plus_then_caret = editor("Add context @route+id^x");
     assert_eq!(codes(&plus_then_caret), vec!["invalid_sub_bullet_block_id"]);
 
-    let caret_then_plus = editor("Do work @route^id+x");
-    assert_eq!(codes(&caret_then_plus), vec!["invalid_task_block_id"]);
+    let caret_then_plus = editor("Do work @route^id@x");
+    assert_eq!(codes(&caret_then_plus), vec!["invalid_project_note_marker"]);
 
     let colon_then_plus = editor("Do work @route:id+x");
     assert_eq!(codes(&colon_then_plus), vec!["invalid_pomodoro_block_id"]);
@@ -666,8 +666,8 @@ fn editor_reports_caret_near_misses_and_conflicts() {
             "`^route:block-id` must be the whole capture item",
         ),
         (
-            "^sase:deep-fix+",
-            "`^route:block-id+` is not a capture form",
+            "^sase:deep-fix@",
+            "`^route:block-id@` is not a capture form",
         ),
         (
             "^sase:deep-fix!",

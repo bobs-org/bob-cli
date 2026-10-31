@@ -92,7 +92,7 @@ fn block_id_link_new_and_project_note_intents() {
     assert_eq!(caret["context"], "task_block_id");
     assert_eq!(caret["block_id"]["intent"], "new");
 
-    let caret_note = complete_json(&vault, "@sase^x+", 7, None);
+    let caret_note = complete_json(&vault, "@sase^x@", 7, None);
     assert_eq!(caret_note["block_id"]["intent"], "project_note");
 
     // Schedule and clipboard markers force new intent.
@@ -254,7 +254,7 @@ fn project_task_block_id_reports_stem_body_used_and_suggestions() {
     fs::create_dir_all(&vault).expect("create vault");
     write_settings(&vault);
 
-    let draft = "Finish it @cash^goog-exit+\n- Draft the memo :";
+    let draft = "Finish it @cash^goog-exit@\n- Draft the memo :";
     let value = complete_json(&vault, draft, draft.len(), None);
     assert_eq!(value["context"], "project_task_block_id");
     assert_eq!(
@@ -289,7 +289,7 @@ fn project_task_block_id_reports_stem_body_used_and_suggestions() {
     );
 
     // A second bullet sees the first bullet's ID in `used`.
-    let two = "Finish it @cash^goog-exit+\n- Draft the memo :draft-memo\n- Call about the 401k :";
+    let two = "Finish it @cash^goog-exit@\n- Draft the memo :draft-memo\n- Call about the 401k :";
     let second = complete_json(&vault, two, two.len(), None);
     assert_eq!(second["context"], "project_task_block_id");
     let second_block = &second["block_id"];
@@ -326,7 +326,7 @@ fn project_task_block_id_reports_stem_body_used_and_suggestions() {
     );
 
     // A `^` bullet reports the caret marker with the same shape.
-    let caret = "Finish it @cash^goog-exit+\n- Collect the equity paperwork ^";
+    let caret = "Finish it @cash^goog-exit@\n- Collect the equity paperwork ^";
     let caret_value = complete_json(&vault, caret, caret.len(), None);
     assert_eq!(caret_value["context"], "project_task_block_id");
     assert_eq!(caret_value["block_id"]["marker"], "^");

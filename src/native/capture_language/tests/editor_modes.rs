@@ -133,7 +133,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[Need::Route, Need::BlockId],
         ),
         (
-            "Body @dev^focus-123+",
+            "Body @dev^focus-123@",
             EditorMode::ProjectNote,
             Some("dev"),
             None,
@@ -141,7 +141,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[],
         ),
         (
-            "Body @^focus-123+",
+            "Body @^focus-123@",
             EditorMode::ProjectNote,
             None,
             None,
@@ -149,7 +149,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[Need::Route],
         ),
         (
-            "Body @dev^+",
+            "Body @dev^@",
             EditorMode::Incomplete,
             Some("dev"),
             None,
@@ -245,7 +245,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[Need::Route, Need::PomodoroId],
         ),
         (
-            "Body @dev^focus-123+#",
+            "Body @dev^focus-123@#",
             EditorMode::Incomplete,
             Some("dev"),
             None,
@@ -335,7 +335,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
 fn editor_reports_unused_project_note_pomodoro_over_the_name() {
     // A `#pomodoro` name with no ` :` task is unused until task bullets
     // can name IDs. The token-level mode stays `project_note`.
-    let raw = "Finish it @cash^goog-exit+#bugs";
+    let raw = "Finish it @cash^goog-exit@#bugs";
     let parse = editor(raw);
     assert_eq!(parse.mode, EditorMode::ProjectNote);
     assert_eq!(parse.route.as_deref(), Some("cash"));
@@ -354,7 +354,7 @@ fn editor_reports_unused_project_note_pomodoro_over_the_name() {
 
     // An empty name is still an incomplete state with a placeholder over
     // `#`, not an error.
-    let partial = editor("Finish it @cash^goog-exit+#");
+    let partial = editor("Finish it @cash^goog-exit@#");
     assert_eq!(partial.mode, EditorMode::Incomplete);
     assert_eq!(partial.needs, vec![Need::PomodoroName]);
     assert!(partial.diagnostics.is_empty());
@@ -362,7 +362,7 @@ fn editor_reports_unused_project_note_pomodoro_over_the_name() {
 
 #[test]
 fn editor_reports_project_task_ids_with_modes_spans_and_diagnostics() {
-    let raw = "Finish the Google exit packet! @cash^goog-exit+#admin\n\
+    let raw = "Finish the Google exit packet! @cash^goog-exit@#admin\n\
                - Draft the resignation memo :draft-memo\n\
                \x20 - keep it short\n\
                - Collect the equity paperwork ^equity-docs";
@@ -428,7 +428,7 @@ fn editor_reports_project_task_ids_with_modes_spans_and_diagnostics() {
     assert!(parse.spans.iter().all(|span| span.start != docs), "{raw}");
 
     // A `^`-only project note keeps the `project_note` mode.
-    let caret_only = editor("Finish it @cash^x+\n- Doc ^docs");
+    let caret_only = editor("Finish it @cash^x@\n- Doc ^docs");
     assert_eq!(caret_only.mode, EditorMode::ProjectNote);
     assert!(caret_only.diagnostics.is_empty());
 
@@ -437,56 +437,56 @@ fn editor_reports_project_task_ids_with_modes_spans_and_diagnostics() {
     // unused-`#pomodoro` rule, the second ID for duplicates).
     let cases: &[(&str, &str, String, &str, bool)] = &[
         (
-            "Finish it :foo @cash^x+",
+            "Finish it :foo @cash^x@",
             "misplaced_project_task_id",
             misplaced_parent_task_id_error(":foo"),
             ":foo",
             false,
         ),
         (
-            "Finish it @cash^x+\n- Draft\n  - nested :foo",
+            "Finish it @cash^x@\n- Draft\n  - nested :foo",
             "misplaced_project_task_id",
             misplaced_nested_task_id_error(":foo"),
             ":foo",
             false,
         ),
         (
-            "Finish it @cash^x+\n- Draft :a_b",
+            "Finish it @cash^x@\n- Draft :a_b",
             "invalid_project_task_id",
             invalid_project_task_id_charset_error("a_b"),
             ":a_b",
             false,
         ),
         (
-            "Finish it @cash^x+\n- Draft :PRJ",
+            "Finish it @cash^x@\n- Draft :PRJ",
             "invalid_project_task_id",
             reserved_project_task_id_error("PRJ"),
             ":PRJ",
             false,
         ),
         (
-            "Finish it @cash^x+\n- :foo",
+            "Finish it @cash^x@\n- :foo",
             "invalid_project_task_id",
             empty_project_task_body_error(2),
             ":foo",
             false,
         ),
         (
-            "Finish it @cash^x+\n- [x] Foo :foo",
+            "Finish it @cash^x@\n- [x] Foo :foo",
             "invalid_project_task_id",
             checkbox_project_task_id_error("foo", 'x'),
             ":foo",
             false,
         ),
         (
-            "Finish it @cash^x+\n- One :same\n- Two :same",
+            "Finish it @cash^x@\n- One :same\n- Two :same",
             "duplicate_project_task_id",
             duplicate_project_task_id_error("same", 2, 3),
             ":same",
             true,
         ),
         (
-            "Finish it @cash^x+#bugs\n- Doc ^docs",
+            "Finish it @cash^x@#bugs\n- Doc ^docs",
             "unused_project_note_pomodoro",
             unused_project_note_pomodoro_error("bugs"),
             "#bugs",
@@ -511,15 +511,15 @@ fn editor_reports_project_task_ids_with_modes_spans_and_diagnostics() {
     }
 
     // A duplicate keeps the first ID and still upgrades the mode.
-    let duplicate = editor("Finish it @cash^x+\n- One :same\n- Two :same");
+    let duplicate = editor("Finish it @cash^x@\n- One :same\n- Two :same");
     assert_eq!(duplicate.mode, EditorMode::PomodoroProjectNote);
 
     // A lone sigil ending a first-level bullet is unfinished: mode
     // `incomplete` needing `block_id`, a placeholder span over the sigil,
     // and no diagnostic.
     for (raw, sigil) in [
-        ("Finish it @cash^x+\n- Draft :", ':'),
-        ("Finish it @cash^x+\n- Draft ^", '^'),
+        ("Finish it @cash^x@\n- Draft :", ':'),
+        ("Finish it @cash^x@\n- Draft ^", '^'),
     ] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
@@ -625,15 +625,16 @@ fn editor_spans_cover_every_marker_shape() {
         ),
         ("Body @^", &[SpanKind::InteractivePlaceholder]),
         (
-            "Body @dev^focus-123+",
+            "Body @dev^focus-123@",
             &[
                 SpanKind::TaskBlockIdRoute,
+                SpanKind::ProjectNoteSeparator,
                 SpanKind::TaskBlockId,
                 SpanKind::ProjectNoteMarker,
             ],
         ),
         (
-            "Body @^focus-123+",
+            "Body @^focus-123@",
             &[
                 SpanKind::InteractivePlaceholder,
                 SpanKind::TaskBlockId,
@@ -641,7 +642,7 @@ fn editor_spans_cover_every_marker_shape() {
             ],
         ),
         (
-            "Body @dev^+",
+            "Body @dev^@",
             &[
                 SpanKind::TaskBlockIdRoute,
                 SpanKind::InteractivePlaceholder,
@@ -669,18 +670,20 @@ fn editor_spans_cover_every_marker_shape() {
             ],
         ),
         (
-            "Body @dev^focus-123+#bugs",
+            "Body @dev^focus-123@#bugs",
             &[
                 SpanKind::TaskBlockIdRoute,
+                SpanKind::ProjectNoteSeparator,
                 SpanKind::TaskBlockId,
                 SpanKind::ProjectNoteMarker,
                 SpanKind::PomodoroName,
             ],
         ),
         (
-            "Body @dev^focus-123+#",
+            "Body @dev^focus-123@#",
             &[
                 SpanKind::TaskBlockIdRoute,
+                SpanKind::ProjectNoteSeparator,
                 SpanKind::TaskBlockId,
                 SpanKind::ProjectNoteMarker,
                 SpanKind::InteractivePlaceholder,
@@ -778,8 +781,8 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "Postgres 17 minimum %log @foo+bar#requirements",
         "Postgres 17 minimum @foo+bar#q-and-a",
         "Postgres 17 minimum @foo+bar#Q&A",
-        "Finish the Google exit packet! @cash^goog-exit+#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs",
-        "Finish it\n- Draft :d @cash^x+",
+        "Finish the Google exit packet! @cash^goog-exit@#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs",
+        "Finish it\n- Draft :d @cash^x@",
         "Fix @sase\n- ratio 3 :1",
         "@Cash+Goog-Exit",
         "@Cash+Goog-Exit!",
@@ -798,7 +801,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "remembered to bump the timeout #",
         "paste the failing output % #",
         "paste the failing output # %",
-        "Finish it @cash^goog-exit+",
+        "Finish it @cash^goog-exit@",
         "x",
         "x1",
         "x1,3",
@@ -1796,7 +1799,7 @@ fn editor_keeps_equals_wording_off_caret_tokens_without_plus() {
         assert_eq!(codes(&parse), vec!["invalid_task_block_id"], "{raw}");
         assert_eq!(parse.diagnostics[0].message, TASK_BLOCK_ID_ERROR, "{raw}");
     }
-    let parse = editor("Finish it @cash^goog-exit+=3");
+    let parse = editor("Finish it @cash^goog-exit@=3");
     assert_eq!(
         codes(&parse),
         vec!["invalid_project_note_marker"],
@@ -1806,7 +1809,7 @@ fn editor_keeps_equals_wording_off_caret_tokens_without_plus() {
         parse.diagnostics[0].message,
         POMODORO_START_PROJECT_NOTE_ERROR
     );
-    let parse = editor("Finish it @cash^goog-exit+#bugs=x");
+    let parse = editor("Finish it @cash^goog-exit@#bugs=x");
     assert_eq!(
         codes(&parse),
         vec!["invalid_project_note_marker"],
@@ -1821,8 +1824,8 @@ fn editor_keeps_equals_wording_off_caret_tokens_without_plus() {
 #[test]
 fn editor_rejects_checkbox_only_project_task_ids_over_the_id_token() {
     for raw in [
-        "Finish it @cash^x+\n- [x] ^foo",
-        "Finish it @cash^x+\n- [ ] ^foo",
+        "Finish it @cash^x@\n- [x] ^foo",
+        "Finish it @cash^x@\n- [ ] ^foo",
     ] {
         let parse = editor(raw);
         assert_eq!(codes(&parse), vec!["invalid_project_task_id"], "{raw}");
@@ -1869,12 +1872,12 @@ fn editor_reports_task_link_queries_as_incomplete() {
 
 #[test]
 fn editor_holds_unused_pomodoro_while_a_colon_id_is_unfinished() {
-    let pending = editor("Finish it @cash^x+#admin\n- Draft :");
+    let pending = editor("Finish it @cash^x@#admin\n- Draft :");
     assert_eq!(pending.mode, EditorMode::Incomplete);
     assert_eq!(pending.needs, vec![Need::BlockId]);
     assert!(pending.diagnostics.is_empty(), "{pending:?}");
 
-    let lone_caret = editor("Finish it @cash^x+#admin\n- Draft ^");
+    let lone_caret = editor("Finish it @cash^x@#admin\n- Draft ^");
     assert_eq!(lone_caret.mode, EditorMode::Incomplete);
     assert_eq!(lone_caret.needs, vec![Need::BlockId]);
     assert_eq!(

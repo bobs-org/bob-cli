@@ -1622,7 +1622,7 @@ pub(super) fn marker_field_at_cursor(
         let marker = &text[1..];
         let (route_part, block_part) =
             marker.split_once('^').expect("task block-ID candidate");
-        // A `#name` after `@route^id+` completes the Pomodoro name that
+        // A `#name` after `@route^id@` completes the Pomodoro name that
         // picks the ` :` links' Pomodoro; the replacement is just the name.
         let (block_part, third) = match block_part.split_once('#') {
             Some((block, name)) => (
@@ -1921,10 +1921,10 @@ pub(super) fn completion_field_from_parts(
     }
 
     let right_end = right_start + parts.right_part.len();
-    // A single trailing `+` immediately after the block-ID part is the
-    // project-note sigil. It is never part of the block replacement: a
+    // A single trailing `@` immediately after the block-ID part is the
+    // project-note seal. It is never part of the block replacement: a
     // cursor inside the ID completes the ID, while a cursor just after the
-    // sigil (and before any `#`) is an empty success. A `+` inside a
+    // seal (and before any `#`) is an empty success. A `+` inside a
     // Pomodoro name stays ordinary name charset.
     let right_is_block_id = matches!(
         parts.right_context,
@@ -1932,7 +1932,7 @@ pub(super) fn completion_field_from_parts(
             | Some(CompletionContext::TaskBlockId)
     );
     let (right_core, has_plus) = if right_is_block_id {
-        match parts.right_part.strip_suffix('+') {
+        match parts.right_part.strip_suffix('@') {
             Some(core) => (core, true),
             None => (parts.right_part, false),
         }
@@ -2002,8 +2002,8 @@ pub(super) fn completion_field_from_parts(
     }
     let third_end = third_start + third.part.len();
     let split = cursor.clamp(third_start, third_end) - third_start;
-    // Strip the project-note sigil from the block ID handed to Pomodoro-name
-    // completion, so `@route^id+#name` reports `id` rather than `id+`.
+    // Strip the project-note seal from the block ID handed to Pomodoro-name
+    // completion, so `@route^id@#name` reports `id` rather than `id@`.
     let third_block = if right_is_block_id {
         right_core
     } else {

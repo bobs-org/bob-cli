@@ -83,6 +83,7 @@ pub(super) fn pomodoro_note_marker_parse(token: &Token<'_>) -> MarkerParse {
             start: token.start,
             end: token.end,
             kind: SpanKind::PomodoroNote,
+            project_note: None,
         }],
         requires_body: false,
         pomodoro_start: None,
@@ -108,6 +109,13 @@ pub(super) fn classify_global_token(token: &Token<'_>) -> TokenParse {
             token,
             "unsupported_explicit_toggle",
             EXPLICIT_TOGGLE_GLOBAL_ERROR,
+        ));
+    }
+    if rest.contains('@') && (rest.contains('^') || rest.contains(':')) {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_global_destination",
+            GLOBAL_DESTINATION_PROJECT_NOTE_ERROR,
         ));
     }
     if rest.contains('#') || rest.contains('^') || rest.contains(':') {
@@ -159,6 +167,7 @@ pub(super) fn classify_global_token(token: &Token<'_>) -> TokenParse {
                 start: token.start,
                 end: token.end,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             }],
             requires_body: false,
             pomodoro_start: None,
@@ -182,6 +191,7 @@ pub(super) fn classify_global_token(token: &Token<'_>) -> TokenParse {
             start: token.start,
             end: token.end,
             kind: SpanKind::GlobalRoute,
+            project_note: None,
         }],
         requires_body: false,
         pomodoro_start: None,
@@ -252,6 +262,13 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
         ));
     }
     if !block_part.is_empty() && !is_block_id(block_part) {
+        if block_part.contains('@') {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_sub_bullet_block_id",
+                &sub_bullet_seal_hint_error(token.text),
+            ));
+        }
         return TokenParse::Invalid(token_diagnostic(
             token,
             "invalid_sub_bullet_block_id",
@@ -314,6 +331,61 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     ))
 }
 
+fn apply_project_note_create(
+    spans: &mut Vec<Span>,
+    exclude_last_placeholder: bool,
+) {
+    let len = spans.len();
+    for (index, span) in spans.iter_mut().enumerate() {
+        if span.kind == SpanKind::PomodoroName {
+            continue;
+        }
+        // The trailing placeholder for a missing `#name` belongs to the
+        // Pomodoro name, not to the sealed marker, so it keeps no modifier.
+        if exclude_last_placeholder
+            && index + 1 == len
+            && span.kind == SpanKind::InteractivePlaceholder
+        {
+            continue;
+        }
+        span.project_note = Some(ProjectNoteForm::Create);
+    }
+}
+
+fn insert_caret_separator_span(
+    token: &Token<'_>,
+    route_part: &str,
+    marker_parse: &mut MarkerParse,
+) {
+    if route_part.is_empty() {
+        return;
+    }
+    // Only insert when both route and block ID are present: otherwise the
+    // placeholder already covers the `^` byte.
+    let has_right = marker_parse
+        .block_id
+        .as_ref()
+        .is_some_and(|id| !id.is_empty());
+    if !has_right {
+        return;
+    }
+    let sep_start = token.start + 1 + route_part.len();
+    let sep_span = Span {
+        start: sep_start,
+        end: sep_start + 1,
+        kind: SpanKind::ProjectNoteSeparator,
+        project_note: Some(ProjectNoteForm::Create),
+    };
+    // Route span is first when present; separator sits right after it.
+    if marker_parse
+        .spans
+        .first()
+        .is_some_and(|span| span.kind == SpanKind::TaskBlockIdRoute)
+    {
+        marker_parse.spans.insert(1, sep_span);
+    }
+}
+
 pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
     let marker = &token.text[1..];
     let (route_part, block_part) =
@@ -328,13 +400,201 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
     }
     // Mirror the execution grammar: split the part after `^` at the first
     // `#` into the block part and an optional Pomodoro name. The
-    // project-note `+` sits immediately after the block ID: with it, a `+`
-    // after `#name` is ordinary Pomodoro-name charset (so `@r^id+#c++`
-    // names `c++`); without it, a trailing `+` is a misordered marker and
-    // a bare `#name` is missing the `+`.
+    // project-note `@` seal sits immediately after the block ID: a trailing
+    // `@` after `#name` is a misordered seal, and a bare `#name` without
+    // the seal is missing it. A trailing `+` is the retired form.
     if let Some((block_before_hash, name)) = block_part.split_once('#') {
-        let Some(block_core) = block_before_hash.strip_suffix('+') else {
-            if let Some(name_core) = name.strip_suffix('+') {
+        if let Some(retired_core) = block_before_hash.strip_suffix('+') {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "retired_project_note_marker",
+                &retired_project_note_marker_error(
+                    token.text,
+                    route_part,
+                    retired_core,
+                    Some(name),
+                ),
+            ));
+        }
+        if let Some(sealed_core) = block_before_hash.strip_suffix('@') {
+            if sealed_core.ends_with('@')
+                || sealed_core.ends_with('+')
+                || sealed_core.contains('@')
+            {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_project_note_marker",
+                    &invalid_project_note_marker_error(
+                        route_part,
+                        sealed_core,
+                        Some(name),
+                    ),
+                ));
+            }
+            // Mirror execution: once `#` is typed the block ID is finished, so
+            // an empty one is an error, not an incomplete state.
+            if sealed_core.is_empty() {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_task_block_id",
+                    TASK_BLOCK_ID_ERROR,
+                ));
+            }
+            // A `=` anywhere after the seal is a session suffix on a
+            // project note, which stays rejected.
+            if block_part.contains('=') {
+                let raw = block_part
+                    .split_once('=')
+                    .map(|(_, raw)| raw)
+                    .unwrap_or_default();
+                let message = if raw.eq_ignore_ascii_case("x")
+                    || link_close_after_x(raw).is_some()
+                {
+                    POMODORO_CLOSE_PROJECT_NOTE_ERROR
+                } else {
+                    POMODORO_START_PROJECT_NOTE_ERROR
+                };
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_project_note_marker",
+                    message,
+                ));
+            }
+            if !is_block_id(sealed_core) {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_task_block_id",
+                    TASK_BLOCK_ID_ERROR,
+                ));
+            }
+            if let Some(name_core) = name.strip_suffix('@') {
+                if !name_core.is_empty() {
+                    return TokenParse::Invalid(token_diagnostic(
+                        token,
+                        "invalid_project_note_marker",
+                        &project_note_misordered_error(
+                            route_part,
+                            sealed_core,
+                            name_core,
+                        ),
+                    ));
+                }
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_project_note_marker",
+                    &invalid_project_note_marker_error(
+                        route_part,
+                        sealed_core,
+                        Some(name_core),
+                    ),
+                ));
+            }
+            // A `#"…"` literal resolves below: a complete one reports its
+            // canonical name; an unterminated one is an editing state.
+            let literal_name: Option<&str> =
+                if super::pomodoro_literal::opens_exact_name(name) {
+                    Some(name)
+                } else {
+                    None
+                };
+            if !name.is_empty()
+                && !is_pomodoro_selector_component(name)
+                && literal_name.is_none()
+            {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_pomodoro_name",
+                    POMODORO_NAME_ERROR,
+                ));
+            }
+            let mut marker_parse = marker_parse(
+                token,
+                MarkerShape {
+                    sigil_len: 1,
+                    route_part,
+                    separator_len: 1,
+                    right_part: sealed_core,
+                    route_kind: SpanKind::TaskBlockIdRoute,
+                    right_kind: SpanKind::TaskBlockId,
+                    complete_mode: EditorMode::ProjectNote,
+                    right_need: Need::BlockId,
+                    third: Some(MarkerThird {
+                        // `@#` spans two bytes; the `@` seal gets its own
+                        // span below and the `#` stays unspanned.
+                        separator_len: 2,
+                        part: name,
+                        kind: SpanKind::PomodoroName,
+                        need: Need::PomodoroName,
+                    }),
+                    suffix: None,
+                },
+            );
+            // `marker_parse` leaves the `@#` separator bytes uncovered, so
+            // span the `@` seal explicitly: ahead of the Pomodoro name, or
+            // split out of the `#` placeholder when the name is still
+            // missing.
+            let seal_start =
+                token.start + 1 + route_part.len() + 1 + sealed_core.len();
+            let seal_span = Span {
+                start: seal_start,
+                end: seal_start + 1,
+                kind: SpanKind::ProjectNoteMarker,
+                project_note: Some(ProjectNoteForm::Create),
+            };
+            if !name.is_empty() {
+                marker_parse.spans.insert(
+                    marker_parse.spans.len().saturating_sub(1),
+                    seal_span,
+                );
+            } else if marker_parse.spans.pop().is_some() {
+                marker_parse.spans.push(seal_span);
+                marker_parse.spans.push(Span {
+                    start: seal_start + 1,
+                    end: seal_start + 2,
+                    kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
+                });
+            }
+            insert_caret_separator_span(token, route_part, &mut marker_parse);
+            apply_project_note_create(&mut marker_parse.spans, true);
+            // Resolve a `#"…"` literal name like the `@route:id#` path: a
+            // complete one reports its canonical name; an invalid one is an
+            // error; an unterminated one is an editing state.
+            if let Some(raw) = literal_name {
+                match super::pomodoro_literal::lex_exact_name_after_hash(
+                    raw,
+                    raw.len(),
+                ) {
+                    Some(lex) if lex.complete => {
+                        match super::pomodoro_literal::canonicalize_exact_name(
+                            &lex.decoded,
+                        ) {
+                            Some(canonical) => {
+                                marker_parse.section = Some(canonical);
+                            }
+                            None => {
+                                return TokenParse::Invalid(token_diagnostic(
+                                    token,
+                                    "invalid_pomodoro_name",
+                                    POMODORO_NAME_ERROR,
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        marker_parse.section = None;
+                        marker_parse.mode = EditorMode::Incomplete;
+                        if !marker_parse.needs.contains(&Need::PomodoroName) {
+                            marker_parse.needs.push(Need::PomodoroName);
+                        }
+                    }
+                }
+            }
+            return TokenParse::Marker(marker_parse);
+        }
+        // No seal on the block part.
+        if let Some(name_core) = name.strip_suffix('@') {
+            if !name_core.is_empty() {
                 return TokenParse::Invalid(token_diagnostic(
                     token,
                     "invalid_project_note_marker",
@@ -348,36 +608,51 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             return TokenParse::Invalid(token_diagnostic(
                 token,
                 "invalid_project_note_marker",
-                &project_note_name_without_plus_error(
+                &invalid_project_note_marker_error(
                     route_part,
                     block_before_hash,
-                    name,
+                    Some(name_core),
                 ),
             ));
-        };
-        if block_core.ends_with('+') {
+        }
+        if block_before_hash.ends_with('@') || block_before_hash.contains('@') {
             return TokenParse::Invalid(token_diagnostic(
                 token,
-                "invalid_task_block_id",
-                TASK_BLOCK_ID_ERROR,
+                "invalid_project_note_marker",
+                &invalid_project_note_marker_error(
+                    route_part,
+                    block_before_hash.trim_end_matches('@'),
+                    Some(name),
+                ),
             ));
         }
-        // Mirror execution: once `#` is typed the block ID is finished, so
-        // an empty one is an error, not an incomplete state.
-        if block_core.is_empty() {
+        // A retired `+` without a seal is handled above; any other `#`
+        // without a seal is missing it.
+        if let Some(retired_core) = block_before_hash.strip_suffix('+') {
             return TokenParse::Invalid(token_diagnostic(
                 token,
-                "invalid_task_block_id",
-                TASK_BLOCK_ID_ERROR,
+                "retired_project_note_marker",
+                &retired_project_note_marker_error(
+                    token.text,
+                    route_part,
+                    retired_core,
+                    Some(name),
+                ),
             ));
         }
-        // A `=` anywhere after the `+` is a session suffix on a project
-        // note, which stays rejected.
-        if block_part.contains('=') {
-            let raw = block_part
-                .split_once('=')
-                .map(|(_, raw)| raw)
-                .unwrap_or_default();
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_project_note_marker",
+            &project_note_name_without_plus_error(
+                route_part,
+                block_before_hash,
+                name,
+            ),
+        ));
+    }
+    if block_part.contains('=') {
+        let (before_eq, raw) = block_part.split_once('=').unwrap_or_default();
+        if before_eq.ends_with('@') {
             let message = if raw.eq_ignore_ascii_case("x")
                 || link_close_after_x(raw).is_some()
             {
@@ -391,112 +666,6 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
                 message,
             ));
         }
-        if !is_block_id(block_core) {
-            return TokenParse::Invalid(token_diagnostic(
-                token,
-                "invalid_task_block_id",
-                TASK_BLOCK_ID_ERROR,
-            ));
-        }
-        // A `#"…"` literal resolves below: a complete one reports its
-        // canonical name; an unterminated one is an editing state.
-        let literal_name: Option<&str> =
-            if super::pomodoro_literal::opens_exact_name(name) {
-                Some(name)
-            } else {
-                None
-            };
-        if !name.is_empty()
-            && !is_pomodoro_selector_component(name)
-            && literal_name.is_none()
-        {
-            return TokenParse::Invalid(token_diagnostic(
-                token,
-                "invalid_pomodoro_name",
-                POMODORO_NAME_ERROR,
-            ));
-        }
-        let mut marker_parse = marker_parse(
-            token,
-            MarkerShape {
-                sigil_len: 1,
-                route_part,
-                separator_len: 1,
-                right_part: block_core,
-                route_kind: SpanKind::TaskBlockIdRoute,
-                right_kind: SpanKind::TaskBlockId,
-                complete_mode: EditorMode::ProjectNote,
-                right_need: Need::BlockId,
-                third: Some(MarkerThird {
-                    // `+#` spans two bytes; a plain `#` spans one, but a
-                    // plain `#` without the `+` never reaches here.
-                    separator_len: 2,
-                    part: name,
-                    kind: SpanKind::PomodoroName,
-                    need: Need::PomodoroName,
-                }),
-                suffix: None,
-            },
-        );
-        // `marker_parse` leaves the `+#` separator bytes uncovered, so span
-        // the `+` sigil explicitly: ahead of the Pomodoro name, or split
-        // out of the `#` placeholder when the name is still missing.
-        let plus_start =
-            token.start + 1 + route_part.len() + 1 + block_core.len();
-        let plus_span = Span {
-            start: plus_start,
-            end: plus_start + 1,
-            kind: SpanKind::ProjectNoteMarker,
-        };
-        if !name.is_empty() {
-            marker_parse
-                .spans
-                .insert(marker_parse.spans.len().saturating_sub(1), plus_span);
-        } else if marker_parse.spans.pop().is_some() {
-            marker_parse.spans.push(plus_span);
-            marker_parse.spans.push(Span {
-                start: plus_start + 1,
-                end: plus_start + 2,
-                kind: SpanKind::InteractivePlaceholder,
-            });
-        }
-        // Resolve a `#"…"` literal name like the `@route:id#` path: a
-        // complete one reports its canonical name; an invalid one is an
-        // error; an unterminated one is an editing state.
-        if let Some(raw) = literal_name {
-            match super::pomodoro_literal::lex_exact_name_after_hash(
-                raw,
-                raw.len(),
-            ) {
-                Some(lex) if lex.complete => {
-                    match super::pomodoro_literal::canonicalize_exact_name(
-                        &lex.decoded,
-                    ) {
-                        Some(canonical) => {
-                            marker_parse.section = Some(canonical);
-                        }
-                        None => {
-                            return TokenParse::Invalid(token_diagnostic(
-                                token,
-                                "invalid_pomodoro_name",
-                                POMODORO_NAME_ERROR,
-                            ));
-                        }
-                    }
-                }
-                _ => {
-                    marker_parse.section = None;
-                    marker_parse.mode = EditorMode::Incomplete;
-                    if !marker_parse.needs.contains(&Need::PomodoroName) {
-                        marker_parse.needs.push(Need::PomodoroName);
-                    }
-                }
-            }
-        }
-        return TokenParse::Marker(marker_parse);
-    }
-    if block_part.contains('=') {
-        let (before_eq, raw) = block_part.split_once('=').unwrap_or_default();
         if before_eq.ends_with('+') {
             let message = if raw.eq_ignore_ascii_case("x")
                 || link_close_after_x(raw).is_some()
@@ -517,10 +686,143 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             TASK_BLOCK_ID_ERROR,
         ));
     }
-    let (block_part, project_note) = match block_part.strip_suffix('+') {
-        Some(stripped) => (stripped, true),
-        None => (block_part, false),
-    };
+    if block_part.contains('!') {
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_task_block_id",
+            TASK_BLOCK_ID_ERROR,
+        ));
+    }
+    if let Some(retired_core) = block_part.strip_suffix('+') {
+        if retired_core.is_empty() || !is_block_id(retired_core) {
+            if retired_core.contains('@') {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_project_note_marker",
+                    &invalid_project_note_marker_error(
+                        route_part,
+                        retired_core.trim_matches('@'),
+                        None,
+                    ),
+                ));
+            }
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ));
+        }
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "retired_project_note_marker",
+            &retired_project_note_marker_error(
+                token.text,
+                route_part,
+                retired_core,
+                None,
+            ),
+        ));
+    }
+    if let Some(sealed_core) = block_part.strip_suffix('@') {
+        if sealed_core.is_empty() {
+            // `@dev^@` is an incomplete block ID with a typed seal: keep
+            // the placeholder path below.
+            let mut marker_parse = marker_parse(
+                token,
+                MarkerShape {
+                    sigil_len: 1,
+                    route_part,
+                    separator_len: 1,
+                    right_part: "",
+                    route_kind: SpanKind::TaskBlockIdRoute,
+                    right_kind: SpanKind::TaskBlockId,
+                    complete_mode: EditorMode::ProjectNote,
+                    right_need: Need::BlockId,
+                    third: None,
+                    suffix: Some(MarkerSuffix {
+                        len: 1,
+                        kind: SpanKind::ProjectNoteMarker,
+                    }),
+                },
+            );
+            apply_project_note_create(&mut marker_parse.spans, false);
+            return TokenParse::Marker(marker_parse);
+        }
+        if !is_block_id(sealed_core) {
+            if sealed_core.contains('@')
+                || sealed_core.ends_with('+')
+                || block_part.contains("@@")
+            {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_project_note_marker",
+                    &invalid_project_note_marker_error(
+                        route_part,
+                        sealed_core.trim_matches(['@', '+']),
+                        None,
+                    ),
+                ));
+            }
+            if block_part.matches('@').count() > 1 {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_project_note_marker",
+                    &invalid_project_note_marker_error(
+                        route_part,
+                        sealed_core.trim_matches('@'),
+                        None,
+                    ),
+                ));
+            }
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ));
+        }
+        let mut marker_parse = marker_parse(
+            token,
+            MarkerShape {
+                sigil_len: 1,
+                route_part,
+                separator_len: 1,
+                right_part: sealed_core,
+                route_kind: SpanKind::TaskBlockIdRoute,
+                right_kind: SpanKind::TaskBlockId,
+                complete_mode: EditorMode::ProjectNote,
+                right_need: Need::BlockId,
+                third: None,
+                suffix: Some(MarkerSuffix {
+                    len: 1,
+                    kind: SpanKind::ProjectNoteMarker,
+                }),
+            },
+        );
+        insert_caret_separator_span(token, route_part, &mut marker_parse);
+        apply_project_note_create(&mut marker_parse.spans, false);
+        if !sealed_core.is_empty() && route_part.is_empty() {
+            marker_parse.mode = EditorMode::ProjectNote;
+        }
+        return TokenParse::Marker(marker_parse);
+    }
+    if block_part.contains('@') {
+        if block_part.trim_matches('@').is_empty() {
+            return TokenParse::Invalid(token_diagnostic(
+                token,
+                "invalid_task_block_id",
+                TASK_BLOCK_ID_ERROR,
+            ));
+        }
+        return TokenParse::Invalid(token_diagnostic(
+            token,
+            "invalid_project_note_marker",
+            &invalid_project_note_marker_error(
+                route_part,
+                block_part.trim_matches('@'),
+                None,
+            ),
+        ));
+    }
     if !block_part.is_empty() && !is_block_id(block_part) {
         return TokenParse::Invalid(token_diagnostic(
             token,
@@ -529,7 +831,7 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
         ));
     }
 
-    let mut marker_parse = marker_parse(
+    let marker_parse = marker_parse(
         token,
         MarkerShape {
             sigil_len: 1,
@@ -538,24 +840,12 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
             right_part: block_part,
             route_kind: SpanKind::TaskBlockIdRoute,
             right_kind: SpanKind::TaskBlockId,
-            complete_mode: if project_note {
-                EditorMode::ProjectNote
-            } else {
-                EditorMode::Task
-            },
+            complete_mode: EditorMode::Task,
             right_need: Need::BlockId,
             third: None,
-            suffix: project_note.then_some(MarkerSuffix {
-                len: 1,
-                kind: SpanKind::ProjectNoteMarker,
-            }),
+            suffix: None,
         },
     );
-    // `@^<id>+` carries the project-note intent even while the route is
-    // still missing; an empty block ID stays an ordinary incomplete state.
-    if project_note && !block_part.is_empty() && route_part.is_empty() {
-        marker_parse.mode = EditorMode::ProjectNote;
-    }
     TokenParse::Marker(marker_parse)
 }
 
@@ -873,12 +1163,14 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                 start: suffix_start,
                 end: suffix_start + 2,
                 kind: SpanKind::PomodoroClose,
+                project_note: None,
             });
             if let Some((start, end)) = in_progress {
                 marker_parse.spans.push(Span {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseInProgress,
+                    project_note: None,
                 });
             }
             if let Some((start, end)) = park {
@@ -886,6 +1178,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroClosePark,
+                    project_note: None,
                 });
             }
             if let Some((start, end)) = complete {
@@ -893,6 +1186,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseComplete,
+                    project_note: None,
                 });
             }
             if let Some((start, end)) = drop {
@@ -900,6 +1194,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseDrop,
+                    project_note: None,
                 });
             }
             marker_parse.pomodoro_close = Some(spec);
@@ -927,12 +1222,14 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                 start: suffix_start,
                 end: suffix_start + 2,
                 kind: SpanKind::PomodoroClose,
+                project_note: None,
             });
             if let Some((start, end)) = in_progress {
                 marker_parse.spans.push(Span {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseInProgress,
+                    project_note: None,
                 });
             }
             if let Some((start, end)) = park {
@@ -940,6 +1237,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroClosePark,
+                    project_note: None,
                 });
             }
             if let Some((start, end)) = complete {
@@ -947,6 +1245,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseComplete,
+                    project_note: None,
                 });
             }
             if let Some((start, end)) = drop {
@@ -954,12 +1253,14 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     start,
                     end,
                     kind: SpanKind::PomodoroCloseDrop,
+                    project_note: None,
                 });
             }
             marker_parse.spans.push(Span {
                 start: separator.0,
                 end: separator.1,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
             marker_parse.pomodoro_close = Some(spec);
             marker_parse.mode = EditorMode::Incomplete;
@@ -1009,6 +1310,7 @@ fn classify_pomodoro_link_start_suffix(
                         start: token.start + start,
                         end: token.start + end,
                         kind: SpanKind::PomodoroStart,
+                        project_note: None,
                     });
                 }
             }
@@ -1019,6 +1321,7 @@ fn classify_pomodoro_link_start_suffix(
                     start: token.start + start,
                     end: token.start + end,
                     kind: SpanKind::PomodoroName,
+                    project_note: None,
                 });
             }
             parsed.spans.sort_by_key(|span| (span.start, span.end));
@@ -1076,6 +1379,7 @@ fn classify_pomodoro_link_start_suffix(
                     start: token.start + prefix_hash_rel,
                     end: token.start + prefix_hash_rel + 1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
             }
             if let Some(raw) = raw_suffix {
@@ -1092,6 +1396,7 @@ fn classify_pomodoro_link_start_suffix(
                             start: token.start + equals_rel,
                             end: token.start + equals_rel + 1 + suffix.len(),
                             kind: SpanKind::PomodoroStart,
+                            project_note: None,
                         });
                     } else if raw.starts_with('#')
                         || raw.starts_with('@')
@@ -1106,6 +1411,7 @@ fn classify_pomodoro_link_start_suffix(
                                 start: token.start + equals_rel,
                                 end: token.start + equals_rel + 1,
                                 kind: SpanKind::PomodoroStart,
+                                project_note: None,
                             });
                         }
                     }
@@ -1121,6 +1427,7 @@ fn classify_pomodoro_link_start_suffix(
                                 + 1
                                 + timing_text.len(),
                             kind: SpanKind::PomodoroStart,
+                            project_note: None,
                         });
                     }
                     let effective = effective_start_timing(&suffix, &timing);
@@ -1152,6 +1459,7 @@ fn classify_pomodoro_link_start_suffix(
                             start: token.start + hash_rel,
                             end: token.start + hash_rel + 1,
                             kind: SpanKind::InteractivePlaceholder,
+                            project_note: None,
                         });
                     }
                 }
@@ -1168,12 +1476,14 @@ fn classify_pomodoro_link_start_suffix(
                     start: token.start + hash,
                     end: token.start + hash + 1,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 });
                 if equals_rel < hash && raw_suffix.is_none() {
                     extra_spans.push(Span {
                         start: token.start + equals_rel,
                         end: token.start + hash,
                         kind: SpanKind::PomodoroStart,
+                        project_note: None,
                     });
                 }
             }
@@ -1250,12 +1560,14 @@ fn classify_pomodoro_link_start_suffix(
                     start: token.start + equals_rel,
                     end: token.start + equals_rel + 1 + suffix_len,
                     kind: SpanKind::PomodoroStart,
+                    project_note: None,
                 });
             } else {
                 parsed.spans.push(Span {
                     start: token.start + equals_rel,
                     end: token.start + equals_rel + 1,
                     kind: SpanKind::PomodoroStart,
+                    project_note: None,
                 });
             }
             // Name span (bare or hash, `#` itself never in a span).
@@ -1269,6 +1581,7 @@ fn classify_pomodoro_link_start_suffix(
                     start: name_start,
                     end: name_start + name_text.len(),
                     kind: SpanKind::PomodoroName,
+                    project_note: None,
                 });
             }
             // Placeholder on the dangling `@` (last byte).
@@ -1277,6 +1590,7 @@ fn classify_pomodoro_link_start_suffix(
                 start: token.start + at_rel,
                 end: token.start + at_rel + 1,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
             parsed.spans.sort_by_key(|span| (span.start, span.end));
             parsed.mode = EditorMode::Incomplete;
@@ -1320,6 +1634,7 @@ pub(super) fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
                     start: token.start,
                     end: token.end,
                     kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
                 }],
                 requires_body: false,
                 pomodoro_start: None,
@@ -1339,6 +1654,7 @@ pub(super) fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
                 start: token.start,
                 end: token.end,
                 kind: SpanKind::Route,
+                project_note: None,
             }],
             requires_body: true,
             pomodoro_start: None,
@@ -1431,12 +1747,14 @@ pub(super) fn marker_parse(
             start: token.start,
             end: route_end,
             kind: shape.route_kind,
+            project_note: None,
         });
         if !has_right && shape.separator_len > 0 {
             spans.push(Span {
                 start: route_end,
                 end: right_start,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
         }
     } else {
@@ -1445,6 +1763,7 @@ pub(super) fn marker_parse(
             start: token.start,
             end: placeholder_end,
             kind: SpanKind::InteractivePlaceholder,
+            project_note: None,
         });
     }
     if has_right {
@@ -1452,6 +1771,7 @@ pub(super) fn marker_parse(
             start: right_start,
             end: right_end,
             kind: shape.right_kind,
+            project_note: None,
         });
     }
     if let Some(third) = shape.third.as_ref() {
@@ -1460,12 +1780,14 @@ pub(super) fn marker_parse(
                 start: right_end,
                 end: third_start,
                 kind: SpanKind::InteractivePlaceholder,
+                project_note: None,
             });
         } else {
             spans.push(Span {
                 start: third_start,
                 end: content_end,
                 kind: third.kind,
+                project_note: None,
             });
         }
     }
@@ -1474,6 +1796,7 @@ pub(super) fn marker_parse(
             start: content_end,
             end: token.end,
             kind: suffix.kind,
+            project_note: None,
         });
     }
 

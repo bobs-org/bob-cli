@@ -368,7 +368,7 @@ fn quoted_route_tokens(line: &str) -> Vec<Range<usize>> {
                         return opens_exact_name(name);
                     }
                     if prefix.starts_with('^') {
-                        return prefix.ends_with('+')
+                        return prefix.ends_with('@')
                             || misordered_project_name_suffix(name);
                     }
                     if prefix.starts_with('@') {
@@ -397,7 +397,7 @@ fn attached_route_candidate(
     let prefix = &token[..hash];
     let suffix = &token[hash + 1..];
     let attached = if prefix.contains('^') {
-        if prefix.ends_with('+') || misordered_project_name_suffix(suffix) {
+        if prefix.ends_with('@') || misordered_project_name_suffix(suffix) {
             return None;
         }
         let parsed =
@@ -462,11 +462,11 @@ fn attached_route_candidate(
     ))
 }
 
-/// A project-note name ending in `+` is the existing misordered spelling,
+/// A project-note name ending in `@` is the existing misordered spelling,
 /// not a type suffix. Preserve that route parser diagnostic, including its
 /// quoted-name form.
 fn misordered_project_name_suffix(suffix: &str) -> bool {
-    if let Some(name) = suffix.strip_suffix('+') {
+    if let Some(name) = suffix.strip_suffix('@') {
         if !name.is_empty()
             && name
                 .bytes()

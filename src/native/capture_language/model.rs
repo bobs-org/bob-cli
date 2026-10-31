@@ -86,8 +86,8 @@ pub(crate) enum CaptureKind {
         start: Option<PomodoroStartSpec>,
         close: Option<PomodoroCloseSpec>,
     },
-    /// `@<route>^<block-id>+` (create the note only) or
-    /// `@<route>^<block-id>+#<pomodoro>` (also pick the Pomodoro that
+    /// `@<route>^<block-id>@` (create the note only) or
+    /// `@<route>^<block-id>@#<pomodoro>` (also pick the Pomodoro that
     /// ` :<id>` Task Links go under): create the project note
     /// `<route>_<block-id>.md`. `pomodoro_name: None` links ` :` tasks
     /// into the current/next Pomodoro; `Some` names the Pomodoro the ` :`
@@ -98,6 +98,7 @@ pub(crate) enum CaptureKind {
         pomodoro_name: Option<String>,
         /// True when `pomodoro_name` came from a `#"NAME"` literal.
         pomodoro_name_is_literal: bool,
+        form: ProjectNoteForm,
     },
     SubBullet {
         target: SubBulletTarget,
@@ -171,6 +172,16 @@ pub(crate) enum CaptureKind {
 pub(crate) enum PomodoroLinkSpelling {
     At,
     Caret,
+}
+
+/// Which sealed project-note form a `@<route>^<block-id>@` marker names.
+/// Only `Create` exists until the offer form lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProjectNoteForm {
+    Create,
+    #[allow(dead_code)]
+    Offer,
 }
 
 /// Whole-item `+N`/`-N` adjustment: a sign plus a positive ASCII-decimal
