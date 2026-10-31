@@ -695,7 +695,7 @@ itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Alt+P takes the
 recommended roll or decay, or sets P1 when the task has no priority → next; a cancel requires a second press; use
 Ctrl+Shift+P `1`–`4` to choose a level); do today (Ctrl+Shift+Enter picks a Pomodoro / Alt+N → next); route an
-inbox task (every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where it goes
+inbox task (every non-closing Ctrl+Shift+P answer, Ctrl+Shift+Enter, and Alt+N ask where it goes
 as the last step before writing, then answers → next); route to a
 project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence
 (Ctrl+Shift+P `b` → next); wording wrong (edit, then Alt+F stays);
@@ -706,9 +706,12 @@ A landing is the exact row `]s` just put the cursor on, in today's walk:
 the same note, the same line text, and the row still due. An answer shows
 one toast — what was done, then where the walk landed — except Task Card
 commits, whose rich notice cards keep their own toast with the landing
-following on its own. After each advance the walk holds a ~350 ms settle
-window that swallows double presses; a fast habitual `]s` after the window
-can still skip a row (`[s` or `<C-o>` recovers it).
+following on its own. `Alt+N` also answers from any due walk row, not only
+the landing: a reworded or hand-reached row whose note and line text are in
+the pre-write queue advances once to that row's walk successor. After each
+advance the walk holds a ~350 ms settle window that swallows double presses;
+a fast habitual `]s` after the window can still skip a row (`[s` or `<C-o>`
+recovers it).
 
 The current review task is the row the walk last landed on, and it outlives
 the landing (cursor moves and other notes). On a relative walk key, when a
@@ -1561,6 +1564,10 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   Link batches, 2.56.1 card header fix; bob-ledger-tools 1.65.0 mark tooltip line; Mac agenda
   `🥀 N` chip; bob-cli managed-log registry with agenda `log:
   "rotten"` and snapshot `KEPT` rows).
+- 2026-10-31: `Alt+N` routes inbox tasks (probe refusals, then the Work Log
+  prompt for a Pending release, then the route picker; `↵` acts and moves,
+  `⇧↵` stays, `Esc` cancels) and answers from any due walk row, not only
+  the landing (nav 2.63.0).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

@@ -1233,11 +1233,11 @@ never rolled back). A single cancel is one editor undo step.
 
 ### Inbox routing
 
-On an open inbox task, `Ctrl+Shift+P` and `Ctrl+Shift+Enter` ask where the
-task goes as the last step before they write. An inbox note is `inbox.md`
-itself or an area note whose frontmatter `parent` resolves to `inbox.md`
-(today `mac_inbox.md` and `gkeep_inbox.md`); only direct children count, so
-a project filed under an inbox is not an inbox note.
+On an open inbox task, `Ctrl+Shift+P`, `Ctrl+Shift+Enter`, and `Alt+N` ask
+where the task goes as the last step before they write. An inbox note is
+`inbox.md` itself or an area note whose frontmatter `parent` resolves to
+`inbox.md` (today `mac_inbox.md` and `gkeep_inbox.md`); only direct children
+count, so a project filed under an inbox is not an inbox note.
 
 **Gesture order.** The Task Card opens exactly as today, with one extra
 muted `Inbox` header chip (`Answers ask where this task goes first`) while
@@ -1251,6 +1251,11 @@ nothing written — not even a new block ID; `Esc` in the
 route picker returns to the exact Task Card surface it came from (card or
 stage, typed input intact) with nothing written, or cancels the whole
 `Ctrl+Shift+Enter` toggle with nothing written — not even a new block ID.
+For `Alt+N`, the status probe's refusals come first and never prompt, a
+Pending release keeps its optional Work Log prompt first, then the route
+picker appears right before the lane write with `commit to Next` or
+`release to Ready` (`N tasks · then …` for counted runs). `Esc` in the
+route picker cancels the whole `Alt+N` gesture with nothing written.
 
 **Route picker.** Header icon `inbox`, title `Route out of <inbox
 basename>`, subtitle `<task text> · then <action>` (`<N> tasks · then
@@ -1286,12 +1291,15 @@ reconcile` should run for project-blocking changes. See
 `Moved to <dest>` (`Moved <N> tasks to <dest>` counted). On a landing: the
 rich card, then the walk toast with `Moved to <dest>` first. `Ctrl+Shift+Enter`:
 one toast, the existing link/unlink text with `· moved to <dest>` appended
-(preamble of the walk toast on a landing).
+(preamble of the walk toast on a landing). `Alt+N`: one toast, the lane text
+(`→ Next · 1 task`) and then `Moved to <dest>` on the next line (preamble of
+the walk toast on a walk origin, settled as `route`).
 
 **What does not route.** Closing gestures (the Task Card Cancel row `x`,
 a cancelling `Ctrl+Enter` recommendation, decision-card Drop — a closed
 task leaves the inbox through `bob task archive`); closed tasks, non-task
-bullets, non-inbox notes; Task Link sessions; the Alt+F decision card and
+bullets, non-inbox notes; Task Link sessions (including `Alt+N` on a Task
+Link line); the Alt+F decision card and
 its Less often stage; `Ctrl+Shift+M`, `^^` linking, and the
 Mac Capture task-toggle mirror. A capture that changes an existing inbox
 task's status routes through `--inbox-route` and Bob Mac Capture's route

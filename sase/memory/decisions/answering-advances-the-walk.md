@@ -17,6 +17,7 @@ metadata:
   decided: 2026-10-06
   superseded_by:
     - decisions/task-move-never-advances-the-walk
+    - decisions/alt-n-answers-from-due-rows
 ---
 
 **Applies to.** bob-plugins (bob-navigation-hotkeys, task-status-cycler,
@@ -77,4 +78,6 @@ Links [[decisions/review-walk-is-tiered]] (the tier order and walk this
 advance moves through).
 
 Superseded in part: Ctrl+Shift+M only — a move never advances the walk; see
-[[decisions/task-move-never-advances-the-walk]].
+[[decisions/task-move-never-advances-the-walk]]. The off-landing stay no
+longer holds for `Alt+N`, which answers from any due walk row; see
+[[decisions/alt-n-answers-from-due-rows]].
