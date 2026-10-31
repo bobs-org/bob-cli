@@ -363,6 +363,71 @@ fn capture_rewrite_json_switches_a_block_id_separator() {
 }
 
 #[test]
+fn capture_rewrite_json_switches_a_colon_marker_to_plus() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("17")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @file:id+")
+        .output()
+        .expect("run capture-rewrite plus toggle json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "Do work @file:id+");
+    assert_eq!(json["text"], "Do work @file+id");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 16);
+    assert_eq!(json["rule"], "switch_block_id_separator");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 8, "end": 17 }, "replacement": "@file+id" },
+        ])
+    );
+    assert_eq!(json["summary"], "Changed @file:id to @file+id");
+
+    let again = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("16")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @file+id")
+        .output()
+        .expect("run capture-rewrite idempotent plus toggle");
+    assert_success(&again);
+    let json: serde_json::Value = serde_json::from_str(stdout(&again).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["text"], "Do work @file+id");
+}
+
+#[test]
+fn capture_parse_keeps_project_note_plus_literal() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@work^prep+")
+        .output()
+        .expect("run capture-parse on project-note marker");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "project_note");
+}
+
+#[test]
 fn capture_parse_does_not_apply_the_separator_toggle() {
     let output = bob_command()
         .arg("capture-parse")

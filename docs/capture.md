@@ -6257,30 +6257,42 @@ The result is `@@template:\nRead {0}` with cursor 20. Feeding either result
 back through the command is a no-op.
 
 **Block-ID separator toggle.** Typing `^` immediately after a complete
-plain `@route:id`, or `:` immediately after `@route^id`, consumes that
-character and swaps the separator. `--cursor` is required: only the token
-ending at that caret is examined, so the command never searches the draft
-for a toggle. The new key must sit against the ID with no intervening
-whitespace and must end the token (end of input or a following whitespace
-boundary). Inserting it inside an ID does not toggle a prefix.
+plain `@route:id`, `:` after `@route^id`, or `+` after `@route:id` consumes
+that character and switches the separator. A plain `@route+block-id` can
+switch back to `@route:id` with `:` or to `@route^block-id` with `^`.
+`@route^block-id+` remains the project-note form and does not toggle.
+`--cursor` is required: only the token ending at that caret is examined,
+so the command never searches the draft for a toggle. The new key must sit
+against the ID with no intervening whitespace and must end the token (end
+of input or a following whitespace boundary). Inserting it inside an ID
+does not toggle a prefix.
 
 ```text
 Do work @file:id^
 ```
 
 becomes `Do work @file^id`, with the cursor placed just past the unchanged
-ID. The same gesture the other way restores the colon spelling. Solo
-markers, leading markers, a trailing marker before later body text, a
+ID. Typing `+` after `@file:id` gives `@file+id`; typing `:` or `^` after
+that plus form switches to `@file:id` or `@file^id`. For example:
+
+```bash
+bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'
+```
+
+In Bob Mac Capture, Undo immediately after a successful `@route:id+`
+rewrite restores the literal post-key draft. Typing `+` after
+`@route^block-id` stays literal so the project-note form remains available.
+Solo markers, leading markers, a trailing marker before later body text, a
 trailing marker on an authored child line, and one item in a blank-line
 batch are eligible wherever the shared grammar already recognizes that
 token as the item's destination. Route and ID spelling, surrounding
 whitespace, CRLF, schedule/priority/dependency markers, and other items
-stay byte-for-byte. Suffix families (`#name`, `+`, `=...`), `@@`, `@!`,
-standalone `^route:id`, `&note:id`, `!note:id`, project-task `:id`/`^id`,
+stay byte-for-byte. Suffixes already inside the marker (`#name`, `+`, `=...`),
+`@@`, `@!`, standalone `^route:id`, `&note:id`, `!note:id`, project-task `:id`/`^id`,
 incomplete or malformed markers, same-separator repeats, and
 marker-looking prose the contextual parser does not select are left
 unchanged. This is an editor assist: `bob capture` and `bob capture-parse`
-keep the literal `@file:id^` text.
+keep the literal `@file:id+` text.
 
 **Relation-label pipe attach.** Typing `|` after whitespace that follows a
 relation token deletes that whitespace so the pipe glues to the token.

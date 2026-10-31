@@ -108,17 +108,19 @@ exactly '@@@' becomes the header with the caret on a fresh line. The result \
 is idempotent (`start_template`). Without --cursor this typing gesture is \
 skipped.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
-a complete plain '@route:id', or ':' immediately after '@route^id', consumes \
-that character and switches the separator so '@file:id^' becomes '@file^id' \
-and '@file^id:' becomes '@file:id' (`switch_block_id_separator`). The caret \
-stays just past the unchanged ID. \
+a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
+'@route+id', or '+' after '@route:id' consumes that character and switches \
+the separator. For example, '@file:id+' becomes '@file+id', \
+'@file+id^' becomes '@file^id', and '@file+id:' becomes '@file:id' \
+(`switch_block_id_separator`). The caret stays just past the unchanged ID. \
 Only the token ending at --cursor is examined; the key must sit against the \
-ID with no space, and it must end the token. Suffix families \
-('@route:id#name', '+', '=...'), '@@', '@!', standalone '^route:id', \
+ID with no space, and it must end the token. Suffixes already inside the \
+token ('#name', '+', '=...'), '@@', '@!', standalone '^route:id', \
 '&note:id', '!note:id', project-task ':id'/'^id', incomplete markers, \
 same-separator repeats, and tokens the contextual parser does not select \
 are left unchanged. Without --cursor this rule is skipped rather than \
-searching the draft.\n\n\
+searching the draft. '@route^block-id+' remains the project-note form and \
+does not toggle.\n\n\
 Relation-label pipe attach (requires --cursor): typing '|' after \
 whitespace that follows a relation token deletes that whitespace, so \
 '~note:id |' becomes '~note:id|'. Only the '|' token ending at --cursor \
@@ -152,7 +154,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 3 -f json -- '@@@'\n  bob capture-rewrite -c 12 -f json -- 'Read {0} @@@'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 3 -f json -- '@@@'\n  bob capture-rewrite -c 12 -f json -- 'Read {0} @@@'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())
@@ -470,6 +472,25 @@ mod tests {
         );
         assert_eq!(value["summary"], "Changed @file:id to @file^id");
         assert!(value.get("notices").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_shape_switches_a_colon_marker_to_plus() {
+        let value = json("Do work @file:id+", Some(17));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["input"], "Do work @file:id+");
+        assert_eq!(value["text"], "Do work @file+id");
+        assert_eq!(value["changed"], true);
+        assert_eq!(value["cursor"], 16);
+        assert_eq!(value["rule"], "switch_block_id_separator");
+        assert_eq!(
+            value["edits"],
+            serde_json::json!([
+                { "range": { "start": 8, "end": 17 }, "replacement": "@file+id" },
+            ])
+        );
+        assert_eq!(value["summary"], "Changed @file:id to @file+id");
     }
 
     #[test]

@@ -472,6 +472,18 @@ fn rewrite_draft_switches_a_trailing_caret_marker_to_colon() {
 }
 
 #[test]
+fn rewrite_draft_switches_a_colon_marker_to_plus() {
+    assert_switch(
+        "Do work @file:id+",
+        "Do work @file+id",
+        "@file:id",
+        "@file+id",
+        8,
+    );
+    assert_switch("@file:id+", "@file+id", "@file:id", "@file+id", 0);
+}
+
+#[test]
 fn rewrite_draft_switches_solo_and_leading_markers() {
     assert_switch("@file:id^", "@file^id", "@file:id", "@file^id", 0);
     assert_switch("@file^id:", "@file:id", "@file^id", "@file:id", 0);
@@ -490,6 +502,111 @@ fn rewrite_draft_switches_a_child_line_trailing_marker() {
     assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
     assert_eq!(rewrite.text, "Do work\n- detail @file^id");
     assert_eq!(rewrite.cursor, Some(rewrite.text.len()));
+}
+
+#[test]
+fn rewrite_draft_switches_plus_markers_back_to_colon_or_caret() {
+    assert_switch(
+        "Do work @file+id:",
+        "Do work @file:id",
+        "@file+id",
+        "@file:id",
+        8,
+    );
+    assert_switch(
+        "Do work @file+id^",
+        "Do work @file^id",
+        "@file+id",
+        "@file^id",
+        8,
+    );
+    assert_switch("@file+id:", "@file:id", "@file+id", "@file:id", 0);
+    assert_switch("@file+id^", "@file^id", "@file+id", "@file^id", 0);
+}
+
+#[test]
+fn rewrite_draft_switches_plus_markers_in_editor_positions() {
+    let raw = "@file:id+ Do work";
+    let rewrite = rewrite_draft(raw, Some("@file:id+".len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "@file+id Do work");
+    assert_eq!(rewrite.cursor, Some("@file+id".len()));
+    assert_eq!(rewrite.edits[0].start, 0);
+    assert_eq!(rewrite.edits[0].end, "@file:id+".len());
+
+    let raw = "Do work\n- detail @file:id+";
+    let rewrite = switch_at(raw);
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work\n- detail @file+id");
+    assert_eq!(rewrite.cursor, Some(rewrite.text.len()));
+
+    let first = "First @file:id+";
+    let raw = format!("{first}\n\nSecond @file:id");
+    let rewrite = rewrite_draft(&raw, Some(first.len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "First @file+id\n\nSecond @file:id");
+    assert_eq!(rewrite.cursor, Some("First @file+id".len()));
+}
+
+#[test]
+fn rewrite_draft_switches_plus_markers_with_unicode_crlf_and_schedule() {
+    assert_switch(
+        "café 🚀 @Cash:Goog-Exit+",
+        "café 🚀 @Cash+Goog-Exit",
+        "@Cash:Goog-Exit",
+        "@Cash+Goog-Exit",
+        "café 🚀 ".len(),
+    );
+
+    let raw = "Do work 🚀 @file:id+\r\nNext";
+    let cursor = "Do work 🚀 @file:id+".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work 🚀 @file+id\r\nNext");
+    assert!(rewrite.text.contains("\r\n"));
+
+    let raw = "Do work @file:id+ s:2";
+    let cursor = "Do work @file:id+".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work @file+id s:2");
+    assert_eq!(rewrite.cursor, Some("Do work @file+id".len()));
+}
+
+#[test]
+fn rewrite_draft_caret_plus_stays_a_project_note_marker() {
+    let raw = "@file^id+";
+    let rewrite = switch_at(raw);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+
+    let parsed = parse_for_editor(raw);
+    assert_eq!(parsed.mode, EditorMode::ProjectNote);
+}
+
+#[test]
+fn rewrite_draft_separator_toggle_supports_three_way_reverse_from_plus() {
+    assert_switch(
+        "Do work @file:id+",
+        "Do work @file+id",
+        "@file:id",
+        "@file+id",
+        8,
+    );
+    assert_switch(
+        "Do work @file+id^",
+        "Do work @file^id",
+        "@file+id",
+        "@file^id",
+        8,
+    );
+    assert_switch(
+        "Do work @file+id:",
+        "Do work @file:id",
+        "@file+id",
+        "@file:id",
+        8,
+    );
 }
 
 #[test]
@@ -561,6 +678,11 @@ fn rewrite_draft_separator_toggle_requires_a_cursor() {
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
     assert_eq!(rewrite.cursor, None);
+
+    let raw = "Do work @file:id+";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
 }
 
 #[test]
@@ -582,6 +704,28 @@ fn rewrite_draft_separator_toggle_exclusions() {
         ("Do work @file:id\n^", "Do work @file:id\n^".len()),
         ("@file:id#name^", "@file:id#name^".len()),
         ("@file:id+^", "@file:id+^".len()),
+        ("Do work @file:id +", "Do work @file:id +".len()),
+        ("Do work @file:id\n+", "Do work @file:id\n+".len()),
+        ("@file:+", "@file:+".len()),
+        ("@file:id#name+", "@file:id#name+".len()),
+        ("@file:id=3+", "@file:id=3+".len()),
+        ("@@file:id+", "@@file:id+".len()),
+        ("@!file:id+", "@!file:id+".len()),
+        ("^file:id+", "^file:id+".len()),
+        ("&note:id+", "&note:id+".len()),
+        ("!note:id+", "!note:id+".len()),
+        (":id+", ":id+".len()),
+        ("^id+", "^id+".len()),
+        ("see @file:id+ here", "see @file:id+".len()),
+        ("Do work @file:i+d", "Do work @file:i+".len()),
+        ("@file+id+", "@file+id+".len()),
+        ("@file+id!:", "@file+id!:".len()),
+        ("@file+id#sec^", "@file+id#sec^".len()),
+        ("@@file+id:", "@@file+id:".len()),
+        ("@file+id!: ", "@file+id!: ".len()),
+        ("@file+: ", "@file+: ".len()),
+        ("@file+:", "@file+:".len()),
+        ("@file^id+", "@file^id+".len()),
         ("@file:id=3^", "@file:id=3^".len()),
         ("@file^id+^", "@file^id+^".len()),
         ("@file^id+#bugs:", "@file^id+#bugs:".len()),
@@ -746,6 +890,18 @@ fn rewrite_draft_separator_toggle_parses_as_the_switched_mode() {
     let caret = switch_at("Do work @file:id^");
     let parsed = parse_for_editor(&caret.text);
     assert_eq!(parsed.mode, EditorMode::Task);
+    assert_eq!(parsed.block_id.as_deref(), Some("id"));
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+    let sub_bullet = switch_at("Do work @file:id+");
+    let parsed = parse_for_editor(&sub_bullet.text);
+    assert_eq!(parsed.mode, EditorMode::SubBullet);
+    assert_eq!(parsed.block_id.as_deref(), Some("id"));
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+    let task_toggle = switch_at("@file:id+");
+    let parsed = parse_for_editor(&task_toggle.text);
+    assert_eq!(parsed.mode, EditorMode::TaskToggle);
     assert_eq!(parsed.block_id.as_deref(), Some("id"));
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
 

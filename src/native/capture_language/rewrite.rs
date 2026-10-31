@@ -60,10 +60,11 @@ impl RewriteRule {
 /// Apply the capture grammar's editor typing assists to `raw_text`.
 ///
 /// With an explicit `cursor`, a complete plain `@route:id` / `@route^id`
-/// marker that just grew the opposite separator (`^` after a colon marker,
-/// `:` after a caret marker) is rewritten to the other spelling and the
-/// appended trigger is dropped. That rule never searches the draft: no
-/// cursor means absorption-only, matching the historical `@@` contract.
+/// marker that just grew a supported separator (`^`, `:`, or `+`) is
+/// rewritten to the trigger's spelling and the appended trigger is dropped.
+/// A `+` separator can also switch to `:` or `^`. That rule never searches
+/// the draft: no cursor means absorption-only, matching the historical `@@`
+/// contract.
 ///
 /// With an explicit `cursor` right after a standalone `@@@` token at the
 /// end of a physical line, that token starts a template draft: it is erased
@@ -285,10 +286,11 @@ fn absorb_bare_declaration(
     unchanged_rewrite(raw_text, cursor, Vec::new())
 }
 
-/// Typing `^` immediately after a complete plain `@route:id`, or `:` after
-/// `@route^id`, consumes that trigger and swaps the separator. The token
-/// must end at `cursor`; the stripped remainder must be the line's selected
-/// destination marker, complete, and free of `#`/`+`/`=`/`!` suffixes.
+/// Typing `^` immediately after a complete plain `@route:id` or `@route+id`,
+/// `:` after `@route^id` or `@route+id`, or `+` after `@route:id` consumes
+/// that trigger and switches the separator. The token must end at `cursor`;
+/// the stripped remainder must be the line's selected destination marker,
+/// complete, and free of `#`/`=`/`!` suffixes.
 fn switch_block_id_separator(
     raw_text: &str,
     cursor: usize,
@@ -297,9 +299,12 @@ fn switch_block_id_separator(
         .into_iter()
         .find(|token| token.end == cursor)?;
     let trigger = *token.text.as_bytes().last()?;
-    if trigger != b':' && trigger != b'^' {
-        return None;
-    }
+    let trigger_char = match trigger {
+        b':' => ':',
+        b'^' => '^',
+        b'+' => '+',
+        _ => return None,
+    };
     let stripped_end = token.end - 1;
     if stripped_end <= token.start || !raw_text.is_char_boundary(stripped_end) {
         return None;
@@ -308,9 +313,14 @@ fn switch_block_id_separator(
     let token_end = token.end;
     let stripped = &raw_text[token_start..stripped_end];
     let (separator, route, id) = plain_block_id_parts(stripped)?;
-    let trigger_char = trigger as char;
-    let expected_separator = if trigger_char == '^' { ':' } else { '^' };
-    if separator != expected_separator {
+    let eligible = match trigger_char {
+        ':' => matches!(separator, '^' | '+'),
+        '^' => matches!(separator, ':' | '+'),
+        // `@route^id+` is the project-note form and stays literal.
+        '+' => separator == ':',
+        _ => false,
+    };
+    if !eligible {
         return None;
     }
 
@@ -327,8 +337,7 @@ fn switch_block_id_separator(
         return None;
     }
 
-    let new_separator = if separator == ':' { '^' } else { ':' };
-    let replacement = format!("@{route}{new_separator}{id}");
+    let replacement = format!("@{route}{trigger_char}{id}");
     let summary = format!("Changed {stripped} to {replacement}");
     let edits = vec![TextEdit {
         start: token_start,
@@ -414,39 +423,27 @@ fn attach_relation_label(
     })
 }
 
-/// A complete plain `@route:id` or `@route^id` token: one `@`, exactly one
-/// colon or caret, a valid route, a valid block ID, and no suffix family.
+/// A complete plain `@route:id`, `@route^id`, or `@route+id` token: one `@`,
+/// exactly one separator, a valid route, a valid block ID, and no suffix
+/// family. The plus form is used only as the starting point for reverse
+/// separator toggles; `@route^id+` remains the project-note form.
 fn plain_block_id_parts(token: &str) -> Option<(char, &str, &str)> {
     let rest = token.strip_prefix('@')?;
     if token.starts_with("@@") || token.starts_with("@!") {
         return None;
     }
-    if rest.contains('#')
-        || rest.contains('+')
-        || rest.contains('=')
-        || rest.contains('!')
-    {
+    if rest.contains('#') || rest.contains('=') || rest.contains('!') {
         return None;
     }
-    match (rest.find(':'), rest.find('^')) {
-        (Some(colon), None) => {
-            if rest[colon + 1..].contains(':') {
-                return None;
-            }
-            let (route, id) = rest.split_once(':')?;
-            (is_route_token(route) && is_block_id(id))
-                .then_some((':', route, id))
-        }
-        (None, Some(caret)) => {
-            if rest[caret + 1..].contains('^') {
-                return None;
-            }
-            let (route, id) = rest.split_once('^')?;
-            (is_route_token(route) && is_block_id(id))
-                .then_some(('^', route, id))
-        }
-        _ => None,
+    let mut separators = rest.match_indices([':', '^', '+']);
+    let (index, separator_text) = separators.next()?;
+    if separators.next().is_some() {
+        return None;
     }
+    let separator = separator_text.chars().next()?;
+    let route = &rest[..index];
+    let id = &rest[index + separator_text.len()..];
+    (is_route_token(route) && is_block_id(id)).then_some((separator, route, id))
 }
 
 fn candidate_selects_plain_marker(
@@ -499,12 +496,16 @@ fn candidate_selects_plain_marker(
             if parse.marker_text.as_deref() != Some(stripped) {
                 return false;
             }
-            let expected_mode = if separator == '^' {
-                EditorMode::Task
-            } else {
-                EditorMode::PomodoroTask
+            let mode_matches = match separator {
+                '^' => marker.mode == EditorMode::Task,
+                ':' => marker.mode == EditorMode::PomodoroTask,
+                '+' => matches!(
+                    marker.mode,
+                    EditorMode::SubBullet | EditorMode::TaskToggle
+                ),
+                _ => false,
             };
-            if marker.mode != expected_mode
+            if !mode_matches
                 || !marker.needs.is_empty()
                 || marker.section.is_some()
                 || marker.pomodoro_start.is_some()

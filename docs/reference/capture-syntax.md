@@ -1108,6 +1108,10 @@ bob capture '@work^intake-flow+' 'Ship the intake flow'
 
 Contract: [Project notes](../capture.md#project-notes).
 
+Typing `+` after `@route^block-id` stays literal in editors using
+[`capture-rewrite`](../capture.md#bob-capture-rewrite), including the Mac
+capture panel, so this project-note form remains available.
+
 ### `:id` child {#project-colon-child}
 
 On a project-note capture, `- <task> :<task-id>` names the task, makes it
@@ -1141,7 +1145,10 @@ Contract: [Project notes](../capture.md#project-notes).
 
 ### `@route+block-id` {#plus-child}
 
-Ordinary child bullet under an existing task.
+Ordinary child bullet under an existing task. Editors that run
+[`capture-rewrite`](../capture.md#bob-capture-rewrite), including the Mac
+capture panel, turn `+` typed immediately after `@route:block-id` into
+`@route+block-id`.
 
 ```bash
 bob capture 'Check the parser @work+prep'
