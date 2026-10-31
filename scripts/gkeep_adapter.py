@@ -96,6 +96,104 @@ def scrub(message: str, secrets: list[str]) -> str:
     return message
 
 
+GKEEPAPI_PINNED_VERSION = "0.17.1"
+
+#: At most this many total attempts on HTTP 429 (plan: keep-adapter-hardening).
+_GKEEPAPI_429_MAX_ATTEMPTS = 3
+
+#: Sleeps between the 429 attempts: 2 s after the first, 4 s after the second.
+_GKEEPAPI_429_SLEEP_SECS = (2.0, 4.0)
+
+#: Why the 429 patch was skipped, or ``None`` when it is active. Checked by
+#: ``--self-test``, which fails loudly on a version drift.
+gkeepapi_patch_error: str | None = "patch not applied yet"
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    """Whether a 401/403-shaped error is really a rate-limit signal.
+
+    Google sometimes answers throttling with 403 plus a
+    ``rateLimitExceeded`` (or ``userRateLimitExceeded``) reason instead of
+    429. Those must map to ``rate_limit``, not ``auth`` — both here and in
+    ``_auth_error`` so ``connect()`` agrees.
+    """
+    if getattr(exc, "code", None) not in (401, 403):
+        return False
+    parts: list[str] = []
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, dict):
+            parts.append(json.dumps(arg, default=str))
+        else:
+            parts.append(str(arg))
+    if not parts:
+        parts.append(str(exc))
+    flat = "".join(parts).lower()
+    for sep in (" ", "_", "-"):
+        flat = flat.replace(sep, "")
+    return "ratelimit" in flat
+
+
+def _patch_gkeepapi_429_retries() -> None:
+    """Bound gkeepapi's endless HTTP 429 retry at import.
+
+    gkeepapi 0.17.1 ``API.send`` sleeps 2 s → 60 s and retries 429 forever,
+    so throttling hangs until the 300 s adapter timeout. This installs a
+    bounded copy of the 0.17.1 loop: at most 3 attempts on 429 (sleeps 2 s,
+    then 4 s), then ``APIException(429, error)``. The 401 → ``refresh()``
+    retry is kept byte-for-byte. Only applied when the installed gkeepapi is
+    exactly the pinned version.
+    """
+    global gkeepapi_patch_error
+    try:
+        import gkeepapi
+        from gkeepapi import exception as gkeep_exception
+    except ImportError as exc:
+        gkeepapi_patch_error = f"gkeepapi is not installed: {exc}"
+        return
+    installed = _package_version("gkeepapi")
+    if installed != GKEEPAPI_PINNED_VERSION:
+        gkeepapi_patch_error = (
+            f"gkeepapi {installed} is not the pinned "
+            f"{GKEEPAPI_PINNED_VERSION}: 429 retry is unbounded"
+        )
+        return
+    import http
+    import logging
+
+    logger = logging.getLogger("gkeepapi")
+
+    def bounded_send(self, **req_kwargs):  # type: ignore[no-untyped-def]
+        # Bounded copy of gkeepapi 0.17.1 API.send: the 429 branch caps
+        # attempts; everything below it is unchanged.
+        i = 0
+        attempts_429 = 0
+        while True:
+            response = self._send(**req_kwargs).json()
+            if "error" not in response:
+                break
+            error = response["error"]
+            if error["code"] == http.HTTPStatus.TOO_MANY_REQUESTS:
+                attempts_429 += 1
+                if attempts_429 >= _GKEEPAPI_429_MAX_ATTEMPTS:
+                    raise gkeep_exception.APIException(
+                        error["code"], error
+                    )
+                logger.debug("Rate limited...")
+                time.sleep(_GKEEPAPI_429_SLEEP_SECS[attempts_429 - 1])
+                continue
+            if error["code"] != http.HTTPStatus.UNAUTHORIZED:
+                raise gkeep_exception.APIException(error["code"], error)
+            if i >= self.RETRY_CNT:
+                raise gkeep_exception.APIException(error["code"], error)
+            logger.info("Refreshing access token")
+            self._auth.refresh()
+            i += 1
+        return response
+
+    gkeepapi.API.send = bounded_send  # type: ignore[method-assign]
+    gkeepapi_patch_error = None
+
+
 def classify_error(exc: BaseException) -> tuple[str, str]:
     """Map an exception to an ``(error kind, message)`` pair."""
     if isinstance(exc, ImportError):
@@ -105,6 +203,8 @@ def classify_error(exc: BaseException) -> tuple[str, str]:
     code = getattr(exc, "code", None)
     message = str(exc) or name
     if code in (401, 403) or name in _AUTH_ERROR_NAMES:
+        if _is_rate_limited(exc):
+            return ("rate_limit", message)
         return ("auth", message)
     if code == 429:
         return ("rate_limit", message)
@@ -309,6 +409,8 @@ def save_state(keep: object, path: str) -> None:
 
 
 def _auth_error(exc: BaseException) -> bool:
+    if _is_rate_limited(exc):
+        return False
     name = type(exc).__name__
     code = getattr(exc, "code", None)
     return code in (401, 403) or name in _AUTH_ERROR_NAMES
@@ -336,7 +438,11 @@ def connect(auth: dict) -> tuple[object, list[str]]:
             email, token, state=state, sync=True, device_id=device_id
         )
     except Exception as first:  # noqa: BLE001 - classified below
-        if _auth_error(first) or state is None:
+        # Only a corrupt cache, a resync demand, or a structurally bad state
+        # earns a full-download retry. Auth, network, and rate-limit failures
+        # raise at once: a network blip must not turn into a full download.
+        kind, _message = classify_error(first)
+        if kind in ("auth", "network", "rate_limit") or state is None:
             raise
         keep = gkeepapi.Keep()
         keep.authenticate(
@@ -381,6 +487,9 @@ def _package_version(name: str) -> str:
         return "unknown"
 
 
+_patch_gkeepapi_429_retries()
+
+
 def op_ping(request: dict) -> dict:
     """No auth, no network: report interpreter and dependency versions."""
     gkeepapi_version = _package_version("gkeepapi")
@@ -413,7 +522,8 @@ def op_snapshot(request: dict) -> dict:
                 if not getattr(note, "deleted", False)
                 and not getattr(note, "trashed", False)
             ]
-            save_state(keep, auth["state_path"])
+            # No save here: connect() already saved this state, and nothing
+            # synced since. (op_archive still saves after its sync.)
         except AdapterFail:
             raise
         except Exception as exc:  # noqa: BLE001 - classified below
@@ -842,6 +952,224 @@ def self_test() -> int:
         dead_pid = child.pid
     # Reaped after context exit.
     check("_parent_alive dead", _parent_alive(dead_pid) is False)
+
+    def _http_error(code: int, payload: object, message: str) -> Exception:
+        # Mimic gkeepapi APIException: the payload rides along in args.
+        exc = Exception(message)
+        exc.code = code  # type: ignore[attr-defined]
+        exc.args = (message, payload)
+        return exc
+
+    rate_payload = {
+        "error": {
+            "code": 403,
+            "errors": [{"reason": "rateLimitExceeded"}],
+        }
+    }
+    user_rate_payload = {
+        "error": {
+            "code": 403,
+            "errors": [{"reason": "userRateLimitExceeded"}],
+        }
+    }
+    rate_403 = _http_error(403, rate_payload, "forbidden")
+    user_rate_403 = _http_error(403, user_rate_payload, "forbidden")
+    message_rate_403 = _http_error(403, {"error": {"code": 403}}, "Rate limit exceeded")
+    plain_403 = _http_error(403, {"error": {"code": 403}}, "forbidden")
+    plain_401 = _http_error(401, {"error": {"code": 401}}, "unauthorized")
+    check("403 rateLimitExceeded is rate_limit", classify_error(rate_403)[0] == "rate_limit")
+    check(
+        "403 userRateLimitExceeded is rate_limit",
+        classify_error(user_rate_403)[0] == "rate_limit",
+    )
+    check(
+        "403 rate-limit message is rate_limit",
+        classify_error(message_rate_403)[0] == "rate_limit",
+    )
+    check("plain 403 is auth", classify_error(plain_403)[0] == "auth")
+    check("plain 401 is auth", classify_error(plain_401)[0] == "auth")
+    check("_auth_error agrees on rate_limit", _auth_error(rate_403) is False)
+    check("_auth_error agrees on auth", _auth_error(plain_403) is True)
+
+    try:
+        import gkeepapi as _gkeepapi_for_test
+    except ImportError:
+        _gkeepapi_for_test = None  # type: ignore[assignment]
+
+    if _gkeepapi_for_test is None:
+        check("gkeepapi importable for 429 tests", False)
+    elif gkeepapi_patch_error is not None:
+        check(f"429 patch active ({gkeepapi_patch_error})", False)
+    else:
+        from gkeepapi import exception as _gexc
+
+        class _CannedResponse:
+            def __init__(self, payload: dict) -> None:
+                self._payload = payload
+
+            def json(self) -> dict:
+                return self._payload
+
+        class _CannedAuth:
+            def __init__(self) -> None:
+                self.refreshes = 0
+
+            def refresh(self) -> None:
+                self.refreshes += 1
+
+            def getAuthToken(self) -> str:
+                return "token"
+
+        class _CannedAPI:
+            RETRY_CNT = 2
+
+            def __init__(self, script: list) -> None:
+                self._script = list(script)
+                self._auth = _CannedAuth()
+                self.calls = 0
+
+            def _send(self, **kwargs: object) -> _CannedResponse:
+                self.calls += 1
+                return _CannedResponse(self._script.pop(0))
+
+        ok_payload: dict = {"items": []}
+        err_429 = {
+            "error": {
+                "code": 429,
+                "message": "Rate exceeded",
+                "errors": [{"reason": "rateLimitExceeded"}],
+            }
+        }
+        err_401 = {"error": {"code": 401, "message": "Unauthorized"}}
+
+        real_sleep = time.sleep
+        slept: list[float] = []
+        time.sleep = slept.append  # type: ignore[method-assign]
+        try:
+            api = _CannedAPI([err_429, err_429, err_429])
+            try:
+                _gkeepapi_for_test.API.send(api)
+                check("429 x3 raises", False)
+            except _gexc.APIException as exc:
+                check("429 x3 raises", exc.code == 429)
+                check(
+                    "429 x3 maps to rate_limit",
+                    classify_error(exc)[0] == "rate_limit",
+                )
+            check("429 x3 makes 3 attempts", api.calls == 3)
+            check("429 x3 sleeps 2s then 4s", slept == [2.0, 4.0])
+
+            slept.clear()
+            api_ok = _CannedAPI([err_429, ok_payload])
+            check(
+                "429 then success",
+                _gkeepapi_for_test.API.send(api_ok) == ok_payload,
+            )
+            check("429 then success sleeps once", slept == [2.0])
+
+            api_auth = _CannedAPI([err_401, ok_payload])
+            check(
+                "401 still refreshes and retries",
+                _gkeepapi_for_test.API.send(api_auth) == ok_payload
+                and api_auth._auth.refreshes == 1,
+            )
+        finally:
+            time.sleep = real_sleep
+
+        import tempfile as _tempfile
+
+        real_keep_cls = _gkeepapi_for_test.Keep
+
+        def _run_connect(
+            first_error: Exception, with_state: bool
+        ) -> tuple[object, dict]:
+            state = {"instances": 0, "authenticates": 0}
+
+            class _FakeKeep:
+                def __init__(self, *args: object, **kwargs: object) -> None:
+                    state["instances"] += 1
+
+                def authenticate(
+                    self, *args: object, **kwargs: object
+                ) -> None:
+                    state["authenticates"] += 1
+                    if state["authenticates"] == 1:
+                        raise first_error
+
+                def dump(self) -> dict:
+                    return {"stub": True}
+
+            _gkeepapi_for_test.Keep = _FakeKeep
+            tmp = _tempfile.mkdtemp()
+            state_path = os.path.join(tmp, "state.json")
+            if with_state:
+                with open(state_path, "w", encoding="utf-8") as handle:
+                    json.dump({"stale": "cache"}, handle)
+            auth = {
+                "email": "t@example.com",
+                "master_token": "secret",
+                "device_id": "d",
+                "state_path": state_path,
+            }
+            try:
+                keep, _secrets = connect(auth)
+                return (keep, state)
+            except Exception as exc:
+                return (exc, state)
+            finally:
+                _gkeepapi_for_test.Keep = real_keep_cls
+
+        outcome, seen = _run_connect(ConnectionError("blip"), True)
+        check("network blip raises", isinstance(outcome, ConnectionError))
+        check("network blip never retries stateless", seen["instances"] == 1)
+
+        resync_error = type("ResyncRequiredException", (Exception,), {})(
+            "resync demanded"
+        )
+        outcome, seen = _run_connect(resync_error, True)
+        check(
+            "resync retries stateless once",
+            not isinstance(outcome, Exception) and seen["instances"] == 2,
+        )
+
+        real_save_state = save_state
+        saves = {"count": 0}
+
+        def _counting_save(keep: object, path: str) -> None:
+            saves["count"] += 1
+            real_save_state(keep, path)
+
+        class _SnapKeep:
+            def authenticate(
+                self, *args: object, **kwargs: object
+            ) -> None:
+                return None
+
+            def find(self, **kwargs: object) -> list:
+                return []
+
+            def dump(self) -> dict:
+                return {"stub": True}
+
+        globals()["save_state"] = _counting_save
+        _gkeepapi_for_test.Keep = _SnapKeep
+        try:
+            tmp = _tempfile.mkdtemp()
+            response = op_snapshot(
+                {
+                    "protocol": 1,
+                    "op": "snapshot",
+                    "email": "t@example.com",
+                    "master_token": "secret",
+                    "device_id": "d",
+                    "state_path": os.path.join(tmp, "state.json"),
+                }
+            )
+            check("snapshot ok", response.get("ok") is True)
+            check("snapshot saves state once", saves["count"] == 1)
+        finally:
+            globals()["save_state"] = real_save_state
+            _gkeepapi_for_test.Keep = real_keep_cls
 
     if failures:
         for failure in failures:

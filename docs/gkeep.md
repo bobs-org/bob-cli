@@ -612,7 +612,10 @@ device in the Google account.
 Rich text and reminders are not carried into the vault, and media stays in
 Google Keep (an attachment summary line plus OCR text is all that lands in
 the task). There is no scheduled runner: draining the inbox is a manual
-`bob gkeep pull`, not a `bob nightly` step.
+`bob gkeep pull`, not a `bob nightly` step. Google throttling surfaces as a
+`rate_limit` error within seconds: the adapter retries HTTP 429 at most
+three times (2 s, then 4 s) and treats rate-limit 403s as `rate_limit`,
+not `auth`.
 
 ## Environment
 
