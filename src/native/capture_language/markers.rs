@@ -455,6 +455,14 @@ pub(crate) fn unused_project_note_pomodoro_error(name: &str) -> String {
     )
 }
 
+/// Offer-form `#pomodoro` name with neither an open task to offer nor a
+/// ` :` task to link.
+pub(crate) fn unused_project_note_offer_pomodoro_error(name: &str) -> String {
+    format!(
+        "`#{name}` picks the Pomodoro for this project's task links, but it has no open task to offer or ` :` task to link; add a task bullet or remove `#{name}`"
+    )
+}
+
 pub(super) const POMODORO_START_SHAPE_ERROR: &str = "Pomodoro start suffix must mirror se<X>: use `=<X>` where <X> is empty, digits, `-`, `-digits`, or `digits-` with optional digits (for example `@<route>:<block-id>=`, `@<route>:<block-id>=3`, `@<route>:<block-id>=-2`)";
 
 pub(super) const POMODORO_START_OVERFLOW_ERROR: &str =

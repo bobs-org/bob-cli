@@ -26,6 +26,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
 
+use super::capture_dependency_tasks::has_hide_tag;
 use super::capture_language::{
     split_leading_checkbox, AuthoredDepth, AuthoredSubBullet,
 };
@@ -74,6 +75,9 @@ pub(crate) struct RenderedProjectNote {
     pub(crate) task_count: usize,
     /// Named first-level tasks in source order, backing `task_links`.
     pub(crate) named_tasks: Vec<RenderedNamedTask>,
+    /// Every rendered `## Tasks` row (not section headings or note-only
+    /// bullets), in output order, with source identity for offer selection.
+    pub(crate) task_rows: Vec<RenderedTask>,
 }
 
 /// One named first-level task bullet: a trailing ` :id` / ` ^id` token
@@ -86,6 +90,23 @@ pub(crate) struct RenderedNamedTask {
     pub(crate) block_id: String,
     pub(crate) link: bool,
     pub(crate) text: String,
+    pub(crate) task_line: String,
+}
+
+/// One rendered `## Tasks` row, including unnamed, hidden, closed, and
+/// placeholder tasks. Nested context lines and note-only bullets are
+/// omitted. `source_index` is the authored first-level sub-bullet that
+/// produced the row, so Offer selection can flip that bullet to ` :`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RenderedTask {
+    pub(crate) line: usize,
+    pub(crate) status: char,
+    pub(crate) block_id: Option<String>,
+    pub(crate) text: String,
+    pub(crate) link: bool,
+    pub(crate) hidden: bool,
+    pub(crate) placeholder: bool,
+    pub(crate) source_index: Option<usize>,
     pub(crate) task_line: String,
 }
 
@@ -265,7 +286,19 @@ fn render_authored_task(
 
 struct FirstGroup<'a> {
     owner: &'a AuthoredSubBullet,
+    owner_index: usize,
     nested: Vec<&'a AuthoredSubBullet>,
+}
+
+struct PendingTask {
+    status: char,
+    block_id: Option<String>,
+    text: String,
+    link: bool,
+    hidden: bool,
+    placeholder: bool,
+    source_index: Option<usize>,
+    task_line: String,
 }
 
 struct SectionEntry {
@@ -294,10 +327,11 @@ pub(crate) fn render_project_note(
     task_line.push_str(" #hide ^prj");
 
     let mut groups: Vec<FirstGroup<'_>> = Vec::new();
-    for bullet in input.sub_bullets {
+    for (index, bullet) in input.sub_bullets.iter().enumerate() {
         if bullet.depth == AuthoredDepth::First || groups.is_empty() {
             groups.push(FirstGroup {
                 owner: bullet,
+                owner_index: index,
                 nested: Vec::new(),
             });
         } else if let Some(current) = groups.last_mut() {
@@ -315,7 +349,7 @@ pub(crate) fn render_project_note(
 
     let mut tasks_block: Vec<String> = Vec::new();
     let mut task_entries: usize = 0;
-    let mut named_tasks: Vec<RenderedNamedTask> = Vec::new();
+    let mut pending_tasks: Vec<PendingTask> = Vec::new();
     let mut sections: Vec<SectionEntry> = Vec::new();
     let mut section_index: HashMap<String, usize> = HashMap::new();
     for group in &groups {
@@ -379,16 +413,20 @@ pub(crate) fn render_project_note(
             } else {
                 task_line
             };
-            tasks_block.push(task_line.clone());
+            let link = named.is_some_and(|task| task.link);
+            let hidden = has_hide_tag(&task_line) || has_hide_tag(bare);
+            pending_tasks.push(PendingTask {
+                status: task_status,
+                block_id: named.map(|task| task.block_id.clone()),
+                text: bare.to_string(),
+                link,
+                hidden,
+                placeholder: false,
+                source_index: Some(group.owner_index),
+                task_line: task_line.clone(),
+            });
+            tasks_block.push(task_line);
             task_entries += 1;
-            if let Some(task) = named {
-                named_tasks.push(RenderedNamedTask {
-                    block_id: task.block_id.clone(),
-                    link: task.link,
-                    text: bare.to_string(),
-                    task_line,
-                });
-            }
             for nested in &group.nested {
                 tasks_block.push(format!("\t- {}", nested.body.trim()));
             }
@@ -424,9 +462,21 @@ pub(crate) fn render_project_note(
     }
     contents.push_str("\n## Tasks\n\n");
     let task_count = if tasks_block.is_empty() && merged_tasks.is_empty() {
-        contents.push_str(&format!(
-            "- [ ] #task {PLACEHOLDER_TASK_BODY} [created::{created_date}]\n"
-        ));
+        let placeholder_line = format!(
+            "- [ ] #task {PLACEHOLDER_TASK_BODY} [created::{created_date}]"
+        );
+        pending_tasks.push(PendingTask {
+            status: ' ',
+            block_id: None,
+            text: PLACEHOLDER_TASK_BODY.to_string(),
+            link: false,
+            hidden: false,
+            placeholder: true,
+            source_index: None,
+            task_line: placeholder_line.clone(),
+        });
+        contents.push_str(&placeholder_line);
+        contents.push('\n');
         1
     } else {
         for line in &tasks_block {
@@ -450,6 +500,34 @@ pub(crate) fn render_project_note(
         }
     }
 
+    let named_tasks = pending_tasks
+        .iter()
+        .filter(|task| !task.placeholder)
+        .filter_map(|task| {
+            task.block_id.as_ref().map(|block_id| RenderedNamedTask {
+                block_id: block_id.clone(),
+                link: task.link,
+                text: task.text.clone(),
+                task_line: task.task_line.clone(),
+            })
+        })
+        .collect();
+    let mut task_rows: Vec<RenderedTask> = pending_tasks
+        .into_iter()
+        .map(|task| RenderedTask {
+            line: 0,
+            status: task.status,
+            block_id: task.block_id,
+            text: task.text,
+            link: task.link,
+            hidden: task.hidden,
+            placeholder: task.placeholder,
+            source_index: task.source_index,
+            task_line: task.task_line,
+        })
+        .collect();
+    assign_rendered_task_lines(&contents, &mut task_rows);
+
     RenderedProjectNote {
         basename,
         contents,
@@ -457,6 +535,22 @@ pub(crate) fn render_project_note(
         sections: section_titles,
         task_count,
         named_tasks,
+        task_rows,
+    }
+}
+
+fn assign_rendered_task_lines(contents: &str, tasks: &mut [RenderedTask]) {
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut start = 0;
+    for task in tasks.iter_mut() {
+        if let Some(offset) = lines[start..]
+            .iter()
+            .position(|line| *line == task.task_line)
+        {
+            let index = start + offset;
+            task.line = index + 1;
+            start = index + 1;
+        }
     }
 }
 
@@ -935,6 +1029,93 @@ mod tests {
         assert_eq!(
             rendered.contents.matches("[created::2026-09-20]").count(),
             0
+        );
+    }
+
+    #[test]
+    fn task_rows_cover_unnamed_hidden_closed_and_placeholder() {
+        pin_utc();
+        let empty = render_project_note(&base_input(&[]));
+        assert_eq!(empty.task_rows.len(), 1);
+        assert!(empty.task_rows[0].placeholder);
+        assert_eq!(empty.task_rows[0].text, PLACEHOLDER_TASK_BODY);
+        assert_eq!(empty.task_rows[0].source_index, None);
+        assert!(empty.task_rows[0].line > 0);
+        assert!(!empty.task_rows[0].task_line.contains("^prj"));
+        assert!(empty.contents.contains("^prj"));
+
+        let sub_bullets = vec![
+            bullet("Draft the memo", AuthoredDepth::First),
+            bullet("Private reminder #hide", AuthoredDepth::First),
+            bullet("[x] Closed work", AuthoredDepth::First),
+            bullet("[>] Cancelled work", AuthoredDepth::First),
+            named_bullet(
+                "Call the bank",
+                AuthoredDepth::First,
+                "call-bank",
+                true,
+            ),
+        ];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        assert_eq!(rendered.task_rows.len(), 5);
+        assert_eq!(rendered.task_rows[0].text, "Draft the memo");
+        assert_eq!(rendered.task_rows[0].status, ' ');
+        assert_eq!(rendered.task_rows[0].block_id, None);
+        assert!(!rendered.task_rows[0].link);
+        assert!(!rendered.task_rows[0].hidden);
+        assert_eq!(rendered.task_rows[0].source_index, Some(0));
+        assert!(rendered.task_rows[1].hidden);
+        assert_eq!(rendered.task_rows[2].status, 'x');
+        assert_eq!(rendered.task_rows[3].status, '>');
+        assert!(rendered.task_rows[4].link);
+        assert_eq!(
+            rendered.task_rows[4].block_id.as_deref(),
+            Some("call-bank")
+        );
+        for row in &rendered.task_rows {
+            assert_eq!(
+                rendered
+                    .contents
+                    .lines()
+                    .nth(row.line - 1)
+                    .expect("task line exists"),
+                row.task_line
+            );
+        }
+        assert_eq!(rendered.named_tasks.len(), 1);
+    }
+
+    #[test]
+    fn task_rows_keep_source_identity_when_tasks_section_merges_after() {
+        pin_utc();
+        let sub_bullets = vec![
+            bullet("Draft the memo", AuthoredDepth::First),
+            bullet("TASKS", AuthoredDepth::First),
+            bullet("merged note", AuthoredDepth::Nested),
+            bullet("Collect paperwork", AuthoredDepth::First),
+            bullet("Collect paperwork", AuthoredDepth::First),
+        ];
+        let rendered = render_project_note(&base_input(&sub_bullets));
+        let texts: Vec<&str> = rendered
+            .task_rows
+            .iter()
+            .map(|row| row.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["Draft the memo", "Collect paperwork", "Collect paperwork"]
+        );
+        assert_eq!(rendered.task_rows[0].source_index, Some(0));
+        assert_eq!(rendered.task_rows[1].source_index, Some(3));
+        assert_eq!(rendered.task_rows[2].source_index, Some(4));
+        assert!(!rendered
+            .task_rows
+            .iter()
+            .any(|row| row.text == "merged note"));
+        assert!(rendered.contents.contains("- merged note\n"));
+        assert!(
+            rendered.task_rows[1].line < rendered.task_rows[2].line,
+            "duplicate descriptions keep note order"
         );
     }
 }

@@ -48,6 +48,9 @@ pub(crate) const PULL_IN_TRIGGER: &str = "project_empty";
 /// Trigger value every existing dependency row reports.
 pub(crate) const DEPENDENCY_TRIGGER: &str = "dependency";
 
+/// Trigger value every new-project offer row reports.
+pub(crate) const PROJECT_CREATED_TRIGGER: &str = "project_created";
+
 /// The capture-side cost gate discovered from the staged close texts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PullInGate {

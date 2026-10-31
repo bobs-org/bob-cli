@@ -1165,15 +1165,30 @@ fn successor_task_lookup(
         &contents,
         tasks_settings,
     );
-    if row.block_id.is_empty() {
-        tasks
-            .into_iter()
-            .find(|task| task.line_index + 1 == row.line)
-    } else {
-        tasks.into_iter().find(|task| {
+    if !row.block_id.is_empty() {
+        return tasks.into_iter().find(|task| {
             task.block_id.as_deref() == Some(row.block_id.as_str())
-        })
+        });
     }
+    if let Some(task) = tasks
+        .iter()
+        .find(|task| task.line_index + 1 == row.line)
+        .cloned()
+    {
+        return Some(task);
+    }
+    if row.trigger != crate::native::task_complete::PROJECT_CREATED_TRIGGER {
+        return None;
+    }
+    let settings = note_tasks::read_settings(bob_dir);
+    tasks.into_iter().find(|task| {
+        task.block_id.is_none()
+            && note_tasks::clean_description(
+                &task.description,
+                &settings.global_filter,
+                None,
+            ) == row.text
+    })
 }
 
 fn project_has_open_work(

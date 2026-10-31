@@ -175,12 +175,10 @@ pub(crate) enum PomodoroLinkSpelling {
 }
 
 /// Which sealed project-note form a `@<route>^<block-id>@` marker names.
-/// Only `Create` exists until the offer form lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProjectNoteForm {
     Create,
-    #[allow(dead_code)]
     Offer,
 }
 

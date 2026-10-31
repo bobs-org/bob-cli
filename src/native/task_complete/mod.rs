@@ -16,7 +16,7 @@ pub(crate) mod tree;
 pub(crate) mod verdicts;
 
 pub(crate) use project_pull_in::{
-    closed_prj_may_have_parent, inspect_pull_ins,
+    closed_prj_may_have_parent, inspect_pull_ins, PROJECT_CREATED_TRIGGER,
 };
 pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,

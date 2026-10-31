@@ -458,6 +458,15 @@ pub(super) struct ProjectNoteSummary {
     pub(super) tasks: usize,
     pub(super) sections: Vec<String>,
     pub(super) task_links: Vec<ProjectTaskLinkJson>,
+    /// `"offer"` for `@route:id@`; omitted on Create.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) form: Option<&'static str>,
+    /// Successor-offer rows for the Offer form, including `[]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) successors: Option<Vec<TaskCompleteUnblockedJson>>,
+    /// Project-group folded counts for Offer aggregation. Never serialized.
+    #[serde(skip)]
+    pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1801,6 +1810,11 @@ pub(super) fn all_unblocked(
                 .iter()
                 .flat_map(|summary| summary.unblocked.iter()),
         )
+        .chain(
+            item.project_note
+                .iter()
+                .flat_map(|note| note.successors.iter().flatten()),
+        )
 }
 
 /// Every still-blocked row an item reports, in the same order as
@@ -1842,6 +1856,11 @@ pub(super) fn all_project_folds(
                 .iter()
                 .flat_map(|summary| summary.project_folds.iter()),
         )
+        .chain(
+            item.project_note
+                .iter()
+                .flat_map(|note| note.project_folds.iter()),
+        )
 }
 
 /// Mutable access to every unblocked vec an item reports, in the same
@@ -1859,6 +1878,11 @@ pub(super) fn unblocked_vecs_mut(
     }
     if let Some(summary) = item.pomodoro_close.as_mut() {
         vecs.push(&mut summary.unblocked);
+    }
+    if let Some(note) = item.project_note.as_mut()
+        && let Some(successors) = note.successors.as_mut()
+    {
+        vecs.push(successors);
     }
     vecs
 }
@@ -2376,6 +2400,11 @@ pub(super) fn print_human_item_success(
         for link in &note.task_links {
             println!("  {}", styler.dim(&format!("- {}", link.block_link)));
         }
+    }
+    if let Some(note) = result.project_note.as_ref()
+        && let Some(successors) = note.successors.as_ref()
+    {
+        print_human_successor_rows(successors, &[], result.dry_run, &styler);
     }
     if result.project_note.is_some() {
         println!(
@@ -3909,15 +3938,7 @@ pub(super) fn print_human_successor_rows(
     let mut last_header: Option<String> = None;
     for row in offered {
         let offer = row.offer.as_ref().expect("offered row");
-        let header = match offer.group {
-            "hand_off" => "Hand-offs".to_string(),
-            "project" => format!(
-                "Project {}",
-                offer.project.as_deref().unwrap_or_default()
-            ),
-            "project_finished" => "Project finished".to_string(),
-            other => other.to_string(),
-        };
+        let header = successor_offer_header(row, offer);
         if last_header.as_ref() != Some(&header) {
             println!("  {header}");
             last_header = Some(header);
@@ -3956,6 +3977,29 @@ pub(super) fn print_human_successor_rows(
                 blocked.text
             );
         }
+    }
+}
+
+fn successor_offer_header(
+    row: &TaskCompleteUnblockedJson,
+    offer: &TaskCompleteOfferJson,
+) -> String {
+    match offer.group {
+        "hand_off" => "Hand-offs".to_string(),
+        "project"
+            if row.trigger
+                == crate::native::task_complete::PROJECT_CREATED_TRIGGER =>
+        {
+            format!(
+                "New project {}",
+                offer.project.as_deref().unwrap_or_default()
+            )
+        }
+        "project" => {
+            format!("Project {}", offer.project.as_deref().unwrap_or_default())
+        }
+        "project_finished" => "Project finished".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -4816,6 +4860,82 @@ mod tests {
         }
         assert!(all_unblocked(&result)
             .all(|row| row.offer.as_ref().is_some_and(|offer| offer.selected)));
+    }
+
+    #[test]
+    fn all_unblocked_includes_project_note_successors() {
+        let mut result = minimal_result();
+        result.kind = "project_note";
+        result.project_note = Some(ProjectNoteSummary {
+            basename: "cash_goog_exit.md".to_string(),
+            parent_route: "cash".to_string(),
+            parent_link: "[[cash]]".to_string(),
+            tasks: 2,
+            sections: Vec::new(),
+            task_links: Vec::new(),
+            form: Some("offer"),
+            successors: Some(vec![unblocked_row(
+                "Draft the memo",
+                "cash_goog_exit.md@abcd1234",
+                1,
+            )]),
+            project_folds: vec![crate::native::task_complete::ProjectFold {
+                project: std::path::PathBuf::from("cash_goog_exit.md"),
+                hidden: 1,
+                already_planned: 1,
+                sub_projects: 0,
+            }],
+        });
+        let texts: Vec<String> =
+            all_unblocked(&result).map(|row| row.text.clone()).collect();
+        assert_eq!(texts, vec!["Draft the memo".to_string()]);
+        let folds: Vec<_> = all_project_folds(&result).collect();
+        assert_eq!(folds.len(), 1);
+        assert_eq!(folds[0].hidden, 1);
+        assert_eq!(folds[0].already_planned, 1);
+        assert_eq!(folds[0].sub_projects, 0);
+        let value = to_value(&result.project_note).expect("serialize");
+        assert_eq!(value["form"], json!("offer"));
+        assert_eq!(value["successors"].as_array().unwrap().len(), 1);
+        assert!(value.get("project_folds").is_none(), "{value}");
+    }
+
+    #[test]
+    fn create_project_note_omits_form_and_successors() {
+        let summary = ProjectNoteSummary {
+            basename: "cash_goog_exit.md".to_string(),
+            parent_route: "cash".to_string(),
+            parent_link: "[[cash]]".to_string(),
+            tasks: 1,
+            sections: Vec::new(),
+            task_links: Vec::new(),
+            form: None,
+            successors: None,
+            project_folds: Vec::new(),
+        };
+        let value = to_value(&summary).expect("serialize");
+        assert!(value.get("form").is_none(), "{value}");
+        assert!(value.get("successors").is_none(), "{value}");
+    }
+
+    #[test]
+    fn project_created_offer_header_reads_new_project() {
+        let mut row = unblocked_row("Draft the memo", "k", 1);
+        row.trigger = crate::native::task_complete::PROJECT_CREATED_TRIGGER;
+        row.offer.as_mut().expect("offer").group = "project";
+        row.offer.as_mut().expect("offer").project =
+            Some("cash_goog_exit.md".to_string());
+        let offer = row.offer.as_ref().expect("offer");
+        assert_eq!(
+            successor_offer_header(&row, offer),
+            "New project cash_goog_exit.md"
+        );
+        row.trigger = "project_empty";
+        let offer = row.offer.as_ref().expect("offer");
+        assert_eq!(
+            successor_offer_header(&row, offer),
+            "Project cash_goog_exit.md"
+        );
     }
 
     #[test]
