@@ -106,12 +106,12 @@ fn first_sync_creates_events_meet_and_links() {
         "{note}"
     );
 
-    // Interview ended before sync: a task with no link.
+    // Interview ended before sync: In Progress under a closed MEET.
     let interview = rows
         .iter()
         .find(|row| row.contains("Product interview"))
         .expect("interview row");
-    assert!(interview.starts_with("- [ ] #task"), "{interview}");
+    assert!(interview.starts_with("- [/] #task"), "{interview}");
     assert!(interview.contains("[root:: job]"), "{interview}");
     assert!(interview.contains("[type:: MEET]"), "{interview}");
     assert!(interview.contains("[📹]("), "{interview}");
@@ -137,8 +137,16 @@ fn first_sync_creates_events_meet_and_links() {
     assert!(gmail.contains("[root:: meet]"), "{gmail}");
     assert!(!gmail.contains("[type::"), "{gmail}");
 
-    // MEET placeholder after the last open entry with four links.
+    // Closed MEET for the ended interview, then one placeholder for the rest.
     let pomodoros = &note[pomodoros_at..];
+    assert!(
+        pomodoros.contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{pomodoros}"
+    );
+    assert!(
+        pomodoros.contains("\t- 🍅 [[#^product-interview]]"),
+        "{pomodoros}"
+    );
     assert!(pomodoros.contains("- [ ] () — MEET"), "{pomodoros}");
     for id in ["dentist", "flight-gmail", "late-call", "late-meeting"] {
         assert!(
@@ -146,12 +154,8 @@ fn first_sync_creates_events_meet_and_links() {
             "missing link {id}:\n{pomodoros}"
         );
     }
-    assert!(
-        !pomodoros.contains("[[#^product-interview]]"),
-        "ended meetings earn no link:\n{pomodoros}"
-    );
 
-    // Journal: one row per included occurrence plus four links.
+    // Journal: one row per included occurrence plus five links.
     let journal = journal_lines(&env);
     let rows_journal = journal
         .iter()
@@ -162,7 +166,7 @@ fn first_sync_creates_events_meet_and_links() {
         .filter(|line| line["kind"] == "gcal.link")
         .count();
     assert_eq!(rows_journal, 10, "{journal:?}");
-    assert_eq!(links, 4, "{journal:?}");
+    assert_eq!(links, 5, "{journal:?}");
     assert!(
         journal
             .iter()
@@ -175,7 +179,12 @@ fn first_sync_creates_events_meet_and_links() {
     assert_eq!(status["outcome"], "written");
     assert_eq!(status["day"], "2026-10-30");
     assert_eq!(status["tasks_added"], 5);
-    assert_eq!(status["links_added"], 4);
+    assert_eq!(status["links_added"], 5);
+
+    let out = stdout(&output);
+    assert!(out.contains("closed 08:00–08:30 — MEET"), "{out}");
+    assert!(out.contains("created () — MEET"), "{out}");
+    assert!(out.contains("Pomodoros +2 entries, +5 links"), "{out}");
 }
 
 #[test]
@@ -243,6 +252,10 @@ fn dry_run_prints_diff_and_writes_nothing() {
     assert!(diff.contains("## Events"), "{diff}");
     assert!(
         diff.contains("+- [*] #task **1830-1900** Dentist"),
+        "{diff}"
+    );
+    assert!(
+        diff.contains("+- [x] (**0800-0830** [t:: 30m]) — MEET"),
         "{diff}"
     );
     // Nothing written: no rows, no journal, no status file.
@@ -350,14 +363,12 @@ fn meet_placeholder_follows_the_last_open_entry() {
     let output = sync_output(&env, &fake, &[]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let note = today_note(&env);
+    let closed_at = note
+        .find("- [x] (**0800-0830** [t:: 30m]) — MEET")
+        .expect("closed MEET");
     let plan_at = note.find("— PLAN").expect("PLAN entry");
-    let meet_at = note.find("— MEET").expect("MEET entry");
-    assert!(plan_at < meet_at, "{note}");
-    let meet_line = note
-        .lines()
-        .find(|line| line.contains("— MEET"))
-        .unwrap_or_default();
-    assert_eq!(meet_line, "- [ ] () — MEET", "{note}");
+    let placeholder_at = note.find("- [ ] () — MEET").expect("placeholder");
+    assert!(closed_at < plan_at && plan_at < placeholder_at, "{note}");
 }
 
 #[test]
@@ -375,16 +386,26 @@ fn existing_open_meet_is_reused() {
     let output = sync_output(&env, &fake, &[]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let note = today_note(&env);
+    assert!(
+        note.contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{note}"
+    );
     assert_eq!(
-        note.matches("— MEET").count(),
+        note.lines()
+            .filter(|line| line.contains("— MEET") && line.contains("[ ]"))
+            .count(),
         1,
         "no second open MEET:\n{note}"
+    );
+    assert!(
+        note.contains("- [ ] (**0900-0925** [t:: 25m]) — MEET"),
+        "{note}"
     );
     assert!(note.contains("\t- [[#^dentist]]"), "{note}");
 }
 
 #[test]
-fn past_day_gets_rows_only_and_no_meet() {
+fn past_day_gets_closed_meet_entries() {
     let env = GcalEnv::new("bob-cli-gcal-sync-past");
     prepare(&env);
     fs::write(
@@ -393,21 +414,81 @@ fn past_day_gets_rows_only_and_no_meet() {
     )
     .expect("yesterday note");
     let fake = FakeGog::new(&env, "fake-gog");
-    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    fake.events_json(
+        &serde_json::json!({
+            "events": [{
+                "id": "yesterday-standup",
+                "summary": "Yesterday standup",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-29T09:00:00-04:00"},
+                "end": {"dateTime": "2026-10-29T09:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=yesterday-standup",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            }],
+            "nextPageToken": serde_json::Value::Null,
+        })
+        .to_string(),
+    );
 
     let output = sync_output(&env, &fake, &["-D", "yesterday"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let note = fs::read_to_string(env.vault().join("2026/20261029.md"))
         .expect("yesterday");
     assert!(note.contains("## Events"), "{note}");
-    assert!(!note.contains("— MEET"), "past days earn no MEET:\n{note}");
-    assert!(!note.contains("[[#^"), "past days earn no links:\n{note}");
+    assert!(
+        note.contains("- [x] (**0900-0930** [t:: 30m]) — MEET"),
+        "past days gain closed MEET entries:\n{note}"
+    );
+    assert!(
+        note.lines().any(|line| line.starts_with("- [/] #task")),
+        "{note}"
+    );
+    assert!(note.contains("\t- 🍅 [[#^yesterday-standup]]"), "{note}");
     // Today's note is untouched.
     assert!(
         !today_note(&env).contains("## Events"),
         "{}",
         today_note(&env)
     );
+}
+
+#[test]
+fn future_day_gets_placeholder_and_starred_rows() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-future");
+    prepare(&env);
+    fs::write(
+        env.vault().join("2026/20261031.md"),
+        "# Saturday 2026-10-31\n\n## Pomodoros\n",
+    )
+    .expect("tomorrow note");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &serde_json::json!({
+            "events": [{
+                "id": "tomorrow-standup",
+                "summary": "Tomorrow standup",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-31T09:00:00-04:00"},
+                "end": {"dateTime": "2026-10-31T09:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=tomorrow-standup",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            }],
+            "nextPageToken": serde_json::Value::Null,
+        })
+        .to_string(),
+    );
+
+    let output = sync_output(&env, &fake, &["-D", "tomorrow"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = fs::read_to_string(env.vault().join("2026/20261031.md"))
+        .expect("tomorrow");
+    assert!(note.contains("## Events"), "{note}");
+    assert!(note.contains("- [ ] () — MEET"), "{note}");
+    assert!(
+        note.lines().any(|line| line.starts_with("- [*] #task")),
+        "{note}"
+    );
+    assert!(note.contains("\t- [[#^tomorrow-standup]]"), "{note}");
 }
 
 #[test]
@@ -490,7 +571,7 @@ fn sync_json_reports_rows_and_pomodoro() {
     assert_eq!(report["day"], "2026-10-30");
     assert_eq!(report["path"], "2026/20261030.md");
     assert_eq!(report["status"], "written");
-    assert_eq!(report["pomodoro"]["links_added"], 4);
+    assert_eq!(report["pomodoro"]["links_added"], 5);
     assert_eq!(report["pomodoro"]["created"], true);
     let rows = report["rows"].as_array().expect("rows");
     let dentist = rows
@@ -573,9 +654,27 @@ fn reconcile_keeps_linked_rows() {
     fake.events_json(include_str!("fixtures/gcal/events.json"));
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
 
+    let before = today_note(&env);
+    let tomato = before
+        .lines()
+        .find(|line| line.contains("🍅 [[#^product-interview]]"))
+        .expect("tomato link")
+        .to_string();
     let output = run_bob(&env, &["task", "reconcile"], "2026-10-30 12:00:00");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let note = today_note(&env);
+    let interview = note
+        .lines()
+        .find(|line| line.contains("^product-interview"))
+        .expect("interview row");
+    assert!(
+        interview.starts_with("- [/]"),
+        "reconcile cleared the past row: {interview}"
+    );
+    assert!(
+        note.lines().any(|line| line == tomato),
+        "reconcile repaired the tomato link:\nbefore={tomato}\n{note}"
+    );
     for id in ["dentist", "late-call", "flight-gmail", "late-meeting"] {
         let row = note
             .lines()
@@ -666,8 +765,8 @@ fn agenda_reads_synced_rows_cleanly() {
     let agenda: Value =
         serde_json::from_str(&stdout(&output)).expect("agenda JSON");
     let text = agenda.to_string();
-    // Linked rows resolve with clean titles; the ended interview has
-    // no link by design, so it stays out of the agenda.
+    // Linked rows resolve with clean titles; the ended interview sits
+    // under a closed MEET, so it stays out of the open agenda.
     assert!(text.contains("Dentist"), "{text}");
     assert!(text.contains("Late call"), "{text}");
     assert!(!text.contains("Product interview"), "{text}");
@@ -934,4 +1033,121 @@ fn waiting_json_reports_a_null_stamp() {
         serde_json::from_str(&stdout(&output)).expect("JSON report");
     assert_eq!(report["status"], "waiting");
     assert!(report["stamp"].is_null(), "{report}");
+}
+
+#[test]
+fn json_lists_meet_entries_and_keeps_open_entry_keys() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-json-entries");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let diff = sync_output(&env, &fake, &["-d"]);
+    assert_eq!(diff.status.code(), Some(0), "{}", stderr(&diff));
+    let diff_text = stdout(&diff);
+    assert!(
+        diff_text.contains("+- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{diff_text}"
+    );
+    assert!(diff_text.contains("+- [ ] () — MEET"), "{diff_text}");
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    let entries = report["pomodoro"]["entries"].as_array().expect("entries");
+    assert!(
+        entries.iter().any(|entry| {
+            entry["state"] == "closed"
+                && entry["time"] == "0800-0830"
+                && entry["created"] == true
+                && entry["links"] == 1
+        }),
+        "{report}"
+    );
+    assert!(
+        entries.iter().any(|entry| {
+            entry["state"] == "planned"
+                && entry["created"] == true
+                && entry["links"] == 4
+        }),
+        "{report}"
+    );
+    assert_eq!(report["pomodoro"]["created"], true);
+    assert_eq!(report["pomodoro"]["links_added"], 5);
+    assert!(
+        report["pomodoro"]["entry_line"].as_u64().is_some(),
+        "{report}"
+    );
+    let note = today_note(&env);
+    assert!(
+        note.contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{note}"
+    );
+}
+
+#[test]
+fn list_reports_task_meet_for_a_past_row() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-list-past");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let output = command.output().expect("list");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    let interview = report["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Product interview")
+        .expect("interview");
+    assert_eq!(interview["vault"], "task · MEET", "{interview}");
+}
+
+#[test]
+fn current_meeting_reconcile_then_clock_close() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-current");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let synced = sync_at(&env, &fake, &[], "2026-10-30 18:45:00");
+    assert_eq!(synced.status.code(), Some(0), "{}", stderr(&synced));
+    let note = today_note(&env);
+    assert_eq!(
+        note.lines()
+            .filter(
+                |line| line.starts_with("- [ ] (**") && line.contains("— MEET")
+            )
+            .count(),
+        1,
+        "exactly one running MEET:\n{note}"
+    );
+    assert!(
+        !note.contains("- [ ] () — MEET"),
+        "one_open must not add a second MEET:\n{note}"
+    );
+
+    let reconcile =
+        run_bob(&env, &["task", "reconcile"], "2026-10-30 18:45:00");
+    assert_eq!(
+        reconcile.status.code(),
+        Some(0),
+        "double running entry would fail reconcile: {}",
+        stderr(&reconcile)
+    );
+
+    let close = run_bob(&env, &["capture", "x"], "2026-10-30 19:05:00");
+    assert_eq!(close.status.code(), Some(0), "{}", stderr(&close));
+    let after = today_note(&env);
+    let dentist = after
+        .lines()
+        .find(|line| line.contains("^dentist"))
+        .expect("dentist");
+    assert!(dentist.starts_with("- [x]"), "{dentist}");
 }

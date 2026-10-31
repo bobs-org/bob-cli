@@ -309,6 +309,51 @@ fn deleted_event_lookup_cancels_and_reports_once() {
 }
 
 #[test]
+fn deleted_past_row_is_left_alone_and_reported_once() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-past-kept");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let interview = today_note(&env)
+        .lines()
+        .find(|line| line.contains("^product-interview"))
+        .expect("interview")
+        .to_string();
+    assert!(interview.starts_with("- [/]"), "{interview}");
+
+    let mut events = base_events();
+    events.retain(|event| event["id"] != "interview");
+    fake.events_json(&events_envelope(events));
+    fake.event_lookup(
+        "interview",
+        r#"{"_fail": {"stderr": "Not Found: no such event", "code": 1}}"#,
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("^product-interview"))
+        .expect("interview");
+    assert_eq!(row, interview, "worked past row must stay:\n{note}");
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("left your worked task alone"),
+        "{combined}"
+    );
+
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(
+        stdout(&again).contains("unchanged"),
+        "kept notice is once: {}",
+        stdout(&again)
+    );
+}
+
+#[test]
 fn moved_event_names_the_new_day() {
     let env = GcalEnv::new("bob-cli-gcal-lifecycle-moved");
     prepare(&env);

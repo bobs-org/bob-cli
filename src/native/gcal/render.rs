@@ -24,7 +24,8 @@ pub(crate) struct TaskRowInput<'a> {
     pub location: Option<&'a str>,
     pub root: Option<&'a str>,
     pub needs_type: bool,
-    pub linked: bool,
+    /// Task checkbox: `*` (Next), `/` (In Progress), or ` ` (Ready).
+    pub status: char,
 }
 
 /// Input for one context row.
@@ -35,12 +36,12 @@ pub(crate) struct ContextRowInput<'a> {
     pub qualifier: Option<&'a str>,
 }
 
-/// Render `- [*] #task **HHMM-HHMM** title badges [root::] [type::] ^id`.
+/// Render `- [status] #task **HHMM-HHMM** title badges [root::] [type::] ^id`.
 pub(crate) fn render_task_row(
     input: &TaskRowInput<'_>,
     block_id: &str,
 ) -> String {
-    let status = if input.linked { '*' } else { ' ' };
+    let status = input.status;
     let mut row = format!(
         "- [{status}] #task **{}** {}",
         input.time_label,
@@ -236,7 +237,7 @@ mod tests {
         title: &'a str,
         root: Option<&'a str>,
         needs_type: bool,
-        linked: bool,
+        status: char,
     ) -> TaskRowInput<'a> {
         TaskRowInput {
             time_label: "0800-0830",
@@ -246,14 +247,14 @@ mod tests {
             location: None,
             root,
             needs_type,
-            linked,
+            status,
         }
     }
 
     #[test]
     fn task_row_field_order_and_status() {
         let row = render_task_row(
-            &task_input("Product interview", Some("job"), true, true),
+            &task_input("Product interview", Some("job"), true, '*'),
             "product-interview",
         );
         assert_eq!(
@@ -264,7 +265,7 @@ mod tests {
              ^product-interview",
         );
         let row = render_task_row(
-            &task_input("Standup", Some("meet"), false, false),
+            &task_input("Standup", Some("meet"), false, ' '),
             "standup",
         );
         assert!(
@@ -330,7 +331,7 @@ mod tests {
                 location: None,
                 root: Some("body"),
                 needs_type: true,
-                linked: true,
+                status: '*',
             },
             "party",
         );
@@ -356,7 +357,7 @@ mod tests {
             &TaskRowInput {
                 join_link: Some("https://teams.microsoft.com/l/meet (1)"),
                 location: Some("Main St Dental"),
-                ..task_input("Dentist", Some("body"), true, true)
+                ..task_input("Dentist", Some("body"), true, '*')
             },
             "dentist",
         );

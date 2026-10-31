@@ -145,7 +145,7 @@ Evidence: `plan:202610/bob_gcal_daily_events.md`,
 
 ## Calendar Events Are Daily-Note Event Tasks {#calendar-events-are-daily-note-event-tasks}
 
-**Status:** Accepted
+**Status:** Superseded in part by [Synced Meetings Are Linked By Phase At Birth](#synced-meetings-link-by-phase)
 
 Synced calendar events live in their daily note's Events section with root attribution and one appended MEET.
 
@@ -167,6 +167,11 @@ plan budget; MEET is not exempt.
 
 **Reopens when.** Event Tasks need review or lanes, or same-type Pomodoro
 duplicates land.
+
+Superseded in part: Task Links no longer all go under one appended MEET
+placeholder; an ended meeting lands under a closed MEET entry and a running
+one under the running MEET. See
+[Synced Meetings Are Linked By Phase At Birth](#synced-meetings-link-by-phase).
 
 ## Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites {#capture-link-drops-blocking-deps}
 
@@ -1763,6 +1768,72 @@ alone is retired; a project's own prerequisites and date still originate on its 
 
 Superseded in part: the parent project's trigger (c) pull-in is now offered and linked
 only when picked. See [Unblocked Tasks Are Offered, Never Auto-Linked](#unblocked-tasks-are-offered).
+
+## Synced Meetings Are Linked By Phase At Birth {#synced-meetings-link-by-phase}
+
+**Status:** Accepted
+
+A new Event Task is filed under a past, running, or planned MEET at birth: closed clusters for ended meetings, one open MEET for current and future.
+
+# Synced Meetings Are Linked By Phase At Birth
+
+**Applies to.** bob-cli and the vault.
+
+**Claim.** Whenever `bob gcal sync` creates an Event Task (a new row, or a
+Maybe context row upgraded in place), it files that row under a MEET Pomodoro
+in the same write, on any day:
+
+| Phase at sync time | Pomodoro | Link line | Row checkbox |
+| --- | --- | --- | --- |
+| Past: the event ended (`end ≤ now`) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry | `🍅 [[#^id]]` | `[/]` |
+| Current: `start ≤ now < end`, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
+| Future: the event has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
+
+Back-to-back or overlapping past meetings share one closed MEET whose span is
+the cluster (next start ≤ cluster end). All current meetings share one
+running MEET, and all future meetings share one placeholder. The run never
+leaves a second open MEET: current meetings with no running Pomodoro reuse an
+existing MEET placeholder if one is open, otherwise they create a running
+MEET; future meetings go under the running MEET when that running entry is
+named MEET, otherwise under the placeholder (created when missing). Sync
+never creates a running entry while any open timed Pomodoro exists. Sync
+only creates MEET entries and appends links; it never starts, closes,
+retimes, renames, or moves an existing entry.
+
+**Why.** Bryan asked that every Event Task `bob gcal sync` creates get a
+past, current, or future Pomodoro with a matching task link, grouping
+same-type meetings, so every created Event Task starts `[*]` or `[/]`.
+`bob task reconcile` exits 1 when a daily note has more than one open timed
+Pomodoro, `bob capture =…` refuses to start a session while one is running,
+and `duplicate_open_pomodoro_name` lints two open MEET entries.
+
+Rejected alternatives:
+
+- **One closed MEET per past meeting.** Touching or overlapping meetings are
+  one truthful span; a gap still splits clusters.
+- **A running MEET plus a separate MEET placeholder.** That leaves two open
+  MEETs, which lints and fights the one-running-session guard.
+- **`[x]` for ended meetings.** Sync cannot know Bryan attended, and the
+  request names `[/]`.
+
+**Cost.** A Past row is worked from birth (`[/]` and a closed-entry link), so
+a later Google decline, delete, or move leaves it alone and reports it once.
+`[/]` rows count in the Pending lane and show in `list`'s `past_open` footer
+until they are completed or cancelled. A closed or running entry built from
+calendar spans may overlap a session already logged. R9 may clear future-day
+`[*]` rows to `[ ]` until that day is today.
+
+**Reopens when.** Same-type Pomodoro duplicates land, or sync can learn
+attendance.
+
+Evidence: `plan:202610/gcal_meeting_pomodoros.md`; `docs/gcal.md` § Sync;
+`tests/gcal_sync.rs`.
+
+[Calendar Events Are Daily-Note Event Tasks](#calendar-events-are-daily-note-event-tasks)
+
+[Event Task Links Close By The Clock](#event-task-links-close-by-the-clock)
+
+[Event Task](../reference/glossary.md#event-task)
 
 ## Task Dependencies Are Links On One Depends-On Line {#task-deps-are-depends-on-links}
 

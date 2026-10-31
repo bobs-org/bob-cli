@@ -336,14 +336,17 @@ qualify too; Google Calendar is not required.
 ## Events
 
 *↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*
-- [ ] #task **0800-0830** Product interview [root:: job] [type:: MEET] ^product-interview
+- [/] #task **0800-0830** Product interview [root:: job] [type:: MEET] ^product-interview
+- [*] #task **1830-1900** Dentist [root:: body] [type:: MEET] ^dentist
 - **all day** School holiday
 - **0915-1000** Toddler class · *maybe*
 
 ## Pomodoros
 
-- [ ] (**0800-0830** [t:: 30m]) — MEET
-  - [[#^product-interview]]
+- [x] (**0800-0830** [t:: 30m]) — MEET
+  - 🍅 [[#^product-interview]]
+- [ ] () — MEET
+  - [[#^dentist]]
 ```
 
 The span is local to the daily note's `timezone:` (or the host timezone).
@@ -363,8 +366,8 @@ Events stamp: which Google account last changed the section, and when. A written
 from the bare title and unique within the note. A written context row carries
 the span (`**all day**` or `**HHMM-HHMM**`) plus optional `· *day N of M*`,
 `· *maybe*`, or `· *free*` tags and the `📅` badge. Event Tasks linked under
-today's MEET show `[*]`; a row first synced after its event ended shows
-`[ ]`. Titles are data: `#task`, trailing `^id`, `%%`, `::`, `🔁`, Tasks
+an open MEET show `[*]`; a row first synced after its event ended shows
+`[/]` under a closed MEET. Titles are data: `#task`, trailing `^id`, `%%`, `::`, `🔁`, Tasks
 emoji, and leading markers are escaped or neutralized, and a resolved
 `@route` token is stripped from the title.
 

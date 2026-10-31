@@ -3,11 +3,11 @@
 //!
 //! The plan inserts new rows in time order (never reordering existing
 //! lines), adopts crash-recovery rows by their `📅` URL, tombstones
-//! journaled rows whose line is gone, and appends each eligible MEET
-//! link once. It keeps a blank line under the `## Events` heading, then
-//! writes the Bob-owned Events stamp as its last step. When the computed
-//! contents equal the input, the plan reports no change and carries no
-//! records.
+//! journaled rows whose line is gone, and files each created Event Task
+//! under a past, running, or planned MEET Pomodoro in the same write. It
+//! keeps a blank line under the `## Events` heading, then writes the
+//! Bob-owned Events stamp as its last step. When the computed contents
+//! equal the input, the plan reports no change and carries no records.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -18,10 +18,10 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 use crate::native::{
     capture::line_spans,
-    capture_pomodoros::{self, PomodoroState},
+    capture_pomodoros::{self, PomodoroEntry, PomodoroState},
     capture_task_toggle::{
-        child_block_end_line, insert_link_into_entry,
-        insert_named_placeholder_after_last_open,
+        child_block_end_line, insert_line_after, insert_line_before,
+        insert_link_into_entry, insert_named_placeholder_after_last_open,
     },
     event_task, markdown,
     pomodoro::pomodoros_section_range,
@@ -61,10 +61,54 @@ pub(crate) struct PlannedOccurrence {
     pub spans: BTreeMap<String, String>,
     /// Write `[type:: MEET]` (the PT13 suggestion is not MEET).
     pub needs_type: bool,
-    /// Whether this task row earns a MEET link (today, event unended).
-    pub link_eligible: bool,
+    /// Phase at sync time; `None` for context rows.
+    pub link_phase: Option<LinkPhase>,
     pub all_day: bool,
     pub start_min: i32,
+    /// End in minutes from the note day's midnight (may exceed 1440).
+    pub end_min: i32,
+}
+
+/// How a created Event Task is filed under a MEET Pomodoro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkPhase {
+    Past,
+    Current,
+    Future,
+}
+
+/// Ledger state of one MEET Pomodoro this run touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeetEntryState {
+    Closed,
+    Running,
+    Planned,
+}
+
+impl MeetEntryState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Running => "running",
+            Self::Planned => "planned",
+        }
+    }
+
+    pub(crate) fn is_open(self) -> bool {
+        matches!(self, Self::Running | Self::Planned)
+    }
+}
+
+/// One MEET Pomodoro the plan created or appended links into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MeetPomodoroEntry {
+    pub state: MeetEntryState,
+    /// 1-based line in the final contents.
+    pub line: usize,
+    /// `HHMM-HHMM` for timed entries.
+    pub time: Option<String>,
+    pub created: bool,
+    pub links: usize,
 }
 
 /// Pure planner input.
@@ -176,13 +220,35 @@ pub(crate) struct SyncPlan {
     pub extra_link_wants: Vec<(String, String, String)>,
     /// Untimed MEET entries left childless by cancels, removed.
     pub entries_removed: usize,
-    pub pomodoro_entry_line: Option<usize>,
-    pub pomodoro_created: bool,
+    /// MEET Pomodoros this run created or appended links into, ledger order.
+    pub pomodoro_entries: Vec<MeetPomodoroEntry>,
+    /// Warnings from MEET filing (running-conflict routing).
+    pub warnings: Vec<String>,
     /// Stamp the note carries after the plan, when an Events section
     /// exists.
     pub stamp: Option<Stamp>,
     /// True when this plan wrote the stamp, or would write it under `-d`.
     pub stamp_refreshed: bool,
+}
+
+impl SyncPlan {
+    /// 1-based line of the first open MEET this run touched.
+    #[cfg(test)]
+    pub(crate) fn pomodoro_entry_line(&self) -> Option<usize> {
+        self.pomodoro_entries
+            .iter()
+            .find(|entry| entry.state.is_open())
+            .map(|entry| entry.line)
+    }
+
+    /// Whether the first open MEET this run touched was created here.
+    #[cfg(test)]
+    pub(crate) fn pomodoro_created(&self) -> bool {
+        self.pomodoro_entries
+            .iter()
+            .find(|entry| entry.state.is_open())
+            .is_some_and(|entry| entry.created)
+    }
 }
 
 pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
@@ -356,9 +422,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
 
     working.ensure_events_heading_gap();
 
-    if input.is_today {
-        plan_meet_links(input, &mut working, &mut plan);
-    }
+    plan_meet_pomodoros(input, &mut working, &mut plan);
 
     plan_stamp(input, &mut working, &mut plan);
 
@@ -391,8 +455,8 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
         plan.learned.clear();
         plan.extra_link_wants.clear();
         plan.entries_removed = 0;
-        plan.pomodoro_entry_line = None;
-        plan.pomodoro_created = false;
+        plan.pomodoro_entries.clear();
+        plan.warnings.clear();
         // Keep `stamp` / `stamp_refreshed` so an unchanged run still
         // reports the line the note already carries.
     }
@@ -650,13 +714,11 @@ fn upgrade_context_row(
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
     });
-    if occurrence.link_eligible {
-        plan.extra_link_wants.push((
-            occurrence.calendar_id.clone(),
-            occurrence.event_id.clone(),
-            block_id,
-        ));
-    }
+    plan.extra_link_wants.push((
+        occurrence.calendar_id.clone(),
+        occurrence.event_id.clone(),
+        block_id,
+    ));
 }
 
 /// Reconcile journaled occurrences that have no included snapshot row:
@@ -940,7 +1002,7 @@ fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
                 location: occurrence.location.as_deref(),
                 root: occurrence.root.as_deref(),
                 needs_type: occurrence.needs_type,
-                linked: occurrence.link_eligible,
+                status: status_for_phase(occurrence.link_phase),
             },
             block_id,
         )
@@ -1257,16 +1319,18 @@ fn plan_stamp(
         return;
     }
 
-    let mut pomodoro_0 = plan.pomodoro_entry_line.map(|line| line - 1);
+    let mut meet_0: Vec<usize> = plan
+        .pomodoro_entries
+        .iter()
+        .map(|entry| entry.line - 1)
+        .collect();
     let pre_canonical = {
         let refs = working.line_refs();
         stamp::canonical_slot(&refs, range.clone())
     };
     if stamps.len() == 1 && stamps[0] == pre_canonical {
         let anchor = stamps[0];
-        if pomodoro_0.is_some_and(|line| anchor < line) {
-            pomodoro_0 = pomodoro_0.map(|line| line - 1);
-        }
+        shift_meet_0(&mut meet_0, |line| anchor < line, -1);
         working.lines.remove(anchor);
         let need_blank_after = working.lines.get(anchor).is_some_and(|line| {
             !line.trim().is_empty()
@@ -1275,16 +1339,12 @@ fn plan_stamp(
         });
         let rendered = stamp::render(input.account, now, note_day);
         working.lines.insert(anchor, rendered);
-        if pomodoro_0.is_some_and(|line| anchor <= line) {
-            pomodoro_0 = pomodoro_0.map(|line| line + 1);
-        }
+        shift_meet_0(&mut meet_0, |line| anchor <= line, 1);
         if need_blank_after {
             working.lines.insert(anchor + 1, String::new());
-            if pomodoro_0.is_some_and(|line| anchor < line) {
-                pomodoro_0 = pomodoro_0.map(|line| line + 1);
-            }
+            shift_meet_0(&mut meet_0, |line| anchor < line, 1);
         }
-        plan.pomodoro_entry_line = pomodoro_0.map(|line| line + 1);
+        write_meet_lines(plan, &meet_0);
         plan.stamp = Some(Stamp {
             account: input.account.to_string(),
             synced_at: now,
@@ -1294,9 +1354,7 @@ fn plan_stamp(
     }
     stamps.sort_unstable();
     for index in stamps.into_iter().rev() {
-        if pomodoro_0.is_some_and(|line| index < line) {
-            pomodoro_0 = pomodoro_0.map(|line| line - 1);
-        }
+        shift_meet_0(&mut meet_0, |line| index < line, -1);
         working.lines.remove(index);
     }
 
@@ -1307,9 +1365,7 @@ fn plan_stamp(
     };
     if slot == range.start {
         working.lines.insert(slot, String::new());
-        if pomodoro_0.is_some_and(|line| slot <= line) {
-            pomodoro_0 = pomodoro_0.map(|line| line + 1);
-        }
+        shift_meet_0(&mut meet_0, |line| slot <= line, 1);
         slot += 1;
     }
     let need_blank_after = working.lines.get(slot).is_some_and(|line| {
@@ -1319,16 +1375,12 @@ fn plan_stamp(
     });
     let rendered = stamp::render(input.account, now, note_day);
     working.lines.insert(slot, rendered);
-    if pomodoro_0.is_some_and(|line| slot <= line) {
-        pomodoro_0 = pomodoro_0.map(|line| line + 1);
-    }
+    shift_meet_0(&mut meet_0, |line| slot <= line, 1);
     if need_blank_after {
         working.lines.insert(slot + 1, String::new());
-        if pomodoro_0.is_some_and(|line| slot < line) {
-            pomodoro_0 = pomodoro_0.map(|line| line + 1);
-        }
+        shift_meet_0(&mut meet_0, |line| slot < line, 1);
     }
-    plan.pomodoro_entry_line = pomodoro_0.map(|line| line + 1);
+    write_meet_lines(plan, &meet_0);
     plan.stamp = Some(Stamp {
         account: input.account.to_string(),
         synced_at: now,
@@ -1336,24 +1388,273 @@ fn plan_stamp(
     plan.stamp_refreshed = true;
 }
 
+fn shift_meet_0(lines: &mut [usize], pred: impl Fn(usize) -> bool, delta: i32) {
+    for line in lines {
+        if pred(*line) {
+            if delta < 0 {
+                *line = line.saturating_sub(delta.unsigned_abs() as usize);
+            } else {
+                *line = line.saturating_add(delta as usize);
+            }
+        }
+    }
+}
+
+fn write_meet_lines(plan: &mut SyncPlan, lines: &[usize]) {
+    for (entry, line) in plan.pomodoro_entries.iter_mut().zip(lines) {
+        entry.line = line + 1;
+    }
+}
+
 fn note_day(input: &SyncPlanInput<'_>) -> NaiveDate {
     NaiveDate::parse_from_str(&input.day_string, "%Y-%m-%d")
         .unwrap_or(input.today)
 }
 
-/// Append each eligible MEET link once, creating the placeholder in
-/// the same write as its first link.
-fn plan_meet_links(
+/// File each eligible Event Task under a past, running, or planned MEET.
+fn plan_meet_pomodoros(
     input: &SyncPlanInput<'_>,
     working: &mut WorkingNote,
     plan: &mut SyncPlan,
 ) {
-    // Eligible links: task rows present in the note (journaled, new,
-    // or adopted) whose event has not ended, with no journaled link
-    // and no tombstone. A removed link is never re-added.
-    let mut wanted: Vec<(String, String, String)> = Vec::new();
+    let wanted = collect_wanted_links(input, working, plan);
+    if wanted.is_empty() {
+        return;
+    }
+    let mut contents = working.as_string();
+    let mut touched: Vec<TouchedMeet> = Vec::new();
+    let mut past: Vec<WantedLink> = Vec::new();
+    let mut current: Vec<WantedLink> = Vec::new();
+    let mut future: Vec<WantedLink> = Vec::new();
+    for link in wanted {
+        match link.phase {
+            LinkPhase::Past => past.push(link),
+            LinkPhase::Current => current.push(link),
+            LinkPhase::Future => future.push(link),
+        }
+    }
+
+    for cluster in cluster_past(past) {
+        let start_min =
+            cluster.iter().map(|link| link.start_min).min().unwrap_or(0);
+        let end_min =
+            cluster.iter().map(|link| link.end_min).max().unwrap_or(0);
+        let (span, time) = format_meet_span(start_min, end_min);
+        let line_text = format!("- [x] {span} — MEET");
+        let at = closed_insert_at(&contents, start_min);
+        let (updated, line_0) = insert_ledger_line(&contents, at, &line_text);
+        contents = updated;
+        shift_touched(&mut touched, line_0);
+        let added = append_links(
+            &mut contents,
+            line_0,
+            &cluster,
+            true,
+            plan,
+            &mut touched,
+        );
+        if added > 0 {
+            touched.push(TouchedMeet {
+                state: MeetEntryState::Closed,
+                line_0,
+                time: Some(time),
+                created: true,
+                links: added,
+            });
+        }
+    }
+
+    let mut routed_future = future;
+    if !current.is_empty() {
+        let targets = open_meet_targets(&contents);
+        if let Some(running) = targets.running_meet() {
+            let added = append_links(
+                &mut contents,
+                running,
+                &current,
+                false,
+                plan,
+                &mut touched,
+            );
+            record_or_bump(
+                &mut touched,
+                MeetEntryState::Running,
+                running,
+                targets.running_time.clone(),
+                false,
+                added,
+            );
+        } else if targets.single_timed.is_some() || targets.several_timed {
+            let label = targets.running_label();
+            for link in &current {
+                plan.warnings.push(format!(
+                    "{} is running now, but {label} is the running Pomodoro; \
+                     linked it under the MEET placeholder",
+                    link.title
+                ));
+            }
+            routed_future.splice(0..0, current);
+        } else if let Some(placeholder) = targets.placeholder {
+            let added = append_links(
+                &mut contents,
+                placeholder,
+                &current,
+                false,
+                plan,
+                &mut touched,
+            );
+            record_or_bump(
+                &mut touched,
+                MeetEntryState::Planned,
+                placeholder,
+                None,
+                false,
+                added,
+            );
+        } else {
+            let start_min =
+                current.iter().map(|link| link.start_min).min().unwrap_or(0);
+            let end_min =
+                current.iter().map(|link| link.end_min).max().unwrap_or(0);
+            let (span, time) = format_meet_span(start_min, end_min);
+            let line_text = format!("- [ ] {span} — MEET");
+            let at = running_insert_at(&contents);
+            let (updated, line_0) =
+                insert_ledger_line(&contents, at, &line_text);
+            contents = updated;
+            shift_touched(&mut touched, line_0);
+            let added = append_links(
+                &mut contents,
+                line_0,
+                &current,
+                false,
+                plan,
+                &mut touched,
+            );
+            if added > 0 {
+                touched.push(TouchedMeet {
+                    state: MeetEntryState::Running,
+                    line_0,
+                    time: Some(time),
+                    created: true,
+                    links: added,
+                });
+            }
+        }
+    }
+
+    if !routed_future.is_empty() {
+        let targets = open_meet_targets(&contents);
+        let (entry_line, state, time, created) =
+            if let Some(running) = targets.running_meet() {
+                (
+                    running,
+                    MeetEntryState::Running,
+                    targets.running_time.clone(),
+                    false,
+                )
+            } else if let Some(placeholder) = targets.placeholder {
+                (placeholder, MeetEntryState::Planned, None, false)
+            } else {
+                let (updated, created_line, _) =
+                    insert_named_placeholder_after_last_open(&contents, "MEET")
+                        .expect("Pomodoros section exists");
+                contents = updated;
+                shift_touched(&mut touched, created_line);
+                (created_line, MeetEntryState::Planned, None, true)
+            };
+        let added = append_links(
+            &mut contents,
+            entry_line,
+            &routed_future,
+            false,
+            plan,
+            &mut touched,
+        );
+        record_or_bump(&mut touched, state, entry_line, time, created, added);
+    }
+
+    if !plan.links_added.is_empty() {
+        working.replace(&contents);
+        touched.sort_by_key(|entry| entry.line_0);
+        plan.pomodoro_entries = touched
+            .into_iter()
+            .filter(|entry| entry.links > 0)
+            .map(|entry| MeetPomodoroEntry {
+                state: entry.state,
+                line: entry.line_0 + 1,
+                time: entry.time,
+                created: entry.created,
+                links: entry.links,
+            })
+            .collect();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WantedLink {
+    calendar_id: String,
+    event_id: String,
+    block_id: String,
+    phase: LinkPhase,
+    start_min: i32,
+    end_min: i32,
+    title: String,
+}
+
+#[derive(Debug, Clone)]
+struct TouchedMeet {
+    state: MeetEntryState,
+    line_0: usize,
+    time: Option<String>,
+    created: bool,
+    links: usize,
+}
+
+enum LineInsert {
+    Before(usize),
+    After(usize),
+}
+
+struct OpenMeetTargets {
+    single_timed: Option<usize>,
+    single_timed_name: Option<String>,
+    several_timed: bool,
+    placeholder: Option<usize>,
+    running_time: Option<String>,
+}
+
+impl OpenMeetTargets {
+    fn running_meet(&self) -> Option<usize> {
+        let line = self.single_timed?;
+        (self.single_timed_name.as_deref() == Some("MEET")).then_some(line)
+    }
+
+    fn running_label(&self) -> String {
+        if self.several_timed {
+            return "multiple timed Pomodoros".to_string();
+        }
+        self.single_timed_name
+            .clone()
+            .unwrap_or_else(|| "an unnamed Pomodoro".to_string())
+    }
+}
+
+fn collect_wanted_links(
+    input: &SyncPlanInput<'_>,
+    working: &WorkingNote,
+    plan: &SyncPlan,
+) -> Vec<WantedLink> {
+    let mut wanted: Vec<WantedLink> = Vec::new();
     for occurrence in &input.occurrences {
-        if !occurrence.task || !occurrence.link_eligible {
+        let Some(phase) = occurrence.link_phase else {
+            continue;
+        };
+        if !occurrence.task {
+            continue;
+        }
+        let created = row_was_created(plan, occurrence);
+        if !created && (!input.is_today || matches!(phase, LinkPhase::Past)) {
             continue;
         }
         let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
@@ -1369,7 +1670,7 @@ fn plan_meet_links(
         else {
             continue;
         };
-        if wanted.iter().any(|(_, _, id)| *id == block_id) {
+        if wanted.iter().any(|link| link.block_id == block_id) {
             continue;
         }
         let refs = working.line_refs();
@@ -1385,28 +1686,31 @@ fn plan_meet_links(
         {
             continue;
         }
-        wanted.push((
-            occurrence.calendar_id.clone(),
-            occurrence.event_id.clone(),
+        wanted.push(WantedLink {
+            calendar_id: occurrence.calendar_id.clone(),
+            event_id: occurrence.event_id.clone(),
             block_id,
-        ));
+            phase,
+            start_min: occurrence.start_min,
+            end_min: occurrence.end_min,
+            title: occurrence.title.clone(),
+        });
     }
-    // Upgraded Maybe rows earn their link the same way, once.
-    for (calendar_id, event_id, block_id) in plan.extra_link_wants.clone() {
-        let key = occurrence_key(&calendar_id, &event_id);
+    for (calendar_id, event_id, block_id) in &plan.extra_link_wants {
+        if wanted.iter().any(|link| link.block_id == *block_id) {
+            continue;
+        }
+        let key = occurrence_key(calendar_id, event_id);
         if let Some(state) = input.journal.get(&(key, input.day_string.clone()))
             && (state.link || state.gone)
         {
-            continue;
-        }
-        if wanted.iter().any(|(_, _, id)| *id == block_id) {
             continue;
         }
         let refs = working.line_refs();
         if find_row_line(
             &working.lines,
             event_task::events_section_range(&refs),
-            &block_id,
+            block_id,
             None,
             true,
             None,
@@ -1415,45 +1719,268 @@ fn plan_meet_links(
         {
             continue;
         }
-        wanted.push((calendar_id, event_id, block_id));
+        let Some(occurrence) = input.occurrences.iter().find(|occurrence| {
+            occurrence.calendar_id == *calendar_id
+                && occurrence.event_id == *event_id
+        }) else {
+            continue;
+        };
+        let Some(phase) = occurrence.link_phase else {
+            continue;
+        };
+        wanted.push(WantedLink {
+            calendar_id: calendar_id.clone(),
+            event_id: event_id.clone(),
+            block_id: block_id.clone(),
+            phase,
+            start_min: occurrence.start_min,
+            end_min: occurrence.end_min,
+            title: occurrence.title.clone(),
+        });
     }
-    if wanted.is_empty() {
+    wanted
+}
+
+fn row_was_created(plan: &SyncPlan, occurrence: &PlannedOccurrence) -> bool {
+    plan.rows_added.iter().any(|row| {
+        row.calendar_id == occurrence.calendar_id
+            && row.event_id == occurrence.event_id
+            && row.row_kind == "task"
+    }) || plan.rows_upgraded.iter().any(|row| {
+        row.calendar_id == occurrence.calendar_id
+            && row.event_id == occurrence.event_id
+    })
+}
+
+fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
+    items.sort_by(|left, right| {
+        (left.start_min, left.end_min, left.block_id.as_str()).cmp(&(
+            right.start_min,
+            right.end_min,
+            right.block_id.as_str(),
+        ))
+    });
+    let mut clusters: Vec<Vec<WantedLink>> = Vec::new();
+    for item in items {
+        if let Some(last) = clusters.last_mut() {
+            let cluster_end =
+                last.iter().map(|link| link.end_min).max().unwrap_or(0);
+            if item.start_min <= cluster_end {
+                last.push(item);
+                continue;
+            }
+        }
+        clusters.push(vec![item]);
+    }
+    clusters
+}
+
+fn format_meet_span(start_min: i32, end_min: i32) -> (String, String) {
+    let duration = (end_min - start_min).max(0);
+    let start_mod = start_min.rem_euclid(1440);
+    let end_mod = end_min.rem_euclid(1440);
+    let start = format!("{:02}{:02}", start_mod / 60, start_mod % 60);
+    let end = format!("{:02}{:02}", end_mod / 60, end_mod % 60);
+    (
+        format!("(**{start}-{end}** [t:: {duration}m])"),
+        format!("{start}-{end}"),
+    )
+}
+
+fn status_for_phase(phase: Option<LinkPhase>) -> char {
+    match phase {
+        Some(LinkPhase::Past) => '/',
+        Some(LinkPhase::Current | LinkPhase::Future) => '*',
+        None => ' ',
+    }
+}
+
+fn closed_insert_at(contents: &str, cluster_start: i32) -> LineInsert {
+    let scan = capture_pomodoros::scan(contents);
+    let lines = line_spans(contents);
+    let line_text: Vec<&str> = lines.iter().map(|line| line.text).collect();
+    let section =
+        pomodoros_section_range(&line_text).expect("Pomodoros section exists");
+    let completed: Vec<&PomodoroEntry> = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.state == PomodoroState::Completed)
+        .collect();
+    if let Some(last) = completed
+        .iter()
+        .rev()
+        .find(|entry| entry_start_min(entry) <= cluster_start)
+    {
+        let end = child_block_end_line(&lines, last.line - 1);
+        return LineInsert::After(end);
+    }
+    if let Some(first) = completed.first() {
+        return LineInsert::Before(first.line - 1);
+    }
+    if let Some(first_open) = scan
+        .entries
+        .iter()
+        .find(|entry| entry.state == PomodoroState::Open)
+    {
+        return LineInsert::Before(first_open.line - 1);
+    }
+    LineInsert::Before(section.start)
+}
+
+fn running_insert_at(contents: &str) -> LineInsert {
+    let scan = capture_pomodoros::scan(contents);
+    let lines = line_spans(contents);
+    let line_text: Vec<&str> = lines.iter().map(|line| line.text).collect();
+    let section =
+        pomodoros_section_range(&line_text).expect("Pomodoros section exists");
+    if let Some(last) = scan
+        .entries
+        .iter()
+        .rfind(|entry| entry.state == PomodoroState::Completed)
+    {
+        let end = child_block_end_line(&lines, last.line - 1);
+        return LineInsert::After(end);
+    }
+    if let Some(first_open) = scan
+        .entries
+        .iter()
+        .find(|entry| entry.state == PomodoroState::Open)
+    {
+        return LineInsert::Before(first_open.line - 1);
+    }
+    LineInsert::Before(section.start)
+}
+
+fn entry_start_min(entry: &PomodoroEntry) -> i32 {
+    entry
+        .time_range
+        .as_deref()
+        .and_then(|range| range.split_once('-'))
+        .and_then(|(start, _)| parse_hhmm(start).map(i32::from))
+        .unwrap_or(0)
+}
+
+fn insert_ledger_line(
+    contents: &str,
+    at: LineInsert,
+    text: &str,
+) -> (String, usize) {
+    let lines = line_spans(contents);
+    match at {
+        LineInsert::Before(index) if index < lines.len() => {
+            (insert_line_before(contents, &lines, index, text), index)
+        }
+        LineInsert::Before(_) if !lines.is_empty() => {
+            let after = lines.len() - 1;
+            (insert_line_after(contents, &lines, after, text), after + 1)
+        }
+        LineInsert::After(index) => {
+            (insert_line_after(contents, &lines, index, text), index + 1)
+        }
+        LineInsert::Before(_) => (format!("{text}\n"), 0),
+    }
+}
+
+fn shift_touched(touched: &mut [TouchedMeet], new_line: usize) {
+    for entry in touched {
+        if entry.line_0 >= new_line {
+            entry.line_0 += 1;
+        }
+    }
+}
+
+fn append_links(
+    contents: &mut String,
+    entry_line: usize,
+    links: &[WantedLink],
+    tomato: bool,
+    plan: &mut SyncPlan,
+    touched: &mut [TouchedMeet],
+) -> usize {
+    let mut added = 0;
+    for link in links {
+        let body = if tomato {
+            format!("🍅 [[#^{}]]", link.block_id)
+        } else {
+            format!("[[#^{}]]", link.block_id)
+        };
+        let spans = line_spans(contents);
+        let end = child_block_end_line(&spans, entry_line);
+        let (updated, already, _) =
+            insert_link_into_entry(contents, &spans, entry_line, &body);
+        if already {
+            continue;
+        }
+        *contents = updated;
+        shift_touched(touched, end + 1);
+        plan.links_added.push(PlannedLink {
+            calendar_id: link.calendar_id.clone(),
+            event_id: link.event_id.clone(),
+            block_id: link.block_id.clone(),
+        });
+        added += 1;
+    }
+    added
+}
+
+fn record_or_bump(
+    touched: &mut Vec<TouchedMeet>,
+    state: MeetEntryState,
+    line_0: usize,
+    time: Option<String>,
+    created: bool,
+    added: usize,
+) {
+    if added == 0 {
         return;
     }
-    let mut contents = working.as_string();
-    let mut entry_line: Option<usize> = find_meet_entry(&contents);
-    let mut created = false;
-    for (calendar_id, event_id, block_id) in &wanted {
-        let link = format!("[[#^{block_id}]]");
-        if entry_line.is_none() {
-            let (updated, created_line, _) =
-                insert_named_placeholder_after_last_open(&contents, "MEET")
-                    .expect("Pomodoros section exists");
-            contents = updated;
-            entry_line = Some(created_line);
-            created = true;
-        }
-        let spans = line_spans(&contents);
-        let (updated, already, _) = insert_link_into_entry(
-            &contents,
-            &spans,
-            entry_line.expect("MEET entry"),
-            &link,
-        );
-        if !already {
-            contents = updated;
-            plan.links_added.push(PlannedLink {
-                calendar_id: calendar_id.clone(),
-                event_id: event_id.clone(),
-                block_id: block_id.clone(),
-            });
-        }
+    if let Some(existing) =
+        touched.iter_mut().find(|entry| entry.line_0 == line_0)
+    {
+        existing.links += added;
+        return;
     }
-    if !plan.links_added.is_empty() {
-        working.replace(&contents);
-        // `entry_line` is 0-based; the report is 1-based.
-        plan.pomodoro_entry_line = entry_line.map(|line| line + 1);
-        plan.pomodoro_created = created;
+    touched.push(TouchedMeet {
+        state,
+        line_0,
+        time,
+        created,
+        links: added,
+    });
+}
+
+fn open_meet_targets(contents: &str) -> OpenMeetTargets {
+    let scan = capture_pomodoros::scan(contents);
+    let timed: Vec<&PomodoroEntry> = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == PomodoroState::Open && entry.time_range.is_some()
+        })
+        .collect();
+    let placeholder = scan.entries.iter().find_map(|entry| {
+        (entry.state == PomodoroState::Open
+            && entry.time_range.is_none()
+            && entry.name.as_deref() == Some("MEET"))
+        .then_some(entry.line - 1)
+    });
+    let several_timed = timed.len() > 1;
+    let (single_timed, single_timed_name, running_time) = if timed.len() == 1 {
+        let entry = timed[0];
+        (
+            Some(entry.line - 1),
+            entry.name.clone(),
+            entry.time_range.clone(),
+        )
+    } else {
+        (None, None, None)
+    };
+    OpenMeetTargets {
+        single_timed,
+        single_timed_name,
+        several_timed,
+        placeholder,
+        running_time,
     }
 }
 
@@ -1462,9 +1989,16 @@ fn journaled_or_planned_block_id(
     plan: &SyncPlan,
     occurrence: &PlannedOccurrence,
 ) -> Option<String> {
+    if let Some(upgraded) = plan.rows_upgraded.iter().find(|row| {
+        row.calendar_id == occurrence.calendar_id
+            && row.event_id == occurrence.event_id
+    }) {
+        return Some(upgraded.block_id.clone());
+    }
     let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
     if let Some(state) = input.journal.get(&(key, input.day_string.clone()))
         && let Some(row) = state.row.as_ref()
+        && !row.block_id.is_empty()
     {
         return Some(row.block_id.clone());
     }
@@ -1481,26 +2015,6 @@ fn journaled_or_planned_block_id(
                 && row.event_id == occurrence.event_id
         })
         .map(|row| row.block_id.clone())
-}
-
-/// The open MEET entry: running timed first, else any open MEET.
-/// Returns the 0-based line index.
-fn find_meet_entry(contents: &str) -> Option<usize> {
-    let scan = capture_pomodoros::scan(contents);
-    let mut fallback = None;
-    for entry in &scan.entries {
-        if entry.state != PomodoroState::Open {
-            continue;
-        }
-        if entry.name.as_deref() != Some("MEET") {
-            continue;
-        }
-        if entry.time_range.is_some() {
-            return Some(entry.line - 1);
-        }
-        fallback = Some(entry.line - 1);
-    }
-    fallback
 }
 
 #[cfg(test)]

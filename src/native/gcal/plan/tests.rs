@@ -1,7 +1,11 @@
 use super::*;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{FixedOffset, NaiveDate, NaiveDateTime, TimeZone};
+use std::collections::{BTreeMap, HashSet};
 
-use crate::native::gcal::stamp;
+use crate::native::gcal::{
+    journal::{occurrence_key, span_hash, OccurrenceState, RowRecord},
+    render, stamp,
+};
 
 const ACCOUNT: &str = "you@example.com";
 
@@ -24,6 +28,13 @@ fn occurrence(
     time_label: &str,
     start_min: i32,
 ) -> PlannedOccurrence {
+    let html_link =
+        Some(format!("https://calendar.google.com/event?eid={event_id}"));
+    let badges = render::badge_text(html_link.as_deref(), None, None);
+    let mut spans = BTreeMap::new();
+    spans.insert("time".to_string(), span_hash(time_label));
+    spans.insert("title".to_string(), span_hash(title));
+    spans.insert("badges".to_string(), span_hash(&badges));
     PlannedOccurrence {
         calendar_id: "primary".to_string(),
         event_id: event_id.to_string(),
@@ -33,20 +44,40 @@ fn occurrence(
         task,
         time_label: time_label.to_string(),
         title: title.to_string(),
-        html_link: Some(format!(
-            "https://calendar.google.com/event?eid={event_id}"
-        )),
+        html_link,
         join_link: None,
         location: None,
         root: None,
         source: None,
         qualifier: None,
-        spans: BTreeMap::new(),
+        spans,
         needs_type: false,
-        link_eligible: false,
+        link_phase: None,
         all_day: time_label == "all day",
         start_min,
+        end_min: end_min_from_label(time_label, start_min),
     }
+}
+
+fn end_min_from_label(time_label: &str, start_min: i32) -> i32 {
+    if time_label.len() == 9 && time_label.as_bytes().get(4) == Some(&b'-') {
+        let hour: i32 = time_label[5..7].parse().unwrap_or(0);
+        let minute: i32 = time_label[7..9].parse().unwrap_or(0);
+        let mut end = hour * 60 + minute;
+        if end < start_min {
+            end += 1440;
+        }
+        return end;
+    }
+    start_min
+}
+
+fn with_phase(
+    mut occurrence: PlannedOccurrence,
+    phase: LinkPhase,
+) -> PlannedOccurrence {
+    occurrence.link_phase = Some(phase);
+    occurrence
 }
 
 fn run(contents: &str, occurrences: Vec<PlannedOccurrence>) -> SyncPlan {
@@ -293,7 +324,7 @@ fn stamp_above_a_paragraph_gets_a_blank_line() {
 #[test]
 fn pomodoro_entry_line_shifts_when_stamp_is_inserted() {
     let mut meeting = occurrence("meet", "Standup", true, "0900-0930", 540);
-    meeting.link_eligible = true;
+    meeting.link_phase = Some(LinkPhase::Future);
     let plan = run_at(
         "# Day\n\n## Pomodoros\n",
         vec![meeting],
@@ -307,7 +338,7 @@ fn pomodoro_entry_line_shifts_when_stamp_is_inserted() {
         .position(|line| line.contains("— MEET"))
         .expect("MEET entry")
         + 1;
-    assert_eq!(plan.pomodoro_entry_line, Some(meet_line));
+    assert_eq!(plan.pomodoro_entry_line(), Some(meet_line));
     assert!(
         plan.contents.contains(&stamp_line(12, 0)),
         "{}",
@@ -342,7 +373,7 @@ fn no_section_and_no_events_gains_nothing() {
 #[test]
 fn stamp_below_pomodoros_does_not_shift_meet_line() {
     let mut meeting = occurrence("meet", "Standup", true, "0900-0930", 540);
-    meeting.link_eligible = true;
+    meeting.link_phase = Some(LinkPhase::Future);
     let input = concat!(
         "## Pomodoros\n",
         "\n",
@@ -359,7 +390,7 @@ fn stamp_below_pomodoros_does_not_shift_meet_line() {
         .position(|line| line.contains("— MEET"))
         .expect("MEET entry")
         + 1;
-    assert_eq!(plan.pomodoro_entry_line, Some(meet_line));
+    assert_eq!(plan.pomodoro_entry_line(), Some(meet_line));
     let events = plan.contents.split("## Events\n").nth(1).expect("Events");
     let stamp = stamp_line(12, 0);
     assert!(
@@ -438,4 +469,534 @@ fn stamp_blank_before_list_is_preserved_on_refresh() {
         plan.contents
     );
     assert!(plan.stamp_refreshed);
+}
+
+fn empty_ledger() -> &'static str {
+    "# Day\n\n## Pomodoros\n"
+}
+
+fn journal_task(
+    event_id: &str,
+    block_id: &str,
+    url: Option<&str>,
+    link: bool,
+) -> ((String, String), OccurrenceState) {
+    let ts = FixedOffset::east_opt(0)
+        .expect("offset")
+        .with_ymd_and_hms(2026, 10, 30, 12, 0, 0)
+        .single()
+        .expect("ts");
+    (
+        (
+            occurrence_key("primary", event_id),
+            "2026-10-30".to_string(),
+        ),
+        OccurrenceState {
+            row: Some(RowRecord {
+                block_id: block_id.to_string(),
+                row_kind: "task".to_string(),
+                spans: BTreeMap::new(),
+                root: None,
+                source: None,
+                series_id: None,
+                url: url.map(str::to_string),
+                ts,
+                host: "test".to_string(),
+                path: "2026/20261030.md".to_string(),
+            }),
+            link,
+            gone: false,
+            flags: HashSet::new(),
+        },
+    )
+}
+
+#[test]
+fn past_and_future_share_closed_then_placeholder() {
+    let plan = run_at(
+        empty_ledger(),
+        vec![
+            with_phase(
+                occurrence("past", "Standup", true, "0800-0830", 480),
+                LinkPhase::Past,
+            ),
+            with_phase(
+                occurrence("later", "Dentist", true, "1830-1900", 1110),
+                LinkPhase::Future,
+            ),
+        ],
+        ACCOUNT,
+        now_at(12, 0),
+        true,
+    );
+    let pomodoros = plan.contents.split("## Pomodoros\n").nth(1).expect("P");
+    assert!(
+        pomodoros.contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{pomodoros}"
+    );
+    assert!(pomodoros.contains("\t- 🍅 [[#^standup]]"), "{pomodoros}");
+    assert!(pomodoros.contains("- [ ] () — MEET"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- [[#^dentist]]"), "{pomodoros}");
+    let closed_at = pomodoros.find("(**0800-0830**").expect("closed");
+    let open_at = pomodoros.find("- [ ] () — MEET").expect("placeholder");
+    assert!(closed_at < open_at, "{pomodoros}");
+    let standup = plan
+        .contents
+        .lines()
+        .find(|line| line.contains("^standup"))
+        .expect("standup");
+    assert!(standup.starts_with("- [/] #task"), "{standup}");
+    let dentist = plan
+        .contents
+        .lines()
+        .find(|line| line.contains("^dentist"))
+        .expect("dentist");
+    assert!(dentist.starts_with("- [*] #task"), "{dentist}");
+    assert_eq!(plan.links_added.len(), 2);
+    assert_eq!(plan.pomodoro_entries.len(), 2);
+    assert_eq!(plan.pomodoro_entries[0].state, MeetEntryState::Closed);
+    assert_eq!(plan.pomodoro_entries[1].state, MeetEntryState::Planned);
+}
+
+#[test]
+fn past_clusters_touching_meetings_and_splits_on_a_gap() {
+    let plan = run_at(
+        empty_ledger(),
+        vec![
+            with_phase(
+                occurrence("a", "One", true, "0800-0830", 480),
+                LinkPhase::Past,
+            ),
+            with_phase(
+                occurrence("b", "Two", true, "0830-0900", 510),
+                LinkPhase::Past,
+            ),
+            with_phase(
+                occurrence("c", "Three", true, "1000-1030", 600),
+                LinkPhase::Past,
+            ),
+        ],
+        ACCOUNT,
+        now_at(12, 0),
+        true,
+    );
+    let pomodoros = plan.contents.split("## Pomodoros\n").nth(1).expect("P");
+    assert!(
+        pomodoros.contains("- [x] (**0800-0900** [t:: 60m]) — MEET"),
+        "{pomodoros}"
+    );
+    assert!(
+        pomodoros.contains("- [x] (**1000-1030** [t:: 30m]) — MEET"),
+        "{pomodoros}"
+    );
+    let first = pomodoros.find("(**0800-0900**").expect("first");
+    let second = pomodoros.find("(**1000-1030**").expect("second");
+    assert!(first < second, "{pomodoros}");
+    assert!(pomodoros.contains("\t- 🍅 [[#^one]]"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- 🍅 [[#^two]]"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- 🍅 [[#^three]]"), "{pomodoros}");
+    assert_eq!(plan.pomodoro_entries.len(), 2);
+}
+
+#[test]
+fn closed_entry_lands_between_completed_sessions() {
+    let input = concat!(
+        "# Day\n\n## Pomodoros\n",
+        "- [x] (**0700-0730** [t:: 30m]) — WORK\n",
+        "\t- [[#^early]]\n",
+        "- [x] (**1100-1130** [t:: 30m]) — WORK\n",
+        "\t- [[#^late]]\n",
+        "- [ ] () — LATER\n",
+    );
+    let plan = run_at(
+        input,
+        vec![with_phase(
+            occurrence("mid", "Standup", true, "0800-0830", 480),
+            LinkPhase::Past,
+        )],
+        ACCOUNT,
+        now_at(12, 0),
+        true,
+    );
+    let pomodoros = plan.contents.split("## Pomodoros\n").nth(1).expect("P");
+    let early = pomodoros.find("— WORK").expect("early");
+    let meet = pomodoros
+        .find("(**0800-0830** [t:: 30m]) — MEET")
+        .expect("meet");
+    let late = pomodoros.rfind("— WORK").expect("late");
+    let later = pomodoros.find("— LATER").expect("later");
+    assert!(early < meet && meet < late && late < later, "{pomodoros}");
+}
+
+#[test]
+fn current_meeting_creates_or_reuses_running_meet() {
+    let meeting = with_phase(
+        occurrence("now", "Weekly sync", true, "1400-1500", 840),
+        LinkPhase::Current,
+    );
+    let created = run_at(
+        empty_ledger(),
+        vec![meeting.clone()],
+        ACCOUNT,
+        now_at(14, 30),
+        true,
+    );
+    assert!(
+        created
+            .contents
+            .contains("- [ ] (**1400-1500** [t:: 60m]) — MEET"),
+        "{}",
+        created.contents
+    );
+    assert!(
+        created.contents.contains("\t- [[#^weekly-sync]]"),
+        "{}",
+        created.contents
+    );
+    assert_eq!(created.pomodoro_entries.len(), 1);
+    assert_eq!(created.pomodoro_entries[0].state, MeetEntryState::Running);
+    assert!(created.pomodoro_created());
+
+    let reused = run_at(
+        concat!(
+            "# Day\n\n## Pomodoros\n",
+            "- [ ] (**1400-1500** [t:: 60m]) — MEET\n",
+        ),
+        vec![meeting],
+        ACCOUNT,
+        now_at(14, 30),
+        true,
+    );
+    assert_eq!(reused.contents.matches("— MEET").count(), 1);
+    assert!(
+        reused.contents.contains("\t- [[#^weekly-sync]]"),
+        "{}",
+        reused.contents
+    );
+    assert!(!reused.pomodoro_created());
+}
+
+#[test]
+fn current_during_running_work_uses_placeholder_and_warns() {
+    let plan = run_at(
+        concat!(
+            "# Day\n\n## Pomodoros\n",
+            "- [ ] (**1400-1500** [t:: 60m]) — WORK\n",
+        ),
+        vec![with_phase(
+            occurrence("now", "Weekly sync", true, "1400-1500", 840),
+            LinkPhase::Current,
+        )],
+        ACCOUNT,
+        now_at(14, 30),
+        true,
+    );
+    assert!(
+        plan.contents.contains("- [ ] () — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(
+        plan.contents.contains("\t- [[#^weekly-sync]]"),
+        "{}",
+        plan.contents
+    );
+    assert_eq!(
+        plan.contents
+            .lines()
+            .filter(|line| line.contains("(**") && line.contains("[ ]"))
+            .count(),
+        1,
+        "no second open timed entry:\n{}",
+        plan.contents
+    );
+    assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+    assert!(
+        plan.warnings[0].contains("Weekly sync is running now, but WORK"),
+        "{:?}",
+        plan.warnings
+    );
+}
+
+#[test]
+fn one_open_never_leaves_two_open_meets() {
+    let current_and_future = run_at(
+        empty_ledger(),
+        vec![
+            with_phase(
+                occurrence("now", "Weekly sync", true, "1400-1500", 840),
+                LinkPhase::Current,
+            ),
+            with_phase(
+                occurrence("later", "Dentist", true, "1830-1900", 1110),
+                LinkPhase::Future,
+            ),
+        ],
+        ACCOUNT,
+        now_at(14, 30),
+        true,
+    );
+    assert_eq!(
+        current_and_future.contents.matches("— MEET").count(),
+        1,
+        "{}",
+        current_and_future.contents
+    );
+    assert!(
+        current_and_future
+            .contents
+            .contains("- [ ] (**1400-1500** [t:: 60m]) — MEET"),
+        "{}",
+        current_and_future.contents
+    );
+    assert!(
+        current_and_future.contents.contains("[[#^weekly-sync]]"),
+        "{}",
+        current_and_future.contents
+    );
+    assert!(
+        current_and_future.contents.contains("[[#^dentist]]"),
+        "{}",
+        current_and_future.contents
+    );
+
+    let with_placeholder = run_at(
+        concat!("# Day\n\n## Pomodoros\n", "- [ ] () — MEET\n",),
+        vec![with_phase(
+            occurrence("now", "Weekly sync", true, "1400-1500", 840),
+            LinkPhase::Current,
+        )],
+        ACCOUNT,
+        now_at(14, 30),
+        true,
+    );
+    assert_eq!(
+        with_placeholder.contents.matches("— MEET").count(),
+        1,
+        "{}",
+        with_placeholder.contents
+    );
+    assert!(
+        with_placeholder.contents.contains("- [ ] () — MEET"),
+        "{}",
+        with_placeholder.contents
+    );
+    assert!(
+        !with_placeholder.contents.contains("(**1400-1500**"),
+        "{}",
+        with_placeholder.contents
+    );
+}
+
+#[test]
+fn cross_midnight_past_meeting_wraps_end() {
+    let plan = run_at(
+        empty_ledger(),
+        vec![with_phase(
+            occurrence("late", "Late meeting", true, "2330-0030", 1410),
+            LinkPhase::Past,
+        )],
+        ACCOUNT,
+        now_at(12, 0),
+        true,
+    );
+    assert!(
+        plan.contents
+            .contains("- [x] (**2330-0030** [t:: 60m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn existing_ended_row_gets_no_closed_entry() {
+    let input = concat!(
+        "## Events\n\n",
+        "- [ ] #task **0800-0830** Standup [📅](https://calendar.google.com/event?eid=past \"Open in Google Calendar\") ^standup\n",
+        "\n## Pomodoros\n",
+    );
+    let (key, state) = journal_task(
+        "past",
+        "standup",
+        Some("https://calendar.google.com/event?eid=past"),
+        false,
+    );
+    let mut journal = BTreeMap::new();
+    journal.insert(key, state);
+    let plan = plan_sync(&SyncPlanInput {
+        contents: input,
+        is_today: true,
+        occurrences: vec![with_phase(
+            occurrence("past", "Standup", true, "0800-0830", 480),
+            LinkPhase::Past,
+        )],
+        journal: &journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now: now_at(12, 0),
+    });
+    assert!(
+        !plan.contents.contains("— MEET"),
+        "journaled ended row must not mint a closed entry:\n{}",
+        plan.contents
+    );
+    assert!(plan.links_added.is_empty());
+}
+
+#[test]
+fn adopted_unended_row_still_gets_open_meet_link() {
+    let input = concat!(
+        "## Events\n\n",
+        "- [ ] #task **1830-1900** Dentist [📅](https://calendar.google.com/event?eid=later \"Open in Google Calendar\") ^dentist\n",
+        "\n## Pomodoros\n",
+    );
+    let plan = run_at(
+        input,
+        vec![with_phase(
+            occurrence("later", "Dentist", true, "1830-1900", 1110),
+            LinkPhase::Future,
+        )],
+        ACCOUNT,
+        now_at(12, 0),
+        true,
+    );
+    assert!(
+        plan.contents.contains("- [ ] () — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(plan.contents.contains("[[#^dentist]]"), "{}", plan.contents);
+    assert_eq!(plan.rows_adopted.len(), 1);
+}
+
+#[test]
+fn upgraded_ended_maybe_gets_closed_meet() {
+    let occ = with_phase(
+        occurrence("past", "Standup", true, "0800-0830", 480),
+        LinkPhase::Past,
+    );
+    let input = concat!(
+        "## Events\n\n",
+        "- **0800-0830** Standup · *maybe* [📅](https://calendar.google.com/event?eid=past \"Open in Google Calendar\")\n",
+        "\n## Pomodoros\n",
+    );
+    let ts = FixedOffset::east_opt(0)
+        .expect("offset")
+        .with_ymd_and_hms(2026, 10, 30, 12, 0, 0)
+        .single()
+        .expect("ts");
+    let mut journal = BTreeMap::new();
+    journal.insert(
+        (occurrence_key("primary", "past"), "2026-10-30".to_string()),
+        OccurrenceState {
+            row: Some(RowRecord {
+                block_id: String::new(),
+                row_kind: "context".to_string(),
+                spans: occ.spans.clone(),
+                root: None,
+                source: None,
+                series_id: None,
+                url: occ.html_link.clone(),
+                ts,
+                host: "test".to_string(),
+                path: "2026/20261030.md".to_string(),
+            }),
+            link: false,
+            gone: false,
+            flags: HashSet::new(),
+        },
+    );
+    let plan = plan_sync(&SyncPlanInput {
+        contents: input,
+        is_today: true,
+        occurrences: vec![occ],
+        journal: &journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now: now_at(12, 0),
+    });
+    let standup = plan
+        .contents
+        .lines()
+        .find(|line| line.contains("^standup"))
+        .expect("standup");
+    assert!(standup.starts_with("- [/] #task"), "{standup}");
+    assert!(
+        plan.contents
+            .contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(
+        plan.contents.contains("\t- 🍅 [[#^standup]]"),
+        "{}",
+        plan.contents
+    );
+    assert_eq!(plan.rows_upgraded.len(), 1);
+    assert_eq!(plan.links_added.len(), 1);
+}
+
+#[test]
+fn replanning_output_with_journal_is_idempotent() {
+    let first = run_at(
+        empty_ledger(),
+        vec![
+            with_phase(
+                occurrence("past", "Standup", true, "0800-0830", 480),
+                LinkPhase::Past,
+            ),
+            with_phase(
+                occurrence("later", "Dentist", true, "1830-1900", 1110),
+                LinkPhase::Future,
+            ),
+        ],
+        ACCOUNT,
+        now_at(12, 0),
+        true,
+    );
+    let mut journal = BTreeMap::new();
+    for row in &first.rows_added {
+        let linked = first.links_added.iter().any(|link| {
+            link.calendar_id == row.calendar_id && link.event_id == row.event_id
+        });
+        let (key, mut state) = journal_task(
+            &row.event_id,
+            &row.block_id,
+            row.url.as_deref(),
+            linked,
+        );
+        if let Some(record) = state.row.as_mut() {
+            record.spans.clone_from(&row.spans);
+        }
+        journal.insert(key, state);
+    }
+    let second = plan_sync(&SyncPlanInput {
+        contents: &first.contents,
+        is_today: true,
+        occurrences: vec![
+            with_phase(
+                occurrence("past", "Standup", true, "0800-0830", 480),
+                LinkPhase::Past,
+            ),
+            with_phase(
+                occurrence("later", "Dentist", true, "1830-1900", 1110),
+                LinkPhase::Future,
+            ),
+        ],
+        journal: &journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now: now_at(12, 0),
+    });
+    assert_eq!(second.contents, first.contents);
+    assert!(!second.changed);
 }

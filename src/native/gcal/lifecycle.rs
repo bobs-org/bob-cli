@@ -277,24 +277,17 @@ pub(crate) fn row_untouched(
     }
     let link = format!("[[#^{block_id}]]");
     let scan = capture_pomodoros::scan(contents);
-    let range = pomodoros_section_range(&lines);
-    let mut bounds: Vec<usize> = scan
+    for entry in scan
         .entries
         .iter()
         .filter(|entry| entry.state == PomodoroState::Completed)
-        .map(|entry| entry.line.saturating_sub(1))
-        .collect();
-    bounds.sort_unstable();
-    let section_end = range.map(|range| range.end).unwrap_or(lines.len());
-    for (position, start) in bounds.iter().enumerate() {
-        let end = bounds
-            .get(position + 1)
-            .copied()
-            .unwrap_or(section_end)
-            .min(lines.len());
-        let from = (*start).min(end);
+    {
+        let start = entry.line.saturating_sub(1);
+        let end = child_block_end_line(&spans, start)
+            .min(lines.len().saturating_sub(1));
+        let from = start.min(end);
         if lines
-            .get(from..end)
+            .get(from..=end)
             .is_some_and(|scope| scope.iter().any(|line| line.contains(&link)))
         {
             return false;
@@ -463,6 +456,30 @@ mod tests {
         let (same, count) = remove_childless_untimed_meet(note);
         assert_eq!(count, 0);
         assert_eq!(same, note);
+    }
+
+    #[test]
+    fn open_meet_links_after_a_closed_entry_stay_untouched() {
+        let note = concat!(
+            "## Events\n",
+            "- [/] #task **0800-0830** Standup ^standup\n",
+            "- [*] #task **1830-1900** Dentist ^dentist\n",
+            "\n## Pomodoros\n",
+            "- [x] (**0800-0830** [t:: 30m]) — MEET\n",
+            "\t- 🍅 [[#^standup]]\n",
+            "- [ ] () — MEET\n",
+            "\t- [[#^dentist]]\n",
+        );
+        let standup = note
+            .lines()
+            .position(|line| line.contains("^standup"))
+            .expect("standup");
+        let dentist = note
+            .lines()
+            .position(|line| line.contains("^dentist"))
+            .expect("dentist");
+        assert!(!row_untouched(note, standup, "standup"));
+        assert!(row_untouched(note, dentist, "dentist"));
     }
 
     #[test]

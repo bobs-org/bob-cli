@@ -43,4 +43,6 @@ pub(crate) use task_update::{
     plan_task_link, set_task_line_status,
     task_update_has_single_future_scheduled, TaskTogglePlan,
 };
-pub(crate) use text::child_block_end_line;
+pub(crate) use text::{
+    child_block_end_line, insert_line_after, insert_line_before,
+};

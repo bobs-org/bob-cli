@@ -5,6 +5,10 @@ aliases:
   - daily-note Event Tasks
   - gcal daily residence
 summary: Synced calendar events live in their daily note's Events section with root attribution and one appended MEET.
+metadata:
+  status: superseded-in-part
+  superseded_by:
+    - decisions:synced-meetings-link-by-phase
 ---
 
 # Calendar Events Are Daily-Note Event Tasks
@@ -27,3 +31,8 @@ plan budget; MEET is not exempt.
 
 **Reopens when.** Event Tasks need review or lanes, or same-type Pomodoro
 duplicates land.
+
+Superseded in part: Task Links no longer all go under one appended MEET
+placeholder; an ended meeting lands under a closed MEET entry and a running
+one under the running MEET. See
+[[decisions:synced-meetings-link-by-phase]].

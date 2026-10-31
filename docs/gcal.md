@@ -350,30 +350,63 @@ The run fetches every configured calendar outside any lock, classifies each
 event, chooses roots, and folds the per-host journal. The plan then inserts
 new rows in time order (never reordering existing lines), adopts rows whose
 `📅` URL is already in the note without a journal record (crash recovery),
-tombstones journaled rows whose line is gone (never re-created), and appends
-each eligible MEET link once. A removed or moved link is never re-added. An
-unchanged calendar can still write the Events stamp when the stamp is due
-(missing, malformed, edited, misplaced, duplicated, or later than now). Age
-never makes a stamp due: the line means last change. A plan that is
+tombstones journaled rows whose line is gone (never re-created), and files
+each created Event Task under a past, running, or planned MEET Pomodoro in
+the same write. A removed or moved link is never re-added. An unchanged
+calendar can still write the Events stamp when the stamp is due (missing,
+malformed, edited, misplaced, duplicated, or later than now). Age never
+makes a stamp due: the line means last change. A plan that is
 byte-identical after that step writes nothing and appends nothing. Sync keeps a
 blank line between the `## Events` heading and its first line, and adds the gap
 to an existing section that lacks it, even when there are no calendar changes.
+
+Every Event Task row this run creates (a new row, or a Maybe context row
+upgraded in place) is linked by phase, on any day:
+
+| Phase at sync time | Pomodoro | Link line | Row checkbox |
+| --- | --- | --- | --- |
+| Past: the event ended (`end ≤ now`) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry | `🍅 [[#^id]]` | `[/]` |
+| Current: `start ≤ now < end`, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
+| Future: the event has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
+
+Back-to-back or overlapping past meetings share one closed MEET whose span is
+the cluster (next start ≤ cluster end). All current meetings share one
+running MEET, and all future meetings share one placeholder. The run never
+leaves a second open MEET: current meetings with no running Pomodoro reuse
+an existing MEET placeholder if one is open, otherwise they create a running
+MEET; future meetings go under the running MEET when that running entry is
+named MEET, otherwise under the placeholder (created when missing). Sync
+never creates a running entry while any open timed Pomodoro exists; those
+current meetings go under the placeholder with a warning. Sync never starts,
+closes, retimes, renames, or moves an existing Pomodoro: it only creates
+entries and appends links. Existing unlinked rows still earn an open-MEET
+link only on today's note, and only when the event has not ended.
+
+A past day (`-D yesterday`) gains closed MEET entries and `[/]` rows. A
+future day (`-D tomorrow`) gains a MEET placeholder and `[*]` rows; task
+status hooks rule R9 may clear those `[*]` rows to `[ ]` until that day
+becomes today, when the MEET link raises them again.
 
 The write takes the vault lock (30 seconds), re-reads and re-plans, then
 writes through the preimage-checked staged writer, all-or-nothing, retrying
 once on a concurrent edit before failing. The journal (`.bob/gcal/<host>.jsonl`)
 appends only after the note write succeeds, and host-local status
 (`$XDG_STATE_HOME/bob/gcal/status.json`) records the run for `list` and
-`doctor`. Commits are left to vault-sync, as with capture. Past days get rows
-only; only today gains MEET links. `-d` prints the exact unified diff of the
-plan and writes nothing. `-q` prints nothing on success, no-op, or waiting.
+`doctor`. Commits are left to vault-sync, as with capture. `-d` prints the
+exact unified diff of the plan and writes nothing. `-q` prints nothing on
+success, no-op, or waiting.
 
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
 (`action`, `kind`, `time`, `title`, `root`, `source`), `pomodoro`
-(`entry_line`, `created`, `links_added`), `warnings`, and `stamp`
+(`entry_line`, `created`, `links_added`, `entries`), `warnings`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
-section and for `waiting`).
+section and for `waiting`). `pomodoro.entries` lists each MEET this run
+created or appended links into (`state` `closed`/`running`/`planned`,
+1-based `line`, `time` as `HHMM-HHMM` or null, `created`, `links`) in
+ledger order. `entry_line` and `created` describe the first open entry in
+that list (`null` / `false` when the run linked only under closed entries).
+`links_added` counts every link, closed entries included.
 
 ### Events stamp
 
@@ -417,14 +450,18 @@ account, or set `gcal.account` to the stamp's account.
 | `[type::]`, block ID | Bob, once | Never rewritten |
 | Child bullets (meeting notes) | You | Never touched |
 | MEET Task Link | Bob, once | Never re-added or moved; removed only by a cancel |
+| MEET Pomodoro entries | Bob, once | Created only in the write that adds their first link; never started, closed, retimed, renamed, or moved afterwards |
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
 | Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
 
 "Untouched" means not done, not In Progress, never linked under a closed
 Pomodoro, and with no 🍅 history. A worked task is never cancelled; it is
-left alone and reported once. MEET placeholders are created only in the
-same write that adds their first link, so sync never leaves a second open
-MEET.
+left alone and reported once. A Past row is worked from birth (`[/]` and a
+closed-entry link), so a later Google decline, delete, or move leaves it
+alone and reports it once. `[/]` rows count in the Pending lane and show in
+`list`'s `past_open` footer until they are completed or cancelled. MEET
+placeholders and running MEET entries are created only in the same write
+that adds their first link, so sync never leaves a second open MEET.
 
 ## Reconciling Google-side changes
 
@@ -438,8 +475,8 @@ render of its event:
   order. The checkbox, `[root::]`, `[type::]`, and block ID are never
   rewritten.
 - A Maybe context row whose RSVP went Yes upgrades in place to an Event
-  Task (with a MEET link when the meeting has not ended yet). A Yes task
-  row whose RSVP went Maybe stays a task and is reported once.
+  Task and is filed under a MEET by phase. A Yes task row whose RSVP went
+  Maybe stays a task and is reported once.
 - A journaled occurrence that leaves the snapshot is looked up with
   `gog calendar event`. A 404/410, a `status: cancelled`, a start on
   another day, or a declined RSVP cancels an untouched task (checkbox to
@@ -554,9 +591,11 @@ no provider description or attendee list, and carries the `vault` state.
 
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
 `warnings`, and `stamp`. `stamp` is `{account, synced_at, refreshed}` or
-`null`. Row actions add `updated`, `cancelled`, `removed` (context),
-`upgraded`, and `learned` to the sync-phase `added`, `adopted`, and `removed`
-(task) actions; lifecycle notices also arrive as `warnings`.
+`null`. `pomodoro` carries `entry_line`, `created`, `links_added`, and
+`entries` as in [Sync](#sync). Row actions add `updated`, `cancelled`,
+`removed` (context), `upgraded`, and `learned` to the sync-phase `added`,
+`adopted`, and `removed` (task) actions; lifecycle notices also arrive as
+`warnings`.
 
 ## Security
 
@@ -588,3 +627,7 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 - Google forbids Calendar scopes on the device-code flow; over SSH, login
   switches to the paste flow automatically.
 - Consent screens left in Testing expire in 7 days; publish them.
+- A closed or running MEET built from calendar spans may overlap a session
+  already logged; sync does not clip it.
+- R9 may clear `[*]` Event Tasks on a future day's note until that day is
+  today.

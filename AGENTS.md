@@ -169,8 +169,9 @@ edited in place.
    runs bob, renders the spans, candidates, and previews bob returns, and submits each
    draft as one bob capture call.
 10. **Calendar Events Are Daily Note Event Tasks**
-    (`calendar-events-are-daily-note-event-tasks`) - Synced calendar events live in
-    their daily note's Events section with root attribution and one appended MEET.
+    (`calendar-events-are-daily-note-event-tasks`) - _[partly superseded by
+    `decisions:synced-meetings-link-by-phase`]_ Synced calendar events live in their
+    daily note's Events section with root attribution and one appended MEET.
 11. **Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites**
     (`capture-link-drops-blocking-deps`) - Typing an existing-task capture link on a
     task Blocked only by its own open prerequisites drops those links and then performs
@@ -282,34 +283,37 @@ edited in place.
     _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ A blocked project
     passes its dependency or schedule reason through its project descendants, with
     reconcile as the authority and the ^prj tag as the proxy for other engines.
-37. **Task Dependencies Are Links On One Depends-On Line**
+37. **Synced Meetings Are Linked By Phase At Birth** (`synced-meetings-link-by-phase`) -
+    A new Event Task is filed under a past, running, or planned MEET at birth: closed
+    clusters for ended meetings, one open MEET for current and future.
+38. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-38. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
+39. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
     (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
     color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
     top-level area stem, then name hash; clients render the hue Bob reports.
-39. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
+40. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
     (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
     `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
     then plan.exempt mute, then top-level area stem, then name hash; clients render the
     hue Bob reports.
-40. **Theme Preferences Live In A Per-Host Journal**
+41. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
     the only writer.
-41. **Today Is Read From The Ledger, Never Written To Tasks**
+42. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-42. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+43. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-43. **Unblocked Tasks Resurface As Ticklers**
+44. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`]_ Every automatic Blocked-to-Ready recovery
     records [unblocked:: today] unless a WRITE skip applies, so the task is TICKLER in

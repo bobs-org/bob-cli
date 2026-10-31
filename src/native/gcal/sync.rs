@@ -18,7 +18,7 @@ use super::{
     journal::{self, OccurrenceState},
     lifecycle::{AbsentVerdict, LifecycleItem},
     model::{EventDateTime, GcalEvent},
-    plan::{self, PlannedOccurrence},
+    plan::{self, LinkPhase, MeetPomodoroEntry, PlannedOccurrence},
     render,
     snapshot::{self},
     stamp::{self, Stamp},
@@ -62,8 +62,7 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             path: String::new(),
             status: "error",
             rows: Vec::new(),
-            entry_line: None,
-            entry_created: false,
+            entries: Vec::new(),
             links_added: 0,
             warnings: Vec::new(),
             quiet: true,
@@ -90,8 +89,7 @@ struct SyncReport {
     path: String,
     status: &'static str,
     rows: Vec<ReportRow>,
-    entry_line: Option<usize>,
-    entry_created: bool,
+    entries: Vec<MeetPomodoroEntry>,
     links_added: usize,
     warnings: Vec<String>,
     quiet: bool,
@@ -196,10 +194,9 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             path: display_path,
             status: "dry_run",
             rows: report_rows(&plan),
-            entry_line: plan.pomodoro_entry_line,
-            entry_created: plan.pomodoro_created,
+            entries: plan.pomodoro_entries.clone(),
             links_added: plan.links_added.len(),
-            warnings,
+            warnings: merge_warnings(warnings, &plan.warnings),
             quiet: args.quiet,
             json: args.format.is_json(),
             diff: Some(diff),
@@ -214,8 +211,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             path: display_path.clone(),
             status: "unchanged",
             rows: Vec::new(),
-            entry_line: None,
-            entry_created: false,
+            entries: Vec::new(),
             links_added: 0,
             warnings,
             quiet: args.quiet,
@@ -297,8 +293,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         path: display_path.clone(),
                         status: "unchanged",
                         rows: Vec::new(),
-                        entry_line: None,
-                        entry_created: false,
+                        entries: Vec::new(),
                         links_added: 0,
                         warnings,
                         quiet: args.quiet,
@@ -326,14 +321,14 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     for kept in &plan.kept {
         warnings.push(format!("{}: {}", kept.title, kept.detail));
     }
+    warnings.extend(plan.warnings.iter().cloned());
 
     let report = SyncReport {
         day,
         path: display_path,
         status: "written",
         rows: report_rows(&plan),
-        entry_line: plan.pomodoro_entry_line,
-        entry_created: plan.pomodoro_created,
+        entries: plan.pomodoro_entries.clone(),
         links_added: plan.links_added.len(),
         warnings,
         quiet: args.quiet,
@@ -358,8 +353,7 @@ fn waiting(
         path: display_path.to_string(),
         status: "waiting",
         rows: Vec::new(),
-        entry_line: None,
-        entry_created: false,
+        entries: Vec::new(),
         links_added: 0,
         warnings: warnings.to_vec(),
         quiet: args.quiet,
@@ -401,7 +395,7 @@ fn build_occurrences(
             continue;
         }
         let task = event.inclusion == Inclusion::Task;
-        let (all_day, start_min, time_label) =
+        let (all_day, start_min, end_min, time_label) =
             row_time(&snapshot.window, &event.event);
         let root_value =
             event.root.as_ref().and_then(|root| root.value.clone());
@@ -435,8 +429,16 @@ fn build_occurrences(
         } else {
             context_qualifier(event.inclusion.reason())
         };
-        let link_eligible =
-            task && is_today && !has_ended(&event.event, &snapshot.window, now);
+        let link_phase = if task {
+            Some(link_phase_for(
+                &event.event,
+                &snapshot.window,
+                is_today,
+                now,
+            ))
+        } else {
+            None
+        };
         let warnings = event
             .root
             .as_ref()
@@ -477,9 +479,10 @@ fn build_occurrences(
                 qualifier,
                 spans,
                 needs_type,
-                link_eligible,
+                link_phase,
                 all_day,
                 start_min,
+                end_min,
             },
             warnings,
         ));
@@ -487,14 +490,14 @@ fn build_occurrences(
     out
 }
 
-/// `(all_day, start_min, time_label)` for one event in vault-local time.
+/// `(all_day, start_min, end_min, time_label)` for one event in vault-local time.
 fn row_time(
     window: &classify::DayWindow,
     event: &super::model::GcalEvent,
-) -> (bool, i32, String) {
+) -> (bool, i32, i32, String) {
     match (&event.start, &event.end) {
         (EventDateTime::AllDay(_), EventDateTime::AllDay(_)) => {
-            (true, 0, "all day".to_string())
+            (true, 0, 0, "all day".to_string())
         }
         (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
             let local_start = window.local(start);
@@ -506,11 +509,39 @@ fn row_time(
                 local_end.hour(),
                 local_end.minute(),
             );
-            let start_min =
-                local_start.hour() as i32 * 60 + local_start.minute() as i32;
-            (false, start_min, label)
+            let start_min = minutes_from_midnight(window.day, local_start);
+            let end_min = minutes_from_midnight(window.day, local_end);
+            (false, start_min, end_min, label)
         }
-        _ => (true, 0, "all day".to_string()),
+        _ => (true, 0, 0, "all day".to_string()),
+    }
+}
+
+fn minutes_from_midnight(day: NaiveDate, local: chrono::NaiveDateTime) -> i32 {
+    let midnight = day.and_hms_opt(0, 0, 0).expect("midnight");
+    (local - midnight).num_minutes() as i32
+}
+
+fn link_phase_for(
+    event: &super::model::GcalEvent,
+    window: &classify::DayWindow,
+    is_today: bool,
+    now: &chrono::NaiveDateTime,
+) -> LinkPhase {
+    match (&event.start, &event.end) {
+        (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
+            let local_start = window.local(start);
+            let local_end = window.local(end);
+            if local_end <= *now {
+                LinkPhase::Past
+            } else if local_start <= *now && is_today {
+                LinkPhase::Current
+            } else {
+                LinkPhase::Future
+            }
+        }
+        _ if window.day < now.date() => LinkPhase::Past,
+        _ => LinkPhase::Future,
     }
 }
 
@@ -656,19 +687,6 @@ fn lookup_verdict(
     Ok(AbsentVerdict::LeftAlone(
         "still listed on this day".to_string(),
     ))
-}
-
-/// Whether the timed event already ended at sync time, in vault-local
-/// wall time.
-fn has_ended(
-    event: &super::model::GcalEvent,
-    window: &classify::DayWindow,
-    now: &chrono::NaiveDateTime,
-) -> bool {
-    match &event.end {
-        EventDateTime::Timed(end) => window.local(end) <= *now,
-        EventDateTime::AllDay(_) => false,
-    }
 }
 
 /// Context-row qualifier from the inclusion reason.
@@ -1098,9 +1116,11 @@ fn print_json(report: &SyncReport) {
             "status": report.status,
             "rows": rows,
             "pomodoro": {
-                "entry_line": report.entry_line,
-                "created": report.entry_created,
+                "entry_line": first_open_entry(report).map(|entry| entry.line),
+                "created": first_open_entry(report)
+                    .is_some_and(|entry| entry.created),
                 "links_added": report.links_added,
+                "entries": json_entries(report),
             },
             "warnings": report.warnings,
             "stamp": stamp,
@@ -1162,14 +1182,8 @@ fn print_human(report: &SyncReport) {
         };
         println!("  {sigil} {:<7} {detail}", row.kind);
     }
-    if report.links_added > 0 {
-        let made = if report.entry_created { "created " } else { "" };
-        println!(
-            "  {} MEET     {}() — MEET · linked {}",
-            if report.entry_created { "+" } else { "=" },
-            made,
-            report.links_added,
-        );
+    for entry in &report.entries {
+        println!("  {}", meet_human_line(entry));
     }
     let count = |action: &str, kind: &str| {
         report
@@ -1180,10 +1194,12 @@ fn print_human(report: &SyncReport) {
     };
     let tasks = count("added", "task");
     let context = count("added", "context");
+    let created_entries =
+        report.entries.iter().filter(|entry| entry.created).count();
     let stamp_only = report.status == "written"
         && report.rows.is_empty()
         && report.links_added == 0
-        && !report.entry_created;
+        && created_entries == 0;
     let summary = if report.status == "unchanged" {
         "✓ Events unchanged · Pomodoros unchanged".to_string()
     } else if stamp_only {
@@ -1208,10 +1224,14 @@ fn print_human(report: &SyncReport) {
         if parts.is_empty() {
             parts.push("+0 tasks".to_string());
         }
+        let entry_word = if created_entries == 1 {
+            "entry"
+        } else {
+            "entries"
+        };
         format!(
-            "✓ Events {} · Pomodoros +{} entry, +{} links",
+            "✓ Events {} · Pomodoros +{created_entries} {entry_word}, +{} links",
             parts.join(", "),
-            usize::from(report.entry_created),
             report.links_added,
         )
     };
@@ -1222,6 +1242,46 @@ fn print_human(report: &SyncReport) {
     for warning in &report.warnings {
         eprintln!("{}", styler.dim(&format!("warning: {warning}")));
     }
+}
+
+fn merge_warnings(mut warnings: Vec<String>, extra: &[String]) -> Vec<String> {
+    warnings.extend(extra.iter().cloned());
+    warnings
+}
+
+fn first_open_entry(report: &SyncReport) -> Option<&MeetPomodoroEntry> {
+    report.entries.iter().find(|entry| entry.state.is_open())
+}
+
+fn json_entries(report: &SyncReport) -> Vec<Value> {
+    report
+        .entries
+        .iter()
+        .map(|entry| {
+            json!({
+                "state": entry.state.as_str(),
+                "line": entry.line,
+                "time": entry.time,
+                "created": entry.created,
+                "links": entry.links,
+            })
+        })
+        .collect()
+}
+
+fn meet_human_line(entry: &MeetPomodoroEntry) -> String {
+    let sigil = if entry.created { "+" } else { "=" };
+    let body = match (entry.created, entry.state, entry.time.as_deref()) {
+        (true, plan::MeetEntryState::Planned, _) => {
+            "created () — MEET".to_string()
+        }
+        (false, plan::MeetEntryState::Planned, _) => "() — MEET".to_string(),
+        (_, state, Some(time)) => {
+            format!("{} {} — MEET", state.as_str(), human_time(time))
+        }
+        (_, state, None) => format!("{} () — MEET", state.as_str()),
+    };
+    format!("{sigil} MEET     {body} · linked {}", entry.links)
 }
 
 /// `0800-0830` → `08:00–08:30`; `all day` stays as written.
