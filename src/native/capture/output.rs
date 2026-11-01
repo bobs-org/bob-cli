@@ -2927,6 +2927,17 @@ pub(super) fn print_human_pomodoro_adjust_success(
         ));
     }
     println!("  {}", styler.dim(&detail));
+    if let Some(conflict) = adjust.event_conflict.as_ref() {
+        println!(
+            "  {}",
+            styler.yellow(&event_conflict_message(
+                adjust.pomodoro_name.as_deref(),
+                &adjust.after_start,
+                &adjust.after_end,
+                conflict,
+            ))
+        );
+    }
     println!("  {}", styler.dim(&result.task_line));
 }
 
@@ -2963,6 +2974,17 @@ pub(super) fn print_human_pomodoro_shift_success(
         shift.pomodoro_line,
     );
     println!("  {}", styler.dim(&detail));
+    if let Some(conflict) = shift.event_conflict.as_ref() {
+        println!(
+            "  {}",
+            styler.yellow(&event_conflict_message(
+                shift.pomodoro_name.as_deref(),
+                &shift.after_start,
+                &shift.after_end,
+                conflict,
+            ))
+        );
+    }
     println!("  {}", styler.dim(&result.task_line));
 }
 

@@ -1050,10 +1050,18 @@ pub(super) fn plan_pomodoro_link_with_start(
                         r#override: None,
                         tracked: true,
                         event_run: None,
+                        event_conflict: None,
                     };
                     if let Some(finish) = meet_finish {
                         finish.apply(&mut summary);
                     }
+                    attach_start_event_conflict(
+                        &mut summary,
+                        &started_day,
+                        now.date(),
+                        spec,
+                        pomodoro_name,
+                    );
                     return Ok(CaptureWritePlan {
                         placement: Placement::Linked,
                         pomodoro: None,
@@ -1167,7 +1175,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         now,
                     },
                 )?;
-                planner.stage(day_file, moved_day)?;
+                planner.stage(day_file, moved_day.clone())?;
                 // The named entry started and moved, and the queued link
                 // moved into it: the destination carries both roles while
                 // the source resolves through the item's line map.
@@ -1195,10 +1203,18 @@ pub(super) fn plan_pomodoro_link_with_start(
                     r#override: None,
                     tracked: true,
                     event_run: None,
+                    event_conflict: None,
                 };
                 if let Some(finish) = meet_finish {
                     finish.apply(&mut summary);
                 }
+                attach_start_event_conflict(
+                    &mut summary,
+                    &moved_day,
+                    now.date(),
+                    spec,
+                    pomodoro_name,
+                );
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
                     pomodoro: None,
@@ -1326,7 +1342,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         now,
                     },
                 )?;
-                planner.stage(day_file, moved_day)?;
+                planner.stage(day_file, moved_day.clone())?;
                 // The named entry was created and started, and the queued
                 // link moved into it.
                 let mut pomodoro_refs = PomodoroBlockRef::started_and_linked(
@@ -1353,10 +1369,18 @@ pub(super) fn plan_pomodoro_link_with_start(
                     r#override: None,
                     tracked: true,
                     event_run: None,
+                    event_conflict: None,
                 };
                 if let Some(finish) = meet_finish {
                     finish.apply(&mut summary);
                 }
+                attach_start_event_conflict(
+                    &mut summary,
+                    &moved_day,
+                    now.date(),
+                    spec,
+                    pomodoro_name,
+                );
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
                     pomodoro: None,
@@ -1465,10 +1489,18 @@ pub(super) fn plan_pomodoro_link_with_start(
         r#override: None,
         tracked: true,
         event_run: None,
+        event_conflict: None,
     };
     if let Some(finish) = meet_finish {
         finish.apply(&mut summary);
     }
+    attach_start_event_conflict(
+        &mut summary,
+        &started_day,
+        now.date(),
+        spec,
+        pomodoro_name,
+    );
     let _ = (q_line_index, q_subtree_end);
     // The queued entry started in place and already holds the link: the
     // destination carries both the start and the (mention-only) link ref.

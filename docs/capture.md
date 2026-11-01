@@ -46,6 +46,7 @@ workflow guide.
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
   - [Adjusting the current Pomodoro](#adjusting-the-current-pomodoro)
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
+  - [Running into an event](#running-into-an-event)
   - [Closing the running Pomodoro](#closing-the-running-pomodoro)
     - [Retired close spellings](#retired-close-spellings)
     - [Choosing each Task Link's outcome](#choosing-each-task-links-outcome)
@@ -3045,6 +3046,9 @@ checkbox, name, other bytes, children, CRLF, and a missing final newline,
 then the entry moves to the current slot. No entry is created, no link is
 added, and no task note is written. Later items see earlier staged edits and
 dry-run computes without committing; any failure rolls the whole batch back.
+A non-MEET start that newly runs past an open Event Task raises a
+structured warning; see [Running into an event](#running-into-an-event).
+
 Composable idioms: `x`, blank line, `=` switches sessions (or `x =` on one
 line; the `x` closes before `=` plans, so no override warning appears);
 `=`, blank line, `+2` starts then extends; `=`, blank line,
@@ -3304,6 +3308,8 @@ kind `pomodoro_start` keeps schema version 1 with `text` = the raw token,
 plus `pomodoro_name`, `created_pomodoro`, and the additive `tasks` array.
 The started session also appears in the batch-level `pomodoro_blocks`
 array; see [Pomodoro blocks](#pomodoro-blocks).
+A non-MEET named start that newly runs past an open Event Task raises a
+structured warning; see [Running into an event](#running-into-an-event).
 Human output prints `started` (dry-run: `would start`), the session name,
 range, and line with ` (created)` when the entry was created, the canonical
 ledger line, one numbered row per queued task, and `nothing queued` when
@@ -3549,7 +3555,9 @@ distinct `pomodoro_adjust` kind with an additive `pomodoro_adjust` object
 start/end/duration, resolved line/name, rendered new range). The adjusted
 session also appears in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks). Human output
-names what changed and where; dry-run says what would change.
+names what changed and where; dry-run says what would change. `+N` that
+newly runs past an open Event Task raises a structured warning; `-N` never
+does. See [Running into an event](#running-into-an-event).
 
 ### Shifting the current Pomodoro
 
@@ -3609,6 +3617,53 @@ session also appears in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks). Human output
 names what shifted and where (`shifted 2026/20260928.md`, `FOCUS 0900-0925
 to 0915-0940 (25m), 15m later at line 5`); dry-run says what would shift.
+`++N`/`--N` that newly run past an open Event Task raise a structured
+warning; see [Running into an event](#running-into-an-event).
+
+### Running into an event
+
+Starting, restarting, swapping in, link-starting, extending (`+N`), or
+shifting (`++N`/`--N`) a **non-MEET** session warns when its new span newly
+crosses the start of an open Event Task on today's note. The warning never
+blocks the write. `-N` and closes never warn.
+
+"Newly crossed" means the event's start lies in the new `[S, E)` and did
+not lie in the previous span (a fresh start has no previous span). Events
+already in that session's own lineup are skipped. Done (`[x]`) and
+cancelled (`[-]`) rows never warn. Untracked Event Tasks (`#untracked`)
+warn like any other open Event Task: untracked means off the clock, not
+optional.
+
+MEET sessions are exempt: their span follows the [event
+run](#meet-starts-follow-the-calendar), so running through those events is
+the point.
+
+Bob emits one structured warning `pomodoro_runs_past_event` naming the
+earliest crossed event, the overlap in minutes, `and N more` when later
+events are also newly crossed, and a fit draft: the largest same-operator
+count that ends at or before that event's start (`=2`, `=2#bugs`,
+`=2-1`, `+K`, `++K`, `--K`). When no positive count fits, the fit is
+omitted. Chains warn per item and only for new crossings, so `= +2`
+warns once on the start.
+
+JSON stays schema 1 and additive. `pomodoro_start`, `pomodoro_adjust`, and
+`pomodoro_shift` gain `event_conflict` when a warning fires:
+
+```json
+"event_conflict": {
+  "event": {
+    "title": "Standup", "time_range": "1200-1230",
+    "line": 2, "untracked": false
+  },
+  "overlap_minutes": 15, "fit": "=2"
+}
+```
+
+`more` is omitted when 0; `fit` is omitted when no positive count fits.
+`--dry-run` reports the same warning and object without writing. Human
+output:
+
+`⚠ BOB 1150-1215 runs 15m into Standup (1200-1230) · =2 ends at 1200`
 
 ### Closing the running Pomodoro
 

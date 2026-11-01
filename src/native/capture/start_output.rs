@@ -160,6 +160,17 @@ pub(super) fn print_human_pomodoro_start_success(
             ))
         );
     }
+    if let Some(conflict) = start.event_conflict.as_ref() {
+        println!(
+            "  {}",
+            styler.yellow(&event_conflict_message(
+                start.pomodoro_name.as_deref(),
+                &start.start,
+                &start.end,
+                conflict,
+            ))
+        );
+    }
     println!("  {}", styler.dim(&result.task_line));
     // Queued-task lineup in the close's row style, with the unchanged
     // status marker instead of a transition. Link and task starts carry no

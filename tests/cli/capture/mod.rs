@@ -23,6 +23,7 @@ mod complete_themes;
 mod complete_wikilink_task;
 mod drawer_bullets;
 mod ensure_next;
+mod event_start_warnings;
 mod event_task_close;
 mod flag_guard;
 mod freshness_stamps;

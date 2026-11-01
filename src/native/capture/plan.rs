@@ -164,6 +164,9 @@ pub(super) fn plan_capture_batch_with_config_path(
         })?;
         planned.result.consumed_links = planner.take_consumed_links();
         planned.result.normalize_dependency_updates();
+        if let Some(warning) = warning_from_item(&planned.result) {
+            warnings.push(warning);
+        }
         let refs = std::mem::take(&mut planned.pomodoro_refs);
         match planner.loaded_texts(&day_file) {
             Some((original, current)) => {
@@ -770,11 +773,13 @@ pub(super) fn plan_capture_item(
     }
     if let CaptureKind::PomodoroAdjust { spec } = parsed.kind.clone() {
         return plan_pomodoro_adjust_item(
-            request, parsed, spec, today, planner,
+            request, parsed, spec, now, today, planner,
         );
     }
     if let CaptureKind::PomodoroShift { spec } = parsed.kind.clone() {
-        return plan_pomodoro_shift_item(request, parsed, spec, today, planner);
+        return plan_pomodoro_shift_item(
+            request, parsed, spec, now, today, planner,
+        );
     }
     if let Some(target) = request.forced_sub_bullet_target.as_ref() {
         parsed.kind = CaptureKind::SubBullet {

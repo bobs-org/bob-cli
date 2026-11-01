@@ -460,6 +460,10 @@ pub(super) struct PomodoroStartSummary {
     /// session is not a MEET with open lineup Event Tasks.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) event_run: Option<EventRunJson>,
+    /// Non-MEET start that newly crosses an open Event Task. Omitted when
+    /// the session is MEET or the span does not newly cross an event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) event_conflict: Option<EventConflictJson>,
 }
 
 fn is_true(value: &bool) -> bool {
@@ -563,6 +567,10 @@ pub(super) struct PomodoroAdjustSummary {
     pub(super) pomodoro_name: Option<String>,
     pub(super) time_range: String,
     pub(super) clamped: bool,
+    /// Non-MEET `+N` that newly crosses an open Event Task. Omitted when
+    /// the session is MEET, the operator is `-N`, or nothing new is crossed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) event_conflict: Option<EventConflictJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -579,6 +587,10 @@ pub(super) struct PomodoroShiftSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_name: Option<String>,
     pub(super) time_range: String,
+    /// Non-MEET `++N`/`--N` that newly crosses an open Event Task.
+    /// Omitted when the session is MEET or nothing new is crossed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) event_conflict: Option<EventConflictJson>,
 }
 
 #[derive(Debug)]

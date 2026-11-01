@@ -404,7 +404,6 @@ pub(crate) fn event_task_by_id(
 
 /// Every Event Task and timed/all-day context row in `contents`, in time
 /// order (all-day first, then by start, end, and ledger line).
-#[allow(dead_code)]
 pub(crate) fn events_in_note(
     contents: &str,
     _date: NaiveDate,
@@ -454,16 +453,16 @@ pub(crate) fn events_in_note(
     events
 }
 
-/// Earliest open Event Task whose start lies in `[session_start, session_end)`,
-/// wrapping overnight when the session end is earlier than its start.
-#[allow(dead_code)]
-pub(crate) fn first_event_start_crossed<'a>(
+/// Open Event Tasks whose start lies in `[session_start, session_end)`,
+/// wrapping overnight when the session end is earlier than its start,
+/// earliest first.
+pub(crate) fn event_starts_crossed<'a>(
     session_start_min: u16,
     session_end_min: u16,
     events: &'a [EventNoteRow],
     exclude_ids: &HashSet<String>,
-) -> Option<&'a EventNoteRow> {
-    let mut best: Option<&'a EventNoteRow> = None;
+) -> Vec<&'a EventNoteRow> {
+    let mut crossed = Vec::new();
     for event in events {
         if !event.is_open_task() {
             continue;
@@ -482,27 +481,45 @@ pub(crate) fn first_event_start_crossed<'a>(
         {
             continue;
         }
-        let better = best.is_none_or(|current| {
-            let current_span = current.span.expect("open task has a span");
-            (
-                start_rank(span.start_min, session_start_min, session_end_min),
-                span.end_on_timeline(),
-                event.line_index,
-            ) < (
+        crossed.push(event);
+    }
+    crossed.sort_by(|left, right| {
+        let left_span = left.span.expect("open task has a span");
+        let right_span = right.span.expect("open task has a span");
+        (
+            start_rank(left_span.start_min, session_start_min, session_end_min),
+            left_span.end_on_timeline(),
+            left.line_index,
+        )
+            .cmp(&(
                 start_rank(
-                    current_span.start_min,
+                    right_span.start_min,
                     session_start_min,
                     session_end_min,
                 ),
-                current_span.end_on_timeline(),
-                current.line_index,
-            )
-        });
-        if better {
-            best = Some(event);
-        }
-    }
-    best
+                right_span.end_on_timeline(),
+                right.line_index,
+            ))
+    });
+    crossed
+}
+
+/// Earliest open Event Task whose start lies in `[session_start, session_end)`,
+/// wrapping overnight when the session end is earlier than its start.
+pub(crate) fn first_event_start_crossed<'a>(
+    session_start_min: u16,
+    session_end_min: u16,
+    events: &'a [EventNoteRow],
+    exclude_ids: &HashSet<String>,
+) -> Option<&'a EventNoteRow> {
+    event_starts_crossed(
+        session_start_min,
+        session_end_min,
+        events,
+        exclude_ids,
+    )
+    .into_iter()
+    .next()
 }
 
 fn start_in_session(

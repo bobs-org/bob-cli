@@ -265,6 +265,7 @@ pub(super) fn plan_pomodoro_adjust_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
     spec: PomodoroAdjustSpec,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
 ) -> Result<PlannedCaptureItem, CaptureError> {
@@ -340,7 +341,7 @@ pub(super) fn plan_pomodoro_adjust_item(
     updated.push_str(&staged[..global_start]);
     updated.push_str(&new_range_text);
     updated.push_str(&staged[global_end..]);
-    planner.stage(&day_file, updated)?;
+    planner.stage(&day_file, updated.clone())?;
     let before_start = format!(
         "{:02}{:02}",
         range.start_minutes / 60,
@@ -365,6 +366,23 @@ pub(super) fn plan_pomodoro_adjust_item(
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
+    let event_conflict = if spec.plus {
+        let old_start = range.start_minutes as u16;
+        let old_end = range.end_minutes as u16;
+        let new_end = new_end_minutes;
+        detect_event_conflict(
+            &updated,
+            now.date(),
+            target_name.as_deref(),
+            target_line.saturating_sub(1),
+            old_start,
+            new_end,
+            Some((old_start, old_end)),
+            &FitKind::AdjustPlus { old_end },
+        )
+    } else {
+        None
+    };
     let summary = PomodoroAdjustSummary {
         direction: if spec.plus { "plus" } else { "minus" },
         requested_units: spec.units,
@@ -380,6 +398,7 @@ pub(super) fn plan_pomodoro_adjust_item(
         pomodoro_name: target_name.clone(),
         time_range: new_range_text.clone(),
         clamped: actual_minutes != requested_minutes,
+        event_conflict,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -468,6 +487,7 @@ pub(super) fn plan_pomodoro_shift_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
     spec: PomodoroShiftSpec,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
 ) -> Result<PlannedCaptureItem, CaptureError> {
@@ -530,7 +550,7 @@ pub(super) fn plan_pomodoro_shift_item(
     updated.push_str(&staged[..global_start]);
     updated.push_str(&new_range_text);
     updated.push_str(&staged[global_end..]);
-    planner.stage(&day_file, updated)?;
+    planner.stage(&day_file, updated.clone())?;
     let before_start = format!(
         "{:02}{:02}",
         range.start_minutes / 60,
@@ -552,6 +572,25 @@ pub(super) fn plan_pomodoro_shift_item(
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
+    let old_start = range.start_minutes as u16;
+    let old_end = range.end_minutes as u16;
+    let new_start = new_start_minutes as u16;
+    let new_end = new_end_minutes as u16;
+    let fit = if spec.later {
+        FitKind::ShiftLater { old_end }
+    } else {
+        FitKind::ShiftEarlier { old_start }
+    };
+    let event_conflict = detect_event_conflict(
+        &updated,
+        now.date(),
+        target_name.as_deref(),
+        target_line.saturating_sub(1),
+        new_start,
+        new_end,
+        Some((old_start, old_end)),
+        &fit,
+    );
     let summary = PomodoroShiftSummary {
         direction: if spec.later { "later" } else { "earlier" },
         requested_units: spec.units,
@@ -564,6 +603,7 @@ pub(super) fn plan_pomodoro_shift_item(
         pomodoro_line: target_line,
         pomodoro_name: target_name.clone(),
         time_range: new_range_text.clone(),
+        event_conflict,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {

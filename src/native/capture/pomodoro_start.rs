@@ -99,6 +99,13 @@ pub(super) fn plan_pomodoro_start(
     if let Some(finish) = finish {
         finish.apply(&mut summary);
     }
+    attach_start_event_conflict(
+        &mut summary,
+        &updated_day,
+        now.date(),
+        spec,
+        pomodoro_name,
+    );
     Ok((updated_day, placement, summary, before))
 }
 
@@ -201,6 +208,7 @@ fn plan_pomodoro_start_unruled(
                         r#override: None,
                         tracked: true,
                         event_run: None,
+                        event_conflict: None,
                     },
                     PomodoroBlockBefore::At(index),
                 ));
@@ -246,6 +254,7 @@ fn plan_pomodoro_start_unruled(
                         r#override: None,
                         tracked: true,
                         event_run: None,
+                        event_conflict: None,
                     },
                     PomodoroBlockBefore::Created,
                 ));
@@ -286,6 +295,7 @@ fn plan_pomodoro_start_unruled(
                         r#override: None,
                         tracked: true,
                         event_run: None,
+                        event_conflict: None,
                     },
                     PomodoroBlockBefore::Created,
                 ));
@@ -356,6 +366,7 @@ fn plan_pomodoro_start_unruled(
                 r#override: None,
                 tracked: true,
                 event_run: None,
+                event_conflict: None,
             },
             PomodoroBlockBefore::At(index),
         ));
@@ -386,6 +397,7 @@ fn plan_pomodoro_start_unruled(
             r#override: None,
             tracked: true,
             event_run: None,
+            event_conflict: None,
         },
         PomodoroBlockBefore::Created,
     ))
@@ -451,6 +463,7 @@ fn plan_typed_pomodoro_start(
                     r#override: None,
                     tracked: true,
                     event_run: None,
+                    event_conflict: None,
                 },
                 PomodoroBlockBefore::At(index),
             ))
@@ -483,6 +496,7 @@ fn plan_typed_pomodoro_start(
                     r#override: None,
                     tracked: true,
                     event_run: None,
+                    event_conflict: None,
                 },
                 PomodoroBlockBefore::Created,
             ))
@@ -1016,10 +1030,12 @@ pub(super) fn plan_pomodoro_start_item(
         r#override: None,
         tracked: true,
         event_run: None,
+        event_conflict: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
+    attach_start_event_conflict(&mut summary, &staged_day, today, &spec, None);
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
@@ -1238,10 +1254,12 @@ fn plan_override_restart_item(
         }),
         tracked: true,
         event_run: None,
+        event_conflict: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
+    attach_start_event_conflict(&mut summary, &staged_day, today, spec, None);
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
@@ -1803,10 +1821,18 @@ fn plan_override_swap_item(
         }),
         tracked: true,
         event_run: None,
+        event_conflict: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
+    attach_start_event_conflict(
+        &mut summary,
+        &staged_day,
+        today,
+        spec,
+        Some(selector),
+    );
     let started_ref = match start_before {
         PomodoroBlockBefore::Created => {
             PomodoroBlockRef::created(PomodoroBlockRole::Started, target_final)
@@ -2574,10 +2600,18 @@ fn plan_named_pomodoro_start_item(
         r#override: None,
         tracked: true,
         event_run: None,
+        event_conflict: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
+    attach_start_event_conflict(
+        &mut summary,
+        &staged_day,
+        today,
+        spec,
+        Some(selector),
+    );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
