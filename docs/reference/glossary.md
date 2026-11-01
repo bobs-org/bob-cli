@@ -417,7 +417,8 @@ In capture, a `#` glued after `@route+id` always names a drawer (`@foo+bar#requi
 matched exactly against the target task at commit time and created on demand with the
 catalog's most-used spelling. A quoted literal (`#"FUTURE WORK"`) or `--drawer TITLE`
 forces creation and skips the near-duplicate guard; an unquoted slug that is a strict
-prefix of, or edit distance 1 from, an existing drawer is refused. `capture-complete`
+prefix of, or edit distance 1 from, an existing drawer is refused. On a project's
+`^prj` task, the note's eligible `##` sections are its drawers. `capture-complete`
 lists the target's drawers in document order, then catalog recents, then a creation row,
 with reserved, ambiguous, and near-duplicate choices refused and quorum copy authored by
 bob. `bob capture-drawers` lists one task's drawers plus catalog recents.

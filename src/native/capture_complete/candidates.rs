@@ -383,34 +383,62 @@ pub(super) fn drawer_candidates(
 
     let parent_text = parent.description.clone();
     let parent_block_id = parent.block_id.clone();
-    let ranked = rank(
-        capture_drawers::drawers(&contents, parent),
-        query,
-        |section| section.slug.as_str(),
-    );
+    // On the project note's own `^prj` task, the drawer menu lists the
+    // note's eligible `##` sections instead of task-child drawers.
+    let prj = capture_drawers::is_prj_parent(&contents, parent);
+    let listed = if prj {
+        capture_drawers::project_h2_drawers(&contents)
+    } else {
+        capture_drawers::drawers(&contents, parent)
+    };
+    // The H2 replacement round-trips against every eligible section
+    // (ambiguity depends on the whole list), so keep the unranked list.
+    let full = prj.then(|| listed.clone());
+    let ranked = rank(listed, query, |section| section.slug.as_str());
 
     Ok((
         Candidates::Drawer(
             ranked
                 .into_iter()
-                .map(|section| DrawerCandidate {
-                    replacement: section.slug.clone(),
-                    title: section.title.clone(),
-                    slug: section.slug.clone(),
-                    route: route.to_string(),
-                    block_id: parent_block_id.clone(),
-                    text: parent_text.clone(),
-                    line: section.line,
-                    entry_count: section.entry_count,
-                    key: section.key.clone(),
-                    group: "drawers".to_string(),
-                    note_count: None,
-                    last_seen: None,
-                    detail: String::new(),
-                    creates: false,
-                    refused: None,
-                    consequence: None,
-                    cursor_after: None,
+                .map(|section| {
+                    let (replacement, group, detail, consequence) = if prj {
+                        let every =
+                            full.as_ref().expect("kept H2 list for ^prj");
+                        (
+                            capture_drawers::h2_replacement(every, &section),
+                            "task".to_string(),
+                            String::new(),
+                            Some(capture_drawers::h2_consequence(
+                                &section.title,
+                            )),
+                        )
+                    } else {
+                        (
+                            section.slug.clone(),
+                            "drawers".to_string(),
+                            String::new(),
+                            None,
+                        )
+                    };
+                    DrawerCandidate {
+                        replacement,
+                        title: section.title.clone(),
+                        slug: section.slug.clone(),
+                        route: route.to_string(),
+                        block_id: parent_block_id.clone(),
+                        text: parent_text.clone(),
+                        line: section.line,
+                        entry_count: section.entry_count,
+                        key: section.key.clone(),
+                        group,
+                        note_count: None,
+                        last_seen: None,
+                        detail,
+                        creates: false,
+                        refused: None,
+                        consequence,
+                        cursor_after: None,
+                    }
                 })
                 .collect(),
         ),

@@ -28,7 +28,9 @@ use super::{
         nearest_shallower_list_item_parent, parse_managed_task_log_marker,
         LineSpan,
     },
-    capture_language, env as bob_env,
+    capture_language,
+    capture_project_note::format_project_section_title,
+    env as bob_env,
     markdown::fenced_lines,
     note_tasks::{self, BlockIdLookup, NoteTask, RefLookup, TaskRef},
     style::Styler,
@@ -515,6 +517,282 @@ fn is_structural_h2_key(key: &str) -> bool {
     false
 }
 
+// ---------------------------------------------------------------------------
+// Project-note `##` sections as drawers (phase `cli-project-drawers`).
+//
+// On a project note's own `^prj` task, `#drawer` resolves against the note's
+// eligible `##` headings by the same exact key rules task drawers use.
+// Structural headings (Tasks, the status-group titles, Pomodoros, Events,
+// Highlights) are never eligible; selects against them are refused before
+// the shared resolver runs so no second `## Pomodoros` is ever created.
+// ---------------------------------------------------------------------------
+
+/// Whether `parent` is the project note's own `^prj` task: the parent line
+/// carries a trailing `^prj` anchor and names a `#task`.
+pub(crate) fn is_prj_parent(contents: &str, parent: &NoteTask) -> bool {
+    let lines = capture::line_spans(contents);
+    let Some(line) = lines.get(parent.line_index) else {
+        return false;
+    };
+    crate::native::projects::has_trailing_prj_anchor(line.text)
+        && line.text.contains("#task")
+}
+
+/// Eligible `##` sections of a project note as drawer values, in document
+/// order: raw heading title, exact drawer key rules, the heading's 1-based
+/// line, the section's end byte offset, and the section's top-level list
+/// items as the entry count. Structural and reserved headings are excluded
+/// (they refuse instead of matching).
+pub(crate) fn project_h2_drawers(contents: &str) -> Vec<Drawer> {
+    let lines = capture::line_spans(contents);
+    let text_lines: Vec<&str> = lines.iter().map(|line| line.text).collect();
+    let fenced = fenced_lines(&text_lines, 0..text_lines.len());
+    let mut drawers = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if fenced.contains(&idx) {
+            continue;
+        }
+        let Some((level, title)) =
+            crate::native::markdown::atx_heading(line.text)
+        else {
+            continue;
+        };
+        if level != 2 {
+            continue;
+        }
+        let title = title.trim();
+        if title.is_empty() {
+            continue;
+        }
+        let key = drawer_key(title);
+        if is_reserved_drawer_key(&key) || is_structural_h2_key(&key) {
+            continue;
+        }
+        let end_line = h2_section_end_line(&lines, &fenced, idx);
+        let entry_count =
+            h2_section_entry_count(&lines, &fenced, idx + 1, end_line);
+        drawers.push(Drawer {
+            key: key.clone(),
+            slug: capture_language::selector_slug(title),
+            title: title.to_string(),
+            line: idx + 1,
+            indentation: String::new(),
+            block_end: line_offset(&lines, end_line),
+            entry_count,
+        });
+    }
+    drawers
+}
+
+/// Exclusive end line index of the `##` section opened at `heading_idx`:
+/// the next heading of level 2 or higher, else the end of the note. Fenced
+/// headings never end a section.
+fn h2_section_end_line(
+    lines: &[capture::LineSpan<'_>],
+    fenced: &std::collections::BTreeSet<usize>,
+    heading_idx: usize,
+) -> usize {
+    for (offset, line) in lines[heading_idx + 1..].iter().enumerate() {
+        let idx = heading_idx + 1 + offset;
+        if fenced.contains(&idx) {
+            continue;
+        }
+        if let Some((level, _)) =
+            crate::native::markdown::atx_heading(line.text)
+            && level <= 2
+        {
+            return idx;
+        }
+    }
+    lines.len()
+}
+
+/// Byte offset where line `index` starts (`contents.len()` for one past
+/// the last line).
+fn line_offset(lines: &[capture::LineSpan<'_>], index: usize) -> usize {
+    if index == 0 {
+        0
+    } else if index <= lines.len() {
+        lines[index - 1].end
+    } else {
+        lines.last().map(|line| line.end).unwrap_or(0)
+    }
+}
+
+/// Count of shallowest-indent list items in a section body: the section's
+/// top-level entries. Fenced and blank lines never count.
+fn h2_section_entry_count(
+    lines: &[capture::LineSpan<'_>],
+    fenced: &std::collections::BTreeSet<usize>,
+    start_idx: usize,
+    end_idx: usize,
+) -> usize {
+    let mut indents = Vec::new();
+    for idx in start_idx..end_idx.min(lines.len()) {
+        if fenced.contains(&idx) {
+            continue;
+        }
+        let text = lines[idx].text;
+        if text.trim().is_empty() {
+            continue;
+        }
+        if capture::list_item_body(text).is_some() {
+            indents.push(capture::leading_spaces_or_tabs_len(text));
+        }
+    }
+    let Some(min) = indents.iter().min().copied() else {
+        return 0;
+    };
+    indents.into_iter().filter(|indent| *indent == min).count()
+}
+
+/// Last nonblank content line index of an H2 section body, if any.
+/// Fenced code lines count as content: insertion stays positional, after
+/// the section's last nonblank line.
+fn h2_section_last_content_line(
+    lines: &[capture::LineSpan<'_>],
+    heading_idx: usize,
+    end_idx: usize,
+) -> Option<usize> {
+    (heading_idx + 1..end_idx.min(lines.len()))
+        .rev()
+        .find(|idx| !lines[*idx].text.trim().is_empty())
+}
+
+/// Where a capture block lands in an H2 section: the byte offset plus
+/// whether the section is empty. A nonempty section takes the start of the
+/// line after its last nonblank content line; an empty section takes the
+/// heading line's end, and the caller then separates with a blank line the
+/// way empty sections do elsewhere.
+pub(crate) fn h2_insert_position(
+    contents: &str,
+    drawer: &Drawer,
+) -> (usize, bool) {
+    let lines = capture::line_spans(contents);
+    let heading_idx = drawer.line.saturating_sub(1).min(lines.len());
+    let end_idx = h2_section_end_line_idx(&lines, drawer.block_end);
+    match h2_section_last_content_line(&lines, heading_idx, end_idx) {
+        Some(idx) => (lines[idx].end, false),
+        None => (
+            lines.get(heading_idx).map(|line| line.end).unwrap_or(0),
+            true,
+        ),
+    }
+}
+
+/// Exclusive end line index of the section a drawer value's `block_end`
+/// marks: the first line starting at or past that offset, else the end of
+/// the note.
+fn h2_section_end_line_idx(
+    lines: &[capture::LineSpan<'_>],
+    block_end: usize,
+) -> usize {
+    for idx in 0..=lines.len() {
+        if line_offset(lines, idx) >= block_end {
+            return idx;
+        }
+    }
+    lines.len()
+}
+
+/// Which drawer key space a resolution runs in: task-child drawers or a
+/// project note's `##` sections. The key rules are identical; only the
+/// refusal nouns and the created title's casing differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DrawerScope {
+    Task,
+    ProjectSection,
+}
+
+impl DrawerScope {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Task => "drawer",
+            Self::ProjectSection => "section",
+        }
+    }
+}
+
+/// Commit-time H2 resolution for a `^prj` target: structural and reserved
+/// keys refuse before matching (a project `##` section is captured with
+/// `@<route>#<Heading>`, never created here), then the shared exact rules
+/// run with section nouns and promotion Title Case on creation.
+pub(crate) fn resolve_h2_for_write(
+    drawers: &[Drawer],
+    selector_text: &str,
+    exact: bool,
+    catalog: &BTreeMap<String, DrawerCatalogRecord>,
+    route: &str,
+    parent_block_id: Option<&str>,
+) -> Result<DrawerResolved, DrawerResolveError> {
+    let keys: Vec<String> = if exact {
+        vec![drawer_key(selector_text)]
+    } else {
+        let slug = selector_text.to_string();
+        vec![
+            slug.to_ascii_uppercase(),
+            capture_language::normalize_task_text(&slug.replace('-', " "))
+                .to_ascii_uppercase(),
+        ]
+    };
+    for key in &keys {
+        if is_structural_h2_key(key) {
+            return Err(DrawerResolveError::new(
+                "reserved_drawer",
+                format!(
+                    "use `@{route}#<Heading>` to capture into a project `##` section"
+                ),
+            ));
+        }
+        if is_reserved_drawer_key(key) {
+            return Err(DrawerResolveError::new(
+                "reserved_drawer",
+                format!(
+                    "`{key}` is managed by Bob; name the section something else"
+                ),
+            ));
+        }
+    }
+    resolve_drawer_for_write(
+        drawers,
+        selector_text,
+        exact,
+        catalog,
+        route,
+        parent_block_id,
+        DrawerScope::ProjectSection,
+    )
+}
+
+/// Human preview consequence for an H2 menu row.
+pub(crate) fn h2_consequence(title: &str) -> String {
+    format!("Adds to ## {title}")
+}
+
+/// Completion replacement for an H2 row: the slug when it parses back to
+/// exactly this section, else a quoted literal the drawer lexer takes
+/// verbatim.
+pub(crate) fn h2_replacement(drawers: &[Drawer], drawer: &Drawer) -> String {
+    if is_drawer_slug(&drawer.slug) {
+        let empty: BTreeMap<String, DrawerCatalogRecord> = BTreeMap::new();
+        if let Ok(resolved) = resolve_drawer_for_write(
+            drawers,
+            &drawer.slug,
+            false,
+            &empty,
+            "",
+            None,
+            DrawerScope::ProjectSection,
+        ) && let DrawerResolveOutcome::Existing { drawer: found } =
+            &resolved.outcome
+            && found.line == drawer.line
+        {
+            return drawer.slug.clone();
+        }
+    }
+    format!("\"{}\"", drawer.title)
+}
+
 fn parse_drawer_catalog_version_and_hash(
     version_and_hash: &str,
 ) -> Option<(u32, &str)> {
@@ -702,7 +980,8 @@ impl DrawerResolveError {
 
 /// Commit-time drawer resolution: exact match, ambiguous, reserved,
 /// near-duplicate guard (slug only), otherwise creation with catalog
-/// spelling and near-catalog warning.
+/// spelling and near-catalog warning. `scope` selects the refusal nouns
+/// and the created title's casing; the key rules are identical.
 pub(crate) fn resolve_drawer_for_write(
     drawers: &[Drawer],
     selector_text: &str,
@@ -710,10 +989,12 @@ pub(crate) fn resolve_drawer_for_write(
     catalog: &BTreeMap<String, DrawerCatalogRecord>,
     route: &str,
     parent_block_id: Option<&str>,
+    scope: DrawerScope,
 ) -> Result<DrawerResolved, DrawerResolveError> {
-    // ^prj refusal is checked by the caller with project predicates;
-    // this resolver handles the generic drawer rules.
+    // ^prj structural and reserved keys are checked by
+    // `resolve_h2_for_write` before this shared matcher runs.
     let _ = (route, parent_block_id);
+    let noun = scope.noun();
     if exact {
         let key = drawer_key(selector_text);
         if is_reserved_drawer_key(&key) {
@@ -744,16 +1025,19 @@ pub(crate) fn resolve_drawer_for_write(
             return Err(DrawerResolveError::new(
                 "ambiguous_drawer",
                 format!(
-                    "drawer `{selector_text}` matches more than one drawer (lines {lines}); rename one"
+                    "{noun} `{selector_text}` matches more than one {noun} (lines {lines}); rename one"
                 ),
             ));
         }
-        // Create with canonical title.
-        let title = capture_language::normalize_task_text(selector_text)
-            .to_ascii_uppercase();
+        // Create with canonical title (promotion Title Case for `##`).
+        let title = cased_creation_title(
+            &capture_language::normalize_task_text(selector_text)
+                .to_ascii_uppercase(),
+            scope,
+        );
         let key = drawer_key(&title);
         let slug = capture_language::selector_slug(&title);
-        let warning = near_catalog_warning(&key, catalog);
+        let warning = near_catalog_warning(&key, catalog, scope);
         return Ok(DrawerResolved {
             outcome: DrawerResolveOutcome::Create { title, key, slug },
             created: true,
@@ -794,7 +1078,7 @@ pub(crate) fn resolve_drawer_for_write(
         return Err(DrawerResolveError::new(
             "ambiguous_drawer",
             format!(
-                "drawer `#{slug}` matches more than one drawer (lines {lines}); use a quoted literal to pick one"
+                "{noun} `#{slug}` matches more than one {noun} (lines {lines}); use a quoted literal to pick one"
             ),
         ));
     }
@@ -821,15 +1105,19 @@ pub(crate) fn resolve_drawer_for_write(
     // Create.
     let title = drawer_spelling_for_slug(catalog, &slug);
     // Ensure the catalog spelling is a valid drawer title; otherwise
-    // fall back to uppercase spaced.
-    let title = if is_drawer_title(&title) {
-        title
-    } else {
-        key_spaced.clone()
-    };
+    // fall back to uppercase spaced. `##` sections then take promotion
+    // Title Case.
+    let title = cased_creation_title(
+        if is_drawer_title(&title) {
+            &title
+        } else {
+            &key_spaced
+        },
+        scope,
+    );
     let key = drawer_key(&title);
     let slug_out = capture_language::selector_slug(&title);
-    let warning = near_catalog_warning(&key, catalog);
+    let warning = near_catalog_warning(&key, catalog, scope);
     Ok(DrawerResolved {
         outcome: DrawerResolveOutcome::Create {
             title,
@@ -894,7 +1182,9 @@ fn find_near_duplicate_drawer<'a>(
 fn near_catalog_warning(
     new_key: &str,
     catalog: &BTreeMap<String, DrawerCatalogRecord>,
+    scope: DrawerScope,
 ) -> Option<String> {
+    let noun = scope.noun();
     for (key, record) in catalog {
         if key == new_key {
             continue;
@@ -906,12 +1196,22 @@ fn near_catalog_warning(
             .is_some()
         {
             return Some(format!(
-                "new drawer {new_key} · did you mean {}?",
+                "new {noun} {new_key} · did you mean {}?",
                 record.title
             ));
         }
     }
     None
+}
+
+/// Creation title for `scope`: ALL-CAPS drawer titles stay as resolved,
+/// while `##` sections take the promotion Title Case
+/// (`FUTURE WORK` becomes `Future Work`).
+fn cased_creation_title(resolved: &str, scope: DrawerScope) -> String {
+    match scope {
+        DrawerScope::Task => resolved.to_string(),
+        DrawerScope::ProjectSection => format_project_section_title(resolved),
+    }
 }
 
 /// Spelling for creation from a slug: most-used matching spelling among
@@ -1286,7 +1586,9 @@ pub(crate) fn build_cli() -> ClapCommand {
 routed Bob note.\n\n\
 The command is read-only and reports every qualifying drawer in document \
 order with its original title, key, whitespace-free slug, line, and entry \
-count, plus recent catalog drawers absent from the task. It uses the same \
+count, plus recent catalog drawers absent from the task. When the parent is \
+the project note's own `^prj` task, the note's eligible `##` sections are \
+reported instead of task-child drawers. It uses the same \
 parent-task lookup and error messages as `bob capture`: a missing, \
 duplicated, or non-task block ID is an error, as is a stale or ambiguous \
 --task-ref. A resolved task with no drawers returns a successful empty list \
@@ -1502,7 +1804,13 @@ fn list_capture_drawers(
     let settings = note_tasks::read_settings(&request.bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
     let parent = resolve_parent(&scan, &request.route, &request.parent)?;
-    let found = drawers(&contents, parent);
+    // On the project note's own `^prj` task, the note's eligible `##`
+    // sections are the drawers.
+    let found = if is_prj_parent(&contents, parent) {
+        project_h2_drawers(&contents)
+    } else {
+        drawers(&contents, parent)
+    };
     let drawers = found
         .iter()
         .map(|drawer| ListedDrawer {

@@ -431,7 +431,11 @@ task block IDs. A trailing '#<drawer>' component, as in \
 The selector is a slug or quoted literal; matching is exact by key, with \
 reserved and near-duplicate refusals, and a missing drawer is created. The \
 captured block is appended at the end of that drawer, before a managed log \
-nested under it, using the drawer's child indentation. '@<route>+<block-id>#' \
+nested under it, using the drawer's child indentation. On the project note's \
+own '^prj' task the selector instead names one of the note's eligible '##' \
+sections, appending the block after that section's last nonblank line and \
+creating a new '## Title Case' section at the end of the note when missing. \
+'@<route>+<block-id>#' \
 with an empty selector is incomplete and needs a drawer; run \
 'bob capture-drawers -r <route> -i <block-id>' to list them. A marker-only \
 '@<route>+<block-id>' item with no body text ensures that task is Next and \
@@ -480,7 +484,9 @@ section.\n\n\
 Use --route with --task and --drawer TITLE to nest a sub-bullet under \
 the named ALL-CAPS child drawer of that task. The title is matched exactly, \
 case insensitively; unlike a typed #<drawer> selector, it is not slug- or \
-prefix-matched, so --drawer future-work does not match FUTURE WORK.\n\n\
+prefix-matched, so --drawer future-work does not match FUTURE WORK. On a \
+'^prj' parent it matches the project note's eligible '##' sections instead, \
+creating a missing section in Title Case.\n\n\
 Use expansion mode to print a template draft's expanded capture text and exit before vault access or planning. \
 In expansion mode all other capture options are accepted and ignored.",
         )

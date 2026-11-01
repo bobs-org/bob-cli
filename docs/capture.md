@@ -4741,20 +4741,22 @@ already exist, block IDs must be unique, and non-task block IDs are rejected.
 Missing IDs include a close-match suggestion when possible and direct callers
 to `bob capture-tasks -r <route>`.
 
-The same marker accepts an optional trailing `#<section>` selector, as in
+The same marker accepts an optional trailing `#<drawer>` selector, as in
 `@cash+goog-exit#requirements` or `@foo+bar#future-work`. The selector names an
-ALL-CAPS child drawer of that task and may use A-Z, a-z, 0-9, and
-`& ' ( ) , . / -`. Whole-slug matches beat earlier prefix matches, so
-`#future-work` still reaches `FUTURE WORK` even when `FUTURE WORKFLOW` appears
-first; `#future` reaches the first slug that starts with `future`. The captured
-block is appended at the end of that section's own block — before the next
-direct child of the parent task, and before a managed log nested under the
-section — using the section's child indentation. A selector that matches
-nothing, or a task with no sections, is an error listing the real titles and
-pointing at `bob capture-drawers`; capture never falls back to the end of
-the task. `@route+id#` with an empty selector is incomplete and reports need
-`drawer`; it does not mean "any section". A second `#`, or `#` before
-`+`, is not this family (`@foo#bar+baz` remains a note-bullet).
+ALL-CAPS child drawer of that task: a slug (`#future-work`) or a quoted
+literal (`#"FUTURE WORK"`). Matching is exact by key, with reserved,
+near-duplicate, and ambiguous refusals, and a missing drawer is created using
+the drawer's child indentation. The captured block is appended at the end of
+that drawer's own block — before the next direct child of the parent task, and
+before a managed log nested under the drawer. On the project note's own
+`^prj` task the selector instead names one of the note's eligible `##`
+sections, appending the block after that section's last nonblank line and
+creating a new `## Title Case` section at the end of the note when missing;
+structural headings (Tasks, the status-group titles, Pomodoros, Events, and
+Highlights) are never drawers. `@route+id#` with an empty selector is
+incomplete and reports need `drawer`; it does not mean "any drawer". A second
+`#`, or `#` before `+`, is not this family (`@foo#bar+baz` remains a
+note-bullet).
 
 For example, `bob capture 'Postgres 17 minimum @foo+bar#requirements'` against
 
@@ -5047,10 +5049,11 @@ every `@token` in the text literal. Add `-D, --drawer TITLE` to nest the
 new bullet under an ALL-CAPS child drawer of that task whose title matches
 `TITLE` exactly, compared case insensitively. `--drawer` also works with
 the hidden `--task-ref` option below; the command requires `--route` and
-either `--task` or `--task-ref`. This exact path is the picker
-counterpart to `--section`; typed `@route+id#prefix` tokens keep the
-slug/prefix matching described above, so `--drawer future-work` does
-**not** match `FUTURE WORK` while `--drawer "Future Work"` does. Picker
+either `--task` or `--task-ref`. Unlike a typed `#<drawer>` selector it is
+never slug-matched, so `--drawer future-work` does **not** match
+`FUTURE WORK` while `--drawer "Future Work"` does. On the project note's own
+`^prj` parent it matches the note's eligible `##` sections instead, creating
+a missing section in Title Case. Picker
 integrations may instead use the hidden `--task-ref <line>:<digest>` option,
 which also reaches parents without block IDs and recovers when unrelated edits
 shift the selected task's line.
@@ -5303,7 +5306,8 @@ in the batch-level `pomodoro_blocks` array; see
 
 Sub-bullet results additionally include `parent_line`, `parent_text`,
 `parent_status_symbol`, and `parent_status_name`. A capture that targeted a
-task drawer also includes `parent_section` (the matched drawer title);
+task drawer also includes `parent_section` (the matched drawer title); on a
+`^prj` parent it is the matched `##` section title instead, while
 plain `@route+block-id` captures omit it. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
 The batch-level `task_blocks` array carries the same parents in full; see
@@ -6683,6 +6687,9 @@ backed by the same scan as `bob capture-sections`. Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate
 `replacement` is the drawer slug (`future-work` for `FUTURE WORK`) or a quoted literal when the slug is ambiguous.
+On the project note's own `^prj` task the menu lists the note's eligible
+`##` sections instead, with `entry_count` set to their top-level list items
+and a `consequence` that names the section (`Adds to ## Requirements`).
 Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
 `@route:#prefix`, and `@route:id=name` (e.g. `@work:outline=bu|`); only the route
 must already resolve because the Pomodoro list does not depend on the block
@@ -7192,9 +7199,12 @@ candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 `label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
 section candidate has `title` and `level`. A drawer candidate has
-`title` (the original ALL-CAPS body), `slug`, `route`, nullable `block_id`,
-`text` (the parent task description), `line`, and `child_count`; `replacement`
-is the slug. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
+`title` (the original ALL-CAPS body), `key`, `slug`, `route`, nullable `block_id`,
+`text` (the parent task description), `line`, `entry_count`, `group`,
+`detail`, `creates`, and an optional `consequence`; `replacement`
+is the slug, or a quoted literal when the slug does not resolve back to the
+row. On a `^prj` parent the rows are the note's eligible `##` sections
+instead of task-child drawers. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
 `requires_name`, optional `creates_pomodoro` (absent or false on existing
 rows), nullable `line`, `state`, `status_symbol`, nullable `time_range`,
 `placeholder`, `is_current`, `child_count`, and `match_count`; selectable named
@@ -7408,7 +7418,8 @@ daily-note contents and plan configuration; the rest of the agenda is derived
 from its existing note inputs.
 
 `capture-drawers` lists the ALL-CAPS direct-child drawer bullets of one
-parent task in document order. Exactly one of `--block-id`/`-i` or
+parent task in document order. When the parent is the project note's own
+`^prj` task it lists the note's eligible `##` sections instead. Exactly one of `--block-id`/`-i` or
 `--task-ref`/`-t` is required; the parent lookup and error messages match
 `bob capture` (missing ID with a close-match suggestion, duplicate ID, non-task
 block ID, stale or ambiguous ref). A resolved task with no drawers returns a

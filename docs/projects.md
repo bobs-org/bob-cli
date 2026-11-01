@@ -131,6 +131,13 @@ task views can tell it apart from ordinary follow-up tasks; it is additive, and
 legacy lines without `#prj` are still recognized. Multiple `^prj` tasks or a
 `^prj` line that is not a valid `#task` checkbox are per-file errors.
 
+Capture into the project note through its `^prj` task with a `#drawer`
+selector (`note text @proj+prj#requirements`): the selector resolves against
+the note's eligible `##` sections by the task-drawer key rules, appending the
+entry after the section's last nonblank line and creating a missing section as
+`## Title Case` at the end of the note. Structural headings (Tasks, the
+status-group titles, Pomodoros, Events, and Highlights) are never drawers.
+
 The same `^prj` line doubles as the project's freshness tracker: while
 sync leaves it visible (no `#hide`), the morning review reminds Bryan
 to replenish it on its tracker cadence (`project_interval` when set,

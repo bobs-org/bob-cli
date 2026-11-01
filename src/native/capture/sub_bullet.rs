@@ -99,10 +99,17 @@ pub(super) fn plan_sub_bullet_capture(
 
     let (insertion_offset, indentation, parent_section, _drawer_created) =
         if let Some(selector) = section_selector {
-            if is_prj_target(&contents, parent) {
-                return Err(CaptureError::usage(
-                    "use `@<note>#<Heading>` for a project section".to_string(),
-                ));
+            if capture_drawers::is_prj_parent(&contents, parent) {
+                return plan_prj_section_capture(
+                    planner,
+                    bob_dir,
+                    target,
+                    route,
+                    &contents,
+                    parent,
+                    selector,
+                    capture_block,
+                );
             }
             // Load catalog for spelling (best-effort; empty on failure).
             let catalog = capture_drawers::load_drawer_catalog(bob_dir)
@@ -116,6 +123,7 @@ pub(super) fn plan_sub_bullet_capture(
                 &catalog,
                 route,
                 block_id,
+                capture_drawers::DrawerScope::Task,
             ) {
                 Ok(resolved) => match resolved.outcome {
                     capture_drawers::DrawerResolveOutcome::Existing {
@@ -236,6 +244,7 @@ pub(super) fn plan_sub_bullet_capture(
                                 &catalog,
                                 route,
                                 parent.block_id.as_deref(),
+                                capture_drawers::DrawerScope::Task,
                             )
                             .map_err(|e| {
                                 CaptureError::usage(e.message.clone())
@@ -356,13 +365,98 @@ pub(super) fn plan_sub_bullet_capture(
     })
 }
 
-fn is_prj_target(contents: &str, parent: &note_tasks::NoteTask) -> bool {
-    let lines = line_spans(contents);
-    let Some(line) = lines.get(parent.line_index) else {
-        return false;
+/// Capture into a project note's `##` section for a `^prj` parent: the
+/// `#drawer` selector resolves against the note's eligible H2s by the drawer
+/// key rules. A match appends the block after the section's last nonblank
+/// line; a miss appends a new `## Title Case` section at the end of the
+/// note, the way promotion does. One staged write per item keeps batch
+/// captures atomic: a later item re-resolves from staged text.
+fn plan_prj_section_capture(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    target: &Path,
+    route: &str,
+    contents: &str,
+    parent: &note_tasks::NoteTask,
+    selector: &DrawerSelector,
+    capture_block: &str,
+) -> Result<CaptureWritePlan, CaptureError> {
+    // Load catalog for spelling (best-effort; empty on failure).
+    let catalog =
+        capture_drawers::load_drawer_catalog(bob_dir).unwrap_or_default();
+    let drawers = capture_drawers::project_h2_drawers(contents);
+    let resolved = match capture_drawers::resolve_h2_for_write(
+        &drawers,
+        &selector.text,
+        selector.exact,
+        &catalog,
+        route,
+        parent.block_id.as_deref(),
+    ) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            return Err(CaptureError::usage(error.message.clone()));
+        }
     };
-    crate::native::projects::has_trailing_prj_anchor(line.text)
-        && line.text.contains("#task")
+    let (updated_target, placement, parent_section) = match resolved.outcome {
+        capture_drawers::DrawerResolveOutcome::Existing { drawer } => {
+            let (offset, empty) =
+                capture_drawers::h2_insert_position(contents, &drawer);
+            let addition = if empty {
+                empty_section_insertion_text(contents, offset, capture_block)
+            } else {
+                insertion_text_preserving_line_endings(
+                    contents,
+                    offset,
+                    capture_block,
+                )
+            };
+            let placement = if offset >= contents.len() {
+                Placement::Appended
+            } else {
+                Placement::Inserted
+            };
+            let updated_target = insert_at(contents, offset, &addition);
+            (updated_target, placement, Some(drawer.title.clone()))
+        }
+        capture_drawers::DrawerResolveOutcome::Create { title, .. } => {
+            let ending = document_line_ending(contents);
+            let double = format!("{ending}{ending}");
+            let separator =
+                if contents.is_empty() || contents.ends_with(double.as_str()) {
+                    String::new()
+                } else if contents.ends_with(ending) {
+                    ending.to_string()
+                } else {
+                    double
+                };
+            let block = capture_block.replace('\n', ending);
+            let updated_target = format!(
+                "{contents}{separator}## {title}{ending}{ending}{block}{ending}"
+            );
+            (updated_target, Placement::Appended, Some(title))
+        }
+    };
+    let details = SubBulletCaptureDetails {
+        block_id: parent.block_id.clone(),
+        parent_line: parent.line_index + 1,
+        parent_text: parent.description.clone(),
+        parent_section,
+        parent_status_symbol: parent.status_symbol,
+        parent_status_name: parent.status_name.clone(),
+    };
+
+    planner.stage(target, updated_target)?;
+
+    Ok(CaptureWritePlan {
+        placement,
+        pomodoro: None,
+        sub_bullet: Some(details),
+        pomodoro_note: None,
+        toggle: None,
+        pomodoro_link: None,
+        pomodoro_refs: Vec::new(),
+    })
 }
 
 pub(crate) fn first_child_indentation(

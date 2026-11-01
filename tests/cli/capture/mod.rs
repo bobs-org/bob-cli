@@ -55,6 +55,7 @@ mod pomodoro_start_named;
 mod pomodoro_whole_item;
 mod pomodoros_agenda;
 mod priority;
+mod prj_drawers;
 mod project_close;
 mod project_note;
 mod project_note_offer;
