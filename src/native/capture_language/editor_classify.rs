@@ -30,7 +30,7 @@ enum EditorCloseSuffix {
     },
 }
 
-/// Mirror `parse_capture_text_with_clip_control`'s precedence: the leading
+/// Mirror `parse_capture_text_with_options`'s precedence: the leading
 /// token wins when `leading` is set (only ever true for the parent line),
 /// and only a plain `@route` token needs body text on the other side before
 /// it routes at all.

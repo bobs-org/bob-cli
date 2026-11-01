@@ -215,6 +215,124 @@ fn insert_typed_pomodoro_block_link(
     })
 }
 
+/// Which default ledger branch selected a Pomodoro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DefaultPomodoroBranch {
+    TimedOpen,
+    LastCompleted,
+    FirstOpen,
+}
+
+/// Current-or-future vs current-or-last-completed default selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DefaultPomodoroSelection {
+    CurrentOrFuture,
+    CurrentOrLastCompleted,
+}
+
+impl DefaultPomodoroSelection {
+    fn no_entry_message(self) -> &'static str {
+        match self {
+            Self::CurrentOrFuture => {
+                "Bob daily note has no eligible open Pomodoro"
+            }
+            Self::CurrentOrLastCompleted => {
+                "Bob daily note has no eligible Pomodoro"
+            }
+        }
+    }
+}
+
+/// The ledger line a default Pomodoro selection attaches to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DefaultPomodoroPick {
+    pub index: usize,
+    pub branch: DefaultPomodoroBranch,
+    pub task_text: String,
+}
+
+/// Select the ledger line `%n` and `@route:id` default insertions attach to.
+///
+/// `CurrentOrFuture` prefers the single open timed entry, else the first
+/// open entry. `CurrentOrLastCompleted` prefers the single open timed
+/// entry, else the last completed entry, else the first open entry.
+pub(crate) fn select_default_pomodoro_line(
+    contents: &str,
+    selection: DefaultPomodoroSelection,
+) -> Result<DefaultPomodoroPick, CaptureError> {
+    let lines = line_spans(contents);
+    let line_text = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section =
+        pomodoro::pomodoros_section_range(&line_text).ok_or_else(|| {
+            CaptureError::io("Bob daily note has no Pomodoros section")
+        })?;
+
+    let mut open = Vec::new();
+    let mut timed = Vec::new();
+    let mut completed = Vec::new();
+    let fenced = super::markdown::fenced_lines(&line_text, section.clone());
+    for index in section {
+        if fenced.contains(&index) {
+            continue;
+        }
+        let line = lines[index].text;
+        if is_indented_line(line) {
+            continue;
+        }
+        if let Some(task) = pomodoro::open_ledger_task(line) {
+            open.push((index, task));
+            if pomodoro::task_time_range(task).is_some() {
+                timed.push((index, task));
+            }
+        } else if let Some(task) = pomodoro::completed_ledger_task(line) {
+            completed.push((index, task));
+        }
+    }
+
+    if timed.len() > 1 {
+        return Err(CaptureError::io(
+            "Bob daily note has multiple open timed Pomodoros",
+        ));
+    }
+
+    let (index, task, branch) = match selection {
+        DefaultPomodoroSelection::CurrentOrFuture => timed
+            .first()
+            .copied()
+            .map(|(index, task)| {
+                (index, task, DefaultPomodoroBranch::TimedOpen)
+            })
+            .or_else(|| {
+                open.first().copied().map(|(index, task)| {
+                    (index, task, DefaultPomodoroBranch::FirstOpen)
+                })
+            }),
+        DefaultPomodoroSelection::CurrentOrLastCompleted => timed
+            .first()
+            .copied()
+            .map(|(index, task)| {
+                (index, task, DefaultPomodoroBranch::TimedOpen)
+            })
+            .or_else(|| {
+                completed.last().copied().map(|(index, task)| {
+                    (index, task, DefaultPomodoroBranch::LastCompleted)
+                })
+            })
+            .or_else(|| {
+                open.first().copied().map(|(index, task)| {
+                    (index, task, DefaultPomodoroBranch::FirstOpen)
+                })
+            }),
+    }
+    .ok_or_else(|| CaptureError::io(selection.no_entry_message()))?;
+
+    Ok(DefaultPomodoroPick {
+        index,
+        branch,
+        task_text: task.to_string(),
+    })
+}
+
 /// Select a Pomodoro in the daily note's `## Pomodoros` section according to
 /// `selection` and insert `block` -- indented to match the entry's existing
 /// children -- at the end of that entry's child block.
@@ -263,14 +381,16 @@ pub(super) fn insert_pomodoro_child_block(
         }
     }
 
-    let (selected, selected_text) = match selection {
+    let (selected, pomodoro_text) = match selection {
         PomodoroSelection::NamedOrCreate {
             selector,
             is_literal,
         } => {
             match select_named_pomodoro(contents, &lines, selector, is_literal)?
             {
-                NamedPomodoroResolution::Found(selected) => selected,
+                NamedPomodoroResolution::Found((index, text)) => {
+                    (index, text.to_string())
+                }
                 NamedPomodoroResolution::Create => {
                     return insert_named_pomodoro_child_block(
                         contents, block, selector, is_literal, &lines,
@@ -279,35 +399,26 @@ pub(super) fn insert_pomodoro_child_block(
                 }
             }
         }
+        PomodoroSelection::TypedEntry { index } => open
+            .iter()
+            .find(|(entry_index, _)| *entry_index == index)
+            .map(|(entry_index, task)| (*entry_index, (*task).to_string()))
+            .ok_or_else(|| CaptureError::io(selection.no_entry_message()))?,
         PomodoroSelection::CurrentOrFuture
-        | PomodoroSelection::CurrentOrLastCompleted
-        | PomodoroSelection::TypedEntry { .. } => {
-            if timed.len() > 1
-                && !matches!(selection, PomodoroSelection::TypedEntry { .. })
-            {
-                return Err(CaptureError::io(
-                    "Bob daily note has multiple open timed Pomodoros",
-                ));
-            }
-            match selection {
+        | PomodoroSelection::CurrentOrLastCompleted => {
+            let kind = match selection {
                 PomodoroSelection::CurrentOrFuture => {
-                    timed.first().or(open.first())
+                    DefaultPomodoroSelection::CurrentOrFuture
                 }
                 PomodoroSelection::CurrentOrLastCompleted => {
-                    timed.first().or(completed.last()).or(open.first())
+                    DefaultPomodoroSelection::CurrentOrLastCompleted
                 }
-                PomodoroSelection::TypedEntry { index } => {
-                    open.iter().find(|(entry_index, _)| *entry_index == index)
-                }
-                PomodoroSelection::NamedOrCreate { .. } => {
-                    unreachable!("named handled")
-                }
-            }
-            .copied()
-            .ok_or_else(|| CaptureError::io(selection.no_entry_message()))?
+                _ => unreachable!("default kinds"),
+            };
+            let pick = select_default_pomodoro_line(contents, kind)?;
+            (pick.index, pick.task_text)
         }
     };
-    let pomodoro_text = selected_text.to_string();
     let insertion_index = task_block_end(&lines, selected);
     let indentation =
         child_bullet_indentation(&lines, selected + 1, insertion_index)

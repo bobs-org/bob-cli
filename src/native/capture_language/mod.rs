@@ -59,10 +59,10 @@ pub(crate) use self::directive::clip_not_read_error;
 #[cfg(test)]
 pub(crate) use self::directive::incomplete_directive_error;
 #[cfg(test)]
-pub(crate) use self::draft::parse_capture_draft_with_clip_control;
-pub(crate) use self::draft::parse_capture_draft_with_clip_control_coded;
+pub(crate) use self::draft::parse_capture_draft_with_options;
+pub(crate) use self::draft::parse_capture_draft_with_options_coded;
 #[cfg(test)]
-pub(crate) use self::draft::parse_capture_text_with_clip_control;
+pub(crate) use self::draft::parse_capture_text_with_options;
 #[cfg(test)]
 pub(crate) use self::draft::split_capture_draft;
 pub(crate) use self::draft::split_physical_lines;

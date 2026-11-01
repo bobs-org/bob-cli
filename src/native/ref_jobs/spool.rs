@@ -58,8 +58,7 @@ pub(crate) struct JobFile {
     pub(crate) display: String,
     /// Fetch hint: `article`, `pdf`, or `arxiv`.
     pub(crate) route_hint: String,
-    /// Whether standalone `%` (or the compatible `@` alias) requested
-    /// companion audio.
+    /// Whether `%l` requested companion audio.
     /// Missing on jobs written by an older `bob`; defaults to false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) listen: bool,

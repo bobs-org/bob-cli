@@ -358,7 +358,7 @@ fn editor_leading_marker_wins_over_trailing_marker() {
     assert_eq!(ranges(&parse), vec![(0, 5, SpanKind::Route)]);
 
     // An invalid prefix is not route-shaped, so the suffix still wins --
-    // exactly like `parse_capture_text_with_clip_control`.
+    // exactly like `parse_capture_text_with_options`.
     let parse = editor("@bad! body @Good");
     assert_eq!(parse.route.as_deref(), Some("good"));
     assert_eq!(parse.body, "@bad! body");

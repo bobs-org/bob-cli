@@ -86,7 +86,6 @@ enum ExtractedTerminal {
 /// always receives an empty list and discards it.
 pub(crate) fn extract_terminal_markers<T: ParseToken>(
     tokens: &mut Vec<T>,
-    _parse_clip_markers: bool,
 ) -> (TerminalMarkers, Vec<(SpanKind, usize, usize)>) {
     let marker_like = |token: &str| {
         parse_schedule_token(token).is_some() || is_priority_marker_token(token)

@@ -266,8 +266,7 @@ pub(super) fn parse_capture_item<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, CaptureItemParseError> {
-    let occurrences =
-        super::type_marker::collect_item_with_clip_control(item, true);
+    let occurrences = super::type_marker::collect_item(item);
     let type_masked_source =
         super::type_marker::masked_source(item, &occurrences);
     let type_masked_item =
@@ -635,7 +634,7 @@ fn parse_capture_item_masked<'a>(
     // remaining tokens unchanged. Ownership is decided once the finished
     // item kind is known; ownerless items retry after `@@` inheritance in
     // draft resolution.
-    let item_dependencies = scan_item_dependencies(item, true);
+    let item_dependencies = scan_item_dependencies(item);
     let invalid = [
         item_dependencies
             .invalid
@@ -781,13 +780,12 @@ fn parse_capture_item_masked<'a>(
         parent_line.raw.text,
         parent_line.raw.start,
         true,
-        true,
     );
     let parent_tokens = unescape_execution_tokens(
         parent_tokens,
         &parent_line_dependencies.escapes,
     );
-    let parent_outcome = resolve_line(parent_tokens, true, detect_route, true)?;
+    let parent_outcome = resolve_line(parent_tokens, true, detect_route)?;
     declarations.extend(global_declarations_from_tokens(
         parent_outcome.declarations,
         parent_line.line_number,
@@ -850,11 +848,10 @@ fn parse_capture_item_masked<'a>(
             child_line.text,
             child_line.start,
             false,
-            true,
         );
         let tokens =
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
-        let outcome = resolve_line(tokens, false, detect_route, true)?;
+        let outcome = resolve_line(tokens, false, detect_route)?;
         declarations.extend(global_declarations_from_tokens(
             outcome.declarations,
             line_number,
@@ -1107,8 +1104,8 @@ fn parse_capture_item_masked<'a>(
         kind
     };
     let route = if note { None } else { route };
-    // Schedule, priority, and clipboard markers stay task-creation
-    // modifiers: a dependency-only item carrying them mixes a second
+    // Schedule, priority, and `%c` stay task-creation modifiers: a
+    // dependency-only item carrying them mixes a second
     // action into an existing-task update instead of failing silently.
     let has_creation_modifiers = aggregate.clip.is_some()
         || aggregate.scheduled_offset.is_some()

@@ -185,7 +185,7 @@ fn scan_line_inner(
         allowed.push(candidate.edge_start..candidate.edge_end);
     }
     for (start, end) in whitespace_tokens(body) {
-        if is_trailing_transparent(&body[start..end], true) {
+        if is_trailing_transparent(&body[start..end]) {
             allowed.push(start..end);
         }
     }

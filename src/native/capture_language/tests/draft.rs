@@ -205,7 +205,7 @@ fn execution_single_item_parser_rejects_blank_line_batches() {
 
 #[test]
 fn execution_batch_parser_prefixes_item_and_line_context() {
-    let error = parse_capture_draft_with_clip_control(
+    let error = parse_capture_draft_with_options(
         "parent\n\nsecond\n  - orphan",
         None,
         None,
@@ -394,7 +394,7 @@ fn execution_preserves_unicode_child_bodies() {
 
 #[test]
 fn execution_forced_route_keeps_child_markers_literal() {
-    let parsed = parse_capture_text_with_clip_control(
+    let parsed = parse_capture_text_with_options(
         "parent\n- child @home",
         Some("work"),
         None,
@@ -523,7 +523,7 @@ fn editor_child_line_alone_can_resolve_the_capture_mode() {
 
 #[test]
 fn execution_rejects_duplicate_global_declarations_by_line() {
-    let error = parse_capture_draft_with_clip_control(
+    let error = parse_capture_draft_with_options(
         "@@foo\nBuy milk @@bar",
         None,
         None,

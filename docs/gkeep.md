@@ -222,16 +222,14 @@ take no lock.
 ### URL-only notes go to the reading queue
 
 A note that holds exactly one bare public link (plus an optional single
-trailing `@route` and an optional standalone `%` listen marker, with `@` as
-a compatible alias) and nothing
+trailing `@route` and an optional `%l` listen directive) and nothing
 else — an empty title with a link body, an empty body with a link title, a
 title equal to the link, or a page title equal to the shared-link preview
 title — is clipped inline to an intake PDF instead of becoming a task. The
-trailing route and listen marker never become part of the clip target.
+trailing route and `%l` never become part of the clip target.
 `URL %l` requests companion audio like
 `bob ref create <URL> -P <parent> -L`; `URL %l @route` adds an explicit
-parent. The listen marker
-must immediately follow the URL.
+parent. `%l` must immediately follow the URL.
 Pull messages name the selected parent (`would clip →
 sase`, `filed → <pdf> → <note> → sase`, `queued → <pdf> (<reason>) → sase`,
 `incomplete → <pdf> (stopped after moving into lib/; bob ref scan finishes it: …) → sase`);

@@ -227,7 +227,7 @@ fn marker_edge_transparency_includes_clip_directives() {
     let raw = "Fix the parser #fix %c";
     assert_eq!(scan_line(raw, 0).len(), 1);
 
-    let parsed = parse_capture_text_with_clip_control(
+    let parsed = parse_capture_text_with_options(
         raw,
         None,
         None,

@@ -525,7 +525,7 @@ pub(crate) struct LineDependencies {
 /// masked before this scan. Skipped tokens stay in the stream for
 /// terminal-marker extraction and route selection; only modifiers are
 /// directive.
-pub(crate) fn is_trailing_transparent(text: &str, _parse_clip: bool) -> bool {
+pub(crate) fn is_trailing_transparent(text: &str) -> bool {
     text.starts_with('@')
         || text == "s:"
         || parse_schedule_token(text).is_some()
@@ -539,7 +539,6 @@ fn escaped_star_is_in_modifier_run(
     tokens: &[Token<'_>],
     consumed: &[bool],
     parent: bool,
-    parse_clip: bool,
 ) -> bool {
     let Some(token_index) =
         tokens.iter().position(|token| token.start == backslash)
@@ -558,7 +557,7 @@ fn escaped_star_is_in_modifier_run(
                 return has_query;
             }
             if consumed[index]
-                || is_trailing_transparent(tokens[index].text, parse_clip)
+                || is_trailing_transparent(tokens[index].text)
                 || tokens[index].text.starts_with("\\&")
                 || tokens[index].text.starts_with("\\*")
             {
@@ -576,7 +575,7 @@ fn escaped_star_is_in_modifier_run(
             return has_query || token_index > 0;
         }
         if consumed[candidate]
-            || is_trailing_transparent(tokens[candidate].text, parse_clip)
+            || is_trailing_transparent(tokens[candidate].text)
             || tokens[candidate].text.starts_with("\\&")
             || tokens[candidate].text.starts_with("\\*")
         {
@@ -591,8 +590,8 @@ fn escaped_star_is_in_modifier_run(
 /// Strip directive dependency modifiers from a line's whitespace tokens.
 ///
 /// Leading modifiers are directive on the parent line only; trailing
-/// modifiers are directive past destination and schedule/priority/
-/// clipboard markers. Returns the remaining tokens (order preserved) plus
+/// modifiers are directive past destination, schedule/priority, and
+/// `%` directives. Returns the remaining tokens (order preserved) plus
 /// the extracted modifiers. `line_text` is the raw line the tokens
 /// borrow; `line_base` is its draft byte offset. Runs before
 /// terminal-marker extraction so interleaved markers still resolve.
@@ -601,23 +600,19 @@ pub(crate) fn extract_line_dependencies<'a>(
     line_text: &str,
     line_base: usize,
     parent: bool,
-    parse_clip: bool,
 ) -> (Vec<Token<'a>>, LineDependencies) {
-    let (tokens, mut result) = extract_line_relation(
-        tokens, line_text, line_base, parent, parse_clip, b'&',
-    );
-    let (tokens, mut blocked) = extract_line_relation(
-        tokens, line_text, line_base, parent, parse_clip, b'*',
-    );
+    let (tokens, mut result) =
+        extract_line_relation(tokens, line_text, line_base, parent, b'&');
+    let (tokens, mut blocked) =
+        extract_line_relation(tokens, line_text, line_base, parent, b'*');
     result.blocked_entries = std::mem::take(&mut blocked.blocked_entries);
     result.blocked_partials = std::mem::take(&mut blocked.blocked_partials);
     result.blocked_invalid = std::mem::take(&mut blocked.blocked_invalid);
     result.spans.append(&mut blocked.spans);
     result.escapes.append(&mut blocked.escapes);
     result.stripped_tokens += blocked.stripped_tokens;
-    let (tokens, mut relations) = extract_line_relations(
-        tokens, line_text, line_base, parent, parse_clip,
-    );
+    let (tokens, mut relations) =
+        extract_line_relations(tokens, line_text, line_base, parent);
     result.relation_entries = std::mem::take(&mut relations.relation_entries);
     result.relation_target_partials =
         std::mem::take(&mut relations.relation_target_partials);
@@ -636,7 +631,6 @@ fn extract_line_relation<'a>(
     line_text: &str,
     line_base: usize,
     parent: bool,
-    parse_clip: bool,
     sigil: u8,
 ) -> (Vec<Token<'a>>, LineDependencies) {
     let scanned = scan_line_modifiers(line_text, line_base, sigil);
@@ -695,7 +689,7 @@ fn extract_line_relation<'a>(
     if parent {
         let mut index = 0;
         while index < tokens.len() {
-            if is_trailing_transparent(tokens[index].text, parse_clip)
+            if is_trailing_transparent(tokens[index].text)
                 || covered_by_other_relation(&tokens[index])
                 || tokens[index].text.starts_with("\\&")
                 || tokens[index].text.starts_with("\\*")
@@ -751,7 +745,7 @@ fn extract_line_relation<'a>(
                 }
                 break;
             }
-            if is_trailing_transparent(tokens[candidate].text, parse_clip) {
+            if is_trailing_transparent(tokens[candidate].text) {
                 index -= 1;
                 continue;
             }
@@ -867,7 +861,7 @@ fn extract_line_relation<'a>(
             ScannedDependency::Escaped { backslash, .. } => {
                 if sigil != b'*'
                     || escaped_star_is_in_modifier_run(
-                        *backslash, &tokens, &consumed, parent, parse_clip,
+                        *backslash, &tokens, &consumed, parent,
                     )
                 {
                     result.escapes.push((*backslash, *backslash + 1));
@@ -891,7 +885,6 @@ fn escaped_tilde_is_in_modifier_run(
     tokens: &[Token<'_>],
     consumed: &[bool],
     parent: bool,
-    parse_clip: bool,
 ) -> bool {
     let Some(token_index) =
         tokens.iter().position(|token| token.start == backslash)
@@ -913,7 +906,7 @@ fn escaped_tilde_is_in_modifier_run(
                 return has_query;
             }
             if consumed[index]
-                || is_trailing_transparent(tokens[index].text, parse_clip)
+                || is_trailing_transparent(tokens[index].text)
                 || tokens[index].text.starts_with("\\&")
                 || tokens[index].text.starts_with("\\*")
                 || tokens[index].text.starts_with("\\~")
@@ -932,7 +925,7 @@ fn escaped_tilde_is_in_modifier_run(
             return has_query || token_index > 0;
         }
         if consumed[candidate]
-            || is_trailing_transparent(tokens[candidate].text, parse_clip)
+            || is_trailing_transparent(tokens[candidate].text)
             || tokens[candidate].text.starts_with("\\&")
             || tokens[candidate].text.starts_with("\\*")
             || tokens[candidate].text.starts_with("\\~")
@@ -950,7 +943,6 @@ fn extract_line_relations<'a>(
     line_text: &str,
     line_base: usize,
     parent: bool,
-    parse_clip: bool,
 ) -> (Vec<Token<'a>>, LineDependencies) {
     let scanned = scan_line_relations(line_text, line_base);
     if scanned.is_empty() {
@@ -1001,7 +993,7 @@ fn extract_line_relations<'a>(
     if parent {
         let mut index = 0;
         while index < tokens.len() {
-            if is_trailing_transparent(tokens[index].text, parse_clip)
+            if is_trailing_transparent(tokens[index].text)
                 || covered_by_other_relation(&tokens[index])
                 || tokens[index].text.starts_with("\\&")
                 || tokens[index].text.starts_with("\\*")
@@ -1053,7 +1045,7 @@ fn extract_line_relations<'a>(
                 }
                 break;
             }
-            if is_trailing_transparent(tokens[candidate].text, parse_clip) {
+            if is_trailing_transparent(tokens[candidate].text) {
                 index -= 1;
                 continue;
             }
@@ -1184,7 +1176,7 @@ fn extract_line_relations<'a>(
             }
             ScannedRelation::Escaped { backslash, .. } => {
                 if escaped_tilde_is_in_modifier_run(
-                    *backslash, &tokens, &consumed, parent, parse_clip,
+                    *backslash, &tokens, &consumed, parent,
                 ) {
                     result.escapes.push((*backslash, *backslash + 1));
                 }
@@ -1465,7 +1457,6 @@ impl ItemDependencySet {
 /// and trailing runs, each authored child its trailing run.
 pub(crate) fn scan_item_dependencies(
     item: &CaptureItem<'_>,
-    parse_clip: bool,
 ) -> ItemDependencySet {
     let mut found = ItemDependencySet::default();
     let Some((parent, children)) = item.lines.split_first() else {
@@ -1477,7 +1468,6 @@ pub(crate) fn scan_item_dependencies(
         parent.raw.text,
         parent.raw.start,
         true,
-        parse_clip,
     );
     found.absorb(&parent_deps);
     for child in children {
@@ -1497,7 +1487,6 @@ pub(crate) fn scan_item_dependencies(
             child_line.text,
             child_line.start,
             false,
-            parse_clip,
         );
         found.absorb(&child_deps);
     }
@@ -1727,10 +1716,10 @@ pub(crate) fn refuse_relationship_needs_text(
     found: &ItemDependencySet,
     owner: &str,
     parent_tokens: &[Token<'_>],
-    parse_clip: bool,
+    has_clip: bool,
     has_children: bool,
 ) -> String {
-    let offending = first_relationship_text_token(parent_tokens, parse_clip)
+    let offending = first_relationship_text_token(parent_tokens, has_clip)
         .unwrap_or(if has_children { "child bullets" } else { "$2" });
     relationship_needs_text_error(
         offending,
@@ -1952,7 +1941,7 @@ mod tests {
     fn extract(text: &str, parent: bool) -> (Vec<String>, LineDependencies) {
         let tokens = tokenize_with_spans(text);
         let (remaining, found) =
-            extract_line_dependencies(tokens, text, 0, parent, false);
+            extract_line_dependencies(tokens, text, 0, parent);
         (
             remaining
                 .iter()

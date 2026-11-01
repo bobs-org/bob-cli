@@ -56,7 +56,7 @@ fn goto_claim_covers_every_table_query_row() {
         assert_eq!(completion.query, query, "{raw:?}");
     }
     // Forced flags do not change the refusal.
-    let forced = parse_capture_text_with_clip_control(
+    let forced = parse_capture_text_with_options(
         "/fix",
         Some("work"),
         None,

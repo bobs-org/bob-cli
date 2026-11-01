@@ -31,24 +31,14 @@ fn execute_routing(
     raw: &str,
     policy: Option<&UrlRoutingPolicy>,
 ) -> Result<ParsedCaptureText, String> {
-    parse_capture_text_with_clip_control(
-        raw,
-        None,
-        None,
-        &routing_options(policy),
-    )
+    parse_capture_text_with_options(raw, None, None, &routing_options(policy))
 }
 
 fn draft_routing(
     raw: &str,
     policy: Option<&UrlRoutingPolicy>,
 ) -> Result<ParsedCaptureDraft, String> {
-    parse_capture_draft_with_clip_control(
-        raw,
-        None,
-        None,
-        &routing_options(policy),
-    )
+    parse_capture_draft_with_options(raw, None, None, &routing_options(policy))
 }
 
 fn editor_routing(raw: &str, policy: Option<&UrlRoutingPolicy>) -> EditorParse {
@@ -185,7 +175,7 @@ fn forced_destination_global_and_clip_keep_tasks() {
         explicit_destination: true,
         ..routing_options(Some(&policy))
     };
-    let forced_blocked = parse_capture_text_with_clip_control(
+    let forced_blocked = parse_capture_text_with_options(
         "https://example.com/post",
         Some("notes"),
         None,
@@ -198,7 +188,7 @@ fn forced_destination_global_and_clip_keep_tasks() {
         explicit_destination: true,
         ..routing_options(Some(&policy))
     };
-    let clipped = parse_capture_text_with_clip_control(
+    let clipped = parse_capture_text_with_options(
         "https://example.com/post",
         None,
         None,
@@ -208,7 +198,7 @@ fn forced_destination_global_and_clip_keep_tasks() {
     assert!(matches!(clipped.kind, CaptureKind::Task));
 
     // A forced `-r` route alone claims an explicit-parent reference.
-    let forced_ref = parse_capture_text_with_clip_control(
+    let forced_ref = parse_capture_text_with_options(
         "https://example.com/post",
         Some("notes"),
         None,
@@ -219,7 +209,7 @@ fn forced_destination_global_and_clip_keep_tasks() {
     assert_eq!(forced_ref.route.as_deref(), Some("notes"));
     assert_eq!(forced_ref.body, "https://example.com/post");
 
-    let forced_listen = parse_capture_text_with_clip_control(
+    let forced_listen = parse_capture_text_with_options(
         "https://example.com/post %l",
         Some("notes"),
         None,
@@ -437,7 +427,7 @@ fn editor_url_list_items_each_report_ref() {
     assert_eq!(parse.items.len(), 2);
     assert!(parse.items[0].ref_listen);
     assert!(!parse.items[1].ref_listen);
-    let listen_start = mixed.find('%').expect("listen marker byte offset");
+    let listen_start = mixed.find('%').expect("%l byte offset");
     assert!(parse.spans.iter().any(|span| {
         span.kind == SpanKind::Directive
             && span.start == listen_start

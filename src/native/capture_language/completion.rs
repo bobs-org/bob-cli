@@ -266,7 +266,6 @@ fn relation_target_completion_field_at(
         line.text,
         line.start,
         parent,
-        true,
     );
     for scanned in scan_line_relations(line.text, line.start) {
         let (start, end, direction, sigil_len, directive_end) = match &scanned {
@@ -364,7 +363,6 @@ fn relation_label_completion_field_at(
         line.text,
         line.start,
         parent,
-        true,
     );
     for scanned in scan_line_relations(line.text, line.start) {
         let (start, end, separator, hidden) = match &scanned {
@@ -508,7 +506,7 @@ fn relation_completion_field_at(
     // mid-line prose that merely looks like one.
     let tokens = tokenize_line_with_spans(line);
     let (_, found) =
-        extract_line_dependencies(tokens, line.text, line.start, parent, true);
+        extract_line_dependencies(tokens, line.text, line.start, parent);
     let (entries, partials) = if sigil == b'*' {
         (&found.blocked_entries, &found.blocked_partials)
     } else {
@@ -1050,8 +1048,7 @@ pub(crate) fn completion_field_at(
                 bare_name: false,
             });
         }
-        let occurrences =
-            super::type_marker::collect_item_with_clip_control(item, true);
+        let occurrences = super::type_marker::collect_item(item);
         if occurrences.is_empty() {
             (item, line)
         } else {
@@ -1198,10 +1195,9 @@ pub(crate) fn completion_field_at(
         scan_line.text,
         scan_line.start,
         leading,
-        true,
     );
     tokens = stripped;
-    extract_terminal_markers(&mut tokens, true);
+    extract_terminal_markers(&mut tokens);
 
     let index = completion_marker_index(&tokens, leading)?;
     let token = tokens[index];

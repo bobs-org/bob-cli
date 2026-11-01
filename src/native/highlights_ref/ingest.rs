@@ -45,8 +45,7 @@ pub(crate) struct IngestRequest<'a> {
     pub(crate) url: &'a str,
     /// Resolved parent route stamped into the marker (e.g. `mac_inbox`).
     pub(crate) parent: &'a str,
-    /// Whether standalone `%` (or the compatible `@` alias) requested
-    /// companion audio.
+    /// Whether `%l` requested companion audio.
     pub(crate) listen: bool,
     /// Commit-subject producer, `bob ref jobs run` or `bob gkeep pull`.
     pub(crate) producer: &'a str,

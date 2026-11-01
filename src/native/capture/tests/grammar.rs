@@ -64,54 +64,39 @@ fn parses_retired_priority_tokens() {
 fn extracts_priority_markers_from_terminal_region() {
     let mut tokens = vec!["buy", "milk", "$2"];
     assert_eq!(
-        extract_terminal_markers(&mut tokens, false)
-            .0
-            .priority_level,
+        extract_terminal_markers(&mut tokens).0.priority_level,
         Some(2)
     );
     assert_eq!(tokens, vec!["buy", "milk"]);
 
     let mut tokens = vec!["buy", "milk", "$2", "@groceries"];
     assert_eq!(
-        extract_terminal_markers(&mut tokens, false)
-            .0
-            .priority_level,
+        extract_terminal_markers(&mut tokens).0.priority_level,
         Some(2)
     );
     assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
 
     let mut tokens = vec!["buy", "milk", "@groceries", "$3"];
     assert_eq!(
-        extract_terminal_markers(&mut tokens, false)
-            .0
-            .priority_level,
+        extract_terminal_markers(&mut tokens).0.priority_level,
         Some(3)
     );
     assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
 
     let mut tokens = vec!["set", "$2", "priority"];
-    assert_eq!(
-        extract_terminal_markers(&mut tokens, false)
-            .0
-            .priority_level,
-        None
-    );
+    assert_eq!(extract_terminal_markers(&mut tokens).0.priority_level, None);
     assert_eq!(tokens, vec!["set", "$2", "priority"]);
 
     let mut tokens = vec!["buy", "$1", "$2"];
     assert_eq!(
-        extract_terminal_markers(&mut tokens, false)
-            .0
-            .priority_level,
+        extract_terminal_markers(&mut tokens).0.priority_level,
         Some(2)
     );
     assert_eq!(tokens, vec!["buy", "$1"]);
 
     let mut tokens = vec!["buy", "milk", "$"];
     assert_eq!(
-        extract_terminal_markers(&mut tokens, false)
-            .0
-            .priority_level,
+        extract_terminal_markers(&mut tokens).0.priority_level,
         Some(1)
     );
     assert_eq!(tokens, vec!["buy", "milk"]);
@@ -120,7 +105,7 @@ fn extracts_priority_markers_from_terminal_region() {
 #[test]
 fn extracts_retired_priority_tokens_from_the_terminal_region() {
     let mut tokens = vec!["buy", "milk", "p:2"];
-    let markers = extract_terminal_markers(&mut tokens, false).0;
+    let markers = extract_terminal_markers(&mut tokens).0;
     assert_eq!(
         markers
             .retired_priority
@@ -132,7 +117,7 @@ fn extracts_retired_priority_tokens_from_the_terminal_region() {
     assert_eq!(tokens, vec!["buy", "milk"]);
 
     let mut tokens = vec!["buy", "milk", "p:2", "@bob"];
-    let markers = extract_terminal_markers(&mut tokens, false).0;
+    let markers = extract_terminal_markers(&mut tokens).0;
     assert_eq!(
         markers
             .retired_priority
@@ -143,14 +128,14 @@ fn extracts_retired_priority_tokens_from_the_terminal_region() {
     assert_eq!(tokens, vec!["buy", "milk", "@bob"]);
 
     let mut tokens = vec!["set", "p:2", "priority"];
-    assert!(extract_terminal_markers(&mut tokens, false)
+    assert!(extract_terminal_markers(&mut tokens)
         .0
         .retired_priority
         .is_none());
     assert_eq!(tokens, vec!["set", "p:2", "priority"]);
 
     let mut tokens = vec!["buy", "p:x"];
-    assert!(extract_terminal_markers(&mut tokens, false)
+    assert!(extract_terminal_markers(&mut tokens)
         .0
         .retired_priority
         .is_none());
@@ -160,7 +145,7 @@ fn extracts_retired_priority_tokens_from_the_terminal_region() {
 #[test]
 fn extracts_escaped_priority_tokens_from_the_terminal_region() {
     let mut tokens = tokenize_with_spans("Pay Bob \\$3");
-    let markers = extract_terminal_markers(&mut tokens, false).0;
+    let markers = extract_terminal_markers(&mut tokens).0;
     assert!(markers.priority_level.is_none());
     assert_eq!(markers.priority_escapes, vec![(8, 9)]);
     assert_eq!(
@@ -169,7 +154,7 @@ fn extracts_escaped_priority_tokens_from_the_terminal_region() {
     );
 
     let mut tokens = tokenize_with_spans("Pay Bob \\$3 $2 @cash");
-    let markers = extract_terminal_markers(&mut tokens, false).0;
+    let markers = extract_terminal_markers(&mut tokens).0;
     assert_eq!(markers.priority_level, Some(2));
     assert_eq!(markers.priority_escapes, vec![(8, 9)]);
     assert_eq!(
@@ -178,7 +163,7 @@ fn extracts_escaped_priority_tokens_from_the_terminal_region() {
     );
 
     let mut tokens = tokenize_with_spans("cost \\$3 today");
-    let markers = extract_terminal_markers(&mut tokens, false).0;
+    let markers = extract_terminal_markers(&mut tokens).0;
     assert!(markers.priority_level.is_none());
     assert!(markers.priority_escapes.is_empty());
     assert_eq!(

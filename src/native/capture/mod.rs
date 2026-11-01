@@ -143,6 +143,10 @@ pub(crate) use pomodoro_adjust::{
     format_adjusted_range, normalize_minutes, parse_adjustment_range,
     AdjustRange,
 };
+pub(crate) use pomodoro_insert::{
+    select_default_pomodoro_line, DefaultPomodoroBranch,
+    DefaultPomodoroSelection,
+};
 pub(crate) use sections::{
     insert_task_line, line_spans, non_tasks_section_headings, LineSpan,
     SectionHeading,

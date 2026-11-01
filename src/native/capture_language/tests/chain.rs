@@ -7,7 +7,7 @@ use super::super::model::*;
 use super::*;
 
 fn execute_draft(raw: &str) -> Result<ParsedCaptureDraft, String> {
-    parse_capture_draft_with_clip_control(
+    parse_capture_draft_with_options(
         raw,
         None,
         None,
@@ -19,7 +19,7 @@ fn execute_forced(
     raw: &str,
     forced_route: Option<&str>,
 ) -> Result<ParsedCaptureDraft, String> {
-    parse_capture_draft_with_clip_control(
+    parse_capture_draft_with_options(
         raw,
         forced_route,
         None,

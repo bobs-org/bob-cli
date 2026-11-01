@@ -4,6 +4,10 @@ use std::{fs, path::Path};
 
 use super::model::{CompleteError, DirectiveCandidate};
 use crate::native::{
+    capture::{
+        select_default_pomodoro_line, DefaultPomodoroBranch,
+        DefaultPomodoroSelection,
+    },
     capture_language::{
         self, CompletionField, EditorItemParse, EditorMode, SpanKind,
     },
@@ -298,42 +302,51 @@ fn pomodoro_note_target(bob_dir: &Path) -> PomodoroNoteTarget {
     let Ok(contents) = fs::read_to_string(&day_file) else {
         return no_pomodoro("No eligible Pomodoro in today's daily note.");
     };
+    let pick = match select_default_pomodoro_line(
+        &contents,
+        DefaultPomodoroSelection::CurrentOrLastCompleted,
+    ) {
+        Ok(pick) => pick,
+        Err(error) => {
+            return no_pomodoro(map_pomodoro_note_error(&error.message))
+        }
+    };
     let scan = capture_pomodoros::scan(&contents);
-    if !scan.has_section {
-        return no_pomodoro("Today's daily note has no Pomodoros section.");
-    }
-
-    let timed_open = scan
+    let entry = scan
         .entries
         .iter()
-        .filter(|entry| {
-            entry.state == PomodoroState::Open && entry.time_range.is_some()
-        })
-        .collect::<Vec<_>>();
-    if timed_open.len() > 1 {
-        return no_pomodoro("Today's note has multiple open timed Pomodoros.");
-    }
-    let selected = timed_open
-        .first()
-        .copied()
-        .or_else(|| {
-            scan.entries
-                .iter()
-                .rev()
-                .find(|entry| entry.state == PomodoroState::Completed)
-        })
-        .or_else(|| {
-            scan.entries
-                .iter()
-                .find(|entry| entry.state == PomodoroState::Open)
-        });
-    let Some(entry) = selected else {
-        return no_pomodoro("Today's daily note has no eligible Pomodoro.");
+        .find(|entry| entry.line == pick.index + 1);
+    let detail = if let Some(entry) = entry.filter(|entry| {
+        entry.time_range.is_some()
+            || entry.name.as_deref().is_some_and(|name| !name.is_empty())
+    }) {
+        format!("→ {}", pomodoro_target_label(entry))
+    } else {
+        let state = match pick.branch {
+            DefaultPomodoroBranch::TimedOpen => "running",
+            DefaultPomodoroBranch::LastCompleted => "last completed",
+            DefaultPomodoroBranch::FirstOpen => "planned",
+        };
+        format!("→ {} · {state}", pick.task_text)
     };
-
     PomodoroNoteTarget {
-        detail: format!("→ {}", pomodoro_target_label(entry)),
+        detail,
         disabled: None,
+    }
+}
+
+fn map_pomodoro_note_error(message: &str) -> &str {
+    match message {
+        "Bob daily note has no Pomodoros section" => {
+            "Today's daily note has no Pomodoros section."
+        }
+        "Bob daily note has multiple open timed Pomodoros" => {
+            "Today's note has multiple open timed Pomodoros."
+        }
+        "Bob daily note has no eligible Pomodoro" => {
+            "Today's daily note has no eligible Pomodoro."
+        }
+        other => other,
     }
 }
 

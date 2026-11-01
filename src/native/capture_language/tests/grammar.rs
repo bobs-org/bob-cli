@@ -392,7 +392,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
     assert!(!is_selector_component("c++"));
     assert!(!is_selector_component("a+b"));
 
-    let parsed = parse_capture_text_with_clip_control(
+    let parsed = parse_capture_text_with_options(
         "Do work @sase:deep-fix#c++",
         None,
         None,
@@ -411,7 +411,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         }
     );
 
-    let infix = parse_capture_text_with_clip_control(
+    let infix = parse_capture_text_with_options(
         "Do work @sase:deep-fix#bob+sase",
         None,
         None,
@@ -429,7 +429,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         }
     );
 
-    let sub_bullet = parse_capture_text_with_clip_control(
+    let sub_bullet = parse_capture_text_with_options(
         "Add context @sase+goog-exit#a+b",
         None,
         None,
@@ -716,7 +716,7 @@ fn lua_composes_clipboard_terminal_markers_around_every_picker_token() {
 fn lua_clipboard_composition_body_follows_bob_terminal_extraction() {
     // Delta from Lua: Hammerspoon left `%`/`s:`/`$<N>` in the body for
     // `bob capture` to interpret, while this module extracts them into
-    // structured spans. A clipboard marker that precedes an incomplete
+    // structured spans. A `%c` that precedes an incomplete
     // marker still stays in the body, because `is_route_marker` (shared
     // with execution) only recognizes complete route tokens.
     assert_eq!(editor("Body %c @Dev:focus-123").body, "Body");
@@ -1025,7 +1025,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
     }
     // A forced route rejects an exact start with the start copy.
-    let forced = parse_capture_text_with_clip_control(
+    let forced = parse_capture_text_with_options(
         "=3",
         Some("work"),
         None,
@@ -2045,7 +2045,7 @@ fn execution_keeps_task_id_lookalikes_literal_outside_project_notes() {
 
 #[test]
 fn execution_forced_route_keeps_retired_and_special_markers_literal() {
-    let parsed = parse_capture_text_with_clip_control(
+    let parsed = parse_capture_text_with_options(
         "Do thing @dev::id @dev+parent @dev^new-id",
         Some("work"),
         None,
@@ -2164,7 +2164,7 @@ fn execution_claims_trailing_hash_types_but_leaves_midline_hash_text() {
 
     // With a forced route every `@...` token stays literal, while a
     // trailing `#now` remains a type marker.
-    let forced = parse_capture_text_with_clip_control(
+    let forced = parse_capture_text_with_options(
         "Fix #now",
         Some("work"),
         None,
@@ -2173,7 +2173,7 @@ fn execution_claims_trailing_hash_types_but_leaves_midline_hash_text() {
     .expect("forced route with type marker");
     assert_eq!(forced.route.as_deref(), Some("work"));
     assert_eq!(forced.type_marker.as_ref().unwrap().name, "now");
-    let parsed = parse_capture_text_with_clip_control(
+    let parsed = parse_capture_text_with_options(
         "Fix #now note",
         Some("work"),
         None,
@@ -2237,7 +2237,7 @@ fn task_link_query_rejects_single_colon_tokens_with_teaching_errors() {
         "padded"
     );
     // Forced flags do not change the rejection.
-    let forced = parse_capture_text_with_clip_control(
+    let forced = parse_capture_text_with_options(
         ":dee",
         Some("work"),
         None,
@@ -2652,7 +2652,7 @@ fn bang_claim_covers_the_contract_table() {
     }
 
     // A complete token plus a child line is claimed invalid too.
-    let child_error = parse_capture_draft_with_clip_control(
+    let child_error = parse_capture_draft_with_options(
         "!sase:fix-flaky\n- child",
         None,
         None,
@@ -2662,7 +2662,7 @@ fn bang_claim_covers_the_contract_table() {
     assert!(child_error.contains("its child lines"), "{child_error}");
 
     // An incomplete token plus a child line stays prose, like `:dee`.
-    let prose_draft = parse_capture_draft_with_clip_control(
+    let prose_draft = parse_capture_draft_with_options(
         "!fix\n- child",
         None,
         None,
@@ -2698,7 +2698,7 @@ fn bang_claim_covers_the_contract_table() {
     }
 
     // Forced destination flags are refused on complete tokens.
-    let forced = parse_capture_draft_with_clip_control(
+    let forced = parse_capture_draft_with_options(
         "!sase:fix-flaky",
         Some("work"),
         None,

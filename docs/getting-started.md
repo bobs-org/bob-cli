@@ -284,7 +284,7 @@ the job; the worker fetches the link independently of the capture process.
 finds the note.
 
 An eligible URL fills the capture item, optionally with a parent route
-and a listen marker: `URL @route`, `URL %l`, or `URL %l @route`. Put
+and an optional `%l` listen directive: `URL @route`, `URL %l`, or `URL %l @route`. Put
 `%l` at either edge of the URL item to request companion audio; Extra prose, child bullets, or other capture markers
 keep it a task. Hosts without a dot, such as `http://go/x` and `localhost`, IP
 literals, and the default excluded hosts (`google.com`, `googleplex.com`,
@@ -368,7 +368,7 @@ Follow the [Git sync runbook](vault-git-sync.md) before enabling maintenance.
 | Hooks refuse a Blocked transition | The Tasks registry's `?` status must match the required definition |
 | A native query using plugin-dependent dashboard filters omits tasks | Native queries do not load desktop Bob plugins; use `bob freshness` for the headless review queue |
 | A captured link is absent from `ref list` | Inspect `bob ref jobs`; a clipped intake PDF needs `bob ref scan` before it has a note |
-| A link stays a task | Extra prose, unsupported markers, children, a parent-task destination, `--no-ref`, a host without a dot, an IP address, an excluded host, or routing disabled in config. A simple `@route` parent and a `%` listen marker immediately after the URL are supported |
+| A link stays a task | Extra prose, unsupported markers, children, a parent-task destination, `--no-ref`, a host without a dot, an IP address, an excluded host, or routing disabled in config. A simple `@route` parent and a `%l` listen directive immediately after the URL are supported |
 | Markdown PDF creation fails | Check the `pandoc`, `xelatex`, and `latex_packages` rows in `bob ref doctor`. Missing packages produce one `tlmgr install` line in the warnings section. Doctor does not check fonts; install DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono when XeLaTeX cannot find them |
 
 Use `bob <command> --help` for accepted options and the [contract index](develop/contracts.md)

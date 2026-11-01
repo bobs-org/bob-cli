@@ -35,7 +35,7 @@ fn split_capture_draft_ignores_leading_blanks_and_crlf() {
 
 #[test]
 fn execution_inherits_a_global_task_route_unless_an_item_overrides() {
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "@@Foo\nFirst task\n\nSecond task @bar\n\nThird task",
         None,
         None,
@@ -55,7 +55,7 @@ fn execution_inherits_a_global_task_route_unless_an_item_overrides() {
 
 #[test]
 fn execution_an_ensure_next_item_participates_normally_in_a_multi_item_draft() {
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "First task @dev\n\n@cash+goog-exit\n\nThird task @dev",
         None,
         None,
@@ -78,7 +78,7 @@ fn execution_an_ensure_next_item_participates_normally_in_a_multi_item_draft() {
 
 #[test]
 fn execution_an_explicit_toggle_item_participates_in_a_multi_item_draft() {
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "First task @dev\n\n@cash+goog-exit!\n\nThird task @dev",
         None,
         None,
@@ -98,7 +98,7 @@ fn execution_an_explicit_toggle_item_participates_in_a_multi_item_draft() {
 
 #[test]
 fn execution_local_markers_override_a_global_declaration() {
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "@@foo\nKeep\n\nBullet @bar#Ideas\n\nId @bar^b-id\n\nPomo @bar:p-id\n\nChild @bar+b-id\n\nNote %n",
         None,
         None, &CaptureParseOptions::routing_off())
@@ -128,7 +128,7 @@ fn execution_local_markers_override_a_global_declaration() {
 
 #[test]
 fn execution_rejects_a_declaration_only_draft() {
-    let error = parse_capture_draft_with_clip_control(
+    let error = parse_capture_draft_with_options(
         "@@foo",
         None,
         None,
@@ -147,7 +147,7 @@ fn execution_rejects_unsupported_global_forms() {
         "@@foo+id\nTask",
         "@@foo+id!\nTask",
     ] {
-        let error = parse_capture_draft_with_clip_control(
+        let error = parse_capture_draft_with_options(
             raw,
             None,
             None,
@@ -160,7 +160,7 @@ fn execution_rejects_unsupported_global_forms() {
 
 #[test]
 fn execution_accepts_a_later_declaration_only_line() {
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "First task\n\n@@foo\nSecond",
         None,
         None,
@@ -174,7 +174,7 @@ fn execution_accepts_a_later_declaration_only_line() {
 
 #[test]
 fn execution_strips_inline_declarations_before_terminal_markers() {
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "Buy milk s:2 @@Groceries",
         None,
         None,
@@ -191,7 +191,7 @@ fn execution_strips_inline_declarations_before_terminal_markers() {
 
 #[test]
 fn execution_warns_when_a_local_marker_shadows_its_declaration() {
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "Buy milk @dev @@groceries\n\nOther",
         None,
         None,
@@ -246,7 +246,7 @@ fn task_complete_items_skip_global_inheritance() {
     // A `@@` declaration routes ordinary items but never turns a `!`
     // item into a task or changes its destination: execution leaves
     // the `!` item a `TaskComplete` with no inherited route or tags.
-    let draft = parse_capture_draft_with_clip_control(
+    let draft = parse_capture_draft_with_options(
         "@@cash\n\n!sase:x",
         None,
         None,

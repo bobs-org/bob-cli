@@ -81,8 +81,8 @@ anything is written, and any failure rolls the whole batch back.
 | --- | --- |
 | Bare public URL | Queue a reference job under `mac_inbox` when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
 | `URL @route` or `@route URL` | Queue the reference under that route (aliases resolve; source `explicit`) |
-| `URL %l` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced); there is no `@` alias |
-| `URL %l @route` or `@route URL %l` | Queue the reference with companion audio under that explicit parent (`%l` is the only listen spelling) |
+| `URL %l` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced) |
+| `URL %l @route` or `@route URL %l` | Queue the reference with companion audio under that explicit parent |
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
 | `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
@@ -151,7 +151,7 @@ anything is written, and any failure rolls the whole batch back.
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%c` / `%c<N>` | Capture clipboard content as child bullets (`%c` is one live value; `%c3` is three) |
 | `%t` | Mark the draft's first item as a template; its rows follow the first blank line |
-| `%` | Incomplete directive except on a bare URL where `%l` requests companion audio; add `%c`, `%n`, `%t`, `%l` or write `\%` to keep a literal `%` |
+| `%` | Incomplete directive: add `%c`, `%n`, `%t`, `%l` or write `\%` to keep a literal `%` |
 | bare `#` / `%` | Open the task-type or directive menu with no row preselected |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
 | `#` | Incomplete `#<type>` at an item edge: add a type (`#fix`) or write `\#` to keep a literal `#`; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
@@ -837,7 +837,7 @@ which physical line in that item it appears on -- as shown above, `@work` and
 `$1` on the last child still route and prioritize that item -- and is
 stripped from the rendered line it was typed on. A second line in the same
 item that resolves the same marker slot (two routes, two schedules, two
-priorities, or two clipboard markers) is ambiguous and fails with a usage
+priorities, or two `%c` directives) is ambiguous and fails with a usage
 error before anything is written. Only the first physical line of an item
 keeps the established leading `@route text` form; later lines compose trailing
 markers only. A `sub_bullet`
@@ -977,18 +977,17 @@ files it when it runs; a queued clip appears after the host's intake drain
 (`bob ref scan -i`). Quote the URL when the shell would treat `#` as a
 comment.
 
-Append a standalone `%` immediately after the URL (the next
+Append `%l` immediately after the URL (the next
 whitespace-delimited token on the same line, one or more spaces/tabs) to
-request companion audio: `https://example.blog.com/somepost %` clips like
+request companion audio: `https://example.blog.com/somepost %l` clips like
 `bob ref create <URL> -P <resolved-parent> -L`. `URL %l @sase` and
 `@sase URL %l` combine listen with an explicit parent; `URL %l` alone uses the
 default, `@@route` global, or `-r` forced parent. Do not attach the marker
 to the URL, or put it in a query, fragment, encoded `%25`/`%40`, or userinfo —
 those bytes stay part of the URL. One optional `<...>` wrapper around the URL
-is still accepted. Exact standalone `@` is still a compatible listen
-spelling. Exact `URL %l` is a directive like `%c`; `--clip URL` and `-R 'URL %c'` keep the clipboard/task path. A non-URL
+is still accepted. Exact `URL %l` is a [directive](#directives) like `%c`; `--clip URL` and `-R 'URL %c'` keep the clipboard/task path. A non-URL
 bare `@` and prefixes such as `@sa` remain route completion, and completing a
-claimed listen marker never replaces it (a separate ` @sa` after `URL %l`
+claimed `%l` never replaces it (a separate ` @sa` after `URL %l`
 still completes the parent). A marked item
 prints `queued … · Listen` with `· companion audio requested`; it needs a
 configured `highlights.listen_command`. Inline intake files the PDF and MP3
@@ -998,7 +997,7 @@ adds audio to existing captures: a marked duplicate, pending job, or
 library hit queues nothing and shows `no new listen job was queued · to
 attach audio run: bob ref create <URL> -P <parent> -L`.
 
-Anything more — an extra word, `#tag`, `s:`, `$<N>`, a clipboard marker, an operator, a child
+Anything more — an extra word, `#tag`, `s:`, `$<N>`, `%c`, an operator, a child
 line, task/destination flags beyond `-r`
 (`-s -t -S -c`, `--task-ref`), or a second `@route` — keeps the item a task.
 `-R` also keeps it a task. Hosts without a dot (`http://go/x`, `localhost`),
@@ -4526,8 +4525,8 @@ owns the generated `- 🧩 **Sub-projects:** [[...]]` line, which is
 machine-owned and rewritten there.
 
 Project-note capture cannot be combined with clipboard input:
-`%...` markers fail with
-`project-note capture cannot be combined with % clipboard markers` and
+`%c` fails with
+`project-note capture cannot be combined with %c` and
 `--clip` with `project-note capture cannot be combined with --clip`.
 Authored children are re-routed into `## Tasks` and `##` sections, so
 clipboard children under the captured parent have no unambiguous home; this
@@ -4733,7 +4732,7 @@ inserted immediately before the earliest of those managed logs. A Schedule Log i
 markers do not move the insertion point. Tasks with neither managed log still
 append at the end of the task block.
 
-The marker composes with terminal `s:<N>`, `$<N>`, and clipboard markers in
+The marker composes with terminal `s:<N>`, `$<N>`, and `%c` in
 either order. Scheduled properties are still rendered for consistency even
 though Obsidian Tasks does not read them from an ordinary bullet. Existing child
 indentation is copied; otherwise capture uses the note's dominant tab-or-two-space
@@ -4853,8 +4852,7 @@ Pomodoro`, `Bob daily note has multiple open timed Pomodoros`, and invalid
 Pomodoro names with ``Pomodoro name must contain only A-Z, 0-9 or `& ' ( ) + , . / -` and must start with a letter or digit``. A task toggle also
 rejects forced destination flags with `task toggle capture cannot be combined
 with <flags>`, `--clip` with `task toggle capture cannot be combined with
---clip`, `%...` with `task toggle capture cannot be combined with % clipboard
-markers`, `s:<N>` with `task toggle capture cannot be combined with s:<N>`,
+--clip`, `%c` with `task toggle capture cannot be combined with %c`, `s:<N>` with `task toggle capture cannot be combined with s:<N>`,
 `$<N>` with `task toggle capture cannot be combined with $<N>`, and authored
 child bullets with `task toggle capture cannot have authored child bullets`.
 
@@ -5879,8 +5877,8 @@ those commands too. A missing config file uses the defaults. Running
 `capture-parse` with a Pomodoro-name span best-effort reads the configured
 vault's theme catalog and adds a `themes` array to that span. If the catalog
 is missing or unavailable, parsing still succeeds and omits those refs. The
-catalog read never writes to the vault. A nonexistent `BOB_DIR` and a `%...`
-clipboard marker still succeed. If `TEXT` is omitted and stdin is piped, it reads the
+catalog read never writes to the vault. A nonexistent `BOB_DIR` and a `%c`
+directive still succeed. If `TEXT` is omitted and stdin is piped, it reads the
 complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
@@ -6113,7 +6111,7 @@ reference, exact `URL %l` adds
 `ref_listen: true` and a `directive` span over `%l`; `-R` keeps it a
 `task` so parse and capture always agree. A complete `%c` / `%c<N>` span has
 kind `directive` with `directive: "clip"` (and `count` when N > 1). A bare
-`%` span that is not listen is kind `directive` with need `directive`. A solo `@route:block-id…` item reports
+`%` span is kind `directive` with need `directive`. A solo `@route:block-id…` item reports
 `pomodoro_link` with the `pomodoro_route` / `pomodoro_block_id` /
 `pomodoro_name` / `pomodoro_start` spans (or `pomodoro_close` plus the two
 list spans for an `=x…` suffix); the `^` spelling reports the same
@@ -6165,7 +6163,7 @@ needs `["section"]`, while marker-only `@route+id#` opens task-type completion a
 is a Pomodoro name.
 
 `relationship_needs_text` is an error diagnostic, not a picker need. It is
-ranged on the `$<N>`, `s:<N>`, clipboard marker, or `child bullets` token
+ranged on the `$<N>`, `s:<N>`, `%c`, or `child bullets` token
 when a bare existing-task owner has relationships but no task text; the
 diagnostic message is identical to the `bob capture` refusal. See
 [Relating existing tasks with `&` and `*`](#relating-existing-tasks).
@@ -6342,7 +6340,7 @@ authored bullet, or a two-space nested authored bullet),
 authored owner), `empty_child_after_markers` (an authored bullet has no text
 left once its capture markers are removed),
 `duplicate_capture_marker` (a later line in the same item resolves a route,
-schedule, priority, or clipboard marker a prior line already resolved),
+schedule, priority, or `%c` a prior line already resolved),
 `invalid_global_destination` (unsupported or malformed `@@` declaration),
 `duplicate_global_destination` (a later `@@` declaration after the first),
 `global_destination_shadowed` (warning: an item-local marker overrides the

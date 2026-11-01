@@ -321,17 +321,16 @@ Contract: [Saving links to your reading queue](../capture.md#saving-links-to-you
 ### `URL %l` {#url-listen}
 
 Queue the reference with companion audio (`ref.listen` true). Parent
-selection matches a bare URL: default, `@@route` global, or `-r`. Exact
-there is no `@` alias. `URL %l @route` / `@route URL %l`
-sets an explicit parent.
+selection matches a bare URL: default, `@@route` global, or `-r`.
+`URL %l @route` / `@route URL %l` sets an explicit parent.
 
 ```bash
-bob capture --dry-run 'https://example.com/article % @work'
+bob capture --dry-run 'https://example.com/article %l @work'
 ```
 
 ```text { .no-copy title="Output" }
-[dry-run] ok would queue  example.com/article → work
-  new to your library · reading task lands in work.md · file it later · listen
+[dry-run] ok would queue  example.com/article → work · Listen
+  new to your library · reading task lands in work.md · companion audio requested
 ```
 
 Contract: [Saving links to your reading queue](../capture.md#saving-links-to-your-reading-queue).

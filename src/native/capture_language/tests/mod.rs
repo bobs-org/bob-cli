@@ -55,7 +55,7 @@ fn line_texts(raw: &str) -> Vec<&str> {
 }
 
 fn execute(raw: &str) -> Result<ParsedCaptureText, String> {
-    parse_capture_text_with_clip_control(
+    parse_capture_text_with_options(
         raw,
         None,
         None,
@@ -64,7 +64,7 @@ fn execute(raw: &str) -> Result<ParsedCaptureText, String> {
 }
 
 fn execute_draft(raw: &str) -> Result<ParsedCaptureDraft, String> {
-    parse_capture_draft_with_clip_control(
+    parse_capture_draft_with_options(
         raw,
         None,
         None,

@@ -151,8 +151,8 @@ fn planning_each_template_matches_planning_its_expansion() {
             "{0} %t\n\nhttps://example.com/template-one\nhttps://example.com/template-two\n",
         ),
         (
-            "reference listen markers",
-            "{0} %t\n\n\"https://example.com/listen-one @\"\n\"https://example.com/listen-two @\"\n",
+            "reference listen directives",
+            "{0} %t\n\n\"https://example.com/listen-one %l\"\n\"https://example.com/listen-two %l\"\n",
         ),
     ];
     let routing = UrlRoutingPolicy::default();

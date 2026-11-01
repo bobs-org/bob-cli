@@ -61,15 +61,15 @@ pub(super) fn parse_editor_line<'a>(
     leading: bool,
 ) -> LineEditorParse<'a> {
     let declarations = take_global_declarations(&mut tokens);
-    // Dependency modifiers interleave with destination and
-    // schedule/priority/clipboard markers in either order, so they leave
+    // Dependency modifiers interleave with destination,
+    // schedule/priority, and `%` directives in either order, so they leave
     // the token stream before terminal-marker extraction and marker
     // selection see it. The remaining tokens resolve exactly like a draft
     // without them.
     let (stripped, dependencies) =
-        extract_line_dependencies(tokens, line_text, line_base, leading, true);
+        extract_line_dependencies(tokens, line_text, line_base, leading);
     tokens = stripped;
-    let (markers, marker_spans) = extract_terminal_markers(&mut tokens, true);
+    let (markers, marker_spans) = extract_terminal_markers(&mut tokens);
     let mut terminal_spans: Vec<Span> = marker_spans
         .into_iter()
         .map(|(kind, start, end)| Span {
@@ -234,7 +234,7 @@ pub(super) fn duplicate_capture_marker_diagnostic(
 
 /// Parse in-progress, possibly multi-line capture text for a live editor.
 ///
-/// Unlike [`parse_capture_text_with_clip_control`] this never fails: an
+/// Unlike [`parse_capture_text_with_options`] this never fails: an
 /// incomplete interactive marker (`@`, `@#`, `@route#`, `@:`, `@route:`,
 /// `@route:id#`, `@route:#name`, `@^`, `@route^`, `@+`, `@route+`, `@@`,
 /// `@@route`, and their legacy `@!` aliases) is a valid editing state,
@@ -657,7 +657,7 @@ pub(super) fn attach_operator_dependency_rejection<'a>(
     mut outcome: EditorItemOutcome<'a>,
     item: &CaptureItem<'a>,
 ) -> EditorItemOutcome<'a> {
-    let found = scan_item_dependencies(item, true);
+    let found = scan_item_dependencies(item);
     if found.is_empty() {
         return outcome;
     }
@@ -936,7 +936,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
         .into_iter()
         .find(|selector| !selector.dual_use_adjustment)?;
     let token = selector.token;
-    let found = scan_item_dependencies(item, true);
+    let found = scan_item_dependencies(item);
     let mut needs = vec![Need::TaskParent];
     if !found.partials.is_empty() && !needs.contains(&Need::TaskDependency) {
         needs.push(Need::TaskDependency);
@@ -978,7 +978,6 @@ pub(super) fn parse_editor_parent_task_item<'a>(
         parent_tokens,
         parent.raw.text,
         parent.raw.start,
-        true,
         true,
     );
     let mut spans = parent_deps.spans;
@@ -1057,7 +1056,7 @@ fn parse_editor_ref_item<'a>(
     if item.lines.len() != 1 {
         return None;
     }
-    if !scan_item_dependencies(item, true).is_empty() {
+    if !scan_item_dependencies(item).is_empty() {
         return None;
     }
     let parent = item.lines.first()?.raw;
@@ -1190,8 +1189,7 @@ pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
-    let occurrences =
-        super::type_marker::collect_item_with_clip_control(item, true);
+    let occurrences = super::type_marker::collect_item(item);
     let type_masked_source =
         super::type_marker::masked_source(item, &occurrences);
     let type_masked_item =

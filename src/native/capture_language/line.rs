@@ -32,20 +32,17 @@ pub(super) fn resolve_line<'a>(
     tokens: Vec<Token<'a>>,
     leading: bool,
     detect_route: bool,
-    parse_clip_markers: bool,
 ) -> Result<LineOutcome<'a>, String> {
-    resolve_line_inner(tokens, leading, detect_route, parse_clip_markers)
+    resolve_line_inner(tokens, leading, detect_route)
 }
 
 fn resolve_line_inner<'a>(
     mut tokens: Vec<Token<'a>>,
     leading: bool,
     detect_route: bool,
-    parse_clip_markers: bool,
 ) -> Result<LineOutcome<'a>, String> {
     let declarations = take_global_declarations(&mut tokens);
-    let (markers, _) =
-        extract_terminal_markers(&mut tokens, parse_clip_markers);
+    let (markers, _) = extract_terminal_markers(&mut tokens);
     if let Some(retired) = &markers.retired_priority {
         return Err(retired_priority_marker_error(&retired.token));
     }

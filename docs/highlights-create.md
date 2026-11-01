@@ -837,8 +837,7 @@ plain reread (no `-L` or `-a`) of a narrated family instead prints
 bob ref create https://arxiv.org/abs/1706.03762 -L
 ```
 
-The `URL %` shorthand in `bob capture` and `bob gkeep pull` (with `URL @`
-kept as a compatible alias) clips like
+The `URL %l` directive in `bob capture` and `bob gkeep pull` clips like
 `bob ref create <URL> -P <parent> -L` (same placeholders, same install
 guarantees, same create-time intake). It never adds audio to existing
 captures; background ingest runs the command quietly (never stdout) with

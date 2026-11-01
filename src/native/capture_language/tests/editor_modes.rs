@@ -938,7 +938,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
     ];
 
     for raw in inputs {
-        let executed = parse_capture_text_with_clip_control(
+        let executed = parse_capture_text_with_options(
             raw,
             None,
             None,
@@ -1724,7 +1724,7 @@ fn interactive_markers_are_the_only_divergence_from_execution() {
         "Body @:",
         "Body @:focus-123",
     ] {
-        let executed = parse_capture_text_with_clip_control(
+        let executed = parse_capture_text_with_options(
             raw,
             None,
             None,
@@ -1761,7 +1761,7 @@ fn interactive_markers_are_the_only_divergence_from_execution() {
         "Body @!",
         "Body @!dev",
     ] {
-        parse_capture_text_with_clip_control(
+        parse_capture_text_with_options(
             raw,
             None,
             None,
@@ -1841,11 +1841,11 @@ fn pomodoro_start_suffix_reports_spec_and_non_overlapping_spans() {
 
 #[test]
 fn caret_close_conflicts_agree_with_execution() {
-    use super::super::parse_capture_text_with_clip_control;
+    use super::super::parse_capture_text_with_options;
     // Invalid link closes with item conflicts report the conflict in both
     // execution and the editor: a conflict wins over the lexical diagnostic.
     for raw in ["^r:id=x1,1 s:2", "^r:id=x1, s:2"] {
-        let execution = parse_capture_text_with_clip_control(
+        let execution = parse_capture_text_with_options(
             raw,
             None,
             None,
@@ -1862,7 +1862,7 @@ fn caret_close_conflicts_agree_with_execution() {
         );
     }
     let child = "^r:id=x1,1\n- detail";
-    let execution = parse_capture_text_with_clip_control(
+    let execution = parse_capture_text_with_options(
         child,
         None,
         None,

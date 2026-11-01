@@ -411,7 +411,6 @@ pub(super) fn parent_task_selector_tokens<'a>(
             scan_line.text,
             scan_line.start,
             line_index == 0,
-            true,
         )
         .0;
         let Some(token) = tokens.last().copied() else {
@@ -2112,13 +2111,7 @@ fn relation_stripped_parent_tokens<'a>(
     parent_line: RawLine<'a>,
 ) -> (Vec<Token<'a>>, LineDependencies) {
     let tokens = tokenize_line_with_spans(&parent_line);
-    extract_line_dependencies(
-        tokens,
-        parent_line.text,
-        parent_line.start,
-        true,
-        true,
-    )
+    extract_line_dependencies(tokens, parent_line.text, parent_line.start, true)
 }
 
 fn line_has_relations(deps: &LineDependencies) -> bool {
@@ -2133,7 +2126,7 @@ fn line_has_relations(deps: &LineDependencies) -> bool {
 
 fn remainder_is_caret_owner(tokens: &[Token<'_>]) -> bool {
     let mut remaining = tokens.to_vec();
-    let _ = extract_terminal_markers(&mut remaining, true);
+    let _ = extract_terminal_markers(&mut remaining);
     matches!(
         remaining.as_slice(),
         [token] if parse_caret_link_token(token.text).is_ok()
@@ -2235,7 +2228,7 @@ pub(super) fn classify_caret_item<'a>(
     let has_relations = line_has_relations(&deps);
     let parent_tokens = if has_relations {
         let mut remaining = stripped;
-        let _ = extract_terminal_markers(&mut remaining, true);
+        let _ = extract_terminal_markers(&mut remaining);
         remaining
     } else {
         original

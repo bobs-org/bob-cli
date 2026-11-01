@@ -84,18 +84,7 @@ struct Candidate {
 /// Scan an authored physical line for type markers. Child bullet prefixes
 /// are excluded from edge checks, while all returned ranges remain absolute.
 pub(crate) fn scan_line(line: &str, base: usize) -> Vec<TypeMarkerOccurrence> {
-    scan_line_with_positions(line, base, false, true, None)
-        .into_iter()
-        .map(|(occurrence, _)| occurrence)
-        .collect()
-}
-
-pub(crate) fn scan_line_with_clip_control(
-    line: &str,
-    base: usize,
-    parse_clip_markers: bool,
-) -> Vec<TypeMarkerOccurrence> {
-    scan_line_with_positions(line, base, false, parse_clip_markers, None)
+    scan_line_with_positions(line, base, false, None)
         .into_iter()
         .map(|(occurrence, _)| occurrence)
         .collect()
@@ -105,7 +94,6 @@ fn scan_line_with_positions(
     line: &str,
     base: usize,
     child_line: bool,
-    parse_clip_markers: bool,
     item: Option<&CaptureItem<'_>>,
 ) -> Vec<(TypeMarkerOccurrence, bool)> {
     let (body_start, body) = if child_line {
@@ -194,7 +182,7 @@ fn scan_line_with_positions(
             };
             let mut occurrence = candidate.occurrence.clone();
             shift_occurrence(&mut occurrence, base + body_start);
-            if !marker_only_task_toggle(item, occurrence, parse_clip_markers) {
+            if !marker_only_task_toggle(item, occurrence) {
                 continue;
             }
         }
@@ -206,7 +194,7 @@ fn scan_line_with_positions(
         allowed.push(candidate.edge_start..candidate.edge_end);
     }
     for (start, end) in whitespace_tokens(body) {
-        if is_trailing_transparent(&body[start..end], parse_clip_markers) {
+        if is_trailing_transparent(&body[start..end]) {
             allowed.push(start..end);
         }
     }
@@ -286,7 +274,6 @@ pub(crate) fn completion_at(
             line.text,
             line.start,
             line.start > first_line_start,
-            true,
             Some(item),
         ) {
             let span = occurrence.span().clone();
@@ -495,7 +482,6 @@ fn misordered_project_name_suffix(suffix: &str) -> bool {
 fn marker_only_task_toggle(
     item: &CaptureItem<'_>,
     attached: TypeMarkerOccurrence,
-    parse_clip_markers: bool,
 ) -> bool {
     let lines = split_physical_lines(item.source);
     let first_line_start = item
@@ -515,7 +501,6 @@ fn marker_only_task_toggle(
                 line.text,
                 line.start,
                 line.start > first_line_start,
-                parse_clip_markers,
                 None,
             )
             .into_iter()
@@ -834,11 +819,10 @@ fn char_len(line: &str, index: usize) -> usize {
 /// Collect this item's markers from its original physical lines. Item ranges
 /// filter synthetic chain items so a marker belongs to exactly one split
 /// operator.
-pub(crate) fn collect_item_with_clip_control(
+pub(crate) fn collect_item(
     item: &CaptureItem<'_>,
-    parse_clip_markers: bool,
 ) -> Vec<TypeMarkerOccurrence> {
-    collect_item_with_positions(item, parse_clip_markers)
+    collect_item_with_positions(item)
         .into_iter()
         .map(|(occurrence, _)| occurrence)
         .collect()
@@ -846,7 +830,6 @@ pub(crate) fn collect_item_with_clip_control(
 
 fn collect_item_with_positions(
     item: &CaptureItem<'_>,
-    parse_clip_markers: bool,
 ) -> Vec<(TypeMarkerOccurrence, bool)> {
     let lines = split_physical_lines(item.source);
     let mut found = Vec::new();
@@ -865,7 +848,6 @@ fn collect_item_with_positions(
             line.text,
             line.start,
             line.start > first_line_start,
-            parse_clip_markers,
             Some(item),
         );
         found.extend(occurrences.into_iter().filter(|(occurrence, _)| {
@@ -881,17 +863,8 @@ fn collect_item_with_positions(
 /// Return a same-length line copy with type markers blanked. Escaped markers
 /// lose only their backslash, leaving the visible `#…` text in the body.
 pub(crate) fn masked_line(line: &RawLine<'_>) -> String {
-    masked_line_with_clip_control(line, true)
-}
-
-pub(crate) fn masked_line_with_clip_control(
-    line: &RawLine<'_>,
-    parse_clip_markers: bool,
-) -> String {
     let mut bytes = line.text.as_bytes().to_vec();
-    for occurrence in
-        scan_line_with_clip_control(line.text, line.start, parse_clip_markers)
-    {
+    for occurrence in scan_line(line.text, line.start) {
         match occurrence {
             TypeMarkerOccurrence::Complete(_)
             | TypeMarkerOccurrence::Incomplete { .. }
@@ -913,11 +886,8 @@ pub(crate) fn masked_line_with_clip_control(
 /// Tokenize the masked line but retain slices into the original line. Only
 /// token classification changes; every returned span still indexes the
 /// authored text.
-pub(crate) fn masked_tokens_with_clip_control<'a>(
-    line: &RawLine<'a>,
-    parse_clip_markers: bool,
-) -> Vec<Token<'a>> {
-    let masked = masked_line_with_clip_control(line, parse_clip_markers);
+pub(crate) fn masked_tokens<'a>(line: &RawLine<'a>) -> Vec<Token<'a>> {
+    let masked = masked_line(line);
     let view = RawLine {
         text: &masked,
         start: line.start,

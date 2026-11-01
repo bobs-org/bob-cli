@@ -371,7 +371,7 @@ and capture refuses it until a task is selected. An exact lone `+` remains the e
 Pomodoro adjustment in parsing. An `&note:block-id` modifier names a prerequisite task link \
 (`&projects/foo:bar`; quote notes with spaces: `&\"Shopping List\":bar`): \
 one or more modifiers lead or trail the parent line (interleaving with \
-destination, schedule, priority, and clipboard markers in either order) or \
+destination, schedule, priority, and `%` directives in either order) or \
 close an authored child line, and each adds a per-item `dependencies` entry \
 (`raw`, decoded `note` and `block_id`, plus its sigil-inclusive `range`) \
 with `dependency_sigil`, `dependency_note`, and `dependency_block_id` \
@@ -1296,7 +1296,7 @@ impl CaptureParseResult {
         diagnostics.extend(instance_diagnostics);
 
         // Instance parses are the source of truth for clipboard: the masked
-        // copy (`xxx %c`) reads as a clipboard marker while a `URL %` row
+        // copy (`xxx %c`) reads as `%c` while a `URL %l` row
         // expands to a Listen reference. Only the session check runs here.
         if let Some(diagnostic) = refusal_diagnostic(
             &parsed.spans,

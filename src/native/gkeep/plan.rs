@@ -111,8 +111,7 @@ pub(super) struct PlannedNote {
     /// Why a skipped note stays in Keep (`pinned`, `shared`, …).
     pub(super) skip_reason: Option<String>,
     /// The R5 URL-only intent when `action` is `CreateRef`, including
-    /// whether standalone `%` (or the compatible `@` alias) requested
-    /// companion audio.
+    /// whether `%l` requested companion audio.
     pub(super) ref_intent: Option<RefIntent>,
     /// Trailing `@route` on a URL-only note, lowercased, when present.
     /// Routing never becomes part of the clip target.
@@ -308,18 +307,16 @@ fn classify_one_with_imports(
 }
 
 /// The R5 URL-only rule: the note holds exactly one bare link (plus an
-/// optional single trailing `@route` and an optional standalone `%`
-/// listen marker or compatible `@` alias) and nothing else, so a pull clips
-/// it into the reading queue instead of writing a task. Returns the link's
-/// intent plus the
-/// trailing route (lowercased) when every condition holds: a text note
-/// with no attachments, not shared (even with `-S`), either an empty
-/// title with a marked body or an empty body with a marked title (a page
-/// title equal to the `WebLink` title also counts), a classifying token,
-/// and an admitting policy. The route and listen marker never become part
-/// of the clip target. `URL %` requests companion audio (with `URL @`
-/// as a compatible alias); `URL % @route` adds an explicit parent.
-/// `URL @route %`, attached `path@`, and leading routes stay ordinary notes.
+/// optional single trailing `@route` and an optional `%l` listen directive)
+/// and nothing else, so a pull clips it into the reading queue instead of
+/// writing a task. Returns the link's intent plus the trailing route
+/// (lowercased) when every condition holds: a text note with no attachments,
+/// not shared (even with `-S`), either an empty title with a marked body or
+/// an empty body with a marked title (a page title equal to the `WebLink`
+/// title also counts), a classifying token, and an admitting policy. The
+/// route and `%l` never become part of the clip target. `URL %l` requests
+/// companion audio; `URL %l @route` adds an explicit parent.
+/// `URL @route %l`, attached `path@`, and leading routes stay ordinary notes.
 pub(super) fn url_only_intent(
     note: &KeepNote,
     policy: &UrlRoutingPolicy,
@@ -338,7 +335,7 @@ pub(super) fn url_only_intent(
     }
     let title = note.content.title.trim();
     let body = note.content.text.trim();
-    // Body shapes: `URL`, `URL %`/`URL @`, `URL @route`, `URL % @route`.
+    // Body shapes: `URL`, `URL @route`, `URL %l`, and `URL %l @route`.
     if !body.is_empty() {
         if let Some((intent, route)) =
             url_only_body_tokens(body, title, note, policy)
@@ -357,10 +354,9 @@ pub(super) fn url_only_intent(
 }
 
 /// Parse one Keep text field (body with a title for matching, or title
-/// alone) as `URL`, `URL %`/`URL @`, `URL @route`, or `URL % @route`. Returns the
+/// alone) as `URL`, `URL @route`, `URL %l`, or `URL %l @route`. Returns the
 /// wrapped intent plus the trailing route. Title/WebLink matching always
-/// compares the URL alone, so the marker never becomes part of the clip
-/// target.
+/// compares the URL alone, so `%l` never becomes part of the clip target.
 fn url_only_body_tokens(
     field: &str,
     title: &str,

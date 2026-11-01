@@ -423,8 +423,8 @@ pub(crate) struct EditorParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
-    /// Whether standalone `%` (or compatible `@`) requested companion
-    /// audio on this `Ref` item. Always false for non-`Ref` modes.
+    /// Whether `%l` requested companion audio on this `Ref` item. Always
+    /// false for non-`Ref` modes.
     pub(crate) ref_listen: bool,
     /// Validated additive `@<route>:<block-id>[#<name>]=<X>` start suffix,
     /// when the resolved marker carries one. `None` for every older marker
@@ -492,8 +492,8 @@ pub(crate) struct EditorItemParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
-    /// Whether standalone `%` (or compatible `@`) requested companion
-    /// audio on this `Ref` item. Always false for non-`Ref` modes.
+    /// Whether `%l` requested companion audio on this `Ref` item. Always
+    /// false for non-`Ref` modes.
     pub(crate) ref_listen: bool,
     pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
     pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
@@ -538,7 +538,7 @@ pub(crate) struct LocalDestinationMarker {
 
 /// One `@...` token resolved for the editor. `requires_body` marks the plain
 /// `@route` form, which only routes when body text sits on the other side --
-/// the same rule `parse_capture_text_with_clip_control` applies.
+/// the same rule `parse_capture_text_with_options` applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct MarkerParse {
     pub(super) mode: EditorMode,

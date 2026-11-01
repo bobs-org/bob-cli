@@ -12,7 +12,7 @@ pub(super) fn parse_capture_text(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
 ) -> Result<ParsedCaptureText, CaptureError> {
-    parse_capture_text_with_clip_control(
+    parse_capture_text_with_options(
         raw_text,
         forced_route,
         forced_section,
@@ -23,13 +23,13 @@ pub(super) fn parse_capture_text(
 /// Run the shared capture grammar and re-wrap its message as this command's
 /// usage error, which owns the exit code `bob capture` reports.
 #[cfg(test)]
-pub(super) fn parse_capture_text_with_clip_control(
+pub(super) fn parse_capture_text_with_options(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &capture_language::CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureText, CaptureError> {
-    capture_language::parse_capture_text_with_clip_control(
+    capture_language::parse_capture_text_with_options(
         raw_text,
         forced_route,
         forced_section,
@@ -38,13 +38,13 @@ pub(super) fn parse_capture_text_with_clip_control(
     .map_err(CaptureError::usage)
 }
 
-pub(super) fn parse_capture_draft_with_clip_control(
+pub(super) fn parse_capture_draft_with_options(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &capture_language::CaptureParseOptions<'_>,
 ) -> Result<capture_language::ParsedCaptureDraft, CaptureError> {
-    capture_language::parse_capture_draft_with_clip_control_coded(
+    capture_language::parse_capture_draft_with_options_coded(
         raw_text,
         forced_route,
         forced_section,
@@ -58,7 +58,7 @@ pub(super) fn parse_capture_draft_with_clip_control(
 
 #[cfg(test)]
 pub(super) fn extract_trailing_schedule(tokens: &mut Vec<&str>) -> Option<u64> {
-    capture_language::extract_terminal_markers(tokens, false)
+    capture_language::extract_terminal_markers(tokens)
         .0
         .scheduled_offset
 }

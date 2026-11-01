@@ -64,13 +64,6 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
 /// session-operator chain (`+2 x`) is split into one single-token item per
 /// operator; see [`session_chain_tokens`].
 pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
-    split_capture_draft_with_clip_control(raw, true)
-}
-
-pub(crate) fn split_capture_draft_with_clip_control(
-    raw: &str,
-    parse_clip_markers: bool,
-) -> CaptureDraft<'_> {
     let lines = split_physical_lines(raw);
     let mut declarations = Vec::new();
     let mut item_lines = Vec::new();
@@ -97,11 +90,7 @@ pub(crate) fn split_capture_draft_with_clip_control(
 
     CaptureDraft {
         declarations,
-        items: split_items_from_item_lines_with_clip_control(
-            &item_lines,
-            raw,
-            parse_clip_markers,
-        ),
+        items: split_items_from_item_lines(&item_lines, raw),
     }
 }
 
@@ -112,32 +101,19 @@ pub(super) fn split_items_from_item_lines<'a>(
     lines: &[ItemLine<'a>],
     source: &'a str,
 ) -> Vec<CaptureItem<'a>> {
-    split_items_from_item_lines_with_clip_control(lines, source, true)
-}
-
-pub(super) fn split_items_from_item_lines_with_clip_control<'a>(
-    lines: &[ItemLine<'a>],
-    source: &'a str,
-    parse_clip_markers: bool,
-) -> Vec<CaptureItem<'a>> {
     let mut items = Vec::new();
     let mut current: Vec<ItemLine<'_>> = Vec::new();
 
     for line in lines.iter().copied() {
         if line.raw.text.trim().is_empty() {
-            push_capture_item(
-                &mut items,
-                &mut current,
-                source,
-                parse_clip_markers,
-            );
+            push_capture_item(&mut items, &mut current, source);
             continue;
         }
 
         current.push(line);
     }
 
-    push_capture_item(&mut items, &mut current, source, parse_clip_markers);
+    push_capture_item(&mut items, &mut current, source);
     items
 }
 
@@ -147,12 +123,8 @@ pub(super) fn split_items_from_item_lines_with_clip_control<'a>(
 /// existing single-token path stays byte-identical.
 pub(super) fn session_chain_tokens<'a>(
     line: &RawLine<'a>,
-    parse_clip_markers: bool,
 ) -> Option<Vec<Token<'a>>> {
-    let tokens = super::type_marker::masked_tokens_with_clip_control(
-        line,
-        parse_clip_markers,
-    );
+    let tokens = super::type_marker::masked_tokens(line);
     if tokens.len() >= 2
         && tokens
             .iter()
@@ -269,7 +241,6 @@ pub(super) fn push_capture_item<'a>(
     items: &mut Vec<CaptureItem<'a>>,
     current: &mut Vec<ItemLine<'a>>,
     source: &'a str,
-    parse_clip_markers: bool,
 ) {
     let Some(first) = current.first().copied() else {
         return;
@@ -279,12 +250,7 @@ pub(super) fn push_capture_item<'a>(
     // submit always agree; each item classifies on its own later.
     if current.len() >= 2
         && current.iter().all(|line| {
-            is_url_list_line(
-                &super::type_marker::masked_line_with_clip_control(
-                    &line.raw,
-                    parse_clip_markers,
-                ),
-            )
+            is_url_list_line(&super::type_marker::masked_line(&line.raw))
         })
     {
         for line in std::mem::take(current) {
@@ -300,17 +266,14 @@ pub(super) fn push_capture_item<'a>(
         }
         return;
     }
-    if let Some(tokens) = session_chain_tokens(&first.raw, parse_clip_markers) {
+    if let Some(tokens) = session_chain_tokens(&first.raw) {
         let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
         let last_child = rest.last().copied();
-        let type_markers = super::type_marker::scan_line_with_clip_control(
-            first.raw.text,
-            first.raw.start,
-            parse_clip_markers,
-        )
-        .into_iter()
-        .filter(|occurrence| occurrence.is_marker())
-        .collect::<Vec<_>>();
+        let type_markers =
+            super::type_marker::scan_line(first.raw.text, first.raw.start)
+                .into_iter()
+                .filter(|occurrence| occurrence.is_marker())
+                .collect::<Vec<_>>();
         let leading_marker_start = type_markers
             .iter()
             .filter(|marker| marker.span().end <= tokens[0].start)
@@ -377,21 +340,15 @@ pub(super) fn push_capture_item<'a>(
         current.clear();
         return;
     }
-    let parent_tokens = super::type_marker::masked_tokens_with_clip_control(
-        &first.raw,
-        parse_clip_markers,
-    );
+    let parent_tokens = super::type_marker::masked_tokens(&first.raw);
     if let Some(split) = split_inline_close_tokens(&parent_tokens) {
         let lead_before = &parent_tokens[..split.owner_index];
         let trail = &parent_tokens[split.trail_start..];
-        let type_markers = super::type_marker::scan_line_with_clip_control(
-            first.raw.text,
-            first.raw.start,
-            parse_clip_markers,
-        )
-        .into_iter()
-        .filter(|occurrence| occurrence.is_marker())
-        .collect::<Vec<_>>();
+        let type_markers =
+            super::type_marker::scan_line(first.raw.text, first.raw.start)
+                .into_iter()
+                .filter(|occurrence| occurrence.is_marker())
+                .collect::<Vec<_>>();
         let leading_marker_start = type_markers
             .iter()
             .filter(|marker| marker.span().end <= parent_tokens[0].start)
@@ -644,13 +601,13 @@ pub(super) fn marker_only_placeholder_after_prefix(
 }
 
 #[cfg(test)]
-pub(crate) fn parse_capture_text_with_clip_control(
+pub(crate) fn parse_capture_text_with_options(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureText, String> {
-    let draft = split_capture_draft_with_clip_control(raw_text, true);
+    let draft = split_capture_draft(raw_text);
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
         return Err(if global.is_some() {
@@ -744,13 +701,13 @@ impl From<CaptureItemParseError> for TemplateCodedError {
 }
 
 #[cfg(test)]
-pub(crate) fn parse_capture_draft_with_clip_control(
+pub(crate) fn parse_capture_draft_with_options(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, String> {
-    parse_capture_draft_with_clip_control_coded(
+    parse_capture_draft_with_options_coded(
         raw_text,
         forced_route,
         forced_section,
@@ -759,7 +716,7 @@ pub(crate) fn parse_capture_draft_with_clip_control(
     .map_err(|error| error.message)
 }
 
-pub(crate) fn parse_capture_draft_with_clip_control_coded(
+pub(crate) fn parse_capture_draft_with_options_coded(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
@@ -830,7 +787,7 @@ fn parse_ordinary_draft(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, CaptureItemParseError> {
-    let draft = split_capture_draft_with_clip_control(raw_text, true);
+    let draft = split_capture_draft(raw_text);
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
         return Err(if global.is_some() {

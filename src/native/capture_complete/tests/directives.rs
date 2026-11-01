@@ -133,6 +133,54 @@ fn pomodoro_note_row_describes_the_selected_session() {
 }
 
 #[test]
+fn pomodoro_note_row_names_a_trailing_range_as_running() {
+    let temp =
+        TempDir::new("bob-cli-capture-complete-directive-trailing-range");
+    let day_file = temp.path().join("daily.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [x] (**1330-1355** [t:: 25m]) — PLAN\n- [ ] BUILD (1400-1425)\n",
+    );
+    let raw = "jot %n";
+    let value = env::with_var("BOB_DAY_FILE", day_file.as_os_str(), || {
+        result(temp.path(), raw, raw.len())
+    });
+    let Candidates::Directive(rows) = value.candidates else {
+        panic!("expected directive candidates");
+    };
+
+    let note = rows.iter().find(|row| row.token == "%n").unwrap();
+    assert_eq!(
+        note.detail.as_deref(),
+        Some("→ BUILD (1400-1425) · running")
+    );
+    assert!(note.disabled_reason.is_none());
+}
+
+#[test]
+fn pomodoro_note_row_disables_when_two_open_timed_entries_mix_formats() {
+    let temp = TempDir::new("bob-cli-capture-complete-directive-mixed-timed");
+    let day_file = temp.path().join("daily.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**1330-1355** [t:: 25m]) — PLAN\n- [ ] BUILD (1400-1425)\n",
+    );
+    let raw = "jot %n";
+    let value = env::with_var("BOB_DAY_FILE", day_file.as_os_str(), || {
+        result(temp.path(), raw, raw.len())
+    });
+    let Candidates::Directive(rows) = value.candidates else {
+        panic!("expected directive candidates");
+    };
+
+    let note = rows.iter().find(|row| row.token == "%n").unwrap();
+    assert_eq!(
+        note.disabled_reason.as_deref(),
+        Some("Today's note has multiple open timed Pomodoros.")
+    );
+}
+
+#[test]
 fn listen_row_activates_when_configured() {
     let temp = TempDir::new("bob-cli-capture-complete-directive-listen");
     let config = temp.path().join("config.yml");
