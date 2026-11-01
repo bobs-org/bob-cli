@@ -248,6 +248,7 @@ fn capture_pomodoro_close_worked_example() {
                 "time_range": null, "created": true
             },
             "unblocked": [],
+            "keep_moving": [],
             "still_blocked": [],
             "unblocked_check": "checked"
         })

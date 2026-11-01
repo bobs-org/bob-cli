@@ -257,12 +257,9 @@ fn km_number_and_key_picks() {
         .expect("key")
         .to_string();
     // Numeric pick maps through the probe to the same key.
-    let by_number = capture_json(
-        &vault,
-        &day_file,
-        &[&format!("-p"), &format!("{first_n}")],
-        "!sase_badges:t",
-    );
+    let pick = first_n.to_string();
+    let by_number =
+        capture_json(&vault, &day_file, &["-p", &pick], "!sase_badges:t");
     let picked: Vec<_> = by_number["task_complete"]["keep_moving"]
         .as_array()
         .expect("keep_moving")
