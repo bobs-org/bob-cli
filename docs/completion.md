@@ -464,6 +464,12 @@ another thin client of that service (see `docs/capture.md`
   carries `refused: "type_not_configured"` and near-name suggestions. Shell completion puts
   them in the `task types` group, with the last-use date and day count or
   `never used`, plus the current-task or inherited-type annotation.
+- **`%` completes capture directives.** A bare `%` opens the Clip (`%c`),
+  Pomodoro note (`%n`), and Template (`%t`) rows; a bare-URL reference also
+  offers Listen (`%l`). Bob supplies the row labels, details, and disabled
+  reasons, and the picker never reads the clipboard. Zsh groups enabled rows
+  as `directives`. Bare `#` and `%` menus report `initial_selection: "none"`
+  for JSON clients, so opening either menu does not select its first row.
 - **Whole-item `!` completes open tasks.** A leading `!` token opens the
   Complete picker over every open task in the vault, and shell completion
   offers only identified, enabled `!note:block-id` values (ID-less and

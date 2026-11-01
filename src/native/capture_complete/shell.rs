@@ -53,16 +53,19 @@ pub(crate) fn shell_completion(
     raw_text: &str,
     cursor: usize,
 ) -> Result<Option<ShellCompletion>, String> {
-    if crate::native::capture_language::template::analyze(raw_text)
+    let template = crate::native::capture_language::template::analyze(raw_text)
         .directive
-        .is_some()
-    {
-        return Ok(None);
-    }
+        .is_some();
     if raw_text.contains(['\n', '\r']) {
         return Ok(None);
     }
     if cursor > raw_text.len() || !raw_text.is_char_boundary(cursor) {
+        return Ok(None);
+    }
+    let directive_owns_cursor =
+        capture_language::completion_field_at(raw_text, cursor)
+            .is_some_and(|field| field.context == CompletionContext::Directive);
+    if template && !directive_owns_cursor {
         return Ok(None);
     }
     // Wikilinks are deferred: return before the ~300 ms `NoteIndex::read`.
@@ -758,6 +761,31 @@ pub(crate) fn shell_completion(
                     full,
                     description: task_type_description(&item),
                     group: "task types".to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
+        CompletionContext::Directive => {
+            let context = super::directives::candidates(
+                bob_dir,
+                raw_text,
+                &field,
+                capture_language::editor_item_at(raw_text, cursor).as_ref(),
+            )
+            .map_err(|error| error.message)?;
+            for item in context {
+                if item.disabled_reason.is_some() || item.replacement.is_empty()
+                {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: false,
+                    full: item.replacement.trim_end().to_string(),
+                    description: item
+                        .detail
+                        .map(|detail| format!("{} · {detail}", item.summary))
+                        .unwrap_or_else(|| item.summary.to_string()),
+                    group: "directives".to_string(),
                 });
             }
             return Ok(Some(ShellCompletion { marker_start, rows }));

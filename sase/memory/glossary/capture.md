@@ -14,7 +14,8 @@ the network; link, start, complete, or relate existing tasks (`@route:id`, `!not
 bob plans every edit against in-memory snapshots of the target notes and today's daily
 note, then writes all or nothing: a note changed on disk since planning, or any failed
 item, aborts the run and rolls back anything already written. `--dry-run` runs the same
-planner without writing; the app's live preview is `bob capture --dry-run --no-clip`. An
+planner without writing; the app's live preview is `bob capture --dry-run`, with `--no-clip`
+unless Bob reports a `%c` clip directive. An
 unfinished picker query (`:dee`, `/fix`, `!fix`, `&`, `Call the bank +`) is refused,
 never captured as prose. The editor-facing `capture-*` companion commands are not
 captures, nor are `bob gkeep pull`, `bob ref create`, or Obsidian keymaps. A draft with

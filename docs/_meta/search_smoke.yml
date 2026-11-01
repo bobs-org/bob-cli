@@ -20,6 +20,12 @@
   location: /reference/capture-syntax/#global-route
 - query: "%t"
   location: /reference/capture-syntax/#template
+- query: "directive menu"
+  location: /reference/capture-syntax/#percent-picker
+- query: "%"
+  location: /reference/capture-syntax/#percent-picker
+- query: "bare # task type completion"
+  location: /reference/capture-syntax/#hash-picker
 - query: "template directive %t"
   location: /reference/capture-syntax/#template
 - query: "@route"
@@ -136,14 +142,14 @@
   location: /reference/capture-syntax/#dollar-priority
 - query: "$<N>"
   location: /reference/capture-syntax/#dollar-priority
-- query: "%"
-  location: /reference/capture-syntax/#percent-clipboard
 - query: "%c"
   location: /reference/capture-syntax/#percent-clipboard
 - query: "%c<N>"
   location: /reference/capture-syntax/#percent-clipboard
 - query: "#<type>"
   location: /reference/capture-syntax/#hash-type
+- query: "#"
+  location: /reference/capture-syntax/#hash-picker
 - query: Pending
   location: /reference/vault-format/#pending
 - query: Next

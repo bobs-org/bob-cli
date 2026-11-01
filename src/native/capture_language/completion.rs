@@ -30,6 +30,8 @@ pub(crate) enum CompletionContext {
     Task,
     /// A `#<type>` task-type marker at either item edge.
     TaskType,
+    /// An edge `%` capture directive (`%c`, `%n`, `%t`, or URL-only `%l`).
+    Directive,
     TaskSection,
     ActiveTask,
     TaskLink,
@@ -94,6 +96,38 @@ pub(crate) struct CompletionField {
     /// spelling, so candidates whose slug cannot be bare get a `#slug`
     /// replacement.
     pub(crate) bare_name: bool,
+}
+
+/// Complete an edge `%` directive at the cursor. The shared directive lexer
+/// owns which tokens claim the edge; this only exposes the token's typed
+/// letter as a completion query while keeping replacement offsets in the
+/// submitted draft.
+fn directive_completion_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    use super::directive::DirectiveOccurrence;
+
+    let occurrence = super::directive::collect_item(item).into_iter().find(
+        |occurrence| {
+            !matches!(occurrence, DirectiveOccurrence::Escaped { .. })
+                && occurrence.span().start <= cursor
+                && cursor <= occurrence.span().end
+        },
+    )?;
+    let span = occurrence.span();
+    let query_start = span.start.checked_add(1)?;
+    let query_end = cursor.clamp(query_start, span.end);
+    let query = item.source.get(query_start..query_end)?.to_string();
+
+    Some(CompletionField {
+        context: CompletionContext::Directive,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (span.start, span.end),
+        bare_name: false,
+    })
 }
 
 pub(super) struct CompletionThird<'a> {
@@ -995,6 +1029,9 @@ pub(crate) fn completion_field_at(
             })
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
+    if let Some(field) = directive_completion_field_at(item, cursor) {
+        return Some(field);
+    }
     // Type markers are transparent to field detection: run every claim
     // below on the offset-preserving masked view, so a neighboring marker
     // never changes a route completion's replacement range. Masking keeps

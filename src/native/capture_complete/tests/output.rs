@@ -12,7 +12,9 @@ use super::{
     result, write_file, TempDir,
 };
 use crate::native::{
-    capture_language::CompletionContext, capture_pomodoros, style::Styler,
+    capture_language::{self, CompletionContext},
+    capture_pomodoros,
+    style::Styler,
 };
 #[test]
 fn build_cli_renders_without_panicking() {
@@ -217,9 +219,11 @@ fn json_shape_is_stable() {
     let pomodoro_json = serde_json::to_value(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
+        grammar: capture_language::GRAMMAR_REVISION,
         cursor: 10,
         replacement: Replacement { start: 9, end: 10 },
         context: Some(CompletionContext::PomodoroName),
+        initial_selection: None,
         subject: None,
         candidates: Candidates::PomodoroName(vec![pomodoro_name]),
         theme_suggestion: None,
@@ -238,6 +242,8 @@ fn json_shape_is_stable() {
     .expect("pomodoro json");
 
     assert_eq!(pomodoro_json["context"], "pomodoro_name");
+    assert_eq!(pomodoro_json["schema_version"], 1);
+    assert_eq!(pomodoro_json["grammar"], 2);
     assert_eq!(pomodoro_json["candidates"][0]["replacement"], "memory");
     assert_eq!(pomodoro_json["candidates"][0]["name"], "MEMORY");
     assert_eq!(pomodoro_json["candidates"][0]["requires_name"], false);
@@ -260,9 +266,11 @@ fn json_shape_is_stable() {
     let value = serde_json::to_value(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
+        grammar: capture_language::GRAMMAR_REVISION,
         cursor: 3,
         replacement: Replacement { start: 1, end: 3 },
         context: Some(CompletionContext::Route),
+        initial_selection: None,
         subject: None,
         candidates: Candidates::Route(vec![RouteCandidate {
             replacement: "cash".to_string(),
@@ -569,9 +577,11 @@ fn human_output_is_plain_without_color() {
         &CaptureCompleteResult {
             ok: true,
             schema_version: SCHEMA_VERSION,
+            grammar: capture_language::GRAMMAR_REVISION,
             cursor: 3,
             replacement: Replacement { start: 1, end: 3 },
             context: Some(CompletionContext::Route),
+            initial_selection: None,
             subject: None,
             candidates: Candidates::Route(vec![RouteCandidate {
                 replacement: "cash".to_string(),

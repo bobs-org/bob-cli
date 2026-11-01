@@ -9,6 +9,10 @@ description: Index of bob capture tokens with syntax, examples, and links into t
 Pomodoro session changes. This page is the token lookup. The full grammar and
 refusal messages live in the [Capture contract](../capture.md).
 
+At a glance: `@` says where, `#` names a place or task type, and `%` says how
+to capture. Completion opens the task-type menu at a bare edge `#` and the
+directive menu at a bare edge `%`.
+
 Examples below were captured from this checkout's `bob` in an isolated
 `HOME`/`XDG_*` tree, a synthetic vault, `BOB_NOW=2026-10-20 12:00:00`,
 `TZ=UTC`, and `BOB_REF_JOBS_KICK=off`. Copy the bundled demo with the
@@ -37,6 +41,8 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `-r route` | Force the URL (or task) route from the CLI | [`-r`](#cli-route) |
 | `@@route` | Shared task destination for unrouted items | [`@@route`](#global-route) |
 | `%t` | Expand one capture per template row | [`%t`](#template) |
+| `%` | **Picker:** choose a capture directive | [Bare `%`](#percent-picker) |
+| `#` | **Picker:** choose a task type | [Bare `#`](#hash-picker) |
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
 | `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
@@ -1303,6 +1309,16 @@ envelope:
 
 Contract: [Scheduling and priority](../capture.md#scheduling-and-priority).
 
+### Bare `%` {#percent-picker}
+
+A bare `%` is an incomplete directive picker. In an editor, it opens a menu with
+Clip (`%c`), Pomodoro note (`%n`), Template (`%t`), and Listen (`%l`) for a
+bare-URL reference. The rows show the Pomodoro target and configuration status;
+unavailable choices explain why and are omitted by shell completion. Opening
+the menu never reads clipboard content.
+
+Contract: [Directives (`%`)](../capture.md#directives).
+
 ### `%c` / `%c<N>` {#percent-clipboard}
 
 Capture clipboard content as child bullets. `%c` reads the live clipboard
@@ -1323,14 +1339,21 @@ bob capture 'Keep 50% @work'
 
 Contract: [Directives (`%`)](../capture.md#directives) · [Clipboard](../capture.md#clipboard).
 
+### Bare `#` {#hash-picker}
+
+A bare `#` at an item edge is an incomplete type marker. In an editor it opens
+task-type completion, with rows in configured type order (or recent catalog
+order) and no row selected. Write `\#` to keep a literal hash.
+
+Contract: [Typing tasks with `#<type>`](../capture.md#typing-tasks-with-type).
+
 ### `#<type>` {#hash-type}
 
 Type a new task at either item edge (`#fix Fix it`, `Fix it #fix`), or retype
 an existing task the item targets. Slugs start with an ASCII letter and use
 letters, digits, and hyphens; quoted literals allow spaces and punctuation
-(`#"DEEP WORK"`). A free-standing bare `#` at an item edge is an incomplete
-type marker: add a type (`#fix`) or write `\#` to keep a literal `#`. A
-leading `# Heading text` is incomplete; `\# Heading text` is the literal.
+(`#"DEEP WORK"`). A leading `# Heading text` is incomplete;
+`\# Heading text` is literal.
 `#` plus a digit, `##…`, `#-…`, mid-line `#`, and glued hashes stay ordinary
 prose. `t:` is ordinary prose. Escape `\#fix` to keep the literal hash text
 in the body.

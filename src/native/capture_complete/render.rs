@@ -490,6 +490,17 @@ pub(super) fn candidate_lines(
         Candidates::TaskType(items) => {
             items.iter().map(task_type_line).collect()
         }
+        Candidates::Directive(items) => items
+            .iter()
+            .map(|item| {
+                let detail = item
+                    .disabled_reason
+                    .as_deref()
+                    .or(item.detail.as_deref())
+                    .unwrap_or(item.summary);
+                (item.token.clone(), format!("{} · {detail}", item.summary))
+            })
+            .collect(),
         Candidates::PomodoroName(items) => items
             .iter()
             .map(|item| {
@@ -657,6 +668,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::RelationLabel => "relation_label",
         CompletionContext::TaskComplete => "task_complete",
         CompletionContext::TaskType => "task_type",
+        CompletionContext::Directive => "directive",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",

@@ -49,7 +49,7 @@ bob capture-parse -f json -- 'Buy milk @dev'
 ```
 
 ```text { .no-copy title="Output" }
-{"ok":true,"schema_version":1,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
+{"ok":true,"schema_version":1,"grammar":2,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
 ```
 
 ```bash
@@ -76,8 +76,8 @@ previews, pickers, and discovery calls for the Mac app and editors.
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob capture` | `-f json` | Item results plus batch `captures`, `warnings`, `plan_budget`, `pomodoro_blocks`, `task_blocks`, `open_notes`, `pull_in`, and `inbox_route`; one-off labels add per-item `relation_label_hides`; cancel-label commits add per-item `relation_cancels[]` (one row per cancelled source), `relation_updates[].cancel_effect`, and warning `relation_cancelled_source`; complete-label commits add per-item `relation_completes[]` (one row per completed source, embedding `task_complete`), `relation_updates[].complete_effect`, and warning `relation_completed_source` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
-| `bob capture-parse` | `-f json` | Per-item `mode`, spans, diagnostics, and `needs` for incomplete input. Relation-label spans carry `cancels_source` or `completes_source` when configured | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
-| `bob capture-complete` | `-f json` | Completion context plus candidates and replacement ranges. `relation_label` rows carry `cancels_source`, `completes_source`, and `configured`; the response may include `relation_cancel` and/or `relation_complete` when configured | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
+| `bob capture-parse` | `-f json` | Per-item `mode`, spans, diagnostics, and `needs` for incomplete input; top-level `grammar: 2` identifies the capture-language revision. Relation-label spans carry `cancels_source` or `completes_source` when configured | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
+| `bob capture-complete` | `-f json` | Completion context plus candidates and replacement ranges; top-level `grammar: 2` identifies the capture-language revision. Bare `#` and `%` menus add `initial_selection: "none"`. `relation_label` rows carry `cancels_source`, `completes_source`, and `configured`; the response may include `relation_cancel` and/or `relation_complete` when configured | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-pomodoros` | `-f json` | Ledger entries for the day plus `warnings` | `schema_version: 1` | [Pomodoro homes](../pomodoro-homes.md) |
 | `bob capture-related` | `-f json` | Candidate matches, UTF-8 draft anchors, verified actions, and already-linked tasks; `--query` adds scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |

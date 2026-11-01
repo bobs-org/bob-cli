@@ -87,10 +87,9 @@ fn double_at_offers_only_destinations_never_a_template_candidate() {
 }
 
 #[test]
-fn template_completion_suppresses_directive_rows_and_placeholders() {
+fn template_rows_and_placeholders_do_not_open_route_completion() {
     let temp = TempDir::new("bob-cli-capture-complete-template-gate");
     for (raw, cursor) in [
-        ("Buy {0} @not-a-route %t\n\nrow", 22),
         ("Buy {0} @not-a-route %t\n\nrow", 27),
         ("Buy {0} @not-a-route %t\n\nrow", 6),
         ("Buy {0} @not-a-route %t\n\nrow  two", 29),
@@ -99,6 +98,21 @@ fn template_completion_suppresses_directive_rows_and_placeholders() {
         assert!(value.context.is_none(), "{raw:?} at {cursor}: {value:?}");
         assert!(value.candidates.is_empty());
     }
+
+    // The existing `%t` token itself belongs to the directive picker. The
+    // template gate must leave that context available while suppressing
+    // route completion on template rows and placeholders.
+    let directive = result(temp.path(), "Buy {0} @not-a-route %t\n\nrow", 22);
+    assert_eq!(directive.context, Some(CompletionContext::Directive));
+    let Candidates::Directive(rows) = directive.candidates else {
+        panic!("expected directive candidates");
+    };
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.token.as_str())
+            .collect::<Vec<_>>(),
+        vec!["%c", "%n", "%t"]
+    );
 }
 
 #[test]

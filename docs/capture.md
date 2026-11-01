@@ -75,6 +75,8 @@ One capture item is a parent line plus optional authored child bullets. Blank
 physical lines split a draft into multiple items; each item is planned before
 anything is written, and any failure rolls the whole batch back.
 
+**`@` says where. `#` names a place or a task type. `%` says how to capture.**
+
 | Marker | Meaning |
 | --- | --- |
 | Bare public URL | Queue a reference job under `mac_inbox` when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
@@ -150,6 +152,7 @@ anything is written, and any failure rolls the whole batch back.
 | `%c` / `%c<N>` | Capture clipboard content as child bullets (`%c` is one live value; `%c3` is three) |
 | `%t` | Mark the draft's first item as a template; its rows follow the first blank line |
 | `%` | Incomplete directive except on a bare URL where `%l` requests companion audio; add `%c`, `%n`, `%t`, `%l` or write `\%` to keep a literal `%` |
+| bare `#` / `%` | Open the task-type or directive menu with no row preselected |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
 | `#` | Incomplete `#<type>` at an item edge: add a type (`#fix`) or write `\#` to keep a literal `#`; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
@@ -5856,6 +5859,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
+Success JSON includes top-level `grammar: 2` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -6079,6 +6083,7 @@ JSON output is a single versioned object:
 {
   "ok": true,
   "schema_version": 1,
+  "grammar": 2,
   "input": "Call bank @Cash+",
   "body": "Call bank",
   "mode": "incomplete",
@@ -6912,6 +6917,20 @@ returns `relation_to_replacement` and `relation_from_replacement` for
 the Add block ID flow. See
 [Linking tasks with '~' and '~~'](#linking-tasks).
 
+A bare `%` opens the `directive` context. Rows are ordered Clip (`%c`),
+Pomodoro note (`%n`), Template (`%t`), then Listen (`%l`) only for a bare-URL
+reference item. A typed letter filters the rows. Each row carries Bob-authored
+`token`, `name`, `summary`, optional `detail` and `disabled_reason`, plus its
+draft replacement and absolute `cursor_after` offset. The details identify
+the Pomodoro `%n` would receive and whether a listen command is configured;
+the menu never reads the clipboard. Disabled rows explain composition rules
+such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
+
+Every successful `capture-parse` and `capture-complete` response includes
+top-level `grammar: 2`; `schema_version` remains 1. An empty query opened by a
+bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
+unselected. The field is omitted for typed queries and other contexts.
+
 A marker-position `#` token also opens `task_type` completion, whether the item
 will create a task or target an existing task. A free-standing bare `#` at an
 item edge is that marker with an empty query. The response replaces the whole
@@ -7058,7 +7077,7 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `pomodoro_start_name`, `task`,
-`task_section`, `active_task`, `task_type`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
+`task_section`, `active_task`, `task_type`, `directive`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
@@ -7066,7 +7085,7 @@ scoped `@route+id` with only the ID span replaced and the typed ID query.
 returns the whole marker span plus its decoded type-name query. Its top-level
 `subject` is `new` or `existing`; candidates describe the current and inherited
 type and the `set`, `clear`, or `keep` effect. `query` is present only for
-`task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `task_type`, `wikilink_task`, `relation_to`, `relation_from`, and `relation_label`; it
+`directive`, `task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `task_type`, `wikilink_task`, `relation_to`, `relation_from`, and `relation_label`; it
 contains the selector text after its sigil (and a decoded locator for a
 dependency, blocked-task, or relation query). `blocked_task` is the `*` twin of
 `task_dependency`: same owner and replacement-range rules, `*` replacements,

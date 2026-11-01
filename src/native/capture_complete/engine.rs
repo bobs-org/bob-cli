@@ -42,12 +42,20 @@ pub(super) fn build_result(
     cursor: usize,
     all_tasks: bool,
 ) -> Result<CaptureCompleteResult, CompleteError> {
-    if let Some(result) =
+    let directive_owns_cursor =
+        capture_language::completion_field_at(raw_text, cursor)
+            .is_some_and(|field| field.context == CompletionContext::Directive);
+    let mut result = if directive_owns_cursor {
+        build_result_inner(bob_dir, raw_text, cursor, all_tasks)?
+    } else if let Some(result) =
         template_completion_gate(bob_dir, raw_text, cursor, all_tasks)?
     {
-        return Ok(result);
-    }
-    build_result_inner(bob_dir, raw_text, cursor, all_tasks)
+        result
+    } else {
+        build_result_inner(bob_dir, raw_text, cursor, all_tasks)?
+    };
+    result.initial_selection = initial_selection(raw_text, &result);
+    Ok(result)
 }
 
 fn build_result_inner(
@@ -107,6 +115,7 @@ fn build_result_inner(
             | CompletionContext::RelationLabel
             | CompletionContext::TaskComplete
             | CompletionContext::TaskType
+            | CompletionContext::Directive
             | CompletionContext::WikilinkTask => {
                 unreachable!("link field context")
             }
@@ -115,12 +124,14 @@ fn build_result_inner(
         return Ok(CaptureCompleteResult {
             ok: true,
             schema_version: SCHEMA_VERSION,
+            grammar: capture_language::GRAMMAR_REVISION,
             cursor,
             replacement: Replacement {
                 start: field.replacement.0,
                 end: field.replacement.1,
             },
             context: Some(field.context),
+            initial_selection: None,
             subject: None,
             candidates,
             theme_suggestion: None,
@@ -162,9 +173,11 @@ fn build_result_inner(
         return Ok(CaptureCompleteResult {
             ok: true,
             schema_version: SCHEMA_VERSION,
+            grammar: capture_language::GRAMMAR_REVISION,
             cursor,
             replacement: marker_range,
             context: Some(CompletionContext::WikilinkTask),
+            initial_selection: None,
             subject: None,
             candidates: Candidates::WikilinkTask(rows),
             theme_suggestion: None,
@@ -248,12 +261,14 @@ fn build_result_inner(
         return Ok(CaptureCompleteResult {
             ok: true,
             schema_version: SCHEMA_VERSION,
+            grammar: capture_language::GRAMMAR_REVISION,
             cursor,
             replacement: Replacement {
                 start: field.replacement.0,
                 end: field.replacement.1,
             },
             context: Some(field.context),
+            initial_selection: None,
             subject: None,
             candidates,
             theme_suggestion: None,
@@ -374,6 +389,15 @@ fn build_result_inner(
             theme_suggestion = Some(context.suggestion);
             (Candidates::TaskType(context.candidates), context.warnings)
         }
+        CompletionContext::Directive => (
+            Candidates::Directive(super::directives::candidates(
+                bob_dir,
+                raw_text,
+                &field,
+                editor_item.as_ref(),
+            )?),
+            Vec::new(),
+        ),
         CompletionContext::TaskDependency => {
             // Vault-wide prerequisite scan: the lexical owner of the
             // modifier under the cursor plus every complete `&note:id`
@@ -545,6 +569,7 @@ fn build_result_inner(
             | CompletionContext::TaskParent
             | CompletionContext::TaskComplete
             | CompletionContext::TaskType
+            | CompletionContext::Directive
             | CompletionContext::RelationTo
             | CompletionContext::RelationFrom
             | CompletionContext::RelationLabel
@@ -617,12 +642,14 @@ fn build_result_inner(
     Ok(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
+        grammar: capture_language::GRAMMAR_REVISION,
         cursor,
         replacement: Replacement {
             start: field.replacement.0,
             end: field.replacement.1,
         },
         context: Some(field.context),
+        initial_selection: None,
         subject,
         candidates,
         theme_suggestion,
@@ -682,6 +709,34 @@ fn template_completion_gate(
         return Ok(Some(CaptureCompleteResult::empty(cursor)));
     }
     Ok(Some(result))
+}
+
+fn initial_selection(
+    raw_text: &str,
+    result: &CaptureCompleteResult,
+) -> Option<&'static str> {
+    if result.query.as_deref() != Some("") {
+        return None;
+    }
+    let marker =
+        raw_text.get(result.replacement.start..result.replacement.end)?;
+    let bare = match result.context? {
+        CompletionContext::TaskType => marker == "#",
+        CompletionContext::Directive => marker == "%",
+        _ => false,
+    };
+    if !bare {
+        return None;
+    }
+    let left_edge = raw_text[..result.replacement.start]
+        .chars()
+        .next_back()
+        .is_none_or(char::is_whitespace);
+    let right_edge = raw_text[result.replacement.end..]
+        .chars()
+        .next()
+        .is_none_or(char::is_whitespace);
+    (left_edge && right_edge).then_some("none")
 }
 
 fn completion_owner(

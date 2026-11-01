@@ -8,7 +8,7 @@ use super::{
     support::bounded_warning,
 };
 use crate::native::{
-    capture,
+    capture, capture_language,
     capture_language::{
         replacement_for, resolve_accepted_type_name, selector_slug,
     },
@@ -251,6 +251,12 @@ fn build_inner(
         ));
     }
 
+    if let Some(refusal) = subject_refusal(raw_text, field, editor_item) {
+        for candidate in &mut candidates {
+            candidate.refused = Some(refusal);
+        }
+    }
+
     let suggestion = suggestion.map(|suggestion| MenuSuggestion {
         suggestion,
         fallback: None,
@@ -262,6 +268,25 @@ fn build_inner(
         suggestion,
         warnings,
     })
+}
+
+fn subject_refusal(
+    raw_text: &str,
+    field: &crate::native::capture_language::CompletionField,
+    item: Option<&EditorItemParse>,
+) -> Option<&'static str> {
+    let mut probe = raw_text.to_string();
+    probe.replace_range(field.replacement.0..field.replacement.1, "#bob-type");
+    let parsed = capture_language::parse_for_editor(&probe);
+    let index = item.map_or(0, |item| item.index);
+    parsed
+        .items
+        .into_iter()
+        .find(|item| item.index == index)?
+        .diagnostics
+        .into_iter()
+        .any(|diagnostic| diagnostic.code == "type_marker_not_applicable")
+        .then_some("type_marker_not_applicable")
 }
 
 fn rows_in_empty_order(catalog: &Catalog, query: &str) -> Vec<TypeRow> {

@@ -18,7 +18,7 @@ use super::{
     result, write_file, TempDir,
 };
 use crate::native::{
-    capture_language::CompletionContext,
+    capture_language::{self, CompletionContext},
     capture_pomodoros::{self, PomodoroState},
 };
 fn named_start_ledger() -> capture_pomodoros::PomodoroScan {
@@ -714,9 +714,11 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
     let json = serde_json::to_value(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
+        grammar: capture_language::GRAMMAR_REVISION,
         cursor: 10,
         replacement: Replacement { start: 9, end: 10 },
         context: Some(CompletionContext::PomodoroName),
+        initial_selection: None,
         subject: None,
         candidates: Candidates::PomodoroName(vec![creation]),
         theme_suggestion: None,
@@ -838,9 +840,11 @@ fn pomodoro_start_name_orders_repeated_completed_names_newest_first() {
     let json = serde_json::to_value(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
+        grammar: capture_language::GRAMMAR_REVISION,
         cursor: 2,
         replacement: Replacement { start: 0, end: 2 },
         context: Some(CompletionContext::PomodoroStartName),
+        initial_selection: None,
         subject: None,
         candidates: Candidates::PomodoroName(candidates.clone()),
         theme_suggestion: None,

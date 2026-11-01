@@ -37,6 +37,9 @@ pub(crate) mod template;
 mod tokens;
 mod type_marker;
 
+/// Revision of the capture grammar contract exposed to clients.
+pub(crate) const GRAMMAR_REVISION: u32 = 2;
+
 #[cfg(test)]
 mod tests;
 

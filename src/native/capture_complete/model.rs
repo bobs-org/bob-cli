@@ -491,6 +491,20 @@ pub(super) struct TaskTypeCandidate {
     pub(super) refused: Option<&'static str>,
 }
 
+/// Bob-authored row for the `directive` completion context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DirectiveCandidate {
+    pub(super) token: String,
+    pub(super) name: &'static str,
+    pub(super) summary: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
+    pub(super) replacement: String,
+    pub(super) cursor_after: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PickerKind {
@@ -661,6 +675,7 @@ pub(super) enum Candidates {
     RelationLabel(Vec<RelationLabelSuggestion>),
     TaskComplete(Vec<TaskCompleteCandidate>),
     TaskType(Vec<TaskTypeCandidate>),
+    Directive(Vec<DirectiveCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -689,6 +704,7 @@ impl Candidates {
             Self::RelationLabel(items) => items.len(),
             Self::TaskComplete(items) => items.len(),
             Self::TaskType(items) => items.len(),
+            Self::Directive(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
@@ -727,9 +743,12 @@ pub(super) struct OverrideCompletion {
 pub(super) struct CaptureCompleteResult {
     pub(super) ok: bool,
     pub(super) schema_version: u32,
+    pub(super) grammar: u32,
     pub(super) cursor: usize,
     pub(super) replacement: Replacement,
     pub(super) context: Option<CompletionContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) initial_selection: Option<&'static str>,
     /// The task picked by a `task_type` completion field, or `new` when
     /// the marker belongs to the task the item will create.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -793,12 +812,14 @@ impl CaptureCompleteResult {
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
+            grammar: crate::native::capture_language::GRAMMAR_REVISION,
             cursor,
             replacement: Replacement {
                 start: cursor,
                 end: cursor,
             },
             context: None,
+            initial_selection: None,
             subject: None,
             candidates: Candidates::Route(Vec::new()),
             theme_suggestion: None,

@@ -4,6 +4,7 @@ mod cancel;
 mod candidates;
 mod cli;
 mod complete;
+mod directives;
 mod engine;
 mod model;
 mod pomodoros;

@@ -169,6 +169,8 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
+Success JSON reports `grammar: 2` for the capture-language revision while \
+`schema_version` stays 1.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> \
@@ -534,6 +536,7 @@ fn raw_text_from_matches(matches: &ArgMatches) -> Result<String, String> {
 struct CaptureParseResult {
     ok: bool,
     schema_version: u32,
+    grammar: u32,
     input: String,
     body: String,
     mode: EditorMode,
@@ -1008,6 +1011,7 @@ impl CaptureParseResult {
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
+            grammar: capture_language::GRAMMAR_REVISION,
             input,
             body: parse.body,
             mode: parse.mode,
@@ -1373,6 +1377,7 @@ impl CaptureParseResult {
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
+            grammar: capture_language::GRAMMAR_REVISION,
             input,
             body,
             mode: parsed.mode,
@@ -2866,6 +2871,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["grammar"], 2);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
