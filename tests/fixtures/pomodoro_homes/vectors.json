@@ -1568,5 +1568,291 @@
         }
       ]
     }
+  ],
+  "today_roots": [
+    {
+      "name": "counts-and-tie-order",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 PLAN\n  - [[t_love#^l1]]\n  - [[t_bob#^b1]]\n- [ ] () \u2014 BUILD\n  - [[t_dev#^d1]]\n  - [[t_sase#^s1]]\n  - [[t_bob#^b2]]\n- [ ] () \u2014 WRITE\n  - [[t_sase#^s2]]\n  - [[t_bob#^b3]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_bob.md": "---\ntype: [[article]]\nparent: [[bob]]\n---\n\n- [ ] #task Bob one ^b1\n- [*] #task Bob two ^b2\n- [/] #task Bob three ^b3\n",
+        "t_sase.md": "---\ntype: [[article]]\nparent: [[sase_blog_notes]]\n---\n\n- [ ] #task Sase one ^s1\n- [ ] #task Sase two ^s2\n",
+        "t_love.md": "---\ntype: [[article]]\nparent: [[love]]\n---\n\n- [ ] #task Love one ^l1\n",
+        "t_dev.md": "---\ntype: [[article]]\nparent: [[dev]]\n---\n\n- [ ] #task Dev one ^d1\n"
+      },
+      "expected": [
+        {
+          "key": "bob.md",
+          "label": "bob",
+          "hue": "orange",
+          "tasks": 3
+        },
+        {
+          "key": "sase.md",
+          "label": "sase",
+          "hue": "blue",
+          "tasks": 2
+        },
+        {
+          "key": "love.md",
+          "label": "love",
+          "hue": "yellow",
+          "tasks": 1
+        },
+        {
+          "key": "dev.md",
+          "label": "dev",
+          "hue": "blue",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "root-fields-win",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 PLAN\n  - [[inbox#^inbox-sase]]\n  - [[inbox#^inbox-paren]]\n  - [[inbox#^inbox-goals]]\n  - [[inbox#^inbox-missing]]\n  - [[inbox#^inbox-dup]]\n  - [[inbox#^inbox-invalid]]\n  - [[inbox#^inbox-nohome]]\n  - [[inbox#^inbox-closed]]\n\n## Tasks\n",
+      "expected": [
+        {
+          "key": "inbox.md",
+          "label": "inbox",
+          "hue": "aqua",
+          "tasks": 4
+        },
+        {
+          "key": "sase.md",
+          "label": "sase",
+          "hue": "blue",
+          "tasks": 3
+        }
+      ]
+    },
+    {
+      "name": "root-true-and-subprojects",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 BUILD\n  - [[t_hack#^h1]]\n  - [[t_blog#^g1]]\n  - [[t_rooted#^r1]]\n  - [[t_rooted_notes#^n1]]\n  - [[t_quoted#^q1]]\n  - [[t_sase_direct#^x1]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_hack.md": "---\ntype: [[article]]\nparent: [[hack]]\n---\n\n- [ ] #task Hack ^h1\n",
+        "t_blog.md": "---\ntype: [[article]]\nparent: [[sase_blog_notes]]\n---\n\n- [ ] #task Blog ^g1\n",
+        "t_rooted.md": "---\ntype: [[article]]\nparent: [[rooted_blog]]\n---\n\n- [ ] #task Rooted ^r1\n",
+        "t_rooted_notes.md": "---\ntype: [[article]]\nparent: [[rooted_blog_notes]]\n---\n\n- [ ] #task Rooted notes ^n1\n",
+        "t_quoted.md": "---\ntype: [[article]]\nparent: [[quoted_root_child]]\n---\n\n- [ ] #task Quoted ^q1\n",
+        "t_sase_direct.md": "---\ntype: [[article]]\nparent: [[sase_grandchild]]\n---\n\n- [ ] #task Direct ^x1\n"
+      },
+      "expected": [
+        {
+          "key": "sase.md",
+          "label": "sase",
+          "hue": "blue",
+          "tasks": 3
+        },
+        {
+          "key": "rooted_blog.md",
+          "label": "rooted_blog",
+          "hue": "blue",
+          "tasks": 2
+        },
+        {
+          "key": "quoted_root.md",
+          "label": "quoted_root",
+          "hue": "blue",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "archive-and-ref-notes",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 READ\n  - [[done/t_archive#^a1]]\n  - [[Archive/t_old#^a2]]\n  - [[t_ref#^r1]]\n  - [[t_subarea#^s1]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "done/t_archive.md": "---\ntype: [[done]]\nparent: [[hack]]\n---\n\n- [ ] #task Archived ^a1\n",
+        "Archive/t_old.md": "---\ntype: [[article]]\nparent: [[sase_blog]]\n---\n\n- [ ] #task Old ^a2\n",
+        "t_ref.md": "---\ntype: [[ref]]\nparent: [[story]]\n---\n\n- [ ] #task Ref ^r1\n",
+        "t_subarea.md": "---\ntype: [[article]]\nparent: [[subarea]]\n---\n\n- [ ] #task Sub ^s1\n"
+      },
+      "expected": [
+        {
+          "key": "sase.md",
+          "label": "sase",
+          "hue": "blue",
+          "tasks": 2
+        },
+        {
+          "key": "story.md",
+          "label": "story",
+          "hue": "yellow",
+          "tasks": 1
+        },
+        {
+          "key": "subarea.md",
+          "label": "subarea",
+          "hue": "yellow",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "open-statuses-only",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 BUILD\n  - [[t_bob#^b1]]\n  - [[t_bob#^b2]]\n  - [[t_bob#^b3]]\n  - [[t_bob#^b4]]\n  - [[t_bob#^bd]]\n  - [[t_bob#^bx]]\n  - [[t_bob#^bc]]\n  - [[t_dev#^d1]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_bob.md": "---\ntype: [[article]]\nparent: [[bob]]\n---\n\n- [ ] #task Ready ^b1\n- [*] #task Next ^b2\n- [/] #task In progress ^b3\n- [?] #task Blocked ^b4\n- [x] #task Done ^bd\n- [X] #task Done upper ^bx\n- [-] #task Cancelled ^bc\n",
+        "t_dev.md": "---\ntype: [[article]]\nparent: [[dev]]\n---\n\n- [ ] #task Dev one ^d1\n"
+      },
+      "expected": [
+        {
+          "key": "bob.md",
+          "label": "bob",
+          "hue": "orange",
+          "tasks": 4
+        },
+        {
+          "key": "dev.md",
+          "label": "dev",
+          "hue": "blue",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "exempt-and-unnamed-entries-count",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 PLAN\n  - [[t_bob#^b1]]\n- [ ] ()\n  - [[t_dev#^d1]]\n  - [[t_bob#^b2]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_bob.md": "---\ntype: [[article]]\nparent: [[bob]]\n---\n\n- [ ] #task Bob one ^b1\n- [ ] #task Bob two ^b2\n",
+        "t_dev.md": "---\ntype: [[article]]\nparent: [[dev]]\n---\n\n- [ ] #task Dev one ^d1\n"
+      },
+      "expected": [
+        {
+          "key": "bob.md",
+          "label": "bob",
+          "hue": "orange",
+          "tasks": 2
+        },
+        {
+          "key": "dev.md",
+          "label": "dev",
+          "hue": "blue",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "dead-links-do-not-count",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [x] (0900-0925 [t:: 25m]) \u2014 BUILD\n  - [[t_bob#^b1]]\n- [-] () \u2014 GONE\n  - [[t_bob#^b2]]\n- [ ] () \u2014 WRITE\n  - ~~[[t_bob#^b3]]~~\n  - [[nope#^b1]]\n  - [[t_bob#^missing]]\n  - Review [[t_bob#^b4]]\n  - Note text\n    - [[t_bob#^b5]]\n  - [[t_dev#^d1]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_bob.md": "---\ntype: [[article]]\nparent: [[bob]]\n---\n\n- [ ] #task One ^b1\n- [ ] #task Two ^b2\n- [ ] #task Three ^b3\n- [ ] #task Four ^b4\n- [ ] #task Five ^b5\n",
+        "t_dev.md": "---\ntype: [[article]]\nparent: [[dev]]\n---\n\n- [ ] #task Dev one ^d1\n"
+      },
+      "expected": [
+        {
+          "key": "dev.md",
+          "label": "dev",
+          "hue": "blue",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "duplicate-links-count-once",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 BUILD\n  - [[t_bob#^b1]]\n  - ![[t_bob#^b1]]\n  - [[t_dev#^d1]]\n- [ ] () \u2014 WRITE\n  - [[t_bob#^b1]]\n  - [[t_bob#^b2]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_bob.md": "---\ntype: [[article]]\nparent: [[bob]]\n---\n\n- [ ] #task Bob one ^b1\n- [ ] #task Bob two ^b2\n",
+        "t_dev.md": "---\ntype: [[article]]\nparent: [[dev]]\n---\n\n- [ ] #task Dev one ^d1\n"
+      },
+      "expected": [
+        {
+          "key": "bob.md",
+          "label": "bob",
+          "hue": "orange",
+          "tasks": 2
+        },
+        {
+          "key": "dev.md",
+          "label": "dev",
+          "hue": "blue",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "unfiled-is-always-last",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n- [ ] #task Rooted chore [root:: gtd_daily] ^gtd\n- [ ] #task Plain chore ^plain\n\n## Pomodoros\n\n- [ ] () \u2014 PLAN\n  - [[#^plain]]\n  - [[t_loose#^u1]]\n  - [[t_bob#^b1]]\n  - [[t_loose#^u2]]\n  - [[#^gtd]]\n  - [[t_dev#^d1]]\n  - [[t_loose#^u3]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_loose.md": "---\ntype: [[article]]\n---\n\n- [ ] #task Loose one ^u1\n- [ ] #task Loose two ^u2\n- [ ] #task Loose three ^u3\n",
+        "t_bob.md": "---\ntype: [[article]]\nparent: [[bob]]\n---\n\n- [ ] #task Bob one ^b1\n",
+        "t_dev.md": "---\ntype: [[article]]\nparent: [[dev]]\n---\n\n- [ ] #task Dev one ^d1\n"
+      },
+      "expected": [
+        {
+          "key": "bob.md",
+          "label": "bob",
+          "hue": "orange",
+          "tasks": 1
+        },
+        {
+          "key": "gtd_daily.md",
+          "label": "gtd_daily",
+          "hue": "orange",
+          "tasks": 1
+        },
+        {
+          "key": "dev.md",
+          "label": "dev",
+          "hue": "blue",
+          "tasks": 1
+        },
+        {
+          "key": "@unfiled",
+          "label": "unfiled",
+          "hue": null,
+          "tasks": 4
+        }
+      ]
+    },
+    {
+      "name": "area-hues",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 WRITE\n  - [[t_job#^j1]]\n  - [[t_story#^y1]]\n  - [[t_inbox#^i1]]\n\n## Tasks\n",
+      "tasks_notes": {
+        "t_job.md": "---\ntype: [[article]]\nparent: [[job]]\n---\n\n- [ ] #task Job one ^j1\n",
+        "t_story.md": "---\ntype: [[article]]\nparent: [[story]]\n---\n\n- [ ] #task Story one ^y1\n",
+        "t_inbox.md": "---\ntype: [[article]]\nparent: [[inbox]]\n---\n\n- [ ] #task Inbox one ^i1\n"
+      },
+      "expected": [
+        {
+          "key": "job.md",
+          "label": "job",
+          "hue": "magenta",
+          "tasks": 1
+        },
+        {
+          "key": "story.md",
+          "label": "story",
+          "hue": "yellow",
+          "tasks": 1
+        },
+        {
+          "key": "inbox.md",
+          "label": "inbox",
+          "hue": "aqua",
+          "tasks": 1
+        }
+      ]
+    },
+    {
+      "name": "no-section-is-empty",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n- [ ] #task Chore ^chore\n\n- [ ] () \u2014 PLAN\n  - [[#^chore]]\n",
+      "expected": []
+    },
+    {
+      "name": "empty-section-is-empty",
+      "daily_path": "2026/20261101.md",
+      "daily": "# 2026-11-01\n\n## Pomodoros\n\n- [ ] () \u2014 PLAN\n- [ ] ()\n\n## Tasks\n",
+      "expected": []
+    }
   ]
 }

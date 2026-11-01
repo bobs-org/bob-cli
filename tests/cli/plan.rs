@@ -141,6 +141,13 @@ fn plan_reports_full_budget_as_json() {
             "2026/20260930.md#gtd",
         ]
     );
+    assert_eq!(
+        value["today_roots"],
+        serde_json::json!([
+            {"key": "@unfiled", "label": "unfiled", "hue": null, "tasks": 6}
+        ]),
+        "unhomed Today tasks form the unfiled bucket, which partitions TODAY"
+    );
     let first = &value["today_tasks"][0];
     assert_eq!(first["status_symbol"], Value::from("*"));
     assert_eq!(first["status_name"], Value::from("Next"));
@@ -264,6 +271,128 @@ fn plan_human_shows_derived_chip_for_unnamed_entry() {
     assert!(!human.contains("GOALS ○"), "{human}");
 }
 
+/// A vault whose Today tasks live under two areas: `bob` (orange) gets
+/// two tasks, `sase` (blue, via a sub-project) one, plus a `[root::]`
+/// field and an unhomed daily-note chore.
+fn roots_vault(prefix: &str) -> TempDir {
+    let temp = TempDir::new(prefix);
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("gtd.md"),
+        "---\ntype: [[area]]\ncolor: orange\n---\n",
+    );
+    write_file(
+        &vault.join("dev.md"),
+        "---\ntype: [[area]]\ncolor: blue\n---\n",
+    );
+    write_file(
+        &vault.join("bob.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[gtd]]\n---\n",
+            "- [*] #task Bob one ^b1\n",
+            "- [ ] #task Bob two ^b2\n",
+            "- [x] #task Bob done ^b3\n",
+        ),
+    );
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[project]]\nparent: [[dev]]\n---\n",
+    );
+    write_file(
+        &vault.join("sase_blog.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[sase]]\n---\n",
+            "- [ ] #task Blog post ^s1\n",
+            "- [ ] #task Rooted elsewhere [root:: bob] ^s2\n",
+        ),
+    );
+    write_file(
+        &vault.join("2026/20260930.md"),
+        concat!(
+            "# 2026-09-30\n\n",
+            "- [ ] #task Chore ^chore\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0945-1015) — GOALS\n",
+            "    - [[sase_blog#^s1]]\n",
+            "    - [[bob#^b1]]\n",
+            "    - [[bob#^b3]]\n",
+            "- [ ] () — PLAN\n",
+            "    - [[bob#^b2]]\n",
+            "    - [[sase_blog#^s2]]\n",
+            "    - [[#^chore]]\n",
+        ),
+    );
+    temp
+}
+
+#[test]
+fn plan_json_reports_today_roots_partitioning_today() {
+    let temp = roots_vault("bob-cli-plan-roots-json");
+    let (_output, value) = plan_json(&temp);
+    assert_eq!(value["today"]["count"], Value::from(5));
+    assert_eq!(
+        value["today_roots"],
+        serde_json::json!([
+            {"key": "bob.md", "label": "bob", "hue": "orange", "tasks": 3},
+            {"key": "sase.md", "label": "sase", "hue": "blue", "tasks": 1},
+            {"key": "@unfiled", "label": "unfiled", "hue": null, "tasks": 1},
+        ]),
+        "done b3 is out; the [root:: bob] task joins bob; unfiled is last"
+    );
+    let total: u64 = value["today_roots"]
+        .as_array()
+        .expect("today_roots")
+        .iter()
+        .map(|root| root["tasks"].as_u64().expect("tasks"))
+        .sum();
+    assert_eq!(total, value["today"]["count"].as_u64().expect("count"));
+}
+
+#[test]
+fn plan_human_prints_the_roots_line_under_the_plan_meters() {
+    let temp = roots_vault("bob-cli-plan-roots-human");
+    let vault = vault_dir(&temp);
+    let output = bob_command()
+        .arg("plan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260930.md"))
+        .output()
+        .expect("run bob plan");
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains(
+            "TODAY 5 - PENDING 0/10 - NEXT 1/15\n  ROOTS ○ bob 3 - ○ sase 1 - ○ unfiled 1\n\n"
+        ),
+        "expected ROOTS directly under the PLAN line:\n{human}"
+    );
+}
+
+#[test]
+fn plan_human_omits_the_roots_line_without_today_tasks() {
+    let temp = TempDir::new("bob-cli-plan-roots-none");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("2026/20260930.md"),
+        "## Pomodoros\n\n- [ ] () — PLAN\n",
+    );
+    let output = bob_command()
+        .arg("plan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260930.md"))
+        .output()
+        .expect("run bob plan");
+    assert_success(&output);
+    assert!(
+        !stdout(&output).contains("ROOTS"),
+        "no Today tasks means no roots line:\n{}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn plan_counts_only_visible_lane_tasks() {
     // The JSON test above already pins next == 1 and pending == 2:
@@ -367,6 +496,7 @@ fn plan_without_daily_note_still_shows_today_zero_and_lanes() {
         .as_array()
         .expect("today_tasks")
         .is_empty());
+    assert_eq!(value["today_roots"], serde_json::json!([]));
     assert_eq!(value["next"]["count"], Value::from(1));
     assert!(value["entries"].as_array().expect("entries").is_empty());
 }
@@ -392,6 +522,11 @@ fn plan_without_pomodoros_section_still_shows_lanes() {
     assert!(
         stdout(&output).contains("no Pomodoros section"),
         "expected no-section header:\n{}",
+        stdout(&output)
+    );
+    assert!(
+        !stdout(&output).contains("ROOTS"),
+        "no section means no roots line:\n{}",
         stdout(&output)
     );
 }

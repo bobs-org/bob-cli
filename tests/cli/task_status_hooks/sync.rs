@@ -1491,6 +1491,13 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
             .len(),
         3
     );
+    assert_eq!(
+        json["plan_budget"]["today_roots"],
+        serde_json::json!([
+            {"key": "@unfiled", "label": "unfiled", "hue": null, "tasks": 3}
+        ]),
+        "the reconcile report carries the same Today roots as bob plan"
+    );
     assert_eq!(json["plan_budget"]["status"], "ok");
 
     let human = bob_command()

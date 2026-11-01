@@ -153,11 +153,105 @@ see the [Today marks display contract](today-marks.md).
 
 The daily and dashboard TODAY badge shares the Work badge colors with
 PENDING, NEXT, and READY: it colors `budget.links.count /
-budget.links.cap` with the same grey/blue/green/yellow/orange/magenta/red bands,
-except `budget.themes.count > budget.themes.cap` forces red, including
-when links are zero. types exactly at cap keep the link-based color.
+budget.links.cap` with the same grey/blue/green/yellow/orange/magenta/red bands.
+Types never affect it: there is no type count or cap.
 Missing ledger data or a missing Pomodoros section is `TODAY –`, never a
 synthetic `0/limit`; an existing empty Pomodoros section is grey.
+
+## Today roots
+
+Today roots are the **root parents** of Today's tasks: where today's planned
+work is going, shown after the type line. A root is the note a task reports
+under, resolved by [Pomodoro homes](pomodoro-homes.md) R1, R2, and R11 against
+the current note tree. Today roots are a **view, never a budget**: they have no
+cap, no lint, no status effect, and nothing is written to the vault.
+
+**Definition.** The input is exactly the `today_tasks` rows from
+[Today](#today): the open `#task` lines behind dedicated Task Links under the
+note's **open** Pomodoros, including exempt PLAN entries and unnamed
+placeholders, deduplicated by (path, block ID). Closed or cancelled entries,
+struck links, unresolved links, and done or cancelled tasks are not Today
+tasks, so they never reach a root.
+
+1. **Root of a task.** A valid `[root:: X]` on the task line wins (R11).
+   Otherwise the task's note is walked: archive and ref notes are walked
+   through, an area at any depth is its own root, a project marked
+   `root: true` is its own root, and any other project reports under its
+   nearest root project or, with none marked, the outermost project (R2). A
+   task with no area or project, including an unrooted task in the daily note
+   itself, lands in the `@unfiled` bucket.
+2. **Group** by root key: the root note's vault path with `.md`, or
+   `@unfiled`. `tasks` is the number of distinct Today tasks under that root.
+3. **Order.** `tasks` descending; ties by the Today order of each root's first
+   task; `@unfiled` always last, however large.
+4. **Label.** The lowercase root stem, or `unfiled` for the bucket.
+5. **Hue.** The root's stable area hue, the same hue Pomodoro home chips use
+   (R8: the top-level area's configured slot, else the local FNV-1a fallback).
+   Roots in one area share a hue. The bucket has no hue (`null`). The Day
+   strip may re-hue same-area bar segments for legibility; Today roots do not.
+6. **Partition invariant.** The sum of `tasks` equals `today.count`, so the
+   roots line partitions TODAY.
+
+Unlike the per-entry home chips (R3), which forecast every linked task
+including done ones, Today roots count only open Today tasks. A task completed
+mid-session leaves the line.
+
+**Reports.** `bob plan -f json` carries an always-present `today_roots` array
+next to `today_tasks` (`[]` when there is no daily note, no Pomodoros section,
+or no Today task). `bob task reconcile -f json` carries the same array in its
+`plan_budget` object. Each element is
+`{"key": "bob.md", "label": "bob", "hue": "blue", "tasks": 5}`, with `hue`
+null for `@unfiled`.
+
+**CLI line.** `bob plan` prints a `ROOTS` line directly under the `PLAN` meter
+line, and only when there is at least one root:
+
+```text
+  PLAN  8/13 links      TODAY 8 · PENDING 12/8 · NEXT 12/13
+  ROOTS ○ bob 5 · ○ sase 2 · ○ sase_blog 1
+```
+
+Each `○` is painted in the root's xterm-256 hue (the same dot painting as the
+`capture-pomodoros --tasks` home chip) and dimmed for `unfiled`. Labels are
+normal and counts are dim. Separators are the styler's separator; with
+`NO_COLOR` the line is plain text.
+
+**Obsidian display contract.** The `bob-plan` block paints the line directly
+after the ★ type line, as its own flex item in the chip row, so it wraps as a
+unit when the row is full. The grammar follows the ledger's visual rule: types
+wear a tinted pill, places wear a dot.
+
+```text
+[TODAY 8/13] [PENDING 9/8] [NEXT 12/13] [READY 15/21]  ★ BUILD · READ · WRITE · FIX   ○ bob 5   ○ sase 2   ○ sase_blog 1
+```
+
+- **Anatomy.** Per root: a hollow 7 px ring (1.5 px border in the root's
+  `--bob-area-<hue>`), a `--text-muted` label, and a `--text-faint` tabular
+  count after a no-break space. The hollow ring is the home chips' forecast
+  mark (planned, not yet worked); the Day strip's filled `●` shows worked time
+  above it. The `unfiled` bucket wears a dashed `--text-faint` ring, echoing
+  the Day strip's hatched "unattributed" tone. There is no leading glyph and no
+  `·` separator: the rings are the glyph, and roots are separated by `0.85em`
+  gaps. Font size and color match the type line (0.9em, muted).
+- **Interaction.** Each real root is a quiet link: click or Enter opens the
+  root note, Mod-click opens it in a new tab. On hover or focus the label goes
+  `--text-normal` and the ring fills with a 35% tint of its hue; focus-visible
+  uses the plan chips' outline. `unfiled` is not interactive. There are no
+  animations and no hover-preview popover.
+- **Text.** Item `title`: `bob · 5 scheduled tasks` (singular `task`) and a
+  second line `Open bob`. The `unfiled` title is `unfiled · 1 scheduled task`
+  with the second line `File the task in an area or project, or give it a root
+  field` (the R6 hint). The group is `role="group"` with
+  `aria-label="Root parents scheduled: bob, 5 tasks; sase, 2 tasks; sase_blog, 1 task"`.
+  Rings are `aria-hidden`.
+- **Truthful or neutral.** With no Today tasks, or no Pomodoros section, there
+  is no line and no placeholder. Until the Tasks cache is available the line is
+  not painted rather than painted with guessed statuses; it appears on the
+  next repaint, on the triggers that already repaint the lane badges. Older
+  daily notes compute from their own content, like the type line.
+
+Out of scope: a root cap, toggling the line off, and a Bob Mac Capture agenda
+roots row.
 
 ## Lanes (NEXT and PENDING)
 
@@ -680,6 +774,9 @@ shows all report fields for one open type and one exempt entry:
       "ledger_line": 56
     }
   ],
+  "today_roots": [
+    {"key": "sase.md", "label": "sase", "hue": "orange", "tasks": 1}
+  ],
   "theme_names": ["GOALS"],
   "theme_refs": [{"key": "goals", "name": "GOALS", "hue": "red",
     "hue_source": "hash"}],
@@ -747,6 +844,8 @@ Lint objects omit `line` when none applies; entries omit
 additive `homes` object from [Pomodoro homes](pomodoro-homes.md).
 Open entries are forecasts. `today_tasks` is
 in ledger order of first occurrence; `today.count` is its length.
+`today_roots` is the additive [Today roots](#today-roots) array (`[]` when
+empty); its `tasks` sum to `today.count`, and it keeps `schema_version: 3`.
 
 Human output:
 
@@ -754,6 +853,7 @@ Human output:
 bob plan · Thu 2026-10-01 · 2026/20261001.md
 
   PLAN  7/10 links      TODAY 7 · PENDING 8/10 · NEXT 12/15
+  ROOTS ○ sase 1
 
   ★ ■GOALS   ▶ 0945-1015   3 links
     …
@@ -770,8 +870,9 @@ An unnamed entry prints the same dim homes chip with its dot that
   ★ (unnamed) ○ sase  ▶ 1020-1050   1 link
 ```
 
-Meters are green within the cap and red when over. ★ is yellow and
-▶ is cyan; exempt rows are dimmed. When lints occur, they appear below
+Meters are green within the cap and red when over. The `ROOTS` line appears
+only when Today has at least one root (see [Today roots](#today-roots)).
+★ is yellow and ▶ is cyan; exempt rows are dimmed. When lints occur, they appear below
 the entries in yellow, with the code dimmed. An open inventory label such
 as MISC appears as a listed type row even though it also raises
 `inventory_label_open`.
@@ -856,15 +957,15 @@ non-Dataview task format, or an unresolvable note, and 3 with
 
 | Surface | What it shows |
 | --- | --- |
-| `bob plan` | The full plan report: meters, today's types (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
+| `bob plan` | The full plan report: meters, the `ROOTS` line, today's types (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
 | `bob ready` | The per-note Ready cap report: crowded/full/room bar overview, the single-note worklist, schema-1 JSON, `--check` (exit 3), and `--cap` preview |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v4: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a type line, and any lints. Task Links under today's open Pomodoros carry a rendered half-ring In Progress mark (◐) when their target is `[/]`; Next targets show none (see `## In Progress marks and the Task Link lane toggle`). TODAY is the link budget (`TODAY 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT badges show the live dashboard section counts (`PENDING n/cap`, `NEXT n/cap`, or `–` when Tasks/Today data is unavailable), including on older daily notes; `pendingBudget`/`nextBudget` keep whole-lane semantics for CLI and notices. Daily cap lints appear only for a section excess and quote the badge's section count; `bob plan` CLI warnings and navigation notices still use whole-lane counts, including TODAY. |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v4: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a type line, the [Today roots](#today-roots) line, and any lints. Task Links under today's open Pomodoros carry a rendered half-ring In Progress mark (◐) when their target is `[/]`; Next targets show none (see `## In Progress marks and the Task Link lane toggle`). TODAY is the link budget (`TODAY 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT badges show the live dashboard section counts (`PENDING n/cap`, `NEXT n/cap`, or `–` when Tasks/Today data is unavailable), including on older daily notes; `pendingBudget`/`nextBudget` keep whole-lane semantics for CLI and notices. Daily cap lints appear only for a section excess and quote the badge's section count; `bob plan` CLI warnings and navigation notices still use whole-lane counts, including TODAY. |
 | `dash.md` | Its ten badges in grouped Review / Work / Browse navigation above `## Tasks` and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v4 (`dashboardLaneBudget`/`renderDashboardLaneBadge` for PENDING/NEXT sections, `readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded) plus the `noteReady` namespace v1 `renderCrowdedChip` and the `dashboardCollections` namespace v1 `snapshot`/`renderChip` for PROJECTS/REFERENCES on the Browse row (each guarded with a clickable unavailable fallback when the plugin is older, unloaded, or throwing). Work is TODAY · PENDING · NEXT · READY; Review is NEW · ROTTEN · CROWDED; Browse is PROJECTS · REFERENCES · BLOCKED opening `dash_projects`, `dash_references`, and `blocked.md`. `dashboardCollections` still supplies only PROJECTS/REFERENCES; BLOCKED is the existing generic chip after that loop. PENDING/NEXT badges show and color the section count against the cap; whole-lane pressure stays labeled in tooltips and accessibility text, while non-dashboard `pendingBudget`/`nextBudget` and CLI warnings keep whole-lane semantics. Daily `bob-plan` PENDING/NEXT badges share the dashboard section counts and warning color. BLOCKED is informational, has no cap, and uses the same informational accent as its Browse neighbors. TODAY is that same link budget and opens today's daily note. PROJECTS counts `projects.base#Active & Waiting` once per path and REFERENCES counts `refs.base#Reading Queue` once per path; a changed Base contract or pending metadata shows `–` with a reason instead of a stale number. |
 | `crowded.md` | The Crowded Notes page (`parent: "[[gtd]]"`, aliases Crowded Notes and Crowded): a `bob-ready-notes` block with the ranked CROWDED/FULL bar rows plus a `### CROWDED Tasks` query grouped by the noteReady group label. |
 | `bob-ready-notes` code block | The same model as the `bob ready` overview: a CROWDED summary line, CROWDED and FULL ranked-bar rows, compressed ROOM pills, dimmed exempt notes, and a remedies footer; `–` when unavailable. |
 | Note `## Tasks` heading chip | A live per-note chip on the first `## Tasks` heading of eligible and exempt notes (Live Preview widget plus Reading-view post-processor): `ready n/cap`, `· full`, `· +k`, `· no cap`, or `–`. It opens crowded and never edits the note. |
 | `bob pomodoro tmux` | Adds a tmux-colored `■` before each known, non-exempt type component, then appends `plan L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; `NO_COLOR` leaves the status text unchanged, and an over-cap meter uses tmux reverse video. |
-| `bob task reconcile` | A `plan_budget` object in JSON and a human meter line such as `plan 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
+| `bob task reconcile` | A `plan_budget` object in JSON (with `today_roots`) and a human meter line such as `plan 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after link budget, a link-cap warning if the count grows over the cap, and the Task Link destination (for example `→ under GOALS (next up)`). New types never warn and never refuse. |
 | Bob Mac Capture | The same budget in a Links capsule, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
 | Obsidian Notices | A lane-aware suffix on Task Link changes. Ctrl+Shift+Enter link and unlink Notices name the destination and append the plan meter, for example `Linked to CAPTURE · Next · plan 2/10` (🔴 when over the link cap); Alt+N lane Notices report the lanes, for example `→ Ready · 2 tasks · unlinked 1 from today · NEXT 11/15 · PENDING 7/10`, with 🔴 plus a prune hint when over a lane cap. Alt+[ / Alt+] Task Link lane-toggle Notices report the toggle, for example `◐ In Progress · Fix the parser crash · PENDING 8/10 · NEXT 11/15` or `→ Next · Fix … · logged`. |

@@ -6,8 +6,10 @@
 //! task-status hooks, and capture.
 
 pub(crate) mod cli;
+pub(crate) mod roots;
 pub(crate) mod today;
 
+pub(crate) use roots::{with_today_roots, TodayRoot};
 pub(crate) use today::{TodayResult, TodayTask};
 
 use std::{
@@ -156,6 +158,9 @@ pub(crate) struct PlanReport {
     pub(crate) next: LaneBudget,
     pub(crate) pending: LaneBudget,
     pub(crate) today_tasks: Vec<TodayTask>,
+    /// Root parents of the Today rows (`docs/plan.md` §Today roots).
+    /// Filled by [`with_today_roots`]; empty until then.
+    pub(crate) today_roots: Vec<TodayRoot>,
     pub(crate) theme_names: Vec<String>,
     pub(crate) theme_refs: Vec<ThemeRef>,
     pub(crate) entries: Vec<PlanEntry>,
@@ -231,6 +236,7 @@ pub(crate) fn assemble_report(
         next: lanes.next.clone(),
         pending: lanes.pending.clone(),
         today_tasks: today_result.tasks.clone(),
+        today_roots: Vec::new(),
         theme_names: ledger.theme_names.clone(),
         theme_refs: Vec::new(),
         entries: ledger.entries.clone(),

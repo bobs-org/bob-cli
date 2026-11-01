@@ -188,6 +188,8 @@ pub(super) fn plan_budget_for_sync(
         &lanes,
         &today_result,
     );
+    let report =
+        plan_budget::with_today_roots(report, bob_dir, Path::new(&daily_file));
     Some(
         match super::super::pomodoro_themes::Catalog::load(
             bob_dir, anchor, false,

@@ -1275,6 +1275,7 @@ JSON mode prints one object on stdout with these stable fields:
     "next": { "count": 0, "cap": 15, "over": false },
     "pending": { "count": 0, "cap": 10, "over": false },
     "today_tasks": [],
+    "today_roots": [],
     "theme_names": ["GOALS"],
     "entries": [
       {

@@ -14,7 +14,7 @@ pub(crate) use facts::{NoteFacts, NoteKind, NoteTheme};
 pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};
 pub(crate) use palette::{fallback_hue, Hue};
 pub(crate) use resolve::{
-    path_string, unfiled_home, unlinked_home, DiskHomeSource, Home,
+    path_string, root_label, unfiled_home, unlinked_home, DiskHomeSource, Home,
     HomeResolver, HomeSource, IndexedHomeSource, ResolverHealth,
 };
 #[cfg(test)]

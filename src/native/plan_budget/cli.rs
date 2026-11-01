@@ -24,10 +24,11 @@ use super::{
         style::Styler,
     },
     assemble_report, compute_for_daily, count_lanes,
+    roots::human_roots,
     today::{today_tasks, TodayResult},
     with_configured_theme_lints, with_entry_homes, with_theme_refs,
-    with_type_mismatch_lints, Lanes, LedgerBudget, PlanReport, PlanStatus,
-    UNNAMED_THEME,
+    with_today_roots, with_type_mismatch_lints, Lanes, LedgerBudget,
+    PlanReport, PlanStatus, UNNAMED_THEME,
 };
 
 const COMMAND_NAME: &str = "bob plan";
@@ -84,7 +85,9 @@ pub(crate) fn build_cli() -> ClapCommand {
             index.\n\n\
             The command is read-only. Types are the distinct open Pomodoro \
             name components besides the exempt ones, listed as names only; the \
-            budget caps links alone. See docs/plan.md for the full definition. A missing \
+            budget caps links alone. A ROOTS line lists the root parents of \
+            Today's tasks with their task counts; it is a view, never a \
+            budget. See docs/plan.md for the full definition. A missing \
             daily note or missing Pomodoros section still reports TODAY 0 \
             and the lanes, and exits 0.",
         )
@@ -231,12 +234,16 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
         &today_result,
     );
     let report = if has_section {
-        with_entry_homes(
-            report,
+        with_today_roots(
+            with_entry_homes(
+                report,
+                &request.bob_dir,
+                Path::new(&relative_day_file),
+                &contents,
+                &config,
+            ),
             &request.bob_dir,
             Path::new(&relative_day_file),
-            &contents,
-            &config,
         )
     } else {
         report
@@ -381,6 +388,12 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
         paint_meter(styler, &next_meter, report.next.over),
         sep = styler.separator(),
     ));
+    if !report.today_roots.is_empty() {
+        output.push_str(&format!(
+            "  ROOTS {}\n",
+            human_roots(&report.today_roots, styler)
+        ));
+    }
     output.push('\n');
 
     if !report.entries.is_empty() {

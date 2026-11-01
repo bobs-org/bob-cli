@@ -57,8 +57,12 @@ bob plan -f json -b /path/to/synthetic-vault
 ```
 
 ```text { .no-copy title="Output (excerpt)" }
-{"ok":true,"schema_version":3,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_links":…,"max_next":…,"max_pending":…,"max_ready":…},"today":{"count":0},"today_tasks":[],"links":{"count":0,"cap":…,"over":false},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
+{"ok":true,"schema_version":3,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_links":…,"max_next":…,"max_pending":…,"max_ready":…},"today":{"count":0},"today_tasks":[],"today_roots":[],"links":{"count":0,"cap":…,"over":false},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
 ```
+
+`today_roots` lists the root parents of Today's tasks as
+`{"key","label","hue","tasks"}` rows (`hue` is null for `@unfiled`); the
+`tasks` sum to `today.count`. See [Today roots](../plan.md#today-roots).
 
 `type_mismatch` warnings in `bob plan` carry additive `link` (`route`,
 `block_id`), `entry` (`line`, `name`), `task_type`, and `entry_types`

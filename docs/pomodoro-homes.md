@@ -204,7 +204,9 @@ A session that links `bob#^…` tasks and `bob_command_mode_improvements#^prj`
 (a sub-project of `bob`) reads `○ bob`; its `parts` still list both homes. A
 chip never routes a capture, changes status, reorders a session, or feeds the
 plan budget. Homes are not capture `#name` targets; separate sessions remain
-separate.
+separate. The plan's [Today roots](plan.md#today-roots) apply the same
+root-parent grouping to Today's open tasks (one row per root, with counts)
+instead of to one entry's forecast.
 
 ## R8 — Area hues
 
@@ -396,6 +398,29 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 | `daily-note-task-home` | an unrooted daily-note task is `@unfiled` |
 | `root-fields` | set `[root::]` re-homes `^gtd` and inbox tasks, paren form, `sase_goals` rolls up with a lint, and missing/duplicate/invalid/no_home fall back; a closed task keeps attributing |
 | `root-parent-chips` | a project and its sub-project share one root label; a `root: true` project (and a quoted `"TRUE"`) is its own root; roots share-rank and tie-break by ledger order; the dot takes the lead root's hue while `lead_home` stays per home |
+
+The file also carries a top-level `today_roots` array that the plan's
+[Today roots](plan.md#today-roots) share with the JavaScript mirror. Each case
+is `{name, daily_path, daily, tasks_notes?, expected}`: it reuses `notes`,
+adds `tasks_notes` (more vault notes holding the tasks), writes `daily` at
+`daily_path`, and expects the `{key, label, hue, tasks}` rows of the roots.
+The existing `cases` are unaffected.
+
+| `today_roots` case | What it proves |
+| --- | --- |
+| `counts-and-tie-order` | counts descend; equal counts keep the Today order of each root's first task, not alphabetical order |
+| `root-fields-win` | a valid `[root::]` (bracket, paren, or sub-project target) re-roots a task; missing, duplicate, invalid, and no-home fields fall back to the task's note; a done task is out |
+| `root-true-and-subprojects` | sub-projects at any depth group under their top project; `root: true` (and a quoted `"TRUE"`) is its own root |
+| `archive-and-ref-notes` | `done/`, `Archive/`, and ref notes are walked through; a sub-area root takes the top-level area hue |
+| `open-statuses-only` | Ready, Next, In Progress, and Blocked count; `x`, `X`, and `-` do not |
+| `exempt-and-unnamed-entries-count` | an exempt PLAN entry and an unnamed placeholder feed the roots |
+| `dead-links-do-not-count` | a closed or cancelled entry, a struck link, an unresolved link, a missing block, a mixed-text bullet, and a nested bullet never reach a root |
+| `duplicate-links-count-once` | a task linked plain, embedded, and under two entries counts once |
+| `unfiled-is-always-last` | `@unfiled` (no hue) is last even when largest; an unrooted daily-note task joins it, a rooted one does not |
+| `area-hues` | an invalid area color uses the local FNV-1a fallback; sub-areas inherit the top-level hue |
+| `no-section-is-empty` / `empty-section-is-empty` | no Pomodoros section, or no linked task, gives `[]` |
+
+Every case also asserts that the sum of `tasks` equals `today.count`.
 
 ## Limits and rejected alternatives
 
