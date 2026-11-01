@@ -2,8 +2,10 @@
 
 This guide is the authoritative display contract for task link marks. The JavaScript
 mirror lives in bob-ledger-tools: `src/148-task-link-marks.js` (pure core),
-`src/284-plugin-task-link-marks.js` (Live Preview, resolver, refresh, and toggle),
-and `src/285-plugin-task-link-marks-reading.js` (rendered views). Its tests run the
+`src/149-task-link-mark-live-model.js` (live-document model, ring host, and widget),
+`src/284-plugin-task-link-marks.js` (Live Preview extension, refresh, and toggle),
+`src/284a-plugin-task-link-marks-resolve.js` (the target resolver), and
+`src/285-plugin-task-link-marks-reading.js` (rendered views). Its tests run the
 conformance vectors below verbatim. There is no api namespace.
 
 Decided for v1 (`bob-cli-f5`): ledger rows stay unmarked (`ledger_rows = skip`), and
@@ -145,7 +147,10 @@ section, per the stylesheet contracts.
   `bob-task-link-mark-swap 180ms cubic-bezier(0.2, 0.9, 0.3, 1.25)` (`scale 0.6 → 1`,
   `opacity 0.3 → 1`) only when a key that was already painted this session changes
   state. It never plays on first paint, startup, scroll, or rerender. A bounded per-key
-  last-state map (about 2,000 keys, LRU) drives it.
+  last-state map (about 2,000 keys, LRU) drives it, kept per editor so each open
+  editor animates its own change. Only a refresh pass or a document change can start
+  it. The host carries `bob-task-link-mark-swap` for a short window (about 400 ms) after
+  the change, so a rebuild during the animation keeps the same element.
 - **Accessibility and print:**
   - `prefers-reduced-motion: reduce` turns off the animation and transitions.
   - In `forced-colors: active` the ink is `CanvasText`, so the shapes still carry state.
