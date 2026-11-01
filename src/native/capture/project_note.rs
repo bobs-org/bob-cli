@@ -258,6 +258,7 @@ pub(super) fn plan_project_note_item(
                 block_id_needed: row.block_id.is_none(),
                 final_status: row.status,
                 final_line: row.line,
+                settled_ordinal: None,
             });
         }
         if frozen_offers.iter().any(|offer| offer.selected) {
@@ -331,6 +332,17 @@ pub(super) fn plan_project_note_item(
                     }
                 }
             }
+        }
+        // The identity the batch net pass resolves unselected ID-less
+        // rows by. The picks above have already minted their IDs, so the
+        // pre-pick ordinal frozen into each key no longer addresses the
+        // surviving ID-less population.
+        for offer in &mut frozen_offers {
+            offer.settled_ordinal = settled_ordinal_for(
+                &rendered.task_rows,
+                offer.source_index,
+                &settings.global_filter,
+            );
         }
         project_folds.push(crate::native::task_complete::ProjectFold {
             project: relative,
@@ -778,6 +790,7 @@ pub(super) fn plan_project_note_item(
                                             fallback,
                                         },
                                     order_key: offer.order_key.clone(),
+                                    settled_ordinal: offer.settled_ordinal,
                                 }),
                             }
                         })
@@ -827,6 +840,9 @@ struct FrozenOffer {
     block_id_needed: bool,
     final_status: char,
     final_line: usize,
+    /// Position among the equal-description tasks that stay ID-less after
+    /// the picks mint theirs; see `TaskCompleteOfferJson::settled_ordinal`.
+    settled_ordinal: Option<usize>,
 }
 
 struct PlacedProjectLink {
@@ -882,6 +898,24 @@ fn digest_ordinal_for(
                     == cleaned
         })
         .count()
+}
+
+/// The ordinal of the ID-less row that came from `source_index` among the
+/// equal-description rows that still have no ID in `rows`. Rows with an ID
+/// (authored or minted by a pick) resolve by that ID instead and have none.
+fn settled_ordinal_for(
+    rows: &[capture_project_note::RenderedTask],
+    source_index: Option<usize>,
+    global_filter: &str,
+) -> Option<usize> {
+    let source_index = source_index?;
+    let index = rows
+        .iter()
+        .position(|row| row.source_index == Some(source_index))?;
+    rows[index]
+        .block_id
+        .is_none()
+        .then(|| digest_ordinal_for(rows, index, global_filter))
 }
 
 fn offer_entry_role(

@@ -1203,11 +1203,14 @@ fn successor_task_lookup(
     }
     if row.trigger == crate::native::task_complete::PROJECT_CREATED_TRIGGER {
         // Project-created ID-less rows have no stable block identity, so
-        // resolve by cleaned description plus the frozen duplicate ordinal
-        // encoded in the offer key (`path@digest` or `path@digest~N`).
-        // Line numbers shift when later items insert context, and raw
-        // `row.text` keeps inline fields like `[type:: ...]`, so compare
-        // cleaned text on both sides.
+        // resolve by cleaned description plus their duplicate ordinal among
+        // the tasks that are still ID-less. The planner records that
+        // settled ordinal after the picks have minted their IDs; the
+        // ordinal inside the public key (`path@digest` or
+        // `path@digest~N`) counts the pre-pick render and is only the
+        // fallback. Line numbers shift when later items insert context,
+        // and raw `row.text` keeps inline fields like `[type:: ...]`, so
+        // compare cleaned text on both sides.
         let settings = note_tasks::read_settings(bob_dir);
         let expected = note_tasks::clean_description(
             &row.text,
@@ -1217,7 +1220,11 @@ fn successor_task_lookup(
         let ordinal = row
             .offer
             .as_ref()
-            .map(|offer| offer_key_duplicate_ordinal(&offer.key))
+            .map(|offer| {
+                offer
+                    .settled_ordinal
+                    .unwrap_or_else(|| offer_key_duplicate_ordinal(&offer.key))
+            })
             .unwrap_or(1);
         let mut matches = tasks.iter().filter(|task| {
             task.block_id.is_none()

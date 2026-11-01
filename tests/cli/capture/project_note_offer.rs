@@ -1014,3 +1014,250 @@ fn offer_human_output_names_the_project_and_cleans_the_minted_caption() {
     assert!(message.contains("offer 1"), "{message}");
     assert!(!fixture.vault.join("cash_pkt.md").exists());
 }
+
+/// One offer of a pick-free preview: its frozen key, text, and authored ID.
+struct BaselineOffer {
+    key: String,
+    text: String,
+    block_id: String,
+}
+
+fn baseline_offers(draft: &str) -> Vec<BaselineOffer> {
+    let fixture = Fixture::plain("bob-cli-offer-identity-baseline");
+    let json = fixture.json(draft, &["--dry-run"]);
+    assert_eq!(json["ok"], true, "{json}");
+    successors(&json)
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            assert_eq!(row["offer"]["n"], index + 1, "{json}");
+            assert_eq!(row["offer"]["selected"], false, "{json}");
+            BaselineOffer {
+                key: row["offer"]["key"].as_str().expect("key").to_string(),
+                text: row["text"].as_str().expect("text").to_string(),
+                block_id: row["block_id"].as_str().expect("id").to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Picks each offer of `draft` alone, by number and by opaque key, in a
+/// preview and in a commit. Every original offer must survive with its
+/// frozen key and number, the unpicked ones must stay ID-less (or keep
+/// their authored ID), and each reported line must be its own task row.
+fn assert_each_single_pick_keeps_every_offer(draft: &str, duplicate: &str) {
+    let baseline = baseline_offers(draft);
+    assert!(baseline.len() >= 3, "{draft}");
+    for pick in 0..baseline.len() {
+        let selectors = [(pick + 1).to_string(), baseline[pick].key.clone()];
+        let mut seen: Vec<Vec<serde_json::Value>> = Vec::new();
+        for selector in &selectors {
+            for dry_run in [true, false] {
+                let fixture = Fixture::plain("bob-cli-offer-identity-pick");
+                let mut flags = vec!["-p", selector.as_str()];
+                if dry_run {
+                    flags.push("--dry-run");
+                }
+                let json = fixture.json(draft, &flags);
+                let context = format!(
+                    "pick {pick} via {selector} dry_run={dry_run}\n{json}"
+                );
+                assert_eq!(json["ok"], true, "{context}");
+                let rows = successors(&json);
+                assert_eq!(rows.len(), baseline.len(), "{context}");
+                assert_eq!(
+                    json["pull_in"]["offer_count"],
+                    baseline.len(),
+                    "{context}"
+                );
+                assert_eq!(json["pull_in"]["picked_count"], 1, "{context}");
+                let mut previous_line = 0;
+                for (index, (row, original)) in
+                    rows.iter().zip(&baseline).enumerate()
+                {
+                    assert_eq!(row["offer"]["n"], index + 1, "{context}");
+                    assert_eq!(row["offer"]["key"], original.key, "{context}");
+                    assert_eq!(row["text"], original.text, "{context}");
+                    assert_eq!(
+                        row["offer"]["selected"],
+                        index == pick,
+                        "{context}"
+                    );
+                    let id = row["block_id"].as_str().expect("block id");
+                    if index == pick {
+                        assert!(!id.is_empty(), "{context}");
+                        if !original.block_id.is_empty() {
+                            assert_eq!(id, original.block_id, "{context}");
+                        }
+                    } else {
+                        assert_eq!(id, original.block_id, "{context}");
+                    }
+                    let line = row["line"].as_u64().expect("line") as usize;
+                    assert!(
+                        line > previous_line,
+                        "each offer owns its own later line: {context}"
+                    );
+                    previous_line = line;
+                }
+                if !dry_run {
+                    assert_offer_lines_match_final_note(&fixture, &json);
+                    let note = &fixture.snapshot()["cash_pkt.md"];
+                    let picked_duplicates = usize::from(
+                        baseline[pick].text == duplicate
+                            && baseline[pick].block_id.is_empty(),
+                    );
+                    let minted_duplicates = note
+                        .lines()
+                        .filter(|line| {
+                            line.contains(duplicate)
+                                && line.contains(" ^")
+                                && !line.contains("^memo")
+                        })
+                        .count();
+                    assert_eq!(
+                        minted_duplicates, picked_duplicates,
+                        "only a picked duplicate mints an ID: {context}\n{note}"
+                    );
+                    for (path, contents) in fixture.snapshot() {
+                        assert!(
+                            !contents.contains("[fresh::"),
+                            "creation never stamps: {path}\n{contents}"
+                        );
+                    }
+                }
+                seen.push(rows.clone());
+            }
+        }
+        for rows in &seen[1..] {
+            assert_eq!(
+                *rows, seen[0],
+                "number, key, preview, and commit report the same offers"
+            );
+        }
+    }
+}
+
+#[test]
+fn offer_two_equal_descriptions_survive_picking_the_first_or_last() {
+    // Reproduces the lander's scratch vault: `-p 1` used to report one
+    // offer because the second duplicate was looked up among the shrunken
+    // ID-less population.
+    assert_each_single_pick_keeps_every_offer(
+        concat!(
+            "Finish packet @cash:pkt@\n",
+            "- Anchor ^anchor\n",
+            "- Draft memo\n",
+            "- Draft memo\n",
+            "\n",
+            "Add context @cash_pkt+anchor\n",
+            "- extra detail\n",
+        ),
+        "Draft memo",
+    );
+}
+
+#[test]
+fn offer_three_equal_descriptions_survive_picking_first_middle_or_last() {
+    assert_each_single_pick_keeps_every_offer(
+        concat!(
+            "Finish packet @cash:pkt@\n",
+            "- Anchor ^anchor\n",
+            "- Draft memo\n",
+            "- Draft memo\n",
+            "- Draft memo\n",
+            "\n",
+            "Add context @cash_pkt+anchor\n",
+            "- extra detail\n",
+        ),
+        "Draft memo",
+    );
+}
+
+#[test]
+fn offer_equal_descriptions_stay_distinct_from_an_authored_id_twin() {
+    // The authored-ID twin sits between the ID-less duplicates. It is a
+    // separate identity domain: it never counts toward an ID-less
+    // ordinal, and picking it never shifts one.
+    assert_each_single_pick_keeps_every_offer(
+        concat!(
+            "Finish packet @cash:pkt@\n",
+            "- Anchor ^anchor\n",
+            "- Draft memo\n",
+            "- Draft memo ^memo\n",
+            "- Draft memo\n",
+            "\n",
+            "Add context @cash_pkt+anchor\n",
+            "- extra detail\n",
+        ),
+        "Draft memo",
+    );
+}
+
+#[test]
+fn offer_duplicate_picks_without_later_context_keep_every_offer() {
+    // The two-duplicate case with nothing shifting lines at all, so the
+    // identity repair stands on its own.
+    assert_each_single_pick_keeps_every_offer(
+        concat!(
+            "Finish packet @cash:pkt@\n",
+            "- Draft memo\n",
+            "- Draft memo\n",
+            "- Draft memo\n",
+        ),
+        "Draft memo",
+    );
+}
+
+#[test]
+fn offer_picking_several_duplicates_keeps_the_rest_and_matches_authored() {
+    // Two of three duplicates picked: the survivor is the unpicked one,
+    // and the files equal the authored ` :` equivalent of the same picks.
+    let draft = concat!(
+        "Finish packet @cash:pkt@\n",
+        "- Draft memo\n",
+        "- Draft memo\n",
+        "- Draft memo\n",
+        "- Other work\n",
+    );
+    let baseline = baseline_offers(draft);
+    assert_eq!(baseline.len(), 4);
+    let picks = format!("1,{}", baseline[2].key);
+    let offer = Fixture::plain("bob-cli-offer-identity-many");
+    let json = offer.json(draft, &["-p", picks.as_str()]);
+    assert_eq!(json["ok"], true, "{json}");
+    let rows = successors(&json);
+    let selected: Vec<bool> = rows
+        .iter()
+        .map(|row| row["offer"]["selected"] == true)
+        .collect();
+    assert_eq!(selected, vec![true, false, true, false], "{json}");
+    let keys: Vec<&str> = rows
+        .iter()
+        .map(|row| row["offer"]["key"].as_str().expect("key"))
+        .collect();
+    let expected: Vec<&str> =
+        baseline.iter().map(|offer| offer.key.as_str()).collect();
+    assert_eq!(keys, expected, "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 4, "{json}");
+    assert_eq!(json["pull_in"]["picked_count"], 2, "{json}");
+    assert_offer_lines_match_final_note(&offer, &json);
+
+    let authored = Fixture::plain("bob-cli-offer-identity-many-authored");
+    let first = rows[0]["block_id"].as_str().expect("first ID");
+    let third = rows[2]["block_id"].as_str().expect("third ID");
+    let created = authored.json(
+        &format!(
+            concat!(
+                "Finish packet @cash^pkt@\n",
+                "- Draft memo :{}\n",
+                "- Draft memo\n",
+                "- Draft memo :{}\n",
+                "- Other work\n",
+            ),
+            first, third
+        ),
+        &[],
+    );
+    assert_eq!(created["ok"], true, "{created}");
+    assert_eq!(offer.snapshot(), authored.snapshot());
+}

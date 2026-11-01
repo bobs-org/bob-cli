@@ -893,6 +893,13 @@ pub(super) struct TaskCompleteOfferJson {
     /// Crate-private draft order; never a JSON field.
     #[serde(skip)]
     pub(super) order_key: crate::native::task_complete::OfferOrderKey,
+    /// Crate-private identity of an ID-less project offer: its 1-based
+    /// position among the project's equal-description tasks that are still
+    /// ID-less once this capture's picks have minted their IDs. The public
+    /// `key` ordinal counts the pre-pick render and so cannot address the
+    /// shrunken ID-less population; never a JSON field.
+    #[serde(skip)]
+    pub(super) settled_ordinal: Option<usize>,
 }
 
 /// Destination reported on an offer row.
@@ -4667,6 +4674,7 @@ mod tests {
                     fallback: false,
                 },
                 order_key: (0, (0, 0), std::path::PathBuf::from("b.md"), 0),
+                settled_ordinal: None,
             }),
         }
     }
