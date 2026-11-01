@@ -1272,21 +1272,26 @@ never rolled back). A single cancel is one editor undo step.
 
 ### Inbox routing
 
-On an open inbox task, `Ctrl+Shift+P`, `Ctrl+Shift+Enter`, and `Alt+N` ask
-where the task goes as the last step before they write. An inbox note is
-`inbox.md` itself or an area note whose frontmatter `parent` resolves to
-`inbox.md` (today `mac_inbox.md` and `gkeep_inbox.md`); only direct children
-count, so a project filed under an inbox is not an inbox note.
+On an open inbox task, `Ctrl+Shift+P`, `Alt+N`, and the `Ctrl+Shift+Enter`
+unlink ask where the task goes as the last step before they write. A
+`Ctrl+Shift+Enter` link asks first, so its Pomodoro picker suggests the
+destination's type. An inbox note is `inbox.md` itself or an area note whose
+frontmatter `parent` resolves to `inbox.md` (today `mac_inbox.md` and
+`gkeep_inbox.md`); only direct children count, so a project filed under an
+inbox is not an inbox note.
 
 **Gesture order.** The Task Card opens exactly as today, with one extra
 muted `Inbox` header chip (`Answers ask where this task goes first`) while
 routing is armed. Pick an action and fill in its stages as today; at the
-moment the card would write, the route picker appears instead. For
-`Ctrl+Shift+Enter`, the Pomodoro picker comes first, then the block-ID prompt
-when one is needed, then the route picker appears right before the link or
-unlink write. Choosing a destination performs the write and the move. `Esc`
-in the Pomodoro picker cancels the whole `Ctrl+Shift+Enter` toggle with
-nothing written — not even a new block ID; `Esc` in the
+moment the card would write, the route picker appears instead. For a
+`Ctrl+Shift+Enter` link, the route picker comes first, then the Pomodoro
+picker suggesting the destination's type (with the `→ <dest>` chip), then the
+block-ID prompt, which refuses an ID that already exists in the destination,
+then the write and the move. `Esc` in either picker cancels the whole
+`Ctrl+Shift+Enter` toggle with nothing written or moved — not even a new block
+ID. `⇧↵` in the route picker keeps the task in the inbox, and the inbox-based
+suggestion still applies. The unlink keeps its Work summary prompt first (for
+In Progress), then the route picker right before the write. `Esc` in the
 route picker returns to the exact Task Card surface it came from (card or
 stage, typed input intact) with nothing written, or cancels the whole
 `Ctrl+Shift+Enter` toggle with nothing written — not even a new block ID.

@@ -13,9 +13,11 @@ gesture, and `inbox.md` counts by design though it holds no `#task` lines today.
 default, `bob capture` and Bob Mac Capture file new tasks in `mac_inbox.md`, and
 `bob gkeep pull` drains Google Keep into `gkeep_inbox.md`. New tasks carry no `fresh`
 stamp, so most surface for triage in the NEW tier of the `]s` walk. On an open task in
-an inbox file, every non-closing Ctrl+Shift+P answer, a Ctrl+Shift+Enter toggle on
-the task line, and Alt+N ask where the task goes just before writing, apply the action in place,
-then move the task without following it; the route picker never offers another inbox
+an inbox file, every non-closing Ctrl+Shift+P answer and Alt+N ask where the task goes
+just before writing; a Ctrl+Shift+Enter link on the task line asks first, so the
+Pomodoro picker suggests the destination's type, while its unlink asks just before
+writing; apply the action in place, then move the task without following it; the route
+picker never offers another inbox
 file, and `⇧↵` applies the answer without moving. Ctrl+Shift+M also moves it, following
 it to the destination. A capture that changes an existing inbox task's
 status asks the same question in Bob Mac Capture's route card, and bob moves the task

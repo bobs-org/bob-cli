@@ -227,8 +227,9 @@ walk once to the next remaining item in the same keystroke: Ctrl+Enter
 completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
 Ctrl+Alt+F keeps an ordinary non-recurring task, Alt+N releases,
 Ctrl+Shift+Enter picks a Pomodoro (↵ takes the current/next one), and a
-resolving Task Card commit moves on. On an inbox task, every non-closing Task Card answer and
-Ctrl+Shift+Enter asks where the task goes as the last step before writing, then answers and moves there.
+resolving Task Card commit moves on. On an inbox task, every non-closing Task Card answer asks
+where the task goes as the last step before writing, then answers and moves there.
+Ctrl+Shift+Enter asks first, so its Pomodoro picker suggests the destination's type.
 Ctrl+Shift+M never advances: it follows
 the moved task to its destination note, and the next `]s` resumes the walk.
 Alt+F is the one answer that stays, `]s` skips,
