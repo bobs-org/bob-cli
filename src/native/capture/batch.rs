@@ -452,6 +452,18 @@ pub(super) struct PomodoroStartSummary {
     /// running session. Idle starts omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) r#override: Option<PomodoroStartOverrideJson>,
+    /// False for an untracked session: the written ledger has no `[t::]`.
+    /// Omitted when true.
+    #[serde(skip_serializing_if = "is_true")]
+    pub(super) tracked: bool,
+    /// The event run a MEET start followed or overrode, omitted when the
+    /// session is not a MEET with open lineup Event Tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) event_run: Option<EventRunJson>,
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Override outcome for a restart or swap. `demoted` is swaps only;

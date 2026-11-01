@@ -2369,11 +2369,13 @@ pub(super) fn print_human_item_success(
         println!(
             "  {}",
             styler.dim(&format!(
-                "{verb} {name} {}-{} ({}m){created} at line {}",
+                "{verb} {name} {}-{} ({}m{}){created} at line {}{}",
                 start.start,
                 start.end,
                 start.duration_minutes,
+                untracked_label(start),
                 start.pomodoro_line,
+                calendar_label(start),
             ))
         );
     }

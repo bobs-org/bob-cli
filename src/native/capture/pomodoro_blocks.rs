@@ -241,6 +241,7 @@ impl PomodoroBlockTracker {
                 line: *headline + 1,
                 name: entry.name.clone(),
                 time_range: entry.time_range.clone(),
+                tracked: headline_is_tracked(pre_lines.get(*headline).copied()),
                 status,
                 created: false,
                 removed: true,
@@ -510,6 +511,9 @@ impl PomodoroBlockTracker {
                 line: tracked.current + 1,
                 name: entry.name.clone(),
                 time_range: entry.time_range.clone(),
+                tracked: headline_is_tracked(
+                    final_lines.get(tracked.current).copied(),
+                ),
                 status,
                 created: tracked.created,
                 removed: false,
@@ -869,6 +873,10 @@ pub(super) struct PomodoroBlockJson {
     pub(super) name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) time_range: Option<String>,
+    /// False for an untracked session (a timed ledger without `[t::]`).
+    /// Omitted when true.
+    #[serde(skip_serializing_if = "is_true")]
+    pub(super) tracked: bool,
     pub(super) status: PomodoroBlockStatus,
     pub(super) created: bool,
     #[serde(skip_serializing_if = "is_false")]
@@ -879,6 +887,16 @@ pub(super) struct PomodoroBlockJson {
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+fn headline_is_tracked(headline: Option<&str>) -> bool {
+    !headline.is_some_and(|text| {
+        matches!(session_tracking(text), SessionTracking::Untracked)
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

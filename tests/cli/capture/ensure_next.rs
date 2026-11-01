@@ -18,7 +18,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
         &day_file,
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
             "  - context\n",
             "- [ ] () — LATER\n",
             "  - [[cash#^goog-exit]]\n",
@@ -90,7 +90,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
         fs::read_to_string(&day_file).expect("day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
             "  - context\n",
             "  - [[cash#^goog-exit]]\n",
             "    - review notes\n",
@@ -110,7 +110,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
                 "roles": ["linked"],
                 "lines": [
                     {
-                        "text": "- [ ] (**0900-0930**) — CURRENT",
+                        "text": "- [ ] (**0900-0930** [t:: 30m]) — CURRENT",
                         "depth": 0,
                         "change": "unchanged",
                     },

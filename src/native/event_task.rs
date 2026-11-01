@@ -59,7 +59,6 @@ pub(crate) struct EventTask {
 }
 
 impl EventTask {
-    #[allow(dead_code)]
     pub(crate) fn is_open(&self) -> bool {
         is_open_status(self.status)
     }
@@ -100,7 +99,6 @@ impl EventNoteRow {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn is_open_status(status: char) -> bool {
     !matches!(status, 'x' | 'X' | '-')
 }

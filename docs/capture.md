@@ -2976,7 +2976,7 @@ Pomodoro sessions form a lifecycle, taught in this order:
 
 | Item | Operator | Effect | Obsidian |
 | --- | --- | --- | --- |
-| `=` / `=<X>` | start / restart | Start the next future Pomodoro, or restart today's running Pomodoro with fresh `se<X>` timing (`=` is 25 minutes); an override shows a warning before the write | `se<X>` + Tab inside `()` or on the running line |
+| `=` / `=<X>` | start / restart | Start the next future Pomodoro, or restart today's running Pomodoro with fresh `se<X>` timing (`=` is 25 minutes, except a MEET, which follows its [event run](#meet-starts-follow-the-calendar)); an override shows a warning before the write | `se<X>` + Tab inside `()` or on the running line |
 | `=<X>#<pomodoro>` | start named / swap | Start that named Pomodoro (open match in place, completed match again, else created); while another session runs, swap in a different name, keeping its clock with an empty `<X>` or using fresh timing when `<X>` is given | `se<X>` + Tab inside `() — NAME` or on the running line after picking the name |
 | `+[N]` / `-[N]` | resize | Move the running session's end N × 5 min later / earlier | `N\p` / `N\P` |
 | `++[N]` / `--[N]` | shift | Move the running session's start and end N × 5 min later / earlier | `N\o` / `N\O` |
@@ -3052,6 +3052,73 @@ Quote `=` items in zsh, which expands a leading `=word` to a command path:
 `bob capture '='`, `bob capture '=3'`, `bob capture '=-2'`.
 Single-quote close tokens that contain `!`, `*`, or `~` (`bob capture 'x!1'`,
 `bob capture 'x*'`).
+
+#### MEET starts follow the calendar
+
+A session named `MEET` (the type [Google Calendar sync](gcal.md) files meetings
+under) takes its span from the Event Tasks in its lineup instead of the
+25-minute default. The **event run** of a MEET is its earliest open Event Task
+that has not ended, plus every following lineup Event Task that touches or
+overlaps it (`next.start ≤ run.end`) and shares its trackedness. Bob computes
+it on the staged daily note at the moment of the start, so a `~<K>` drop and
+earlier items of the same draft already apply. Only plain same-note links
+(`[[#^id]]`) to Event Tasks count; other links, done or cancelled Event Tasks,
+and Event Tasks that already ended are skipped.
+
+| Start | Span written | `[t::]` |
+| --- | --- | --- |
+| `=` or `=meet` (empty suffix) on a MEET, or `=` restarting a running MEET | The run's real span, for example `(**1100-1200** [t:: 60m])` | Omitted when the run is untracked |
+| `=5#meet`, `=3`, or any counted suffix | The explicit span | Omitted when the run is untracked |
+| Kept-ledger swap (`=meet` while another session runs) | The running session's span bytes | Dropped or restored to match the run |
+| Link start (`@route:id#meet=`) | The written span | Omitted when the run is untracked |
+| Any non-MEET session, or a MEET with an empty run | Unchanged | Always written |
+
+An event run is **untracked** when its Event Tasks carry `#untracked`; the
+session then writes `(**1200-1300**)` with no `[t::]`, which every reader treats
+as on the calendar and off the clock (see [Untracked
+sessions](reference/vault-format.md)). A tracked event and an untracked one
+never share a run, so lunch at 1200-1300 followed by a 1300-1330 standup
+starts a 1200-1300 untracked MEET; capture `=` again after it closes to run
+the standup.
+
+Two rules keep the ledger truthful:
+
+- **Late joins never double count.** If today's latest closed session ends
+  inside the run, the run's start moves to that end: with `BOB 1250-1310`
+  closed and a `1300-1400` review, `=` at 1315 writes `1310-1400`.
+- **Early starts are real.** A run that starts after the next five-minute slot
+  is written with its future start (`1300-1330` at 1250). A run more than 25
+  minutes away raises the structured warning `pomodoro_event_run_later`:
+  `MEET's next event, Lunch, starts at 1400 (2h 10m from now) · capture
+  `=5#meet` to start 25 minutes now`. The start still happens.
+
+Closing a session that has not started yet records a zero-length session at
+its own start (the end never moves before the start) and warns that `x0`
+resets it instead.
+
+JSON stays schema 1 and additive. `pomodoro_start.tracked` is `false` for an
+untracked session and omitted otherwise, and `pomodoro_blocks[].tracked`
+mirrors it for the final block. `pomodoro_start.event_run` appears when a MEET
+has a non-empty run:
+
+```json
+"event_run": {
+  "time_range": "1200-1300", "start": "1200", "end": "1300",
+  "untracked": true, "source": "calendar",
+  "events": [{"index": 1, "title": "Lunch with Kelly",
+              "time_range": "1200-1300", "line": 2,
+              "block_id": "lunch", "untracked": true}]
+}
+```
+
+`time_range`, `start`, and `end` are the run's span after the late-join clamp.
+`source` is `calendar` when the written session follows that span and
+`explicit` when a counted suffix or a kept ledger set its own. Each event's
+`index` is its lineup number on the pre-drop lineup, so a drop leaves gaps. Human
+output appends the same facts: `MEET 1200-1300 (60m · untracked) at line 7 ·
+from your calendar: Lunch with Kelly`. Obsidian's `se<X>` + Tab mirrors the
+rule through the shared
+[`meet_event_run` vectors](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/meet_event_run/vectors.json).
 
 #### Dropping queued Task Links as a session starts
 
@@ -3131,6 +3198,10 @@ bob capture '=bugs'
 bob capture '=3#bugs'
 bob capture 'x =bugs'
 ```
+
+Starting an open `MEET` placeholder (`=meet`, `=#meet`) follows the session's
+[event run](#meet-starts-follow-the-calendar) when the suffix is empty; a
+created MEET has an empty lineup and keeps the 25-minute default.
 
 A named start token is `=` plus an `se<X>` suffix (possibly empty) plus a name: either a bare name right after `=` (`=bugs`), or `#` plus a name part (`=#bugs`). A bare name starts with an ASCII letter, is not close-shaped, and does not start with `x#`/`X#`; it ends exactly where a `#name` part ends (whitespace, `~`, or `@`). The `#` spelling is still always valid: write `#` only when a number comes first (`=3#bugs`) or the name starts with a digit or reads as a close (`=#2fa`, `=#x`, `=#x2`). `=bugs` and `=#bugs` lex to one token and produce the same `CaptureKind`, vault writes, and `capture-parse` semantics; only `input`/`body` echoes and span offsets differ. The `<X>` goes before `#` or last after `@` (`=bugs@3` means `=3#bugs`). The name part is a Pomodoro
 selector with the usual charset (`A-Z`, `a-z`, `0-9`, `& ' ( ) + , . / -`);
@@ -3240,7 +3311,8 @@ bob capture '=3#bugs'
 ```
 
 For a restart, `=` means 25 minutes, `=3` is 15 minutes, and `=-2` is 25
-minutes with a 10-minute offset. The running session stays the same; Bob
+minutes with a 10-minute offset; a MEET restart with an empty suffix re-derives
+its [event run](#meet-starts-follow-the-calendar) instead. The running session stays the same; Bob
 replaces its parenthesized time ledger and moves it to the current slot. A
 trailing `~<K>` drops Task Links from the session that remains running,
 numbered from the start lineup. Restarting is allowed even when the running
@@ -3536,6 +3608,14 @@ printf 'x\n\n=\n' | bob capture
 
 Single-quote tokens that contain `!`, `*`, or `~`: shells glob `*` and
 history-expand `!`. A bare `x` needs no `=`-word quoting.
+
+#### Closing a session that has not started
+
+A MEET written with its event run's future start has not begun when `x` runs
+before that start. The close never moves the end before the start: it records
+a zero-length session (`1300-1300`, `0m`) and warns ``capture `x0` to reset it
+instead``. After the start, `x` shortens by whole five-minute units as always.
+An untracked session closes untracked: `(**1200-1230**)` stays without `[t::]`.
 
 #### Event Task links close by the clock
 
@@ -5514,6 +5594,8 @@ Field rules:
   omitted when the entry has none. When `removed` is true, `line` is the
   1-based headline in the item's pre-state day text, so an earlier edit
   in the same item (N linked above T's consumption) does not shift it.
+- `tracked` is `false` for an untracked session (a timed headline without
+  `[t::]`) and omitted when the session is tracked or an untimed placeholder.
 - `status` is `"completed"` for a completed entry, `"running"` for an open
   entry with a time range, and `"queued"` for an open entry without one.
 - `created` is true when the entry did not exist before the batch.

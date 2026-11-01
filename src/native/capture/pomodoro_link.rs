@@ -74,6 +74,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
                 spec,
                 now,
                 typed,
+                day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path()),
             )?;
         planner.stage(target, updated_target)?;
         planner.stage(&day_file, updated_day)?;
@@ -518,6 +519,7 @@ pub(super) fn plan_pomodoro_link_capture(
             spec,
             now,
             &day_contents,
+            day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path()),
             previous_task_line,
             task_line,
             task_description,
@@ -814,6 +816,7 @@ pub(super) fn plan_pomodoro_link_with_start(
     spec: &PomodoroStartSpec,
     now: chrono::NaiveDateTime,
     day_contents: &str,
+    day_relative: &Path,
     previous_task_line: String,
     task_line: String,
     task_description: String,
@@ -914,6 +917,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 spec,
                 now,
                 typed,
+                day_relative,
             )?;
         planner.stage(day_file, updated_day)?;
         let pomodoro_refs = PomodoroBlockRef::started_and_linked(
@@ -998,6 +1002,17 @@ pub(super) fn plan_pomodoro_link_with_start(
                             dest_index,
                             &time_range,
                         )?;
+                    let (started_day, meet_finish) = apply_meet_rule(
+                        started_day,
+                        &MeetStartInput {
+                            day_relative,
+                            entry_index: moved_index,
+                            spec,
+                            span_rule: SpanRule::Written,
+                            numbers: None,
+                            now,
+                        },
+                    )?;
                     planner.stage(day_file, started_day.clone())?;
                     // The queued link's own entry started: it carries
                     // both the start and the (mention-only) link ref.
@@ -1020,7 +1035,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         });
                     let dest_json =
                         destination_json(&dest_entry, false, pomodoro_name);
-                    let summary = PomodoroStartSummary {
+                    let mut summary = PomodoroStartSummary {
                         start: start_text.clone(),
                         end: end_text.clone(),
                         duration_minutes,
@@ -1033,7 +1048,12 @@ pub(super) fn plan_pomodoro_link_with_start(
                         drop: Vec::new(),
                         dropped: Vec::new(),
                         r#override: None,
+                        tracked: true,
+                        event_run: None,
                     };
+                    if let Some(finish) = meet_finish {
+                        finish.apply(&mut summary);
+                    }
                     return Ok(CaptureWritePlan {
                         placement: Placement::Linked,
                         pomodoro: None,
@@ -1119,7 +1139,6 @@ pub(super) fn plan_pomodoro_link_with_start(
                             error, block_link, route, block_id,
                         )
                     })?;
-                planner.stage(day_file, moved_day.clone())?;
                 let after_scan = capture_pomodoros::scan(&moved_day);
                 let dest_entry = after_scan
                     .entries
@@ -1137,6 +1156,18 @@ pub(super) fn plan_pomodoro_link_with_start(
                     });
                 let dest_json =
                     destination_json(&dest_entry, false, pomodoro_name);
+                let (moved_day, meet_finish) = apply_meet_rule(
+                    moved_day,
+                    &MeetStartInput {
+                        day_relative,
+                        entry_index: dest_json.line.saturating_sub(1),
+                        spec,
+                        span_rule: SpanRule::Written,
+                        numbers: None,
+                        now,
+                    },
+                )?;
+                planner.stage(day_file, moved_day)?;
                 // The named entry started and moved, and the queued link
                 // moved into it: the destination carries both roles while
                 // the source resolves through the item's line map.
@@ -1149,7 +1180,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
                     source_endpoint.line.saturating_sub(1),
                 ));
-                let summary = PomodoroStartSummary {
+                let mut summary = PomodoroStartSummary {
                     start: start_text,
                     end: end_text,
                     duration_minutes,
@@ -1162,7 +1193,12 @@ pub(super) fn plan_pomodoro_link_with_start(
                     drop: Vec::new(),
                     dropped: Vec::new(),
                     r#override: None,
+                    tracked: true,
+                    event_run: None,
                 };
+                if let Some(finish) = meet_finish {
+                    finish.apply(&mut summary);
+                }
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
                     pomodoro: None,
@@ -1262,7 +1298,6 @@ pub(super) fn plan_pomodoro_link_with_start(
                             error, block_link, route, block_id,
                         )
                     })?;
-                planner.stage(day_file, moved_day.clone())?;
                 let after_scan = capture_pomodoros::scan(&moved_day);
                 let dest_entry = after_scan
                     .entries
@@ -1280,6 +1315,18 @@ pub(super) fn plan_pomodoro_link_with_start(
                     });
                 let dest_json =
                     destination_json(&dest_entry, true, pomodoro_name);
+                let (moved_day, meet_finish) = apply_meet_rule(
+                    moved_day,
+                    &MeetStartInput {
+                        day_relative,
+                        entry_index: dest_json.line.saturating_sub(1),
+                        spec,
+                        span_rule: SpanRule::Written,
+                        numbers: None,
+                        now,
+                    },
+                )?;
+                planner.stage(day_file, moved_day)?;
                 // The named entry was created and started, and the queued
                 // link moved into it.
                 let mut pomodoro_refs = PomodoroBlockRef::started_and_linked(
@@ -1291,7 +1338,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
                     source_endpoint.line.saturating_sub(1),
                 ));
-                let summary = PomodoroStartSummary {
+                let mut summary = PomodoroStartSummary {
                     start: start_text,
                     end: end_text,
                     duration_minutes,
@@ -1304,7 +1351,12 @@ pub(super) fn plan_pomodoro_link_with_start(
                     drop: Vec::new(),
                     dropped: Vec::new(),
                     r#override: None,
+                    tracked: true,
+                    event_run: None,
                 };
+                if let Some(finish) = meet_finish {
+                    finish.apply(&mut summary);
+                }
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
                     pomodoro: None,
@@ -1374,6 +1426,17 @@ pub(super) fn plan_pomodoro_link_with_start(
         q_entry_index,
         &time_range,
     )?;
+    let (started_day, meet_finish) = apply_meet_rule(
+        started_day,
+        &MeetStartInput {
+            day_relative,
+            entry_index: moved_index,
+            spec,
+            span_rule: SpanRule::Written,
+            numbers: None,
+            now,
+        },
+    )?;
     planner.stage(day_file, started_day.clone())?;
     let after_scan = capture_pomodoros::scan(&started_day);
     let dest_entry = after_scan
@@ -1387,7 +1450,7 @@ pub(super) fn plan_pomodoro_link_with_start(
             time_range: Some(format!("{start_text}-{end_text}")),
         });
     let dest_json = destination_json(&dest_entry, false, pomodoro_name);
-    let summary = PomodoroStartSummary {
+    let mut summary = PomodoroStartSummary {
         start: start_text,
         end: end_text,
         duration_minutes,
@@ -1400,7 +1463,12 @@ pub(super) fn plan_pomodoro_link_with_start(
         drop: Vec::new(),
         dropped: Vec::new(),
         r#override: None,
+        tracked: true,
+        event_run: None,
     };
+    if let Some(finish) = meet_finish {
+        finish.apply(&mut summary);
+    }
     let _ = (q_line_index, q_subtree_end);
     // The queued entry started in place and already holds the link: the
     // destination carries both the start and the (mention-only) link ref.

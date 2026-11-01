@@ -486,3 +486,25 @@ fn missing_section_is_an_error() {
         Err(FindRunningError::NoSection)
     );
 }
+
+#[test]
+fn close_before_the_start_clamps_to_a_zero_length_session() {
+    // A MEET written with its event run's future start has not begun yet:
+    // closing now never moves the end before the start.
+    let tracked = timing_for("- [ ] (**1300-1330** [t:: 30m]) — MEET", 12, 50);
+    assert_eq!(tracked.closed_start, 13 * 60);
+    assert_eq!(tracked.closed_end, 13 * 60);
+    assert_eq!(tracked.closed_duration, 0);
+    assert_eq!(tracked.decremented_minutes, 30);
+    let untracked = timing_for("- [ ] (**1300-1333**) — MEET", 12, 59);
+    assert_eq!(untracked.closed_end, 13 * 60);
+    assert_eq!(untracked.closed_duration, 0);
+    assert_eq!(untracked.new_range_text.as_deref(), Some("(**1300-1300**)"));
+}
+
+#[test]
+fn close_after_the_start_still_shortens_by_whole_units() {
+    let timing = timing_for("- [ ] (**1300-1333** [t:: 33m]) — MEET", 13, 10);
+    assert_eq!(timing.closed_duration, 13);
+    assert_eq!(timing.closed_end, 13 * 60 + 13);
+}

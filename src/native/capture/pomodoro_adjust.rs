@@ -1045,9 +1045,71 @@ pub(crate) fn normalize_minutes(value: i64) -> u64 {
     value.rem_euclid(1440) as u64
 }
 
+/// Re-render a parenthesized session ledger (`(**HHMM-HHMM** …)`) as tracked
+/// or untracked, keeping the span and every other metadata byte. Tracking an
+/// untracked ledger writes `[t::]` from the span; untracking drops `[t::]`
+/// and the legacy stopwatch. A ledger already in the requested state, and
+/// text that holds no ledger, come back unchanged.
+pub(crate) fn set_ledger_tracking(ledger: &str, tracked: bool) -> String {
+    let Some(range) = parse_adjustment_range(ledger) else {
+        return ledger.to_string();
+    };
+    let currently_tracked = duration_from_range_text(ledger).is_some();
+    if currently_tracked == tracked {
+        return ledger.to_string();
+    }
+    let rest = remove_adjustment_duration_metadata(&range.metadata);
+    let (start, end) = (range.start_minutes, range.end_minutes);
+    let (end_minutes, duration) = (
+        u16::try_from(end).unwrap_or(0),
+        normalize_minutes(end as i64 - start as i64),
+    );
+    let metadata = if tracked {
+        format!("[t:: {duration}m] {rest}")
+    } else {
+        rest
+    };
+    let formatted = format_adjusted_range(
+        start,
+        end_minutes,
+        duration,
+        metadata.trim_end(),
+    );
+    let mut output = String::with_capacity(ledger.len() + 12);
+    output.push_str(&ledger[..range.start_ch]);
+    output.push_str(&formatted);
+    output.push_str(&ledger[range.end_ch..]);
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_ledger_tracking_toggles_duration_and_keeps_metadata() {
+        assert_eq!(
+            set_ledger_tracking("(**1200-1300** [t:: 60m])", false),
+            "(**1200-1300**)"
+        );
+        assert_eq!(
+            set_ledger_tracking("(**1200-1300**)", true),
+            "(**1200-1300** [t:: 60m])"
+        );
+        assert_eq!(
+            set_ledger_tracking("(**1200-1300** [t:: 45m] extra)", false),
+            "(**1200-1300** extra)"
+        );
+        assert_eq!(
+            set_ledger_tracking("(**2330-0030** extra)", true),
+            "(**2330-0030** [t:: 60m] extra)"
+        );
+        assert_eq!(
+            set_ledger_tracking("(**1200-1300** [t:: 60m])", true),
+            "(**1200-1300** [t:: 60m])"
+        );
+        assert_eq!(set_ledger_tracking("()", true), "()");
+    }
 
     #[test]
     fn session_tracking_classifies_tracked_untracked_and_placeholder() {

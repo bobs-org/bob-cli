@@ -201,7 +201,15 @@ pub(crate) fn close_timing(
     let Ok(delta) = u64::try_from(delta) else {
         return timing;
     };
-    let new_duration = duration.saturating_sub(delta);
+    // A session that has not started yet (a MEET written with its event
+    // run's future start) closes at its own start: the end never moves
+    // before the start.
+    let not_started = signed_minute_delta(range.start_minutes, closed_at) > 0;
+    let new_duration = if not_started {
+        0
+    } else {
+        duration.saturating_sub(delta)
+    };
     let Some(new_end_total) = range.start_minutes.checked_add(new_duration)
     else {
         return timing;

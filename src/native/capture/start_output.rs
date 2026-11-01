@@ -57,19 +57,24 @@ pub(super) fn print_human_pomodoro_start_success(
             println!(
                 "  {}",
                 styler.dim(&format!(
-                    "{name} takes over {range} ({}m) at line {}",
-                    start.duration_minutes, start.pomodoro_line,
+                    "{name} takes over {range} ({}m{}) at line {}{}",
+                    start.duration_minutes,
+                    untracked_label(start),
+                    start.pomodoro_line,
+                    calendar_label(start),
                 ))
             );
         } else {
             println!(
                 "  {}",
                 styler.dim(&format!(
-                    "{name} {}-{} ({}m){created} at line {}",
+                    "{name} {}-{} ({}m{}){created} at line {}{}",
                     start.start,
                     start.end,
                     start.duration_minutes,
+                    untracked_label(start),
                     start.pomodoro_line,
+                    calendar_label(start),
                 ))
             );
         }
@@ -131,23 +136,27 @@ pub(super) fn print_human_pomodoro_start_success(
         println!(
             "  {}",
             styler.dim(&format!(
-                "{name} {before} → {}-{} ({}m) at line {}",
+                "{name} {before} → {}-{} ({}m{}) at line {}{}",
                 start.start,
                 start.end,
                 start.duration_minutes,
+                untracked_label(start),
                 start.pomodoro_line,
+                calendar_label(start),
             ))
         );
     } else {
         println!(
             "  {}",
             styler.dim(&format!(
-                "{} {}-{} ({}m){created} at line {}",
+                "{} {}-{} ({}m{}){created} at line {}{}",
                 name,
                 start.start,
                 start.end,
                 start.duration_minutes,
+                untracked_label(start),
                 start.pomodoro_line,
+                calendar_label(start),
             ))
         );
     }
@@ -226,6 +235,33 @@ pub(super) fn print_human_pomodoro_start_success(
     if tasks.is_empty() {
         println!("  {}", styler.dim("nothing queued"));
     }
+}
+
+/// ` · untracked` inside the duration parentheses of an untracked session.
+pub(super) fn untracked_label(start: &PomodoroStartSummary) -> &'static str {
+    if start.tracked {
+        ""
+    } else {
+        " · untracked"
+    }
+}
+
+/// ` · from your calendar: A, B` when the span follows an event run.
+pub(super) fn calendar_label(start: &PomodoroStartSummary) -> String {
+    let Some(run) = start
+        .event_run
+        .as_ref()
+        .filter(|run| run.source == "calendar")
+    else {
+        return String::new();
+    };
+    let titles = run
+        .events
+        .iter()
+        .map(|event| event.title.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" · from your calendar: {titles}")
 }
 
 fn override_warning_line(

@@ -362,7 +362,10 @@ session that links it is a timed ledger row without `[t::]`, so `[root::]`
 attributes no minutes. An Event Task may carry `[root:: NOTE]` to attribute
 its Pomodoro time to that area or project; `[type:: MEET]` is needed only
 when the root's suggested task type is not already `MEET`. Link an Event
-Task with its local block link under a Pomodoro.
+Task with its local block link under a Pomodoro. Starting that `MEET` with an
+empty suffix writes the span of the linked Event Tasks and leaves `[t::]` off
+for an untracked run: [MEET starts follow the
+calendar](../capture.md#meet-starts-follow-the-calendar).
 
 `bob gcal sync` writes rows in this shape, with a blank line between the
 `## Events` heading and the section's first line. That first line is Bob's

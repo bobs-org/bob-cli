@@ -589,7 +589,7 @@ fn capture_task_toggle_reports_inserted_link_block() {
     write_toggle_task_settings(&vault);
     write_file(&target, "- [ ] #task Fresh work ^fresh\n");
     let day_before =
-        "## Pomodoros\n- [ ] (**0900-0930**) — CODING\n  - context\n";
+        "## Pomodoros\n- [ ] (**0900-0930** [t:: 30m]) — CODING\n  - context\n";
     write_file(&day_file, day_before);
 
     let json = capture_json_dry_run_matches_real(
@@ -613,7 +613,7 @@ fn capture_task_toggle_reports_inserted_link_block() {
                 "roles": ["changed"],
                 "lines": [
                     {
-                        "text": "- [ ] (**0900-0930**) — CODING",
+                        "text": "- [ ] (**0900-0930** [t:: 30m]) — CODING",
                         "depth": 0,
                         "change": "unchanged",
                     },
@@ -636,7 +636,7 @@ fn capture_task_toggle_reports_inserted_link_block() {
         day_after,
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CODING\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CODING\n",
             "  - context\n",
             "  - [[cash#^fresh]]\n",
         )
@@ -748,7 +748,7 @@ fn capture_task_toggle_reports_unlink_removal_from_two_entries() {
     write_file(&target, "- [*] #task Queued work ^done\n");
     let day_before = concat!(
         "## Pomodoros\n",
-        "- [ ] (**0900-0930**) — ONE\n",
+        "- [ ] (**0900-0930** [t:: 30m]) — ONE\n",
         "  - [[cash#^done]]\n",
         "- [ ] () — TWO\n",
         "  - [[cash#^done]]\n",
@@ -780,7 +780,7 @@ fn capture_task_toggle_reports_unlink_removal_from_two_entries() {
                 "roles": ["changed"],
                 "lines": [
                     {
-                        "text": "- [ ] (**0900-0930**) — ONE",
+                        "text": "- [ ] (**0900-0930** [t:: 30m]) — ONE",
                         "depth": 0,
                         "change": "unchanged",
                     },
@@ -816,7 +816,7 @@ fn capture_task_toggle_reports_unlink_removal_from_two_entries() {
     let day_after = fs::read_to_string(&day_file).expect("read toggled day");
     assert_eq!(
         day_after,
-        "## Pomodoros\n- [ ] (**0900-0930**) — ONE\n- [ ] () — TWO\n"
+        "## Pomodoros\n- [ ] (**0900-0930** [t:: 30m]) — ONE\n- [ ] () — TWO\n"
     );
     // The route note is untouched: unlinking keeps Next.
     assert_eq!(

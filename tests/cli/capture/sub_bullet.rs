@@ -742,8 +742,8 @@ fn capture_pomodoro_note_reports_running_entry_block() {
     let day_file = vault.join("day.md");
     let day_before = concat!(
         "## Pomodoros\n",
-        "- [x] (**0800-0830**) — DONE\n",
-        "- [ ] (**0900-0930**) — RUN\n",
+        "- [x] (**0800-0830** [t:: 30m]) — DONE\n",
+        "- [ ] (**0900-0930** [t:: 30m]) — RUN\n",
     );
     write_file(&day_file, day_before);
 
@@ -767,7 +767,7 @@ fn capture_pomodoro_note_reports_running_entry_block() {
                 "roles": ["changed"],
                 "lines": [
                     {
-                        "text": "- [ ] (**0900-0930**) — RUN",
+                        "text": "- [ ] (**0900-0930** [t:: 30m]) — RUN",
                         "depth": 0,
                         "change": "unchanged",
                     },
@@ -785,8 +785,8 @@ fn capture_pomodoro_note_reports_running_entry_block() {
         day_after,
         concat!(
             "## Pomodoros\n",
-            "- [x] (**0800-0830**) — DONE\n",
-            "- [ ] (**0900-0930**) — RUN\n",
+            "- [x] (**0800-0830** [t:: 30m]) — DONE\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — RUN\n",
             "  - quick note\n",
         )
     );
@@ -802,7 +802,7 @@ fn capture_pomodoro_note_reports_last_completed_entry_block() {
     let day_file = vault.join("day.md");
     let day_before = concat!(
         "## Pomodoros\n",
-        "- [x] (**0800-0830**) — DONE\n",
+        "- [x] (**0800-0830** [t:: 30m]) — DONE\n",
         "  - old ctx\n",
         "- [ ] () — QUEUED\n",
     );
@@ -828,7 +828,7 @@ fn capture_pomodoro_note_reports_last_completed_entry_block() {
                 "roles": ["changed"],
                 "lines": [
                     {
-                        "text": "- [x] (**0800-0830**) — DONE",
+                        "text": "- [x] (**0800-0830** [t:: 30m]) — DONE",
                         "depth": 0,
                         "change": "unchanged",
                     },
@@ -851,7 +851,7 @@ fn capture_pomodoro_note_reports_last_completed_entry_block() {
         day_after,
         concat!(
             "## Pomodoros\n",
-            "- [x] (**0800-0830**) — DONE\n",
+            "- [x] (**0800-0830** [t:: 30m]) — DONE\n",
             "  - old ctx\n",
             "  - quick note\n",
             "- [ ] () — QUEUED\n",

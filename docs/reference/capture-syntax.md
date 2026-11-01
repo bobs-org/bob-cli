@@ -850,7 +850,10 @@ Contract: [Shifting the current Pomodoro](../capture.md#shifting-the-current-pom
 Start today's next future Pomodoro now with `se<X>` timing (`=` is 25
 minutes, `=3` is 15, `=-2` is 25 minutes with a 10-minute offset), or
 restart the running session with that timing. A restart prints an override
-warning. The item must contain only the start token.
+warning. The item must contain only the start token. An empty-suffix start of
+a `MEET` session takes the span of its next back-to-back Event Tasks instead
+and omits `[t::]` for an `#untracked` run: see [MEET starts follow the
+calendar](../capture.md#meet-starts-follow-the-calendar).
 
 ```bash
 bob capture '=3'

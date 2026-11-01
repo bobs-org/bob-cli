@@ -59,7 +59,51 @@ pub(super) fn compute_pomodoro_start_range(
 /// The fourth tuple element is the block-tracker `before` for the started
 /// entry: `At` of the pre-state headline the start moved, or `Created`
 /// when the start created its entry.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn plan_pomodoro_start(
+    original_day: &str,
+    block_link: &str,
+    pomodoro_name: Option<&str>,
+    pomodoro_name_is_literal: bool,
+    spec: &PomodoroStartSpec,
+    now: chrono::NaiveDateTime,
+    typed: Option<&crate::native::capture_task_toggle::TypedImplicit<'_>>,
+    day_relative: &Path,
+) -> Result<
+    (String, Placement, PomodoroStartSummary, PomodoroBlockBefore),
+    CaptureError,
+> {
+    let (updated_day, placement, mut summary, before) =
+        plan_pomodoro_start_unruled(
+            original_day,
+            block_link,
+            pomodoro_name,
+            pomodoro_name_is_literal,
+            spec,
+            now,
+            typed,
+        )?;
+    // A link start keeps its written span; a MEET start still follows its
+    // event run's trackedness.
+    let (updated_day, finish) = apply_meet_rule(
+        updated_day,
+        &MeetStartInput {
+            day_relative,
+            entry_index: summary.pomodoro_line.saturating_sub(1),
+            spec,
+            span_rule: SpanRule::Written,
+            numbers: None,
+            now,
+        },
+    )?;
+    if let Some(finish) = finish {
+        finish.apply(&mut summary);
+    }
+    Ok((updated_day, placement, summary, before))
+}
+
+/// [`plan_pomodoro_start`] before the MEET trackedness rule.
+fn plan_pomodoro_start_unruled(
     original_day: &str,
     block_link: &str,
     pomodoro_name: Option<&str>,
@@ -155,6 +199,8 @@ pub(super) fn plan_pomodoro_start(
                         drop: Vec::new(),
                         dropped: Vec::new(),
                         r#override: None,
+                        tracked: true,
+                        event_run: None,
                     },
                     PomodoroBlockBefore::At(index),
                 ));
@@ -198,6 +244,8 @@ pub(super) fn plan_pomodoro_start(
                         drop: Vec::new(),
                         dropped: Vec::new(),
                         r#override: None,
+                        tracked: true,
+                        event_run: None,
                     },
                     PomodoroBlockBefore::Created,
                 ));
@@ -236,6 +284,8 @@ pub(super) fn plan_pomodoro_start(
                         drop: Vec::new(),
                         dropped: Vec::new(),
                         r#override: None,
+                        tracked: true,
+                        event_run: None,
                     },
                     PomodoroBlockBefore::Created,
                 ));
@@ -304,6 +354,8 @@ pub(super) fn plan_pomodoro_start(
                 drop: Vec::new(),
                 dropped: Vec::new(),
                 r#override: None,
+                tracked: true,
+                event_run: None,
             },
             PomodoroBlockBefore::At(index),
         ));
@@ -332,6 +384,8 @@ pub(super) fn plan_pomodoro_start(
             drop: Vec::new(),
             dropped: Vec::new(),
             r#override: None,
+            tracked: true,
+            event_run: None,
         },
         PomodoroBlockBefore::Created,
     ))
@@ -395,6 +449,8 @@ fn plan_typed_pomodoro_start(
                     drop: Vec::new(),
                     dropped: Vec::new(),
                     r#override: None,
+                    tracked: true,
+                    event_run: None,
                 },
                 PomodoroBlockBefore::At(index),
             ))
@@ -425,6 +481,8 @@ fn plan_typed_pomodoro_start(
                     drop: Vec::new(),
                     dropped: Vec::new(),
                     r#override: None,
+                    tracked: true,
+                    event_run: None,
                 },
                 PomodoroBlockBefore::Created,
             ))
@@ -902,6 +960,17 @@ pub(super) fn plan_pomodoro_start_item(
     .map_err(|error| CaptureError::io(error.to_string()))?;
     let (updated, moved_index) =
         start_existing_pomodoro_entry(&drop_plan.contents, index, &time_range)?;
+    let (updated, meet_finish) = apply_meet_rule(
+        updated,
+        &MeetStartInput {
+            day_relative: Path::new(&rel),
+            entry_index: moved_index,
+            spec: &spec,
+            span_rule: SpanRule::Calendar,
+            numbers: Some(&drop_plan.kept),
+            now,
+        },
+    )?;
     let task_line = line_spans(&updated)
         .get(moved_index)
         .map(|line| line.text.to_string())
@@ -932,7 +1001,7 @@ pub(super) fn plan_pomodoro_start_item(
     );
     let mut drop_list = spec.drop.clone();
     drop_list.sort_unstable();
-    let summary = PomodoroStartSummary {
+    let mut summary = PomodoroStartSummary {
         start,
         end,
         duration_minutes,
@@ -945,7 +1014,12 @@ pub(super) fn plan_pomodoro_start_item(
         drop: drop_list,
         dropped,
         r#override: None,
+        tracked: true,
+        event_run: None,
     };
+    if let Some(finish) = meet_finish {
+        warnings.extend(finish.apply(&mut summary));
+    }
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
@@ -1105,6 +1179,18 @@ fn plan_override_restart_item(
         splice_session_ledger(&drop_plan.contents, running_index, time_range)?;
     let (moved_contents, moved_index) =
         move_started_pomodoro_to_current_slot(&restarted, running_index)?;
+    let rel = close_day_relative(&request.bob_dir, day_file);
+    let (moved_contents, meet_finish) = apply_meet_rule(
+        moved_contents,
+        &MeetStartInput {
+            day_relative: Path::new(&rel),
+            entry_index: moved_index,
+            spec,
+            span_rule: SpanRule::Calendar,
+            numbers: Some(&drop_plan.kept),
+            now,
+        },
+    )?;
     let task_line = line_spans(&moved_contents)
         .get(moved_index)
         .map(|line| line.text.to_string())
@@ -1131,7 +1217,7 @@ fn plan_override_restart_item(
     );
     let mut drop_list = spec.drop.clone();
     drop_list.sort_unstable();
-    let summary = PomodoroStartSummary {
+    let mut summary = PomodoroStartSummary {
         start: start.to_string(),
         end: end.to_string(),
         duration_minutes,
@@ -1150,7 +1236,12 @@ fn plan_override_restart_item(
             demoted: None,
             close_first: format!("x {}", parsed.body),
         }),
+        tracked: true,
+        event_run: None,
     };
+    if let Some(finish) = meet_finish {
+        warnings.extend(finish.apply(&mut summary));
+    }
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
@@ -1595,6 +1686,22 @@ fn plan_override_swap_item(
             (moved_index, true, warning)
         }
     };
+    let swap_rel = close_day_relative(&request.bob_dir, day_file);
+    let (contents, meet_finish) = apply_meet_rule(
+        contents,
+        &MeetStartInput {
+            day_relative: Path::new(&swap_rel),
+            entry_index: target_final,
+            spec,
+            span_rule: if keeps_ledger {
+                SpanRule::Written
+            } else {
+                SpanRule::Calendar
+            },
+            numbers: drop_plan.as_ref().map(|plan| plan.kept.as_slice()),
+            now,
+        },
+    )?;
     planner.stage(day_file, contents.clone())?;
     if let Some(warning) = suggestion_warning {
         warnings.push(warning.into());
@@ -1668,7 +1775,7 @@ fn plan_override_swap_item(
             )
         };
     let ledger = if keeps_ledger { "kept" } else { "fresh" };
-    let summary = PomodoroStartSummary {
+    let mut summary = PomodoroStartSummary {
         start: summary_start,
         end: summary_end,
         duration_minutes: summary_duration,
@@ -1694,7 +1801,12 @@ fn plan_override_swap_item(
             }),
             close_first: format!("x {}", parsed.body),
         }),
+        tracked: true,
+        event_run: None,
     };
+    if let Some(finish) = meet_finish {
+        warnings.extend(finish.apply(&mut summary));
+    }
     let started_ref = match start_before {
         PomodoroBlockBefore::Created => {
             PomodoroBlockRef::created(PomodoroBlockRole::Started, target_final)
@@ -1948,7 +2060,7 @@ fn previous_range_duration_minutes(range: &str) -> u64 {
 /// newline survive. Uses the adjustment span first (canonical and legacy
 /// range spellings with any `[t:: ...]` or range-local metadata), then
 /// the ledger's parenthetical time-range discovery.
-fn splice_session_ledger(
+pub(super) fn splice_session_ledger(
     contents: &str,
     entry_index: usize,
     time_range: &str,
@@ -1996,7 +2108,7 @@ fn splice_session_ledger(
 /// annotations), so a suffix-less swap can hand the clock to the incoming
 /// session untouched. Same span discovery as the restart splice, so a
 /// ledger a restart can replace is a ledger a swap can keep.
-fn read_session_ledger_bytes(headline: &str) -> Option<String> {
+pub(super) fn read_session_ledger_bytes(headline: &str) -> Option<String> {
     if let Some(range) = parse_adjustment_range(headline) {
         return headline
             .get(range.start_ch..range.end_ch)
@@ -2383,6 +2495,17 @@ fn plan_named_pomodoro_start_item(
                 (updated, moved_index, true, warning, None)
             }
         };
+    let (updated, meet_finish) = apply_meet_rule(
+        updated,
+        &MeetStartInput {
+            day_relative: Path::new(rel),
+            entry_index: moved_index,
+            spec,
+            span_rule: SpanRule::Calendar,
+            numbers: drop_plan.as_ref().map(|plan| plan.kept.as_slice()),
+            now,
+        },
+    )?;
     planner.stage(day_file, updated)?;
     if let Some(warning) = suggestion_warning {
         warnings.push(warning.into());
@@ -2436,7 +2559,7 @@ fn plan_named_pomodoro_start_item(
         })?;
     let mut drop_list = spec.drop.clone();
     drop_list.sort_unstable();
-    let summary = PomodoroStartSummary {
+    let mut summary = PomodoroStartSummary {
         start: start.to_string(),
         end: end.to_string(),
         duration_minutes,
@@ -2449,7 +2572,12 @@ fn plan_named_pomodoro_start_item(
         drop: drop_list,
         dropped,
         r#override: None,
+        tracked: true,
+        event_run: None,
     };
+    if let Some(finish) = meet_finish {
+        warnings.extend(finish.apply(&mut summary));
+    }
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,

@@ -337,6 +337,17 @@ pub(super) fn build_close_summary_json(
                 (timing.clone(), timing, remaining, 0)
             }
         };
+    if let Some(timing) = &ledger.timing
+        && timing.closed_duration == 0
+        && timing.planned_duration > 0
+        && signed_close_delta(timing.planned_start, closed_at_minutes) > 0
+    {
+        extra_warnings.push(format!(
+            "{} has not started: it starts at {}, so closing now records a zero-length session; capture `x0` to reset it instead",
+            running.name.as_deref().filter(|name| !name.is_empty()).unwrap_or("the running session"),
+            format_close_hhmm(timing.planned_start),
+        ));
+    }
     let tasks = plan
         .summary
         .tasks
