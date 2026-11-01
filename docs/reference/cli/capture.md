@@ -17,7 +17,7 @@ Within each item, every later physical line must be either a column-zero Markdow
 
 All items are planned against in-memory note snapshots before commit. Later items see earlier planned edits to the same target, and any parse, clipboard, validation, staging, or replace failure leaves notes, ledgers, and newly created clipboard files at their original state. Single-item JSON keeps its legacy shape; multi-item JSON keeps the first result at the top level and adds an ordered 'captures' array.
 
-A draft beginning with `@@template:` expands one capture per later row. Write one capture item with `{0}`, `{1}`, and so on, then a blank line and one row of values per capture; each row must supply exactly one value per placeholder index; quote fields containing spaces. A template that uses only `{0}` takes one capture per value, so `bar baz bam` on one line is three captures. Capturing a template is exactly capturing its expansion, and the whole run still plans and writes atomically. Use `{{` and `}}` for literal braces, or the `--expand` option to print the expanded text without capturing. Templates refuse `%c` and Pomodoro session operators because those actions cannot safely repeat across rows.
+A draft whose first item carries the `%t` directive expands one capture per later row. Write one capture item with `{0}`, `{1}`, and so on, put `%t` at either edge of any of its lines, then a blank line and one row of values per capture; each row must supply exactly one value per placeholder index; quote fields containing spaces. A template that uses only `{0}` takes one capture per value, so `bar baz bam` on one line is three captures. Capturing a template is exactly capturing its expansion, and the whole run still plans and writes atomically. Use `{{` and `}}` for literal braces, or the `--expand` option to print the expanded text without capturing. Templates refuse `%c` and Pomodoro session operators because those actions cannot safely repeat across rows.
 
 Append a trailing lowercase 's:<N>' token, where N is a non-negative integer, to schedule the capture N days from today. The token is removed from the task text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It may appear before or after a trailing @route token and is recognized only at the very end of the input. Checkbox-bearing captures with a resolved scheduled property start Blocked as '[?]', including s:0; ordinary bullet and sub-bullet forms stay checkbox-free.
 
@@ -86,7 +86,7 @@ Options:
           Plan and report without writing notes or clipboard files
 
   -E, --expand
-          Print the draft with its @@template: expanded, then exit without capturing
+          Print the draft with its `%t` template expanded, then exit without capturing
 
   -f, --format <FORMAT>
           Output format: human or json
@@ -186,7 +186,7 @@ Examples:
   bob capture --route notes --section Ideas -- jot idea
   bob capture @notes#Ideas jot idea
   printf '@@foo\nFirst task\n\nSecond task @bar\n' | bob capture
-  printf '@@template:\nApply to {0}! @job^apply-{1}\n\nFoobar foo\n"Two Sigma" two-sigma\n' | bob capture
+  printf 'Apply to {0}! @job^apply-{1} %%t\n\nFoobar foo\n"Two Sigma" two-sigma\n' | bob capture
   echo 'buy milk @groceries' | bob capture
   bob capture -f json -- @work send status
   printf 'Prepare launch\n- Confirm owner\n\nSend status @work\n' | bob capture

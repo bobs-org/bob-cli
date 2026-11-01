@@ -2,7 +2,7 @@ use crate::support::*;
 
 #[test]
 fn capture_expand_prints_template_text_and_json_summary() {
-    let draft = "@@template:\nApply {0} to {1}\n\n\"Two Sigma\" job\n";
+    let draft = "Apply {0} to {1} %t\n\n\"Two Sigma\" job\n";
     let human = bob_command()
         .args(["capture", "-E"])
         .arg(draft)
@@ -63,7 +63,7 @@ fn capture_expand_ignores_capture_options_and_never_needs_a_vault() {
             "--clip",
             "--dry-run",
         ])
-        .arg("@@template:\nTask {0}\n\nvalue\n")
+        .arg("Task {0} %t\n\nvalue\n")
         .output()
         .expect("run expansion with unrelated capture options");
     assert_success(&output);
@@ -75,7 +75,7 @@ fn capture_expand_ignores_capture_options_and_never_needs_a_vault() {
 fn capture_expand_reports_language_errors_as_usage_errors() {
     let output = bob_command()
         .args(["capture", "-E", "-f", "json"])
-        .arg("@@template:\nTask {0} {2}\n\nA B C\n")
+        .arg("Task {0} {2} %t\n\nA B C\n")
         .output()
         .expect("run invalid expansion");
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
@@ -88,8 +88,8 @@ fn capture_expand_reports_language_errors_as_usage_errors() {
 
 #[test]
 fn capture_expand_one_line_values_equal_three_line_rows() {
-    let one_line = "@@template:\nfoo: {0}! @sase:foo-{0}\n\nbar baz bam\n";
-    let three_line = "@@template:\nfoo: {0}! @sase:foo-{0}\n\nbar\nbaz\nbam\n";
+    let one_line = "foo: {0}! @sase:foo-{0} %t\n\nbar baz bam\n";
+    let three_line = "foo: {0}! @sase:foo-{0} %t\n\nbar\nbaz\nbam\n";
     let one = bob_command()
         .args(["capture", "-E"])
         .arg(one_line)

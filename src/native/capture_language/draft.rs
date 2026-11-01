@@ -766,7 +766,7 @@ pub(crate) fn parse_capture_draft_with_clip_control_coded(
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, TemplateCodedError> {
     let analysis = super::template::analyze(raw_text);
-    if analysis.header.is_some() {
+    if analysis.directive.is_some() {
         if let Some(first_issue) = analysis.issues.first() {
             if let Some(row) =
                 super::template::row_number_for_issue(&analysis, first_issue)
@@ -791,7 +791,7 @@ pub(crate) fn parse_capture_draft_with_clip_control_coded(
                 TemplateCodedError::coded(issue.code(), issue.message())
             })?
         else {
-            // Header without a block is already reported as a language
+            // A missing definition is already reported as a language
             // issue above; reaching here means an ordinary draft.
             return parse_ordinary_draft(
                 raw_text,

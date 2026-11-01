@@ -28,7 +28,7 @@ Options:
 Examples:
   bob capture-templates list -f json
   bob capture-templates show 1
-  bob capture-templates save '@@template:\nApply {0}\n\n'
+  bob capture-templates save 'Apply {0} %t\n\n'
   bob capture-templates delete 1
   bob capture-templates clear
 
@@ -93,7 +93,7 @@ Examples:
 List saved capture templates (default)
 
 ```text title="bob capture-templates list --help"
-List the bob-owned saved `@@template:` blocks. The command is read-only. Bare `bob capture-templates` runs this list.
+List the bob-owned saved `%t` template definitions. The command is read-only. Bare `bob capture-templates` runs this list.
 
 Usage: bob capture-templates list [OPTIONS]
 
@@ -137,7 +137,7 @@ Options:
           Show help
 
 Examples:
-  bob capture-templates save '@@template:\nApply to {0} @job^apply-{1}\n\n'
+  bob capture-templates save 'Apply to {0} @job^apply-{1} %t\n\n'
   cat template-draft.txt | bob capture-templates save -f json
 ```
 
@@ -146,7 +146,7 @@ Examples:
 Print one template as a ready-to-insert draft
 
 ```text title="bob capture-templates show --help"
-Print the selected template as an unstyled `@@template:` draft. TEMPLATE is a 1-based list index (one or two digits) or a content id.
+Print the selected template as an unstyled `%t` draft. TEMPLATE is a 1-based list index (one or two digits) or a content id.
 
 Usage: bob capture-templates show [OPTIONS] <TEMPLATE>
 

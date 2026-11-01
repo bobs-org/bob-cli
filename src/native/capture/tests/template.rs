@@ -100,59 +100,59 @@ fn planning_each_template_matches_planning_its_expansion() {
     let cases = [
         (
             "route",
-            "@@template:\nTask {0} @work\n\none\ntwo\n",
+            "Task {0} @work %t\n\none\ntwo\n",
         ),
         (
             "requested block ID",
-            "@@template:\nTask {0} @work^{1}\n\none first\ntwo second\n",
+            "Task {0} @work^{1} %t\n\none first\ntwo second\n",
         ),
         (
             "Pomodoro task link",
-            "@@template:\nTask {0} @work:{1}\n\none link-one\ntwo link-two\n",
+            "Task {0} @work:{1} %t\n\none link-one\ntwo link-two\n",
         ),
         (
             "existing-task sub-bullet",
-            "@@template:\n@work+parent Child {0}\n\none\ntwo\n",
+            "@work+parent Child {0} %t\n\none\ntwo\n",
         ),
         (
             "section bullet",
-            "@@template:\nIdea {0} @notes#Ideas\n\none\ntwo\n",
+            "Idea {0} @notes#Ideas %t\n\none\ntwo\n",
         ),
         (
             "schedule marker",
-            "@@template:\nTask {0} s:1 @work\n\none\ntwo\n",
+            "Task {0} s:1 @work %t\n\none\ntwo\n",
         ),
         (
             "priority marker",
-            "@@template:\nTask {0} $1 @work\n\none\ntwo\n",
+            "Task {0} $1 @work %t\n\none\ntwo\n",
         ),
         (
             "prerequisite marker",
-            "@@template:\nTask {0} &work:prereq @work^{1}\n\none dep-one\ntwo dep-two\n",
+            "Task {0} &work:prereq @work^{1} %t\n\none dep-one\ntwo dep-two\n",
         ),
         (
             "blocked-task marker",
-            "@@template:\nTask {0} *work:blocked @work^{1}\n\none block-one\ntwo block-two\n",
+            "Task {0} *work:blocked @work^{1} %t\n\none block-one\ntwo block-two\n",
         ),
         (
             "bulk completion",
-            "@@template:\n!work:{0}\n\ndone-one\ndone-two\n",
+            "!work:{0} %t\n\ndone-one\ndone-two\n",
         ),
         (
             "existing task link",
-            "@@template:\n^work:{0}\n\nexisting-one\nexisting-two\n",
+            "^work:{0} %t\n\nexisting-one\nexisting-two\n",
         ),
         (
             "child placeholders",
-            "@@template:\nTask {0} @work^{1}\n- child {2}\n\nfirst one detail\nsecond two detail\n",
+            "Task {0} @work^{1} %t\n- child {2}\n\nfirst one detail\nsecond two detail\n",
         ),
         (
             "bare URL references",
-            "@@template:\n{0}\n\nhttps://example.com/template-one\nhttps://example.com/template-two\n",
+            "{0} %t\n\nhttps://example.com/template-one\nhttps://example.com/template-two\n",
         ),
         (
             "reference listen markers",
-            "@@template:\n{0}\n\n\"https://example.com/listen-one @\"\n\"https://example.com/listen-two @\"\n",
+            "{0} %t\n\n\"https://example.com/listen-one @\"\n\"https://example.com/listen-two @\"\n",
         ),
     ];
     let routing = UrlRoutingPolicy::default();

@@ -12,8 +12,7 @@ use super::{
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
         CompletionRelation, OverrideCompletion, PickerDescriptor, PickerKind,
-        PickerScope, Replacement, RouteCandidate, RouteCandidateKind,
-        SCHEMA_VERSION,
+        PickerScope, Replacement, SCHEMA_VERSION,
     },
     pomodoros::{
         apply_bare_start_name_replacements, pomodoro_candidates,
@@ -642,49 +641,21 @@ fn build_result_inner(
 }
 
 /// Template completion uses a same-length masked draft so template syntax and
-/// row values never become picker queries. Partial first-line headers remain
-/// ordinary route completion, with a synthetic `template:` candidate.
+/// row values never become picker queries.
 fn template_completion_gate(
     bob_dir: &Path,
     raw_text: &str,
     cursor: usize,
     all_tasks: bool,
 ) -> Result<Option<CaptureCompleteResult>, CompleteError> {
-    let partial_header = partial_template_header(raw_text, cursor);
     let analysis = crate::native::capture_language::template::analyze(raw_text);
-    if analysis.header.is_none() {
-        if let Some((start, end, query)) = partial_header {
-            let mut result =
-                build_result_inner(bob_dir, raw_text, cursor, all_tasks)?;
-            if result.context == Some(CompletionContext::Route)
-                && let Candidates::Route(ref mut candidates) = result.candidates
-            {
-                let template = RouteCandidate {
-                    replacement: "template:".to_string(),
-                    route: "template:".to_string(),
-                    label: "Bulk template: one capture per row below"
-                        .to_string(),
-                    kind: RouteCandidateKind::Template,
-                    status: None,
-                    match_kind: None,
-                };
-                if "template:".starts_with(&query.to_ascii_lowercase()) {
-                    let at = if query.is_empty() {
-                        candidates.len()
-                    } else {
-                        0
-                    };
-                    candidates.insert(at, template);
-                    result.replacement = Replacement { start, end };
-                }
-            }
-            return Ok(Some(result));
-        }
+    if analysis.directive.is_none() {
         return Ok(None);
     }
 
-    let (header_range, _) = analysis.header.as_ref().expect("checked header");
-    if (header_range.start..=header_range.end).contains(&cursor)
+    let (directive_range, _) =
+        analysis.directive.as_ref().expect("checked directive");
+    if (directive_range.start..=directive_range.end).contains(&cursor)
         || crate::native::capture_language::template::cursor_on_template_row(
             &analysis, cursor,
         )
@@ -711,43 +682,6 @@ fn template_completion_gate(
         return Ok(Some(CaptureCompleteResult::empty(cursor)));
     }
     Ok(Some(result))
-}
-
-fn partial_template_header(
-    raw: &str,
-    cursor: usize,
-) -> Option<(usize, usize, String)> {
-    if cursor > raw.len() || !raw.is_char_boundary(cursor) {
-        return None;
-    }
-    let lines = crate::native::capture_language::split_physical_lines(raw);
-    let first_nonblank_index = lines
-        .iter()
-        .position(|line| !line.text.trim_matches([' ', '\t']).is_empty())?;
-    let cursor_index = lines
-        .iter()
-        .position(|line| line.start <= cursor && cursor <= line.end)?;
-    if cursor_index != first_nonblank_index {
-        return None;
-    }
-    let cursor_line = &lines[cursor_index];
-    let line_start = cursor_line.start;
-    let line_end = cursor_line.end;
-    let line = &raw[line_start..line_end];
-    let trimmed_start = line.len() - line.trim_start_matches([' ', '\t']).len();
-    let content = &line[trimmed_start..];
-    if !"@@template:".starts_with(&content.to_ascii_lowercase())
-        || content.len() < 2
-        || content.eq_ignore_ascii_case("@@template:")
-    {
-        return None;
-    }
-    let query = content.strip_prefix("@@")?;
-    Some((
-        line_start + trimmed_start + 2,
-        cursor.min(line_end),
-        query.to_string(),
-    ))
 }
 
 fn completion_owner(

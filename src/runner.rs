@@ -876,7 +876,7 @@ const CAPTURE_TEMPLATES_AFTER_HELP: &str = "\
 Examples:
   bob capture-templates list -f json
   bob capture-templates show 1
-  bob capture-templates save '@@template:\\nApply {0}\\n\\n'
+  bob capture-templates save 'Apply {0} %t\\n\\n'
   bob capture-templates delete 1
   bob capture-templates clear
 

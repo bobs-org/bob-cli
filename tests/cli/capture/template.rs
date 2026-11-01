@@ -1,4 +1,4 @@
-//! Execution tests for `@@template:` drafts.
+//! Execution tests for `%t` template drafts.
 
 use crate::support::*;
 use std::fs;
@@ -28,8 +28,7 @@ fn template_executes_rows_and_adds_row_metadata() {
     let dry_vault = temp.path().join("dry-vault");
     fs::create_dir_all(&dry_vault).expect("create dry-run vault");
     let draft = concat!(
-        "@@template:\n",
-        "Apply to {0}! @job^apply-{1}\n",
+        "Apply to {0}! @job^apply-{1} %t\n",
         "- **URL**: {2}\n",
         "\n",
         "Foobar foo https://foobar.example/job\n",
@@ -48,14 +47,14 @@ fn template_executes_rows_and_adds_row_metadata() {
     assert_eq!(result["template"]["row_count"], 2);
     assert_eq!(
         result["template_row"],
-        serde_json::json!({"row": 1, "line": 5})
+        serde_json::json!({"row": 1, "line": 4})
     );
     assert_eq!(result["text"], "Apply to Foobar!");
     assert_eq!(result["block_id"], "apply-foo");
     assert_eq!(result["captures"][0]["template_row"]["row"], 1);
     assert_eq!(
         result["captures"][1]["template_row"],
-        serde_json::json!({"row": 2, "line": 6})
+        serde_json::json!({"row": 2, "line": 5})
     );
     assert_eq!(result["captures"][1]["text"], "Apply to Two Sigma!");
     assert_eq!(
@@ -90,13 +89,13 @@ fn template_human_summary_names_the_source_rows() {
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
         .arg("--dry-run")
-        .arg("@@template:\nTask {0}\n\nfirst\nsecond\n")
+        .arg("Task {0} %t\n\nfirst\nsecond\n")
         .output()
         .expect("run human template capture");
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("template  2 rows · lines 4–5"),
+        stdout(&output).contains("template  2 rows · lines 3–4"),
         "unexpected output:\n{}",
         format_output(&output)
     );
@@ -113,8 +112,7 @@ fn a_late_duplicate_id_refuses_the_whole_template_with_row_context() {
     let original = "- [ ] #task existing ^duplicate\n";
     fs::write(vault.join("work.md"), original).expect("write existing task");
     let draft = concat!(
-        "@@template:\n",
-        "Task {0} @work^{1}\n",
+        "Task {0} @work^{1} %t\n",
         "\n",
         "first one\n",
         "second two\n",
@@ -129,7 +127,7 @@ fn a_late_duplicate_id_refuses_the_whole_template_with_row_context() {
 
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(
-        stderr(&output).contains("template row 5 (line 8)")
+        stderr(&output).contains("template row 5 (line 7)")
             && stderr(&output).contains("block ID ^duplicate already exists"),
         "{}",
         format_output(&output)
@@ -147,13 +145,13 @@ fn duplicate_ids_across_template_rows_refuse_with_the_later_row() {
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
-        .arg("@@template:\nTask {0} @work^{1}\n\nfirst same-id\nsecond same-id\n")
+        .arg("Task {0} @work^{1} %t\n\nfirst same-id\nsecond same-id\n")
         .output()
         .expect("run duplicate row capture");
 
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(
-        stderr(&output).contains("template row 2 (line 5)")
+        stderr(&output).contains("template row 2 (line 4)")
             && stderr(&output).contains("block ID ^same-id already exists"),
         "{}",
         format_output(&output)
@@ -169,14 +167,14 @@ fn parser_diagnostics_keep_the_template_source_line() {
     let output = capture(&temp, &vault)
         .arg("-f")
         .arg("json")
-        .arg("@@template:\nTask {0}\n  - nested {1}\n\nparent child\n")
+        .arg("Task {0} %t\n  - nested {1}\n\nparent child\n")
         .output()
         .expect("run malformed template item");
 
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
     let error = json(&output);
     assert!(
-        error["error"].as_str().unwrap().contains("capture line 3"),
+        error["error"].as_str().unwrap().contains("capture line 2"),
         "{}",
         format_output(&output)
     );
@@ -194,7 +192,7 @@ fn template_clipboard_markers_refuse_even_with_no_clip() {
             command.arg("--no-clip");
         }
         let output = command
-            .arg("@@template:\nTask {0} %c\n\nvalue\n")
+            .arg("Task {0} %c %t\n\nvalue\n")
             .output()
             .expect("run clipboard-marker refusal");
         assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
@@ -203,7 +201,7 @@ fn template_clipboard_markers_refuse_even_with_no_clip() {
         assert!(error["error"]
             .as_str()
             .unwrap()
-            .contains("template row 1 (line 4)"));
+            .contains("template row 1 (line 3)"));
         assert!(!vault.join("mac_inbox.md").exists());
     }
 }
@@ -216,7 +214,7 @@ fn template_clip_flag_and_session_operators_have_stable_codes() {
 
     let forced_clip = capture(&temp, &vault)
         .args(["--clip", "-f", "json"])
-        .arg("@@template:\nTask {0}\n\nvalue\n")
+        .arg("Task {0} %t\n\nvalue\n")
         .output()
         .expect("run forced clip refusal");
     assert_eq!(forced_clip.status.code(), Some(2));
@@ -225,7 +223,7 @@ fn template_clip_flag_and_session_operators_have_stable_codes() {
     for session_form in ["=", "x", "+5", "++2", "--3", "@work:task=3"] {
         let session = capture(&temp, &vault)
             .args(["-f", "json"])
-            .arg(format!("@@template:\n{{0}}\n\n{session_form}\n"))
+            .arg(format!("{{0}} %t\n\n{session_form}\n"))
             .output()
             .expect("run session refusal");
         assert_eq!(
@@ -242,7 +240,7 @@ fn template_clip_flag_and_session_operators_have_stable_codes() {
         assert!(json(&session)["error"]
             .as_str()
             .unwrap()
-            .contains("template row 1 (line 4)"));
+            .contains("template row 1 (line 3)"));
     }
 }
 
@@ -252,10 +250,10 @@ fn template_session_suffixes_refuse_in_execution() {
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     for draft in [
-        "@@template:\nTask {0} @job:{1}=3\n\na b\n",
-        "@@template:\n^job:{0}=x\n\na\n",
-        "@@template:\n^job:{0}=3\n\na\n",
-        "@@template:\n{0}\n\n^job:a=x\n",
+        "Task {0} @job:{1}=3 %t\n\na b\n",
+        "^job:{0}=x %t\n\na\n",
+        "^job:{0}=3 %t\n\na\n",
+        "{0} %t\n\n^job:a=x\n",
     ] {
         let output = capture(&temp, &vault)
             .args(["--dry-run", "-f", "json"])
@@ -284,7 +282,7 @@ fn template_execution_reports_first_issue_in_draft_order() {
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
 
-    let probe = "@@template:\n{0}{1}\n\n= \"\"\na\n";
+    let probe = "{0}{1} %t\n\n= \"\"\na\n";
     let output = capture(&temp, &vault)
         .args(["--dry-run", "-f", "json"])
         .arg(probe)
@@ -297,12 +295,12 @@ fn template_execution_reports_first_issue_in_draft_order() {
         error["error"]
             .as_str()
             .unwrap()
-            .starts_with("template row 1 (line 4): a template can't drive"),
+            .starts_with("template row 1 (line 3): a template can't drive"),
         "{}",
         error["error"]
     );
 
-    let arity_only = "@@template:\n{0} {1}\n\nonly-one\n";
+    let arity_only = "{0} {1} %t\n\nonly-one\n";
     let output = capture(&temp, &vault)
         .args(["--dry-run", "-f", "json"])
         .arg(arity_only)
@@ -331,7 +329,7 @@ fn real_template_capture_saves_and_reports_statuses() {
     let temp = TempDir::new("bob-cli-capture-template-shelf");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    let draft = "@@template:\nApply to {0}\n\nAcme\n";
+    let draft = "Apply to {0} %t\n\nAcme\n";
 
     let first = capture(&temp, &vault)
         .args(["-f", "json"])
@@ -366,7 +364,7 @@ fn real_template_capture_saves_and_reports_statuses() {
         2
     );
 
-    let edited = "@@template:\nApply to {0}!\n\nAcme\n";
+    let edited = "Apply to {0}! %t\n\nAcme\n";
     let replaced = capture(&temp, &vault)
         .args(["-f", "json", "--template-origin"])
         .arg(&id)
@@ -407,7 +405,7 @@ fn template_human_output_reports_saved() {
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
-        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .arg("Task {0} %t\n\nfirst\n")
         .output()
         .expect("run human template capture");
     assert_success(&output);
@@ -423,7 +421,7 @@ fn non_saving_runs_leave_the_shelf_absent() {
     let temp = TempDir::new("bob-cli-capture-template-shelf-absent");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    let draft = "@@template:\nTask {0}\n\nfirst\n";
+    let draft = "Task {0} %t\n\nfirst\n";
     let shelf = shelf_path(&temp);
 
     let dry = capture(&temp, &vault)
@@ -445,7 +443,7 @@ fn non_saving_runs_leave_the_shelf_absent() {
     assert!(!shelf.exists());
 
     let failed = capture(&temp, &vault)
-        .arg("@@template:\nTask {0} {2}\n\nA B C\n")
+        .arg("Task {0} {2} %t\n\nA B C\n")
         .output()
         .expect("failed capture");
     assert_ne!(failed.status.code(), Some(0));
@@ -500,8 +498,8 @@ fn one_row_and_many_rows_save_the_same_shelf_entry() {
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     for draft in [
-        "@@template:\nApply to {0}\n\none\n",
-        "@@template:\nApply to {0}\n\none\ntwo\nthree\n",
+        "Apply to {0} %t\n\none\n",
+        "Apply to {0} %t\n\none\ntwo\nthree\n",
     ] {
         let output = capture(&temp, &vault)
             .args(["-f", "json"])
@@ -524,7 +522,7 @@ fn unwritable_shelf_keeps_exit_zero_with_not_saved() {
     let output = capture(&temp, &vault)
         .env("BOB_CAPTURE_TEMPLATES_FILE", blocker.join("templates.json"))
         .args(["-f", "json"])
-        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .arg("Task {0} %t\n\nfirst\n")
         .output()
         .expect("run unwritable capture");
     assert_success(&output);
@@ -545,7 +543,7 @@ fn bad_template_origin_is_a_usage_error() {
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
         .args(["--template-origin", "not an id!"])
-        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .arg("Task {0} %t\n\nfirst\n")
         .output()
         .expect("run bad origin");
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
@@ -558,7 +556,7 @@ fn expand_with_bad_template_origin_is_a_usage_error() {
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
         .args(["-E", "--template-origin", "bad!"])
-        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .arg("Task {0} %t\n\nfirst\n")
         .output()
         .expect("run bad origin expand");
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
@@ -572,7 +570,7 @@ fn human_replaced_names_the_checked_out_origin() {
     fs::create_dir_all(&vault).expect("create vault");
     let first = capture(&temp, &vault)
         .args(["-f", "json"])
-        .arg("@@template:\nApply to {0}\n\nAcme\n")
+        .arg("Apply to {0} %t\n\nAcme\n")
         .output()
         .expect("run first capture");
     assert_success(&first);
@@ -583,7 +581,7 @@ fn human_replaced_names_the_checked_out_origin() {
     let replaced = capture(&temp, &vault)
         .args(["--template-origin"])
         .arg(&origin)
-        .arg("@@template:\nApply to {0}!\n\nAcme\n")
+        .arg("Apply to {0}! %t\n\nAcme\n")
         .output()
         .expect("run replacing capture");
     assert_success(&replaced);
@@ -627,8 +625,8 @@ fn template_one_placeholder_one_line_dry_run_matches_three_lines() {
     let temp = TempDir::new("bob-cli-capture-template-one-line");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    let one_line = "@@template:\nTask {0}\n\nbar baz bam\n";
-    let three_line = "@@template:\nTask {0}\n\nbar\nbaz\nbam\n";
+    let one_line = "Task {0} %t\n\nbar baz bam\n";
+    let three_line = "Task {0} %t\n\nbar\nbaz\nbam\n";
 
     let one = capture(&temp, &vault)
         .args(["--dry-run", "-f", "json"])
@@ -640,15 +638,15 @@ fn template_one_placeholder_one_line_dry_run_matches_three_lines() {
     assert_eq!(one_value["template"]["row_count"], 3);
     assert_eq!(
         one_value["captures"][0]["template_row"],
-        serde_json::json!({"row": 1, "line": 4})
+        serde_json::json!({"row": 1, "line": 3})
     );
     assert_eq!(
         one_value["captures"][1]["template_row"],
-        serde_json::json!({"row": 2, "line": 4})
+        serde_json::json!({"row": 2, "line": 3})
     );
     assert_eq!(
         one_value["captures"][2]["template_row"],
-        serde_json::json!({"row": 3, "line": 4})
+        serde_json::json!({"row": 3, "line": 3})
     );
 
     let three = capture(&temp, &vault)
@@ -679,7 +677,7 @@ fn template_url_listen_marker_is_not_clipboard_capture() {
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
         .args(["--dry-run", "--no-clip", "-f", "json"])
-        .arg("@@template:\n{0}\n\n\"https://example.com/one %l\"\n")
+        .arg("{0} %t\n\n\"https://example.com/one %l\"\n")
         .output()
         .expect("run URL listen template");
     assert_success(&output);
@@ -688,12 +686,12 @@ fn template_url_listen_marker_is_not_clipboard_capture() {
     assert_eq!(value["ref"]["listen"], true);
     assert_eq!(
         value["template_row"],
-        serde_json::json!({"row": 1, "line": 4})
+        serde_json::json!({"row": 1, "line": 3})
     );
 
     let unquoted = capture(&temp, &vault)
         .args(["--dry-run", "--no-clip", "-f", "json"])
-        .arg("@@template:\n{0}\n\nhttps://example.com/one %l\n")
+        .arg("{0} %t\n\nhttps://example.com/one %l\n")
         .output()
         .expect("run unquoted URL listen template");
     assert_eq!(
@@ -707,7 +705,7 @@ fn template_url_listen_marker_is_not_clipboard_capture() {
         error["error"]
             .as_str()
             .unwrap()
-            .contains("template row 2 (line 4)"),
+            .contains("template row 2 (line 3)"),
         "{}",
         error["error"]
     );

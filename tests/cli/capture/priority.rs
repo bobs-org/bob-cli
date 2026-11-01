@@ -682,7 +682,7 @@ fn capture_retired_priority_marker_is_a_usage_error() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
-        .arg("@@template:\nfoo p:{0}\n\n2\n")
+        .arg("foo p:{0} %t\n\n2\n")
         .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("run template p:2 capture");

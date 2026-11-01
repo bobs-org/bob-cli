@@ -1,4 +1,4 @@
-//! Locked atomic JSON shelf for saved `@@template:` blocks.
+//! Locked atomic JSON shelf for saved `%t` template definitions.
 //!
 //! The shelf lives at `bob_cli_state_dir()/capture/templates.json`, with
 //! `BOB_CAPTURE_TEMPLATES_FILE` overriding the exact path. Entries are
@@ -49,19 +49,22 @@ fn quarantine_file_for(file: &Path) -> PathBuf {
     parent.join(format!("{stem}.corrupt.json"))
 }
 
-/// Canonical block text: the analyzed template block's lines, header
-/// excluded, each stripped of trailing ASCII spaces and tabs and joined
-/// with `\n`. Indentation, escapes, quotes, Unicode, and literal text are
-/// preserved byte for byte.
+/// Canonical block text: the analyzed template block's lines, `%t` and its
+/// one adjacent separator space excluded, each stripped of trailing ASCII
+/// spaces and tabs and joined with `\n`. Indentation, escapes, quotes,
+/// Unicode, and literal text are preserved byte for byte.
 pub(crate) fn canonical_template_text(raw: &str) -> Option<String> {
     let analysis = capture_language::template::analyze(raw);
+    analysis.directive.as_ref()?;
     let block = analysis.block.as_ref()?;
-    let mut lines = Vec::with_capacity(block.line_ranges().len());
-    for (_, range) in block.line_ranges() {
-        let text = raw.get(range.clone())?;
-        lines.push(text.trim_end_matches([' ', '\t']));
-    }
-    Some(lines.join("\n"))
+    let lines = block.definition_lines(raw);
+    Some(
+        lines
+            .iter()
+            .map(|line| line.trim_end_matches([' ', '\t']))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// First 12 lowercase hex digits of SHA-256 over the canonical text.
@@ -930,7 +933,7 @@ mod tests {
 
     #[test]
     fn canonical_text_strips_trailing_space_and_keeps_layout() {
-        let raw = "@@template:\nApply to {0}! @job^apply-{1}  \t\n- **URL**: {2}\t\n\nFoobar foo x\n";
+        let raw = "Apply to {0}! @job^apply-{1}  \t %t\n- **URL**: {2}\t\n\nFoobar foo x\n";
         assert_eq!(
             canonical_template_text(raw).as_deref(),
             Some("Apply to {0}! @job^apply-{1}\n- **URL**: {2}")
@@ -939,7 +942,7 @@ mod tests {
 
     #[test]
     fn canonical_text_handles_crlf_unicode_escapes_and_header_gap() {
-        let raw = "@@template:\r\n\r\n  Apply {{{0}}} café {1}  \r\n\t- child {2}\r\n\r\nrow\n";
+        let raw = "  Apply {{{0}}} café {1}   %t\r\n\t- child {2}\r\n\r\nrow\n";
         let canonical = canonical_template_text(raw).expect("canonical");
         assert_eq!(canonical, "  Apply {{{0}}} café {1}\n\t- child {2}");
     }
@@ -980,14 +983,41 @@ mod tests {
     }
 
     #[test]
+    fn the_directive_never_changes_the_content_id() {
+        let stored =
+            canonical_template_text("{0} @x %t\n\none\n").expect("canonical");
+        assert_eq!(stored, "{0} @x");
+        // The id is the hash of the pre-directive stored definition.
+        for draft in [
+            "{0} @x %t\n\none\n",
+            "%t {0} @x\n\none\n",
+            "{0} @x   %t  \n\none\ntwo\n",
+            "{0} @x\n- note %t\n\none\n",
+        ] {
+            let canonical = canonical_template_text(draft).expect("canonical");
+            let expected = if draft.contains("note") {
+                "{0} @x\n- note"
+            } else {
+                "{0} @x"
+            };
+            assert_eq!(canonical, expected, "{draft:?}");
+        }
+        assert_eq!(template_id(&stored), template_id("{0} @x"));
+        assert_eq!(template_id(&stored), "0fc73235db73");
+    }
+
+    #[test]
+    fn a_draft_without_the_directive_has_no_canonical_text() {
+        assert_eq!(canonical_template_text("{0} @x\n\none\n"), None);
+    }
+
+    #[test]
     fn one_row_and_many_rows_save_the_same_entry() {
-        let single =
-            canonical_template_text("@@template:\nApply to {0}\n\none\n")
+        let single = canonical_template_text("Apply to {0} %t\n\none\n")
+            .expect("canonical");
+        let many =
+            canonical_template_text("Apply to {0} %t\n\none\ntwo\nthree\n")
                 .expect("canonical");
-        let many = canonical_template_text(
-            "@@template:\nApply to {0}\n\none\ntwo\nthree\n",
-        )
-        .expect("canonical");
         assert_eq!(single, many);
         assert_eq!(template_id(&single), template_id(&many));
     }

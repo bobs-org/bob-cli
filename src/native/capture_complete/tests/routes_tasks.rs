@@ -72,68 +72,40 @@ fn route_completion_lists_every_target_for_an_empty_query() {
 }
 
 #[test]
-fn template_header_completion_is_offered_first_for_prefix_and_last_for_empty_query(
-) {
-    use super::super::model::RouteCandidateKind;
-
-    let temp = TempDir::new("bob-cli-capture-complete-template-header");
-    let prefix = result(temp.path(), "@@te", 4);
-    let Candidates::Route(routes) = &prefix.candidates else {
-        panic!("expected route candidates");
-    };
-    assert_eq!(routes[0].kind, RouteCandidateKind::Template);
-    assert_eq!(routes[0].replacement, "template:");
-    assert_eq!(prefix.replacement, Replacement { start: 2, end: 4 });
-
-    let empty = result(temp.path(), "@@", 2);
-    let Candidates::Route(routes) = &empty.candidates else {
-        panic!("expected route candidates");
-    };
-    assert_eq!(routes.last().unwrap().kind, RouteCandidateKind::Template);
+fn double_at_offers_only_destinations_never_a_template_candidate() {
+    let temp = TempDir::new("bob-cli-capture-complete-no-template-candidate");
+    for (raw, cursor) in [("@@te", 4), ("@@", 2)] {
+        let value = result(temp.path(), raw, cursor);
+        let Candidates::Route(routes) = &value.candidates else {
+            panic!("expected route candidates for {raw:?}");
+        };
+        assert!(
+            routes.iter().all(|route| route.replacement != "template:"),
+            "{raw:?}: {routes:?}"
+        );
+    }
 }
 
 #[test]
-fn template_header_offered_only_on_first_nonblank_line() {
-    use super::super::model::RouteCandidateKind;
-
-    let temp = TempDir::new("bob-cli-capture-complete-template-first-line");
-    let raw = "@@te\n\n@@te";
-    let first = result(temp.path(), raw, 4);
-    let Candidates::Route(routes) = &first.candidates else {
-        panic!("expected route candidates");
-    };
-    assert!(
-        routes
-            .iter()
-            .any(|route| route.kind == RouteCandidateKind::Template),
-        "cursor in first @@te still offers template: {first:?}"
-    );
-
-    let second = result(temp.path(), raw, 10);
-    let Candidates::Route(routes) = &second.candidates else {
-        panic!("expected route candidates");
-    };
-    assert!(
-        !routes
-            .iter()
-            .any(|route| route.kind == RouteCandidateKind::Template),
-        "cursor in second @@te must not offer template: {second:?}"
-    );
-}
-
-#[test]
-fn template_completion_suppresses_header_rows_and_placeholders() {
+fn template_completion_suppresses_directive_rows_and_placeholders() {
     let temp = TempDir::new("bob-cli-capture-complete-template-gate");
     for (raw, cursor) in [
-        ("@@template:\n@not-a-route", 8),
-        ("@@template:\nBuy {0} @not-a-route\n\nrow", 37),
-        ("@@template:\nBuy {0} @not-a-route\n\nrow", 17),
-        ("@@template:\nBuy {0} @not-a-route\n\nrow  two", 39),
+        ("Buy {0} @not-a-route %t\n\nrow", 22),
+        ("Buy {0} @not-a-route %t\n\nrow", 27),
+        ("Buy {0} @not-a-route %t\n\nrow", 6),
+        ("Buy {0} @not-a-route %t\n\nrow  two", 29),
     ] {
         let value = result(temp.path(), raw, cursor);
         assert!(value.context.is_none(), "{raw:?} at {cursor}: {value:?}");
         assert!(value.candidates.is_empty());
     }
+}
+
+#[test]
+fn template_completion_still_completes_markers_in_the_definition() {
+    let temp = TempDir::new("bob-cli-capture-complete-template-definition");
+    let value = result(temp.path(), "Buy {0} @no %t\n\nrow", 11);
+    assert_eq!(value.context, Some(CompletionContext::Route));
 }
 
 #[test]

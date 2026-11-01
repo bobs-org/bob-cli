@@ -164,7 +164,7 @@ PYTHON
 }
 time_kind qualifying capture-related --bob-dir "$bob_dir" --format json -- "Install new UPS battery @dev" || fail "qualifying timing failed"
 time_kind non_creating capture-related --bob-dir "$bob_dir" --format json -- "Remember a thought @dev#Ideas" || fail "non-creating timing failed"
-time_kind template capture-related --bob-dir "$bob_dir" --format json -- "@@template:" || fail "template timing failed"
+time_kind template capture-related --bob-dir "$bob_dir" --format json -- "Task {0} %t" || fail "template timing failed"
 time_kind spawn_floor --version || fail "spawn-floor timing failed"
 
 # Stratify the worksheet and firing-rate summary in one audited pass.

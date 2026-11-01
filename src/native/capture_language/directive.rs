@@ -1,10 +1,9 @@
 //! Offset-preserving `%` directive lexer.
 //!
 //! Directives sit at either edge of any physical line of an item, with only
-//! other markers between the token and that edge. This phase recognizes
-//! `%c` / `%c<N>`, `%n`, and `%l`; every other `%…` token at an edge is
-//! unknown, and a bare `%` is incomplete. Later phases extend [`Directives`]
-//! with template.
+//! other markers between the token and that edge. The lexer recognizes
+//! `%c` / `%c<N>`, `%n`, `%t`, and `%l`; every other `%…` token at an edge
+//! is unknown, and a bare `%` is incomplete.
 
 use super::dependencies::{
     is_trailing_transparent, protected_ranges, scan_line_blocked_tasks,
@@ -22,6 +21,7 @@ use std::ops::Range;
 pub(crate) struct Directives {
     pub(crate) clip: Option<ClipRequest>,
     pub(crate) note: bool,
+    pub(crate) template: bool,
     pub(crate) listen: bool,
 }
 
@@ -52,6 +52,7 @@ pub(crate) enum DirectiveOccurrence {
 pub(crate) enum DirectiveKind {
     Clip { count: NonZeroUsize },
     Note,
+    Template,
     Listen,
 }
 
@@ -91,18 +92,22 @@ pub(crate) fn is_directive_token(text: &str) -> bool {
 }
 
 pub(crate) fn incomplete_directive_error() -> String {
-    "`%` is incomplete: add a directive (`%c`, `%n`, `%l`), or write `\\%` to keep a literal `%`"
+    "`%` is incomplete: add a directive (`%c`, `%n`, `%t`, `%l`), or write `\\%` to keep a literal `%`"
         .to_string()
 }
 
 pub(crate) fn unknown_directive_error(token: &str) -> String {
     format!(
-        "`{token}` is not a capture directive; write `%c`, `%n`, or `%l`, or `\\{token}` to keep the text"
+        "`{token}` is not a capture directive; write `%c`, `%n`, `%t`, or `%l`, or `\\{token}` to keep the text"
     )
 }
 
 pub(crate) fn directive_not_applicable_error() -> String {
     "`%l` queues companion audio for a bare URL".to_string()
+}
+
+pub(crate) fn template_directive_misplaced_error() -> String {
+    "`%t` marks the first item as the template".to_string()
 }
 
 pub(crate) fn invalid_clip_count_error(token: &str) -> String {
@@ -256,6 +261,12 @@ fn classify_token(token: &str, span: Range<usize>) -> DirectiveOccurrence {
             span,
         };
     }
+    if token == "%t" {
+        return DirectiveOccurrence::Complete {
+            kind: DirectiveKind::Template,
+            span,
+        };
+    }
     if token == "%l" {
         return DirectiveOccurrence::Complete {
             kind: DirectiveKind::Listen,
@@ -305,6 +316,33 @@ fn classify_clip(
             message: invalid_clip_count_error(token),
         },
     }
+}
+
+/// Byte ranges of every complete `%t` directive at an edge of `lines`, read
+/// as one item: the first line is the parent line and the rest are
+/// authored child lines.
+pub(crate) fn template_tokens(lines: &[RawLine<'_>]) -> Vec<Range<usize>> {
+    lines
+        .iter()
+        .enumerate()
+        .flat_map(|(index, line)| template_tokens_in_line(line, index > 0))
+        .collect()
+}
+
+pub(crate) fn template_tokens_in_line(
+    line: &RawLine<'_>,
+    child_line: bool,
+) -> Vec<Range<usize>> {
+    scan_line_inner(line.text, line.start, child_line)
+        .into_iter()
+        .filter_map(|occurrence| match occurrence {
+            DirectiveOccurrence::Complete {
+                kind: DirectiveKind::Template,
+                span,
+            } => Some(span),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(crate) fn collect_item(item: &CaptureItem<'_>) -> Vec<DirectiveOccurrence> {
@@ -400,6 +438,7 @@ fn directive_discriminant(occurrence: &DirectiveOccurrence) -> Option<u8> {
             DirectiveKind::Clip { .. } => 0,
             DirectiveKind::Note => 1,
             DirectiveKind::Listen => 2,
+            DirectiveKind::Template => 3,
         }),
         _ => None,
     }
@@ -409,6 +448,7 @@ fn duplicate_label(discriminant: u8) -> &'static str {
     match discriminant {
         0 => "directive (%c)",
         1 => "directive (%n)",
+        3 => "directive (%t)",
         _ => "directive (%l)",
     }
 }
@@ -457,6 +497,7 @@ pub(crate) fn resolve(
     let mut directives = Directives {
         clip: None,
         note: false,
+        template: false,
         listen: false,
     };
     for occurrence in markers {
@@ -466,6 +507,7 @@ pub(crate) fn resolve(
                     directives.clip = occurrence.clip_request();
                 }
                 DirectiveKind::Note => directives.note = true,
+                DirectiveKind::Template => directives.template = true,
                 DirectiveKind::Listen => directives.listen = true,
             },
             DirectiveOccurrence::Incomplete { span } => {

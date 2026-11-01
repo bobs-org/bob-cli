@@ -83,7 +83,7 @@ anything is written, and any failure rolls the whole batch back.
 | `URL %l @route` or `@route URL %l` | Queue the reference with companion audio under that explicit parent (`%l` is the only listen spelling) |
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
-| `@@template:` | Expand one capture item per row from the following `{N}` template; captures exactly like the expansion |
+| `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
 | `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
@@ -148,7 +148,8 @@ anything is written, and any failure rolls the whole batch back.
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%c` / `%c<N>` | Capture clipboard content as child bullets (`%c` is one live value; `%c3` is three) |
-| `%` | Incomplete directive except on a bare URL where `%l` requests companion audio; add `%c`, `%n`, `%l` or write `\%` to keep a literal `%` |
+| `%t` | Mark the draft's first item as a template; its rows follow the first blank line |
+| `%` | Incomplete directive except on a bare URL where `%l` requests companion audio; add `%c`, `%n`, `%t`, `%l` or write `\%` to keep a literal `%` |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
 | `#` | Incomplete `#<type>` at an item edge: add a type (`#fix`) or write `\#` to keep a literal `#`; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
@@ -606,26 +607,26 @@ output numbers batch items as `1/N`, `2/N`, and so on, and prints a compact
 
 ### Bulk templates
 
-A draft whose first nonblank line is `@@template:` expands one capture item per
-row. The planner receives the same text that `bob capture -E` prints, so a
-template capture has the same results, ordering, and all-or-nothing writes as
-capturing that expansion directly.
-Editors that run [`capture-rewrite`](#bob-capture-rewrite), including the Mac
-capture panel, turn a typed `@@@` at the very start of a draft into the template
-header and place the caret on the next line. Typing `@@@` at the end of any
-line does the same, so a line already written becomes the template: the token
-is erased and `@@template:` becomes the draft's first line.
+A draft whose first item carries the [`%t` directive](#directives) expands one
+capture item per row. The planner receives the same text that `bob capture -E`
+prints, so a template capture has the same results, ordering, and all-or-nothing
+writes as capturing that expansion directly.
+
+The template is the draft's first item: a parent line and optional authored
+child bullets, ending at the first blank line. `%t` sits at either edge of any
+line of that item and stays where you typed it; nothing is rewritten. The rows
+are the nonblank physical lines after that blank line.
 
 ```text
-@@template:
-Apply to {0}! @job^apply-{1}
+Apply to {0}! @job^apply-{1} %t
 - **URL**: {2}
 
 Foobar foo http://foobar.com/career/some_foo_job
 "Two Sigma" two-sigma https://www.twosigma.com/careers/some_role
 ```
 
-This expands to two ordinary items, preserving the authored child bullet:
+This expands to two ordinary items, preserving the authored child bullet and
+dropping `%t` along with one adjacent separator space:
 
 ```text
 Apply to Foobar! @job^apply-foo
@@ -635,16 +636,14 @@ Apply to Two Sigma! @job^apply-two-sigma
 - **URL**: https://www.twosigma.com/careers/some_role
 ```
 
-The template is one item: a parent line and optional authored child bullets.
-It ends at the first blank line after the header. Blank lines after that
-separate rows and are ignored. Each nonblank row supplies one capture, except
-a template using only `{0}` takes one capture per space-separated value, so
-values may share a line or sit one per line; rows cannot have child bullets
-yet.
+Blank lines after the template separate rows and are ignored. Each nonblank
+row supplies one capture, except a template using only `{0}` takes one capture
+per space-separated value, so values may share a line or sit one per line; rows
+cannot have child bullets yet.
 
 | Draft part | Rule |
 | --- | --- |
-| Header | `@@template:` alone on the first nonblank line; case-insensitive |
+| Directive | `%t` at either edge of any line of the draft's first item; one per draft |
 | Placeholder | `{0}` through `{999}`; indices must start at zero and have no gaps; repeats and any order are allowed |
 | Literal braces | Write `{{` for `{` and `}}` for `}` |
 | One placeholder | Split the row on spaces and tabs; each value is its own row, numbered left to right then top to bottom; quote values containing spaces as below |
@@ -653,8 +652,7 @@ yet.
 A `{0}`-only template takes one capture per value:
 
 ```text
-@@template:
-foo: {0}! @sase:foo-{0}
+foo: {0}! @sase:foo-{0} %t
 
 bar baz bam
 ```
@@ -672,22 +670,23 @@ foo: bam! @sase:foo-bam
 Values are inserted once and are not scanned again. Every ordinary marker in
 the template applies independently to each row, including routes and sections,
 `s:<N>`, `$<N>`, `&` and `*` dependencies, completion (`!note:id`), task
-links, and reference URLs. Duplicate block IDs across rows are refused by the
-normal planner. A row with an empty or incomplete picker value gets the
-existing capture error, scoped to that template row.
+links, `%n`, `%l`, and reference URLs. Duplicate block IDs across rows are
+refused by the normal planner. A row with an empty or incomplete picker value
+gets the existing capture error, scoped to that template row.
 
 Use `@route:{1}` when each row should link its task under the one selected
 Pomodoro; the normal `plan.max_links` warning applies. Use `@route^apply-{1}`
 when rows should create plain Ready tasks that you link as you work them.
 
-Templates refuse other `@@` declarations, clipboard capture, and Pomodoro
-session operators. This includes `%c` even with `--no-clip` or `--clip`,
-whole-item forms such as `=`, `x`, `+N`, and `++N`, and start/close suffixes
-on task markers. `URL %l` remains allowed when it is the reference listen
-marker. In a `{0}`-only template, keep the marker on its URL by quoting the
-row (`"https://example.com/one %"`) or by putting `%` in the template
-(`{0} %` covers the all-listen case); an unquoted
-`https://example.com/one %` row is two values and refuses naming row 2. A
+Templates refuse `@@` declarations, clipboard capture, and Pomodoro session
+operators. This includes `%c` even with `--no-clip` or `--clip`, whole-item
+forms such as `=`, `x`, `+N`, and `++N`, and start/close suffixes on task
+markers. A row value that injects `%c` or `%t` at an expanded item's edge is
+refused too, so templates never nest. `%l` and `%n` apply per expanded row. In a
+`{0}`-only template, keep the directive on its URL by quoting the row
+(`"https://example.com/one %l"`) or by putting `%l` in the template
+(`{0} %l %t` covers the all-listen case); an unquoted
+`https://example.com/one %l` row is two values and refuses naming row 2. A
 template is limited to 1,000 rows and 1 MiB of
 expanded text; it is refused rather than truncated when it exceeds either
 bound.
@@ -697,7 +696,7 @@ problem in draft order and writes nothing:
 
 | Code | Example message |
 | --- | --- |
-| `template_header_misplaced` | Write `@@template:` alone on the draft's first line |
+| `template_directive_misplaced` | `%t` marks the first item as the template |
 | `template_missing_rows` | Add a blank line, then one row per capture; with the blank separator present: add one row per capture (`: N values separated by spaces`, `: one value per capture, separated by spaces or new lines`, or bare) |
 | `template_needs_separator` | Add a blank line between the template and its rows |
 | `template_missing_placeholder` | Add at least one placeholder such as `{0}` |
@@ -712,23 +711,24 @@ problem in draft order and writes nothing:
 | `template_too_large` | Expanded template exceeds the 1 MiB limit |
 | `template_row_incomplete` | `capture-parse` reports an incomplete expanded item on its row |
 
-Success JSON adds a top-level `template` summary (`line`, `field_count`, and
-`row_count`) and a `template_row` (`row`, `line`) on each result item. Human
-output prints a dim row-count and source-line summary before the numbered
-items. `-E, --expand` prints the expanded text and exits before vault access
-or planning; JSON mode returns it as `expanded` with the same `template`
-summary. On drafts without the header, `-E` returns the original text.
+Success JSON adds a top-level `template` summary (`line` — the line carrying
+`%t` — `field_count`, and `row_count`) and a `template_row` (`row`, `line`) on
+each result item. Human output prints a dim row-count and source-line summary
+before the numbered items. `-E, --expand` prints the expanded text and exits
+before vault access or planning; JSON mode returns it as `expanded` with the
+same `template` summary. On drafts without `%t`, `-E` returns the original
+text.
 
 ### Saved templates
 
-Every successful real `@@template:` capture saves its template block to a
+Every successful real `%t` capture saves its template block to a
 bob-owned shelf, so the next wave reuses it instead of retyping it. Only the
 block is saved, never the rows: rows carry one-off values that must not
 replay.
 
 Saving happens after the vault write succeeds, once per invocation (not once
 per row), and only for real captures: `--dry-run`, `-E`, failed or refused
-captures, drafts without a header, and forced `-r`/`-s`/`-t` destinations
+captures, drafts without `%t`, and forced `-r`/`-s`/`-t` destinations
 never touch the shelf. `capture-parse`, `capture-complete`, and
 `capture-rewrite` never touch it either. Saving is best-effort and never
 fails a capture: the exit code stays 0, and a shelf failure prints
@@ -739,8 +739,9 @@ The shelf lives at
 `${XDG_STATE_HOME:-~/.local/state}/bob-cli/capture/templates.json`.
 `BOB_CAPTURE_TEMPLATES_FILE` overrides the exact file path. The directory is
 `0700` and the file is `0600`. Entries are keyed by the first 12 hex digits
-of SHA-256 over the canonical block text (trailing spaces and tabs stripped,
-lines joined with `\n`), ordered most recently touched first, with
+of SHA-256 over the canonical block text (`%t` and its one adjacent separator
+space removed, trailing spaces and tabs stripped, lines joined with `\n`), so
+adding `%t` to a stored definition never changes its id, ordered most recently touched first, with
 `first_saved_at`, `last_used_at`, and a `use_count` of successful captures.
 
 `capture.max_saved_templates` in the Bob config caps the shelf from 0 to 36
@@ -758,8 +759,8 @@ disk is never deleted by picking it.
 
 Use `bob capture-templates` to manage the shelf. Bare invocation and `list`
 show the newest templates first. `show TEMPLATE` prints the ready-to-insert
-draft (`@@template:` header, definition, and an empty rows area) without
-styling, so it can be piped or copied directly. `TEMPLATE` is a 1-based list
+draft (the definition with ` %t` appended to its first line, then an empty
+rows area) without styling, so it can be piped or copied directly. `TEMPLATE` is a 1-based list
 index of one or two digits, or the content id shown by `list`.
 
 ```sh
@@ -771,7 +772,7 @@ bob capture-templates clear
 ```
 
 `save` accepts TEXT arguments joined with spaces or a complete draft on stdin.
-It checks the definition (header, separator, placeholders, and block-level
+It checks the definition (`%t`, separator, placeholders, and block-level
 markers) while ignoring missing rows and row errors. Saving a definition does
 not increment `use_count`. The hidden `--template-origin ID` supports the Mac
 client's checkout flow; it replaces an edited origin atomically while keeping
@@ -857,13 +858,17 @@ This grammar recognizes:
 | --- | --- |
 | `%c` | Read the live clipboard into child bullets of this item |
 | `%c<N>` (N ≥ 2) | Live clipboard plus history, N values in all. `%c1` is `%c` |
-| `%` | Incomplete on a task (add `%c`, `%n`, `%l`, or write `\%`). On a bare URL `%l` requests companion audio (`URL %l`) |
+| `%n` | Capture the item as a plain-text note on a Pomodoro |
+| `%t` | Mark this item as the draft's template; see [Bulk templates](#bulk-templates) |
+| `%l` | Queue a bare-URL reference with companion audio (`URL %l`) |
+| `%` | Incomplete (add `%c`, `%n`, `%t`, `%l`, or write `\%`) |
 | anything else (`%3`, `%C`, `%clip`, `%build_log`) | `unknown_directive` |
 
 `%c0`, a leading zero (`%c01`), and a count that overflows `usize` are
 invalid (`unknown_directive`). Each directive appears at most once per item
-(`duplicate_capture_marker`, label `directive (%c)`). Letters are lowercase
-only.
+(`duplicate_capture_marker`, label `directive (%c)`, `directive (%t)`, and so
+on). Letters are lowercase only. `%t` is valid only on the draft's first item;
+a `%t` anywhere else is `template_directive_misplaced`.
 
 See [Clipboard](#clipboard) for what `%c` reads.
 
@@ -5058,7 +5063,7 @@ Useful options:
 - `-b, --bob-dir DIR`: Bob vault root; defaults to `BOB_DIR` or `~/bob`
 - `-c, --clip`: force a clipboard read as if `%c` were written
 - `-d, --dry-run`: plan and report without writing notes or clipboard files
-- `-E, --expand`: print a template draft's expansion and exit before vault
+- `-E, --expand`: print a `%t` template draft's expansion and exit before vault
   access or planning
 - `-f, --format human|json`: human confirmation or stable JSON for callers
 - `-i, --inbox-route ANSWER`: route an inbox task this capture changes:
@@ -5127,7 +5132,7 @@ on `--dry-run` and when saving is off. Human output appends `· saved`
 (`· saved, replacing <origin-id>` for `replaced`, naming the checked-out
 origin that was removed) or `· not saved` to the template summary line. `-E, --expand` prints the expanded draft in human
 mode; with `-f json` it returns `expanded` and the same `template` summary. On
-drafts without a header it returns the original text. The
+drafts without `%t` it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
@@ -5877,12 +5882,13 @@ bad flag is an error (exit 2); every other input succeeds.
 
 ### Template drafts
 
-See [Bulk templates](#bulk-templates) for the `@@template:` grammar. For
-`capture-parse`, the header line is a `template_header` span, each `{N}` is a
+See [Bulk templates](#bulk-templates) for the `%t` grammar. For
+`capture-parse`, the `%t` token is a `directive` span with `directive:
+"template"`, each `{N}` is a
 `template_placeholder` span with its zero-based `field`, and every lexed row
 value is a `template_field` span with its field index. Field spans include
-quotes when a value is quoted. The JSON `template` object reports the header,
-template block range and line bounds, `field_count`, and `rows`. Each row has
+quotes when a value is quoted. The JSON `template` object reports the
+`directive` (token range and line), template block range and line bounds, `field_count`, and `rows`. Each row has
 its one-based row number, source line and range, fields, and (when expansion
 succeeded) the expanded capture `mode` and `body`. Rows of a one-placeholder
 template can share a `line`, and each row's `range` is its value's range.
@@ -5892,10 +5898,9 @@ expanded row follows as an item with mode `template_row`, the row's typed
 range and source line, its expanded body and capture markers, and
 `needs: []`. Its `template_row` value mirrors the corresponding entry in
 `template.rows`. A row that cannot expand still has an item and its field
-spans, but no expanded `mode` or `body`. If the header has no template yet or
-the template has no rows, the top-level `needs` includes `template_row`.
+spans, but no expanded `mode` or `body`. If the template has no rows, the top-level `needs` includes `template_row`.
 
-Template-language diagnostics include `template_header_misplaced`,
+Template-language diagnostics include `template_directive_misplaced`,
 `template_missing_rows`, `template_needs_separator`,
 `template_missing_placeholder`, `template_invalid_placeholder`,
 `template_placeholder_gap`, `template_row_bullet`,
@@ -5903,9 +5908,9 @@ Template-language diagnostics include `template_header_misplaced`,
 `template_global_declaration`, `template_too_large`,
 `template_clipboard`, and `template_session_operator`. A validly expanded row
 that still has picker needs or parses as `incomplete` adds
-`template_row_incomplete`. Without a header, a first item containing `{N}`
-followed by another item adds the `template_header_missing` warning; capture
-continues to treat those items normally.
+`template_row_incomplete`. Without `%t`, a first item containing `{N}`
+followed by another item adds the `template_directive_missing` warning, which
+teaches `%t`; capture continues to treat those items normally.
 
 Template and masked-parse ranges point into the typed draft because masking
 preserves byte offsets. Per-row diagnostics use the expansion source map:
@@ -5915,8 +5920,8 @@ multiple fields points to the row. Repeated literal errors are deduplicated by
 code, range, and message. A placeholder that changes a token's meaning per
 row, such as `${0}`, is highlighted according to how the masked template
 parses it; each row's expanded parse still reports any real problem.
-`global_destination` is omitted for template drafts. Drafts without a header
-keep their existing JSON shape, except for the `template_header_missing`
+`global_destination` is omitted for template drafts. Drafts without `%t`
+keep their existing JSON shape, except for the `template_directive_missing`
 warning when that hint applies.
 
 `TEXT` accepts the same batch draft `bob capture` does: one or more blank or
@@ -6355,7 +6360,7 @@ This read-only command shows existing tasks that a capture draft may duplicate
 or relate to. Draft mode follows the capture editor grammar and examines only
 items that create tasks: `task`, `pomodoro_task`, `project_note`, and
 `pomodoro_project_note`. For a project-note item it matches the title. A
-`@@template:` draft and a draft with no task-creating items return an empty
+`%t` template draft and a draft with no task-creating items return an empty
 `items` array before Bob scans the vault.
 
 Open candidates are tasks in routable inbox, area, and active project notes.
@@ -6444,7 +6449,7 @@ usual `{"ok": false, "error": "…"}` envelope.
 bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 ```
 
-Applies the capture grammar's automatic draft rewrites -- template start, the
+Applies the capture grammar's automatic draft rewrites -- the
 block-ID separator toggle, the relation-label pipe attach, and the bare `@@`
 absorption rule -- and reports the
 resulting edits, cursor, and a human summary. It is purely lexical and
@@ -6461,31 +6466,6 @@ are never rewritten: they keep their quotes and spelling byte-for-byte.
 Template drafts are never rewritten: `capture-rewrite` returns
 `changed: false`, with no rule or edits, so it cannot absorb `@@` or toggle a
 template marker.
-
-**Template start.** Typing a third `@` right after a standalone `@@@` token
-at the end of any physical line erases that token (plus any spaces or tabs
-before it) and inserts `@@template:` plus a line ending as the draft's new
-first line. Only the whitespace-delimited token ending at `--cursor` is
-examined, and the cursor must sit at the end of its physical line. The draft's
-first line break is reused (`\r\n`, `\n`, or `\r`; `\n` when the draft has
-none). This typing gesture requires `--cursor`; without it, the rule is
-skipped.
-
-```bash
-bob capture-rewrite -c 3 -f json -- '@@@'
-```
-
-The result is `@@template:\n` with cursor 12 and summary
-`Started a @@template: draft`. If the draft already has following lines, they
-move down so the cursor still lands on a blank line. At the end of any other
-line, the same gesture erases `@@@` there instead:
-
-```bash
-bob capture-rewrite -c 12 -f json -- 'Read {0} @@@'
-```
-
-The result is `@@template:\nRead {0}` with cursor 20. Feeding either result
-back through the command is a no-op.
 
 **Block-ID separator toggle.** Typing `^` immediately after a complete
 plain `@route:id` or `@route+id`, `:` after `@route^id` or `@route+id`, or `+`
@@ -6637,16 +6617,12 @@ JSON output is a single versioned object:
 }
 ```
 
-`rule` is `start_template`, `switch_block_id_separator`,
+`rule` is `switch_block_id_separator`,
 `attach_relation_label`, `absorb_local_marker`, or `absorb_declaration`,
 omitted when nothing changed. `cursor` is present only when `--cursor` was
-supplied and is mapped through every edit. For `start_template`, it lands
-where the erased `@@@` began, after the inserted header; that is the start
-of the fresh line when `@@@` was the whole first line. Separator toggles land
+supplied and is mapped through every edit. Separator toggles land
 just past the unchanged ID, pipe attaches land just past the glued `|`, and
-absorption lands just past the rewritten `@@<payload>` token. A
-`start_template` rewrite returns one edit when the erasure starts at byte 0,
-and otherwise two: the header insertion at 0, then the erasure.
+absorption lands just past the rewritten `@@<payload>` token.
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`
@@ -6697,15 +6673,11 @@ candidates. An inherited global route also
 becomes the current note for same-note wikilink heading/block completion unless
 that item overrides it. Route completion is backed by the same
 scan as `bob capture-targets`. For a template draft, completion runs against
-the masked template: the header, rows, and placeholders return empty success,
-while route, section, Pomodoro-name, dependency, and wikilink pickers in the
-template body remain available. Block-ID contexts and replacements that
-overlap a placeholder return empty success. On `@@`, `@@te`, and other
-first-nonblank-line prefixes of the reserved header, route completion offers a
-`template:` candidate (`kind: "template"`, label
-`Bulk template: one capture per row below`), first for a matching query and
-last for an empty query. It is not offered on later lines, even when a later
-line repeats the same prefix text. Section completion
+the masked template: the `%t` token, rows, and placeholders return empty
+success, while route, section, Pomodoro-name, dependency, and wikilink pickers
+in the template body remain available. Block-ID contexts and replacements that
+overlap a placeholder return empty success. `@@` completes only destinations;
+it never offers a template candidate. Section completion
 covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Task-section completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
@@ -7472,8 +7444,8 @@ still permits reads, and `clear` remains available as the explicit reset.
       "index": 1,
       "id": "9c1f0e2a7b3d",
       "text": "Apply to {0}! @job^apply-{1}\n- **URL**: {2}",
-      "draft": "@@template:\nApply to {0}! @job^apply-{1}\n- **URL**: {2}\n\n",
-      "cursor": 57,
+      "draft": "Apply to {0}! @job^apply-{1} %t\n- **URL**: {2}\n\n",
+      "cursor": 48,
       "field_count": 3,
       "line_count": 2,
       "route": "job",

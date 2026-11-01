@@ -90,7 +90,7 @@ its `scheduled` date. `BOB_PRIORITY_ROLL_SEED` can make a roll repeatable. See
 
 | Key | Type and allowed value | Default | Effect |
 | --- | --- | --- | --- |
-| `capture.max_saved_templates` | Integer, 0–36 | `36` | Maximum saved `@@template:` blocks; `0` disables saving. |
+| `capture.max_saved_templates` | Integer, 0–36 | `36` | Maximum saved `%t` template definitions; `0` disables saving. |
 
 See [capture templates](../capture.md#saved-templates).
 

@@ -36,7 +36,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `URL %l` / `URL %l @route` | Queue with companion audio | [`URL %l`](#url-listen) |
 | `-r route` | Force the URL (or task) route from the CLI | [`-r`](#cli-route) |
 | `@@route` | Shared task destination for unrouted items | [`@@route`](#global-route) |
-| `@@template:` | Expand one capture per template row | [`@@template:`](#template) |
+| `%t` | Expand one capture per template row | [`%t`](#template) |
 | `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
 | `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
@@ -332,15 +332,16 @@ Contract: [Saving links to your reading queue](../capture.md#saving-links-to-you
 
 ## Templates
 
-### `@@template:` {#template}
+### `%t` {#template}
 
-The first line is `@@template:`. The following `{N}` template captures
-exactly like its expansion: one item per later nonblank row (`{0}`-only
-templates can pack several values on one line). `-E, --expand` prints the
-expansion and exits before vault access.
+`%t` at either edge of any line of the draft's first item makes that item a
+template. The `{N}` placeholders in it capture exactly like its expansion: one
+item per nonblank row after the first blank line (`{0}`-only templates can pack
+several values on one line). `-E, --expand` prints the expansion and exits
+before vault access.
 
 ```bash
-printf '%s\n' '@@template:' 'Call {0} @work' '' 'Alex' 'Sam' | bob capture -E
+printf '%s\n' 'Call {0} @work %t' '' 'Alex' 'Sam' | bob capture -E
 ```
 
 ```text { .no-copy title="Output" }
@@ -349,12 +350,9 @@ Call Alex @work
 Call Sam @work
 ```
 
-A successful real `@@template:` capture saves the template block (not the
-rows) on the shelf. Manage it with `bob capture-templates`.
-
-Editors that run [`bob capture-rewrite`](../capture.md#bob-capture-rewrite),
-including the Mac capture panel, turn a typed `@@@` at the very start of a
-draft into the `@@template:` header and put the caret on the next line.
+A successful real `%t` capture saves the template block (not the rows) on the
+shelf. Manage it with `bob capture-templates`. A `%t` anywhere but the first
+item is refused (`template_directive_misplaced`).
 
 Contract: [Bulk templates](../capture.md#bulk-templates).
 

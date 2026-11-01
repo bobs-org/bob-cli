@@ -495,7 +495,7 @@ fn execution_and_editor_agree_on_typed_task_bodies() {
 #[test]
 fn template_rows_keep_markers_out_of_the_body() {
     use super::super::template;
-    let raw = "@@template:\n\nTask {0} #fix\n\nvalue\n";
+    let raw = "Task {0} #fix %t\n\nvalue\n";
     let expansion = template::expand(raw).expect("valid template").unwrap();
     assert!(expansion.text.contains("#fix"));
     // The expanded row parses like its unmarked baseline.

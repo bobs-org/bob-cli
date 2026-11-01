@@ -179,7 +179,7 @@ fn marker_only_continuations_stay_with_the_original_item() {
 
 #[test]
 fn template_rows_keep_type_metadata_and_template_local_offsets() {
-    let input = "@@template:\nFix {0} #fix\n\nparser\n";
+    let input = "Fix {0} #fix %t\n\nparser\n";
     let draft = execute_draft(input).expect("template row");
     let item = &draft.items[0];
     assert_eq!(item.parsed.body, "Fix parser");

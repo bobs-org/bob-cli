@@ -154,7 +154,7 @@ fn build_cli(kind: Command) -> ClapCommand {
         Command::List => command
             .about("List saved capture templates")
             .long_about(
-                "List the bob-owned saved `@@template:` blocks. The command is read-only. Bare `bob capture-templates` runs this list.",
+                "List the bob-owned saved `%t` template definitions. The command is read-only. Bare `bob capture-templates` runs this list.",
             )
             .after_help(
                 "Examples:\n  bob capture-templates\n  bob capture-templates list -f json\n  bob capture-templates show 1",
@@ -163,7 +163,7 @@ fn build_cli(kind: Command) -> ClapCommand {
             .about("Print one template as a ready-to-insert draft")
             .arg(template_arg())
             .long_about(
-                "Print the selected template as an unstyled `@@template:` draft. TEMPLATE is a 1-based list index (one or two digits) or a content id.",
+                "Print the selected template as an unstyled `%t` draft. TEMPLATE is a 1-based list index (one or two digits) or a content id.",
             )
             .after_help(
                 "Examples:\n  bob capture-templates show 1\n  bob capture-templates show 9c1f0e2a7b3d -f json",
@@ -176,7 +176,7 @@ fn build_cli(kind: Command) -> ClapCommand {
                 "Save one template definition from TEXT or stdin. Only definition errors are checked; missing rows and row errors are ignored. A successful save does not increment use_count. `--template-origin` is an internal checkout id used by Bob Mac Capture.",
             )
             .after_help(
-                "Examples:\n  bob capture-templates save '@@template:\\nApply to {0} @job^apply-{1}\\n\\n'\n  cat template-draft.txt | bob capture-templates save -f json",
+                "Examples:\n  bob capture-templates save 'Apply to {0} @job^apply-{1} %t\\n\\n'\n  cat template-draft.txt | bob capture-templates save -f json",
             ),
         Command::Delete => command
             .about("Delete templates by list index or content id")
@@ -327,6 +327,9 @@ fn run_show_command(selector: &str, format: OutputFormat) -> i32 {
     0
 }
 
+const NOT_A_TEMPLATE: &str =
+    "add `%t` to the draft's first item to save it as a template";
+
 fn run_save_command(matches: &ArgMatches, format: OutputFormat) -> i32 {
     if let Some(origin) = matches.get_one::<String>("template-origin")
         && !store::is_valid_origin(origin)
@@ -344,16 +347,16 @@ fn run_save_command(matches: &ArgMatches, format: OutputFormat) -> i32 {
         }
     };
     let analysis = capture_language::template::analyze(&raw);
-    if analysis.header.is_none()
+    if analysis.directive.is_none()
         && !analysis
             .issues
             .iter()
-            .any(|issue| issue.code() == "template_header_misplaced")
+            .any(|issue| issue.code() == "template_directive_misplaced")
     {
         return report_error(
             format,
             "saved_template_not_template",
-            "start the draft with `@@template:` to save it as a template",
+            NOT_A_TEMPLATE,
             2,
         );
     }
@@ -364,7 +367,7 @@ fn run_save_command(matches: &ArgMatches, format: OutputFormat) -> i32 {
         return report_error(
             format,
             "saved_template_not_template",
-            "start the draft with `@@template:` to save it as a template",
+            NOT_A_TEMPLATE,
             2,
         );
     };
@@ -602,8 +605,17 @@ struct TemplateJson {
     use_count: u64,
 }
 
+/// The ready-to-insert draft for a stored definition: ` %t` appended to its
+/// first line, then a blank line where the rows go.
+fn render_template_draft(text: &str) -> String {
+    match text.split_once('\n') {
+        Some((first, rest)) => format!("{first} %t\n{rest}\n\n"),
+        None => format!("{text} %t\n\n"),
+    }
+}
+
 fn template_json(index: usize, entry: &TemplateShelfEntry) -> TemplateJson {
-    let draft = format!("@@template:\n{}\n\n", entry.text);
+    let draft = render_template_draft(&entry.text);
     let parsed = capture_parse::parse_template_protocol(&entry.text);
     let analysis = capture_language::template::analyze(&draft);
     TemplateJson {
@@ -646,7 +658,9 @@ fn print_human_list(
     println!("{heading}");
     if snapshot.entries.is_empty() {
         println!();
-        println!("No saved templates yet. Capture a `@@template:` draft and it lands here.");
+        println!(
+            "No saved templates yet. Capture a `%t` draft and it lands here."
+        );
         return;
     }
 

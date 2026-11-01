@@ -42,7 +42,7 @@ pub(crate) struct TemplateProtocolParse {
 }
 
 pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
-    let prefix = "@@template:\n";
+    let prefix = "%t ";
     let draft = format!("{prefix}{text}\n\n");
     let text_start = prefix.len();
     let text_end = text_start + text.len();
@@ -910,7 +910,7 @@ fn theme_name_content(raw: &str, span_start: usize) -> (&str, usize) {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct TemplateParse {
-    header: TemplateHeaderParse,
+    directive: TemplateDirectiveParse,
     range: SourceRange,
     line_start: usize,
     line_end: usize,
@@ -919,7 +919,7 @@ struct TemplateParse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct TemplateHeaderParse {
+struct TemplateDirectiveParse {
     range: SourceRange,
     line: usize,
 }
@@ -952,7 +952,7 @@ struct SourceRange {
 impl CaptureParseResult {
     fn new(input: String, options: &EditorParseOptions<'_>) -> Self {
         let analysis = capture_language::template::analyze(&input);
-        if analysis.header.is_some() {
+        if analysis.directive.is_some() {
             return Self::new_template(input, options, analysis);
         }
 
@@ -980,20 +980,22 @@ impl CaptureParseResult {
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
         let mut diagnostics = Vec::new();
-        if let Some(warning) = headerless_template_hint(&input, &parse.items) {
+        if let Some(warning) =
+            missing_template_directive_hint(&input, &parse.items)
+        {
             diagnostics.push(warning);
         }
         diagnostics.extend(
             analysis
                 .issues
                 .iter()
-                .filter(|issue| issue.code() == "template_header_misplaced")
+                .filter(|issue| issue.code() == "template_directive_misplaced")
                 .map(template_issue_diagnostic),
         );
         diagnostics.extend(parse.diagnostics.into_iter().filter(
             |diagnostic| {
                 !analysis.issues.iter().any(|issue| {
-                    issue.code() == "template_header_misplaced"
+                    issue.code() == "template_directive_misplaced"
                         && ranges_overlap(
                             diagnostic.range,
                             Some((issue.range().start, issue.range().end)),
@@ -1066,10 +1068,10 @@ impl CaptureParseResult {
             .map(|item| rebuild_template_body(&input, &masked, item))
             .unwrap_or_default();
 
-        let (header_range, header_line) = analysis
-            .header
+        let (directive_range, directive_line) = analysis
+            .directive
             .as_ref()
-            .expect("template parse has a header");
+            .expect("template parse has a directive");
         let (template_range, line_start, line_end) = analysis
             .block
             .as_ref()
@@ -1077,7 +1079,7 @@ impl CaptureParseResult {
                 (block.range.clone(), block.line_start, block.line_end)
             })
             .unwrap_or_else(|| {
-                (header_range.clone(), *header_line, *header_line)
+                (directive_range.clone(), *directive_line, *directive_line)
             });
 
         let expanded_rows = capture_language::template::expand_rows_for_editor(
@@ -1334,15 +1336,15 @@ impl CaptureParseResult {
         items.push(template_item);
         items.extend(row_items);
 
-        let header = TemplateHeaderParse {
+        let directive = TemplateDirectiveParse {
             range: SourceRange {
-                start: header_range.start,
-                end: header_range.end,
+                start: directive_range.start,
+                end: directive_range.end,
             },
-            line: *header_line,
+            line: *directive_line,
         };
         let template = TemplateParse {
-            header,
+            directive,
             range: SourceRange {
                 start: template_range.start,
                 end: template_range.end,
@@ -1551,6 +1553,10 @@ fn stamp_directive_spans(spans: &mut [CaptureParseSpan], input: &str) {
             span.directive = Some("listen");
             continue;
         }
+        if token == "%t" {
+            span.directive = Some("template");
+            continue;
+        }
         let Some(rest) = token.strip_prefix("%c") else {
             continue;
         };
@@ -1752,11 +1758,11 @@ fn template_spans(
         }
     }
 
-    if let Some((range, _)) = analysis.header.as_ref() {
+    if let Some((range, _)) = analysis.directive.as_ref() {
         result.push(CaptureParseSpan {
             start: range.start,
             end: range.end,
-            kind: SpanKind::TemplateHeader,
+            kind: SpanKind::Directive,
             field: None,
             themes: Vec::new(),
             cancels_source: false,
@@ -1837,7 +1843,7 @@ fn rebuild_template_body(
     }
 }
 
-fn headerless_template_hint(
+fn missing_template_directive_hint(
     raw: &str,
     items: &[EditorItemParse],
 ) -> Option<Diagnostic> {
@@ -1848,8 +1854,10 @@ fn headerless_template_hint(
     }
     Some(Diagnostic {
         severity: Severity::Warning,
-        code: "template_header_missing",
-        message: "add `@@template:` as the first line to use this item as a template for the lines below".to_string(),
+        code: "template_directive_missing",
+        message:
+            "add `%t` to this item to use it as a template for the lines below"
+                .to_string(),
         range: Some((first.start, first.end)),
     })
 }

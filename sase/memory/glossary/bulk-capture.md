@@ -5,12 +5,12 @@ aliases:
   - "batch capture"
 ---
 
-A bulk capture holds multiple items: blank-line items, bare-URL lists, chained session operators, or one item per row from a `@@template:` draft. Template rows are later nonblank physical lines, one capture per line (a template using only `{0}` takes one capture per space-separated or quoted value, so several can share a line), never blank-line-separated items; capturing the draft is exactly capturing its `bob capture -E` expansion. Blank or whitespace-only lines separate items; a blank-line-free block of two or more
+A bulk capture holds multiple items: blank-line items, bare-URL lists, chained session operators, or one item per row from a `%t` template draft. Template rows are later nonblank physical lines, one capture per line (a template using only `{0}` takes one capture per space-separated or quoted value, so several can share a line), never blank-line-separated items; capturing the draft is exactly capturing its `bob capture -E` expansion. Blank or whitespace-only lines separate items; a blank-line-free block of two or more
 bare-URL lines splits into one item per URL, and a line chaining session operators
 (`+2 x`, `x =`) into one item per operator. Authored child bullets never start an
 item. Each item is still judged alone, with its own markers and whole-item forms, so
 bulk linking (several `@route:id` items) and bulk completion (one `!note:id` per item)
-work. The draft-wide `@@route` form routes otherwise-unrouted items across a blank-line batch; the draft-wide `@@template:` form declares and expands before parsing. One staged planner
+work. The draft-wide `@@route` form routes otherwise-unrouted items across a blank-line batch; the `%t` directive marks the draft's first item as a template that declares and expands before parsing. One staged planner
 (`CaptureBatchPlanner`) runs the items in order, so each item sees the edits planned
 before it (insertion points, block-ID checks, Pomodoro lineup numbers) exactly as
 sequential captures would, and any item's failure rolls the whole draft back. JSON

@@ -3,7 +3,7 @@
 use crate::support::*;
 
 #[test]
-fn capture_rewrite_help_prints_line_break_escapes_literally() {
+fn capture_rewrite_help_describes_only_the_remaining_rules() {
     let output = bob_command()
         .arg("capture-rewrite")
         .arg("--help")
@@ -13,8 +13,12 @@ fn capture_rewrite_help_prints_line_break_escapes_literally() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("(`\\r\\n`, `\\n`, or `\\r`;"),
-        "capture-rewrite help omitted the literal line-break escapes:\n{out}"
+        out.contains("It implements three rules."),
+        "capture-rewrite help miscounts its rules:\n{out}"
+    );
+    assert!(
+        !out.contains("Template start"),
+        "capture-rewrite help still documents the template start:\n{out}"
     );
     assert!(
         !output.stdout.contains(&b'\r'),
@@ -92,37 +96,7 @@ fn capture_rewrite_json_absorbs_a_local_marker() {
 }
 
 #[test]
-fn capture_rewrite_json_starts_a_template() {
-    let output = bob_command()
-        .arg("capture-rewrite")
-        .arg("-c")
-        .arg("3")
-        .arg("-f")
-        .arg("json")
-        .arg("--")
-        .arg("@@@")
-        .output()
-        .expect("run capture-rewrite template start");
-
-    assert_success(&output);
-    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
-    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture-rewrite JSON");
-    assert_eq!(json["text"], "@@template:\n");
-    assert_eq!(json["changed"], true);
-    assert_eq!(json["cursor"], 12);
-    assert_eq!(json["rule"], "start_template");
-    assert_eq!(
-        json["edits"],
-        serde_json::json!([
-            { "range": { "start": 0, "end": 3 }, "replacement": "@@template:\n" }
-        ])
-    );
-    assert_eq!(json["summary"], "Started a @@template: draft");
-}
-
-#[test]
-fn capture_rewrite_json_starts_a_template_at_a_line_end() {
+fn capture_rewrite_json_leaves_a_third_at_alone() {
     let output = bob_command()
         .arg("capture-rewrite")
         .arg("-c")
@@ -132,24 +106,35 @@ fn capture_rewrite_json_starts_a_template_at_a_line_end() {
         .arg("--")
         .arg("Read {0} @@@")
         .output()
-        .expect("run capture-rewrite template start at line end");
+        .expect("run capture-rewrite with a third at");
 
     assert_success(&output);
     assert!(stderr(&output).is_empty(), "{}", format_output(&output));
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-rewrite JSON");
-    assert_eq!(json["text"], "@@template:\nRead {0}");
-    assert_eq!(json["changed"], true);
-    assert_eq!(json["cursor"], 20);
-    assert_eq!(json["rule"], "start_template");
-    assert_eq!(
-        json["edits"],
-        serde_json::json!([
-            { "range": { "start": 0, "end": 0 }, "replacement": "@@template:\n" },
-            { "range": { "start": 8, "end": 12 }, "replacement": "" },
-        ])
-    );
-    assert_eq!(json["summary"], "Started a @@template: draft");
+    assert_eq!(json["text"], "Read {0} @@@");
+    assert_eq!(json["changed"], false);
+    assert!(json["rule"].is_null(), "{json}");
+}
+
+#[test]
+fn capture_rewrite_json_leaves_template_drafts_untouched() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("18")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @file:{0}^ %t\n\nrow")
+        .output()
+        .expect("run capture-rewrite on a template draft");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["text"], "Do work @file:{0}^ %t\n\nrow");
+    assert_eq!(json["changed"], false);
 }
 
 #[test]

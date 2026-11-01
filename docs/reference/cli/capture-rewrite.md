@@ -11,9 +11,7 @@ Apply the capture grammar's automatic draft rewrites
 ```text title="bob capture-rewrite --help"
 Apply the capture grammar's editor typing assists to TEXT and report the resulting edits, cursor, and a human summary.
 
-The command is purely lexical and completely read-only: it never opens the vault, never reads the clipboard, never touches the filesystem, and takes no --bob-dir. It implements four rules.
-
-Template start (requires --cursor): typing a third '@' right after a standalone '@@@' token at the end of any physical line erases that token (plus any spaces or tabs before it) and inserts '@@template:' plus a line ending as the draft's new first line. Only the whitespace-delimited token ending at --cursor is examined, and it must be exactly '@@@' with the cursor at the end of its physical line. The draft's first line break is reused (`\r\n`, `\n`, or `\r`; `\n` when the draft has none). The caret lands where the erased '@@@' began, after the inserted header -- so a first line that is exactly '@@@' becomes the header with the caret on a fresh line. The result is idempotent (`start_template`). Without --cursor this typing gesture is skipped.
+The command is purely lexical and completely read-only: it never opens the vault, never reads the clipboard, never touches the filesystem, and takes no --bob-dir. It implements three rules.
 
 Block-ID separator toggle (requires --cursor): typing '^' immediately after a complete plain '@route:id' or '@route+id', ':' after '@route^id' or '@route+id', or '+' after '@route:id' or '@route^id' consumes that character and switches the separator. Typing ':' right after a sealed '@route^id@' gives '@route:id@', and '^' after '@route:id@' gives '@route^id@'. For example, '@file:id+' becomes '@file+id', '@file^id+' becomes '@file+id', '@file+id^' becomes '@file^id', '@file+id:' becomes '@file:id', '@file^id@:' becomes '@file:id@', and '@file:id@^' becomes '@file^id@' (`switch_block_id_separator`). The caret stays just past the unchanged ID (and seal, when sealed). Only the token ending at --cursor is examined; the key must sit against the ID (or seal) with no space, and it must end the token. Suffixes already inside the token ('#name', '=...'), '@@', '@!', standalone '^route:id', '&note:id', '!note:id', project-task ':id'/'^id', incomplete markers, same-separator repeats after a seal, '+' after a seal, and tokens the contextual parser does not select are left unchanged. Without --cursor this rule is skipped rather than searching the draft.
 
@@ -43,8 +41,6 @@ Options:
           Show help
 
 Examples:
-  bob capture-rewrite -c 3 -f json -- '@@@'
-  bob capture-rewrite -c 12 -f json -- 'Read {0} @@@'
   bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'
   bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'
   bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'

@@ -581,7 +581,7 @@ fn exact_block_ids_and_template_rows_keep_the_marker() {
         &vault,
         &day_file,
         &config,
-        &["@@template:\nTask {0} #fix\n\nparser\n"],
+        &["Task {0} #fix %t\n\nparser\n"],
         true,
     );
     assert_eq!(template["template"]["row_count"], 1, "{template}");

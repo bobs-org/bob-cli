@@ -54,7 +54,7 @@ pub(crate) fn shell_completion(
     cursor: usize,
 ) -> Result<Option<ShellCompletion>, String> {
     if crate::native::capture_language::template::analyze(raw_text)
-        .header
+        .directive
         .is_some()
     {
         return Ok(None);
@@ -150,9 +150,6 @@ pub(crate) fn shell_completion(
                             .map(|status| format!("project \u{00B7} {status}"))
                             .unwrap_or_else(|| "project".to_string()),
                     ),
-                    RouteCandidateKind::Template => {
-                        unreachable!("template is editor-only")
-                    }
                 };
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),

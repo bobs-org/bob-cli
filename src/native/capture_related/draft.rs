@@ -27,7 +27,7 @@ pub(super) fn draft_related(
     // Template definitions are capture-editor syntax, not task-creating
     // drafts. In particular, do this before resolving BOB_DIR or walking it.
     if capture_language::template::analyze(&request.draft)
-        .header
+        .directive
         .is_some()
     {
         return empty_result();

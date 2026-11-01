@@ -444,6 +444,15 @@ fn apply_directives(
 ) -> Result<(), CaptureItemParseError> {
     match super::directive::resolve(occurrences) {
         Ok(directives) => {
+            // Template drafts are framed before items are parsed, so a
+            // `%t` that reaches an item is not on the draft's first item
+            // (or came from a row value).
+            if directives.template {
+                return Err(CaptureItemParseError::coded(
+                    "template_directive_misplaced",
+                    super::directive::template_directive_misplaced_error(),
+                ));
+            }
             if parsed.clip.is_none() {
                 parsed.clip = directives.clip;
             }

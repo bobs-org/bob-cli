@@ -911,17 +911,17 @@ fn wikilink_task_coexists_with_trailing_template_markers() {
     fs::create_dir_all(&vault).expect("create vault");
     write_fixture(&vault);
 
-    // Trailing `@@@` on the same line: the `((` token must keep its parse
+    // Trailing `%t` on the same line: the `((` token must keep its parse
     // spans and completion contract, and the rewrite must leave byte ranges
     // intact.
-    let draft = "Follow up ((s @@@";
+    let draft = "Follow up ((s %t";
     let parsed = parse_json(draft);
     let spans = parsed["spans"].as_array().expect("spans array");
     assert!(
         spans
             .iter()
             .any(|span| span["kind"] == "wikilink_task_delimiter"),
-        "trailing @@@ hid (( spans: {parsed}"
+        "trailing %t hid (( spans: {parsed}"
     );
     let json = complete_json(&vault, 13, draft);
     assert_eq!(json["context"], "wikilink_task", "{draft:?}: {json}");
@@ -931,7 +931,7 @@ fn wikilink_task_coexists_with_trailing_template_markers() {
     let replacement = identified["replacement"].as_str().expect("link");
     let spliced = splice(draft, &json, replacement);
     assert!(
-        spliced.contains("@@@"),
+        spliced.contains("%t"),
         "splice lost trailing template marker: {spliced:?}"
     );
     let rewrite_output = bob_command()
@@ -950,10 +950,10 @@ fn wikilink_task_coexists_with_trailing_template_markers() {
             .expect("rewrite JSON");
     assert_eq!(rewrite["input"], draft);
 
-    // `@@template:` rows mask `((` tokens: inside a template row there are no
+    // `%t` template rows mask `((` tokens: inside a template row there are no
     // `wikilink_task_*` spans, so the completion gate stays empty. This is the
     // coexistence contract: template rows never leak `((` fields.
-    let template_draft = "@@template:\nTask {0}\n\nFollow up ((s";
+    let template_draft = "Task {0} %t\n\nFollow up ((s";
     let template_parsed = parse_json(template_draft);
     let template_spans = template_parsed["spans"]
         .as_array()

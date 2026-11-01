@@ -235,7 +235,7 @@ fn capture_templates_save_unknown_flag_leaves_the_shelf_unchanged() {
         .arg("json")
         .arg("--bogus")
         .arg("--")
-        .arg("@@template:\nApply to {0}\n\n")
+        .arg("Apply to {0} %t\n\n")
         .env("BOB_CAPTURE_TEMPLATES_FILE", &shelf)
         .output()
         .expect("run capture-templates save with unknown flag");

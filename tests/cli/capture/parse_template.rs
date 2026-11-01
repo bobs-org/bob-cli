@@ -18,18 +18,23 @@ fn parse_json(draft: &str) -> Value {
 
 #[test]
 fn template_parse_reports_typed_spans_items_and_summary() {
-    let draft = "@@template:\nApply to {0}! @route:{1}\n- **URL**: {2}\n\n\"Two Sigma\" role https://example.com/role\n\"Café 🚀\" job https://example.com/job\n";
+    let draft = "Apply to {0}! @route:{1} %t\n- **URL**: {2}\n\n\"Two Sigma\" role https://example.com/role\n\"Café 🚀\" job https://example.com/job\n";
     let value = parse_json(draft);
 
     assert_eq!(value["schema_version"], 1);
     assert_eq!(value["body"], "Apply to {0}!");
     assert_eq!(value["mode"], "pomodoro_task");
     assert!(value.get("global_destination").is_none());
-    assert_eq!(value["template"]["header"]["line"], 1);
+    assert_eq!(value["template"]["directive"]["line"], 1);
+    let token = draft.find("%t").unwrap();
+    assert_eq!(
+        value["template"]["directive"]["range"],
+        serde_json::json!({"start": token, "end": token + 2})
+    );
     assert_eq!(value["template"]["field_count"], 3);
     assert_eq!(value["template"]["rows"].as_array().unwrap().len(), 2);
     assert_eq!(value["template"]["rows"][0]["row"], 1);
-    assert_eq!(value["template"]["rows"][0]["line"], 5);
+    assert_eq!(value["template"]["rows"][0]["line"], 4);
     assert_eq!(
         value["template"]["rows"][0]["fields"][0]["value"],
         "Two Sigma"
@@ -60,7 +65,13 @@ fn template_parse_reports_typed_spans_items_and_summary() {
         .all(|entry| { entry["code"] != "invalid_global_destination" }));
 
     let spans = value["spans"].as_array().unwrap();
-    assert!(spans.iter().any(|span| span["kind"] == "template_header"));
+    assert!(spans.iter().any(|span| {
+        span["kind"] == "directive"
+            && span["directive"] == "template"
+            && span["start"] == token
+            && span["end"] == token + 2
+    }));
+    assert!(spans.iter().all(|span| span["kind"] != "template_header"));
     assert!(spans.iter().any(|span| {
         span["kind"] == "template_placeholder" && span["field"] == 1
     }));
@@ -83,22 +94,19 @@ fn template_parse_reports_typed_spans_items_and_summary() {
 
 #[test]
 fn placeholders_suppress_per_row_picker_needs_but_constant_pickers_remain() {
-    for draft in [
-        "@@template:\n!{0}\n\nanything\n",
-        "@@template:\n:{0}\n\nanything\n",
-    ] {
+    for draft in ["!{0} %t\n\nanything\n", ":{0} %t\n\nanything\n"] {
         let value = parse_json(draft);
         assert_eq!(value["needs"], serde_json::json!([]), "{draft}");
         assert_eq!(value["items"][0]["needs"], serde_json::json!([]));
     }
 
-    let value = parse_json("@@template:\nTask {0} &\n\nbody\n");
+    let value = parse_json("Task {0} & %t\n\nbody\n");
     assert!(value["needs"]
         .as_array()
         .unwrap()
         .contains(&serde_json::json!("task_dependency")));
 
-    let value = parse_json("@@template:\nTask @job:{0}\n\nitem\n");
+    let value = parse_json("Task @job:{0} %t\n\nitem\n");
     assert!(!value["needs"]
         .as_array()
         .unwrap()
@@ -107,7 +115,7 @@ fn placeholders_suppress_per_row_picker_needs_but_constant_pickers_remain() {
 
 #[test]
 fn template_row_need_and_arity_diagnostic_use_typed_ranges() {
-    for draft in ["@@template:\n", "@@template:\nTask {0}\n\n"] {
+    for draft in ["%t\n", "Task {0} %t\n\n"] {
         let value = parse_json(draft);
         assert!(value["needs"]
             .as_array()
@@ -115,7 +123,7 @@ fn template_row_need_and_arity_diagnostic_use_typed_ranges() {
             .contains(&serde_json::json!("template_row")));
     }
 
-    let draft = "@@template:\nTask {0} {1}\n\nonly-one\n";
+    let draft = "Task {0} {1} %t\n\nonly-one\n";
     let value = parse_json(draft);
     let diagnostic = value["diagnostics"]
         .as_array()
@@ -126,7 +134,7 @@ fn template_row_need_and_arity_diagnostic_use_typed_ranges() {
     let start = draft.find("only-one").unwrap();
     assert_eq!(diagnostic["range"], serde_json::json!([start, start + 8]));
 
-    let incomplete = parse_json("@@template:\n{0}\n\n:dee\n");
+    let incomplete = parse_json("{0} %t\n\n:dee\n");
     let row = &incomplete["template"]["rows"][0];
     assert_eq!(row["mode"], "incomplete");
     assert!(incomplete["diagnostics"]
@@ -138,7 +146,7 @@ fn template_row_need_and_arity_diagnostic_use_typed_ranges() {
 
 #[test]
 fn expanded_row_diagnostics_map_bad_ids_to_fields_and_dedupe_literals() {
-    let draft = "@@template:\nDo {0} @jobs:{1}\n\nbuild bad.id\n";
+    let draft = "Do {0} @jobs:{1} %t\n\nbuild bad.id\n";
     let value = parse_json(draft);
     let field = value["template"]["rows"][0]["fields"][1]["range"].clone();
     let invalid = value["diagnostics"]
@@ -150,8 +158,7 @@ fn expanded_row_diagnostics_map_bad_ids_to_fields_and_dedupe_literals() {
     assert_eq!(invalid["range"][0], field["start"]);
     assert_eq!(invalid["range"][1], field["end"]);
 
-    let repeated =
-        parse_json("@@template:\nDo {0} @dev+bad.id\n\none\ntwo\nthree\n");
+    let repeated = parse_json("Do {0} @dev+bad.id %t\n\none\ntwo\nthree\n");
     let count = repeated["diagnostics"]
         .as_array()
         .unwrap()
@@ -162,12 +169,16 @@ fn expanded_row_diagnostics_map_bad_ids_to_fields_and_dedupe_literals() {
 }
 
 #[test]
-fn headerless_placeholder_suggests_template_without_changing_capture_items() {
+fn placeholder_without_the_directive_suggests_template_without_changing_capture_items(
+) {
     let draft = "Apply {0}\n\nNext item";
     let value = parse_json(draft);
     assert_eq!(value["items"].as_array().unwrap().len(), 2);
     assert_eq!(value["diagnostics"][0]["severity"], "warning");
-    assert_eq!(value["diagnostics"][0]["code"], "template_header_missing");
+    assert_eq!(
+        value["diagnostics"][0]["code"],
+        "template_directive_missing"
+    );
 
     let ordinary = parse_json("Call bank @Cash+");
     assert!(ordinary.get("template").is_none());
@@ -182,7 +193,7 @@ fn headerless_placeholder_suggests_template_without_changing_capture_items() {
 
 #[test]
 fn template_placeholders_split_capture_spans_and_refusals_are_reported() {
-    let draft = "@@template:\nCall @rou{0}te+\n\n";
+    let draft = "Call @rou{0}te+ %t\n\n";
     let value = parse_json(draft);
     let placeholder = draft.find("{0}").unwrap();
     let route_spans = value["spans"]
@@ -196,26 +207,26 @@ fn template_placeholders_split_capture_spans_and_refusals_are_reported() {
         .iter()
         .any(|span| span["start"] == placeholder + 3));
 
-    let clipboard = parse_json("@@template:\nDo {0} %c\n\nvalue\n");
+    let clipboard = parse_json("Do {0} %c %t\n\nvalue\n");
     assert!(clipboard["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .any(|entry| entry["code"] == "template_clipboard"));
 
-    let session = parse_json("@@template:\n{0}\n\n+2\n");
+    let session = parse_json("{0} %t\n\n+2\n");
     assert!(session["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
         .any(|entry| entry["code"] == "template_session_operator"));
 
-    let misplaced = parse_json("Task\n@@template:\n\nvalue\n");
+    let misplaced = parse_json("Task\n\nvalue %t\n");
     assert!(misplaced["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| entry["code"] == "template_header_misplaced"));
+        .any(|entry| entry["code"] == "template_directive_misplaced"));
     assert!(!misplaced["diagnostics"]
         .as_array()
         .unwrap()
@@ -226,10 +237,10 @@ fn template_placeholders_split_capture_spans_and_refusals_are_reported() {
 #[test]
 fn template_session_suffixes_are_refused_with_typed_ranges() {
     for draft in [
-        "@@template:\nTask {0} @job:{1}=3\n\na b\n",
-        "@@template:\n^job:{0}=x\n\na\n",
-        "@@template:\n^job:{0}=3\n\na\n",
-        "@@template:\n{0}\n\n^job:a=x\n",
+        "Task {0} @job:{1}=3 %t\n\na b\n",
+        "^job:{0}=x %t\n\na\n",
+        "^job:{0}=3 %t\n\na\n",
+        "{0} %t\n\n^job:a=x\n",
     ] {
         let value = parse_json(draft);
         let session = value["diagnostics"]
@@ -253,7 +264,7 @@ fn template_session_suffixes_are_refused_with_typed_ranges() {
 
 #[test]
 fn template_clipboard_follows_expanded_instances() {
-    let listen = parse_json("@@template:\n{0} %\n\nhttps://example.com/a\n");
+    let listen = parse_json("{0} % %t\n\nhttps://example.com/a\n");
     assert!(
         !listen["diagnostics"]
             .as_array()
@@ -264,7 +275,7 @@ fn template_clipboard_follows_expanded_instances() {
         listen["diagnostics"]
     );
 
-    let literal = "@@template:\n{0} task %c\n\nvalue1\nvalue2\n";
+    let literal = "{0} task %c %t\n\nvalue1\nvalue2\n";
     let value = parse_json(literal);
     let clipboard: Vec<_> = value["diagnostics"]
         .as_array()
@@ -279,7 +290,7 @@ fn template_clipboard_follows_expanded_instances() {
         serde_json::json!([percent, percent + 2])
     );
 
-    let row_clip = parse_json("@@template:\nTask {0}\n\na %c\n");
+    let row_clip = parse_json("Task {0} %t\n\na %c\n");
     assert!(
         row_clip["diagnostics"]
             .as_array()
@@ -295,7 +306,7 @@ fn human_output_adds_template_summary() {
     let output = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("@@template:\nTask {0} {1}\n\nA B\n")
+        .arg("Task {0} {1} %t\n\nA B\n")
         .output()
         .expect("run human capture-parse");
     assert_success(&output);
@@ -304,14 +315,14 @@ fn human_output_adds_template_summary() {
 
 #[test]
 fn template_parse_one_line_values_share_line_with_per_value_ranges() {
-    let draft = "@@template:\nTask {0}\n\nbar baz bam\n";
+    let draft = "Task {0} %t\n\nbar baz bam\n";
     let value = parse_json(draft);
 
     let rows = value["template"]["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 3);
     for (index, expected) in ["bar", "baz", "bam"].iter().enumerate() {
         assert_eq!(rows[index]["row"], index + 1);
-        assert_eq!(rows[index]["line"], 4);
+        assert_eq!(rows[index]["line"], 3);
         assert_eq!(rows[index]["fields"][0]["value"], **expected);
         let start = draft.find(expected).unwrap();
         // `find` returns the first occurrence; `bar`/`baz`/`bam` also appear
@@ -327,8 +338,8 @@ fn template_parse_one_line_values_share_line_with_per_value_ranges() {
     let mut ranges = Vec::new();
     for (index, item) in items.iter().skip(1).enumerate() {
         assert_eq!(item["mode"], "template_row");
-        assert_eq!(item["line_start"], 4);
-        assert_eq!(item["line_end"], 4);
+        assert_eq!(item["line_start"], 3);
+        assert_eq!(item["line_end"], 3);
         assert_eq!(item["template_row"]["row"], index + 1);
         let start = item["range"]["start"].as_u64().unwrap();
         let end = item["range"]["end"].as_u64().unwrap();
@@ -347,7 +358,7 @@ fn template_parse_one_line_values_share_line_with_per_value_ranges() {
         .collect();
     assert_eq!(field_spans.len(), 3);
 
-    let quoted_draft = "@@template:\nTask {0}\n\nbar \"baz bam\"\n";
+    let quoted_draft = "Task {0} %t\n\nbar \"baz bam\"\n";
     let quoted = parse_json(quoted_draft);
     let quoted_rows = quoted["template"]["rows"].as_array().unwrap();
     assert_eq!(quoted_rows.len(), 2);

@@ -762,7 +762,7 @@ fn capture_parse_json_reports_task_wikilink_spans_without_stealing_capture_spans
         "x ((foo",
         "=3 ((foo",
         "x\n- Follow up ((s",
-        "@@template:\nTask {0}\n\n((x\n",
+        "Task {0} %t\n\n((x\n",
     ] {
         let parsed = parse(draft);
         assert!(

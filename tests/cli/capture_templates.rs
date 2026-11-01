@@ -2,8 +2,7 @@ use crate::support::*;
 use serde_json::Value;
 use std::{fs, process::Command};
 
-const DEFINITION: &str =
-    "@@template:\nApply to {0}! @job^apply-{1}\n- **URL**: {2}\n\n";
+const DEFINITION: &str = "Apply to {0}! @job^apply-{1} %t\n- **URL**: {2}\n\n";
 
 fn command(file: &std::path::Path) -> Command {
     let mut command = bob_command();
@@ -48,7 +47,7 @@ fn list_save_show_and_delete_follow_the_template_protocol() {
     );
     assert_eq!(
         saved_json["template"]["draft"],
-        "@@template:\nApply to {0}! @job^apply-{1}\n- **URL**: {2}\n\n"
+        "Apply to {0}! @job^apply-{1} %t\n- **URL**: {2}\n\n"
     );
     assert_eq!(
         saved_json["template"]["cursor"],
@@ -74,11 +73,11 @@ fn list_save_show_and_delete_follow_the_template_protocol() {
     assert_success(&shown);
     assert_eq!(
         stdout(&shown),
-        "@@template:\nApply to {0}! @job^apply-{1}\n- **URL**: {2}\n\n"
+        "Apply to {0}! @job^apply-{1} %t\n- **URL**: {2}\n\n"
     );
 
     let edited_definition =
-        "@@template:\nApply for {0}! @job^apply-{1}\n\ninvalid row arity is ignored\n";
+        "Apply for {0}! @job^apply-{1} %t\n\ninvalid row arity is ignored\n";
     let replaced = run_with_stdin(
         command(&file).args(["save", "--template-origin", id, "-f", "json"]),
         edited_definition,
@@ -110,7 +109,7 @@ fn definition_errors_and_newer_schema_have_stable_recovery_paths() {
     let file = temp.path().join("templates.json");
     let invalid = run_with_stdin(
         command(&file).args(["save", "-f", "json"]),
-        "@@template:\nA task\n\n",
+        "A task %t\n\n",
     );
     assert_eq!(invalid.status.code(), Some(2));
     assert_eq!(json(&invalid)["code"], "template_missing_placeholder");
@@ -131,7 +130,7 @@ fn definition_errors_and_newer_schema_have_stable_recovery_paths() {
     let save = command(&file)
         .arg("save")
         .args(["-f", "json"])
-        .arg("@@template:\nTask {0}\n\n")
+        .arg("Task {0} %t\n\n")
         .output()
         .expect("attempt newer-schema save");
     assert_eq!(save.status.code(), Some(1));
@@ -198,7 +197,7 @@ fn newer_schema_with_changed_field_type_stays_readable_and_refuses_writes() {
     let save = command(&file)
         .arg("save")
         .args(["-f", "json"])
-        .arg("@@template:\nTask {0}\n\n")
+        .arg("Task {0} %t\n\n")
         .output()
         .expect("save against newer schema");
     assert_eq!(save.status.code(), Some(1));
@@ -292,7 +291,7 @@ fn show_by_index_prints_the_insertable_draft() {
     assert_success(&shown);
     assert_eq!(
         stdout(&shown),
-        "@@template:\nApply to {0}! @job^apply-{1}\n- **URL**: {2}\n\n"
+        "Apply to {0}! @job^apply-{1} %t\n- **URL**: {2}\n\n"
     );
 }
 

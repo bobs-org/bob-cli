@@ -409,7 +409,7 @@ fn clip_directives_claim_edges_and_leave_prose_alone() {
     let error = parse_capture_text("body %", None).expect_err("incomplete");
     assert!(error.message.contains("`%` is incomplete"), "{error:?}");
 
-    for raw in ["body %log", "body %3", "body %C", "body %t"] {
+    for raw in ["body %log", "body %3", "body %C", "body %x"] {
         let error = parse_capture_text(raw, None).expect_err("unknown");
         assert!(
             error.message.contains("is not a capture directive"),

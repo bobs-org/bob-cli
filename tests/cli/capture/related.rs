@@ -238,8 +238,7 @@ fn draft_gates_short_titles_templates_and_noncreating_items_before_vault_io() {
     assert_eq!(noncreating["warnings"], serde_json::json!([]));
     check_golden("noncreating", noncreating, &missing);
 
-    let template =
-        related_json(&missing, "@@template:\n- [ ] #task {title}", &[]);
+    let template = related_json(&missing, "- [ ] #task {title} %t", &[]);
     assert_eq!(template["items"], serde_json::json!([]));
     assert_eq!(template["warnings"], serde_json::json!([]));
     check_golden("template", template, &missing);

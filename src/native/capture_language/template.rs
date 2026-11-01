@@ -1,4 +1,4 @@
-//! Pure framing, validation, and expansion for `@@template:` capture drafts.
+//! Pure framing, validation, and expansion for `%t` capture-template drafts.
 //!
 //! This module only reads the supplied text. It deliberately knows nothing
 //! about the vault or capture planning so `bob capture -E` can use it as a
@@ -12,7 +12,6 @@ use std::ops::Range;
 
 const MAX_ROWS: usize = 1_000;
 const MAX_EXPANDED_BYTES: usize = 1024 * 1024;
-const HEADER: &str = "@@template:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TemplateIssue {
@@ -68,18 +67,38 @@ pub(crate) struct TemplateBlock {
     pub(crate) range: Range<usize>,
     pub(crate) line_start: usize,
     pub(crate) line_end: usize,
+    /// The `%t` token plus one adjacent separator space. Framing removes
+    /// these bytes from the definition handed to expansion, so the engine
+    /// sees the item exactly as it would without the directive.
+    pub(crate) cut: Range<usize>,
     lines: Vec<(usize, Range<usize>)>,
 }
 
 impl TemplateBlock {
-    pub(crate) fn line_ranges(&self) -> &[(usize, Range<usize>)] {
-        &self.lines
+    /// The definition's physical lines with the `%t` token and its one
+    /// adjacent separator space removed. Nothing else is touched.
+    pub(crate) fn definition_lines(&self, raw: &str) -> Vec<String> {
+        self.lines
+            .iter()
+            .filter_map(|(_, range)| {
+                let line = raw.get(range.clone())?;
+                if self.cut.start < range.start || self.cut.end > range.end {
+                    return Some(line.to_string());
+                }
+                Some(format!(
+                    "{}{}",
+                    &line[..self.cut.start - range.start],
+                    &line[self.cut.end - range.start..]
+                ))
+            })
+            .collect()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TemplateAnalysis {
-    pub(crate) header: Option<(Range<usize>, usize)>,
+    /// The `%t` token's byte range and its 1-based line number.
+    pub(crate) directive: Option<(Range<usize>, usize)>,
     pub(crate) block: Option<TemplateBlock>,
     pub(crate) placeholders: Vec<TemplatePlaceholder>,
     pub(crate) escapes: Vec<Range<usize>>,
@@ -100,7 +119,7 @@ pub(crate) fn definition_issue(raw: &str) -> Option<TemplateIssue> {
         .issues
         .iter()
         .filter(|issue| match issue.code {
-            "template_header_misplaced" => true,
+            "template_directive_misplaced" | "duplicate_capture_marker" => true,
             "template_needs_separator"
             | "template_invalid_placeholder"
             | "template_placeholder_gap" => block.is_some_and(|block| {
@@ -170,18 +189,16 @@ pub(crate) struct TemplateExpansion {
     pub(crate) summary: TemplateSummary,
 }
 
-/// Return a same-length copy suitable for the editor parser. Header and row
-/// lines are hidden, while placeholders and brace escapes retain their byte
-/// offsets as harmless ASCII text.
+/// Return a same-length copy suitable for the editor parser. The `%t` token
+/// and row lines are hidden, while placeholders and brace escapes retain
+/// their byte offsets as harmless ASCII text.
 pub(crate) fn masked(raw: &str) -> String {
     let analysis = analyze(raw);
     let lines = split_physical_lines(raw);
     let mut bytes = raw.as_bytes().to_vec();
 
-    if let Some((_, line_number)) = analysis.header.as_ref()
-        && let Some(line) = lines.get(line_number.saturating_sub(1))
-    {
-        bytes[line.start..line.end].fill(b' ');
+    if let Some((range, _)) = analysis.directive.as_ref() {
+        bytes[range.clone()].fill(b' ');
     }
     for row in &analysis.rows {
         if let Some(line) = lines.get(row.line.saturating_sub(1)) {
@@ -273,77 +290,79 @@ pub(crate) fn expand_rows_for_editor(
         .collect()
 }
 
-/// Analyze the framing and language of `raw`. A missing header with no
-/// misplaced header is represented by an analysis with no `header` and no
-/// issues; a misplaced `@@template:` still produces an issue.
+/// Analyze the framing and language of `raw`. The draft's first item (the
+/// first run of nonblank lines) is the template definition when a `%t`
+/// directive sits at an edge of any of its lines. A draft without that
+/// directive is represented by an analysis with no `directive`; a `%t` in
+/// any later item still produces a misplaced-directive issue.
 pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
     let lines = split_physical_lines(raw);
-    let first_nonblank =
-        lines.iter().position(|line| !line.text.trim().is_empty());
-    let header_index = first_nonblank.filter(|index| {
-        trim_ascii_space_tab(lines[*index].text).eq_ignore_ascii_case(HEADER)
-    });
     let mut issues = Vec::new();
+    let empty = |issues: Vec<TemplateIssue>| {
+        let mut issues = issues;
+        sort_issues(&mut issues);
+        TemplateAnalysis {
+            directive: None,
+            block: None,
+            placeholders: Vec::new(),
+            escapes: Vec::new(),
+            field_count: 0,
+            rows: Vec::new(),
+            issues,
+        }
+    };
 
-    for (index, line) in lines.iter().enumerate() {
-        for token in tokenize_with_spans(line.text) {
-            if token.text.to_ascii_lowercase().starts_with(HEADER)
-                && Some(index) != header_index
-            {
-                let range =
-                    (line.start + token.start)..(line.start + token.end);
+    let Some(block_start_index) =
+        lines.iter().position(|line| !line.text.trim().is_empty())
+    else {
+        return empty(issues);
+    };
+    let separator_index = (block_start_index..lines.len())
+        .find(|index| lines[*index].text.trim().is_empty());
+    let block_end_index = separator_index.unwrap_or(lines.len());
+
+    let tokens = super::directive::template_tokens(
+        &lines[block_start_index..block_end_index],
+    );
+    let Some(directive_range) = tokens.first().cloned() else {
+        // No definition: every edge `%t` in a later item is misplaced.
+        for (offset, line) in lines[block_end_index..].iter().enumerate() {
+            let after_blank_or_start = offset == 0
+                || lines[block_end_index + offset - 1].text.trim().is_empty();
+            if line.text.trim().is_empty() {
+                continue;
+            }
+            for range in super::directive::template_tokens_in_line(
+                line,
+                !after_blank_or_start,
+            ) {
                 issues.push(issue(
-                    "template_header_misplaced",
-                    "write `@@template:` alone on the draft's first line",
+                    "template_directive_misplaced",
+                    super::directive::template_directive_misplaced_error(),
                     range,
                 ));
             }
         }
+        return empty(issues);
+    };
+    for range in tokens.iter().skip(1) {
+        issues.push(issue(
+            "duplicate_capture_marker",
+            super::line::duplicate_marker_error("directive (%t)"),
+            range.clone(),
+        ));
     }
 
-    let Some(header_index) = header_index else {
-        sort_issues(&mut issues);
-        return TemplateAnalysis {
-            header: None,
-            block: None,
-            placeholders: Vec::new(),
-            escapes: Vec::new(),
-            field_count: 0,
-            rows: Vec::new(),
-            issues,
-        };
-    };
+    let directive_line = lines
+        .iter()
+        .position(|line| {
+            line.start <= directive_range.start
+                && directive_range.start <= line.end
+        })
+        .map_or(block_start_index + 1, |index| index + 1);
+    let directive = Some((directive_range.clone(), directive_line));
+    let cut = directive_cut(raw, &directive_range);
 
-    let header_line = lines[header_index];
-    let header_text = trim_ascii_space_tab(header_line.text);
-    let header_start = header_line.start
-        + (header_text.as_ptr() as usize - header_line.text.as_ptr() as usize);
-    let header_range = header_start..(header_start + header_text.len());
-    let header = Some((header_range.clone(), header_index + 1));
-
-    let Some(block_start_index) = (header_index + 1..lines.len())
-        .find(|index| !lines[*index].text.trim().is_empty())
-    else {
-        issues.push(issue(
-            "template_missing_rows",
-            "write the template on the next line, then a blank line and one row per capture",
-            header_range,
-        ));
-        sort_issues(&mut issues);
-        return TemplateAnalysis {
-            header,
-            block: None,
-            placeholders: Vec::new(),
-            escapes: Vec::new(),
-            field_count: 0,
-            rows: Vec::new(),
-            issues,
-        };
-    };
-
-    let separator_index = (block_start_index..lines.len())
-        .find(|index| lines[*index].text.trim().is_empty());
-    let block_end_index = separator_index.unwrap_or(lines.len());
     let block_lines = (block_start_index..block_end_index)
         .map(|index| (index + 1, lines[index].start..lines[index].end))
         .collect::<Vec<_>>();
@@ -351,6 +370,7 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
         range: lines[block_start_index].start..lines[block_end_index - 1].end,
         line_start: block_start_index + 1,
         line_end: block_end_index,
+        cut,
         lines: block_lines,
     };
 
@@ -605,19 +625,23 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
             &placeholders,
             &escaped_braces,
             &rows,
-            header_index + 1,
+            directive_line,
             field_count,
         ) {
             Ok(expansion) => {
                 for instance in &expansion.instances {
+                    let instance_lines = split_physical_lines(&instance.text);
+                    if !super::directive::template_tokens(&instance_lines)
+                        .is_empty()
+                    {
+                        issues.push(issue(
+                            "template_directive_misplaced",
+                            format!("template row {} (line {}): a row value can't inject `%t`; templates don't nest", instance.row, instance.line),
+                            instance.row_range.clone(),
+                        ));
+                    }
                     for token in tokenize_with_spans(&instance.text) {
-                        if token.text.to_ascii_lowercase().starts_with(HEADER) {
-                            issues.push(issue(
-                                "template_header_misplaced",
-                                "write `@@template:` alone on the draft's first line",
-                                instance.row_range.clone(),
-                            ));
-                        } else if token.text.starts_with("@@") {
+                        if token.text.starts_with("@@") {
                             issues.push(issue(
                                 "template_global_declaration",
                                 format!("template row {} (line {}): a template draft can't declare `@@` destinations; put the destination in the template line", instance.row, instance.line),
@@ -643,7 +667,7 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
 
     sort_issues(&mut issues);
     TemplateAnalysis {
-        header,
+        directive,
         block: Some(block),
         placeholders,
         escapes: escaped_braces,
@@ -708,7 +732,7 @@ pub(crate) fn expand(
     if let Some(issue) = analysis.issues.first() {
         return Err(issue.clone());
     }
-    let Some((_, header_line)) = analysis.header else {
+    let Some((_, directive_line)) = analysis.directive else {
         return Ok(None);
     };
     let Some(block) = analysis.block else {
@@ -721,7 +745,7 @@ pub(crate) fn expand(
             &analysis.placeholders,
             &analysis.escapes,
             &analysis.rows,
-            header_line,
+            directive_line,
             analysis.field_count,
         )
         .expect("analyzed template expansion must fit the size limit"),
@@ -734,7 +758,7 @@ fn build_expansion(
     placeholders: &[TemplatePlaceholder],
     escapes: &[Range<usize>],
     rows: &[TemplateRow],
-    header_line: usize,
+    directive_line: usize,
     field_count: usize,
 ) -> Result<TemplateExpansion, ()> {
     let mut text = String::new();
@@ -758,7 +782,7 @@ fn build_expansion(
         text,
         instances,
         summary: TemplateSummary {
-            line: header_line,
+            line: directive_line,
             field_count,
             row_count: rows.len(),
         },
@@ -791,6 +815,7 @@ fn build_instance(
             &mut text,
             &raw[range.clone()],
             range.start,
+            &block.cut,
             placeholders,
             escapes,
             &row.fields,
@@ -808,10 +833,12 @@ fn build_instance(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_expanded_line(
     output: &mut String,
     line: &str,
     base: usize,
+    cut: &Range<usize>,
     placeholders: &[TemplatePlaceholder],
     escapes: &[Range<usize>],
     fields: &[TemplateField],
@@ -824,6 +851,10 @@ fn append_expanded_line(
         escapes.partition_point(|escape| escape.start < base);
     while cursor < line.len() {
         let absolute = base + cursor;
+        if absolute == cut.start && cut.start < cut.end {
+            cursor = cut.end - base;
+            continue;
+        }
         if let Some(placeholder) = placeholders.get(placeholder_index)
             && placeholder.range.start == absolute
         {
@@ -1070,9 +1101,7 @@ fn check_global_tokens(
     issues: &mut Vec<TemplateIssue>,
 ) {
     for token in tokenize_with_spans(line.text) {
-        if token.text.starts_with("@@")
-            && !token.text.to_ascii_lowercase().starts_with(HEADER)
-        {
+        if token.text.starts_with("@@") {
             issues.push(issue(
                 "template_global_declaration",
                 format!("template line {line_number}: a template draft can't declare `@@` destinations; put the destination in the template line"),
@@ -1089,9 +1118,7 @@ fn check_global_tokens_in_row(
     issues: &mut Vec<TemplateIssue>,
 ) {
     for token in tokenize_with_spans(line.text) {
-        if token.text.starts_with("@@")
-            && !token.text.to_ascii_lowercase().starts_with(HEADER)
-        {
+        if token.text.starts_with("@@") {
             issues.push(issue(
                 "template_global_declaration",
                 format!("template row {row_number} (line {line_number}): a template draft can't declare `@@` destinations; put the destination in the template line"),
@@ -1110,9 +1137,7 @@ fn check_global_tokens_in_single_line(
 ) {
     let fallback = line_rows.first().map(|row| row.row).unwrap_or(base_row);
     for token in tokenize_with_spans(line.text) {
-        if token.text.starts_with("@@")
-            && !token.text.to_ascii_lowercase().starts_with(HEADER)
-        {
+        if token.text.starts_with("@@") {
             let token_start = line.start + token.start;
             let row_number = line_rows
                 .iter()
@@ -1163,6 +1188,19 @@ fn field_range(field_count: usize) -> String {
         1 => "{0}".to_string(),
         count => format!("{{0}}–{{{}}}", count - 1),
     }
+}
+
+/// The `%t` token plus one adjacent separator space: the space before it
+/// when present, otherwise the space after it.
+fn directive_cut(raw: &str, token: &Range<usize>) -> Range<usize> {
+    let bytes = raw.as_bytes();
+    if token.start > 0 && matches!(bytes[token.start - 1], b' ' | b'\t') {
+        return (token.start - 1)..token.end;
+    }
+    if matches!(bytes.get(token.end), Some(b' ' | b'\t')) {
+        return token.start..(token.end + 1);
+    }
+    token.clone()
 }
 
 fn looks_like_bullet(line: &str) -> bool {

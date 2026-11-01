@@ -18,7 +18,9 @@
   location: /reference/capture-syntax/#cli-route
 - query: "@@route"
   location: /reference/capture-syntax/#global-route
-- query: "@@template:"
+- query: "%t"
+  location: /reference/capture-syntax/#template
+- query: "template directive %t"
   location: /reference/capture-syntax/#template
 - query: "@route"
   location: /reference/capture-syntax/#at-route

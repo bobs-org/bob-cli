@@ -51,7 +51,6 @@ pub(super) enum RouteCandidateKind {
     Inbox,
     Area,
     Project,
-    Template,
 }
 
 impl From<CaptureTargetKind> for RouteCandidateKind {

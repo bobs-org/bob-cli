@@ -525,8 +525,7 @@ fn open_notes_template_draft() {
     let (_temp, vault, day) = open_vault("bob-cli-open-notes-template");
     fs::create_dir_all(&vault).expect("create vault");
     let draft = concat!(
-        "@@template:\n",
-        "Apply to {0}! @job^apply-{1}\n",
+        "Apply to {0}! @job^apply-{1} %t\n",
         "- **URL**: {2}\n",
         "\n",
         "Foobar foo https://foobar.example/job\n",
