@@ -20,4 +20,4 @@ page captions, ahead of Other highlights and Removed highlights. `bob ref show` 
 the Mac Refs panel group the same way. Membership is re-derived from the sidecar on
 every scan and nothing new is stored. Tag edits never change `^h-` IDs, and a PDF with
 no declaration renders unchanged. Not a Markdown `##` heading or a `bob capture`
-target section. See `docs/highlights-ref-sync.md`.
+[[task-drawer]]. See `docs/highlights-ref-sync.md`.

@@ -17,21 +17,21 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture_clip, capture_language,
+    capture_clip, capture_drawers, capture_language,
     capture_language::{
         is_block_id, unused_project_note_offer_pomodoro_error,
         unused_project_note_pomodoro_error, AuthoredSubBullet, CaptureKind,
-        CaptureParseOptions, ClipRequest, ParsedCaptureItem, ParsedCaptureText,
-        ParsedDependencyTarget, ParsedDependencyTargetKind, ParsedRelation,
-        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroShiftSpec,
-        PomodoroStartSpec, ProjectNoteForm, RelationDirection, SubBulletTarget,
-        TaskSectionSelector, TaskToggleIntent,
+        CaptureParseOptions, ClipRequest, DrawerSelector, ParsedCaptureItem,
+        ParsedCaptureText, ParsedDependencyTarget, ParsedDependencyTargetKind,
+        ParsedRelation, PomodoroAdjustSpec, PomodoroCloseSpec,
+        PomodoroShiftSpec, PomodoroStartSpec, ProjectNoteForm,
+        RelationDirection, SubBulletTarget, TaskToggleIntent,
         POMODORO_CLOSE_INTERNAL_BULLETS_ERROR, POMODORO_START_FORCED_ERROR,
     },
     capture_pomodoro_close, capture_pomodoro_start, capture_pomodoros,
-    capture_project_note, capture_schedule_log, capture_task_sections,
-    capture_task_toggle, capture_templates, collect_done, config,
-    env as bob_env, markdown, note_tasks,
+    capture_project_note, capture_schedule_log, capture_task_toggle,
+    capture_templates, collect_done, config, env as bob_env, markdown,
+    note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     plan_budget, pomodoro,
     projects::{
@@ -156,7 +156,7 @@ pub(crate) use sub_bullet::{
     first_direct_managed_log_start, leading_spaces_or_tabs_len,
     leading_whitespace, list_item_body, list_marker_len,
     nearest_shallower_list_item_parent, parse_managed_task_log_marker,
-    ManagedTaskLogKind,
+    ManagedTaskLogKind, MANAGED_TASK_LOG_LABELS,
 };
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
@@ -355,7 +355,7 @@ fn save_template_shelf(
     if request.forced_route.is_some()
         || request.forced_section.is_some()
         || request.forced_sub_bullet_target.is_some()
-        || request.forced_task_section.is_some()
+        || request.forced_drawer.is_some()
         || !request.forced_destination_flags.is_empty()
     {
         return;

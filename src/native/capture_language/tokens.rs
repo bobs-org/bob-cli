@@ -88,7 +88,7 @@ pub(super) fn parse_sub_bullet_route_token(
     if block_id.is_empty() {
         return Err(if section.is_some() {
             format!(
-                "sub-bullet capture requires a block ID before the task section: @<route>+<block-id>#<section> (run 'bob capture-tasks -r {}' to list task block IDs)",
+                "sub-bullet capture requires a block ID before the drawer: @<route>+<block-id>#<drawer> (run 'bob capture-tasks -r {}' to list task block IDs)",
                 route.to_ascii_lowercase()
             )
         } else {
@@ -110,23 +110,74 @@ pub(super) fn parse_sub_bullet_route_token(
     let section = match section {
         None => None,
         Some("") => {
-            return Err(format!(
-                "sub-bullet capture requires a task section: @<route>+<block-id>#<section> (run 'bob capture-task-sections -r {} -i {}' to list task sections)",
-                route.to_ascii_lowercase(),
-                block_id
-            ));
+            // Empty `#` is an incomplete drawer; the editor opens the
+            // drawer menu and execution needs `drawer`.
+            Some(DrawerSelector {
+                text: String::new(),
+                exact: false,
+            })
         }
-        // The strict task-section charset (no `+`) is enforced later, once
-        // the finished item shows whether this stays a sub-bullet capture.
-        // Attached task-type suffixes are masked by the shared item scanner
-        // before this token parser runs.
-        Some(selector) if !is_pomodoro_selector_component(selector) => {
-            return Err(SUB_BULLET_SECTION_ERROR.to_string());
+        Some(selector)
+            if selector.ends_with('!')
+                && !selector.starts_with('"')
+                && !selector.starts_with('“') =>
+        {
+            return Err(
+                "`!` takes no drawer: write `@route+id!` without a `#drawer`"
+                    .to_string(),
+            );
         }
-        Some(selector) => Some(TaskSectionSelector {
-            text: selector.to_string(),
-            exact: false,
-        }),
+        Some(selector) if opens_exact_name(selector) => {
+            let Some(lex) = lex_exact_name_after_hash(selector, selector.len())
+            else {
+                return Err(
+                    "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                        .to_string(),
+                );
+            };
+            if !lex.complete {
+                // Partial quoted literal: incomplete drawer query.
+                Some(DrawerSelector {
+                    text: lex.decoded.clone(),
+                    exact: true,
+                })
+            } else {
+                let canonical =
+                    crate::native::capture_drawers::normalize_drawer_literal(
+                        &lex.decoded,
+                    );
+                let Some(canonical) = canonical else {
+                    return Err(
+                        "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                            .to_string(),
+                    );
+                };
+                // Quoted literals must match exactly; trailing bytes
+                // after the closing quote are invalid.
+                if selector.len() != lex.literal_len {
+                    return Err(
+                        "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                            .to_string(),
+                    );
+                }
+                Some(DrawerSelector {
+                    text: canonical,
+                    exact: true,
+                })
+            }
+        }
+        Some(selector) => {
+            if !crate::native::capture_drawers::is_drawer_slug(selector) {
+                return Err(
+                    "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)"
+                        .to_string(),
+                );
+            }
+            Some(DrawerSelector {
+                text: selector.to_string(),
+                exact: false,
+            })
+        }
     };
 
     if explicit_toggle {
@@ -191,7 +242,9 @@ pub(super) fn explicit_toggle_unsupported_message(
         return Some(EXPLICIT_TOGGLE_REPEATED_ERROR);
     }
     if after_at.contains('#') {
-        return Some(EXPLICIT_TOGGLE_NAMED_ERROR);
+        return Some(
+            "`!` takes no drawer: write `@route+id!` without a `#drawer`",
+        );
     }
     Some(EXPLICIT_TOGGLE_ONLY_MARKER_ERROR)
 }
@@ -449,19 +502,11 @@ pub(super) fn parent_task_selector_tokens<'a>(
 }
 
 /// Return whether one already-whitespace-free selector component is typeable
-/// as a task-section third component (`@route+id#section`).
-///
-/// ASCII alphanumerics plus `& ' ( ) , . / -`. The Pomodoro-name third
-/// component (`@route:id#pomodoro`) is this grammar plus `+`; see
-/// [`is_pomodoro_selector_component`].
-pub(crate) fn is_selector_component(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(is_selector_byte)
-}
-
 /// Return whether one already-whitespace-free selector component is typeable
 /// as a Pomodoro-name third component (`@route:id#pomodoro`).
 ///
-/// Same bytes as [`is_selector_component`], plus `+`.
+/// Drawer slugs allow ASCII letters, digits, and hyphens; Pomodoro names add
+/// `+`.
 pub(crate) fn is_pomodoro_selector_component(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(is_pomodoro_selector_byte)
 }
@@ -2547,7 +2592,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
         Ok((route, parts)) => {
             if forced_route.is_some() || forced_section.is_some() {
                 return Err(
-                    "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone".to_string(),
+                    "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the link alone".to_string(),
                 );
             }
             if !is_solo_item {

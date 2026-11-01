@@ -44,7 +44,7 @@ pub(super) fn plan_sub_bullet_capture(
     target: &Path,
     route: &str,
     sub_bullet_target: &SubBulletTarget,
-    section_selector: Option<&TaskSectionSelector>,
+    section_selector: Option<&DrawerSelector>,
     capture_block: &str,
 ) -> Result<CaptureWritePlan, CaptureError> {
     let contents = planner.read_existing(target)?;
@@ -97,19 +97,206 @@ pub(super) fn plan_sub_bullet_capture(
         }
     };
 
-    let (insertion_offset, indentation, parent_section) =
+    let (insertion_offset, indentation, parent_section, _drawer_created) =
         if let Some(selector) = section_selector {
-            let sections =
-                capture_task_sections::task_sections(&contents, parent);
-            let section =
-                resolve_parent_section(route, parent, selector, &sections)?;
-            let insertion =
-                capture_task_sections::section_insertion(&contents, section);
-            (
-                insertion.offset,
-                insertion.indentation,
-                Some(section.title.clone()),
-            )
+            if is_prj_target(&contents, parent) {
+                return Err(CaptureError::usage(
+                    "use `@<note>#<Heading>` for a project section".to_string(),
+                ));
+            }
+            // Load catalog for spelling (best-effort; empty on failure).
+            let catalog = capture_drawers::load_drawer_catalog(bob_dir)
+                .unwrap_or_default();
+            let drawers = capture_drawers::drawers(&contents, parent);
+            let block_id = parent.block_id.as_deref();
+            match capture_drawers::resolve_drawer_for_write(
+                &drawers,
+                &selector.text,
+                selector.exact,
+                &catalog,
+                route,
+                block_id,
+            ) {
+                Ok(resolved) => match resolved.outcome {
+                    capture_drawers::DrawerResolveOutcome::Existing {
+                        drawer,
+                    } => {
+                        let insertion = capture_drawers::drawer_insertion(
+                            &contents, &drawer,
+                        );
+                        (
+                            insertion.offset,
+                            insertion.indentation,
+                            Some(drawer.title.clone()),
+                            resolved.created,
+                        )
+                    }
+                    capture_drawers::DrawerResolveOutcome::Create {
+                        title,
+                        key: _,
+                        slug: _,
+                    } => {
+                        // Create the drawer header first at the plain-child
+                        // anchor, stage it, then re-resolve as existing so
+                        // two items into one new drawer share one header.
+                        let lines = line_spans(&contents);
+                        let drawer_indent = first_child_indentation(
+                            &lines,
+                            parent.line_index,
+                            parent.block_end,
+                            &parent.indentation,
+                        )
+                        .or_else(|| {
+                            dominant_indent_unit(&lines).map(|unit| {
+                                format!("{}{}", parent.indentation, unit)
+                            })
+                        })
+                        .unwrap_or_else(|| format!("{}\t", parent.indentation));
+                        let header_offset = first_direct_managed_log_start(
+                            &lines,
+                            parent.line_index,
+                            parent.block_end,
+                        )
+                        .unwrap_or(parent.block_end);
+                        let header_block =
+                            format!("{drawer_indent}- {title}\n");
+                        let header_addition =
+                            insertion_text_preserving_line_endings(
+                                &contents,
+                                header_offset,
+                                &header_block,
+                            );
+                        let with_header = insert_at(
+                            &contents,
+                            header_offset,
+                            &header_addition,
+                        );
+                        planner.stage(target, with_header.clone())?;
+                        // Re-read staged (includes our header plus any
+                        // earlier batch items) and resolve as existing.
+                        let staged = planner.read_existing(target)?;
+                        let settings = note_tasks::read_settings(bob_dir);
+                        let staged_scan = note_tasks::scan(&staged, &settings);
+                        let staged_parent = match sub_bullet_target {
+                            SubBulletTarget::BlockId(block_id) => {
+                                match staged_scan.by_block_id(block_id) {
+                                    BlockIdLookup::Found(task) => task,
+                                    _ => {
+                                        return Err(CaptureError::io(format!(
+                                            "task ^{block_id} vanished while creating drawer {title}"
+                                        )));
+                                    }
+                                }
+                            }
+                            SubBulletTarget::Ref { line, digest } => {
+                                match staged_scan.by_ref(*line, digest) {
+                                    RefLookup::Found(task) => task,
+                                    _ => {
+                                        return Err(CaptureError::io(format!(
+                                            "task vanished while creating drawer {title}"
+                                        )));
+                                    }
+                                }
+                            }
+                        };
+                        let staged_drawers =
+                            capture_drawers::drawers(&staged, staged_parent);
+                        let Some(drawer) =
+                            staged_drawers.iter().find(|d| d.title == title)
+                        else {
+                            return Err(CaptureError::io(format!(
+                                "failed to create drawer {title}"
+                            )));
+                        };
+                        let insertion =
+                            capture_drawers::drawer_insertion(&staged, drawer);
+                        // Note: header already staged; the entry below
+                        // will be staged as a second edit in the same
+                        // batch transaction. Return staged-based offset
+                        // relative to the staged contents, but the caller
+                        // below stages against `contents` (pre-header).
+                        // To keep one transaction, stage the entry against
+                        // the staged contents directly here and return
+                        // early.
+                        let _ = (insertion, drawer);
+                        // Fall through to entry insertion against staged:
+                        // recompute from staged below.
+                        let contents = staged;
+                        let drawers = staged_drawers;
+                        let parent = staged_parent;
+                        // Resolve again (must be existing now).
+                        let catalog =
+                            capture_drawers::load_drawer_catalog(bob_dir)
+                                .unwrap_or_default();
+                        let resolved2 =
+                            capture_drawers::resolve_drawer_for_write(
+                                &drawers,
+                                &selector.text,
+                                selector.exact,
+                                &catalog,
+                                route,
+                                parent.block_id.as_deref(),
+                            )
+                            .map_err(|e| {
+                                CaptureError::usage(e.message.clone())
+                            })?;
+                        let capture_drawers::DrawerResolveOutcome::Existing {
+                            drawer,
+                        } = resolved2.outcome
+                        else {
+                            return Err(CaptureError::io(format!(
+                                "failed to create drawer {title}"
+                            )));
+                        };
+                        let insertion = capture_drawers::drawer_insertion(
+                            &contents, &drawer,
+                        );
+                        // Stage entry against staged contents (which already
+                        // has the header). We inline the entry staging here
+                        // to keep header+entry atomic.
+                        let indented_block = capture_block
+                            .split('\n')
+                            .map(|line| {
+                                format!("{}{}", insertion.indentation, line)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let addition = insertion_text_preserving_line_endings(
+                            &contents,
+                            insertion.offset,
+                            &indented_block,
+                        );
+                        let placement = if insertion.offset >= contents.len() {
+                            Placement::Appended
+                        } else {
+                            Placement::Inserted
+                        };
+                        let details = SubBulletCaptureDetails {
+                            block_id: parent.block_id.clone(),
+                            parent_line: parent.line_index + 1,
+                            parent_text: parent.description.clone(),
+                            parent_section: Some(drawer.title.clone()),
+                            parent_status_symbol: parent.status_symbol,
+                            parent_status_name: parent.status_name.clone(),
+                        };
+                        let updated_target =
+                            insert_at(&contents, insertion.offset, &addition);
+                        planner.stage(target, updated_target)?;
+                        return Ok(CaptureWritePlan {
+                            placement,
+                            pomodoro: None,
+                            sub_bullet: Some(details),
+                            pomodoro_note: None,
+                            toggle: None,
+                            pomodoro_link: None,
+                            pomodoro_refs: Vec::new(),
+                        });
+                    }
+                },
+                Err(e) => {
+                    return Err(CaptureError::usage(e.message.clone()));
+                }
+            }
         } else {
             let lines = line_spans(&contents);
             let indentation = first_child_indentation(
@@ -129,7 +316,7 @@ pub(super) fn plan_sub_bullet_capture(
                 parent.block_end,
             )
             .unwrap_or(parent.block_end);
-            (insertion_offset, indentation, None)
+            (insertion_offset, indentation, None, false)
         };
     let indented_block = capture_block
         .split('\n')
@@ -169,91 +356,13 @@ pub(super) fn plan_sub_bullet_capture(
     })
 }
 
-pub(super) const MAX_LISTED_SECTION_TITLES: usize = 8;
-
-pub(super) fn resolve_parent_section<'a>(
-    route: &str,
-    parent: &note_tasks::NoteTask,
-    selector: &TaskSectionSelector,
-    sections: &'a [capture_task_sections::TaskSection],
-) -> Result<&'a capture_task_sections::TaskSection, CaptureError> {
-    if sections.is_empty() {
-        return Err(CaptureError::io(format!(
-            "{} has no task sections ({})",
-            parent_task_label(route, parent),
-            capture_task_sections_hint(route, parent),
-        )));
-    }
-    if let Some(section) = capture_task_sections::match_section(
-        sections,
-        &selector.text,
-        selector.exact,
-    ) {
-        return Ok(section);
-    }
-    let listed = format_section_titles(sections);
-    let suggestion = capture_task_sections::suggest_section(
-        sections,
-        &selector.text,
-        selector.exact,
-    )
-    .map(|section| format!("; did you mean {}?", section.title))
-    .unwrap_or_default();
-    Err(CaptureError::io(format!(
-        "no task section matching '{}' under {}{suggestion} (have: {listed}; {})",
-        selector.text,
-        parent_under_label(route, parent),
-        capture_task_sections_hint(route, parent),
-    )))
-}
-
-pub(super) fn parent_task_label(
-    route: &str,
-    parent: &note_tasks::NoteTask,
-) -> String {
-    match parent.block_id.as_deref() {
-        Some(block_id) => format!("task ^{block_id} in {route}.md"),
-        None => format!("the selected task in {route}.md"),
-    }
-}
-
-pub(super) fn parent_under_label(
-    route: &str,
-    parent: &note_tasks::NoteTask,
-) -> String {
-    match parent.block_id.as_deref() {
-        Some(block_id) => format!("^{block_id} in {route}.md"),
-        None => format!("the selected task in {route}.md"),
-    }
-}
-
-pub(super) fn capture_task_sections_hint(
-    route: &str,
-    parent: &note_tasks::NoteTask,
-) -> String {
-    match parent.block_id.as_deref() {
-        Some(block_id) => {
-            format!("run 'bob capture-task-sections -r {route} -i {block_id}' to list them")
-        }
-        None => {
-            format!("run 'bob capture-task-sections -r {route}' to list them")
-        }
-    }
-}
-
-pub(super) fn format_section_titles(
-    sections: &[capture_task_sections::TaskSection],
-) -> String {
-    let mut listed = sections
-        .iter()
-        .take(MAX_LISTED_SECTION_TITLES)
-        .map(|section| section.title.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    if sections.len() > MAX_LISTED_SECTION_TITLES {
-        listed.push_str(", ...");
-    }
-    listed
+fn is_prj_target(contents: &str, parent: &note_tasks::NoteTask) -> bool {
+    let lines = line_spans(contents);
+    let Some(line) = lines.get(parent.line_index) else {
+        return false;
+    };
+    crate::native::projects::has_trailing_prj_anchor(line.text)
+        && line.text.contains("#task")
 }
 
 pub(crate) fn first_child_indentation(
@@ -279,13 +388,13 @@ pub(crate) fn first_child_indentation(
 // Parity note: the navigation-hotkeys-only `❌ **CANCEL LOG**` is
 // deliberately NOT a managed-log anchor here. It is placed first under the
 // task, so newly captured notes land below it via the managed-log anchors,
-// and emoji-led bullets are never task sections anyway. Mirrors
+// and emoji-led bullets are never task drawers anyway. Mirrors
 // `plugins/bob-navigation-hotkeys` managed-log grammar, which now also knows
 // the Rotten kind.
 pub(super) const SCHEDULE_LOG_EMOJI: &str = "🗓️";
 pub(super) const WORK_LOG_EMOJI: &str = "🛠️";
 pub(super) const ROTTEN_LOG_EMOJI: &str = "🥀";
-pub(super) const MANAGED_TASK_LOG_LABELS: &[(&str, ManagedTaskLogKind)] = &[
+pub(crate) const MANAGED_TASK_LOG_LABELS: &[(&str, ManagedTaskLogKind)] = &[
     ("SCHEDULE LOG", ManagedTaskLogKind::Schedule),
     ("Schedule log", ManagedTaskLogKind::Schedule),
     ("WORK LOG", ManagedTaskLogKind::Work),

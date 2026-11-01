@@ -27,7 +27,7 @@ page captions, ahead of Other highlights and Removed highlights. `bob ref show` 
 the Mac Refs panel group the same way. Membership is re-derived from the sidecar on
 every scan and nothing new is stored. Tag edits never change `^h-` IDs, and a PDF with
 no declaration renders unchanged. Not a Markdown `##` heading or a `bob capture`
-target section. See `docs/highlights-ref-sync.md`.
+[Task Drawer](#task-drawer). See `docs/highlights-ref-sync.md`.
 
 ### Area Note {#area-note}
 
@@ -401,6 +401,33 @@ targets, and dep links never count as Pomodoro Task Links. See
 [Task Dependencies Are Links On One Depends-On Line](../develop/decisions.md#task-deps-are-depends-on-links) and
 [Projects Block Their Tasks From The ^prj Line](../develop/decisions.md#projects-block-from-prj-line); syntax details live in
 `docs/task-dependencies.md`.
+
+### Task Drawer {#task-drawer}
+
+*Aliases: drawer.*
+
+A direct non-checkbox ALL-CAPS child bullet of a `#task` line, with its notes nested
+beneath it. A drawer holds part of one task's work (`REQUIREMENTS`, `FUTURE WORK`);
+its entries are plain bullets with no checkbox, `#task`, or `created` field. A drawer
+is nonempty by construction: capture never creates an empty drawer, and promotion of a
+task to a project note turns each drawer into an H2 section while reversal restores
+them.
+
+In capture, a `#` glued after `@route+id` always names a drawer (`@foo+bar#requirements`),
+matched exactly against the target task at commit time and created on demand with the
+catalog's most-used spelling. A quoted literal (`#"FUTURE WORK"`) or `--drawer TITLE`
+forces creation and skips the near-duplicate guard; an unquoted slug that is a strict
+prefix of, or edit distance 1 from, an existing drawer is refused. `capture-complete`
+lists the target's drawers in document order, then catalog recents, then a creation row,
+with reserved, ambiguous, and near-duplicate choices refused and quorum copy authored by
+bob. `bob capture-drawers` lists one task's drawers plus catalog recents.
+
+Managed lines and logs are never drawers: Depends-On, BLOCKS, [Task Relation](#task-relation) LINKS
+lines, and the Schedule, Work, Rotten, and Cancel logs, plus `TASKS`. A drawer is not a
+Markdown `##` heading, a [Project Note](#project-note) H2 section, an [Annotation Section](#annotation-section), a
+[Pomodoro](#pomodoro) name, or a [Task Type](#task-type): `@note#Heading` routes to a note heading,
+`=name` names a Pomodoro, and a free-standing `#fix` at an item edge types the task.
+See `docs/capture.md`.
 
 ### Task Freshness {#task-freshness}
 

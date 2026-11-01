@@ -346,26 +346,20 @@ fn bash_keeps_spaces_in_one_argument() {
     }
     let temp = TempDir::new("bob-bash-spaces");
     let vault = e2e_vault(&temp);
-    let line = "bob capture --route cash --task fix-sink --task-section F";
+    let line = "bob capture --route cash --task fix-sink --drawer F";
     let reply = run_bash_case(
         &vault,
         line,
         line.chars().count(),
         &[
-            "bob",
-            "capture",
-            "--route",
-            "cash",
-            "--task",
-            "fix-sink",
-            "--task-section",
-            "F",
+            "bob", "capture", "--route", "cash", "--task", "fix-sink",
+            "--drawer", "F",
         ],
         7,
     );
     assert!(
         reply.iter().any(|value| value.contains("FIRST\\ STEPS")),
-        "task section stays one escaped argument: {reply:?}"
+        "drawer stays one escaped argument: {reply:?}"
     );
 }
 
@@ -651,7 +645,7 @@ readline_case EQUALS $'bob capture =#\t' '<=#deep-work>' ''
 # An open quote completes inside the quotes; readline closes them.
 readline_case QUOTE $'bob capture \'fix it @ca\t' '<fix it @cash>' ''
 # A value with a space stays one argument.
-readline_case SPACES $'bob capture --route cash --task fix-sink --task-section F\t' '<FIRST STEPS>' ''
+readline_case SPACES $'bob capture --route cash --task fix-sink --drawer F\t' '<FIRST STEPS>' ''
 # An attached `!files-in` value completes the note name.
 readline_case FILESIN $'bob query --tasks-note=c\t' '<--tasks-note=cash.md>' ''
 # Attached option values keep working, as does the solo link form.

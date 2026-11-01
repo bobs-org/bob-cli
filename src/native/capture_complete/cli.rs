@@ -114,9 +114,9 @@ covers '@route+fragment', including -a/--all-tasks missing-ID candidates. An inh
 becomes the current note for same-note wikilink heading/block completion unless \
 that item overrides it. Route completion is backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
-backed by the same scan as `bob capture-sections`. Task-section completion \
+backed by the same scan as `bob capture-sections`. Drawer completion \
 covers '@route+id#prefix' and a bare '@route+id#' once the item has body text, backed by the same \
-scanner as `bob capture-task-sections`; replacement text is the section \
+scanner as `bob capture-drawers`; replacement text is the drawer \
 slug. Pomodoro-name completion covers '@route:id#prefix', a bare \
 '@route:id#', '@route:#prefix', '@route^id@#prefix', and a bare '@route^id@#'; \
 Today rows come from `bob capture-pomodoros`: link-name completion offers \
@@ -212,10 +212,7 @@ the replacement covers the whole `!` token, sigil included, and the response car
 vault-scoped `picker` descriptor plus the `!`/`[` continuation keys on a bare `!`. \
 A marker-position `#<type>` token at either line edge completes `task_type`: the \
 replacement covers the whole marker, `query` is the decoded type name, and \
-`subject` says `new` or `existing`. The attached '@route^block-id#...' suffix \
-completes `task_type` (subject `new`), and a marker-only '@route+block-id#...' \
-suffix completes `task_type` (subject `existing`), including an empty '#'; an \
-attached suffix replacement never adds a space, and a bare unattached '#' \
+`subject` says `new` or `existing`. A glued '#...' after `^id` is refused; a separate '#type' retypes the new task (subject `new`), and a separate '#type' on a marker-only '@route+id' retypes before ensuring Next (subject `existing`); a bare unattached '#' \
 opens `task_type` with an empty query. Configured rows follow config order for \
 an empty query; hidden types remain available on exact matches. Candidates \
 carry Bob's theme refs, current and inherited annotations, and a `set`, \
@@ -227,7 +224,7 @@ A bare `%` opens the `directive` context with Bob-authored Clip, Pomodoro \
 note, and Template rows; bare-URL items also offer Listen. A typed letter \
 filters the rows, and opening the menu never reads the clipboard. Bare `#` \
 opens `task_type` with no row preselected. Every success response reports \
-`grammar: 2` while `schema_version` stays 1; an empty bare `#` or `%` \
+`grammar: 3` while `schema_version` stays 1; an empty bare `#` or `%` \
 query adds `initial_selection: \"none\"`. \
 A solo leading `:` token \
 completes `task_link`: every linkable open task (Ready, Blocked, Next, In \
@@ -239,11 +236,11 @@ link. A whole-draft `/` token completes `task_goto`: the same rows and order as 
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `@` seal \
 directly after the `^` or `:` block-ID part is never part of the replacement and reports intent `project_note`; a `+` after a `:` block ID is the retired project-note form and offers nothing. A trailing ` :id` or ` ^id` on a \
 first-level bullet of a project-note item completes as `project_task_block_id`, with empty candidates and an additive `block_id` object carrying intent `new`, the project-note stem, the sigil range, the bullet body, used IDs (`prj` plus sibling task IDs), and suggestions. An empty block-ID component \
-('@route+#') returns a successful empty task-section list; an unresolvable \
+('@route+#') returns a successful empty drawer list; an unresolvable \
 parent task returns a successful empty list plus one bounded warning. Other \
 contexts still rank \
 exact prefix matches before substring matches, case-insensitively, while \
-keeping each discovery source's stable order. Task-section ranking uses \
+keeping each discovery source's stable order. Drawer ranking uses \
 slug-prefix matches first, then slug-substring matches, in document order \
 inside each tier.\n\n\
 When the cursor is inside an Obsidian wikilink, wikilink completion takes \
@@ -264,7 +261,7 @@ nothing for this field. The replacement covers the `((query` token \
 up to the cursor.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
+            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, drawer, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())

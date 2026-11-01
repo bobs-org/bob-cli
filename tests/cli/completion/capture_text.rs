@@ -371,7 +371,7 @@ fn sections_complete_after_hash() {
 }
 
 #[test]
-fn task_sections_complete_after_id_hash() {
+fn drawers_complete_after_id_hash() {
     let fixture = fixture();
     let output = complete(
         &fixture,

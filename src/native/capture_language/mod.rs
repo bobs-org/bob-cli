@@ -38,7 +38,7 @@ mod tokens;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 2;
+pub(crate) const GRAMMAR_REVISION: u32 = 3;
 
 #[cfg(test)]
 mod tests;
@@ -110,6 +110,7 @@ pub(crate) use self::model::CaptureParseOptions;
 pub(crate) use self::model::ClipRequest;
 pub(crate) use self::model::CloseLogEntry;
 pub(crate) use self::model::CloseLogOrigin;
+pub(crate) use self::model::DrawerSelector;
 pub(crate) use self::model::EditorParseOptions;
 pub(crate) use self::model::ParsedCaptureDraft;
 pub(crate) use self::model::ParsedCaptureItem;
@@ -127,7 +128,6 @@ pub(crate) use self::model::ProjectNoteForm;
 pub(crate) use self::model::ProjectTaskId;
 pub(crate) use self::model::RefParentSource;
 pub(crate) use self::model::SubBulletTarget;
-pub(crate) use self::model::TaskSectionSelector;
 pub(crate) use self::model::TaskToggleIntent;
 pub(crate) use self::model::TemplateRowSummary;
 pub(crate) use self::pomodoro_literal::canonicalize_exact_name;
@@ -146,6 +146,4 @@ pub(crate) use self::type_marker::scan_line;
 pub(crate) use self::type_marker::unmatched_type_display;
 pub(crate) use self::type_marker::ResolvedTypeName;
 pub(crate) use self::type_marker::TypeMarkerOccurrence;
-pub(crate) use self::type_marker::{
-    replacement_for, TypeMarker, TypeMarkerAttachment,
-};
+pub(crate) use self::type_marker::{replacement_for, TypeMarker};

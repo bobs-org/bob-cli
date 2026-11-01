@@ -583,7 +583,7 @@ mod tests {
             forced_route,
             forced_section: None,
             forced_sub_bullet_target: forced_target,
-            forced_task_section: None,
+            forced_drawer: None,
             inbox_routes: Vec::new(),
             no_clip: true,
             no_ref: false,

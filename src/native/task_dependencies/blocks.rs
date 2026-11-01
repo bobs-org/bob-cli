@@ -16,6 +16,7 @@ use super::block_link_spans;
 pub(crate) const BLOCKS_EMOJI: &str = "🧱";
 pub(crate) const BLOCKS_LABEL: &str = "BLOCKS";
 pub(crate) const BLOCKS_SEPARATOR: &str = " • ";
+pub(crate) const CANCEL_LOG_LABEL: &str = "CANCEL LOG";
 
 const TOLERATED_EMOJI: &[&str] = &["🧱", "🚧", "⛓️", "⛓"];
 

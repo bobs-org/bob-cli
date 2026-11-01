@@ -1001,7 +1001,7 @@ pub(super) fn classify_prj_task(
     }
 }
 
-pub(super) fn is_valid_prj_task_line(
+pub(crate) fn is_valid_prj_task_line(
     line: &str,
     task: ParsedTaskLine<'_>,
 ) -> bool {

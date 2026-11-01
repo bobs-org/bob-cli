@@ -112,6 +112,8 @@ pub(crate) fn wikilink_task_spans(raw: &str) -> Vec<Span> {
                 end: token.opener + 2,
                 kind: SpanKind::WikilinkTaskDelimiter,
                 project_note: None,
+                title: None,
+                key: None,
             }];
             if token.query_end > token.opener + 2 {
                 spans.push(Span {
@@ -119,6 +121,8 @@ pub(crate) fn wikilink_task_spans(raw: &str) -> Vec<Span> {
                     end: token.query_end,
                     kind: SpanKind::WikilinkTaskQuery,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
             }
             if let Some(closer) = token.closer {
@@ -127,6 +131,8 @@ pub(crate) fn wikilink_task_spans(raw: &str) -> Vec<Span> {
                     end: closer + 2,
                     kind: SpanKind::WikilinkTaskDelimiter,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
             }
             spans

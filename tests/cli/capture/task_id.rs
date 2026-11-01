@@ -255,8 +255,8 @@ fn capture_task_id_recovers_a_shifted_line_and_rejects_write_free_failures() {
 }
 
 #[test]
-fn capture_task_sections_json_and_human_list_sections() {
-    let temp = TempDir::new("bob-cli-capture-task-sections-list");
+fn capture_drawers_json_and_human_list_sections() {
+    let temp = TempDir::new("bob-cli-capture-drawers-list");
     let vault = temp.path().join("vault");
     write_capture_task_settings(&vault);
     write_file(
@@ -272,7 +272,7 @@ fn capture_task_sections_json_and_human_list_sections() {
     );
 
     let json_out = bob_command()
-        .arg("capture-task-sections")
+        .arg("capture-drawers")
         .arg("-b")
         .arg(&vault)
         .arg("-r")
@@ -282,7 +282,7 @@ fn capture_task_sections_json_and_human_list_sections() {
         .arg("-f")
         .arg("json")
         .output()
-        .expect("run capture-task-sections json");
+        .expect("run capture-drawers json");
     assert_success(&json_out);
     assert!(
         stderr(&json_out).is_empty(),
@@ -299,12 +299,12 @@ fn capture_task_sections_json_and_human_list_sections() {
             "\"block_id\"",
             "\"ref\"",
             "\"count\"",
-            "\"sections\"",
+            "\"drawers\"",
             "\"title\"",
+            "\"key\"",
             "\"slug\"",
             "\"line\"",
-            "\"child_count\"",
-            "\"depth\"",
+            "\"entry_count\"",
         ],
     );
     let json: serde_json::Value =
@@ -314,22 +314,23 @@ fn capture_task_sections_json_and_human_list_sections() {
     assert_eq!(json["route"], "foo");
     assert_eq!(json["block_id"], "bar");
     assert_eq!(json["count"], 3);
-    assert_eq!(json["sections"][0]["title"], "REQUIREMENTS");
-    assert_eq!(json["sections"][0]["slug"], "requirements");
-    assert_eq!(json["sections"][0]["line"], 3);
-    assert_eq!(json["sections"][0]["child_count"], 1);
-    assert_eq!(json["sections"][0]["depth"], 1);
-    assert_eq!(json["sections"][1]["title"], "FUTURE WORK");
-    assert_eq!(json["sections"][1]["slug"], "future-work");
-    assert_eq!(json["sections"][2]["title"], "NOTES");
-    assert_eq!(json["sections"][2]["child_count"], 0);
+    assert_eq!(json["drawers"][0]["title"], "REQUIREMENTS");
+    assert_eq!(json["drawers"][0]["key"], "REQUIREMENTS");
+    assert_eq!(json["drawers"][0]["slug"], "requirements");
+    assert_eq!(json["drawers"][0]["line"], 3);
+    assert_eq!(json["drawers"][0]["entry_count"], 1);
+    assert_eq!(json["drawers"][1]["title"], "FUTURE WORK");
+    assert_eq!(json["drawers"][1]["key"], "FUTURE WORK");
+    assert_eq!(json["drawers"][1]["slug"], "future-work");
+    assert_eq!(json["drawers"][2]["title"], "NOTES");
+    assert_eq!(json["drawers"][2]["entry_count"], 0);
     let task_ref = json["ref"].as_str().expect("ref");
     let (line, digest) = task_ref.split_once(':').expect("ref separator");
     assert_eq!(line, "2");
     assert_eq!(digest.len(), 8);
 
     let human = bob_command()
-        .arg("capture-task-sections")
+        .arg("capture-drawers")
         .arg("-b")
         .arg(&vault)
         .arg("-r")
@@ -337,21 +338,22 @@ fn capture_task_sections_json_and_human_list_sections() {
         .arg("-i")
         .arg("bar")
         .output()
-        .expect("run capture-task-sections human");
+        .expect("run capture-drawers human");
     assert_success(&human);
     assert_stdout_has_no_ansi(&human);
     let text = stdout(&human);
-    assert!(text.contains("Capture task sections - foo.md"), "{text}");
+    assert!(text.contains("Capture drawers"), "{text}");
+    assert!(text.contains("foo.md"), "{text}");
     assert!(text.contains("^bar"), "{text}");
     assert!(text.contains("REQUIREMENTS"), "{text}");
     assert!(text.contains("requirements"), "{text}");
     assert!(text.contains("FUTURE WORK"), "{text}");
-    assert!(text.contains("3 sections"), "{text}");
+    assert!(text.contains("3 drawers"), "{text}");
 }
 
 #[test]
-fn capture_task_sections_empty_and_error_paths() {
-    let temp = TempDir::new("bob-cli-capture-task-sections-errors");
+fn capture_drawers_empty_and_error_paths() {
+    let temp = TempDir::new("bob-cli-capture-drawers-errors");
     let vault = temp.path().join("vault");
     write_capture_task_settings(&vault);
     let original = concat!(
@@ -371,7 +373,7 @@ fn capture_task_sections_empty_and_error_paths() {
     let ambiguous_ref = format!("99:{same_digest}");
 
     let empty = bob_command()
-        .arg("capture-task-sections")
+        .arg("capture-drawers")
         .arg("-b")
         .arg(&vault)
         .arg("-r")
@@ -387,13 +389,10 @@ fn capture_task_sections_empty_and_error_paths() {
         serde_json::from_str(stdout(&empty).trim()).expect("json");
     assert_eq!(empty_json["ok"], true);
     assert_eq!(empty_json["count"], 0);
-    assert_eq!(
-        empty_json["sections"].as_array().expect("sections").len(),
-        0
-    );
+    assert_eq!(empty_json["drawers"].as_array().expect("drawers").len(), 0);
 
     let by_ref = bob_command()
-        .arg("capture-task-sections")
+        .arg("capture-drawers")
         .arg("-b")
         .arg(&vault)
         .arg("-r")
@@ -409,7 +408,7 @@ fn capture_task_sections_empty_and_error_paths() {
         serde_json::from_str(stdout(&by_ref).trim()).expect("json");
     assert!(ref_json["block_id"].is_null(), "{ref_json}");
     assert_eq!(ref_json["count"], 1);
-    assert_eq!(ref_json["sections"][0]["title"], "REQUIREMENTS");
+    assert_eq!(ref_json["drawers"][0]["title"], "REQUIREMENTS");
 
     let cases: &[(&str, i32, &str, &[&str])] = &[
         (
@@ -483,7 +482,7 @@ fn capture_task_sections_empty_and_error_paths() {
 
     for (name, exit, expected, extra) in cases {
         let output = bob_command()
-            .arg("capture-task-sections")
+            .arg("capture-drawers")
             .arg("-b")
             .arg(&vault)
             .arg("-f")

@@ -286,7 +286,7 @@ pub(crate) fn normalize_task_text(raw_text: &str) -> String {
     raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Canonical whitespace-free selector slug for task-section and Pomodoro-name
+/// Canonical whitespace-free selector slug for drawer and Pomodoro-name
 /// third components: trim, collapse internal whitespace to one space,
 /// ASCII-lowercase, then replace each remaining space with `-`.
 pub(crate) fn selector_slug(text: &str) -> String {

@@ -31,7 +31,7 @@ destination, while an item-local @route, @route+id, @route#..., @route^..., \
 or @route:... marker still wins for that item. A `%n` item ignores the \
 declaration and always files a Pomodoro note. A declaration-only draft \
 fails. Do not combine a textual @@ declaration with --route, --section, --task, \
-or --task-section. Each item's first nonblank line is normalized and \
+or --drawer. Each item's first nonblank line is normalized and \
 becomes that item's parent, formatted as a #task with a [created::] stamp unless a \
 bullet or sub-bullet route is selected, and written to mac_inbox.md unless an \
 @route token, @@ declaration, or --route target is provided. Existing target files \
@@ -218,7 +218,7 @@ canonical `(**HHMM-HHMM** [t:: Nm])` form, preserving other metadata, child \
 bullets, and newline style. A `@@` declaration still routes ordinary items \
 in the same draft but never turns an adjustment into a task. Forced \
 destination, task, section, and clipboard options (`--route`, `--section`, \
-`--task`, `--task-section`, `--clip`, `%`, `s:<N>`, `$<N>`) are rejected \
+`--task`, `--drawer`, `--clip`, `%`, `s:<N>`, `$<N>`) are rejected \
 on adjustment items. Later items observe earlier staged edits to the same \
 daily file, dry-run reports without writing, and any failure rolls the \
 whole batch back. JSON reports a distinct `pomodoro_adjust` kind with an \
@@ -426,27 +426,22 @@ new child is placed before the selected task's first direct-child Schedule Log o
 Work Log; if neither managed log exists, the child is appended at the end of the \
 task block. The note and task must already exist. Existing child indentation and \
 line endings are preserved; run 'bob capture-tasks -r <route>' to list eligible \
-task block IDs. A trailing '#<section>' component, as in \
-'@<route>+<block-id>#<section>', names an ALL-CAPS child section of that task. \
-The selector may use A-Z, a-z, 0-9, and & ' ( ) , . / -. Whole-slug matches beat \
-earlier prefix matches, so #future-work still wins over FUTURE WORKFLOW. The \
-captured block is appended at the end of that section, before a managed log \
-nested under it, using the section's child indentation. A selector that matches \
-nothing is an error listing the task's real sections; capture never falls back \
-to the end of the task. '@<route>+<block-id>#' with an empty selector is \
-incomplete and needs a task section; run \
-'bob capture-task-sections -r <route> -i <block-id>' to list them. A marker-only \
+task block IDs. A trailing '#<drawer>' component, as in \
+'@<route>+<block-id>#<drawer>', names an ALL-CAPS child drawer of that task. \
+The selector is a slug or quoted literal; matching is exact by key, with \
+reserved and near-duplicate refusals, and a missing drawer is created. The \
+captured block is appended at the end of that drawer, before a managed log \
+nested under it, using the drawer's child indentation. '@<route>+<block-id>#' \
+with an empty selector is incomplete and needs a drawer; run \
+'bob capture-drawers -r <route> -i <block-id>' to list them. A marker-only \
 '@<route>+<block-id>' item with no body text ensures that task is Next and \
 relocates its existing open-Pomodoro Task Link to the Pomodoro the task's type places \
-without creating a missing link or toggling Next back to Ready. The marker-only \
-form with an attached '#<type>', '@<route>+<block-id>#<type>', also retypes the \
+without creating a missing link or toggling Next back to Ready. A separate \
+'#<type>' after the marker, as in '@<route>+<block-id> #<type>', also retypes the \
 existing task before ensuring Next and choosing the destination from its new \
-type. This attached type marker only applies when the complete item has no body \
-text or authored children; with body text, \
-'@<route>+<block-id>#<section>' keeps its child-bullet meaning. \
-'@<route>+<block-id>#' opens task-type completion only when the whole item \
-qualifies as marker-only Ensure Next. Neither unsuffixed form synthesizes a \
-missing Task Link. A terminal '!' on the unsuffixed marker-only form, \
+type. With body text, '@<route>+<block-id>#<drawer>' keeps its drawer meaning, \
+and a separate '#<type>' retypes the target in the same transaction. \
+Neither unsuffixed form synthesizes a missing Task Link. A terminal '!' on the unsuffixed marker-only form, \
 '@<route>+<block-id>!', is the only spelling that toggles the Pomodoro Task \
 Link itself: when no matching link sits under an open Pomodoro the task links \
 (Ready/Blocked rise to Next while Next/In Progress keep their lane), and when \
@@ -482,20 +477,21 @@ The section title is matched exactly, case insensitively, against non-Tasks \
 headings (generated status-group headings under Tasks are skipped); if no \
 heading matches, the bullet falls back to the pre-heading \
 section.\n\n\
-Use --route with --task and --task-section TITLE to nest a sub-bullet under \
-the named ALL-CAPS child section of that task. The title is matched exactly, \
-case insensitively; unlike a typed #<section> selector, it is not slug- or \
-prefix-matched, so --task-section future-work does not match FUTURE WORK.\n\n\
+Use --route with --task and --drawer TITLE to nest a sub-bullet under \
+the named ALL-CAPS child drawer of that task. The title is matched exactly, \
+case insensitively; unlike a typed #<drawer> selector, it is not slug- or \
+prefix-matched, so --drawer future-work does not match FUTURE WORK.\n\n\
 Use expansion mode to print a template draft's expanded capture text and exit before vault access or planning. \
 In expansion mode all other capture options are accepted and ignored.",
         )
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk '$2'\n  bob capture research rust '$4' @dev\n  bob capture buy milk %c\n  bob capture research links %c3\n  bob capture investigate %c @dev:blockid\n  bob capture --clip -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash^goog-exit@' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit@\\n- Draft the resignation memo\\n' | bob capture
   printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture
-  printf 'Finish the Google exit packet! @cash:goog-exit@\\n- Draft the resignation memo\\n- Collect paperwork\\n' | bob capture\n  bob capture -p all -- '@cash:goog-exit@' 'Finish the Google exit packet!'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  bob capture -- --anything\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture 'x'\n  bob capture 'x2'\n  bob capture 'x1!2'\n  bob capture 'x!1@2'\n  bob capture 'x1~2'\n  bob capture 'x0'\n  printf 'x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf 'x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=bugs'\n  bob capture '=3#bugs'\n  bob capture '=bugs@3'\n  bob capture 'x =bugs'\n  bob capture '@sase:deep-fix=bugs'\n  bob capture 'x =~2'\n  printf 'x\\n\\n=\\n' | bob capture\n  bob capture '+2 x'\n  bob capture 'x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  bob capture -i 1=health -- '@mac_inbox:route-task'\n  printf -- '-2\\n\\nx\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout %n\n  bob capture paste the failing output %c %n\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf 'Apply to {0}! @job^apply-{1} %%t\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",        )
+  printf 'Finish the Google exit packet! @cash:goog-exit@\\n- Draft the resignation memo\\n- Collect paperwork\\n' | bob capture\n  bob capture -p all -- '@cash:goog-exit@' 'Finish the Google exit packet!'\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  bob capture -- --anything\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture 'x'\n  bob capture 'x2'\n  bob capture 'x1!2'\n  bob capture 'x!1@2'\n  bob capture 'x1~2'\n  bob capture 'x0'\n  printf 'x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf 'x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=bugs'\n  bob capture '=3#bugs'\n  bob capture '=bugs@3'\n  bob capture 'x =bugs'\n  bob capture '@sase:deep-fix=bugs'\n  bob capture 'x =~2'\n  printf 'x\\n\\n=\\n' | bob capture\n  bob capture '+2 x'\n  bob capture 'x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  bob capture -i 1=health -- '@mac_inbox:route-task'\n  printf -- '-2\\n\\nx\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --drawer REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout %n\n  bob capture paste the failing output %c %n\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf 'Apply to {0}! @job^apply-{1} %%t\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",        )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
         .arg(clip_arg())
+        .arg(drawer_arg())
         .arg(dry_run_arg())
         .arg(expand_arg())
         .arg(format_arg())
@@ -511,7 +507,6 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(section_arg())
         .arg(task_arg())
         .arg(task_ref_arg())
-        .arg(task_section_arg())
         .arg(template_origin_arg())
         .arg(text_arg())
 }
@@ -640,7 +635,7 @@ pub(super) fn section_arg() -> Arg {
         .long("section")
         .short('s')
         .value_name("TITLE")
-        .conflicts_with_all(["task", "task-ref", "task-section"])
+        .conflicts_with_all(["task", "task-ref", "drawer"])
         .help("Force a bullet into the exact section TITLE; requires --route")
 }
 
@@ -661,13 +656,13 @@ pub(super) fn task_ref_arg() -> Arg {
         .hide(true)
 }
 
-pub(super) fn task_section_arg() -> Arg {
-    Arg::new("task-section")
-        .long("task-section")
-        .short('S')
+pub(super) fn drawer_arg() -> Arg {
+    Arg::new("drawer")
+        .long("drawer")
+        .short('D')
         .value_name("TITLE")
         .conflicts_with("section")
-        .help("Nest under the exact task-section TITLE; requires --route and --task")
+        .help("Nest under the exact drawer TITLE; requires --route and --task")
 }
 
 pub(crate) fn template_origin_arg() -> Arg {
@@ -746,7 +741,7 @@ pub(super) struct CaptureRequest {
     pub(super) forced_route: Option<String>,
     pub(super) forced_section: Option<String>,
     pub(super) forced_sub_bullet_target: Option<SubBulletTarget>,
-    pub(super) forced_task_section: Option<String>,
+    pub(super) forced_drawer: Option<String>,
     pub(super) inbox_routes: Vec<InboxRoutePick>,
     pub(super) no_clip: bool,
     pub(super) no_ref: bool,
@@ -785,13 +780,13 @@ impl CaptureRequest {
                 "{option} requires --route"
             )));
         }
-        let forced_task_section = forced_task_section_from_matches(matches)?;
-        if forced_task_section.is_some() && forced_route.is_none() {
-            return Err(CaptureError::usage("--task-section requires --route"));
+        let forced_drawer = forced_drawer_from_matches(matches)?;
+        if forced_drawer.is_some() && forced_route.is_none() {
+            return Err(CaptureError::usage("--drawer requires --route"));
         }
-        if forced_task_section.is_some() && forced_sub_bullet_target.is_none() {
+        if forced_drawer.is_some() && forced_sub_bullet_target.is_none() {
             return Err(CaptureError::usage(
-                "--task-section requires --task or --task-ref",
+                "--drawer requires --task or --task-ref",
             ));
         }
         let template_origin = validated_template_origin(matches)?;
@@ -804,7 +799,7 @@ impl CaptureRequest {
             forced_route,
             forced_section,
             forced_sub_bullet_target,
-            forced_task_section,
+            forced_drawer,
             inbox_routes: matches
                 .get_many::<String>("inbox-route")
                 .map(|values| {
@@ -967,8 +962,8 @@ pub(super) fn forced_destination_flags(
     if matches.contains_id("task-ref") {
         flags.push("--task-ref");
     }
-    if matches.contains_id("task-section") {
-        flags.push("--task-section");
+    if matches.contains_id("drawer") {
+        flags.push("--drawer");
     }
     flags
 }
@@ -988,14 +983,14 @@ pub(super) fn competing_destination_error(flags: &[&str]) -> String {
     )
 }
 
-pub(super) fn forced_task_section_from_matches(
+pub(super) fn forced_drawer_from_matches(
     matches: &ArgMatches,
 ) -> Result<Option<String>, CaptureError> {
-    let Some(section) = matches.get_one::<String>("task-section") else {
+    let Some(section) = matches.get_one::<String>("drawer") else {
         return Ok(None);
     };
     if section.trim().is_empty() {
-        return Err(CaptureError::usage("--task-section must not be empty"));
+        return Err(CaptureError::usage("--drawer must not be empty"));
     }
     Ok(Some(section.clone()))
 }

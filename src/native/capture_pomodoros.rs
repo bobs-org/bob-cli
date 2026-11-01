@@ -19,8 +19,8 @@ use super::{
         duration_from_range_text, leading_spaces_or_tabs_len, line_spans,
         list_item_body, nearest_shallower_list_item_parent, LineSpan,
     },
-    capture_language, capture_pomodoro_close, capture_pomodoros_agenda,
-    capture_task_sections, config, env as bob_env, markdown, note_tasks,
+    capture_drawers, capture_language, capture_pomodoro_close,
+    capture_pomodoros_agenda, config, env as bob_env, markdown, note_tasks,
     plan_budget, pomodoro, pomodoro_homes,
     pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
     style::{display_width, pad_right, Styler},
@@ -510,7 +510,7 @@ pub(crate) fn bounded_warning(message: String) -> String {
 
 pub(crate) fn canonicalize_pomodoro_name(raw: &str) -> Option<String> {
     let name = capture_language::normalize_task_text(raw).to_ascii_uppercase();
-    capture_task_sections::is_pomodoro_name(&name).then_some(name)
+    capture_drawers::is_pomodoro_name(&name).then_some(name)
 }
 
 /// Canonical name for a decoded exact-name literal (`#"NAME"`): collapse

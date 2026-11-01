@@ -248,8 +248,7 @@ mod tests {
         let task = context(&["capture", "--route", "cash", "--task", "abc"]);
         assert_eq!(task.task.as_deref(), Some("abc"));
 
-        let block_id =
-            context(&["capture-task-sections", "-r", "cash", "-i", "abc"]);
+        let block_id = context(&["capture-drawers", "-r", "cash", "-i", "abc"]);
         assert_eq!(block_id.task.as_deref(), Some("abc"));
 
         let repo = context(&["plugins", "sync", "--repo", "/tmp/repo"]);

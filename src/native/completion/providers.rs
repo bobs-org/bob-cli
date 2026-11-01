@@ -15,13 +15,13 @@ use std::{ffi::OsStr, fs, path::Path};
 
 use super::{context::Context, kinds::Kind, protocol};
 use crate::native::{
-    capture, capture_pomodoros, capture_targets, capture_task_sections, config,
+    capture, capture_drawers, capture_pomodoros, capture_targets, config,
     note_tasks, pomodoro,
 };
 
 /// Shown when a route-dependent slot has no `--route` yet.
 pub(crate) const MISSING_ROUTE_MESSAGE: &str = "pass --route first";
-/// Shown when `--task-section` has a route but no `--task` yet.
+/// Shown when `--drawer` has a route but no `--task` yet.
 pub(crate) const MISSING_TASK_MESSAGE: &str = "pass --task first";
 
 /// Answer one vault slot. Returns `None` when `kind` is not
@@ -34,7 +34,7 @@ pub(crate) fn vault_lines(
         Kind::Route => Some(routes(&context.bob_dir)),
         Kind::Section => Some(sections(context)),
         Kind::Task => Some(tasks(context)),
-        Kind::TaskSection => Some(task_sections(context)),
+        Kind::Drawer => Some(drawers(context)),
         Kind::PomodoroRef => Some(pomodoros(context)),
         Kind::Plugin => Some(plugins(context)),
         Kind::Level => Some(levels()),
@@ -234,10 +234,10 @@ fn open_tasks(context: &Context, route: &str) -> Vec<note_tasks::NoteTask> {
         .collect()
 }
 
-/// ALL-CAPS child sections of the `--task` parent, in document order
+/// ALL-CAPS child drawers of the `--task` parent, in document order
 /// under `task sections`. The value is the exact TITLE the flag
 /// expects.
-fn task_sections(context: &Context) -> Vec<String> {
+fn drawers(context: &Context) -> Vec<String> {
     let Some(route) = context.route.as_deref() else {
         return vec![protocol::message_line(MISSING_ROUTE_MESSAGE)];
     };
@@ -256,10 +256,10 @@ fn task_sections(context: &Context) -> Vec<String> {
     else {
         return Vec::new();
     };
-    capture_task_sections::task_sections(&contents, parent)
+    capture_drawers::drawers(&contents, parent)
         .iter()
         .filter_map(|section| {
-            let description = match section.child_count {
+            let description = match section.entry_count {
                 0 => String::new(),
                 1 => "1 item".to_string(),
                 count => format!("{count} items"),

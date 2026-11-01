@@ -82,12 +82,12 @@ pub(crate) fn capture_spec() -> GuardSpec {
         long("section", true),
         long("task", true),
         long("task-ref", true),
-        long("task-section", true),
+        long("drawer", true),
         long("template-origin", true),
     ];
     GuardSpec {
         longs: LONGS,
-        short_values: "bfiprstS",
+        short_values: "bfiprstD",
         short_flags: "cdEhnR",
         equals_only_shorts: "",
     }

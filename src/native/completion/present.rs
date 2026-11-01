@@ -510,7 +510,7 @@ impl<'a> Walk<'a> {
             Kind::Route
             | Kind::Section
             | Kind::Task
-            | Kind::TaskSection
+            | Kind::Drawer
             | Kind::PomodoroRef
             | Kind::Plugin
             | Kind::Level

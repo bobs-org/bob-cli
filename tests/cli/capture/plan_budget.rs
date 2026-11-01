@@ -771,7 +771,7 @@ fn capture_strict_mode_refuses_toggle_path() {
     write_toggle_task_settings(&vault);
 
     let output =
-        capture_json(&vault, &day_file, &["@dev+newid#NEWT"], Some(&config));
+        capture_json(&vault, &day_file, &["@dev+newid #NEWT"], Some(&config));
     assert_eq!(
         output.status.code(),
         Some(1),

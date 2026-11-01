@@ -775,6 +775,10 @@ fn parse_capture_item_masked<'a>(
     // extraction and route selection see it, exactly like the editor
     // line pass: the remaining tokens resolve like a draft without them.
     let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+    let parent_tokens = super::pomodoro_literal::merge_leading_literal_token(
+        &parent_line.raw,
+        parent_tokens,
+    );
     let (parent_tokens, parent_line_dependencies) = extract_line_dependencies(
         parent_tokens,
         parent_line.raw.text,
@@ -886,7 +890,7 @@ fn parse_capture_item_masked<'a>(
             && item.lines.len() == 1
         {
             return Err(
-                "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone".to_string(),
+                "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the link alone".to_string(),
             );
         }
     }
@@ -915,7 +919,7 @@ fn parse_capture_item_masked<'a>(
         }
         if forced_route.is_some() || forced_section.is_some() {
             return Err(
-                "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone".to_string(),
+                "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the link alone".to_string(),
             );
         }
         if !has_dependencies {
@@ -1334,31 +1338,51 @@ pub(super) fn resolve_sub_bullet_kind(
         }
         return Err(EXPLICIT_TOGGLE_ONLY_MARKER_ERROR.to_string());
     }
-    let CaptureKind::SubBullet {
-        target: SubBulletTarget::BlockId(block_id),
-        section,
-    } = kind
-    else {
+    let CaptureKind::SubBullet { target, section } = kind else {
         return Ok(kind);
     };
-    if !parent_body_is_empty {
-        if let Some(section) = &section
-            && !is_selector_component(&section.text)
-        {
-            return Err(SUB_BULLET_SECTION_ERROR.to_string());
+    // A glued `#drawer` suffix always stays a drawer capture, never a
+    // toggle. Plain `@route+id` without a drawer keeps the old
+    // Ensure-Next toggle when the body is empty.
+    if let Some(drawer) = section {
+        if drawer.text.is_empty() {
+            return Err(
+                "`#` is incomplete: add a drawer (`#requirements`), or write `\\#` to keep a literal `#`"
+                    .to_string(),
+            );
+        }
+        if parent_body_is_empty {
+            return Err(
+                "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
+                    .to_string(),
+            );
         }
         return Ok(CaptureKind::SubBullet {
-            target: SubBulletTarget::BlockId(block_id),
-            section,
+            target,
+            section: Some(drawer),
         });
     }
-    if sub_bullets_is_empty && no_other_item_markers {
-        return Ok(CaptureKind::TaskToggle {
-            block_id,
-            intent: TaskToggleIntent::EnsureNext,
+    // No drawer: plain child bullet. Empty bodies become Ensure-Next
+    // toggles for plain block IDs; Ref targets stay sub-bullets.
+    if parent_body_is_empty && sub_bullets_is_empty && no_other_item_markers {
+        if let SubBulletTarget::BlockId(block_id) = target {
+            return Ok(CaptureKind::TaskToggle {
+                block_id,
+                intent: TaskToggleIntent::EnsureNext,
+            });
+        }
+        return Ok(CaptureKind::SubBullet {
+            target,
+            section: None,
         });
     }
-    Err(missing_text_error())
+    if parent_body_is_empty {
+        return Err(missing_text_error());
+    }
+    Ok(CaptureKind::SubBullet {
+        target,
+        section: None,
+    })
 }
 
 pub(super) fn parsed_capture_item_outcome<'a>(

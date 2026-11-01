@@ -787,6 +787,8 @@ fn extract_line_relation<'a>(
                         SpanKind::DependencySigil
                     },
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 result.spans.push(Span {
                     start: entry.note_start,
@@ -797,6 +799,8 @@ fn extract_line_relation<'a>(
                         SpanKind::DependencyNote
                     },
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 result.spans.push(Span {
                     start: entry.block_start,
@@ -807,6 +811,8 @@ fn extract_line_relation<'a>(
                         SpanKind::DependencyBlockId
                     },
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 if sigil == b'*' {
                     result.blocked_entries.push(entry.clone());
@@ -829,6 +835,8 @@ fn extract_line_relation<'a>(
                     end: *end,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 if sigil == b'*' {
                     result.blocked_partials.push((*start, *end));
@@ -851,6 +859,8 @@ fn extract_line_relation<'a>(
                     end: invalid.end,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 if sigil == b'*' {
                     result.blocked_invalid.push(invalid.clone());
@@ -1082,18 +1092,24 @@ fn extract_line_relations<'a>(
                     end: entry.start + entry.sigil_len(),
                     kind: SpanKind::RelationSigil,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 result.spans.push(Span {
                     start: entry.note_start,
                     end: entry.note_end,
                     kind: SpanKind::RelationNote,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 result.spans.push(Span {
                     start: entry.block_start,
                     end: entry.block_end,
                     kind: SpanKind::RelationBlockId,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 if let Some(separator) = entry.separator {
                     result.spans.push(Span {
@@ -1101,6 +1117,8 @@ fn extract_line_relations<'a>(
                         end: separator.1,
                         kind: SpanKind::RelationLabelSeparator,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let (Some(label_start), Some(label_end)) =
@@ -1111,6 +1129,8 @@ fn extract_line_relations<'a>(
                         end: label_end,
                         kind: SpanKind::RelationLabel,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 result.relation_entries.push(entry.clone());
@@ -1130,6 +1150,8 @@ fn extract_line_relations<'a>(
                     end: *end,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 result.relation_target_partials.push((*start, *end));
             }
@@ -1148,6 +1170,8 @@ fn extract_line_relations<'a>(
                     end: *end,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 result.relation_label_partials.push((*start, *end));
             }
@@ -1166,6 +1190,8 @@ fn extract_line_relations<'a>(
                     end: invalid.end,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 result.relation_invalid.push(InvalidDependency {
                     raw: invalid.raw.clone(),

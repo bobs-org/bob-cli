@@ -43,18 +43,17 @@ fn slug_literal_and_marker_run_keep_original_byte_ranges() {
 
 #[test]
 fn attached_route_type_completion_keeps_the_marker_attached() {
-    let raw = "@cash+task-id#fix";
+    let raw = "@cash+task-id #fix";
     let completion = completion_at_raw(raw, raw.len())
-        .expect("attached Ensure Next type marker");
+        .expect("separate Ensure Next type marker");
     assert_eq!(completion.query, "fix");
-    assert_eq!(completion.span, "@cash+task-id".len()..raw.len());
-    assert!(!completion.leading);
+    assert!(completion.leading);
 
-    let project_task = "@cash^task-id#fix";
+    let project_task = "@cash^task-id #fix";
     let completion = completion_at_raw(project_task, project_task.len())
-        .expect("attached explicit-ID task type marker");
+        .expect("separate explicit-ID task type marker");
     assert_eq!(completion.query, "fix");
-    assert!(!completion.leading);
+    assert!(completion.leading);
 }
 
 #[test]

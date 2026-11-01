@@ -86,6 +86,7 @@ fn capture_help_lists_options_alphabetically() {
         &[
             "-b, --bob-dir",
             "-c, --clip",
+            "-D, --drawer",
             "-d, --dry-run",
             "-E, --expand",
             "-f, --format",
@@ -95,7 +96,6 @@ fn capture_help_lists_options_alphabetically() {
             "-r, --route",
             "-s, --section",
             "-t, --task",
-            "-S, --task-section",
         ],
     );
     assert!(
@@ -115,10 +115,10 @@ fn capture_help_lists_options_alphabetically() {
     );
     assert!(
         help.contains("@<route>+<block-id>")
-            && help.contains("@<route>+<block-id>#<section>")
+            && help.contains("@<route>+<block-id>#<drawer>")
             && help.contains("bob capture '@cash+goog-exit'")
             && help.contains("bob capture 'Postgres 17 minimum @foo+bar#requirements'")
-            && help.contains("--task-section REQUIREMENTS")
+            && help.contains("--drawer REQUIREMENTS")
             && help.contains("first direct-child Schedule Log or Work Log")
             && help.contains("@<route>^<block-id>")
             && help.contains("bob capture '@dev^foobar'")
@@ -181,8 +181,8 @@ fn capture_complete_help_lists_options_alphabetically() {
     let help = stdout(&output);
     assert!(
         help.contains("cursor-aware completion candidates")
-            && help.contains("task_section")
-            && help.contains("capture-task-sections")
+            && help.contains("drawer")
+            && help.contains("capture-drawers")
             && help.contains("creates_pomodoro")
             && help.contains("creates the named placeholder later"),
         "expected capture-complete long help:\n{help}"
@@ -253,20 +253,20 @@ fn capture_task_id_help_lists_options_alphabetically() {
 }
 
 #[test]
-fn capture_task_sections_help_lists_options_alphabetically() {
+fn capture_drawers_help_lists_options_alphabetically() {
     let output = bob_command()
-        .arg("capture-task-sections")
+        .arg("capture-drawers")
         .arg("--help")
         .output()
-        .expect("run bob capture-task-sections --help");
+        .expect("run bob capture-drawers --help");
 
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("ALL-CAPS direct-child section bullets")
+        help.contains("ALL-CAPS direct-child drawer bullets")
             && help.contains("Exactly one of -i/--block-id or -t/--task-ref")
             && help.contains("successful empty list"),
-        "expected capture-task-sections long help:\n{help}"
+        "expected capture-drawers long help:\n{help}"
     );
     assert_text_order(
         &help,
@@ -446,7 +446,7 @@ fn capture_parse_help_lists_options_alphabetically() {
         help.contains("lexical and read-only")
             && help.contains("theme catalog")
             && help.contains("@route+id#")
-            && help.contains("task_section")
+            && help.contains("drawer")
             && help.contains("pomodoro_name")
             && help.contains("@foo+bar#req"),
         "expected capture-parse long help:\n{help}"

@@ -32,7 +32,7 @@ pub(crate) enum CompletionContext {
     TaskType,
     /// An edge `%` capture directive (`%c`, `%n`, `%t`, or URL-only `%l`).
     Directive,
-    TaskSection,
+    Drawer,
     ActiveTask,
     TaskLink,
     /// A whole-draft `/query` Go To search over the `:` task catalog.
@@ -79,11 +79,11 @@ pub(crate) struct CompletionField {
     pub(crate) context: CompletionContext,
     /// The already-resolved, lowercased route, when `context` needs one
     /// (`section`, `pomodoro_block_id`, `pomodoro_name`, `task`, and
-    /// `task_section`).
+    /// `drawer`).
     pub(crate) route: Option<String>,
     /// The already-typed block ID of a three-component
     /// `@route+id#section` or `@route:id#pomodoro` marker. Set only when
-    /// `context` is `task_section` or `pomodoro_name`; always `None` for
+    /// `context` is `drawer` or `pomodoro_name`; always `None` for
     /// two-component contexts.
     pub(crate) block_id: Option<String>,
     /// The text already typed in this component, up to `cursor`.
@@ -1539,7 +1539,7 @@ pub(super) fn marker_field_at_cursor(
                 Some(CompletionThird {
                     separator_len: 1,
                     part: section,
-                    context: CompletionContext::TaskSection,
+                    context: CompletionContext::Drawer,
                 }),
             ),
             None => (rest, None),
@@ -1821,7 +1821,7 @@ pub(super) fn global_completion_field_at(
 /// sigil; the right component spans exactly its text, excluding the
 /// separator. An optional third component is the same: `#` is never part of
 /// a replacement range, so a cursor after `#` on `@route+id#` is a
-/// zero-length `task_section` replacement at the insertion point. Each
+/// zero-length `drawer` replacement at the insertion point. Each
 /// component stays well-defined -- and empty -- when its text has not been
 /// typed yet.
 pub(super) fn completion_field_from_parts(

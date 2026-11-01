@@ -253,7 +253,7 @@ fn relationship_only_owner_reports_needs_text() {
 
 #[test]
 fn suffixed_plus_owner_can_set_type_and_dependencies() {
-    let json = parse_json("@body+excercise#bugs &foo:bar");
+    let json = parse_json("@body+excercise #bugs &foo:bar");
     assert_eq!(json["mode"], "task_dependency", "{json}");
     assert_eq!(json["dependency_target"]["kind"], "existing_task", "{json}");
     assert_eq!(json["dependencies"][0]["raw"], "&foo:bar", "{json}");

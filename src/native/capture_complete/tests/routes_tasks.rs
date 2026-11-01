@@ -215,8 +215,8 @@ fn sub_bullet_task_completion_reports_full_task_metadata() {
 }
 
 #[test]
-fn task_section_completion_lists_ranked_slugs_for_the_parent_task() {
-    let temp = TempDir::new("bob-cli-capture-complete-task-section");
+fn drawer_completion_lists_ranked_slugs_for_the_parent_task() {
+    let temp = TempDir::new("bob-cli-capture-complete-drawer");
     write_settings(temp.path());
     write_file(
         &temp.path().join("foo.md"),
@@ -232,9 +232,9 @@ fn task_section_completion_lists_ranked_slugs_for_the_parent_task() {
     );
 
     let empty = result(temp.path(), "note @foo+bar#", 14);
-    assert_eq!(empty.context, Some(CompletionContext::TaskSection));
+    assert_eq!(empty.context, Some(CompletionContext::Drawer));
     assert_eq!(empty.replacement, Replacement { start: 14, end: 14 });
-    let Candidates::TaskSection(all) = &empty.candidates else {
+    let Candidates::Drawer(all) = &empty.candidates else {
         panic!("expected task section candidates");
     };
     let titles: Vec<&str> =
@@ -249,13 +249,13 @@ fn task_section_completion_lists_ranked_slugs_for_the_parent_task() {
     assert_eq!(all[0].block_id.as_deref(), Some("bar"));
     assert_eq!(all[0].text, "Parent task");
     assert_eq!(all[0].line, 3);
-    assert_eq!(all[0].child_count, 1);
+    assert_eq!(all[0].entry_count, 1);
     assert_eq!(all[3].replacement, "future-work");
-    assert_eq!(all[3].child_count, 0);
+    assert_eq!(all[3].entry_count, 0);
     assert!(empty.warnings.is_empty());
 
     let prefix = result(temp.path(), "note @foo+bar#future", 20);
-    let Candidates::TaskSection(prefixed) = &prefix.candidates else {
+    let Candidates::Drawer(prefixed) = &prefix.candidates else {
         panic!("expected task section candidates");
     };
     let prefixed_titles: Vec<&str> = prefixed
@@ -265,7 +265,7 @@ fn task_section_completion_lists_ranked_slugs_for_the_parent_task() {
     assert_eq!(prefixed_titles, ["FUTURE WORKFLOW", "FUTURE WORK"]);
 
     let exact = result(temp.path(), "note @foo+bar#future-work", 25);
-    let Candidates::TaskSection(exact_hits) = &exact.candidates else {
+    let Candidates::Drawer(exact_hits) = &exact.candidates else {
         panic!("expected task section candidates");
     };
     let exact_titles: Vec<&str> = exact_hits
@@ -281,7 +281,7 @@ fn task_section_completion_lists_ranked_slugs_for_the_parent_task() {
     assert_eq!(future_work.slug, "future-work");
 
     let substring = result(temp.path(), "note @foo+bar#work", 18);
-    let Candidates::TaskSection(subs) = &substring.candidates else {
+    let Candidates::Drawer(subs) = &substring.candidates else {
         panic!("expected task section candidates");
     };
     let sub_titles: Vec<&str> =
@@ -325,8 +325,8 @@ fn three_component_marker_keeps_route_and_task_contexts() {
     assert_eq!(tasks[0].block_id.as_deref(), Some("bar"));
 
     let section = result(temp.path(), raw, hash + 2);
-    assert_eq!(section.context, Some(CompletionContext::TaskSection));
-    let Candidates::TaskSection(sections) = &section.candidates else {
+    assert_eq!(section.context, Some(CompletionContext::Drawer));
+    let Candidates::Drawer(sections) = &section.candidates else {
         panic!("expected task section candidates");
     };
     assert_eq!(sections[0].replacement, "requirements");
@@ -334,8 +334,8 @@ fn three_component_marker_keeps_route_and_task_contexts() {
 }
 
 #[test]
-fn task_section_completion_empty_block_id_is_an_empty_success() {
-    let temp = TempDir::new("bob-cli-capture-complete-task-section-empty");
+fn drawer_completion_empty_block_id_is_an_empty_success() {
+    let temp = TempDir::new("bob-cli-capture-complete-drawer-empty");
     write_settings(temp.path());
     write_file(
         &temp.path().join("foo.md"),
@@ -343,14 +343,14 @@ fn task_section_completion_empty_block_id_is_an_empty_success() {
     );
 
     let value = result(temp.path(), "note @foo+#", 11);
-    assert_eq!(value.context, Some(CompletionContext::TaskSection));
+    assert_eq!(value.context, Some(CompletionContext::Drawer));
     assert_eq!(value.candidates.len(), 0);
     assert!(value.warnings.is_empty());
 }
 
 #[test]
-fn task_section_completion_warns_once_for_an_unresolvable_parent() {
-    let temp = TempDir::new("bob-cli-capture-complete-task-section-warning");
+fn drawer_completion_warns_once_for_an_unresolvable_parent() {
+    let temp = TempDir::new("bob-cli-capture-complete-drawer-warning");
     write_settings(temp.path());
     write_file(
         &temp.path().join("foo.md"),
@@ -363,7 +363,7 @@ fn task_section_completion_warns_once_for_an_unresolvable_parent() {
     );
 
     let missing = result(temp.path(), "note @foo+missing#", 18);
-    assert_eq!(missing.context, Some(CompletionContext::TaskSection));
+    assert_eq!(missing.context, Some(CompletionContext::Drawer));
     assert_eq!(missing.candidates.len(), 0);
     assert_eq!(missing.warnings.len(), 1);
     assert_eq!(
@@ -404,21 +404,28 @@ fn hash_after_a_bare_block_id_marker_completes_a_task_type() {
     let day_file = temp.path().join("2026/20260828.md");
     write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n- [ ] ()\n");
 
+    // Glued `#...` after `+id` is always a drawer selector (grammar revision
+    // 3); the separate `#type` form still completes a task type.
     let raw = "@cash+bar#bu";
     let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
         result(temp.path(), raw, raw.len())
     });
+    assert_eq!(value.context, Some(CompletionContext::Drawer));
 
-    assert_eq!(value.context, Some(CompletionContext::TaskType));
-    let Candidates::TaskType(candidates) = &value.candidates else {
+    let spaced = "@cash+bar #bu";
+    let typed = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), spaced, spaced.len())
+    });
+    assert_eq!(typed.context, Some(CompletionContext::TaskType));
+    let Candidates::TaskType(candidates) = &typed.candidates else {
         panic!("expected task-type candidates");
     };
-    assert_eq!(candidates[0].replacement, "#bugs");
+    assert_eq!(candidates[0].replacement, "#bugs ");
 
-    // The same marker with body text keeps the task-section context.
+    // The same glued marker with body text keeps the drawer context.
     let with_body = "note @cash+bar#bu";
     let section = result(temp.path(), with_body, with_body.len());
-    assert_eq!(section.context, Some(CompletionContext::TaskSection));
+    assert_eq!(section.context, Some(CompletionContext::Drawer));
 }
 
 #[test]

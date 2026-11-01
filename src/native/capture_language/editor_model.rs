@@ -29,7 +29,7 @@ pub(crate) enum SpanKind {
     PomodoroShift,
     SubBulletRoute,
     SubBulletBlockId,
-    SubBulletSection,
+    Drawer,
     TaskToggleRoute,
     TaskToggleBlockId,
     TaskToggleExplicitToggle,
@@ -97,7 +97,7 @@ impl SpanKind {
             Self::PomodoroShift => "pomodoro_shift",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
-            Self::SubBulletSection => "sub_bullet_section",
+            Self::Drawer => "drawer",
             Self::TaskToggleRoute => "task_toggle_route",
             Self::TaskToggleBlockId => "task_toggle_block_id",
             Self::TaskToggleExplicitToggle => "task_toggle_explicit_toggle",
@@ -143,13 +143,17 @@ fn is_no_project_note(form: &Option<super::model::ProjectNoteForm>) -> bool {
     form.is_none()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Span {
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) kind: SpanKind,
     #[serde(default, skip_serializing_if = "is_no_project_note")]
     pub(crate) project_note: Option<super::model::ProjectNoteForm>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) key: Option<String>,
 }
 
 /// The full documented severity vocabulary of the `capture-parse` JSON
@@ -247,7 +251,8 @@ pub(crate) enum Need {
     /// A `%` marker is still open: name the directive to finish it.
     Directive,
     Task,
-    TaskSection,
+    Drawer,
+    DrawerText,
     ActiveTask,
     TaskLink,
     /// A whole-draft `/query` Go To picker is still open.
@@ -285,7 +290,8 @@ impl Need {
             Self::TaskType => "task_type",
             Self::Directive => "directive",
             Self::Task => "task",
-            Self::TaskSection => "task_section",
+            Self::Drawer => "drawer",
+            Self::DrawerText => "drawer_text",
             Self::ActiveTask => "active_task",
             Self::TaskLink => "task_link",
             Self::TaskGoto => "task_goto",

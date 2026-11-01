@@ -3,16 +3,16 @@ use std::path::Path;
 use super::{
     candidates::{
         active_task_candidates, apply_relationship_picker,
-        blocked_task_candidates, dependency_candidates, link_candidates,
-        relation_candidates, relation_label_suggestions, route_candidates,
-        section_candidates, task_candidates, task_complete_candidates,
-        task_goto_candidates, task_link_candidates, task_parent_candidates,
-        task_section_candidates, TaskSearch,
+        blocked_task_candidates, dependency_candidates, drawer_candidates,
+        link_candidates, relation_candidates, relation_label_suggestions,
+        route_candidates, section_candidates, task_candidates,
+        task_complete_candidates, task_goto_candidates, task_link_candidates,
+        task_parent_candidates, TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
-        CompletionRelation, OverrideCompletion, PickerDescriptor, PickerKind,
-        PickerScope, Replacement, SCHEMA_VERSION,
+        CompletionRelation, DrawerTarget, OverrideCompletion, PickerDescriptor,
+        PickerKind, PickerScope, Replacement, SCHEMA_VERSION,
     },
     pomodoros::{
         apply_bare_start_name_replacements, pomodoro_candidates,
@@ -103,7 +103,7 @@ fn build_result_inner(
             | CompletionContext::PomodoroName
             | CompletionContext::PomodoroStartName
             | CompletionContext::Task
-            | CompletionContext::TaskSection
+            | CompletionContext::Drawer
             | CompletionContext::ActiveTask
             | CompletionContext::TaskLink
             | CompletionContext::TaskGoto
@@ -134,6 +134,7 @@ fn build_result_inner(
             initial_selection: None,
             subject: None,
             candidates,
+            target: None,
             theme_suggestion: None,
             r#override: None,
             block_id: None,
@@ -180,6 +181,7 @@ fn build_result_inner(
             initial_selection: None,
             subject: None,
             candidates: Candidates::WikilinkTask(rows),
+            target: None,
             theme_suggestion: None,
             r#override: None,
             block_id: None,
@@ -271,6 +273,7 @@ fn build_result_inner(
             initial_selection: None,
             subject: None,
             candidates,
+            target: None,
             theme_suggestion: None,
             r#override: None,
             block_id: Some(block_field),
@@ -330,9 +333,9 @@ fn build_result_inner(
                 Vec::new(),
             )
         }
-        CompletionContext::TaskSection => {
+        CompletionContext::Drawer => {
             let route = field.route.as_deref().expect("route resolved");
-            task_section_candidates(
+            drawer_candidates(
                 bob_dir,
                 route,
                 field.block_id.as_deref(),
@@ -639,6 +642,11 @@ fn build_result_inner(
         apply_bare_start_name_replacements(&mut candidates);
     }
 
+    let drawer_target = if field.context == CompletionContext::Drawer {
+        drawer_completion_target(bob_dir, &field, &candidates)
+    } else {
+        None
+    };
     Ok(CaptureCompleteResult {
         ok: true,
         schema_version: SCHEMA_VERSION,
@@ -652,6 +660,7 @@ fn build_result_inner(
         initial_selection: None,
         subject,
         candidates,
+        target: drawer_target,
         theme_suggestion,
         r#override: override_info,
         block_id: None,
@@ -711,12 +720,59 @@ fn template_completion_gate(
     Ok(Some(result))
 }
 
+fn drawer_completion_target(
+    bob_dir: &Path,
+    field: &capture_language::CompletionField,
+    candidates: &Candidates,
+) -> Option<DrawerTarget> {
+    let route = field.route.clone()?;
+    let route_label = capture::route_label(&route);
+    let block_id = field.block_id.clone();
+    // Prefer the parent text already resolved for task rows.
+    if let Candidates::Drawer(rows) = candidates
+        && let Some(first) = rows.first()
+    {
+        return Some(DrawerTarget {
+            route: route_label,
+            block_id,
+            text: first.text.clone(),
+        });
+    }
+    // Fall back to reading the parent directly so `target` is present
+    // even when the drawer list is empty.
+    let note_path = bob_dir.join(&route_label);
+    let content = std::fs::read_to_string(&note_path).ok()?;
+    let settings = crate::native::note_tasks::read_settings(bob_dir);
+    let scan = crate::native::note_tasks::scan(&content, &settings);
+    let parent =
+        block_id
+            .as_deref()
+            .and_then(|id| match scan.by_block_id(id) {
+                crate::native::note_tasks::BlockIdLookup::Found(task) => {
+                    Some(task)
+                }
+                _ => None,
+            });
+    Some(DrawerTarget {
+        route: route_label,
+        block_id,
+        text: parent
+            .map(|task| task.description.clone())
+            .unwrap_or_default(),
+    })
+}
+
 fn initial_selection(
     raw_text: &str,
     result: &CaptureCompleteResult,
 ) -> Option<&'static str> {
     if result.query.as_deref() != Some("") {
         return None;
+    }
+    // An empty drawer query (`@route+id#`) opens with nothing selected,
+    // even though the `#` is glued to the ID.
+    if matches!(result.context, Some(CompletionContext::Drawer)) {
+        return Some("none");
     }
     let marker =
         raw_text.get(result.replacement.start..result.replacement.end)?;

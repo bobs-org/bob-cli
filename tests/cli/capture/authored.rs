@@ -581,7 +581,7 @@ fn capture_bare_terminal_marker_authored_children_nest_one_level_deeper() {
 }
 
 #[test]
-fn capture_task_section_authored_children_and_composition() {
+fn capture_drawer_authored_children_and_composition() {
     let original = concat!(
         "- [ ] #task Parent ^parent\n",
         "\t- REQUIREMENTS\n",
@@ -589,7 +589,7 @@ fn capture_task_section_authored_children_and_composition() {
         "\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t- *2026-08-01* — keep this entry\n",
     );
-    let temp = TempDir::new("bob-cli-task-section-composition");
+    let temp = TempDir::new("bob-cli-drawer-composition");
     let vault = temp.path().join("vault");
     let clipboard = temp.path().join("clipboard");
     let config = temp.path().join("config.yml");
@@ -609,7 +609,7 @@ fn capture_task_section_authored_children_and_composition() {
         .env("BOB_PRIORITY_ROLL_SEED", "1")
         .env("BOB_CLIPBOARD_CMD", &clipboard)
         .output()
-        .expect("run composed task-section capture");
+        .expect("run composed drawer capture");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
@@ -640,7 +640,7 @@ fn capture_task_section_authored_children_and_composition() {
         format_output(&output)
     );
 
-    let scheduled = TempDir::new("bob-cli-task-section-scheduled");
+    let scheduled = TempDir::new("bob-cli-drawer-scheduled");
     let vault = scheduled.path().join("vault");
     write_file(&vault.join("cash.md"), original);
     let output = bob_command()
@@ -650,7 +650,7 @@ fn capture_task_section_authored_children_and_composition() {
         .arg("ship it s:2 @cash+parent#requirements")
         .env("BOB_NOW", "2026-07-10")
         .output()
-        .expect("run scheduled task-section capture");
+        .expect("run scheduled drawer capture");
     assert_success(&output);
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
@@ -664,7 +664,7 @@ fn capture_task_section_authored_children_and_composition() {
         )
     );
 
-    let clipped = TempDir::new("bob-cli-task-section-clip-flag");
+    let clipped = TempDir::new("bob-cli-drawer-clip-flag");
     let vault = clipped.path().join("vault");
     let clipboard = clipped.path().join("clipboard");
     write_file(&vault.join("cash.md"), original);
@@ -679,7 +679,7 @@ fn capture_task_section_authored_children_and_composition() {
         .env("BOB_NOW", "2026-07-31")
         .env("BOB_CLIPBOARD_CMD", &clipboard)
         .output()
-        .expect("run --clip task-section capture");
+        .expect("run --clip drawer capture");
     assert_success(&output);
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read note"),

@@ -289,7 +289,7 @@ fn ensure_next_named_relocation_sets_a_theme_after_freshness_edits() {
         ),
     );
     let (output, json) =
-        capture_json(&vault, &day_file, &config, &["@sase+work#FIX"], false);
+        capture_json(&vault, &day_file, &config, &["@sase+work #FIX"], false);
     assert_success(&output);
     assert_eq!(json["toggle_behavior"], "ensure_next", "{json}");
     assert_eq!(json["task_theme"]["action"], "set", "{json}");

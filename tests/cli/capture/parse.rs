@@ -881,7 +881,7 @@ fn capture_parse_reports_utf8_byte_offsets() {
 }
 
 #[test]
-fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
+fn capture_parse_json_reports_drawer_and_incomplete_needs() {
     let complete = bob_command()
         .arg("capture-parse")
         .arg("-f")
@@ -904,7 +904,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         serde_json::json!([
             { "start": 20, "end": 24, "kind": "sub_bullet_route" },
             { "start": 25, "end": 28, "kind": "sub_bullet_block_id" },
-            { "start": 29, "end": 32, "kind": "sub_bullet_section" },
+            { "start": 29, "end": 32, "kind": "drawer" },
         ])
     );
 
@@ -923,7 +923,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
     assert_eq!(json["route"], "foo");
     assert_eq!(json["block_id"], "bar");
     assert!(json["section"].is_null());
-    assert_eq!(json["needs"], serde_json::json!(["task_section"]));
+    assert_eq!(json["needs"], serde_json::json!(["drawer"]));
 
     let needs_task = bob_command()
         .arg("capture-parse")
@@ -952,7 +952,7 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&both).trim()).expect("json");
     assert_eq!(json["mode"], "incomplete");
-    assert_eq!(json["needs"], serde_json::json!(["task", "task_section"]));
+    assert_eq!(json["needs"], serde_json::json!(["task", "drawer"]));
 
     let invalid = bob_command()
         .arg("capture-parse")
@@ -961,11 +961,11 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .arg("--")
         .arg("note @foo+bar#bad_id")
         .output()
-        .expect("run invalid section parse");
+        .expect("run invalid drawer parse");
     assert_success(&invalid);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&invalid).trim()).expect("json");
-    assert_eq!(json["diagnostics"][0]["code"], "invalid_sub_bullet_section");
+    assert_eq!(json["diagnostics"][0]["code"], "invalid_drawer");
 
     let note_bullet = bob_command()
         .arg("capture-parse")
@@ -1132,33 +1132,19 @@ fn capture_parse_json_reports_explicit_toggle_and_attached_type_spans() {
         .arg("@cash+goog-exit#deep-work")
         .env("BOB_DIR", &vault)
         .output()
-        .expect("run named ensure-Next parse");
+        .expect("run drawer parse");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
-    assert_eq!(json["mode"], "task_toggle");
-    assert!(json["section"].is_null());
+    assert_eq!(json["mode"], "sub_bullet");
+    assert_eq!(json["section"], "deep-work");
+    assert_eq!(json["needs"], serde_json::json!(["drawer_text"]));
     assert_eq!(
         json["spans"],
         serde_json::json!([
-            { "start": 0, "end": 5, "kind": "task_toggle_route" },
-            { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
-            {
-                "start": 15,
-                "end": 25,
-                "kind": "task_type",
-                "themes": [
-                    {
-                        "key": "deep-work",
-                        "name": "DEEP-WORK",
-                        "hue": "yellow",
-                        "hue_source": "hash",
-                        "known": false,
-                        "start": 16,
-                        "end": 25,
-                    },
-                ],
-            },
+            { "start": 0, "end": 5, "kind": "sub_bullet_route" },
+            { "start": 6, "end": 15, "kind": "sub_bullet_block_id" },
+            { "start": 16, "end": 25, "kind": "drawer" },
         ])
     );
 }

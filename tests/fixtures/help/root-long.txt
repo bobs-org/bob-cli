@@ -39,6 +39,7 @@ Setup:
 
 Capture protocol:
   capture-complete       Complete the capture marker at the cursor
+  capture-drawers        List the ALL-CAPS child drawers of a capture task
   capture-parse          Explain what in-progress capture text currently means
   capture-pomodoro-name  Write a name onto an open unnamed Pomodoro
   capture-pomodoros      List today's Pomodoro ledger entries
@@ -47,7 +48,6 @@ Capture protocol:
   capture-sections       List the non-Tasks sections of a capture note
   capture-targets        List inbox, area, and active project capture routes
   capture-task-id        Write a block ID onto an open capture task
-  capture-task-sections  List the ALL-CAPS child sections of a capture task
   capture-tasks          List the open tasks of a capture note
   capture-templates      List, save, show, and manage saved capture templates
 

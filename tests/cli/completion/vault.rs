@@ -349,7 +349,7 @@ fn tasks_offer_open_block_ids_with_text() {
         vec!["bob", "capture", "--route=cash", "--task", ""],
         vec![
             "bob",
-            "capture-task-sections",
+            "capture-drawers",
             "--route",
             "cash",
             "--block-id",
@@ -376,19 +376,13 @@ fn tasks_offer_open_block_ids_with_text() {
 }
 
 #[test]
-fn task_sections_offer_exact_titles() {
+fn drawers_offer_exact_titles() {
     let fixture = fixture();
     let output = complete(
         &fixture,
         &[
-            "bob",
-            "capture",
-            "--route",
-            "cash",
-            "--task",
-            "fix-sink",
-            "--task-section",
-            "",
+            "bob", "capture", "--route", "cash", "--task", "fix-sink",
+            "--drawer", "",
         ],
     );
 
@@ -489,7 +483,7 @@ fn missing_prerequisites_name_the_flag() {
 
     let output = complete(
         &fixture,
-        &["bob", "capture", "--route", "cash", "--task-section", ""],
+        &["bob", "capture", "--route", "cash", "--drawer", ""],
     );
     assert_success(&output);
     assert_eq!(stdout(&output), "!message pass --task first\n");
@@ -590,18 +584,12 @@ fn completion_is_read_only() {
         vec!["bob", "capture", "--route", "cash", "--section", ""],
         vec!["bob", "capture", "--route", "cash", "--task", ""],
         vec![
-            "bob",
-            "capture",
-            "--route",
-            "cash",
-            "--task",
-            "fix-sink",
-            "--task-section",
-            "",
+            "bob", "capture", "--route", "cash", "--task", "fix-sink",
+            "--drawer", "",
         ],
         vec![
             "bob",
-            "capture-task-sections",
+            "capture-drawers",
             "--route",
             "cash",
             "--block-id",

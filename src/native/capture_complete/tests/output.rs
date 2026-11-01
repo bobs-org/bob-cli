@@ -225,6 +225,7 @@ fn json_shape_is_stable() {
         context: Some(CompletionContext::PomodoroName),
         initial_selection: None,
         subject: None,
+        target: None,
         candidates: Candidates::PomodoroName(vec![pomodoro_name]),
         theme_suggestion: None,
         r#override: None,
@@ -243,7 +244,7 @@ fn json_shape_is_stable() {
 
     assert_eq!(pomodoro_json["context"], "pomodoro_name");
     assert_eq!(pomodoro_json["schema_version"], 1);
-    assert_eq!(pomodoro_json["grammar"], 2);
+    assert_eq!(pomodoro_json["grammar"], 3);
     assert_eq!(pomodoro_json["candidates"][0]["replacement"], "memory");
     assert_eq!(pomodoro_json["candidates"][0]["name"], "MEMORY");
     assert_eq!(pomodoro_json["candidates"][0]["requires_name"], false);
@@ -272,6 +273,7 @@ fn json_shape_is_stable() {
         context: Some(CompletionContext::Route),
         initial_selection: None,
         subject: None,
+        target: None,
         candidates: Candidates::Route(vec![RouteCandidate {
             replacement: "cash".to_string(),
             route: "cash".to_string(),
@@ -583,6 +585,7 @@ fn human_output_is_plain_without_color() {
             context: Some(CompletionContext::Route),
             initial_selection: None,
             subject: None,
+            target: None,
             candidates: Candidates::Route(vec![RouteCandidate {
                 replacement: "cash".to_string(),
                 route: "cash".to_string(),

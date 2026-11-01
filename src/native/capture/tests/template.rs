@@ -13,7 +13,7 @@ fn template_request(vault: &Path, raw_text: &str) -> CaptureRequest {
         forced_route: None,
         forced_section: None,
         forced_sub_bullet_target: None,
-        forced_task_section: None,
+        forced_drawer: None,
         inbox_routes: Vec::new(),
         no_clip: false,
         no_ref: false,

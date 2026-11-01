@@ -324,8 +324,8 @@ fn capture_complete_pomodoro_name_json_skips_create_when_ledger_cannot_place_it(
 }
 
 #[test]
-fn capture_complete_task_section_json_covers_components_and_warnings() {
-    let temp = TempDir::new("bob-cli-capture-complete-task-section");
+fn capture_complete_drawer_json_covers_components_and_warnings() {
+    let temp = TempDir::new("bob-cli-capture-complete-drawer");
     let vault = temp.path().join("vault");
     write_capture_task_settings(&vault);
     write_file(
@@ -360,7 +360,7 @@ fn capture_complete_task_section_json_covers_components_and_warnings() {
     assert_success(&section);
     let section_json: serde_json::Value =
         serde_json::from_str(stdout(&section).trim()).expect("json");
-    assert_eq!(section_json["context"], "task_section");
+    assert_eq!(section_json["context"], "drawer");
     assert_eq!(
         section_json["replacement"],
         serde_json::json!({"start": hash + 1, "end": raw.len()})
@@ -388,7 +388,7 @@ fn capture_complete_task_section_json_covers_components_and_warnings() {
     assert_success(&bare);
     let bare_json: serde_json::Value =
         serde_json::from_str(stdout(&bare).trim()).expect("json");
-    assert_eq!(bare_json["context"], "task_section");
+    assert_eq!(bare_json["context"], "drawer");
     let titles: Vec<&str> = bare_json["candidates"]
         .as_array()
         .expect("candidates")
@@ -413,7 +413,7 @@ fn capture_complete_task_section_json_covers_components_and_warnings() {
     assert_success(&empty_id);
     let empty_id_json: serde_json::Value =
         serde_json::from_str(stdout(&empty_id).trim()).expect("json");
-    assert_eq!(empty_id_json["context"], "task_section");
+    assert_eq!(empty_id_json["context"], "drawer");
     assert_eq!(
         empty_id_json["candidates"]
             .as_array()
@@ -438,7 +438,7 @@ fn capture_complete_task_section_json_covers_components_and_warnings() {
     assert_success(&missing);
     let missing_json: serde_json::Value =
         serde_json::from_str(stdout(&missing).trim()).expect("json");
-    assert_eq!(missing_json["context"], "task_section");
+    assert_eq!(missing_json["context"], "drawer");
     assert_eq!(
         missing_json["candidates"]
             .as_array()

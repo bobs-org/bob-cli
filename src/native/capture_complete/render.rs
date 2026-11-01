@@ -435,12 +435,12 @@ pub(super) fn candidate_lines(
                 (label, detail)
             })
             .collect(),
-        Candidates::TaskSection(items) => items
+        Candidates::Drawer(items) => items
             .iter()
             .map(|item| {
                 (
                     item.replacement.clone(),
-                    format!("{}  {} items", item.title, item.child_count),
+                    format!("{}  {} items", item.title, item.entry_count),
                 )
             })
             .collect(),
@@ -656,7 +656,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::PomodoroStartName => "pomodoro_start_name",
         CompletionContext::Task => "task",
-        CompletionContext::TaskSection => "task_section",
+        CompletionContext::Drawer => "drawer",
         CompletionContext::ActiveTask => "active_task",
         CompletionContext::TaskLink => "task_link",
         CompletionContext::TaskGoto => "task_goto",

@@ -58,6 +58,8 @@ pub(super) fn parse_editor_adjust_item<'a>(
         end: token_end,
         kind: span_kind,
         project_note: None,
+        title: None,
+        key: None,
     };
     let exact = parent_trimmed.len() == prefix_len && item.lines.len() == 1;
     if !exact {
@@ -311,6 +313,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
         end: token_start + prefix_len,
         kind: SpanKind::PomodoroStart,
         project_note: None,
+        title: None,
+        key: None,
     }];
     if name.is_empty() {
         // Bare tokens never have an empty name; only `=#` uses the
@@ -322,6 +326,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 end: hash_start + 1,
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
+                title: None,
+                key: None,
             });
         }
     } else {
@@ -330,6 +336,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
             end: name_end,
             kind: SpanKind::PomodoroName,
             project_note: None,
+            title: None,
+            key: None,
         });
     }
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
@@ -469,6 +477,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 end: token_start + timing_offset + 1,
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
+                title: None,
+                key: None,
             });
             // Add drop span if a valid drop was typed before the dangling `@`.
             if let DropLex::Valid(_, range) = &drop_lex {
@@ -477,6 +487,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
                     end: range.1,
                     kind: SpanKind::PomodoroStartDrop,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 timing_spans.sort_by_key(|span| span.start);
             }
@@ -499,6 +511,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 end,
                 kind: SpanKind::PomodoroStart,
                 project_note: None,
+                title: None,
+                key: None,
             });
             spans.sort_by_key(|span| span.start);
         }
@@ -519,6 +533,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
                     end: range.1,
                     kind: SpanKind::PomodoroStartDrop,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 return Some(editor_named_valid_outcome(
                     item,
@@ -536,6 +552,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
                         end: range.1,
                         kind: SpanKind::PomodoroStartDrop,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 spans.push(Span {
@@ -543,6 +561,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
                     end: sep_range.1,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 return Some(editor_start_drop_incomplete_outcome(
                     item,
@@ -643,6 +663,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
             end: token_start + timing_offset + 1,
             kind: SpanKind::InteractivePlaceholder,
             project_note: None,
+            title: None,
+            key: None,
         });
         timing_spans.sort_by_key(|span| span.start);
         // With extra text or child lines, a dangling `@` still reports the
@@ -999,7 +1021,7 @@ fn editor_named_invalid_outcome<'a>(
     let mut outcome = editor_start_invalid_outcome(
         item,
         parent_trimmed,
-        spans[0],
+        spans[0].clone(),
         message,
         range,
     );
@@ -1044,6 +1066,8 @@ pub(super) fn parse_editor_start_item<'a>(
         },
         kind: SpanKind::PomodoroStart,
         project_note: None,
+        title: None,
+        key: None,
     };
     enum DropLex {
         None,
@@ -1071,13 +1095,15 @@ pub(super) fn parse_editor_start_item<'a>(
             }
         }
     };
-    let mut valid_spans = vec![base_span];
+    let mut valid_spans = vec![base_span.clone()];
     if let DropLex::Valid(_, range) = &drop_lex {
         valid_spans.push(Span {
             start: range.0,
             end: range.1,
             kind: SpanKind::PomodoroStartDrop,
             project_note: None,
+            title: None,
+            key: None,
         });
     }
     if let Some((timing_offset, timing_after)) = timing.as_ref()
@@ -1088,6 +1114,8 @@ pub(super) fn parse_editor_start_item<'a>(
             end: token_start + timing_offset + 1 + timing_after.len(),
             kind: SpanKind::PomodoroStart,
             project_note: None,
+            title: None,
+            key: None,
         });
         valid_spans.sort_by_key(|span| span.start);
     }
@@ -1101,7 +1129,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 return Some(editor_start_invalid_outcome(
                     item,
                     parent_trimmed,
-                    base_span,
+                    base_span.clone(),
                     message,
                     Some((token_start + start, token_start + end)),
                 ));
@@ -1128,7 +1156,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 return Some(editor_start_invalid_outcome(
                     item,
                     parent_trimmed,
-                    base_span,
+                    base_span.clone(),
                     message,
                     Some(range),
                 ));
@@ -1136,12 +1164,14 @@ pub(super) fn parse_editor_start_item<'a>(
             if let Some((timing_offset, timing_after)) = timing.as_ref()
                 && timing_after.is_empty()
             {
-                let mut timing_spans = vec![base_span];
+                let mut timing_spans = vec![base_span.clone()];
                 timing_spans.push(Span {
                     start: token_start + timing_offset,
                     end: token_start + timing_offset + 1,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 return Some(editor_start_timing_incomplete_outcome(
                     item,
@@ -1157,7 +1187,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 return Some(editor_start_invalid_outcome(
                     item,
                     parent_trimmed,
-                    base_span,
+                    base_span.clone(),
                     message,
                     Some(range),
                 ));
@@ -1169,7 +1199,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     return Some(editor_start_invalid_outcome(
                         item,
                         parent_trimmed,
-                        base_span,
+                        base_span.clone(),
                         start_drop_no_spaces_error(),
                         Some(extra_text_range(
                             token_start,
@@ -1186,7 +1216,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 return Some(editor_start_invalid_outcome(
                     item,
                     parent_trimmed,
-                    base_span,
+                    base_span.clone(),
                     message,
                     Some((child.raw.start, child.raw.end)),
                 ));
@@ -1199,7 +1229,7 @@ pub(super) fn parse_editor_start_item<'a>(
                 return Some(editor_start_invalid_outcome(
                     item,
                     parent_trimmed,
-                    base_span,
+                    base_span.clone(),
                     message,
                     Some((item.start, item.end)),
                 ));
@@ -1247,12 +1277,14 @@ pub(super) fn parse_editor_start_item<'a>(
     if let Some((timing_offset, timing_after)) = timing.as_ref()
         && timing_after.is_empty()
     {
-        let mut timing_spans = vec![base_span];
+        let mut timing_spans = vec![base_span.clone()];
         timing_spans.push(Span {
             start: token_start + timing_offset,
             end: token_start + timing_offset + 1,
             kind: SpanKind::InteractivePlaceholder,
             project_note: None,
+            title: None,
+            key: None,
         });
         return Some(editor_start_timing_incomplete_outcome(
             item,
@@ -1282,7 +1314,7 @@ pub(super) fn parse_editor_start_item<'a>(
             let spans = if timing.is_some() {
                 valid_spans.clone()
             } else {
-                vec![base_span]
+                vec![base_span.clone()]
             };
             Some(EditorItemOutcome {
                 item: EditorItemParse {
@@ -1354,13 +1386,15 @@ pub(super) fn parse_editor_start_item<'a>(
         DropLex::Incomplete(list, drop_range, sep_range, sep) => {
             let mut spec = base_spec;
             spec.drop = list;
-            let mut spans = vec![base_span];
+            let mut spans = vec![base_span.clone()];
             if let Some(range) = drop_range {
                 spans.push(Span {
                     start: range.0,
                     end: range.1,
                     kind: SpanKind::PomodoroStartDrop,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
             }
             spans.push(Span {
@@ -1368,6 +1402,8 @@ pub(super) fn parse_editor_start_item<'a>(
                 end: sep_range.1,
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
+                title: None,
+                key: None,
             });
             Some(editor_start_drop_incomplete_outcome(
                 item,
@@ -1446,6 +1482,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end: token_start + len,
                         kind: SpanKind::PomodoroStart,
                         project_note: None,
+                        title: None,
+                        key: None,
                     },
                     pomodoro_double_start_error(token_text),
                     Some((token_start, token_start + len)),
@@ -1492,6 +1530,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 end: token_start + first.len(),
                 kind: SpanKind::PomodoroStart,
                 project_note: None,
+                title: None,
+                key: None,
             },
             pomodoro_double_close_error(first, &close_spelling),
             Some((token_start, token_start + first.len())),
@@ -1512,6 +1552,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 end: token_start + first.len(),
                 kind: SpanKind::PomodoroClose,
                 project_note: None,
+                title: None,
+                key: None,
             }],
             Vec::new(),
             vec![Diagnostic {
@@ -1529,6 +1571,8 @@ pub(super) fn parse_editor_close_item<'a>(
         end: token_start + 1,
         kind: SpanKind::PomodoroClose,
         project_note: None,
+        title: None,
+        key: None,
     };
     // `x#…` is a claimed close near miss with a teaching error, whether or
     // not the item carries extra text or child lines. It used to be prose.
@@ -1538,7 +1582,7 @@ pub(super) fn parse_editor_close_item<'a>(
             parent_trimmed,
             EditorMode::PomodoroClose,
             None,
-            vec![close_span],
+            vec![close_span.clone()],
             Vec::new(),
             vec![Diagnostic {
                 severity: Severity::Error,
@@ -1572,19 +1616,21 @@ pub(super) fn parse_editor_close_item<'a>(
                     parent_trimmed,
                     EditorMode::PomodoroClose,
                     Some(PomodoroCloseSpec::plain(first.to_string())),
-                    vec![close_span],
+                    vec![close_span.clone()],
                     Vec::new(),
                     Vec::new(),
                 ));
             }
             Some(Ok(CloseSelectionOutcome::Valid(lex))) => {
-                let mut spans = vec![close_span];
+                let mut spans = vec![close_span.clone()];
                 if let Some((start, end)) = lex.in_progress_range {
                     spans.push(Span {
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseInProgress,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = lex.park_range {
@@ -1593,6 +1639,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end,
                         kind: SpanKind::PomodoroClosePark,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = lex.complete_range {
@@ -1601,6 +1649,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end,
                         kind: SpanKind::PomodoroCloseComplete,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = lex.drop_range {
@@ -1609,6 +1659,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end,
                         kind: SpanKind::PomodoroCloseDrop,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 return Some(editor_close_outcome(
@@ -1622,13 +1674,15 @@ pub(super) fn parse_editor_close_item<'a>(
                 ));
             }
             Some(Ok(CloseSelectionOutcome::Incomplete(incomplete))) => {
-                let mut spans = vec![close_span];
+                let mut spans = vec![close_span.clone()];
                 if let Some((start, end)) = incomplete.in_progress_range {
                     spans.push(Span {
                         start,
                         end,
                         kind: SpanKind::PomodoroCloseInProgress,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.park_range {
@@ -1637,6 +1691,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end,
                         kind: SpanKind::PomodoroClosePark,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.complete_range {
@@ -1645,6 +1701,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end,
                         kind: SpanKind::PomodoroCloseComplete,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = incomplete.drop_range {
@@ -1653,6 +1711,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end,
                         kind: SpanKind::PomodoroCloseDrop,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 spans.push(Span {
@@ -1660,6 +1720,8 @@ pub(super) fn parse_editor_close_item<'a>(
                     end: incomplete.separator_range.1,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 return Some(editor_close_outcome(
                     item,
@@ -1680,7 +1742,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     parent_trimmed,
                     EditorMode::PomodoroClose,
                     None,
-                    vec![close_span],
+                    vec![close_span.clone()],
                     Vec::new(),
                     vec![Diagnostic {
                         severity: Severity::Error,
@@ -1720,13 +1782,15 @@ pub(super) fn parse_editor_close_item<'a>(
                     EditorSelection::Plain(lex)
                 }
                 Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
-                    let mut spans = vec![close_span];
+                    let mut spans = vec![close_span.clone()];
                     if let Some((start, end)) = incomplete.in_progress_range {
                         spans.push(Span {
                             start,
                             end,
                             kind: SpanKind::PomodoroCloseInProgress,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.park_range {
@@ -1735,6 +1799,8 @@ pub(super) fn parse_editor_close_item<'a>(
                             end,
                             kind: SpanKind::PomodoroClosePark,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.complete_range {
@@ -1743,6 +1809,8 @@ pub(super) fn parse_editor_close_item<'a>(
                             end,
                             kind: SpanKind::PomodoroCloseComplete,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                     if let Some((start, end)) = incomplete.drop_range {
@@ -1751,6 +1819,8 @@ pub(super) fn parse_editor_close_item<'a>(
                             end,
                             kind: SpanKind::PomodoroCloseDrop,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                     spans.push(Span {
@@ -1758,6 +1828,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end: incomplete.separator_range.1,
                         kind: SpanKind::InteractivePlaceholder,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                     EditorSelection::Incomplete(incomplete, spans)
                 }
@@ -1768,13 +1840,15 @@ pub(super) fn parse_editor_close_item<'a>(
     // Selection spans stay visible on every path below, including bullet
     // lines; the old child-line branch dropped them.
     let selection_spans = |lex: &CloseSelectionLex| {
-        let mut spans = vec![close_span];
+        let mut spans = vec![close_span.clone()];
         if let Some((start, end)) = lex.in_progress_range {
             spans.push(Span {
                 start,
                 end,
                 kind: SpanKind::PomodoroCloseInProgress,
                 project_note: None,
+                title: None,
+                key: None,
             });
         }
         if let Some((start, end)) = lex.park_range {
@@ -1783,6 +1857,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 end,
                 kind: SpanKind::PomodoroClosePark,
                 project_note: None,
+                title: None,
+                key: None,
             });
         }
         if let Some((start, end)) = lex.complete_range {
@@ -1791,6 +1867,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 end,
                 kind: SpanKind::PomodoroCloseComplete,
                 project_note: None,
+                title: None,
+                key: None,
             });
         }
         if let Some((start, end)) = lex.drop_range {
@@ -1799,6 +1877,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 end,
                 kind: SpanKind::PomodoroCloseDrop,
                 project_note: None,
+                title: None,
+                key: None,
             });
         }
         spans
@@ -1828,7 +1908,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     parent_trimmed,
                     EditorMode::PomodoroClose,
                     None,
-                    vec![close_span],
+                    vec![close_span.clone()],
                     Vec::new(),
                     vec![Diagnostic {
                         severity: Severity::Error,
@@ -1860,6 +1940,8 @@ pub(super) fn parse_editor_close_item<'a>(
                             end,
                             kind: SpanKind::PomodoroCloseLogIndex,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                 }
@@ -1884,6 +1966,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end: dangling.index_range.1,
                         kind: SpanKind::InteractivePlaceholder,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 base_spans.sort_by_key(|span| (span.start, span.end));
@@ -1944,7 +2028,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 parent_trimmed,
                 EditorMode::PomodoroClose,
                 None,
-                vec![close_span],
+                vec![close_span.clone()],
                 Vec::new(),
                 vec![Diagnostic {
                     severity: Severity::Error,
@@ -2026,6 +2110,8 @@ pub(super) fn parse_editor_close_item<'a>(
                     end: index_range.1,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 spans.sort_by_key(|span| (span.start, span.end));
                 return Some(editor_close_outcome(
@@ -2048,6 +2134,8 @@ pub(super) fn parse_editor_close_item<'a>(
                 end: index_range.1,
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
+                title: None,
+                key: None,
             });
             base_spans.sort_by_key(|span| (span.start, span.end));
             let mut spec =
@@ -2091,6 +2179,8 @@ pub(super) fn parse_editor_close_item<'a>(
                         end,
                         kind: SpanKind::PomodoroCloseLogIndex,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 spans.sort_by_key(|span| (span.start, span.end));
@@ -2115,6 +2205,8 @@ pub(super) fn parse_editor_close_item<'a>(
                     end,
                     kind: SpanKind::PomodoroCloseLogIndex,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
             }
             base_spans.sort_by_key(|span| (span.start, span.end));

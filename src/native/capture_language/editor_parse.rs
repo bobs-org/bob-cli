@@ -31,6 +31,43 @@ pub(crate) fn tokenize_line_with_spans<'a>(
     super::pomodoro_literal::merge_leading_literal_token(line, tokens)
 }
 
+fn is_valid_drawer_section(section: &str) -> bool {
+    if section.is_empty() {
+        return true;
+    }
+    if section.ends_with('!')
+        && !section.starts_with('"')
+        && !section.starts_with('“')
+    {
+        return false;
+    }
+    if section.starts_with('"') || section.starts_with('“') {
+        use super::pomodoro_literal::{
+            lex_exact_name_after_hash, opens_exact_name,
+        };
+        if !opens_exact_name(section) {
+            return false;
+        }
+        let Some(lex) = lex_exact_name_after_hash(section, section.len())
+        else {
+            return false;
+        };
+        if !lex.complete {
+            return true;
+        }
+        let Some(canonical) =
+            crate::native::capture_drawers::normalize_drawer_literal(
+                &lex.decoded,
+            )
+        else {
+            return false;
+        };
+        let _ = canonical;
+        return section.len() == lex.literal_len;
+    }
+    crate::native::capture_drawers::is_drawer_slug(section)
+}
+
 /// One physical line's marker resolution for the editor: its remaining body
 /// text, the marker it resolved (if any), the terminal schedule/priority/
 /// clipboard spans it carries, and any diagnostics raised along the way.
@@ -77,9 +114,11 @@ pub(super) fn parse_editor_line<'a>(
             end,
             kind,
             project_note: None,
+            title: None,
+            key: None,
         })
         .collect();
-    terminal_spans.extend(dependencies.spans.iter().copied());
+    terminal_spans.extend(dependencies.spans.iter().cloned());
 
     let mut diagnostics = Vec::new();
     if let Some(diagnostic) = retired_priority_marker_diagnostic(&markers) {
@@ -389,7 +428,7 @@ pub(crate) fn parse_for_editor_with(
     let task_complete = first.task_complete.clone();
     let sub_bullets = first.sub_bullets.clone();
     let mut spans = global_spans;
-    spans.extend(items.iter().flat_map(|item| item.spans.iter().copied()));
+    spans.extend(items.iter().flat_map(|item| item.spans.iter().cloned()));
     let mut diagnostics = global_diagnostics;
     diagnostics.extend(
         items
@@ -748,6 +787,8 @@ pub(super) fn parse_editor_task_link_item<'a>(
                 end: token.end,
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
+                title: None,
+                key: None,
             }],
             diagnostics: Vec::new(),
             sub_bullets: Vec::new(),
@@ -795,6 +836,8 @@ pub(super) fn parse_editor_task_goto_item<'a>(
                 end: token.end,
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
+                title: None,
+                key: None,
             }],
             diagnostics: Vec::new(),
             sub_bullets: Vec::new(),
@@ -867,6 +910,8 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                 end,
                 kind: SpanKind::InteractivePlaceholder,
                 project_note: None,
+                title: None,
+                key: None,
             }],
             Vec::new(),
         )),
@@ -890,18 +935,24 @@ pub(super) fn parse_editor_task_complete_item<'a>(
                         end: dependency.start + 1,
                         kind: SpanKind::TaskCompleteSigil,
                         project_note: None,
+                        title: None,
+                        key: None,
                     },
                     Span {
                         start: dependency.start + 1,
                         end: dependency.block_start - 1,
                         kind: SpanKind::TaskCompleteNote,
                         project_note: None,
+                        title: None,
+                        key: None,
                     },
                     Span {
                         start: dependency.block_start,
                         end: dependency.block_end,
                         kind: SpanKind::TaskCompleteBlockId,
                         project_note: None,
+                        title: None,
+                        key: None,
                     },
                 ],
                 Vec::new(),
@@ -986,6 +1037,8 @@ pub(super) fn parse_editor_parent_task_item<'a>(
         end: token.end,
         kind: SpanKind::InteractivePlaceholder,
         project_note: None,
+        title: None,
+        key: None,
     });
     spans.sort_by_key(|span| (span.start, span.end));
     Some(EditorItemOutcome {
@@ -1098,6 +1151,8 @@ fn parse_editor_ref_item<'a>(
                     end: token.end,
                     kind: SpanKind::RefUrl,
                     project_note: None,
+                    title: None,
+                    key: None,
                 }],
                 diagnostics: Vec::new(),
                 sub_bullets: Vec::new(),
@@ -1152,12 +1207,16 @@ fn parse_editor_ref_item<'a>(
                         end: url_token.end,
                         kind: SpanKind::RefUrl,
                         project_note: None,
+                        title: None,
+                        key: None,
                     },
                     Span {
                         start: route_token.start,
                         end: route_token.end,
                         kind: SpanKind::Route,
                         project_note: None,
+                        title: None,
+                        key: None,
                     },
                 ],
                 diagnostics: Vec::new(),
@@ -1343,6 +1402,8 @@ fn attach_type_marker_metadata(
             end: span.end,
             kind: SpanKind::TaskType,
             project_note: None,
+            title: None,
+            key: None,
         });
     }
     // Like execution, duplicates refuse before any subject judgment.
@@ -1458,6 +1519,8 @@ fn attach_directive_metadata(
             end: span.end,
             kind: SpanKind::Directive,
             project_note: None,
+            title: None,
+            key: None,
         });
     }
     match super::directive::resolve(occurrences) {
@@ -1727,10 +1790,9 @@ pub(super) fn parse_editor_item_inner<'a>(
             spans.extend(marker.spans.clone());
             seen.absorb_route(None, &mut diagnostics);
             if marker.mode == EditorMode::SubBullet
-                && marker
-                    .section
-                    .as_deref()
-                    .is_some_and(|section| !is_selector_component(section))
+                && marker.section.as_deref().is_some_and(|section| {
+                    !section.is_empty() && !is_valid_drawer_section(section)
+                })
             {
                 let start = marker.spans.first().map(|span| span.start);
                 let end = marker.spans.last().map(|span| span.end);
@@ -1860,13 +1922,15 @@ pub(super) fn parse_editor_item_inner<'a>(
     }
 
     // A marker-only `@route+block-id` with no body, authored children, or
-    // other item-wide markers is Ensure Next. The type-marker wrapper masks
-    // its attached `#<type>` suffix before this classification.
+    // other item-wide markers is Ensure Next. A glued `#drawer` suffix
+    // always stays a drawer capture and never toggles.
+    let has_drawer = section.is_some();
     let toggle_eligible = body.is_empty()
         && sub_bullets.is_empty()
         && !seen.schedule
         && !seen.priority
-        && !seen.clip;
+        && !seen.clip
+        && !has_drawer;
     let has_explicit_toggle = spans
         .iter()
         .any(|span| span.kind == SpanKind::TaskToggleExplicitToggle);
@@ -1888,6 +1952,21 @@ pub(super) fn parse_editor_item_inner<'a>(
         if let Some(index) = own_local_destination_marker_index {
             local_destination_markers[index].mode = EditorMode::TaskToggle;
         }
+    } else if mode == EditorMode::SubBullet
+        && has_drawer
+        && body.trim().is_empty()
+        && sub_bullet_relaxed_section_range.is_none()
+    {
+        // A drawer capture with no parent note text is incomplete even
+        // with authored children.
+        if !needs.contains(&Need::DrawerText) {
+            needs.push(Need::DrawerText);
+        }
+        if mode != EditorMode::Incomplete {
+            // Keep SubBullet mode but mark incomplete via needs; the
+            // editor shows the drawer menu and the missing-text hint.
+            // Diagnostics stay empty so the menu can open.
+        }
     } else if let Some(range) = sub_bullet_relaxed_section_range {
         mode = EditorMode::Task;
         route = None;
@@ -1899,13 +1978,13 @@ pub(super) fn parse_editor_item_inner<'a>(
                 span.kind,
                 SpanKind::SubBulletRoute
                     | SpanKind::SubBulletBlockId
-                    | SpanKind::SubBulletSection
+                    | SpanKind::Drawer
             )
         });
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
-            code: "invalid_sub_bullet_section",
-            message: SUB_BULLET_SECTION_ERROR.to_string(),
+            code: "invalid_drawer",
+            message: INVALID_DRAWER_ERROR.to_string(),
             range: Some(range),
         });
         local_destination_marker = None;
@@ -2052,6 +2131,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                             end: token.end,
                             kind: SpanKind::InteractivePlaceholder,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                 }
@@ -2071,6 +2152,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 end: token.start + 1,
                                 kind: SpanKind::ProjectTaskLinkMarker,
                                 project_note: None,
+                                title: None,
+                                key: None,
                             });
                         }
                         spans.push(Span {
@@ -2078,6 +2161,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                             end: token.end,
                             kind: SpanKind::ProjectTaskBlockId,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                 }
@@ -2163,12 +2248,16 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + link_end,
                     kind: SpanKind::ActiveTaskBlockId,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 if let Some((name_start, name_end)) = name_range
                     && name_end > name_start
@@ -2178,6 +2267,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                         end: token_start + name_end,
                         kind: SpanKind::PomodoroName,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some(offset) = start_offset {
@@ -2187,6 +2278,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                             end: token_start + offset + 2,
                             kind: SpanKind::PomodoroClose,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                         if let Some((start, end)) = close_in_progress {
                             spans.push(Span {
@@ -2194,6 +2287,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroCloseInProgress,
                                 project_note: None,
+                                title: None,
+                                key: None,
                             });
                         }
                         if let Some((start, end)) = close_park {
@@ -2202,6 +2297,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroClosePark,
                                 project_note: None,
+                                title: None,
+                                key: None,
                             });
                         }
                         if let Some((start, end)) = close_complete {
@@ -2210,6 +2307,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroCloseComplete,
                                 project_note: None,
+                                title: None,
+                                key: None,
                             });
                         }
                         if let Some((start, end)) = close_drop {
@@ -2218,6 +2317,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                                 end: token_start + end,
                                 kind: SpanKind::PomodoroCloseDrop,
                                 project_note: None,
+                                title: None,
+                                key: None,
                             });
                         }
                     } else {
@@ -2228,6 +2329,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                                     end: token_start + end,
                                     kind: SpanKind::PomodoroStart,
                                     project_note: None,
+                                    title: None,
+                                    key: None,
                                 });
                             }
                         }
@@ -2290,18 +2393,24 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + link_end,
                     kind: SpanKind::ActiveTaskBlockId,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 spans.push(Span {
                     start: token_start + suffix_offset,
                     end: token_start + suffix_offset + 2,
                     kind: SpanKind::PomodoroClose,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 if let Some((start, end)) = close_in_progress {
                     spans.push(Span {
@@ -2309,6 +2418,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseInProgress,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = close_park {
@@ -2317,6 +2428,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                         end: token_start + end,
                         kind: SpanKind::PomodoroClosePark,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = close_complete {
@@ -2325,6 +2438,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseComplete,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 if let Some((start, end)) = close_drop {
@@ -2333,6 +2448,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                         end: token_start + end,
                         kind: SpanKind::PomodoroCloseDrop,
                         project_note: None,
+                        title: None,
+                        key: None,
                     });
                 }
                 spans.push(Span {
@@ -2340,6 +2457,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: token_start + separator_range.1,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 local_destination_markers.push(LocalDestinationMarker {
                     start: token_start,
@@ -2425,6 +2544,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: token_end,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
             }
             CaretItemKind::NamePartial {
@@ -2451,12 +2572,16 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + link_end,
                     kind: SpanKind::ActiveTaskBlockId,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 for (start, end) in start_ranges {
                     if end > start {
@@ -2465,6 +2590,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                             end: token_start + end,
                             kind: SpanKind::PomodoroStart,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                 }
@@ -2473,6 +2600,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: token_start + name_range.0,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
             }
             CaretItemKind::TimingIncomplete {
@@ -2500,12 +2629,16 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: route_end,
                     kind: SpanKind::ActiveTaskRoute,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 spans.push(Span {
                     start: route_end + 1,
                     end: token_start + timing_link_end,
                     kind: SpanKind::ActiveTaskBlockId,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 for (start, end) in timing_ranges {
                     if end > start {
@@ -2514,6 +2647,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                             end: token_start + end,
                             kind: SpanKind::PomodoroStart,
                             project_note: None,
+                            title: None,
+                            key: None,
                         });
                     }
                 }
@@ -2522,12 +2657,16 @@ pub(super) fn parse_editor_item_inner<'a>(
                     end: token_start + timing_name_range.1,
                     kind: SpanKind::PomodoroName,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
                 spans.push(Span {
                     start: token_start + separator_range.0,
                     end: token_start + separator_range.1,
                     kind: SpanKind::InteractivePlaceholder,
                     project_note: None,
+                    title: None,
+                    key: None,
                 });
             }
             CaretItemKind::Invalid { message } => {

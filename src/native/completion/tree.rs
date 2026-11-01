@@ -50,8 +50,8 @@ impl NativeCommand {
             NativeCommand::CaptureTaskId => {
                 crate::native::capture_task_id::build_cli()
             }
-            NativeCommand::CaptureTaskSections => {
-                crate::native::capture_task_sections::build_cli()
+            NativeCommand::CaptureDrawers => {
+                crate::native::capture_drawers::build_cli()
             }
             NativeCommand::CaptureTasks => {
                 crate::native::capture_tasks::build_cli()

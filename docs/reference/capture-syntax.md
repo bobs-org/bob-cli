@@ -113,9 +113,9 @@ what they attach to, not as one global operator.
 | `#` | `@route#Section` | Heading in that note |
 | `#` | free-standing `#` at an item edge | Incomplete type marker: add `#fix` or write `\#` |
 | `#` | free-standing `#<type>` at an item edge | Type the new task or retype its selected task; unconfigured names refuse |
-| `#` | `@route^id#<type>` at an item edge | Type the new task with that block ID |
-| `#` | `@route+id#<type>` with no body or children | Retype the existing task and ensure Next |
-| `#` | `@route+id#section` with body text | ALL-CAPS task section |
+| `#` | `@route^id #<type>` (separate token) | Type the new task with that block ID |
+| `#` | `@route+id #<type>` (separate token) | Retype the target in the same transaction; marker-only also ensures Next |
+| `#` | `@route+id#drawer` (glued, with body text) | ALL-CAPS task drawer, created on demand |
 | `#` | `@route:id#pomodoro` / `=name` | Named Pomodoro (`=bugs` and `=#bugs` are one token) |
 | `@` | `@route…` | Route / destination token |
 | `@` | `@@route` | Draft-wide destination |
@@ -1360,11 +1360,11 @@ in the body.
 With configured `types:`, only configured entries are accepted. Without that
 vocabulary, only names already present in Pomodoro history are accepted;
 inventory labels are excluded. Unknown names fail transactionally with
-`type_not_configured`, including in dry-run mode. A marker attached as
-`@route+block-id#type` retypes the task and ensures Next only when the whole
-item has no body or authored children; with body text, `#section` remains a
-task-section selector. `@route^block-id#type` types the new task with that
-explicit block ID. Named Pomodoro owners such as `@route:block-id#NAME`,
+`type_not_configured`, including in dry-run mode. A separate `#type` token on
+`@route+block-id` retypes the target in the same transaction; with no body or
+authored children it also ensures Next, while with body text the glued
+`#drawer` suffix keeps its task-drawer meaning. `@route^block-id #type` (separate
+token) types the new task with that explicit block ID. Named Pomodoro owners such as `@route:block-id#NAME`,
 `^route:block-id#NAME`, `=#NAME`, and project-note `@route^block-id@#NAME` /
 `@route:block-id@#NAME` keep their existing meanings.
 

@@ -856,7 +856,7 @@ fn capture_pomodoro_close_diagnostics() {
         vec!["--route", "bob", "--section", "Tasks"],
         vec!["--route", "bob", "--task", "ready"],
         vec!["--route", "bob", "--task-ref", "1:deadbeef"],
-        vec!["--route", "bob", "--task", "ready", "--task-section", "FOO"],
+        vec!["--route", "bob", "--task", "ready", "--drawer", "FOO"],
     ] {
         let output = bob_command()
             .arg("capture")

@@ -786,7 +786,7 @@ pub(super) fn reject_pomodoro_start_conflicts(
         || request.forced_route.is_some()
         || request.forced_section.is_some()
         || request.forced_sub_bullet_target.is_some()
-        || request.forced_task_section.is_some()
+        || request.forced_drawer.is_some()
         || request.forced_clip.is_some()
     {
         return Err(CaptureError::usage(

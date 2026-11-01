@@ -9,7 +9,7 @@
 //!
 //! The key needs the command path because one arg id can mean two
 //! things: `--block-id` is a _new_ ID in `capture-task-id` but an
-//! _existing_ task in `capture-task-sections`, `--source` is a choice
+//! _existing_ task in `capture-drawers`, `--source` is a choice
 //! in `gkeep list` but free text in `query`, and `--output` is a PDF in
 //! `ref create` but whatever its
 //! [`clap::ValueHint`] says elsewhere. An empty path matches any
@@ -36,7 +36,7 @@ pub(crate) enum Kind {
     /// An open task of the routed note, by block ID.
     Task,
     /// An ALL-CAPS child section of the `--task` parent.
-    TaskSection,
+    Drawer,
     /// An open Pomodoro, by stale-safe ref.
     PomodoroRef,
     /// A plugin ID from the repo checkout.
@@ -88,7 +88,7 @@ const TABLE: &[Entry] = &[
     },
     // ... but an _existing_ task here.
     Entry {
-        path: &["capture-task-sections"],
+        path: &["capture-drawers"],
         arg: "block-id",
         kind: Kind::Task,
     },
@@ -382,8 +382,8 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
-        arg: "task-section",
-        kind: Kind::TaskSection,
+        arg: "drawer",
+        kind: Kind::Drawer,
     },
     // Internal saved-template checkout id; free text, never completed
     // from the vault. A list index or content id, never completed from
@@ -873,12 +873,12 @@ mod tests {
             lookup_exact(&["capture-task-id"], "block-id"),
             Some(Kind::FreeText)
         );
-        // `capture-task-sections --block-id` names an existing
+        // `capture-drawers --block-id` names an existing
         // task, so the vault-kinds phase gives it the live task
         // provider; `capture-task-id --block-id` stays free text
         // because it mints a new ID.
         assert_eq!(
-            lookup_exact(&["capture-task-sections"], "block-id"),
+            lookup_exact(&["capture-drawers"], "block-id"),
             Some(Kind::Task)
         );
         assert_eq!(

@@ -525,14 +525,7 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
         vec!["--route", "work", "--section", "Ideas"],
         vec!["--route", "work", "--task", "some-id"],
         vec!["--route", "work", "--task-ref", "1:abcdef12"],
-        vec![
-            "--route",
-            "work",
-            "--task",
-            "some-id",
-            "--task-section",
-            "TITLE",
-        ],
+        vec!["--route", "work", "--task", "some-id", "--drawer", "TITLE"],
         vec!["--clip"],
     ] {
         let temp_f = TempDir::new("bob-cli-capture-start-forced");
@@ -563,7 +556,7 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
         );
         assert!(
             stdout(&forced).contains(
-                "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the start alone"
+                "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the start alone"
             ),
             "{args:?}: {}",
             format_output(&forced)

@@ -281,7 +281,7 @@ anything is written, and any failure rolls the whole batch back.
 | `= -2` vs `=-2` | `= -2` starts 25 minutes then shortens 10 minutes; `=-2` is one 25-minute start with a 10-minute offset |
 | `- -` | Two bare adjustments in a row; lines made only of bare operators are chains, not prose |
 | `@cash^goog-exit@` | New project note `cash_goog_exit.md`; the `@` is a project-note seal, not a sub-bullet |
-| `@cash^goog-exit@#bugs` | New project note with its ` :id` Task Links under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task section |
+| `@cash^goog-exit@#bugs` | New project note with its ` :id` Task Links under the Pomodoro named `BUGS`; the `#` names a Pomodoro, not a task drawer |
 | `@cash:goog-exit@` | New project note `cash_goog_exit.md`, then its open tasks are offered; only `-p` picks (and explicit ` :id` bullets) are linked |
 | `@cash:goog-exit@#bugs` | Same; links and picks go under the Pomodoro named `BUGS` |
 | `@cash^goog-exit+`, `@cash^goog-exit+#bugs`, `@cash:goog-exit+`, `@cash:goog-exit+#bugs` | Retired project-note forms; the error teaches `@cash:goog-exit@` (choose tasks to link) and `@cash^goog-exit@` (link none), with `#bugs` carried over |
@@ -294,10 +294,9 @@ anything is written, and any failure rolls the whole batch back.
 | `Fix it @sase^parser#fxi` | Refused with the project-note hint for `@sase^parser@#fxi` |
 | `@sase+parser#fxi` | Refused with the Pomodoro-link hint for `^sase:parser#fxi` |
 
-A `#<type>` suffix after `@route^id` types the new task. After
-`@route+id`, it retypes the existing task when the item has no body text or
-authored children; with body text, the suffix names the ALL-CAPS task section
-for the child bullet. A `#` in the middle of the body stays ordinary text.
+A separate `#<type>` token after `@route^id` types the new task. After
+`@route+id`, it retypes the existing task in the same transaction; a glued
+`#drawer` suffix names the ALL-CAPS task drawer for the child bullet. A `#` in the middle of the body stays ordinary text.
 `@route::id` is retired; use `@route^id` for an ordinary task with a block ID.
 
 Leading `@route text` is accepted only on an item's first physical line. Later
@@ -413,7 +412,7 @@ Other task
 Here `Buy milk` routes to `dev.md`; `Other task` inherits `groceries.md`.
 
 Do not combine a textual `@@` declaration with `--route`, `--section`, `--task`,
-or `--task-section`. Clipboard, scheduling, priority, dry-run, formatting, and
+or `--drawer`. Clipboard, scheduling, priority, dry-run, formatting, and
 stdin remain composable.
 
 Each real item resolves in this order:
@@ -509,11 +508,11 @@ literal `#`. A leading `# Heading text` is therefore incomplete, and
 keep the literal `#fix` text in the body. The retired `t:` spelling is
 ordinary prose.
 
-The marker can attach to a new task with an explicit block ID
-(`Fix it @sase^fix-x#fix`). It can also attach to `@route+block-id#type` to
-retype an existing task while ensuring Next, but only when the complete item
-has no task body or authored children. With a body,
-`@route+block-id#section` keeps its task-section meaning. A marker on a
+The marker types a new task with an explicit block ID
+(`Fix it @sase^fix-x #fix`). A separate `#type` token on `@route+block-id`
+retypes the existing task in the same transaction; a marker-only item also
+ensures Next. With a body, the glued `@route+block-id#drawer` suffix keeps
+its drawer meaning. A marker on a
 whole-item link or a relationship-only owner also retypes its existing
 subject task. Each item accepts one marker, and a marker alone still needs a
 task.
@@ -1137,7 +1136,7 @@ An optional `#<pomodoro>` component names the target: `@sase:deep-fix#bugs`
 links under the open Pomodoro named `BUGS` and leaves the current Pomodoro
 alone. The selector is a slug — ASCII-lowercase, internal whitespace collapsed
 to `-` — using `A-Z`, `a-z`, `0-9`, and `& ' ( ) + , . / -`. That is the
-task-section selector character set plus `+`. Matching is a whole-slug match in
+drawer selector character set plus `+`. Matching is a whole-slug match in
 document order, else the first slug-prefix match, so `#bugs` and `#bug` both
 reach `BUGS`, and `#memory` still reaches `MEMORY` when `MEMORY WORK` appears
 first. Duplicate names resolve to the first open match; give the second a
@@ -1258,7 +1257,7 @@ current new-task meaning.
 
 An explicit Pomodoro name on a whole-item existing-task link also applies the
 retype rule described above. This includes the `^route:block-id` active-task
-spelling and the equivalent `=name` shorthands. An attached `#<type>` on a
+spelling and the equivalent `=name` shorthands. A separate `#<type>` token on a
 marker-only `@route+id` item is the type marker for Ensure Next, not a Pomodoro
 selector. The type is evaluated from the task's staged pre-edit line and its
 destination note; the field edit is staged with the task and ledger changes.
@@ -2748,7 +2747,7 @@ exit 2 and I/O-class errors exit 1:
 
 | Refusal | Exit | Message |
 | --- | --- | --- |
-| Forced destination flags (`--route`, `--section`, `--task`, `--task-section`, `--clip`) on the `!` item | 2 | `` `!sase:solo` completes an existing task and must be the whole capture item; remove its forced destination flags `` |
+| Forced destination flags (`--route`, `--section`, `--task`, `--drawer`, `--clip`) on the `!` item | 2 | `` `!sase:solo` completes an existing task and must be the whole capture item; remove its forced destination flags `` |
 | Ambiguous note | 2 | `ambiguous note "dup": matches a/dup.md, b/dup.md; use the full relative path` |
 | No such note | 2 | `no such note: nosuchnote` |
 | Canceled task | 1 | `` `^cx` in sase.md is Canceled; reopen it before completing it `` |
@@ -3055,7 +3054,7 @@ line; the `x` closes before `=` plans, so no override warning appears);
 `^bob:ready` starts then links a
 task into the now-running session. A `@@` declaration never applies to start
 items, and forced `--route`/`--section`/`--task`/`--task-ref`/
-`--task-section`/`--clip` fail on them; `%`, `s:<N>`, and `$<N>` after a
+`--drawer`/`--clip` fail on them; `%`, `s:<N>`, and `$<N>` after a
 counted token are shape errors by construction.
 
 The started session reports its queued Task Links (direct-child Task Links
@@ -3242,7 +3241,7 @@ range, and line with ` (created)` when the entry was created, the canonical
 ledger line, one numbered row per queued task, and `nothing queued` when
 empty. A `@@` declaration never applies to named starts, and forced
 `--route` /
-`--section` / `--task` / `--task-ref` / `--task-section` / `--clip` fail on
+`--section` / `--task` / `--task-ref` / `--drawer` / `--clip` fail on
 them with the existing start error. Quote named starts in zsh like every
 other `=` item: zsh's `EQUALS` expansion rewrites a word that starts with `=`, so `bob capture =focus` fails unquoted. Always single-quote (`bob capture '=bugs'`, `bob capture 'x =bugs'`, `bob capture '=#"DEEP WORK"'`).
 
@@ -3466,7 +3465,7 @@ units and actual applied minutes when clamping changes the delta.
 A `@@route` declaration still routes ordinary items in the same draft but
 never turns `+5` into a task or changes its destination. Forced
 destination/task/section and clipboard options (`--route`, `--section`,
-`--task`, `--task-ref`, `--task-section`, `--clip`, `%`, `s:<N>`, `$<N>`)
+`--task`, `--task-ref`, `--drawer`, `--clip`, `%`, `s:<N>`, `$<N>`)
 are rejected on adjustment items with a specific error. Later items observe
 earlier staged edits to the same daily file through `CaptureBatchPlanner`,
 so a `+5` after a session-start item can adjust the session created earlier
@@ -3520,7 +3519,7 @@ neighbouring entries. Only that ledger line is rewritten to Bob's canonical
 non-duration metadata, child bullets, newline style, and surrounding bytes.
 A `@@route` declaration never applies to shift items, and forced
 destination/task/section and clipboard options (`--route`, `--section`,
-`--task`, `--task-ref`, `--task-section`, `--clip`, `%`, `s:<N>`, `$<N>`)
+`--task`, `--task-ref`, `--drawer`, `--clip`, `%`, `s:<N>`, `$<N>`)
 are rejected on shift items with a specific error. Later items observe
 earlier staged edits, dry-run computes without committing, and any failure
 rolls the whole batch back, so `--2` then `+` in one draft composes (or
@@ -4320,7 +4319,7 @@ only of bare operators are newly recognized chains (`- -`, `+ -`, `= =`,
 `-- --`, `- - -`); they used to be prose. Runtime guards apply per token in
 order (`x -2` closes then fails because nothing is running; `= =` fails on
 the second start), and forced `--route`/`--section`/`--task`/`--task-ref`/
-`--task-section`/`--clip` fail on the first chain token.
+`--drawer`/`--clip` fail on the first chain token.
 
 Single-quote the argument: zsh expands a leading `=word`, so write
 `bob capture '+2 x'`. Positional args are already joined with spaces, so
@@ -4531,7 +4530,7 @@ Project-note capture cannot be combined with clipboard input:
 Authored children are re-routed into `## Tasks` and `##` sections, so
 clipboard children under the captured parent have no unambiguous home; this
 is a deliberate deferral a future change can lift. Forced destination flags
-(`--route`, `--section`, `--task`, `--task-ref`, `--task-section`) keep
+(`--route`, `--section`, `--task`, `--task-ref`, `--drawer`) keep
 `@tokens` literal, so they never reach this family. `s:<N>` and `$<N>` are
 allowed and behave as described above. A `=<X>` / `=x` suffix is rejected on
 project notes with a message naming `@<route>^<block-id>@`; `!` stays
@@ -4744,7 +4743,7 @@ to `bob capture-tasks -r <route>`.
 
 The same marker accepts an optional trailing `#<section>` selector, as in
 `@cash+goog-exit#requirements` or `@foo+bar#future-work`. The selector names an
-ALL-CAPS child section of that task and may use A-Z, a-z, 0-9, and
+ALL-CAPS child drawer of that task and may use A-Z, a-z, 0-9, and
 `& ' ( ) , . / -`. Whole-slug matches beat earlier prefix matches, so
 `#future-work` still reaches `FUTURE WORK` even when `FUTURE WORKFLOW` appears
 first; `#future` reaches the first slug that starts with `future`. The captured
@@ -4752,9 +4751,9 @@ block is appended at the end of that section's own block — before the next
 direct child of the parent task, and before a managed log nested under the
 section — using the section's child indentation. A selector that matches
 nothing, or a task with no sections, is an error listing the real titles and
-pointing at `bob capture-task-sections`; capture never falls back to the end of
+pointing at `bob capture-drawers`; capture never falls back to the end of
 the task. `@route+id#` with an empty selector is incomplete and reports need
-`task_section`; it does not mean "any section". A second `#`, or `#` before
+`drawer`; it does not mean "any section". A second `#`, or `#` before
 `+`, is not this family (`@foo#bar+baz` remains a note-bullet).
 
 For example, `bob capture 'Postgres 17 minimum @foo+bar#requirements'` against
@@ -4790,18 +4789,17 @@ it makes the task Next and relocates its existing Task Link. The route note and
 daily note are planned together before either file is written, so a failure
 leaves the whole batch unchanged.
 
-The attached `@route+block-id#type` form also ensures Next and retypes the
-existing task, but only when the whole item has no body or authored children.
-The `#` suffix is then the task type marker and the task's Task Link moves to
-the placement selected by that type. When the item has body text,
-`@route+block-id#section <text>` keeps its child-bullet meaning and selects an
-ALL-CAPS task section. `@route+block-id#` opens the task-type completion menu
-only when the whole item qualifies as marker-only Ensure Next.
+A separate `#type` token on `@route+block-id` retypes the existing task
+in the same transaction; a marker-only item also ensures Next, and the task's
+Task Link moves to the placement selected by that type. When the item has body
+text, `@route+block-id#drawer <text>` keeps its child-bullet meaning and selects
+an ALL-CAPS task drawer. A glued `@route+block-id#` with no drawer name is
+incomplete and needs a drawer.
 
 The link-presence toggle, including Pomodoro-link insertion and
 all-open-link removal, is reserved for the terminal `@route+block-id!`
 spelling. To retype during an explicit toggle, write `@route+block-id! #type`;
-`@route+block-id#type!` is refused with a message showing the correct order.
+`@route+block-id#drawer!` is refused with a message showing the correct order.
 The ledger decides the
 direction: no matching link under an open Pomodoro links the task, and any
 matching link unlinks it. No toggle path ever lowers a lane.
@@ -4856,8 +4854,8 @@ with <flags>`, `--clip` with `task toggle capture cannot be combined with
 `$<N>` with `task toggle capture cannot be combined with $<N>`, and authored
 child bullets with `task toggle capture cannot have authored child bullets`.
 
-The marker-only `@route+block-id` and `@route+block-id#type` forms are
-Ensure Next operations. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and
+The marker-only `@route+block-id` form, with or without a separate `#type`, is an
+Ensure Next operation. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and
 Next `[*]` are eligible: Ready and a task Blocked only by its own
 prerequisites rise to Next after a §13.5.1 drop, while Next and In
 Progress keep their lane. Other Blocked targets stay unlinked (see the
@@ -4996,7 +4994,7 @@ destination:
 | `s:<N>`                                                         | rejected |
 | `$<N>`                                                         | rejected |
 | `@route`, `@route#Sec`, `@route:id`, `@route:id#name`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
-| `--route` / `--section` / `--task` / `--task-ref` / `--task-section` | rejected |
+| `--route` / `--section` / `--task` / `--task-ref` / `--drawer` | rejected |
 
 Only a `%n` is recognized; a leading `#` or a `#` in the middle
 of the body stays literal text, and `#<section-prefix>` keeps its existing
@@ -5045,14 +5043,14 @@ keep the prefix-matching behavior described above. Without `--section`,
 `--route` captures a task.
 
 With `--route`, `-t, --task BLOCK-ID` selects sub-bullet mode while keeping
-every `@token` in the text literal. Add `-S, --task-section TITLE` to nest the
-new bullet under an ALL-CAPS child section of that task whose title matches
-`TITLE` exactly, compared case insensitively. `--task-section` also works with
+every `@token` in the text literal. Add `-D, --drawer TITLE` to nest the
+new bullet under an ALL-CAPS child drawer of that task whose title matches
+`TITLE` exactly, compared case insensitively. `--drawer` also works with
 the hidden `--task-ref` option below; the command requires `--route` and
 either `--task` or `--task-ref`. This exact path is the picker
 counterpart to `--section`; typed `@route+id#prefix` tokens keep the
-slug/prefix matching described above, so `--task-section future-work` does
-**not** match `FUTURE WORK` while `--task-section "Future Work"` does. Picker
+slug/prefix matching described above, so `--drawer future-work` does
+**not** match `FUTURE WORK` while `--drawer "Future Work"` does. Picker
 integrations may instead use the hidden `--task-ref <line>:<digest>` option,
 which also reaches parents without block IDs and recovers when unrelated edits
 shift the selected task's line.
@@ -5097,8 +5095,8 @@ Useful options:
 - `--task-ref LINE:DIGEST`: hidden picker option; with `--route`, append beneath
   the task identified by that stale-safe ref from `capture-tasks` or
   `capture-complete`. Conflicts with `--task`. Not listed in `--help`.
-- `-S, --task-section TITLE`: with `--route` and `--task` or `--task-ref`, nest
-  under the exact ALL-CAPS child section; conflicts with `--section`
+- `-D, --drawer TITLE`: with `--route` and `--task` or `--task-ref`, nest
+  under the exact ALL-CAPS child drawer; conflicts with `--section`
 
 ### Input, stdin, and JSON output
 
@@ -5305,7 +5303,7 @@ in the batch-level `pomodoro_blocks` array; see
 
 Sub-bullet results additionally include `parent_line`, `parent_text`,
 `parent_status_symbol`, and `parent_status_name`. A capture that targeted a
-task section also includes `parent_section` (the matched original title);
+task drawer also includes `parent_section` (the matched drawer title);
 plain `@route+block-id` captures omit it. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
 The batch-level `task_blocks` array carries the same parents in full; see
@@ -5857,7 +5855,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 2` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 3` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -6081,7 +6079,7 @@ JSON output is a single versioned object:
 {
   "ok": true,
   "schema_version": 1,
-  "grammar": 2,
+  "grammar": 3,
   "input": "Call bank @Cash+",
   "body": "Call bank",
   "mode": "incomplete",
@@ -6151,14 +6149,13 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
-needs `["section"]`, while marker-only `@route+id#` opens task-type completion and needs
-`["task_type"]`, `note @route+id#` reports mode
-`incomplete` and needs `["task_section"]`, and `@route:id#` reports mode
+needs `["section"]`, while `@route+id#` with an empty drawer name reports mode
+`incomplete` and needs `["drawer"]`, and `@route:id#` reports mode
 `incomplete` and needs `["pomodoro_name"]`. A complete
-`@route+id#section <text>` sub-bullet populates `route`, `block_id`, and
-`section` together. A complete `@route:id#name` Pomodoro marker populates
+`@route+id#drawer <text>` sub-bullet populates `route`, `block_id`, and
+`drawer` together. A complete `@route:id#name` Pomodoro marker populates
 `route`, `block_id`, and `section` the same way; the mode says that `section`
 is a Pomodoro name.
 
@@ -6282,7 +6279,7 @@ generic capture/block presentation.
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
 `pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `project_note_offer_marker`, `project_note_separator`, `sub_bullet_route`,
-`sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
+`sub_bullet_block_id`, `drawer`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_explicit_toggle`, `task_type`, `global_route`,
 `schedule`, `priority`, `clipboard`,
 `ref_url`, `ref_listen`,
@@ -6330,7 +6327,7 @@ stable snake_case `code`, a `message` reusing `bob capture`'s exact wording,
 and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
-`invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
+`invalid_sub_bullet_block_id`, `invalid_drawer`,
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a `%n` directive on the same item as `@route`,
 `s:<N>`, or `$<N>`),
@@ -6682,10 +6679,10 @@ in the template body remain available. Block-ID contexts and replacements that
 overlap a placeholder return empty success. `@@` completes only destinations;
 it never offers a template candidate. Section completion
 covers `@route#prefix`,
-backed by the same scan as `bob capture-sections`. Task-section completion
+backed by the same scan as `bob capture-sections`. Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
-backed by the same scanner as `bob capture-task-sections`; the candidate
-`replacement` is the section slug (`future-work` for `FUTURE WORK`).
+backed by the same scanner as `bob capture-drawers`; the candidate
+`replacement` is the drawer slug (`future-work` for `FUTURE WORK`) or a quoted literal when the slug is ambiguous.
 Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
 `@route:#prefix`, and `@route:id=name` (e.g. `@work:outline=bu|`); only the route
 must already resolve because the Pomodoro list does not depend on the block
@@ -6925,7 +6922,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 2`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 3`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 
@@ -6994,12 +6991,12 @@ and shell completion skips them.
 `@route:` (`pomodoro_block_id`) completion now carries the `block_id` object
 and link-only filtering above; an empty-query marker-only `@route:` still
 lists that note's linkable tasks in document order. An empty block-ID component (`@route+#`) returns a successful empty
-task-section list. An unresolvable parent task returns a successful empty list
+drawer list. An unresolvable parent task returns a successful empty list
 plus one bounded `warnings` entry; the warning names the route and block ID
 without logging draft text or the task description.
 Route, section, and wikilink candidates rank exact prefix matches before
 substring matches, case-insensitively, while keeping each discovery source's
-stable order. Task-section candidates rank slug-prefix matches first, then
+stable order. Drawer candidates rank slug-prefix matches first, then
 slug-substring matches, in document order inside each tier. Task candidates in `@route+` search block ID (when present),
 task text, section, and status name or symbol the same way, but identified
 tasks always stay ahead of unidentified tasks and prefix matches precede
@@ -7075,7 +7072,7 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `pomodoro_start_name`, `task`,
-`task_section`, `active_task`, `task_type`, `directive`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
+`drawer`, `active_task`, `task_type`, `directive`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
@@ -7194,7 +7191,7 @@ silently. Each candidate's `replacement` is the exact text to insert; wikilink
 candidates also include `cursor_after`, the post-accept UTF-8 byte offset after
 deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 `label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
-section candidate has `title` and `level`. A task-section candidate has
+section candidate has `title` and `level`. A drawer candidate has
 `title` (the original ALL-CAPS body), `slug`, `route`, nullable `block_id`,
 `text` (the parent task description), `line`, and `child_count`; `replacement`
 is the slug. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
@@ -7262,7 +7259,7 @@ JSON forms as the underlying scan would.
 bob capture-pomodoros [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json] [-t|--tasks]
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
-bob capture-task-sections --route NAME (--block-id ID | --task-ref REF) [-b|--bob-dir DIR] [-f|--format human|json]
+bob capture-drawers --route NAME (--block-id ID | --task-ref REF) [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-tasks --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 ```
 
@@ -7279,12 +7276,12 @@ list and call `bob capture` directly:
    skip this step.
 3. For a sub-bullet capture (`@route+`), run `capture-tasks` for the route and
    let the user choose an open task. Other capture modes skip this step.
-4. Optionally run `capture-task-sections` for that parent (`--block-id` or
-   `--task-ref`) and let the user choose a section title, then pass
-   `--task-section TITLE` to nest under that ALL-CAPS child section.
+4. Optionally run `capture-drawers` for that parent (`--block-id` or
+   `--task-ref`) and let the user choose a drawer title, then pass
+   `--drawer TITLE` to nest under that ALL-CAPS child drawer.
 5. Run `bob capture --route NAME --section TITLE -- <text>` for a bullet, omit
    `--section` for a task, or run
-   `bob capture --route NAME --task-ref REF [--task-section TITLE] -- <text>`
+   `bob capture --route NAME --task-ref REF [--drawer TITLE] -- <text>`
    for a sub-bullet.
 
 On a successful scan, `capture-targets` returns `mac_inbox` first even when
@@ -7347,7 +7344,7 @@ object with `ok`, `schema_version` `1`, `day_file`, `relative_day_file`,
 nullable `name`, `slug`, `selectable`, nullable `time_range`, `placeholder`,
 `is_current`, `child_count`, and `task_link_count`. `task_link_count` is the size of the numbered Task Link lineup that a plain `x` close indexes, the same count as `pomodoro_close.task_links`, present as an integer only on the `is_current` entry and `null` elsewhere. Editors use it to know whether close task numbers can be multi-digit. The ref is stale-safe: a later write command
 can resolve exact line plus digest first, then a unique shifted digest match.
-Named Pomodoros use the same slug rules as task sections — ASCII-lowercase,
+Named Pomodoros use the same slug rules as task drawers — ASCII-lowercase,
 whitespace collapsed to `-`, whole-slug matching before the first slug-prefix
 match — with `+` also allowed in the selector. Entries whose names produce
 untypeable slugs stay in the list with `selectable: false`.
@@ -7410,18 +7407,20 @@ load plan configuration nor include the budget. The budget depends on both the
 daily-note contents and plan configuration; the rest of the agenda is derived
 from its existing note inputs.
 
-`capture-task-sections` lists the ALL-CAPS direct-child section bullets of one
+`capture-drawers` lists the ALL-CAPS direct-child drawer bullets of one
 parent task in document order. Exactly one of `--block-id`/`-i` or
 `--task-ref`/`-t` is required; the parent lookup and error messages match
 `bob capture` (missing ID with a close-match suggestion, duplicate ID, non-task
-block ID, stale or ambiguous ref). A resolved task with no sections returns a
+block ID, stale or ambiguous ref). A resolved task with no drawers returns a
 successful empty list so a picker can skip the chooser. Human output uses cyan
-titles and dim slugs plus child counts, with a `No task sections found.` empty
+titles and dim slugs plus child counts, with a `No drawers found.` empty
 state. JSON success is a single versioned object with `ok`, `schema_version`
 `1`, `route`, nullable `block_id` (null when the parent was resolved by
-`--task-ref` and still has no ID), `ref`, `count`, and an ordered `sections`
-array. Each section has `title`, `slug`, `line`, `child_count`, and `depth`
-(always `1` for a direct child). JSON failure is `{"ok": false, "error": "..."}`.
+`--task-ref` and still has no ID), `ref`, `count`, an ordered `drawers`
+array, and a `recent` array of catalog drawers absent from the task. Each
+drawer has `title`, `key`, `slug`, `line`, and `entry_count`; each recent row
+has `title`, `key`, `note_count`, and `last_seen`. JSON failure is
+`{"ok": false, "error": "..."}`.
 
 ## `bob capture-templates`
 
@@ -7548,7 +7547,7 @@ Assigns a canonical ALL-CAPS name to one open, unnamed Pomodoro in today's
 daily note. This is the only write needed to turn a nameable Pomodoro picker
 candidate into a selectable named Pomodoro. The command canonicalizes `--name`
 by trimming, collapsing internal whitespace to a single space, and
-ASCII-uppercasing, then requires the task-section title grammar plus `+`
+ASCII-uppercasing, then requires the drawer title grammar plus `+`
 (`A-Z`, `0-9`, spaces, and `& ' ( ) + , . / -`, starting with a letter or
 digit). `+` is allowed in the rest of a Pomodoro name, not as the first
 character.

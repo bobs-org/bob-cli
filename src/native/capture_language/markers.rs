@@ -266,8 +266,6 @@ pub(super) const MISSING_CAPTURE_ITEM_ERROR: &str =
 
 pub(super) const EXPLICIT_TOGGLE_ONLY_MARKER_ERROR: &str = "explicit toggle `!` is only valid on a marker-only `@<route>+<block-id>!` capture; it cannot be combined with body text, authored children, clipboard, schedule, or priority";
 
-pub(super) const EXPLICIT_TOGGLE_NAMED_ERROR: &str = "explicit toggle `!` cannot follow a task type; write `@<route>+<block-id>! #<type>`";
-
 pub(super) const EXPLICIT_TOGGLE_REPEATED_ERROR: &str =
     "explicit toggle `!` cannot be repeated; use a single `@<route>+<block-id>!`";
 
@@ -282,8 +280,8 @@ pub(super) const SUB_BULLET_ROUTE_ERROR: &str =
 pub(super) const SUB_BULLET_BLOCK_ID_ERROR: &str =
     "sub-bullet capture block ID must be non-empty and contain only A-Z, a-z, 0-9 or '-'";
 
-pub(super) const SUB_BULLET_SECTION_ERROR: &str =
-    "sub-bullet capture section must contain only A-Z, a-z, 0-9 or & ' ( ) , . / -";
+pub(super) const INVALID_DRAWER_ERROR: &str =
+    "invalid drawer: use `#slug` (`#requirements`, `#future-work`) or `#\"TITLE\"` (`#\"NON-GOALS\"`, `#\"Q&A\"`, `#\"API (V2)\"`)";
 
 pub(super) const TASK_BLOCK_ID_ROUTE_ERROR: &str =
     "task block-ID capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
@@ -330,15 +328,14 @@ pub(super) fn project_note_misordered_error_with(
     )
 }
 
-/// Pomodoro name on a `^` project-note marker without the `@` seal.
+/// R3: a glued `#` after `^id` is never a drawer; type it separately.
 pub(super) fn project_note_name_without_plus_error(
     route: &str,
     block_id: &str,
     name: &str,
 ) -> String {
-    format!(
-        "`#{name}` after `@{route}^{block_id}` needs the project-note `@` (`@{route}^{block_id}@#{name}`); to link a task under a Pomodoro, use `@{route}:{block_id}#{name}`"
-    )
+    let _ = (route, block_id, name);
+    "a new task has no drawers: type it with a separate `#fix` (`Fix the parser @sase^parser #fix`)".to_string()
 }
 
 /// Empty Pomodoro name on a `^` project-note marker (`@route^id@#`).
@@ -576,7 +573,7 @@ pub(super) const POMODORO_ADJUST_OVERFLOW_ERROR: &str =
 
 pub(super) const POMODORO_ADJUST_SHAPE_ERROR: &str = "Pomodoro adjustment items must contain only the signed count (for example `+5` or `-`); remove extra text, markers, or child lines";
 
-pub(super) const POMODORO_ADJUST_FORCED_ERROR: &str = "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the adjustment alone";
+pub(super) const POMODORO_ADJUST_FORCED_ERROR: &str = "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the adjustment alone";
 
 pub(super) const POMODORO_SHIFT_ZERO_ERROR: &str = "Pomodoro shift magnitude must be positive; `++0` and `--0` move nothing (for example `++3` moves today's Pomodoro 15 minutes later)";
 
@@ -585,14 +582,14 @@ pub(super) const POMODORO_SHIFT_OVERFLOW_ERROR: &str =
 
 pub(super) const POMODORO_SHIFT_SHAPE_ERROR: &str = "Pomodoro shift items must contain only the operator (for example `++3` or `--`); remove extra text, markers, or child lines";
 
-pub(super) const POMODORO_SHIFT_FORCED_ERROR: &str = "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the shift alone";
+pub(super) const POMODORO_SHIFT_FORCED_ERROR: &str = "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the shift alone";
 
 pub(crate) const POMODORO_CLOSE_INTERNAL_BULLETS_ERROR: &str =
     "a close never carries authored sub-bullets";
 
-pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the start alone";
+pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the start alone";
 
-pub(super) const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `x` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the close alone";
+pub(super) const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `x` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the close alone";
 
 /// Whole-item start shape error, formatted with the typed token: a counted
 /// token with extra text, markers, or child lines, or an exact token with

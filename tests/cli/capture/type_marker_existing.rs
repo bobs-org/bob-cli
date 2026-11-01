@@ -178,7 +178,7 @@ fn ensure_next_retype_sets_field_and_moves_link() {
         "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^fix-e]]\n- [ ] () — FIX\n",
     );
     let (_, json) =
-        capture_json(&vault, &day_file, &config, &["@sase+fix-e#fix"], false);
+        capture_json(&vault, &day_file, &config, &["@sase+fix-e #fix"], false);
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
     assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
     assert!(
@@ -205,7 +205,7 @@ fn ensure_next_attached_literal_retypes_before_placing_the_task_link() {
         &vault,
         &day_file,
         &config,
-        &["@sase+parser#\"DEEP WORK\""],
+        &["@sase+parser #\"DEEP WORK\""],
         false,
     );
     assert_eq!(json["task_theme"]["theme"]["name"], "DEEP WORK", "{json}");

@@ -127,8 +127,7 @@ pub(crate) fn decode_partial_literal_text(inner: &str) -> String {
 /// names nothing valid.
 pub(crate) fn canonicalize_exact_name(decoded: &str) -> Option<String> {
     let name = super::line::normalize_task_text(decoded).to_ascii_uppercase();
-    crate::native::capture_task_sections::is_pomodoro_name(&name)
-        .then_some(name)
+    crate::native::capture_drawers::is_pomodoro_name(&name).then_some(name)
 }
 
 /// Extend a whitespace-delimited link token through an exact-name

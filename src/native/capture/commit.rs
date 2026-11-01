@@ -66,6 +66,7 @@ pub(super) fn commit_capture_batch(
         return Err(error);
     }
     crate::native::relation_labels::invalidate_scan(bob_dir);
+    crate::native::capture_drawers::invalidate_drawer_catalog(bob_dir);
     for (item, path) in created_jobs {
         let id = path
             .file_stem()

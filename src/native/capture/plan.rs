@@ -57,7 +57,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         url_routing: routing,
         explicit_destination: request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
-            || request.forced_task_section.is_some()
+            || request.forced_drawer.is_some()
             || request.forced_clip.is_some(),
         has_global_destination: false,
     };
@@ -815,17 +815,17 @@ pub(super) fn plan_capture_item(
             }
         }
     }
-    if let Some(title) = request.forced_task_section.as_ref() {
+    if let Some(title) = request.forced_drawer.as_ref() {
         match &mut parsed.kind {
             CaptureKind::SubBullet { section, .. } => {
-                *section = Some(TaskSectionSelector {
+                *section = Some(DrawerSelector {
                     text: title.clone(),
                     exact: true,
                 });
             }
             _ => {
                 return Err(CaptureError::usage(
-                    "--task-section requires --task or --task-ref",
+                    "--drawer requires --task or --task-ref",
                 ));
             }
         }

@@ -100,7 +100,7 @@ pub(crate) enum CaptureKind {
     },
     SubBullet {
         target: SubBulletTarget,
-        section: Option<TaskSectionSelector>,
+        section: Option<DrawerSelector>,
     },
     PomodoroNote,
     /// A marker-only `@route+block-id` or `@route+block-id!` item: update
@@ -406,7 +406,7 @@ pub(crate) enum SubBulletTarget {
 /// Typed `@route+block-id#section` selector. A typed token is always
 /// prefix-capable (`exact: false`); the forced picker option sets `exact`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TaskSectionSelector {
+pub(crate) struct DrawerSelector {
     pub(crate) text: String,
     pub(crate) exact: bool,
 }

@@ -508,10 +508,10 @@ pub(super) fn reject_pomodoro_close_conflicts(
     if request.forced_route.is_some()
         || request.forced_section.is_some()
         || request.forced_sub_bullet_target.is_some()
-        || request.forced_task_section.is_some()
+        || request.forced_drawer.is_some()
     {
         return Err(CaptureError::usage(
-            "Pomodoro close `=x` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the close alone",
+            "Pomodoro close `=x` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the close alone",
         ));
     }
     if request.forced_clip.is_some() {

@@ -205,7 +205,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+sched#deep-work")
+        .arg("@cash+sched #deep-work")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 13:40:00")
@@ -241,7 +241,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+sched#deep-work")
+        .arg("@cash+sched #deep-work")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 13:40:00")
@@ -274,7 +274,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+nolog#deep-work")
+        .arg("@cash+nolog #deep-work")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 13:45:00")
@@ -374,7 +374,7 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
         ),
     );
 
-    let draft = "New work @dev:first#deep-work\n\n@cash+alpha#deep-work\n\n@cash+beta#deep-work\n";
+    let draft = "New work @dev:first#deep-work\n\n@cash+alpha #deep-work\n\n@cash+beta #deep-work\n";
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -670,7 +670,7 @@ fn capture_task_toggle_reports_created_named_entry() {
         &day_file,
         "2026-07-10 10:00:00",
         &config,
-        &["@cash+fresh#deep-work"],
+        &["@cash+fresh #deep-work"],
     );
     assert_eq!(json["kind"], "task_toggle");
     assert_eq!(json["toggle_behavior"], "ensure_next");

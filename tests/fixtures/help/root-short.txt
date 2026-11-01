@@ -34,9 +34,9 @@ Setup:
   plugins     List and deploy Bob's custom Obsidian plugins
 
 Capture protocol (Bob Mac Capture JSON endpoints; `bob --help` lists them):
-  capture-complete  capture-parse  capture-pomodoro-name  capture-pomodoros
-  capture-related  capture-rewrite  capture-sections  capture-targets
-  capture-task-id  capture-task-sections  capture-tasks  capture-templates
+  capture-complete  capture-drawers  capture-parse  capture-pomodoro-name
+  capture-pomodoros  capture-related  capture-rewrite  capture-sections
+  capture-targets  capture-task-id  capture-tasks  capture-templates
 
 Options:
   -h, --help     Print help (see more with '--help')

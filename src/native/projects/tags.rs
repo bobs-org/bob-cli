@@ -57,7 +57,7 @@ pub(super) fn is_task_tag_right_boundary(character: char) -> bool {
         )
 }
 
-pub(super) fn has_trailing_prj_anchor(line: &str) -> bool {
+pub(crate) fn has_trailing_prj_anchor(line: &str) -> bool {
     let trimmed = line.trim_end();
     let Some(before_anchor) = trimmed.strip_suffix("^prj") else {
         return false;

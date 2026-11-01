@@ -19,9 +19,9 @@ command sheet); Day Strip (day stats); Event Task (event row, calendar task); In
 GTD Review Footer (review footer); Pomodoro; Project Note (prj note); Project Task (prj
 task); Reference Note (ref note); Reference Task (ref task); Root Parent; Rotten Log
 (keep log); Schedule Log; Stats Dash (dash\_stats); Successor Offer; Task Dependency
-Link (task dep link, dep link); Task Freshness (freshness); Task Link (task block link);
-Task Mention (mention, text mention); Task Relation (relation, LINKS line, LINKED FROM
-line); Task Successor (successor); Task Type (type, theme, pomodoro theme,
-pomodoro-theme); Top-Level Project (top project); Work Log
+Link (task dep link, dep link); Task Drawer (drawer); Task Freshness (freshness); Task
+Link (task block link); Task Mention (mention, text mention); Task Relation (relation,
+LINKS line, LINKED FROM line); Task Successor (successor); Task Type (type, theme,
+pomodoro theme, pomodoro-theme); Top-Level Project (top project); Work Log
 
 <!-- /sase:strands -->

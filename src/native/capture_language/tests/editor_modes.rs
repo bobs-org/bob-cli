@@ -58,7 +58,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             Some("dev"),
             None,
             Some("focus-123"),
-            &[Need::TaskSection],
+            &[Need::Drawer],
         ),
         (
             "Body @dev+#req",
@@ -74,7 +74,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             Some("dev"),
             None,
             None,
-            &[Need::Task, Need::TaskSection],
+            &[Need::Task, Need::Drawer],
         ),
         (
             "Body @+focus-123#req",
@@ -98,7 +98,7 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             None,
             None,
             None,
-            &[Need::Route, Need::Task, Need::TaskSection],
+            &[Need::Route, Need::Task, Need::Drawer],
         ),
         (
             "Body @dev^focus-123",
@@ -605,7 +605,7 @@ fn editor_spans_cover_every_marker_shape() {
             &[
                 SpanKind::SubBulletRoute,
                 SpanKind::SubBulletBlockId,
-                SpanKind::SubBulletSection,
+                SpanKind::Drawer,
             ],
         ),
         (
@@ -621,7 +621,7 @@ fn editor_spans_cover_every_marker_shape() {
             &[
                 SpanKind::SubBulletRoute,
                 SpanKind::InteractivePlaceholder,
-                SpanKind::SubBulletSection,
+                SpanKind::Drawer,
             ],
         ),
         (
@@ -637,12 +637,12 @@ fn editor_spans_cover_every_marker_shape() {
             &[
                 SpanKind::InteractivePlaceholder,
                 SpanKind::SubBulletBlockId,
-                SpanKind::SubBulletSection,
+                SpanKind::Drawer,
             ],
         ),
         (
             "Body @+#req",
-            &[SpanKind::InteractivePlaceholder, SpanKind::SubBulletSection],
+            &[SpanKind::InteractivePlaceholder, SpanKind::Drawer],
         ),
         (
             "Body @+#",
@@ -867,14 +867,14 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "Postgres 17 minimum @foo+bar#requirements s:1",
         "Postgres 17 minimum %c @foo+bar#requirements",
         "Postgres 17 minimum @foo+bar#q-and-a",
-        "Postgres 17 minimum @foo+bar#Q&A",
+        "Postgres 17 minimum @foo+bar#non-goals",
         "Finish the Google exit packet! @cash^goog-exit@#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs",
         "Finish it\n- Draft :d @cash^x@",
         "Fix @sase\n- ratio 3 :1",
         "@Cash+Goog-Exit",
         "@Cash+Goog-Exit!",
-        "@Cash+Goog-Exit#bugs",
-        "@Cash+Goog-Exit#deep-work",
+        "Called today @Cash+Goog-Exit#bugs",
+        "Called today @Cash+Goog-Exit#deep-work",
         "Some note @foo#bar",
         "@foo#bar Some note",
         "Some note @foo#",

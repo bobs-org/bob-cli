@@ -79,6 +79,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | Command | What it does |
 | --- | --- |
 | [`bob capture-complete`](capture-complete.md) | Complete the capture marker at the cursor |
+| [`bob capture-drawers`](capture-drawers.md) | List the ALL-CAPS child drawers of a capture task |
 | [`bob capture-parse`](capture-parse.md) | Explain what in-progress capture text currently means |
 | [`bob capture-pomodoro-name`](capture-pomodoro-name.md) | Write a name onto an open unnamed Pomodoro |
 | [`bob capture-pomodoros`](capture-pomodoros.md) | List today's Pomodoro ledger entries |
@@ -87,7 +88,6 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob capture-sections`](capture-sections.md) | List the non-Tasks sections of a capture note |
 | [`bob capture-targets`](capture-targets.md) | List inbox, area, and active project capture routes |
 | [`bob capture-task-id`](capture-task-id.md) | Write a block ID onto an open capture task |
-| [`bob capture-task-sections`](capture-task-sections.md) | List the ALL-CAPS child sections of a capture task |
 | [`bob capture-tasks`](capture-tasks.md) | List the open tasks of a capture note |
 | [`bob capture-templates`](capture-templates.md) | List, save, show, and manage saved capture templates |
 | [`bob capture-templates clear`](capture-templates.md#bob-capture-templates-clear) | Clear the saved-template shelf |
@@ -140,6 +140,7 @@ Setup:
 
 Capture protocol:
   capture-complete       Complete the capture marker at the cursor
+  capture-drawers        List the ALL-CAPS child drawers of a capture task
   capture-parse          Explain what in-progress capture text currently means
   capture-pomodoro-name  Write a name onto an open unnamed Pomodoro
   capture-pomodoros      List today's Pomodoro ledger entries
@@ -148,7 +149,6 @@ Capture protocol:
   capture-sections       List the non-Tasks sections of a capture note
   capture-targets        List inbox, area, and active project capture routes
   capture-task-id        Write a block ID onto an open capture task
-  capture-task-sections  List the ALL-CAPS child sections of a capture task
   capture-tasks          List the open tasks of a capture note
   capture-templates      List, save, show, and manage saved capture templates
 

@@ -285,7 +285,7 @@ fn capture_forced_section_requires_route() {
 }
 
 #[test]
-fn capture_task_section_inserts_into_first_middle_and_last_sections() {
+fn capture_drawer_inserts_into_first_middle_and_last_sections() {
     let original = concat!(
         "- [ ] #task Parent [created::2026-07-01] ^parent\n",
         "\t- REQUIREMENTS\n",
@@ -347,7 +347,7 @@ fn capture_task_section_inserts_into_first_middle_and_last_sections() {
     ];
 
     for (name, draft, expected, section, task_line) in cases {
-        let temp = TempDir::new(&format!("bob-cli-task-section-{name}"));
+        let temp = TempDir::new(&format!("bob-cli-drawer-{name}"));
         let vault = temp.path().join("vault");
         write_file(&vault.join("cash.md"), original);
         let output = bob_command()
@@ -359,7 +359,7 @@ fn capture_task_section_inserts_into_first_middle_and_last_sections() {
             .arg(draft)
             .env("BOB_NOW", "2026-07-31")
             .output()
-            .expect("run task-section capture");
+            .expect("run drawer capture");
         assert_success(&output);
         assert_eq!(
             fs::read_to_string(vault.join("cash.md")).expect("read note"),
@@ -379,24 +379,43 @@ fn capture_task_section_inserts_into_first_middle_and_last_sections() {
 }
 
 #[test]
-fn capture_task_section_prefix_vs_whole_slug_and_multiword() {
+fn capture_drawer_prefix_vs_whole_slug_and_multiword() {
     let original = concat!(
         "- [ ] #task Parent ^parent\n",
         "\t- FUTURE WORKFLOW\n",
         "\t- FUTURE WORK\n",
     );
+
+    // Prefix `#future` is a near-duplicate refusal under exact matching.
+    let temp = TempDir::new("bob-cli-drawer-slug-prefix");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), original);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("first prefix @cash+parent#future")
+        .env("BOB_NOW", "2026-07-31")
+        .output()
+        .expect("run prefix refusal capture");
+    assert!(!output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("did you mean `#future-work`?")
+            || json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("did you mean"),
+        "prefix should refuse as near-duplicate: {json}"
+    );
+
     let cases = [
-        (
-            "prefix",
-            "first prefix @cash+parent#future",
-            "FUTURE WORKFLOW",
-            concat!(
-                "- [ ] #task Parent ^parent\n",
-                "\t- FUTURE WORKFLOW\n",
-                "\t\t- first prefix\n",
-                "\t- FUTURE WORK\n",
-            ),
-        ),
         (
             "whole-slug",
             "exact slug @cash+parent#future-work",
@@ -422,7 +441,7 @@ fn capture_task_section_prefix_vs_whole_slug_and_multiword() {
     ];
 
     for (name, draft, section, expected) in cases {
-        let temp = TempDir::new(&format!("bob-cli-task-section-slug-{name}"));
+        let temp = TempDir::new(&format!("bob-cli-drawer-slug-{name}"));
         let vault = temp.path().join("vault");
         write_file(&vault.join("cash.md"), original);
         let output = bob_command()
@@ -449,7 +468,7 @@ fn capture_task_section_prefix_vs_whole_slug_and_multiword() {
 }
 
 #[test]
-fn capture_task_section_managed_log_geometry() {
+fn capture_drawer_managed_log_geometry() {
     let nested_log = concat!(
         "- [ ] #task Parent ^parent\n",
         "\t- REQUIREMENTS\n",
@@ -457,7 +476,7 @@ fn capture_task_section_managed_log_geometry() {
         "\t\t\t- *2026-08-01* — scheduled\n",
         "\t- FUTURE WORK\n",
     );
-    let temp = TempDir::new("bob-cli-task-section-nested-log");
+    let temp = TempDir::new("bob-cli-drawer-nested-log");
     let vault = temp.path().join("vault");
     write_file(&vault.join("cash.md"), nested_log);
     let output = bob_command()
@@ -489,7 +508,7 @@ fn capture_task_section_managed_log_geometry() {
         "\t- 🗓️ **SCHEDULE LOG**\n",
         "\t\t- *2026-08-01* — scheduled\n",
     );
-    let temp = TempDir::new("bob-cli-task-section-sibling-log");
+    let temp = TempDir::new("bob-cli-drawer-sibling-log");
     let vault = temp.path().join("vault");
     write_file(&vault.join("cash.md"), sibling_log);
     let output = bob_command()
@@ -516,7 +535,7 @@ fn capture_task_section_managed_log_geometry() {
 }
 
 #[test]
-fn capture_task_section_indent_units_crlf_and_dry_run() {
+fn capture_drawer_indent_units_crlf_and_dry_run() {
     let cases = [
         (
             "tab",
@@ -585,7 +604,7 @@ fn capture_task_section_indent_units_crlf_and_dry_run() {
     ];
 
     for (name, original, expected) in cases {
-        let temp = TempDir::new(&format!("bob-cli-task-section-indent-{name}"));
+        let temp = TempDir::new(&format!("bob-cli-drawer-indent-{name}"));
         let vault = temp.path().join("vault");
         let note = vault.join("cash.md");
         write_file(&note, original);
@@ -600,7 +619,7 @@ fn capture_task_section_indent_units_crlf_and_dry_run() {
             .arg("new note @cash+parent#requirements")
             .env("BOB_NOW", "2026-07-31")
             .output()
-            .expect("dry-run task-section");
+            .expect("dry-run drawer");
         assert_success(&dry_run);
         let dry_json: serde_json::Value =
             serde_json::from_str(stdout(&dry_run).trim()).expect("dry JSON");
@@ -619,7 +638,7 @@ fn capture_task_section_indent_units_crlf_and_dry_run() {
             .arg("new note @cash+parent#requirements")
             .env("BOB_NOW", "2026-07-31")
             .output()
-            .expect("run indent task-section");
+            .expect("run indent drawer");
         assert_success(&output);
         assert_eq!(
             fs::read_to_string(&note).expect("read note"),
@@ -631,13 +650,13 @@ fn capture_task_section_indent_units_crlf_and_dry_run() {
 }
 
 #[test]
-fn capture_forced_task_section_matches_title_exactly() {
+fn capture_forced_drawer_matches_title_exactly() {
     let original = concat!(
         "- [ ] #task Parent ^parent\n",
         "\t- REQUIREMENTS\n",
         "\t- FUTURE WORK\n",
     );
-    let temp = TempDir::new("bob-cli-forced-task-section");
+    let temp = TempDir::new("bob-cli-forced-drawer");
     let vault = temp.path().join("vault");
     write_file(&vault.join("cash.md"), original);
 
@@ -651,13 +670,13 @@ fn capture_forced_task_section_matches_title_exactly() {
         .arg("cash")
         .arg("--task")
         .arg("parent")
-        .arg("--task-section")
+        .arg("--drawer")
         .arg("REQUIREMENTS")
         .arg("--")
         .arg("mention @other literally")
         .env("BOB_NOW", "2026-07-31")
         .output()
-        .expect("run --task-section capture");
+        .expect("run --drawer capture");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
@@ -680,7 +699,7 @@ fn capture_forced_task_section_matches_title_exactly() {
         .arg("cash")
         .arg("-t")
         .arg("parent")
-        .arg("-S")
+        .arg("-D")
         .arg("Future Work")
         .arg("--")
         .arg("cased title")
@@ -704,7 +723,7 @@ fn capture_forced_task_section_matches_title_exactly() {
 
     let parent_line = "- [ ] #task Parent ^parent";
     let digest = hex::encode(Sha256::digest(parent_line.as_bytes()));
-    let ref_temp = TempDir::new("bob-cli-forced-task-section-ref");
+    let ref_temp = TempDir::new("bob-cli-forced-drawer-ref");
     let vault = ref_temp.path().join("vault");
     write_file(
         &vault.join("cash.md"),
@@ -718,13 +737,13 @@ fn capture_forced_task_section_matches_title_exactly() {
         .arg("cash")
         .arg("--task-ref")
         .arg(format!("1:{}", &digest[..8]))
-        .arg("--task-section")
+        .arg("--drawer")
         .arg("NOTES")
         .arg("--")
         .arg("from ref")
         .env("BOB_NOW", "2026-07-31")
         .output()
-        .expect("run --task-ref --task-section");
+        .expect("run --task-ref --drawer");
     assert_success(&output);
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
@@ -737,7 +756,7 @@ fn capture_forced_task_section_matches_title_exactly() {
 }
 
 #[test]
-fn capture_forced_task_section_option_errors() {
+fn capture_forced_drawer_option_errors() {
     struct Case<'a> {
         name: &'a str,
         note: Option<&'a str>,
@@ -753,30 +772,11 @@ fn capture_forced_task_section_option_errors() {
     );
     let cases = [
         Case {
-            name: "slug-is-not-exact",
-            note: Some(note),
-            args: vec![
-                "--route".into(),
-                "cash".into(),
-                "--task".into(),
-                "parent".into(),
-                "--task-section".into(),
-                "future-work".into(),
-                "body".into(),
-            ],
-            exit: 1,
-            expected: "did you mean FUTURE WORK?",
-        },
-        Case {
             name: "requires-route",
             note: Some(note),
-            args: vec![
-                "--task-section".into(),
-                "REQUIREMENTS".into(),
-                "body".into(),
-            ],
+            args: vec!["--drawer".into(), "REQUIREMENTS".into(), "body".into()],
             exit: 2,
-            expected: "--task-section requires --route",
+            expected: "--drawer requires --route",
         },
         Case {
             name: "requires-task",
@@ -784,12 +784,12 @@ fn capture_forced_task_section_option_errors() {
             args: vec![
                 "--route".into(),
                 "cash".into(),
-                "--task-section".into(),
+                "--drawer".into(),
                 "REQUIREMENTS".into(),
                 "body".into(),
             ],
             exit: 2,
-            expected: "--task-section requires --task or --task-ref",
+            expected: "--drawer requires --task or --task-ref",
         },
         Case {
             name: "empty",
@@ -799,12 +799,12 @@ fn capture_forced_task_section_option_errors() {
                 "cash".into(),
                 "--task".into(),
                 "parent".into(),
-                "--task-section".into(),
+                "--drawer".into(),
                 String::new(),
                 "body".into(),
             ],
             exit: 2,
-            expected: "--task-section must not be empty",
+            expected: "--drawer must not be empty",
         },
         Case {
             name: "conflicts-with-section",
@@ -814,7 +814,7 @@ fn capture_forced_task_section_option_errors() {
                 "cash".into(),
                 "--section".into(),
                 "Ideas".into(),
-                "--task-section".into(),
+                "--drawer".into(),
                 "REQUIREMENTS".into(),
                 "body".into(),
             ],
@@ -824,10 +824,8 @@ fn capture_forced_task_section_option_errors() {
     ];
 
     for case in cases {
-        let temp = TempDir::new(&format!(
-            "bob-cli-forced-task-section-error-{}",
-            case.name
-        ));
+        let temp =
+            TempDir::new(&format!("bob-cli-forced-drawer-error-{}", case.name));
         let vault = temp.path().join("vault");
         fs::create_dir_all(&vault).expect("create vault");
         if let Some(note) = case.note {
@@ -840,7 +838,7 @@ fn capture_forced_task_section_option_errors() {
             .args(&case.args)
             .env("BOB_NOW", "2026-07-31")
             .output()
-            .expect("run forced task-section error");
+            .expect("run forced drawer error");
         assert_eq!(
             output.status.code(),
             Some(case.exit),
@@ -868,7 +866,7 @@ fn capture_forced_task_section_option_errors() {
 }
 
 #[test]
-fn capture_task_section_errors_leave_the_note_unchanged() {
+fn capture_drawer_errors_leave_the_note_unchanged() {
     struct Case<'a> {
         name: &'a str,
         note: Option<&'a str>,
@@ -886,33 +884,32 @@ fn capture_task_section_errors_leave_the_note_unchanged() {
     let duplicate = "- [ ] #task One ^dup\n- [x] #task Two ^dup\n";
     let cases = [
         Case {
-            name: "no-match",
+            name: "reserved-tasks",
             note: Some(with_sections),
-            args: vec!["body".into(), "@cash+parent#absent".into()],
-            exit: 1,
-            expected:
-                "no task section matching 'absent' under ^parent in cash.md",
+            args: vec!["body".into(), "@cash+parent#tasks".into()],
+            exit: 2,
+            expected: "managed by Bob",
         },
         Case {
-            name: "lists-titles",
+            name: "reserved-links",
             note: Some(with_sections),
-            args: vec!["body".into(), "@cash+parent#zzz".into()],
-            exit: 1,
-            expected: "have: REQUIREMENTS, FUTURE WORK",
+            args: vec!["body".into(), "@cash+parent#links".into()],
+            exit: 2,
+            expected: "managed by Bob",
         },
         Case {
             name: "close-match",
             note: Some(with_sections),
             args: vec!["body".into(), "@cash+parent#requirments".into()],
-            exit: 1,
-            expected: "did you mean REQUIREMENTS?",
+            exit: 2,
+            expected: "did you mean `#requirements`?",
         },
         Case {
-            name: "no-sections",
+            name: "reserved-no-drawers",
             note: Some(no_sections),
-            args: vec!["body".into(), "@cash+parent#requirements".into()],
-            exit: 1,
-            expected: "task ^parent in cash.md has no task sections",
+            args: vec!["body".into(), "@cash+parent#tasks".into()],
+            exit: 2,
+            expected: "managed by Bob",
         },
         Case {
             name: "missing-task-wins",
@@ -940,7 +937,7 @@ fn capture_task_section_errors_leave_the_note_unchanged() {
     for case in cases {
         for json in [false, true] {
             let temp = TempDir::new(&format!(
-                "bob-cli-task-section-error-{}-{}",
+                "bob-cli-drawer-error-{}-{}",
                 case.name,
                 if json { "json" } else { "human" }
             ));

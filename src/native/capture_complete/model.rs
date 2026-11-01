@@ -96,15 +96,32 @@ pub(super) struct TaskCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct TaskSectionCandidate {
+pub(super) struct DrawerCandidate {
     pub(super) replacement: String,
     pub(super) title: String,
+    pub(super) key: String,
     pub(super) slug: String,
     pub(super) route: String,
     pub(super) block_id: Option<String>,
     pub(super) text: String,
     pub(super) line: usize,
-    pub(super) child_count: usize,
+    pub(super) entry_count: usize,
+    #[serde(default)]
+    pub(super) group: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) note_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) last_seen: Option<u64>,
+    #[serde(default)]
+    pub(super) detail: String,
+    #[serde(default)]
+    pub(super) creates: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) refused: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) consequence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) cursor_after: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -663,7 +680,7 @@ pub(super) enum Candidates {
     Route(Vec<RouteCandidate>),
     Section(Vec<SectionCandidate>),
     Task(Vec<TaskCandidate>),
-    TaskSection(Vec<TaskSectionCandidate>),
+    Drawer(Vec<DrawerCandidate>),
     PomodoroName(Vec<PomodoroNameCandidate>),
     ActiveTask(Vec<ActiveTaskCandidate>),
     TaskLink(Vec<TaskLinkCandidate>),
@@ -692,7 +709,7 @@ impl Candidates {
             Self::Route(items) => items.len(),
             Self::Section(items) => items.len(),
             Self::Task(items) => items.len(),
-            Self::TaskSection(items) => items.len(),
+            Self::Drawer(items) => items.len(),
             Self::PomodoroName(items) => items.len(),
             Self::ActiveTask(items) => items.len(),
             Self::TaskLink(items) => items.len(),
@@ -740,6 +757,13 @@ pub(super) struct OverrideCompletion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DrawerTarget {
+    pub(super) route: String,
+    pub(super) block_id: Option<String>,
+    pub(super) text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct CaptureCompleteResult {
     pub(super) ok: bool,
     pub(super) schema_version: u32,
@@ -754,6 +778,8 @@ pub(super) struct CaptureCompleteResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) subject: Option<&'static str>,
     pub(super) candidates: Candidates,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) target: Option<DrawerTarget>,
     /// `None` outside `pomodoro_name`; `Some(None)` means that context
     /// ran without a task theme suggestion.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -822,6 +848,7 @@ impl CaptureCompleteResult {
             initial_selection: None,
             subject: None,
             candidates: Candidates::Route(Vec::new()),
+            target: None,
             theme_suggestion: None,
             r#override: None,
             block_id: None,

@@ -408,6 +408,8 @@ impl LinkSyntax {
             end: component.end,
             kind: SpanKind::WikilinkDelimiter,
             project_note: None,
+            title: None,
+            key: None,
         }));
         if let Some(target) = self.target.filter(Component::is_non_empty) {
             spans.push(target.span(SpanKind::WikilinkTarget));
@@ -590,6 +592,8 @@ impl Component {
             end: self.end,
             kind,
             project_note: None,
+            title: None,
+            key: None,
         }
     }
 }

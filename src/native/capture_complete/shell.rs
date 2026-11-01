@@ -2,10 +2,10 @@ use std::path::Path;
 
 use super::{
     candidates::{
-        active_task_candidates, blocked_task_candidates, link_candidates,
-        relation_candidates, relation_label_suggestions, route_candidates,
-        section_candidates, task_candidates, task_complete_candidates,
-        task_link_candidates, task_parent_candidates, task_section_candidates,
+        active_task_candidates, blocked_task_candidates, drawer_candidates,
+        link_candidates, relation_candidates, relation_label_suggestions,
+        route_candidates, section_candidates, task_candidates,
+        task_complete_candidates, task_link_candidates, task_parent_candidates,
         TaskSearch,
     },
     model::{Candidates, RouteCandidateKind},
@@ -229,18 +229,18 @@ pub(crate) fn shell_completion(
                 });
             }
         }
-        CompletionContext::TaskSection => {
+        CompletionContext::Drawer => {
             let Some(route) = field.route.as_deref() else {
                 return Ok(None);
             };
-            let (candidates, _) = task_section_candidates(
+            let (candidates, _) = drawer_candidates(
                 bob_dir,
                 route,
                 field.block_id.as_deref(),
                 "",
             )
             .map_err(|error| error.message.clone())?;
-            let Candidates::TaskSection(items) = candidates else {
+            let Candidates::Drawer(items) = candidates else {
                 return Ok(None);
             };
             for item in items {

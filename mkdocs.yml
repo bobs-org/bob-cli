@@ -69,6 +69,7 @@ plugins:
   - redirects:
       redirect_maps:
         pomodoro-themes.md: task-types.md
+        reference/cli/capture-task-sections.md: reference/cli/capture-drawers.md
         reference/cli/themes.md: reference/cli/types.md
   - tags:
       listings: false
@@ -226,6 +227,7 @@ nav:
               - "bob plugins": reference/cli/plugins.md
           - "Capture protocol":
               - "bob capture-complete": reference/cli/capture-complete.md
+              - "bob capture-drawers": reference/cli/capture-drawers.md
               - "bob capture-parse": reference/cli/capture-parse.md
               - "bob capture-pomodoro-name": reference/cli/capture-pomodoro-name.md
               - "bob capture-pomodoros": reference/cli/capture-pomodoros.md
@@ -234,7 +236,6 @@ nav:
               - "bob capture-sections": reference/cli/capture-sections.md
               - "bob capture-targets": reference/cli/capture-targets.md
               - "bob capture-task-id": reference/cli/capture-task-id.md
-              - "bob capture-task-sections": reference/cli/capture-task-sections.md
               - "bob capture-tasks": reference/cli/capture-tasks.md
               - "bob capture-templates": reference/cli/capture-templates.md
           # END GENERATED: cli nav

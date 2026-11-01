@@ -131,13 +131,13 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
   guessing. Vault scans run behind a 150 ms deadline so a slow vault
   can never delay the prompt; on timeout bob answers nothing.
   - `--route` (on `capture`, `capture-sections`, `capture-tasks`,
-    `capture-task-id`, `capture-task-sections`): routes in
+    `capture-task-id`, `capture-drawers`): routes in
     capture-targets scan order, grouped `inbox` / `areas` / `projects`.
   - `capture --section`: non-Tasks sections of the routed note, grouped
     `sections in <route>`.
-  - `capture --task` and `capture-task-sections --block-id`: open tasks
+  - `capture --task` and `capture-drawers --block-id`: open tasks
     of the routed note by block ID, grouped `tasks in <route>`.
-  - `capture --task-section`: ALL-CAPS child sections of the `--task`
+  - `capture --drawer`: ALL-CAPS child drawers of the `--task`
     parent by exact title, grouped `task sections`.
   - `capture-pomodoro-name --pomodoro-ref`: open Pomodoros by
     stale-safe ref, grouped `open Pomodoros`.

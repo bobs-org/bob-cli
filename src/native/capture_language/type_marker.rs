@@ -28,19 +28,11 @@ pub(crate) struct TypeMarker {
     pub(crate) literal: bool,
     /// The exact authored token, including its sigil and literal quotes.
     pub(crate) authored: String,
-    pub(crate) attachment: TypeMarkerAttachment,
     /// Authored bare route on this item, when a free-standing marker can
     /// use the heading-bullet teaching hint.
     pub(crate) heading_route: Option<String>,
     pub(crate) span: Range<usize>,
     pub(crate) name_span: Range<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TypeMarkerAttachment {
-    Free,
-    ProjectTask { route: String, block_id: String },
-    ExistingTask { route: String, block_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,14 +128,48 @@ fn scan_line_with_positions(
             index += char_len(body, index);
             continue;
         }
+        fn is_glued_drawer_or_r3_hash(body: &str, sigil: usize) -> bool {
+            // Find the whitespace-delimited token containing this `#`.
+            let token_start = body[..sigil]
+                .rfind(|c: char| c.is_whitespace())
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let token_end = body[sigil..]
+                .find(|c: char| c.is_whitespace())
+                .map(|i| sigil + i)
+                .unwrap_or(body.len());
+            let token = &body[token_start..token_end];
+            let Some(at_pos) = token.find('@') else {
+                return false;
+            };
+            let hash_in_token = match token.find('#') {
+                Some(pos) => token_start + pos == sigil,
+                None => false,
+            };
+            if !hash_in_token {
+                return false;
+            }
+            // Token starts with `@` (possibly after leading chars?) and contains
+            // `+` or `^` before the `#`. For `@dev+id#now!`, token is
+            // `@dev+id#now!`, which has `+` before `#`.
+            let before_hash = &token[..token.find('#').unwrap_or(0)];
+            (before_hash.contains('+') || before_hash.contains('^'))
+                && at_pos == 0
+        }
+
+        // A glued `#` after `@route+id` or `@route^id` is a drawer or R3,
+        // never a type marker. Skip it here; drawer parsing owns it.
+        if is_glued_drawer_or_r3_hash(body, sigil) {
+            index += char_len(body, index);
+            continue;
+        }
         let after_hash = &body[sigil + 1..];
         let next = after_hash.chars().next();
         let opens = next.is_some_and(|character| {
             character.is_ascii_alphabetic() || matches!(character, '"' | '“')
         });
         // A free-standing bare `#` is an incomplete type marker. `#`+digit,
-        // `##…`, and `#-…` stay prose; attached `@route^/+` suffixes still
-        // parse through `attached_route_candidate`.
+        // `##…`, and `#-…` stay prose.
         let bare = next.is_none() || next.is_some_and(char::is_whitespace);
         if !opens && !bare {
             index += char_len(body, index);
@@ -152,41 +178,6 @@ fn scan_line_with_positions(
         let parsed = parse_candidate(body, index, sigil, escaped);
         index = parsed.edge_end.max(index + 1);
         candidates.push(parsed);
-    }
-
-    // An attached `@route^block-id#type` is unambiguous at line scope. The
-    // `@route+block-id#type` form depends on the whole item, so it is only
-    // considered when the caller supplied that item view.
-    for (token_start, token_end) in whitespace_tokens(body) {
-        let Some((candidate, attached)) =
-            attached_route_candidate(body, token_start, token_end)
-        else {
-            continue;
-        };
-        let sigil = candidate.occurrence.span().start;
-        if protected
-            .iter()
-            .any(|(start, end)| *start <= sigil && sigil < *end)
-            || quoted_route_tokens
-                .iter()
-                .any(|span| span.start <= sigil && sigil < span.end)
-            || modifier_protected
-                .iter()
-                .any(|span| span.start <= sigil && sigil < span.end)
-        {
-            continue;
-        }
-        if attached == AttachedRouteKind::ExistingTask {
-            let Some(item) = item else {
-                continue;
-            };
-            let mut occurrence = candidate.occurrence.clone();
-            shift_occurrence(&mut occurrence, base + body_start);
-            if !marker_only_task_toggle(item, occurrence) {
-                continue;
-            }
-        }
-        candidates.push(candidate);
     }
 
     let mut allowed = Vec::<Range<usize>>::new();
@@ -224,7 +215,6 @@ fn scan_line_with_positions(
         .filter_map(|mut candidate| {
             if let TypeMarkerOccurrence::Complete(marker) =
                 &mut candidate.occurrence
-                && matches!(&marker.attachment, TypeMarkerAttachment::Free)
             {
                 marker.heading_route = item.and_then(bare_route_on_item);
             }
@@ -371,87 +361,6 @@ fn quoted_route_tokens(line: &str) -> Vec<Range<usize>> {
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AttachedRouteKind {
-    ProjectTask,
-    ExistingTask,
-}
-
-fn attached_route_candidate(
-    line: &str,
-    token_start: usize,
-    token_end: usize,
-) -> Option<(Candidate, AttachedRouteKind)> {
-    let token = line.get(token_start..token_end)?;
-    let hash = token.find('#')?;
-    let prefix = &token[..hash];
-    let suffix = &token[hash + 1..];
-    let attached = if prefix.contains('^') {
-        if prefix.ends_with('@') || misordered_project_name_suffix(suffix) {
-            return None;
-        }
-        let parsed =
-            super::tokens::parse_task_block_id_route_token(prefix).ok()?;
-        matches!(
-            parsed.kind,
-            super::model::CaptureKind::TaskWithBlockId { .. }
-        )
-        .then_some(AttachedRouteKind::ProjectTask)?
-    } else {
-        let parsed =
-            super::tokens::parse_sub_bullet_route_token(prefix).ok()?;
-        if !matches!(
-            parsed.kind,
-            super::model::CaptureKind::SubBullet {
-                target: super::model::SubBulletTarget::BlockId(_),
-                section: None,
-            }
-        ) || suffix.ends_with('!')
-        {
-            return None;
-        }
-        AttachedRouteKind::ExistingTask
-    };
-    let marker_start = token_start + hash;
-    let mut candidate =
-        parse_candidate(line, marker_start, marker_start, false);
-    let edge_end = candidate.edge_end;
-    let attachment = match attached {
-        AttachedRouteKind::ProjectTask => {
-            let (route, block_id) = prefix
-                .split_once('^')
-                .expect("validated project-task route");
-            TypeMarkerAttachment::ProjectTask {
-                route: route.to_string(),
-                block_id: block_id.to_string(),
-            }
-        }
-        AttachedRouteKind::ExistingTask => {
-            let (route, block_id) = prefix
-                .split_once('+')
-                .expect("validated existing-task route");
-            TypeMarkerAttachment::ExistingTask {
-                route: route.to_string(),
-                block_id: block_id.to_string(),
-            }
-        }
-    };
-    if let TypeMarkerOccurrence::Complete(marker) = &mut candidate.occurrence {
-        marker.attachment = attachment;
-    }
-    Some((
-        Candidate {
-            occurrence: candidate.occurrence,
-            // The marker bytes attach to the route token. Treat them as a
-            // trailing field for replacement spacing even when the whole
-            // route token is at the line's leading edge.
-            edge_start: token_start,
-            edge_end,
-        },
-        attached,
-    ))
-}
-
 /// A project-note name ending in `@` is the existing misordered spelling,
 /// not a type suffix. Preserve that route parser diagnostic, including its
 /// quoted-name form.
@@ -473,63 +382,6 @@ fn misordered_project_name_suffix(suffix: &str) -> bool {
         }
     }
     false
-}
-
-/// Decide the overloaded `@route+block-id#…` suffix from one whole-item
-/// parse. Existing type markers are blanked first, then the low-level editor
-/// parser examines body and authored children without entering its own
-/// type-marker wrapper.
-fn marker_only_task_toggle(
-    item: &CaptureItem<'_>,
-    attached: TypeMarkerOccurrence,
-) -> bool {
-    let lines = split_physical_lines(item.source);
-    let first_line_start = item
-        .lines
-        .first()
-        .map(|line| line.raw.start)
-        .unwrap_or(item.start);
-    let mut occurrences = Vec::new();
-    for item_line in &item.lines {
-        let Some(line) = lines.iter().find(|line| {
-            line.start <= item_line.raw.start && item_line.raw.start <= line.end
-        }) else {
-            continue;
-        };
-        occurrences.extend(
-            scan_line_with_positions(
-                line.text,
-                line.start,
-                line.start > first_line_start,
-                None,
-            )
-            .into_iter()
-            .map(|(occurrence, _)| occurrence)
-            .filter(|occurrence| {
-                occurrence.span().start >= item.start
-                    && occurrence.span().end <= item.end
-            }),
-        );
-    }
-    occurrences.push(attached);
-    let masked_source = masked_source(item, &occurrences);
-    let skips = marker_only_child_lines(item, &occurrences);
-    let mut masked_item = masked_item(item, &masked_source);
-    masked_item
-        .lines
-        .retain(|line| !skips.contains(&(line.raw.start, line.raw.end)));
-    matches!(
-        super::editor_parse::parse_editor_item_inner(
-            &masked_item,
-            &super::model::EditorParseOptions::routing_off(),
-            false,
-            false,
-        )
-        .item
-        .mode,
-        super::editor_model::EditorMode::TaskToggle
-            | super::editor_model::EditorMode::TaskDependency
-    )
 }
 
 fn parse_candidate(
@@ -606,7 +458,6 @@ fn parse_candidate(
                     name: lex.decoded,
                     literal: true,
                     authored: line[start..marker_end].to_string(),
-                    attachment: TypeMarkerAttachment::Free,
                     heading_route: None,
                     span: start..marker_end,
                     name_span: content_start + open_len..marker_end - close_len,
@@ -651,7 +502,6 @@ fn parse_candidate(
                     name: slug.to_string(),
                     literal: false,
                     authored: line[start..candidate_end].to_string(),
-                    attachment: TypeMarkerAttachment::Free,
                     heading_route: None,
                     span: start..candidate_end,
                     name_span: content_start..candidate_end,
@@ -1243,20 +1093,16 @@ pub(crate) fn not_applicable_error(
 pub(crate) fn is_existing_type_marker_subject(
     parsed: &ParsedCaptureText,
 ) -> bool {
-    use super::model::{CaptureKind, ParsedDependencyTargetKind};
+    use super::model::CaptureKind;
     match &parsed.kind {
         CaptureKind::PomodoroLink { close, .. } => close.is_none(),
         CaptureKind::TaskToggle { .. } => true,
         CaptureKind::SubBullet { target, .. } => {
             use super::model::SubBulletTarget;
-            matches!(target, SubBulletTarget::BlockId(_))
-                && parsed.body.trim().is_empty()
-                && parsed.sub_bullets.is_empty()
-                && matches!(
-                    parsed.dependency_target.as_ref(),
-                    Some(target) if target.kind
-                        == ParsedDependencyTargetKind::ExistingTask
-                )
+            matches!(
+                target,
+                SubBulletTarget::BlockId(_) | SubBulletTarget::Ref { .. }
+            )
         }
         _ => false,
     }

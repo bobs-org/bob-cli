@@ -4,7 +4,7 @@ use super::*;
 use crate::native::{
     capture_language::{
         replacement_for, resolve_accepted_type_name, resolve_exact_type_name,
-        unmatched_type_display, TypeMarker, TypeMarkerAttachment,
+        unmatched_type_display, TypeMarker,
     },
     config::themes::ThemeSources,
     plan_budget::{normalize_component, split_components},
@@ -810,33 +810,16 @@ impl CaptureTaskThemeContext {
         let authored = &marker.authored;
         let escaped = format!("\\{authored}");
         let canonical = unmatched_type_display(&marker.name);
-        let attached = matches!(
-            &marker.attachment,
-            TypeMarkerAttachment::ProjectTask { .. }
-                | TypeMarkerAttachment::ExistingTask { .. }
-        );
-        let hint = match &marker.attachment {
-            TypeMarkerAttachment::ProjectTask { route, block_id } => Some(
+        let hint = marker
+            .heading_route
+            .as_ref()
+            .map(|route| {
+                let name = authored.strip_prefix('#').unwrap_or(authored);
                 format!(
-                    " (for a project note whose ` :{block_id}` tasks go under the {canonical} Pomodoro, write `{route}^{block_id}@{authored}`)"
-                ),
-            ),
-            TypeMarkerAttachment::ExistingTask { route, block_id } => {
-                let route = route.strip_prefix('@').unwrap_or(route);
-                Some(format!(
-                    " (to link the task under the {canonical} Pomodoro, write `^{route}:{block_id}{authored}`)"
-                ))
-            }
-            TypeMarkerAttachment::Free => marker.heading_route.as_ref().map(
-                |route| {
-                    let name = authored.strip_prefix('#').unwrap_or(authored);
-                    format!(
-                        " (for a bullet under a heading, write `{route}#{name}`)"
-                    )
-                },
-            ),
-        }
-        .unwrap_or_default();
+                    " (for a bullet under a heading, write `{route}#{name}`)"
+                )
+            })
+            .unwrap_or_default();
         let message = if catalog.configured_themes().is_some() {
             let suggestions = catalog
                 .similar_to(&canonical)
@@ -858,20 +841,8 @@ impl CaptureTaskThemeContext {
                         .join(" or ")
                 )
             };
-            if attached {
-                format!(
-                    "`{authored}` is not one of your task types{suggestion}{separator} {add} {canonical} under `types:` in {} to use it{hint}",
-                    self.config_path.display()
-                )
-            } else {
-                format!(
-                    "`{authored}` is not one of your task types{suggestion}{separator} {add} {canonical} under `types:` in {} to use it, or write `{escaped}` to keep it as a tag{hint}",
-                    self.config_path.display()
-                )
-            }
-        } else if attached {
             format!(
-                "`{authored}` is not a task type yet: no Pomodoro has used {canonical} and no `types:` vocabulary is configured; add `types:` to {}{hint}",
+                "`{authored}` is not one of your task types{suggestion}{separator} {add} {canonical} under `types:` in {} to use it, or write `{escaped}` to keep it as a tag{hint}",
                 self.config_path.display()
             )
         } else {

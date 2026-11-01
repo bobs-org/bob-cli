@@ -7,23 +7,22 @@ use std::{
 use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
-        Candidates, CompleteError, DependencyCandidate, PickerRelationEntry,
-        PickerRelationship, PickerRelationshipEntry, RelationCandidate,
-        RelationLabelSuggestion, RouteCandidate, SectionCandidate,
-        TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate,
-        TaskLinkCandidate, TaskParentCandidate, TaskSectionCandidate,
+        Candidates, CompleteError, DependencyCandidate, DrawerCandidate,
+        PickerRelationEntry, PickerRelationship, PickerRelationshipEntry,
+        RelationCandidate, RelationLabelSuggestion, RouteCandidate,
+        SectionCandidate, TaskCandidate, TaskCompleteCandidate,
+        TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
     },
     support::rank,
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
-    capture_completable_tasks, capture_dependency_tasks,
+    capture_completable_tasks, capture_dependency_tasks, capture_drawers,
     capture_language::{
         DependencyEntry, DependencyTarget, DependencyTargetKind,
         EditorItemParse, RelationDirection, RelationEntry,
     },
-    capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
-    config,
+    capture_link_tasks, capture_targets, capture_tasks, config,
     note_tasks::{self, BlockIdLookup},
     pomodoro, project_dependencies, task_complete, task_relations,
     task_status_hooks,
@@ -311,14 +310,14 @@ pub(super) fn task_match_kind(
     }
 }
 
-pub(super) fn task_section_candidates(
+pub(super) fn drawer_candidates(
     bob_dir: &Path,
     route: &str,
     block_id: Option<&str>,
     query: &str,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
     let Some(block_id) = block_id.filter(|id| !id.is_empty()) else {
-        return Ok((Candidates::TaskSection(Vec::new()), Vec::new()));
+        return Ok((Candidates::Drawer(Vec::new()), Vec::new()));
     };
 
     let target = bob_dir.join(capture::route_label(route));
@@ -326,11 +325,11 @@ pub(super) fn task_section_candidates(
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok((
-                Candidates::TaskSection(Vec::new()),
+                Candidates::Drawer(Vec::new()),
                 vec![unresolvable_parent_warning(
                     route,
                     block_id,
-                    TaskSectionLookupFailure::MissingNote,
+                    DrawerLookupFailure::MissingNote,
                 )],
             ));
         }
@@ -348,11 +347,11 @@ pub(super) fn task_section_candidates(
         BlockIdLookup::Found(task) => task,
         BlockIdLookup::Missing => {
             return Ok((
-                Candidates::TaskSection(Vec::new()),
+                Candidates::Drawer(Vec::new()),
                 vec![unresolvable_parent_warning(
                     route,
                     block_id,
-                    TaskSectionLookupFailure::Missing {
+                    DrawerLookupFailure::Missing {
                         suggestion: scan
                             .suggest_block_id(block_id)
                             .map(str::to_string),
@@ -362,21 +361,21 @@ pub(super) fn task_section_candidates(
         }
         BlockIdLookup::Duplicate(count) => {
             return Ok((
-                Candidates::TaskSection(Vec::new()),
+                Candidates::Drawer(Vec::new()),
                 vec![unresolvable_parent_warning(
                     route,
                     block_id,
-                    TaskSectionLookupFailure::Duplicate(count),
+                    DrawerLookupFailure::Duplicate(count),
                 )],
             ));
         }
         BlockIdLookup::NotATask { .. } => {
             return Ok((
-                Candidates::TaskSection(Vec::new()),
+                Candidates::Drawer(Vec::new()),
                 vec![unresolvable_parent_warning(
                     route,
                     block_id,
-                    TaskSectionLookupFailure::NotATask,
+                    DrawerLookupFailure::NotATask,
                 )],
             ));
         }
@@ -385,24 +384,33 @@ pub(super) fn task_section_candidates(
     let parent_text = parent.description.clone();
     let parent_block_id = parent.block_id.clone();
     let ranked = rank(
-        capture_task_sections::task_sections(&contents, parent),
+        capture_drawers::drawers(&contents, parent),
         query,
         |section| section.slug.as_str(),
     );
 
     Ok((
-        Candidates::TaskSection(
+        Candidates::Drawer(
             ranked
                 .into_iter()
-                .map(|section| TaskSectionCandidate {
+                .map(|section| DrawerCandidate {
                     replacement: section.slug.clone(),
-                    title: section.title,
-                    slug: section.slug,
+                    title: section.title.clone(),
+                    slug: section.slug.clone(),
                     route: route.to_string(),
                     block_id: parent_block_id.clone(),
                     text: parent_text.clone(),
                     line: section.line,
-                    child_count: section.child_count,
+                    entry_count: section.entry_count,
+                    key: section.key.clone(),
+                    group: "drawers".to_string(),
+                    note_count: None,
+                    last_seen: None,
+                    detail: String::new(),
+                    creates: false,
+                    refused: None,
+                    consequence: None,
+                    cursor_after: None,
                 })
                 .collect(),
         ),
@@ -2107,7 +2115,7 @@ pub(super) fn task_complete_candidates(
     (Candidates::TaskComplete(candidates), catalog.warnings)
 }
 
-pub(super) enum TaskSectionLookupFailure {
+pub(super) enum DrawerLookupFailure {
     MissingNote,
     Missing { suggestion: Option<String> },
     Duplicate(usize),
@@ -2118,13 +2126,13 @@ pub(super) enum TaskSectionLookupFailure {
 pub(super) fn unresolvable_parent_warning(
     route: &str,
     block_id: &str,
-    failure: TaskSectionLookupFailure,
+    failure: DrawerLookupFailure,
 ) -> String {
     match failure {
-        TaskSectionLookupFailure::MissingNote => {
+        DrawerLookupFailure::MissingNote => {
             format!("note does not exist: {route}.md")
         }
-        TaskSectionLookupFailure::Missing { suggestion } => {
+        DrawerLookupFailure::Missing { suggestion } => {
             match suggestion {
                 Some(suggestion) => format!(
                     "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}?"
@@ -2134,12 +2142,12 @@ pub(super) fn unresolvable_parent_warning(
                 }
             }
         }
-        TaskSectionLookupFailure::Duplicate(count) => {
+        DrawerLookupFailure::Duplicate(count) => {
             format!(
                 "block ID ^{block_id} appears {count} times in {route}.md"
             )
         }
-        TaskSectionLookupFailure::NotATask => {
+        DrawerLookupFailure::NotATask => {
             format!("^{block_id} in {route}.md is not a task")
         }
     }

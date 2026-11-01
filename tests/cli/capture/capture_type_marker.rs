@@ -376,14 +376,6 @@ fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
         "`#\"DEEP WURK\"` is not one of your task types; did you mean `#\"DEEP WORK\"`? Add DEEP WURK under `types:` in {} to use it, or write `\\#\"DEEP WURK\"` to keep it as a tag",
         config.display()
     );
-    let project_hint = format!(
-        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id@#fxi`)",
-        config.display()
-    );
-    let ensure_hint = format!(
-        "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it (to link the task under the FXI Pomodoro, write `^sase:parser#fxi`)",
-        config.display()
-    );
     let heading_hint = format!(
         "`#fxi` is not one of your task types; add FXI under `types:` in {} to use it, or write `\\#fxi` to keep it as a tag (for a bullet under a heading, write `@sase#fxi`)",
         config.display()
@@ -394,8 +386,8 @@ fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
         ("Fix it #chores", two_suggestions.as_str()),
         ("Fix it #fxi", no_suggestion.as_str()),
         ("Fix it #\"DEEP WURK\"", literal.as_str()),
-        ("@sase^new-id#fxi Fix it", project_hint.as_str()),
-        ("@sase+parser#fxi", ensure_hint.as_str()),
+        ("@sase^new-id #fxi Fix it", no_suggestion.as_str()),
+        ("@sase+parser #fxi", no_suggestion.as_str()),
         ("#fxi Fix it @sase", heading_hint.as_str()),
     ] {
         for dry_run in [false, true] {
@@ -418,15 +410,15 @@ fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
 
     write_file(&config, "plan:\n  max_themes: 30\n");
     let no_vocabulary_hint = format!(
-        "`#fxi` is not a task type yet: no Pomodoro has used FXI and no `types:` vocabulary is configured; add `types:` to {} (for a project note whose ` :new-id` tasks go under the FXI Pomodoro, write `@sase^new-id@#fxi`)",
+        "`#fxi` is not a task type yet: no Pomodoro has used FXI and no `types:` vocabulary is configured; add `types:` to {}, or write `\\#fxi` to keep it as a tag",
         config.display()
     );
     let before_no_vocabulary = snapshot_files(temp.path());
     for dry_run in [false, true] {
         let args = if dry_run {
-            vec!["-d", "@sase^new-id#fxi Fix it"]
+            vec!["-d", "@sase^new-id #fxi Fix it"]
         } else {
-            vec!["@sase^new-id#fxi Fix it"]
+            vec!["@sase^new-id #fxi Fix it"]
         };
         let (_, json) = capture_error_json(&vault, &day_file, &config, &args);
         assert_eq!(json["code"], "type_not_configured", "{json}");
@@ -565,7 +557,7 @@ fn exact_block_ids_and_template_rows_keep_the_marker() {
         &vault,
         &day_file,
         &config,
-        &["Task with id @sase^typed-id#fix"],
+        &["Task with id @sase^typed-id #fix"],
         true,
     );
     assert_eq!(explicit_id["block_id"], "typed-id", "{explicit_id}");
@@ -607,7 +599,7 @@ fn leading_attached_project_marker_accepts_a_spaced_literal() {
         &vault,
         &day_file,
         &config,
-        &["@sase^parser#\"DEEP WORK\" Fix the parser"],
+        &["@sase^parser #\"DEEP WORK\" Fix the parser"],
         false,
     );
     assert_eq!(json["block_id"], "parser", "{json}");

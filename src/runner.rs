@@ -122,6 +122,10 @@ pub(crate) struct Alias {
 
 pub(crate) const ALIASES: &[Alias] = &[
     Alias {
+        from: "capture-task-sections",
+        to: &["capture-drawers"],
+    },
+    Alias {
         from: "highlights",
         to: &["ref"],
     },
@@ -724,6 +728,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "capture-drawers",
+        about: "List the ALL-CAPS child drawers of a capture task",
+        section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureDrawers,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "capture-parse",
         about: "Explain what in-progress capture text currently means",
         section: Section::CaptureProtocol,
@@ -792,15 +805,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
         section: Section::CaptureProtocol,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::CaptureTaskId,
-            script_command: None,
-        }),
-    },
-    Subcommand {
-        name: "capture-task-sections",
-        about: "List the ALL-CAPS child sections of a capture task",
-        section: Section::CaptureProtocol,
-        target: Target::Leaf(Leaf {
-            native_command: NativeCommand::CaptureTaskSections,
             script_command: None,
         }),
     },
@@ -2083,7 +2087,7 @@ mod tests {
             NativeCommand::CaptureSections,
             NativeCommand::CaptureTargets,
             NativeCommand::CaptureTaskId,
-            NativeCommand::CaptureTaskSections,
+            NativeCommand::CaptureDrawers,
             NativeCommand::CaptureTasks,
             NativeCommand::CaptureTemplatesClear,
             NativeCommand::CaptureTemplatesDelete,

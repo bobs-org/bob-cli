@@ -158,28 +158,28 @@ fn editor_reports_invalid_components_as_diagnostics() {
         ),
         (
             "Body @dev+id#bad_id",
-            "invalid_sub_bullet_section",
-            SUB_BULLET_SECTION_ERROR,
+            "invalid_drawer",
+            INVALID_DRAWER_ERROR,
         ),
         (
             "Body @dev+id#req^x",
-            "invalid_sub_bullet_section",
-            SUB_BULLET_SECTION_ERROR,
+            "invalid_drawer",
+            INVALID_DRAWER_ERROR,
         ),
         (
             "Body @dev+id#req:x",
-            "invalid_sub_bullet_section",
-            SUB_BULLET_SECTION_ERROR,
+            "invalid_drawer",
+            INVALID_DRAWER_ERROR,
         ),
         (
             "Body @dev+id#req+x",
-            "invalid_sub_bullet_section",
-            SUB_BULLET_SECTION_ERROR,
+            "invalid_drawer",
+            INVALID_DRAWER_ERROR,
         ),
         (
             "Body @dev+id#req#x",
-            "invalid_sub_bullet_section",
-            SUB_BULLET_SECTION_ERROR,
+            "invalid_drawer",
+            INVALID_DRAWER_ERROR,
         ),
         (
             "Body @bad.route^id",
@@ -259,7 +259,7 @@ fn editor_reports_invalid_components_as_diagnostics() {
 
 #[test]
 fn attached_task_type_after_block_id_is_not_a_project_note_error() {
-    let parse = editor("Body @dev^focus-123#bugs");
+    let parse = editor("Body @dev^focus-123 #bugs");
     assert_eq!(parse.mode, EditorMode::Task);
     assert_eq!(parse.body, "Body");
     assert!(parse.diagnostics.is_empty());
@@ -391,7 +391,7 @@ fn editor_accepts_marker_only_input_with_an_empty_body() {
         ("@:", EditorMode::Incomplete),
         ("@dev+id", EditorMode::TaskToggle),
         ("@dev+id!", EditorMode::TaskToggle),
-        ("@dev+id#req", EditorMode::TaskToggle),
+        ("@dev+id#req", EditorMode::SubBullet),
         ("@+", EditorMode::Incomplete),
         ("@dev^id", EditorMode::Task),
         ("@^", EditorMode::Incomplete),

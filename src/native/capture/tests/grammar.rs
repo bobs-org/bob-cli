@@ -699,12 +699,12 @@ fn parses_sub_bullet_routes_with_precedence_and_terminal_markers() {
         "body @foo+bad:id: {error:?}"
     );
     let parsed = parse_capture_text("body @foo+bad#section", None)
-        .expect("hash after plus is a task-section selector");
+        .expect("hash after plus is a drawer selector");
     assert_eq!(
         parsed.kind,
         CaptureKind::SubBullet {
             target: SubBulletTarget::BlockId("bad".to_string()),
-            section: Some(capture_language::TaskSectionSelector {
+            section: Some(capture_language::DrawerSelector {
                 text: "section".to_string(),
                 exact: false,
             }),
@@ -717,7 +717,7 @@ fn parses_sub_bullet_routes_with_precedence_and_terminal_markers() {
             || error.message.contains("project-note `+`"),
         "{error:?}"
     );
-    let typed = parse_capture_text("body @foo^bad#section", None)
+    let typed = parse_capture_text("body @foo^bad #section", None)
         .expect("hash after a caret task ID is a task-type marker");
     assert!(matches!(typed.kind, CaptureKind::TaskWithBlockId { .. }));
     assert_eq!(
@@ -755,14 +755,11 @@ fn malformed_sub_bullet_markers_are_usage_errors() {
         ("body @bad.route+id", "route must contain"),
         ("body @cash+bad.id", "block ID must be"),
         ("body @cash+bad:id", "block ID must be"),
-        (
-            "body @cash+#req",
-            "requires a block ID before the task section",
-        ),
-        ("body @cash+id#", "requires a task section"),
-        ("body @cash+id#bad_id", "section must contain"),
-        ("body @cash+id#req^x", "section must contain"),
-        ("body @cash+id#req+x", "section must contain"),
+        ("body @cash+#req", "requires a block ID before the drawer"),
+        ("body @cash+id#", "incomplete"),
+        ("body @cash+id#bad_id", "invalid drawer"),
+        ("body @cash+id#req^x", "invalid drawer"),
+        ("body @cash+id#req+x", "invalid drawer"),
     ] {
         let error = parse_capture_text(raw, None)
             .expect_err(&format!("{raw} should fail"));
@@ -792,7 +789,7 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
         }
     );
 
-    let typed = parse_capture_text("@cash+id#fix", None)
+    let typed = parse_capture_text("@cash+id #fix", None)
         .expect("bare marker with a task type ensures Next");
     assert_eq!(
         typed.kind,

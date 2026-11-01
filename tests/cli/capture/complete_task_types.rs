@@ -232,16 +232,21 @@ fn attached_ensure_next_type_uses_existing_subject_without_extra_space() {
     let temp = TempDir::new("bob-cli-complete-task-types-attached");
     let (vault, config) = fixture(temp.path(), true);
 
-    let full_menu = complete_end(temp.path(), &vault, &config, "@dev+current#");
+    // Glued `#` after `+id` is a drawer, not a type.
+    let drawer = complete_end(temp.path(), &vault, &config, "@dev+current#");
+    assert_eq!(drawer["context"], "drawer");
+
+    let full_menu =
+        complete_end(temp.path(), &vault, &config, "@dev+current #");
     assert_eq!(full_menu["context"], "task_type");
     assert_eq!(full_menu["subject"], "existing");
     assert_eq!(full_menu["query"], "");
     assert_eq!(
         full_menu["replacement"],
-        serde_json::json!({"start": 12, "end": 13})
+        serde_json::json!({"start": 13, "end": 14})
     );
 
-    let typed = complete_end(temp.path(), &vault, &config, "@dev+current#fi");
+    let typed = complete_end(temp.path(), &vault, &config, "@dev+current #fi");
     assert_eq!(typed["context"], "task_type");
     assert_eq!(typed["subject"], "existing");
     let fix = typed["candidates"]
@@ -250,10 +255,10 @@ fn attached_ensure_next_type_uses_existing_subject_without_extra_space() {
         .iter()
         .find(|row| row["name"] == "FIX")
         .unwrap();
-    assert_eq!(fix["replacement"], "#fix");
+    assert_eq!(fix["replacement"], "#fix ");
 
     let body =
-        complete_end(temp.path(), &vault, &config, "@dev+current#fi detail");
+        complete_end(temp.path(), &vault, &config, "@dev+current #fi detail");
     assert_ne!(body["context"], "task_type");
 }
 
@@ -266,20 +271,20 @@ fn attached_project_task_empty_suffix_is_new_and_keeps_suffix_replacements() {
         temp.path(),
         &vault,
         &config,
-        "Fix the parser @dev^new-id#",
+        "Fix the parser @dev^new-id #",
     );
     assert_eq!(empty["context"], "task_type");
     assert_eq!(empty["subject"], "new");
     assert_eq!(empty["query"], "");
     assert_eq!(empty["candidates"][0]["replacement"], "#build");
 
-    let draft = "@dev^new-id#f Fix the parser";
-    let typed = complete(temp.path(), &vault, &config, draft, 13);
+    let draft = "@dev^new-id #f Fix the parser";
+    let typed = complete(temp.path(), &vault, &config, draft, 14);
     assert_eq!(typed["context"], "task_type");
     assert_eq!(typed["subject"], "new");
     assert_eq!(
         typed["replacement"],
-        serde_json::json!({"start": 11, "end": 13})
+        serde_json::json!({"start": 12, "end": 14})
     );
     let fix = typed["candidates"]
         .as_array()
@@ -290,8 +295,8 @@ fn attached_project_task_empty_suffix_is_new_and_keeps_suffix_replacements() {
     assert_eq!(fix["replacement"], "#fix");
 
     for draft in [
-        "Fix the parser @dev^current#\"DEEP W",
-        "@dev+current#\"DEEP W",
+        "Fix the parser @dev^current #\"DEEP W",
+        "@dev+current #\"DEEP W",
     ] {
         let partial = complete_end(temp.path(), &vault, &config, draft);
         assert_eq!(partial["context"], "task_type", "{draft:?}");

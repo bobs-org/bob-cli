@@ -226,4 +226,4 @@ pub(crate) use surface::{
 pub(crate) use sync::{
     display_for_wikilink, subproject_displays_in_marker_line,
 };
-pub(crate) use tags::contains_task_tag;
+pub(crate) use tags::{contains_task_tag, has_trailing_prj_anchor};

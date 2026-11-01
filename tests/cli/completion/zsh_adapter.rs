@@ -597,7 +597,7 @@ fn real_zsh_first_tab_completes() {
 }
 
 /// One pty session covering all three real-completion scenarios.
-/// `capture-task` is exactly ambiguous (its `-id`/`-sections`/`-s`
+/// `capture-task` is exactly ambiguous (its `-id`/`-s`
 /// rows share the typed prefix), so the very first TAB renders rows:
 /// that proves the `loadautofunc` guard ran `_bob` immediately
 /// instead of merely loading it. (`cap` would first extend to the
@@ -653,7 +653,7 @@ zpty -w pb "autoload -Uz compinit && compinit -D -i && print -r -- COMPINIT-DONE
 wait_for COMPINIT-DONE '' || { print -r -- "SETUP-READ-FAILED"; zpty -d pb; exit 1 }
 print -r -- "SETUP OK"
 zpty -w -n pb $'bob capture-task\t'
-if wait_for capture-task-sections ''; then print -r -- "FIRST-TAB OK"; else print -r -- "FIRST-TAB MISS"; fi
+if wait_for capture-task-id ''; then print -r -- "FIRST-TAB OK"; else print -r -- "FIRST-TAB MISS"; fi
 reset_line || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture -\t'
 if wait_for --route ''; then print -r -- "DASH-TAB OK"; else print -r -- "DASH-TAB MISS"; fi

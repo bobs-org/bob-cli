@@ -288,27 +288,49 @@ fn capture_task_id_help_is_native_only() {
 }
 
 #[test]
-fn capture_task_sections_help_is_native_only() {
-    let temp = TempDir::new("bob-cli-capture-task-sections-native-help");
+fn capture_drawers_help_is_native_only() {
+    let temp = TempDir::new("bob-cli-capture-drawers-native-help");
     let output = bob_command()
-        .arg("capture-task-sections")
+        .arg("capture-drawers")
         .arg("--help")
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
-        .expect("run native-only bob capture-task-sections --help");
+        .expect("run native-only bob capture-drawers --help");
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("bob capture-task-sections"),
-        "expected capture-task-sections help text:\n{}",
+        stdout(&output).contains("bob capture-drawers"),
+        "expected capture-drawers help text:\n{}",
         format_output(&output)
     );
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
-        "native-only capture-task-sections should not extract script assets"
+        "native-only capture-drawers should not extract script assets"
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_task_sections_alias_help_matches_canonical() {
+    let canonical = bob_command()
+        .arg("capture-drawers")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-drawers --help");
+    let aliased = bob_command()
+        .arg("capture-task-sections")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-task-sections --help");
+
+    assert_success(&canonical);
+    assert_success(&aliased);
+    assert_eq!(
+        stdout(&aliased),
+        stdout(&canonical),
+        "hidden alias must be byte-identical"
+    );
 }
 
 #[test]
@@ -476,10 +498,8 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture-sections", "--help"], "bob capture-sections"),
         (&["capture-targets", "--help"], "bob capture-targets"),
         (&["capture-task-id", "--help"], "bob capture-task-id"),
-        (
-            &["capture-task-sections", "--help"],
-            "bob capture-task-sections",
-        ),
+        (&["capture-drawers", "--help"], "bob capture-drawers"),
+        (&["capture-task-sections", "--help"], "bob capture-drawers"),
         (&["capture-tasks", "--help"], "bob capture-tasks"),
         (&["completion", "--help"], "bob completion"),
         (&["gkeep", "--help"], "bob gkeep"),
@@ -610,10 +630,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         ),
         (&["capture-targets", "--help"], "bob capture-targets --help"),
         (&["capture-task-id", "--help"], "bob capture-task-id --help"),
-        (
-            &["capture-task-sections", "--help"],
-            "bob capture-task-sections --help",
-        ),
+        (&["capture-drawers", "--help"], "bob capture-drawers --help"),
         (&["capture-tasks", "--help"], "bob capture-tasks --help"),
         (&["completion", "--help"], "bob completion --help"),
         (
@@ -1089,6 +1106,7 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
         "capture-sections",
         "capture-targets",
         "capture-task-id",
+        "capture-drawers",
         "capture-task-sections",
         "capture-tasks",
     ];

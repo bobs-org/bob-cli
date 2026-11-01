@@ -1346,7 +1346,7 @@ mod tests {
             forced_route: None,
             forced_section: None,
             forced_sub_bullet_target: None,
-            forced_task_section: None,
+            forced_drawer: None,
             inbox_routes: vec![InboxRoutePick::Answer {
                 selector: "1".to_string(),
                 destination: Some("health".to_string()),

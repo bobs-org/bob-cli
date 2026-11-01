@@ -354,38 +354,38 @@ fn masked_items_match_their_baseline_across_grammar_families() {
     );
     // Unicode bytes move every later offset.
     check_masking_parity("Fix 🧰 it", "#fix Fix 🧰 it", 0, "#fix ");
-    // Attached markers mask to the route token on either edge. Quoted
+    // Separate type markers mask to the route token on either edge. Quoted
     // suffixes stay whole even though their names contain whitespace.
     check_masking_parity(
         "Fix the parser @sase^parser",
-        "Fix the parser @sase^parser#fix",
-        27,
-        "#fix",
+        "Fix the parser @sase^parser #fix",
+        28,
+        " #fix",
     );
     check_masking_parity(
         "Fix the parser @sase^parser",
-        "Fix the parser @sase^parser#\"DEEP WORK\"",
-        27,
-        "#\"DEEP WORK\"",
+        "Fix the parser @sase^parser #\"DEEP WORK\"",
+        28,
+        " #\"DEEP WORK\"",
     );
     check_masking_parity(
         "@sase^parser Fix the parser",
-        "@sase^parser#fix Fix the parser",
+        "@sase^parser #fix Fix the parser",
         12,
-        "#fix",
+        " #fix",
     );
-    check_masking_parity("@sase+parser", "@sase+parser#fix", 12, "#fix");
+    check_masking_parity("@sase+parser", "@sase+parser #fix", 12, " #fix");
     check_masking_parity(
         "@sase+parser",
-        "@sase+parser#\"DEEP WORK\"",
+        "@sase+parser #\"DEEP WORK\"",
         12,
-        "#\"DEEP WORK\"",
+        " #\"DEEP WORK\"",
     );
     check_masking_parity(
         "@sase+parser &notes:spec",
-        "@sase+parser#fix &notes:spec",
+        "@sase+parser #fix &notes:spec",
         12,
-        "#fix",
+        " #fix",
     );
     // Markers on child lines type the parent item.
     check_masking_parity(
@@ -415,6 +415,8 @@ fn masked_items_match_their_baseline_across_grammar_families() {
             end: span.end + " #fix".len(),
             kind: span.kind,
             project_note: None,
+            title: None,
+            key: None,
         })
         .collect();
     assert_eq!(var.items[1].spans, shifted);
@@ -423,10 +425,10 @@ fn masked_items_match_their_baseline_across_grammar_families() {
 #[test]
 fn attached_literal_spans_touch_route_ids_and_incomplete_literals_need_type() {
     for raw in [
-        "Fix it @sase^parser#\"DEEP WORK\"",
-        "Fix it @sase^parser#“DEEP WORK”",
-        "@sase+parser#\"DEEP WORK\"",
-        "@sase+parser#“DEEP WORK”",
+        "Fix it @sase^parser #\"DEEP WORK\"",
+        "Fix it @sase^parser #“DEEP WORK”",
+        "@sase+parser #\"DEEP WORK\"",
+        "@sase+parser #“DEEP WORK”",
     ] {
         let parse = editor(raw);
         let item = &parse.items[0];
@@ -445,7 +447,7 @@ fn attached_literal_spans_touch_route_ids_and_incomplete_literals_need_type() {
                 )
             })
             .expect("route block ID span");
-        assert_eq!(id.end, marker.start, "{raw:?}");
+        assert_eq!(id.end + 1, marker.start, "{raw:?}");
         let mut spans = item.spans.clone();
         spans.sort_by_key(|span| (span.start, span.end));
         assert!(
@@ -455,10 +457,10 @@ fn attached_literal_spans_touch_route_ids_and_incomplete_literals_need_type() {
     }
 
     for raw in [
-        "Fix it @sase^parser#\"DEEP",
-        "Fix it @sase^parser#\"DEEP W",
-        "Fix it @sase^parser#“DEEP W",
-        "@sase+parser#\"DEEP W",
+        "Fix it @sase^parser #\"DEEP",
+        "Fix it @sase^parser #\"DEEP W",
+        "Fix it @sase^parser #“DEEP W",
+        "@sase+parser #\"DEEP W",
     ] {
         assert!(editor(raw).needs.contains(&Need::TaskType), "{raw:?}");
     }

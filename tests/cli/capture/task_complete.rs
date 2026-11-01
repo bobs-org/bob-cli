@@ -645,7 +645,7 @@ fn forced_flags_exit_2_with_exact_message_and_untouched_vault() {
         vec!["--route", "sase"],
         vec!["--route", "sase", "--section", "Tasks"],
         vec!["--route", "sase", "--task", "foo"],
-        vec!["--route", "sase", "--task", "foo", "--task-section", "Bar"],
+        vec!["--route", "sase", "--task", "foo", "--drawer", "Bar"],
         vec!["--clip"],
     ];
     for flags in cases {

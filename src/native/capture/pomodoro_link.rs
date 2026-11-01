@@ -223,10 +223,10 @@ pub(super) fn reject_pomodoro_link_conflicts(
         ));
     }
     if request.forced_sub_bullet_target.is_some()
-        || request.forced_task_section.is_some()
+        || request.forced_drawer.is_some()
     {
         return Err(CaptureError::usage(
-            "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone",
+            "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the link alone",
         ));
     }
     if parsed.clip.is_some() {

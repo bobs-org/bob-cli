@@ -13,7 +13,7 @@ Report the authoritative capture grammar's view of TEXT.
 
 The grammar parse is lexical and read-only. For Pomodoro-name spans, the command also best-effort reads the configured vault's theme catalog and adds theme refs; if the catalog is unavailable, parsing still succeeds without those refs. It never writes to the vault or reads the clipboard, and takes no --bob-dir. A '%c' directive still succeeds without reading the clipboard.
 
-Success JSON reports `grammar: 2` for the capture-language revision while `schema_version` stays 1.
+Success JSON reports `grammar: 3` for the capture-language revision while `schema_version` stays 1.
 
 It reports the normalized body, the overall capture mode, the resolved route, section, and block ID, which parts a picker still has to supply, an optional global_destination object for a @@<route> declaration token anywhere in the draft, ordered blank-line-separated item summaries and ranges after inheritance, the UTF-8 byte spans of every recognized token (including a `task_type` span for `#<type>` markers), Obsidian wikilink component spans, every authored sub-bullet's normalized body plus depth, an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` start suffix (including the short `=name` suffix, e.g. `@work:outline=bugs`), an optional pomodoro_adjust object for a whole-item `+[N]`/`-[N]` adjustment, an optional pomodoro_shift object for a whole-item `++[N]`/`--[N]` shift, an optional pomodoro_close object for a `=x` link close suffix or whole-item close, and structured diagnostics. Wikilink highlighting is syntax-only and never touches the vault. Byte offsets index the original TEXT before whitespace normalization, are half-open [start, end), never overlap, and always land on a character boundary.
 
@@ -94,5 +94,5 @@ Modes:
   task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, task_dependency, task_complete, ref, incomplete
 
 Needs:
-  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type
+  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type
 ```

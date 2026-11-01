@@ -23,6 +23,7 @@ mod capture_clip;
 mod capture_completable_tasks;
 mod capture_complete;
 mod capture_dependency_tasks;
+mod capture_drawers;
 mod capture_flag_guard;
 mod capture_language;
 mod capture_link_tasks;
@@ -40,7 +41,6 @@ mod capture_schedule_log;
 mod capture_sections;
 mod capture_targets;
 mod capture_task_id;
-mod capture_task_sections;
 mod capture_task_toggle;
 mod capture_task_wikilinks;
 mod capture_tasks;
@@ -122,7 +122,7 @@ pub(crate) enum NativeCommand {
     CaptureSections,
     CaptureTargets,
     CaptureTaskId,
-    CaptureTaskSections,
+    CaptureDrawers,
     CaptureTasks,
     CaptureTemplatesClear,
     CaptureTemplatesDelete,
@@ -189,7 +189,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureSections => capture_sections::run(args),
         NativeCommand::CaptureTargets => capture_targets::run(args),
         NativeCommand::CaptureTaskId => capture_task_id::run(args),
-        NativeCommand::CaptureTaskSections => capture_task_sections::run(args),
+        NativeCommand::CaptureDrawers => capture_drawers::run(args),
         NativeCommand::CaptureTasks => capture_tasks::run(args),
         NativeCommand::CaptureTemplatesClear => {
             capture_templates::command::run_clear(args)

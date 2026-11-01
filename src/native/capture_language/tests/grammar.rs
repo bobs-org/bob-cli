@@ -89,7 +89,7 @@ fn lua_parses_all_four_canonical_sub_bullet_forms() {
     assert!(with_section.needs.is_empty());
 
     let needs_section = editor("Add context @Dev+focus-123#");
-    assert_eq!(needs_section.needs, vec![Need::TaskSection]);
+    assert_eq!(needs_section.needs, vec![Need::Drawer]);
     assert_eq!(needs_section.block_id.as_deref(), Some("focus-123"));
 }
 
@@ -109,22 +109,22 @@ fn a_bare_sub_bullet_marker_becomes_a_task_toggle() {
     );
 
     let typed = editor("@Cash+Goog-Exit#fix");
-    assert_eq!(typed.mode, EditorMode::TaskToggle);
-    assert!(typed.section.is_none());
+    assert_eq!(typed.mode, EditorMode::SubBullet);
+    assert_eq!(typed.section.as_deref(), Some("fix"));
+    assert_eq!(typed.needs, vec![Need::DrawerText]);
     assert!(typed.diagnostics.is_empty());
-    assert!(span_kinds(&typed).contains(&SpanKind::TaskType));
+    assert!(span_kinds(&typed).contains(&SpanKind::Drawer));
 
-    // An attached `#` on a marker-only toggle opens task-type completion.
+    // An empty `#` after `+id` opens drawer completion.
     let incomplete = editor("@cash+goog-exit#");
     assert_eq!(incomplete.mode, EditorMode::Incomplete);
-    assert_eq!(incomplete.needs, vec![Need::TaskType]);
-    assert!(span_kinds(&incomplete).contains(&SpanKind::TaskType));
+    assert_eq!(incomplete.needs, vec![Need::Drawer]);
 
-    // The same trailing bare `#` keeps its task-section meaning once the
+    // The same trailing bare `#` keeps its drawer meaning once the
     // item has body text -- unaffected by the toggle rule.
     let with_body = editor("note @cash+goog-exit#");
     assert_eq!(with_body.mode, EditorMode::Incomplete);
-    assert_eq!(with_body.needs, vec![Need::TaskSection]);
+    assert_eq!(with_body.needs, vec![Need::Drawer]);
 
     let attached_with_body = editor("@cash+goog-exit#fix detail");
     assert_eq!(attached_with_body.mode, EditorMode::SubBullet);
@@ -213,7 +213,7 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
         vec![SpanKind::TaskToggleRoute, SpanKind::TaskToggleBlockId]
     );
 
-    let typed = execute("@dev+id#fix").expect("typed ensure-Next");
+    let typed = execute("@dev+id #fix").expect("typed ensure-Next");
     assert_eq!(
         typed.kind,
         CaptureKind::TaskToggle {
@@ -229,11 +229,18 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
             .map(|marker| marker.name.as_str()),
         Some("fix")
     );
-    let typed_editor = editor("@dev+id#fix");
+    let typed_editor = editor("@dev+id #fix");
     assert_eq!(typed_editor.mode, EditorMode::TaskToggle);
     assert!(span_kinds(&typed_editor).contains(&SpanKind::TaskType));
     assert!(!span_kinds(&typed_editor)
         .contains(&SpanKind::TaskToggleExplicitToggle));
+
+    // A glued `#fix` is always a drawer, never a type.
+    let drawer_err = execute("@dev+id#fix").expect_err("glued drawer");
+    assert_eq!(
+        drawer_err,
+        "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
+    );
 
     let bang = execute("@dev+id!").expect("explicit toggle");
     assert_eq!(
@@ -257,21 +264,17 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
 #[test]
 fn explicit_toggle_near_misses_have_focused_diagnostics() {
     let named = editor("@dev+id#now!");
-    assert_eq!(codes(&named), vec!["unsupported_explicit_toggle"]);
+    assert_eq!(codes(&named), vec!["invalid_drawer"]);
     assert!(
-        named.diagnostics[0]
-            .message
-            .contains("cannot follow a task type"),
+        named.diagnostics[0].message.contains("takes no drawer"),
         "{}",
         named.diagnostics[0].message
     );
 
     let hash_bang = editor("@dev+id#!");
-    assert_eq!(codes(&hash_bang), vec!["unsupported_explicit_toggle"]);
+    assert_eq!(codes(&hash_bang), vec!["invalid_drawer"]);
     assert!(
-        hash_bang.diagnostics[0]
-            .message
-            .contains("cannot follow a task type"),
+        hash_bang.diagnostics[0].message.contains("takes no drawer"),
         "{}",
         hash_bang.diagnostics[0].message
     );
@@ -306,7 +309,7 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
 
     let executed_named = execute("@dev+id#now!").expect_err("named");
     assert!(
-        executed_named.contains("explicit toggle `!` cannot follow a task type; write `@<route>+<block-id>! #<type>`"),
+        executed_named.contains("`!` takes no drawer"),
         "{executed_named}"
     );
     let executed_repeated = execute("@dev+id!!").expect_err("repeated");
@@ -326,10 +329,10 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
 fn a_toggle_with_body_text_stays_a_sub_bullet_marker() {
     // A `+`-name is only valid Pomodoro syntax for a genuine toggle; a
     // sub-bullet capture with real body text still enforces the
-    // stricter task-section charset and reports the sub-bullet code,
+    // stricter drawer charset and reports the sub-bullet code,
     // even though the relaxed parse-time check let it through.
     let rejected = editor("Add context @sase+goog-exit#a+b");
-    assert_eq!(codes(&rejected), vec!["invalid_sub_bullet_section"]);
+    assert_eq!(codes(&rejected), vec!["invalid_drawer"]);
     assert_eq!(rejected.mode, EditorMode::Task);
     assert_eq!(rejected.body, "Add context");
     assert!(rejected.route.is_none());
@@ -339,7 +342,7 @@ fn a_toggle_with_body_text_stays_a_sub_bullet_marker() {
             kind,
             SpanKind::SubBulletRoute
                 | SpanKind::SubBulletBlockId
-                | SpanKind::SubBulletSection
+                | SpanKind::Drawer
                 | SpanKind::TaskToggleRoute
                 | SpanKind::TaskToggleBlockId
         )),
@@ -389,8 +392,8 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
     assert!(is_pomodoro_selector_component("c++"));
     assert!(is_pomodoro_selector_component("bob+sase"));
     assert!(is_pomodoro_selector_component("a+b"));
-    assert!(!is_selector_component("c++"));
-    assert!(!is_selector_component("a+b"));
+    assert!(!crate::native::capture_drawers::is_drawer_slug("c++"));
+    assert!(!crate::native::capture_drawers::is_drawer_slug("a+b"));
 
     let parsed = parse_capture_text_with_options(
         "Do work @sase:deep-fix#c++",
@@ -435,7 +438,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         None,
         &CaptureParseOptions::routing_off(),
     );
-    assert_eq!(sub_bullet, Err(SUB_BULLET_SECTION_ERROR.to_string()));
+    assert_eq!(sub_bullet, Err(INVALID_DRAWER_ERROR.to_string()));
 
     let parse = editor("Do work @sase:deep-fix#c++");
     assert_eq!(parse.mode, EditorMode::PomodoroTask);
@@ -460,7 +463,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
     );
 
     let rejected = editor("Add context @sase+goog-exit#a+b");
-    assert_eq!(codes(&rejected), vec!["invalid_sub_bullet_section"]);
+    assert_eq!(codes(&rejected), vec!["invalid_drawer"]);
 
     let incomplete = editor("Body @:#a+b");
     assert_eq!(incomplete.mode, EditorMode::Incomplete);
@@ -494,7 +497,7 @@ fn lua_rejects_invalid_sub_bullet_and_pomodoro_components() {
         ("Add context @bad.route+id", "invalid_sub_bullet_route"),
         ("Add context @route+bad.id", "invalid_sub_bullet_block_id"),
         ("Add context @route+bad_id", "invalid_sub_bullet_block_id"),
-        ("Add context @route+id#bad_id", "invalid_sub_bullet_section"),
+        ("Add context @route+id#bad_id", "invalid_drawer"),
         ("Do work @bad.route:id", "invalid_pomodoro_route"),
         ("Do work @route:bad.id", "invalid_pomodoro_block_id"),
         ("Do work @route:id:extra", "invalid_pomodoro_block_id"),
@@ -1322,8 +1325,8 @@ fn execution_parses_three_component_sub_bullet_markers() {
             Some(1),
             None,
         ),
-        ("note $2 @foo+bar#Q&A", "note", "Q&A", None, Some(2)),
-        ("note @foo+bar#Q&A $2", "note", "Q&A", None, Some(2)),
+        ("note $2 @foo+bar#\"Q&A\"", "note", "Q&A", None, Some(2)),
+        ("note @foo+bar#\"Q&A\" $2", "note", "Q&A", None, Some(2)),
         (
             "note %c @foo+bar#non-goals",
             "note",
@@ -1346,13 +1349,14 @@ fn execution_parses_three_component_sub_bullet_markers() {
         assert_eq!(parsed.route.as_deref(), Some("foo"), "{raw}");
         assert_eq!(parsed.scheduled_offset, scheduled, "{raw}");
         assert_eq!(parsed.priority_level, priority, "{raw}");
+        let expected_exact = section == "Q&A";
         assert_eq!(
             parsed.kind,
             CaptureKind::SubBullet {
                 target: SubBulletTarget::BlockId("bar".to_string()),
-                section: Some(TaskSectionSelector {
+                section: Some(DrawerSelector {
                     text: section.to_string(),
-                    exact: false,
+                    exact: expected_exact,
                 }),
             },
             "{raw}"
@@ -1371,7 +1375,7 @@ fn execution_three_component_marker_composes_on_multiline_first_line_only() {
         parsed.kind,
         CaptureKind::SubBullet {
             target: SubBulletTarget::BlockId("bar".to_string()),
-            section: Some(TaskSectionSelector {
+            section: Some(DrawerSelector {
                 text: "requirements".to_string(),
                 exact: false,
             }),
@@ -1732,15 +1736,13 @@ fn execution_rejects_project_note_shape_errors() {
         project_note_misordered_error("cash", "goog-exit", "bugs")
     );
 
-    // Without the project-note `@` seal, `#name` types the task with that block ID.
-    let typed_task = execute("Finish it @cash^goog-exit#bugs")
-        .expect("new task with a type marker");
-    assert_eq!(typed_task.body, "Finish it");
-    assert!(matches!(
-        typed_task.kind,
-        CaptureKind::TaskWithBlockId { ref block_id } if block_id == "goog-exit"
-    ));
-    assert_eq!(typed_task.type_marker.as_ref().unwrap().name, "bugs");
+    // Without the project-note `@` seal, a glued `#` is never a drawer (R3).
+    let error = execute("Finish it @cash^goog-exit#bugs")
+        .expect_err("R3 drawer refusal");
+    assert_eq!(
+        error,
+        "a new task has no drawers: type it with a separate `#fix` (`Fix the parser @sase^parser #fix`)"
+    );
 
     // An empty name asks for one.
     let error = execute("Finish it @cash^goog-exit@#")
@@ -2537,7 +2539,7 @@ fn relationship_only_owner_refuses_text_extras() {
 
 #[test]
 fn typed_existing_task_owner_keeps_dependency_behavior() {
-    let plus_named = "@body+excercise#bugs &foo:bar";
+    let plus_named = "@body+excercise #bugs &foo:bar";
     let typed_owner = execute(plus_named).expect("typed relationship owner");
     assert!(matches!(typed_owner.kind, CaptureKind::TaskToggle { .. }));
     assert_eq!(typed_owner.type_marker.as_ref().unwrap().name, "bugs");

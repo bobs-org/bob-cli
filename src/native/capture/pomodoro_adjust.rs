@@ -69,10 +69,10 @@ pub(super) fn reject_pomodoro_adjust_conflicts(
     if request.forced_route.is_some()
         || request.forced_section.is_some()
         || request.forced_sub_bullet_target.is_some()
-        || request.forced_task_section.is_some()
+        || request.forced_drawer.is_some()
     {
         return Err(CaptureError::usage(
-            "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, or --task-section; capture the adjustment alone",
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with --route, --section, --task, --task-ref, or --drawer; capture the adjustment alone",
         ));
     }
     if request.forced_clip.is_some() {
@@ -222,10 +222,10 @@ pub(super) fn reject_pomodoro_shift_conflicts(
     if request.forced_route.is_some()
         || request.forced_section.is_some()
         || request.forced_sub_bullet_target.is_some()
-        || request.forced_task_section.is_some()
+        || request.forced_drawer.is_some()
     {
         return Err(CaptureError::usage(
-            "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, or --task-section; capture the shift alone",
+            "Pomodoro shift `++N`/`--N` cannot be combined with --route, --section, --task, --task-ref, or --drawer; capture the shift alone",
         ));
     }
     if request.forced_clip.is_some() {
