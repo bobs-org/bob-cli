@@ -4,8 +4,11 @@
 its event run and which sessions are tracked. The Rust test
 (`tests/cli/capture/meet_event_run.rs`) runs every case through
 `bob capture -f json`. The Obsidian mirror lives at
-`plugins/task-status-cycler/scripts/fixtures/meet_event_run/vectors.json` in
+`plugins/bob-ledger-tools/scripts/fixtures/meet_event_run/vectors.json` in
 bob-plugins and must copy this file from the bob-cli commit that first adds it.
+bob-plugins drives each `=`, `=meet`, and `=5#meet` case as an `se<X>` + Tab
+inside the target `()` (a restart replaces the running range with `(se)`); the
+`~K` drop and kept-ledger swap cases are capture-only gestures.
 
 Each case gives the whole daily note (`day`, path `2026/20261101.md`), the
 clock (`now`), the capture `token`, and the expected note after the start
