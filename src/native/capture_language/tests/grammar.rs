@@ -264,7 +264,7 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
 #[test]
 fn explicit_toggle_near_misses_have_focused_diagnostics() {
     let named = editor("@dev+id#now!");
-    assert_eq!(codes(&named), vec!["invalid_drawer"]);
+    assert_eq!(codes(&named), vec!["drawer_toggle"]);
     assert!(
         named.diagnostics[0].message.contains("takes no drawer"),
         "{}",
@@ -272,7 +272,7 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
     );
 
     let hash_bang = editor("@dev+id#!");
-    assert_eq!(codes(&hash_bang), vec!["invalid_drawer"]);
+    assert_eq!(codes(&hash_bang), vec!["drawer_toggle"]);
     assert!(
         hash_bang.diagnostics[0].message.contains("takes no drawer"),
         "{}",

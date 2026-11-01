@@ -370,7 +370,7 @@ fn capture_drawer_inserts_into_first_middle_and_last_sections() {
         let json: serde_json::Value =
             serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
         assert_eq!(json["kind"], "sub_bullet", "{name}");
-        assert_eq!(json["parent_section"], section, "{name}");
+        assert_eq!(json["drawer"]["title"], section, "{name}");
         assert_eq!(json["parent_text"], "Parent", "{name}");
         assert_eq!(json["block_id"], "parent", "{name}");
         assert_eq!(json["task_line"], task_line, "{name}");
@@ -457,7 +457,7 @@ fn capture_drawer_prefix_vs_whole_slug_and_multiword() {
         assert_success(&output);
         let json: serde_json::Value =
             serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-        assert_eq!(json["parent_section"], section, "{name}");
+        assert_eq!(json["drawer"]["title"], section, "{name}");
         assert_eq!(
             fs::read_to_string(vault.join("cash.md")).expect("read note"),
             expected,
@@ -624,7 +624,7 @@ fn capture_drawer_indent_units_crlf_and_dry_run() {
         let dry_json: serde_json::Value =
             serde_json::from_str(stdout(&dry_run).trim()).expect("dry JSON");
         assert_eq!(dry_json["dry_run"], true, "{name}");
-        assert_eq!(dry_json["parent_section"], "REQUIREMENTS", "{name}");
+        assert_eq!(dry_json["drawer"]["title"], "REQUIREMENTS", "{name}");
         assert_eq!(
             fs::read_to_string(&note).expect("read dry note"),
             original,
@@ -680,7 +680,7 @@ fn capture_forced_drawer_matches_title_exactly() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["parent_section"], "REQUIREMENTS");
+    assert_eq!(json["drawer"]["title"], "REQUIREMENTS");
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read note"),
         concat!(

@@ -646,7 +646,7 @@ pub(super) fn plan_project_note_item(
             pomodoro_link_placement,
             parent_line: None,
             parent_text: None,
-            parent_section: None,
+            drawer: None,
             parent_status_symbol: None,
             parent_status_name: None,
             toggle_direction: None,

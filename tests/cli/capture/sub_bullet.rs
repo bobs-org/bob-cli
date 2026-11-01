@@ -97,8 +97,8 @@ fn capture_sub_bullet_inserts_with_parent_indentation_and_reports_json() {
         );
         assert!(json["parent_line"].as_u64().is_some(), "{name}: {json}");
         assert!(
-            json.get("parent_section").is_none(),
-            "{name}: plain sub-bullet must omit parent_section: {json}"
+            json["drawer"].is_null(),
+            "{name}: plain sub-bullet must report drawer null: {json}"
         );
         assert_eq!(json["created"], "2026-07-31");
         assert_eq!(json["task_line"], "- new note");

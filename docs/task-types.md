@@ -668,7 +668,10 @@ post-image without writing.
 A `#<type>` marker on a new or selected existing task writes the resolved type X before
 placement, following the field table: X equals the inherited suggestion I
 with no field means kept; with an authored exception means cleared;
-otherwise a field already equal to X is kept, else set. A free-standing bare
+otherwise a field already equal to X is kept, else set. A separate `#type`
+on a body-bearing `@route+id` child (with or without a drawer) retypes the
+`+id` target in the same transaction as the child write, moving a live Task
+Link with the existing relocation and leaving lanes untouched. A free-standing bare
 `#` at an item edge is an incomplete marker: add a type (`#fix`) or write
 `\#` to keep a literal `#`. `#` plus a digit, `##…`, `#-…`, mid-line `#`,
 and glued hashes stay ordinary prose. The marker is the

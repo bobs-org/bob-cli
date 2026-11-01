@@ -414,7 +414,7 @@ pub(super) struct SubBulletCaptureDetails {
     pub(super) block_id: Option<String>,
     pub(super) parent_line: usize,
     pub(super) parent_text: String,
-    pub(super) parent_section: Option<String>,
+    pub(super) drawer: Option<DrawerJson>,
     pub(super) parent_status_symbol: char,
     pub(super) parent_status_name: String,
 }

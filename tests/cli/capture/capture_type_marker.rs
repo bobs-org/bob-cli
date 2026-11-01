@@ -684,13 +684,28 @@ fn global_and_forced_routes_preserve_new_task_applicability() {
     );
     assert_eq!(global["task_theme"]["theme"]["name"], "FIX", "{global}");
 
-    let (_, error) = capture_error_json(
+    // A forced `--task` child with a separate `#type` retypes the parent
+    // in the same transaction (drawer-writes).
+    let (_, forced) = capture_json(
         &vault,
         &day_file,
         &config,
         &["-r", "sase", "--task", "parent", "A child #fix"],
+        true,
     );
-    assert_eq!(error["code"], "type_marker_not_applicable", "{error}");
+    assert_eq!(forced["task_theme"]["theme"]["name"], "FIX", "{forced}");
+    assert!(forced["drawer"].is_null(), "{forced}");
+    assert!(
+        forced["task_line"]
+            .as_str()
+            .unwrap()
+            .contains("[type:: FIX]")
+            || forced["previous_task_line"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Parent"),
+        "{forced}"
+    );
 }
 
 #[test]

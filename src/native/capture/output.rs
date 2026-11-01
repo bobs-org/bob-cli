@@ -507,8 +507,7 @@ pub(super) struct CaptureItemResult {
     pub(super) parent_line: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) parent_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) parent_section: Option<String>,
+    pub(super) drawer: Option<DrawerJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) parent_status_symbol: Option<char>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -641,6 +640,16 @@ pub(super) struct CaptureItemResult {
     /// when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) mirror_skipped: Vec<MirrorSkippedJson>,
+}
+
+/// Per-item drawer report: the matched or created drawer title, its key,
+/// and whether this item created it. `None` serializes as `null` for a
+/// plain child.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DrawerJson {
+    pub(super) title: String,
+    pub(super) key: String,
+    pub(super) created: bool,
 }
 
 impl CaptureItemResult {
@@ -2273,12 +2282,19 @@ pub(super) fn print_human_item_success(
             .as_deref()
             .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
             .unwrap_or_default();
-        let parent_section = result
-            .parent_section
-            .as_deref()
-            .map(|title| format!(" · {}", styler.cyan(title)))
+        let drawer_suffix = result
+            .drawer
+            .as_ref()
+            .map(|drawer| {
+                let base = format!(" · {}", styler.cyan(&drawer.title));
+                if drawer.created {
+                    format!("{base}        new drawer")
+                } else {
+                    base
+                }
+            })
             .unwrap_or_default();
-        println!("  under {marker}{parent_text}{block_id}{parent_section}");
+        println!("  under {marker}{parent_text}{block_id}{drawer_suffix}");
     }
     println!("  {}", styler.dim(&result.task_line));
     print_human_link_guard(result, &styler);
@@ -4707,7 +4723,7 @@ mod tests {
             pomodoro_link_placement: None,
             parent_line: None,
             parent_text: None,
-            parent_section: None,
+            drawer: None,
             parent_status_symbol: None,
             parent_status_name: None,
             toggle_direction: None,

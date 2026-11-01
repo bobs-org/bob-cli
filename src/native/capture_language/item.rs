@@ -328,6 +328,31 @@ pub(super) fn parse_capture_item<'a>(
             {
                 return Err(directive_only_error(&directive_occurrences));
             }
+            if error
+                == "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
+            {
+                return Err(CaptureItemParseError::coded("drawer_text", error));
+            }
+            if error
+                == "`!` takes no drawer: write `@route+id!` without a `#drawer`"
+            {
+                return Err(CaptureItemParseError::coded(
+                    "drawer_toggle",
+                    error,
+                ));
+            }
+            if error.starts_with("invalid drawer: use `#slug`") {
+                return Err(CaptureItemParseError::coded(
+                    "invalid_drawer",
+                    error,
+                ));
+            }
+            if error.starts_with("a new task has no drawers:") {
+                return Err(CaptureItemParseError::coded(
+                    "invalid_drawer",
+                    error,
+                ));
+            }
             // Keep the established parser's diagnostics for malformed
             // underlying forms. Marker-only items are handled above so they
             // never collapse to the generic missing-text copy.

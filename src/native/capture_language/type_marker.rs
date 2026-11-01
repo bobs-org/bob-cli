@@ -1017,7 +1017,7 @@ pub(crate) fn type_marker_not_applicable_error(
         ),
         TypeMarkerSubject::SubBullet => (
             "adds a child bullet",
-            "capture `@<route>+<block-id>#<type>` alone to retype that task",
+            "add note text so the marker retypes the parent task",
         ),
         TypeMarkerSubject::ProjectNote => {
             ("creates a project note", "set `task_type:` in the new note")
@@ -1074,16 +1074,19 @@ pub(crate) fn is_new_task(parsed: &ParsedCaptureText) -> bool {
 /// Return the shared teaching error when a type marker no longer has a new
 /// task as its final subject. Global and forced destinations can change an
 /// initially ordinary task into a child after the item parser runs.
+/// A body-bearing `@route+id` / `--task-ref` child is an existing
+/// type-marker subject, so it never refuses here.
 pub(crate) fn not_applicable_error(
     parsed: &ParsedCaptureText,
 ) -> Option<String> {
     let marker = parsed.type_marker.as_ref()?;
-    (!is_new_task(parsed)).then(|| {
-        type_marker_not_applicable_error(
-            &marker.name,
-            TypeMarkerSubject::for_kind(&parsed.kind),
-        )
-    })
+    if is_new_task(parsed) || is_existing_type_marker_subject(parsed) {
+        return None;
+    }
+    Some(type_marker_not_applicable_error(
+        &marker.name,
+        TypeMarkerSubject::for_kind(&parsed.kind),
+    ))
 }
 
 /// Classify whether a marker's parsed item retypes the existing task it

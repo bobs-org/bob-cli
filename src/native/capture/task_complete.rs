@@ -86,7 +86,7 @@ pub(super) fn plan_task_complete_item(
             pomodoro_link_placement: None,
             parent_line: None,
             parent_text: None,
-            parent_section: None,
+            drawer: None,
             parent_status_symbol: None,
             parent_status_name: None,
             toggle_direction: None,

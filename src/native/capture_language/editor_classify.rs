@@ -182,7 +182,7 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     {
         return TokenParse::Invalid(token_diagnostic(
             token,
-            "invalid_drawer",
+            "drawer_toggle",
             "`!` takes no drawer: write `@route+id!` without a `#drawer`",
         ));
     }
@@ -238,7 +238,7 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
     {
         return TokenParse::Invalid(token_diagnostic(
             token,
-            "invalid_drawer",
+            "drawer_toggle",
             "`!` takes no drawer: write `@route+id!` without a `#drawer`",
         ));
     }
@@ -313,7 +313,7 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
                 Need::Drawer,
             )
         };
-    TokenParse::Marker(marker_parse(
+    let mut parsed = marker_parse(
         token,
         MarkerShape {
             sigil_len: 1,
@@ -335,7 +335,47 @@ pub(super) fn classify_sub_bullet_token(token: &Token<'_>) -> TokenParse {
                 kind: SpanKind::TaskToggleExplicitToggle,
             }),
         },
-    ))
+    );
+    // Drawer spans carry title/key when the name is valid: a slug's key,
+    // or a literal's uppercased title. Parsing stays lexical.
+    if let Some(section) = section_part
+        && !section.is_empty()
+    {
+        let drawer_meta: Option<(String, String)> = if section.starts_with('"')
+            || section.starts_with('“')
+        {
+            super::pomodoro_literal::lex_exact_name_after_hash(
+                section,
+                section.len(),
+            )
+            .filter(|lex| lex.complete)
+            .and_then(|lex| {
+                crate::native::capture_drawers::normalize_drawer_literal(
+                    &lex.decoded,
+                )
+            })
+            .map(|title| {
+                let key = crate::native::capture_drawers::drawer_key(&title);
+                (title, key)
+            })
+        } else if crate::native::capture_drawers::is_drawer_slug(section) {
+            let spaced = section.replace('-', " ");
+            let canonical =
+                super::normalize_task_text(&spaced).to_ascii_uppercase();
+            Some((canonical.clone(), canonical))
+        } else {
+            None
+        };
+        if let Some((title, key)) = drawer_meta {
+            for span in parsed.spans.iter_mut() {
+                if span.kind == SpanKind::Drawer {
+                    span.title = Some(title.clone());
+                    span.key = Some(key.clone());
+                }
+            }
+        }
+    }
+    TokenParse::Marker(parsed)
 }
 
 fn apply_project_note_create(

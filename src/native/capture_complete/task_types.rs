@@ -113,10 +113,19 @@ fn build_inner(
             .iter()
             .any(|span| span.kind == SpanKind::TaskToggleBlockId)
     });
+    let sub_bullet_existing = editor_item.is_some_and(|item| {
+        matches!(
+            item.mode,
+            crate::native::capture_language::EditorMode::SubBullet
+        ) && item.route.is_some()
+            && item.block_id.is_some()
+            && !item.body.trim().is_empty()
+    });
     let subject = if !has_new_task_id
         && (existing.is_some()
             || whole_item_link.is_some()
-            || whole_item_toggle.is_some())
+            || whole_item_toggle.is_some()
+            || sub_bullet_existing)
     {
         "existing"
     } else {
@@ -131,8 +140,13 @@ fn build_inner(
     let block_id = existing
         .and_then(|target| target.block_id.as_deref())
         .or_else(|| whole_item_link.and_then(|item| item.block_id.as_deref()))
+        .or_else(|| whole_item_toggle.and_then(|item| item.block_id.as_deref()))
         .or_else(|| {
-            whole_item_toggle.and_then(|item| item.block_id.as_deref())
+            sub_bullet_existing
+                .then_some(
+                    editor_item.and_then(|item| item.block_id.as_deref()),
+                )
+                .flatten()
         });
     let suggestion = resolve_task_suggestion(
         bob_dir,

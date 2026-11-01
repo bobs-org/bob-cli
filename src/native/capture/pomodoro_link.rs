@@ -747,7 +747,7 @@ fn planned_item_from_pomodoro_link_plan(
             pomodoro_link_placement: link.pomodoro_link_placement,
             parent_line: None,
             parent_text: None,
-            parent_section: None,
+            drawer: None,
             parent_status_symbol: None,
             parent_status_name: None,
             toggle_direction: None,

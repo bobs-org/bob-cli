@@ -1660,9 +1660,7 @@ fn type_marker_subject_for_editor(
         EditorMode::Bullet => {
             Some(super::type_marker::TypeMarkerSubject::Bullet)
         }
-        EditorMode::SubBullet => {
-            Some(super::type_marker::TypeMarkerSubject::SubBullet)
-        }
+        EditorMode::SubBullet => None,
         EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => {
             Some(super::type_marker::TypeMarkerSubject::ProjectNote)
         }

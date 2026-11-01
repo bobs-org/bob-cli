@@ -5305,11 +5305,17 @@ in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).
 
 Sub-bullet results additionally include `parent_line`, `parent_text`,
-`parent_status_symbol`, and `parent_status_name`. A capture that targeted a
-task drawer also includes `parent_section` (the matched drawer title); on a
-`^prj` parent it is the matched `##` section title instead, while
-plain `@route+block-id` captures omit it. They reuse `block_id` for the
+`parent_status_symbol`, and `parent_status_name`. They reuse `block_id` for the
 parent's ID, omitting it when a task-ref selected a parent without one.
+Every sub-bullet item carries a `drawer` object (`{title, key, created}`) for
+a drawer capture, or `null` for a plain child. On a `^prj` parent the drawer
+title is the matched `##` section title, with `created` true when the `##`
+was appended. A separate `#type` on a body-bearing `@route+id` child retypes
+the target in the same transaction; human and dry-run output show
+`new drawer` when `created` and the type row together. Drawer refusals carry
+a JSON `code` (`invalid_drawer`, `drawer_text`, `ambiguous_drawer`,
+`reserved_drawer`, `drawer_near_duplicate`, `drawer_toggle`), and creating a
+drawer near a catalog name emits the `drawer_near_catalog` warning.
 The batch-level `task_blocks` array carries the same parents in full; see
 [Task blocks](#task-blocks).
 

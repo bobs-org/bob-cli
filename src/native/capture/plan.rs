@@ -504,7 +504,7 @@ fn plan_ref_item(
             pomodoro_link_placement: None,
             parent_line: None,
             parent_text: None,
-            parent_section: None,
+            drawer: None,
             parent_status_symbol: None,
             parent_status_name: None,
             toggle_direction: None,
@@ -935,7 +935,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_link_placement: toggle.pomodoro_link_placement,
                 parent_line: None,
                 parent_text: None,
-                parent_section: None,
+                drawer: None,
                 parent_status_symbol: None,
                 parent_status_name: None,
                 toggle_direction: (!link_consumed)
@@ -1523,6 +1523,76 @@ pub(super) fn plan_capture_item(
     );
     // Set when a `:` task is created unlinked below (PDG4/PDG5).
     let mut new_task_link_guard: Option<LinkGuardJson> = None;
+    // A separate `#type` on a body-bearing `@route+id` / `--task-ref` child
+    // retypes the target in the same transaction. Stage the `[type::]` edit
+    // before the child write; a later failure leaves the vault
+    // byte-identical because the batch never commits. Only marker-only
+    // `@route+id #type` (Ensure Next) keeps its lane behavior elsewhere.
+    let mut sub_bullet_retype: Option<(
+        String,
+        ExistingTypeMarkerApplication,
+        String,
+    )> = None;
+    if let (
+        Some(marker),
+        CaptureKind::SubBullet {
+            target: sub_bullet_target,
+            ..
+        },
+    ) = (parsed.type_marker.clone(), &parsed.kind)
+    {
+        let route = parsed.route.as_deref().ok_or_else(|| {
+            CaptureError::io(
+                "sub-bullet capture invariant failed: route is missing",
+            )
+        })?;
+        let target_path =
+            request.bob_dir.join(PathBuf::from(route_label(route)));
+        let block_id_owned: String = match sub_bullet_target {
+            SubBulletTarget::BlockId(block_id) => block_id.clone(),
+            SubBulletTarget::Ref { line, digest } => {
+                let contents = planner.read_existing(&target_path)?;
+                let settings = note_tasks::read_settings(&request.bob_dir);
+                let scan = note_tasks::scan(&contents, &settings);
+                match scan.by_ref(*line, digest) {
+                    RefLookup::Found(task) => task
+                        .block_id
+                        .clone()
+                        .ok_or_else(|| {
+                            CaptureError::io(format!(
+                                "the selected task in {route}.md has no block ID; rerun the task picker"
+                            ))
+                        })?,
+                    RefLookup::Stale => {
+                        return Err(CaptureError::io(format!(
+                            "the selected task is no longer in {route}.md; rerun the task picker"
+                        )));
+                    }
+                    RefLookup::Ambiguous => {
+                        return Err(CaptureError::io(format!(
+                            "the selected task matches more than one line in {route}.md; rerun the task picker"
+                        )));
+                    }
+                }
+            }
+        };
+        let original = read_staged_task_line(
+            planner,
+            &request.bob_dir,
+            &target_path,
+            route,
+            &block_id_owned,
+        )?;
+        let applied = task_theme_context.apply_type_marker_to_existing(
+            planner,
+            &target_path,
+            route,
+            &block_id_owned,
+            &marker,
+            warnings,
+        )?;
+        sub_bullet_retype = Some((original, applied, block_id_owned));
+    }
     let mut note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
@@ -1533,14 +1603,27 @@ pub(super) fn plan_capture_item(
                     "sub-bullet capture invariant failed: route is missing",
                 )
             })?;
+            // After a retype the parent line digest changed, so a `--task-ref`
+            // child resolves by its stable block ID for the write.
+            let owned_block_target;
+            let effective_target = if let Some((_, _, block_id_owned)) =
+                sub_bullet_retype.as_ref()
+            {
+                owned_block_target =
+                    SubBulletTarget::BlockId(block_id_owned.clone());
+                &owned_block_target
+            } else {
+                sub_bullet_target
+            };
             plan_sub_bullet_capture(
                 planner,
                 &request.bob_dir,
                 &target,
                 route,
-                sub_bullet_target,
+                effective_target,
                 section.as_ref(),
                 &capture_block,
+                warnings,
             )?
         }
         CaptureKind::Pomodoro {
@@ -1691,6 +1774,25 @@ pub(super) fn plan_capture_item(
             marker.literal,
             pomodoro.details.pomodoro_name.as_deref(),
         )?;
+    }
+    // A SubBullet retype moves a live Task Link with the existing D8
+    // relocation. No Ensure Next, no new Task Link, and no lane change.
+    let mut sub_bullet_type_relocation: Option<TypeRelocationJson> = None;
+    let mut sub_bullet_task_theme: Option<CaptureTaskThemeChange> = None;
+    let mut sub_bullet_previous: Option<String> = None;
+    if let Some((original, applied, block_id_owned)) = sub_bullet_retype {
+        sub_bullet_task_theme = Some(applied.summary.clone());
+        sub_bullet_previous = Some(original);
+        if let Some(relocation) = task_theme_context.relocate_for_retype(
+            planner,
+            &block_id_owned,
+            &applied.type_key,
+            &applied.type_name,
+            &mut note_plan.pomodoro_refs,
+            warnings,
+        )? {
+            sub_bullet_type_relocation = Some(relocation.json);
+        }
     }
     let mut pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
     // Dependency effects report through `task_blocks` with the new
@@ -1941,7 +2043,11 @@ pub(super) fn plan_capture_item(
     }
     // An explicit `#type` marker is the authority: its staged field stands,
     // and the named-retype path below must not overwrite or clear it.
-    let task_theme = if let Some(summary) = marker_theme {
+    // A SubBullet retype reports its own summary; the parent's staged line
+    // already carries the field.
+    let task_theme = if let Some(summary) = sub_bullet_task_theme {
+        Some(summary)
+    } else if let Some(summary) = marker_theme {
         // The staged line already carries the marker field through
         // `block_first_line`; refresh it in case later steps rewrote it.
         // (The `capture_line` edit above flows through flipped/augmented
@@ -2052,7 +2158,7 @@ pub(super) fn plan_capture_item(
             text: parsed.body,
             task_line: block_first_line,
             task_theme,
-            type_relocation: None,
+            type_relocation: sub_bullet_type_relocation,
             kind: kind_label,
             created,
             scheduled,
@@ -2088,14 +2194,13 @@ pub(super) fn plan_capture_item(
                 .or_else(|| {
                     pomodoro_note.map(|note| note.pomodoro_text.clone())
                 }),
-            parent_section: sub_bullet
-                .and_then(|edit| edit.parent_section.clone()),
+            drawer: sub_bullet.and_then(|edit| edit.drawer.clone()),
             parent_status_symbol: sub_bullet
                 .map(|edit| edit.parent_status_symbol),
             parent_status_name: sub_bullet
                 .map(|edit| edit.parent_status_name.clone()),
             toggle_direction: None,
-            previous_task_line: None,
+            previous_task_line: sub_bullet_previous,
             status_symbol: None,
             status_name: None,
             previous_status_symbol: None,

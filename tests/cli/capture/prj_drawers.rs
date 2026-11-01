@@ -50,7 +50,7 @@ fn capture_prj_drawer_appends_after_section_content() {
         serde_json::from_str(stdout(&dry_run).trim()).expect("dry JSON");
     assert_eq!(dry_json["dry_run"], true);
     assert_eq!(dry_json["kind"], "sub_bullet");
-    assert_eq!(dry_json["parent_section"], "Requirements");
+    assert_eq!(dry_json["drawer"]["title"], "Requirements");
     assert_eq!(
         fs::read_to_string(vault.join("proj.md")).expect("read note"),
         PROJECT_NOTE,
@@ -71,7 +71,7 @@ fn capture_prj_drawer_appends_after_section_content() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
     assert_eq!(json["kind"], "sub_bullet");
-    assert_eq!(json["parent_section"], "Requirements");
+    assert_eq!(json["drawer"]["title"], "Requirements");
     assert_eq!(json["block_id"], "prj");
     assert_eq!(json["task_line"], "- Postgres 17 minimum");
     assert_eq!(json["placement"], "inserted");
@@ -117,7 +117,7 @@ fn capture_prj_drawer_appends_after_section_content() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["parent_section"], "Future Work");
+    assert_eq!(json["drawer"]["title"], "Future Work");
     assert_eq!(json["placement"], "appended");
     assert!(fs::read_to_string(vault.join("proj.md"))
         .expect("read note")
@@ -148,7 +148,7 @@ fn capture_prj_drawer_creates_missing_h2_in_title_case() {
     assert_eq!(captures.len(), 2);
     assert!(captures
         .iter()
-        .all(|item| item["parent_section"] == "New Area"));
+        .all(|item| item["drawer"]["title"] == "New Area"));
     assert_eq!(
         fs::read_to_string(vault.join("proj.md")).expect("read note"),
         format!("{PROJECT_NOTE}\n## New Area\n\n- first\n- second\n")
@@ -327,7 +327,7 @@ fn capture_prj_drawer_ambiguous_and_guard_refuse_but_literal_wins() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["parent_section"], "Future-Work");
+    assert_eq!(json["drawer"]["title"], "Future-Work");
     assert_eq!(
         fs::read_to_string(vault.join("dup.md")).expect("read note"),
         original.replace(
@@ -359,7 +359,7 @@ fn capture_prj_drawer_authored_children_and_clip_nest_under_entry() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["parent_section"], "Requirements");
+    assert_eq!(json["drawer"]["title"], "Requirements");
     assert_eq!(
         fs::read_to_string(vault.join("proj.md")).expect("read note"),
         PROJECT_NOTE.replace(
@@ -374,6 +374,14 @@ fn capture_prj_drawer_separate_type_and_plain_child_still_work() {
     let temp = TempDir::new("bob-cli-prj-drawer-retype");
     let vault = temp.path().join("vault");
     write_file(&vault.join("proj.md"), PROJECT_NOTE);
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        concat!(
+            "plan:\n  max_themes: 30\n",
+            "themes:\n  BUILD: yellow\n  FIX: blue\n",
+        ),
+    );
 
     // A separate `#type` retypes in the same transaction as the H2 write.
     let output = bob_command()
@@ -384,15 +392,17 @@ fn capture_prj_drawer_separate_type_and_plain_child_still_work() {
         .arg("json")
         .arg("Postgres 17 @proj+prj#requirements #fix")
         .env("BOB_NOW", "2026-07-31")
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("run prj drawer retype capture");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["parent_section"], "Requirements");
-    assert!(fs::read_to_string(vault.join("proj.md"))
-        .expect("read note")
-        .contains("more notes\n- Postgres 17\n"));
+    assert_eq!(json["drawer"]["title"], "Requirements");
+    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    let note = fs::read_to_string(vault.join("proj.md")).expect("read note");
+    assert!(note.contains("more notes\n- Postgres 17\n"), "{note}");
+    assert!(note.contains("[type:: FIX]"), "{note}");
 
     // A plain child with a separate `#type` follows the existing project
     // typing rules, unchanged by drawers.
@@ -404,6 +414,7 @@ fn capture_prj_drawer_separate_type_and_plain_child_still_work() {
         .arg("json")
         .arg("plain child @proj+prj #fix")
         .env("BOB_NOW", "2026-07-31")
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("run plain prj child capture");
     assert_success(&output);
@@ -573,7 +584,7 @@ fn capture_prj_drawer_promotion_round_trip() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["parent_section"], "Requirements");
+    assert_eq!(json["drawer"]["title"], "Requirements");
     assert!(fs::read_to_string(vault.join("proj.md"))
         .expect("read note")
         .ends_with("## Requirements\n\n- Postgres 17 minimum\n- follow up\n"));

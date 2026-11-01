@@ -46,6 +46,7 @@ pub(super) fn plan_sub_bullet_capture(
     sub_bullet_target: &SubBulletTarget,
     section_selector: Option<&DrawerSelector>,
     capture_block: &str,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<CaptureWritePlan, CaptureError> {
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
@@ -97,46 +98,64 @@ pub(super) fn plan_sub_bullet_capture(
         }
     };
 
-    let (insertion_offset, indentation, parent_section, _drawer_created) =
-        if let Some(selector) = section_selector {
-            if capture_drawers::is_prj_parent(&contents, parent) {
-                return plan_prj_section_capture(
-                    planner,
-                    bob_dir,
-                    target,
-                    route,
-                    &contents,
-                    parent,
-                    selector,
-                    capture_block,
-                );
-            }
-            // Load catalog for spelling (best-effort; empty on failure).
-            let catalog = capture_drawers::load_drawer_catalog(bob_dir)
-                .unwrap_or_default();
-            let drawers = capture_drawers::drawers(&contents, parent);
-            let block_id = parent.block_id.as_deref();
-            match capture_drawers::resolve_drawer_for_write(
-                &drawers,
-                &selector.text,
-                selector.exact,
-                &catalog,
+    let (insertion_offset, indentation, drawer) = if let Some(selector) =
+        section_selector
+    {
+        if capture_drawers::is_prj_parent(&contents, parent) {
+            return plan_prj_section_capture(
+                planner,
+                bob_dir,
+                target,
                 route,
-                block_id,
-                capture_drawers::DrawerScope::Task,
-            ) {
-                Ok(resolved) => match resolved.outcome {
+                &contents,
+                parent,
+                selector,
+                capture_block,
+                warnings,
+            );
+        }
+        // Load catalog for spelling (best-effort; empty on failure).
+        let catalog =
+            capture_drawers::load_drawer_catalog(bob_dir).unwrap_or_default();
+        let drawers = capture_drawers::drawers(&contents, parent);
+        let block_id = parent.block_id.as_deref();
+        match capture_drawers::resolve_drawer_for_write(
+            &drawers,
+            &selector.text,
+            selector.exact,
+            &catalog,
+            route,
+            block_id,
+            capture_drawers::DrawerScope::Task,
+        ) {
+            Ok(resolved) => {
+                let resolved_warning = resolved.warning.clone();
+                let resolved_created = resolved.created;
+                match resolved.outcome {
                     capture_drawers::DrawerResolveOutcome::Existing {
                         drawer,
                     } => {
+                        if let Some(message) = resolved_warning {
+                            warnings.push(CaptureWarning::Structured(
+                                StructuredCaptureWarning {
+                                    code: "drawer_near_catalog",
+                                    label: None,
+                                    count: None,
+                                    message,
+                                },
+                            ));
+                        }
                         let insertion = capture_drawers::drawer_insertion(
                             &contents, &drawer,
                         );
                         (
                             insertion.offset,
                             insertion.indentation,
-                            Some(drawer.title.clone()),
-                            resolved.created,
+                            Some(DrawerJson {
+                                title: drawer.title.clone(),
+                                key: drawer.key.clone(),
+                                created: resolved_created,
+                            }),
                         )
                     }
                     capture_drawers::DrawerResolveOutcome::Create {
@@ -166,8 +185,7 @@ pub(super) fn plan_sub_bullet_capture(
                             parent.block_end,
                         )
                         .unwrap_or(parent.block_end);
-                        let header_block =
-                            format!("{drawer_indent}- {title}\n");
+                        let header_block = format!("{drawer_indent}- {title}");
                         let header_addition =
                             insertion_text_preserving_line_endings(
                                 &contents,
@@ -216,49 +234,14 @@ pub(super) fn plan_sub_bullet_capture(
                                 "failed to create drawer {title}"
                             )));
                         };
-                        let insertion =
-                            capture_drawers::drawer_insertion(&staged, drawer);
-                        // Note: header already staged; the entry below
-                        // will be staged as a second edit in the same
-                        // batch transaction. Return staged-based offset
-                        // relative to the staged contents, but the caller
-                        // below stages against `contents` (pre-header).
-                        // To keep one transaction, stage the entry against
-                        // the staged contents directly here and return
-                        // early.
-                        let _ = (insertion, drawer);
-                        // Fall through to entry insertion against staged:
-                        // recompute from staged below.
+                        // Header already staged; the entry below stages
+                        // against the staged contents directly so
+                        // header+entry stay atomic and two rows into one
+                        // new drawer share one header on re-resolve.
                         let contents = staged;
-                        let drawers = staged_drawers;
                         let parent = staged_parent;
-                        // Resolve again (must be existing now).
-                        let catalog =
-                            capture_drawers::load_drawer_catalog(bob_dir)
-                                .unwrap_or_default();
-                        let resolved2 =
-                            capture_drawers::resolve_drawer_for_write(
-                                &drawers,
-                                &selector.text,
-                                selector.exact,
-                                &catalog,
-                                route,
-                                parent.block_id.as_deref(),
-                                capture_drawers::DrawerScope::Task,
-                            )
-                            .map_err(|e| {
-                                CaptureError::usage(e.message.clone())
-                            })?;
-                        let capture_drawers::DrawerResolveOutcome::Existing {
-                            drawer,
-                        } = resolved2.outcome
-                        else {
-                            return Err(CaptureError::io(format!(
-                                "failed to create drawer {title}"
-                            )));
-                        };
                         let insertion = capture_drawers::drawer_insertion(
-                            &contents, &drawer,
+                            &contents, drawer,
                         );
                         // Stage entry against staged contents (which already
                         // has the header). We inline the entry staging here
@@ -280,11 +263,25 @@ pub(super) fn plan_sub_bullet_capture(
                         } else {
                             Placement::Inserted
                         };
+                        if let Some(message) = resolved_warning {
+                            warnings.push(CaptureWarning::Structured(
+                                StructuredCaptureWarning {
+                                    code: "drawer_near_catalog",
+                                    label: None,
+                                    count: None,
+                                    message,
+                                },
+                            ));
+                        }
                         let details = SubBulletCaptureDetails {
                             block_id: parent.block_id.clone(),
                             parent_line: parent.line_index + 1,
                             parent_text: parent.description.clone(),
-                            parent_section: Some(drawer.title.clone()),
+                            drawer: Some(DrawerJson {
+                                title: drawer.title.clone(),
+                                key: drawer.key.clone(),
+                                created: true,
+                            }),
                             parent_status_symbol: parent.status_symbol,
                             parent_status_name: parent.status_name.clone(),
                         };
@@ -301,32 +298,36 @@ pub(super) fn plan_sub_bullet_capture(
                             pomodoro_refs: Vec::new(),
                         });
                     }
-                },
-                Err(e) => {
-                    return Err(CaptureError::usage(e.message.clone()));
                 }
             }
-        } else {
-            let lines = line_spans(&contents);
-            let indentation = first_child_indentation(
-                &lines,
-                parent.line_index,
-                parent.block_end,
-                &parent.indentation,
-            )
-            .or_else(|| {
-                dominant_indent_unit(&lines)
-                    .map(|unit| format!("{}{}", parent.indentation, unit))
-            })
-            .unwrap_or_else(|| format!("{}\t", parent.indentation));
-            let insertion_offset = first_direct_managed_log_start(
-                &lines,
-                parent.line_index,
-                parent.block_end,
-            )
-            .unwrap_or(parent.block_end);
-            (insertion_offset, indentation, None, false)
-        };
+            Err(e) => {
+                return Err(CaptureError::usage_code(
+                    e.message.clone(),
+                    e.code,
+                ));
+            }
+        }
+    } else {
+        let lines = line_spans(&contents);
+        let indentation = first_child_indentation(
+            &lines,
+            parent.line_index,
+            parent.block_end,
+            &parent.indentation,
+        )
+        .or_else(|| {
+            dominant_indent_unit(&lines)
+                .map(|unit| format!("{}{}", parent.indentation, unit))
+        })
+        .unwrap_or_else(|| format!("{}\t", parent.indentation));
+        let insertion_offset = first_direct_managed_log_start(
+            &lines,
+            parent.line_index,
+            parent.block_end,
+        )
+        .unwrap_or(parent.block_end);
+        (insertion_offset, indentation, None)
+    };
     let indented_block = capture_block
         .split('\n')
         .map(|line| format!("{indentation}{line}"))
@@ -346,7 +347,7 @@ pub(super) fn plan_sub_bullet_capture(
         block_id: parent.block_id.clone(),
         parent_line: parent.line_index + 1,
         parent_text: parent.description.clone(),
-        parent_section,
+        drawer,
         parent_status_symbol: parent.status_symbol,
         parent_status_name: parent.status_name.clone(),
     };
@@ -380,6 +381,7 @@ fn plan_prj_section_capture(
     parent: &note_tasks::NoteTask,
     selector: &DrawerSelector,
     capture_block: &str,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<CaptureWritePlan, CaptureError> {
     // Load catalog for spelling (best-effort; empty on failure).
     let catalog =
@@ -395,10 +397,22 @@ fn plan_prj_section_capture(
     ) {
         Ok(resolved) => resolved,
         Err(error) => {
-            return Err(CaptureError::usage(error.message.clone()));
+            return Err(CaptureError::usage_code(
+                error.message.clone(),
+                error.code,
+            ));
         }
     };
-    let (updated_target, placement, parent_section) = match resolved.outcome {
+    if let Some(message) = resolved.warning.clone() {
+        warnings.push(CaptureWarning::Structured(StructuredCaptureWarning {
+            code: "drawer_near_catalog",
+            label: None,
+            count: None,
+            message,
+        }));
+    }
+    let resolved_created = resolved.created;
+    let (updated_target, placement, drawer) = match resolved.outcome {
         capture_drawers::DrawerResolveOutcome::Existing { drawer } => {
             let (offset, empty) =
                 capture_drawers::h2_insert_position(contents, &drawer);
@@ -417,9 +431,19 @@ fn plan_prj_section_capture(
                 Placement::Inserted
             };
             let updated_target = insert_at(contents, offset, &addition);
-            (updated_target, placement, Some(drawer.title.clone()))
+            (
+                updated_target,
+                placement,
+                Some(DrawerJson {
+                    title: drawer.title.clone(),
+                    key: drawer.key.clone(),
+                    created: resolved_created,
+                }),
+            )
         }
-        capture_drawers::DrawerResolveOutcome::Create { title, .. } => {
+        capture_drawers::DrawerResolveOutcome::Create {
+            title, key, ..
+        } => {
             let ending = document_line_ending(contents);
             let double = format!("{ending}{ending}");
             let separator =
@@ -434,14 +458,22 @@ fn plan_prj_section_capture(
             let updated_target = format!(
                 "{contents}{separator}## {title}{ending}{ending}{block}{ending}"
             );
-            (updated_target, Placement::Appended, Some(title))
+            (
+                updated_target,
+                Placement::Appended,
+                Some(DrawerJson {
+                    title: title.clone(),
+                    key,
+                    created: true,
+                }),
+            )
         }
     };
     let details = SubBulletCaptureDetails {
         block_id: parent.block_id.clone(),
         parent_line: parent.line_index + 1,
         parent_text: parent.description.clone(),
-        parent_section,
+        drawer,
         parent_status_symbol: parent.status_symbol,
         parent_status_name: parent.status_name.clone(),
     };
