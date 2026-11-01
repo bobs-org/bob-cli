@@ -2365,10 +2365,13 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     Err(error) => return Err(error.message),
                     Ok(lexed) => {
                         if let Some(dangling) = lexed.dangling.first() {
-                            return Err(close_log_dangling_error(
-                                &format!("- {}", dangling.index),
-                                dangling.index,
-                            ));
+                            return Err(match dangling.index {
+                                Some(index) => close_log_dangling_error(
+                                    &format!("- {index}"),
+                                    index,
+                                ),
+                                None => close_log_star_dangling_error(),
+                            });
                         }
                         let mut spec = close_spec_from_lex(
                             first.to_string(),

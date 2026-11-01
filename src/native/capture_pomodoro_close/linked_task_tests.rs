@@ -425,6 +425,7 @@ fn selection_log(
             index: Some(index),
             text: text.to_string(),
             details: Vec::new(),
+            all: false,
             origin: Default::default(),
         })
         .collect();
@@ -445,6 +446,7 @@ fn selection_detail_log(
             index: Some(index),
             text: text.to_string(),
             details: details.into_iter().map(str::to_string).collect(),
+            all: false,
             origin: Default::default(),
         })
         .collect();

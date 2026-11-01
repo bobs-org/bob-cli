@@ -327,15 +327,20 @@ number names the task, so only the entry's first token is an index (`x 1 \
 the close, then any session operators (`bob capture 'x wired the lexer'`, \
 `bob capture 'x1,3 3 fixed the flaky test'`, `bob capture 'x wired the \
 lexer ='`). For several entries or details, use child bullets below the \
-close instead: `- [<n>] <text>` logs `<text>` in typed order, and a \
-two-space `  - <detail>` nests an undated detail under its entry in the \
-task's Work Log. Bullets are numbered all or none: either every first-level \
+close instead: `- [<n>] <text>` logs `<text>` in typed order, `- * <text>` \
+logs the same entry to every worked task no other entry in this close logs \
+to, and a two-space `  - <detail>` nests an undated detail under its entry \
+in the task's Work Log. Bullets are numbered all or none except star \
+bullets, which never fix the list's kind: either every non-star first-level \
 bullet starts with its task number (`- 3 foo bar`), or none does and each \
-bullet logs in order to the close's worked tasks — one worked task takes \
-them all, otherwise bullet `i` logs to worked task `i`, so `x3,4` plus \
-`- foo bar` plus `- baz bam` writes exactly what `- 3 foo bar` plus \
-`- 4 baz bam` writes. A leading number is always a task number, so to log \
-text that starts with a number, number every bullet (`- 3 2 bugs fixed`). \
+unnumbered bullet logs in order to the close's worked tasks — one worked \
+task takes them all, otherwise bullet `i` logs to worked task `i`, so \
+`x3,4` plus `- foo bar` plus `- baz bam` writes exactly what `- 3 foo bar` \
+plus `- 4 baz bam` writes, and `x` plus `- wired the lexer` plus \
+`- * code review` logs the first to task 1 and the star to every other \
+worked task. A leading number is always a task number, so to log \
+text that starts with a number, number every bullet (`- 3 2 bugs fixed`); \
+to log text that starts with `*`, write `- * * foo` or `- 1 * foo`. \
 For explicitly numbered selections without wildcards, positions resolve lexically \
 and `capture-parse` agrees with `bob capture`. With wildcard intent, numbered \
 entries can target resolved worked links except explicit drops; unnumbered \
@@ -347,7 +352,7 @@ index, so `- 1 fixed 3 bugs` logs `fixed 3 bugs` and every backslash \
 stays literal. The outcome is exactly the sub-bullets the user would type \
 by hand under that Task Link, followed by the unchanged close. A close's child lines are Work \
 Log bullets; a token ending in `,` or `~` (`x1,`, `x*1,`, `x*~`) is incomplete and \
-fails, a dangling bullet (`- 1`) or dangling inline number (`x 1`) is incomplete and \
+fails, a dangling bullet (`- 1` or `- *`) or dangling inline number (`x 1`) is incomplete and \
 fails, whitespace is \
 never allowed inside the lists, and `xx`/`xa`/`Plan x`/a capitalized `X…` stay ordinary \
 prose. A trailing `*`/`!` with no numbers is a valid wildcard group instead of a dangling state, so `x*` and `x!` are valid. Entry text is literal (`@route`, `@@route`, `s:<N>`, `$<N>`, `%`, \
@@ -368,7 +373,7 @@ rolls the whole batch back, so \
 JSON reports a distinct `pomodoro_close` kind (link and task forms keep \
 their kind with an additive `pomodoro_close` object) carrying the typed \
 `raw`, the `in_progress`/`park`/`complete`/`drop` lists, the `log` entries \
-(`index`, `text`, `details`) in typed order, the numbered `task_links` \
+(`index`, `text`, `details`, and an `all` flag on expanded star copies) in typed order, the numbered `task_links` \
 lineup (with `parked` and `dropped` outcomes), each task row's `index` and `role` \
 (with a `dropped` role; parked rows stay `worked` with `carried: false`) plus its `typed_work_log` subset and the aligned \
 `typed_work_log_details`; \

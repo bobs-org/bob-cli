@@ -273,18 +273,18 @@ needing `pomodoro_start_timing` with no spec. A whole-item \
 any order; a capitalized `X…` stays prose) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
 the `park` list, the `complete` list, the `drop` list, the additive `park_all` and `complete_all` flags, and the `log` entries (`index`, \
-`text`, `details`) in typed order (`index` is omitted for unnumbered bullets under a close without `<N>`/`*<P>` or with wildcard intent, which `bob capture` resolves after staging the running session lineup); and spans covering the `x` token (`pomodoro_close`), the `<N>` list \
+`text`, `details`, and an `all` flag on unexpanded star bullets) in typed order (`index` is omitted for unnumbered bullets under a close without `<N>`/`*<P>` or with wildcard intent, and for star bullets, which `bob capture` resolves after staging the running session lineup); and spans covering the `x` token (`pomodoro_close`), the `<N>` list \
 including its commas (`pomodoro_close_in_progress`), the `*<P>` list \
 including the `*` (`pomodoro_close_park`), the `!<M>` list \
 including the `!` (`pomodoro_close_complete`), the `~<K>` list including \
-the `~` (`pomodoro_close_drop`), and each numbered entry index \
-(`pomodoro_close_log_index`; positional entries get no index span, and entry text \
+the `~` (`pomodoro_close_drop`), and each numbered or star entry index \
+(`pomodoro_close_log_index`; positional entries get no index span, a star bullet's `*` gets one, and entry text \
 renders as neutral prose but keeps \
 its wikilink spans); the human `close` line reads \
 `x1*2!3~4 (in progress 1 · parked 2 · complete 3 · drop 4 · defer the rest)`, with \
 `in progress none` for `x0`, `park all` for `x*`, `complete all` for `x!`, `park all · complete 2` for `x*!2`, `in progress 1 · park all` for `x1*`, and a bare `x` for a plain close, and \
 `log 2 'wired the lexer' (+1 detail)` for typed entries with details \
-(`log 'wired the lexer'` with no number for entries resolved at execution). \
+(`log 'wired the lexer'` with no number for entries resolved at execution, `* 'code review'` for a star bullet). \
 One entry may sit on the close line itself (`bob capture-parse -f json -- \
 'x wired it'`): it logs to the first task the close works, or to the \
 leading number when one is typed. Under wildcard intent, the default index is \
@@ -295,18 +295,19 @@ while the default gets none, and entry text keeps its wikilink spans. A \
 dangling inline number (`bob capture-parse -f json -- 'x 2'`) reports mode \
 'incomplete' needing `pomodoro_close_log_text` with the partial spec and an \
 `interactive_placeholder` span over the number instead of its index span. \
-Several entries still use child bullets below the close (`- [<n>] <text>`, with \
+Several entries still use child bullets below the close (`- [<n>] <text>`, `- * <text>`, with \
 two-space `  - <detail>` details nesting under their entry): bullets are numbered \
-all or none, and unnumbered bullets log in order to the close's worked tasks \
+all or none except star bullets, which never fix the list's kind, and unnumbered bullets log in order to the close's worked tasks \
 (one worked task takes them all, otherwise bullet `i` logs to worked task `i`); \
+a star bullet logs to every remaining worked task; \
 a leading number is always a task number, so `- 2 bugs fixed` names task 2. Only the \
 first token is an index and every backslash stays literal. A \
-dangling bullet (`- 1`) reports mode 'incomplete' needing \
+dangling bullet (`- 1` or `- *`) reports mode 'incomplete' needing \
 `pomodoro_close_log_text` with the partial spec (lists plus every complete \
 entry with its details), the spans typed so far, and one \
-`interactive_placeholder` span over each dangling number instead of its \
+`interactive_placeholder` span over each dangling number or `*` instead of its \
 index span. A mixed-numbering bullet, too many unnumbered bullets, a close \
-that works no task, a non-loggable index, a bad number, a \
+that works no task, a star bullet with no task left, a non-loggable index, a bad number, a \
 block link, or a fence reports 'pomodoro_close' plus an \
 `invalid_pomodoro_close` diagnostic on the precise range, and so does a bad \
 inline entry (stray marker, misplaced operators, no-spaces join, Task Link \
@@ -2535,9 +2536,13 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
             .log
             .iter()
             .map(|entry| {
-                let head = match entry.index {
-                    Some(index) => format!("{index} {:?}", entry.text),
-                    None => format!("{:?}", entry.text),
+                let head = if entry.all {
+                    format!("* {:?}", entry.text)
+                } else {
+                    match entry.index {
+                        Some(index) => format!("{index} {:?}", entry.text),
+                        None => format!("{:?}", entry.text),
+                    }
                 };
                 if entry.details.is_empty() {
                     head
@@ -3511,18 +3516,21 @@ mod tests {
                     index: Some(1),
                     text: "wired the lexer".to_string(),
                     details: vec!["chose a hand-rolled lexer".to_string()],
+                    all: false,
                     origin: Default::default(),
                 },
                 CloseLogEntry {
                     index: Some(2),
                     text: "sketched the parser".to_string(),
                     details: vec!["a".to_string(), "b".to_string()],
+                    all: false,
                     origin: Default::default(),
                 },
                 CloseLogEntry {
                     index: Some(1),
                     text: "opened the PR".to_string(),
                     details: Vec::new(),
+                    all: false,
                     origin: Default::default(),
                 },
             ],
@@ -3533,6 +3541,37 @@ mod tests {
         );
         let plain = PomodoroCloseSpec::plain("x".to_string());
         assert_eq!(format_pomodoro_close(&plain), "x");
+        let star = PomodoroCloseSpec {
+            raw: "x".to_string(),
+            in_progress: None,
+            park: Vec::new(),
+            park_all: false,
+            complete: Vec::new(),
+            complete_all: false,
+            drop: Vec::new(),
+            log: vec![
+                CloseLogEntry {
+                    index: None,
+                    text: "wired the lexer".to_string(),
+                    details: Vec::new(),
+                    all: false,
+                    origin: Default::default(),
+                },
+                CloseLogEntry {
+                    index: None,
+                    text: "code review".to_string(),
+                    details: vec!["cleaned up".to_string()],
+                    all: true,
+                    origin: crate::native::capture_language::CloseLogOrigin::StarBullet {
+                        position: 2,
+                    },
+                },
+            ],
+        };
+        assert_eq!(
+            format_pomodoro_close(&star),
+            "x (log \"wired the lexer\", * \"code review\" (+1 detail))"
+        );
     }
 
     #[test]

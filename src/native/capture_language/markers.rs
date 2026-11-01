@@ -955,6 +955,28 @@ pub(super) fn close_log_dangling_error(
     )
 }
 
+/// A dangling `- *` star bullet at execution.
+pub(super) fn close_log_star_dangling_error() -> String {
+    "`- *` is incomplete: type the Work Log text after `*`".to_string()
+}
+
+/// A star bullet whose remaining set is empty: every worked task already
+/// has its own Work Log entry. `raw` is the typed close token and
+/// `worked` the close's worked tasks in ascending order.
+pub(super) fn close_log_star_covered_error(
+    raw: &str,
+    worked: &[u32],
+) -> String {
+    let tasks = if worked.len() == 1 {
+        format!("1 task: {}", worked[0])
+    } else {
+        format!("{} tasks: {}", worked.len(), join_task_numbers(worked))
+    };
+    format!(
+        "every task `{raw}` works ({tasks}) already has its own Work Log entry, so `- *` has no task left to log to; drop the `- *` bullet"
+    )
+}
+
 /// A block link inside a Work Log bullet.
 pub(super) fn close_log_block_link_error(link: &str) -> String {
     format!("a Work Log bullet can't contain the block link `{link}`; the close would treat it as a Task Link")

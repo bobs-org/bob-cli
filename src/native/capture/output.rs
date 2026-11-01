@@ -118,6 +118,10 @@ pub(super) struct PomodoroCloseLogEntryJson {
     /// Nested detail lines under the entry, omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) details: Vec<String>,
+    /// `true` when this entry came from a `- *` star bullet that logs to
+    /// every remaining worked task. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) all: bool,
 }
 
 fn typed_work_log_details_is_empty(details: &[Vec<String>]) -> bool {
@@ -4591,6 +4595,7 @@ mod tests {
             index: 2,
             text: "wired the lexer".to_string(),
             details: Vec::new(),
+            all: false,
         };
         let value = to_value(&plain).expect("serialize");
         assert_eq!(value, json!({ "index": 2, "text": "wired the lexer" }));
@@ -4598,6 +4603,7 @@ mod tests {
             index: 2,
             text: "wired the lexer".to_string(),
             details: vec!["chose a hand-rolled lexer".to_string()],
+            all: false,
         };
         assert_eq!(
             to_value(&detailed).expect("serialize"),
@@ -4606,6 +4612,16 @@ mod tests {
                 "text": "wired the lexer",
                 "details": ["chose a hand-rolled lexer"],
             })
+        );
+        let starred = PomodoroCloseLogEntryJson {
+            index: 3,
+            text: "code review".to_string(),
+            details: Vec::new(),
+            all: true,
+        };
+        assert_eq!(
+            to_value(&starred).expect("serialize"),
+            json!({ "index": 3, "text": "code review", "all": true })
         );
     }
 

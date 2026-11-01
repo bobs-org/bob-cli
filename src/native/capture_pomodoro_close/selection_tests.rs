@@ -95,6 +95,7 @@ fn sel_detail_log(
                     index: Some(index),
                     text: text.to_string(),
                     details: details.into_iter().map(str::to_string).collect(),
+                    all: false,
                     origin: Default::default(),
                 }
             })
@@ -145,6 +146,7 @@ fn sel_drop_log(
                     index: Some(index),
                     text: text.to_string(),
                     details: Vec::new(),
+                    all: false,
                     origin: Default::default(),
                 }
             })
@@ -1546,6 +1548,7 @@ fn sel_positional(texts: Vec<&str>, raw: &str) -> CloseSelection {
                 index: None,
                 text: text.to_string(),
                 details: Vec::new(),
+                all: false,
                 origin: CloseLogOrigin::PositionalBullet {
                     position: ordinal as u32 + 1,
                 },
@@ -1784,12 +1787,14 @@ fn lexically_resolved_positional_entry_reports_nested_wording() {
             index: Some(1),
             text: "a".to_string(),
             details: Vec::new(),
+            all: false,
             origin: CloseLogOrigin::PositionalBullet { position: 1 },
         },
         CloseLogEntry {
             index: Some(2),
             text: "b".to_string(),
             details: Vec::new(),
+            all: false,
             origin: CloseLogOrigin::PositionalBullet { position: 2 },
         },
     ];
@@ -1798,5 +1803,278 @@ fn lexically_resolved_positional_entry_reports_nested_wording() {
     assert_eq!(
         error.to_string(),
         "Work Log bullet 2 logs to task 2 by its position, but task 2 `[[a#^two]]` is nested under another bullet, so the close can't write its Work Log; move it to the top level of CAPTURE"
+    );
+}
+
+fn close_log_entry(
+    index: Option<u32>,
+    text: &str,
+    origin: super::super::capture_language::CloseLogOrigin,
+    all: bool,
+) -> super::super::capture_language::CloseLogEntry {
+    use super::super::capture_language::CloseLogEntry;
+    CloseLogEntry {
+        index,
+        text: text.to_string(),
+        details: Vec::new(),
+        all,
+        origin,
+    }
+}
+
+fn star_entry(
+    position: u32,
+    text: &str,
+) -> super::super::capture_language::CloseLogEntry {
+    use super::super::capture_language::CloseLogOrigin;
+    close_log_entry(None, text, CloseLogOrigin::StarBullet { position }, true)
+}
+
+fn positional_entry(
+    position: u32,
+    text: &str,
+) -> super::super::capture_language::CloseLogEntry {
+    use super::super::capture_language::CloseLogOrigin;
+    close_log_entry(
+        None,
+        text,
+        CloseLogOrigin::PositionalBullet { position },
+        false,
+    )
+}
+
+fn numbered_entry(
+    index: u32,
+    text: &str,
+) -> super::super::capture_language::CloseLogEntry {
+    use super::super::capture_language::CloseLogOrigin;
+    close_log_entry(Some(index), text, CloseLogOrigin::Bullet, false)
+}
+
+#[test]
+fn star_entries_expand_in_typed_order() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]",
+    ]);
+    let running = running_of(&contents);
+    let mut selection = sel(None, Vec::new(), "x");
+    selection.log = vec![
+        positional_entry(1, "a"),
+        star_entry(2, "b"),
+        star_entry(3, "c"),
+    ];
+    let applied =
+        apply_close_selection(&contents, &running, &selection).expect("apply");
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| (entry.index, entry.text.as_str(), entry.all))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some(1), "a", false),
+            (Some(2), "b", true),
+            (Some(3), "b", true),
+            (Some(2), "c", true),
+            (Some(3), "c", true),
+        ]
+    );
+    assert!(applied.contents.contains("\t\t- a\n"));
+    assert!(applied.contents.contains("\t\t- b\n"));
+    assert!(applied.contents.contains("\t\t- c\n"));
+}
+
+#[test]
+fn star_entries_follow_numbered_bullets_in_non_selection_mode() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]",
+    ]);
+    let running = running_of(&contents);
+    let mut selection = sel(None, Vec::new(), "x");
+    selection.log = vec![numbered_entry(1, "wired"), star_entry(2, "review")];
+    let applied =
+        apply_close_selection(&contents, &running, &selection).expect("apply");
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| (entry.index, entry.all))
+            .collect::<Vec<_>>(),
+        vec![(Some(1), false), (Some(2), true), (Some(3), true)]
+    );
+}
+
+#[test]
+fn star_entries_use_lexical_w_in_selection_mode() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]",
+        "\t- [[a#^four]]",
+    ]);
+    let running = running_of(&contents);
+    let mut selection = sel(Some(vec![2, 4]), Vec::new(), "x2,4");
+    selection.log = vec![
+        close_log_entry(
+            Some(2),
+            "a",
+            super::super::capture_language::CloseLogOrigin::PositionalBullet {
+                position: 1,
+            },
+            false,
+        ),
+        star_entry(2, "b"),
+    ];
+    let applied =
+        apply_close_selection(&contents, &running, &selection).expect("apply");
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        vec![Some(2), Some(4)]
+    );
+}
+
+#[test]
+fn star_entries_use_top_level_lineup_for_wildcards() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^three]]",
+    ]);
+    let running = running_of(&contents);
+    let mut selection = sel(None, Vec::new(), "x*").with_all(true, false);
+    selection.log = vec![numbered_entry(1, "a"), star_entry(2, "b")];
+    let applied =
+        apply_close_selection(&contents, &running, &selection).expect("apply");
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| (entry.index, entry.all))
+            .collect::<Vec<_>>(),
+        vec![(Some(1), false), (Some(2), true), (Some(3), true)]
+    );
+    let mut complete_all = sel(None, Vec::new(), "x!").with_all(false, true);
+    complete_all.log = vec![star_entry(1, "shipped")];
+    let applied = apply_close_selection(&contents, &running, &complete_all)
+        .expect("apply complete all");
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        vec![Some(1), Some(2), Some(3)]
+    );
+}
+
+#[test]
+fn star_entries_dedup_duplicate_targets() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+        "\t- [[a#^one]]",
+    ]);
+    let running = running_of(&contents);
+    let mut selection = sel(None, Vec::new(), "x");
+    selection.log = vec![star_entry(1, "review")];
+    let applied =
+        apply_close_selection(&contents, &running, &selection).expect("apply");
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        vec![Some(1), Some(2)]
+    );
+    let mut covered = sel(None, Vec::new(), "x");
+    covered.log = vec![numbered_entry(1, "own"), star_entry(2, "review")];
+    let applied =
+        apply_close_selection(&contents, &running, &covered).expect("apply");
+    assert_eq!(
+        applied
+            .log
+            .iter()
+            .map(|entry| (entry.index, entry.all))
+            .collect::<Vec<_>>(),
+        vec![(Some(1), false), (Some(2), true)]
+    );
+}
+
+#[test]
+fn star_entries_report_nothing_left_and_empty_w() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let mut covered = sel(None, Vec::new(), "x");
+    covered.log = vec![
+        numbered_entry(1, "a"),
+        numbered_entry(2, "b"),
+        star_entry(3, "c"),
+    ];
+    let error = apply_close_selection(&contents, &running, &covered)
+        .expect_err("covered");
+    assert_eq!(
+        error.to_string(),
+        "every task `x` works (2 of CAPTURE's tasks: 1 and 2) already has its own Work Log entry, so `- *` has no task left to log to; drop the `- *` bullet"
+    );
+    let deferred = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]#",
+        "\t- [[a#^two]]#",
+    ]);
+    let running = running_of(&deferred);
+    let mut empty = sel(None, Vec::new(), "x");
+    empty.log = vec![star_entry(1, "foo")];
+    let error =
+        apply_close_selection(&deferred, &running, &empty).expect_err("empty");
+    assert!(
+        error.to_string().contains(
+            "`x` works none of CAPTURE's top-level Task Links, so its Work Log bullets have none to log to"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn star_entry_nested_wording_names_the_star_origin() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- [[a#^one]]",
+        "\t- parent note",
+        "\t\t- [[a#^two]]",
+    ]);
+    let running = running_of(&contents);
+    let mut selection = sel(Some(vec![1, 2]), Vec::new(), "x1,2");
+    selection.log = vec![numbered_entry(1, "a"), star_entry(2, "b")];
+    let error = apply_close_selection(&contents, &running, &selection)
+        .expect_err("nested");
+    assert_eq!(
+        error.to_string(),
+        "Work Log bullet 2 (`- *`) logs to task 2 because no other entry names it, but task 2 `[[a#^two]]` is nested under another bullet, so the close can't write its Work Log; move it to the top level of CAPTURE"
     );
 }

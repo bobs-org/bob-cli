@@ -11,7 +11,8 @@ use super::super::{
         nearest_shallower_list_item_parent,
     },
     capture_language::{
-        assign_log_positions, CloseLogEntry, CloseLogOrigin, PositionalLogError,
+        assign_log_positions, lexical_worked_tasks_with_all, CloseLogEntry,
+        CloseLogOrigin, PositionalLogError,
     },
     event_task::{event_task_by_id, ClockClass, CloseClock, EventTaskClock},
     markdown,
@@ -224,6 +225,14 @@ pub(crate) enum CloseSelectionError {
         running_name: Option<String>,
         first_text: String,
     },
+    /// A star bullet whose remaining set is empty: every worked task
+    /// already has its own Work Log entry. `worked` is the close's worked
+    /// tasks in ascending order.
+    LogStarCovered {
+        raw: String,
+        worked: Vec<u32>,
+        running_name: Option<String>,
+    },
     LogLineupChanged,
 }
 
@@ -294,6 +303,12 @@ impl fmt::Display for CloseSelectionError {
                             "Work Log bullet {position} logs to task {index} by its position, but {owner} has {range}"
                         )
                     }
+                    CloseLogOrigin::StarBullet { position } => {
+                        write!(
+                            f,
+                            "Work Log bullet {position} (`- *`) logs to task {index} because no other entry names it, but {owner} has {range}"
+                        )
+                    }
                     CloseLogOrigin::Inline {
                         close_token,
                         explicit,
@@ -350,6 +365,12 @@ impl fmt::Display for CloseSelectionError {
                             "Work Log bullet {position} logs to task {index} by its position, but task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
                         )
                 }
+                CloseLogOrigin::StarBullet { position } => {
+                    write!(
+                            f,
+                            "Work Log bullet {position} (`- *`) logs to task {index} because no other entry names it, but task {index} `{block_link}` is deferred, so it can't take a Work Log entry; list it in `<N>` or `!<M>` to log to it"
+                        )
+                }
                 CloseLogOrigin::Inline {
                     close_token,
                     explicit,
@@ -385,6 +406,12 @@ impl fmt::Display for CloseSelectionError {
                         "Work Log bullet {position} logs to task {index} by its position, but task {index} `{block_link}` is dropped, so it can't take a Work Log entry"
                     )
                 }
+                CloseLogOrigin::StarBullet { position } => {
+                    write!(
+                        f,
+                        "Work Log bullet {position} (`- *`) logs to task {index} because no other entry names it, but task {index} `{block_link}` is dropped, so it can't take a Work Log entry"
+                    )
+                }
                 _ => {
                     write!(
                         f,
@@ -412,6 +439,12 @@ impl fmt::Display for CloseSelectionError {
                         write!(
                             f,
                             "Work Log bullet {position} logs to task {index} by its position, but task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
+                        )
+                    }
+                    CloseLogOrigin::StarBullet { position } => {
+                        write!(
+                            f,
+                            "Work Log bullet {position} (`- *`) logs to task {index} because no other entry names it, but task {index} `{block_link}` is nested under another bullet, so the close can't write its Work Log; move it to the top level of {owner}"
                         )
                     }
                     CloseLogOrigin::Inline {
@@ -484,6 +517,26 @@ impl fmt::Display for CloseSelectionError {
                         join_numbers(worked),
                     )
                 }
+            }
+            Self::LogStarCovered {
+                raw,
+                worked,
+                running_name,
+            } => {
+                let owner = owner_name(running_name);
+                let tasks = if worked.len() == 1 {
+                    format!("1 of {owner}'s tasks: {}", worked[0])
+                } else {
+                    format!(
+                        "{} of {owner}'s tasks: {}",
+                        worked.len(),
+                        join_numbers(worked)
+                    )
+                };
+                write!(
+                    f,
+                    "every task `{raw}` works ({tasks}) already has its own Work Log entry, so `- *` has no task left to log to; drop the `- *` bullet"
+                )
             }
             Self::LogLineupChanged => {
                 write!(f, "Work Log entry changed the Task Link lineup")
@@ -937,48 +990,11 @@ pub(crate) fn apply_close_selection_with_clock(
             log: Vec::new(),
         });
     }
-    // Unnumbered bullets (then all positional) resolve against the session's
-    // top-level worked links before validation and insertion.
+    // Unnumbered (non-star) bullets resolve against the session's
+    // top-level worked links; star bullets then expand to every remaining
+    // worked task.
     let resolved_log: Vec<CloseLogEntry> =
-        if selection.log.iter().any(|entry| entry.index.is_none()) {
-            let spans = line_spans(contents);
-            let entry_index = running.line.saturating_sub(1);
-            let worked = top_level_worked_links(&lineup, &spans, entry_index);
-            match assign_log_positions(&worked, selection.log.len()) {
-                Ok(indices) => selection
-                    .log
-                    .iter()
-                    .zip(indices)
-                    .map(|(entry, index)| {
-                        let mut resolved = entry.clone();
-                        resolved.index = Some(index);
-                        resolved
-                    })
-                    .collect(),
-                Err(PositionalLogError::NoWorkedTask) => {
-                    return Err(CloseSelectionError::LogPositionalNone {
-                        raw: selection.raw.clone(),
-                        total: lineup.len(),
-                        running_name: running.name.clone(),
-                    });
-                }
-                Err(PositionalLogError::TooManyBullets { .. }) => {
-                    return Err(CloseSelectionError::LogPositionalTooMany {
-                        raw: selection.raw.clone(),
-                        worked,
-                        bullets: selection.log.len(),
-                        running_name: running.name.clone(),
-                        first_text: selection
-                            .log
-                            .first()
-                            .map(|entry| entry.text.clone())
-                            .unwrap_or_default(),
-                    });
-                }
-            }
-        } else {
-            selection.log.clone()
-        };
+        resolve_close_log_entries(contents, running, &lineup, selection)?;
     validate_close_log_entries(contents, running, &lineup, &resolved_log)?;
     let mut tags: Vec<LineTag> =
         (0..lines.len()).map(LineTag::Original).collect();
@@ -1019,6 +1035,144 @@ enum LineTag {
     /// A detail line under the entry inserted for `ordinal`, so
     /// `inserted_lines[ordinal]` stays the entry line.
     InsertedDetail(usize),
+}
+
+/// Resolve positional unnumbered bullets against the session lineup, then
+/// expand each star bullet into one entry per remaining worked task.
+fn resolve_close_log_entries(
+    contents: &str,
+    running: &RunningPomodoro,
+    lineup: &[NumberedTaskLink],
+    selection: &CloseSelection,
+) -> Result<Vec<CloseLogEntry>, CloseSelectionError> {
+    let spans = line_spans(contents);
+    let entry_index = running.line.saturating_sub(1);
+    let top_level_worked = top_level_worked_links(lineup, &spans, entry_index);
+    let positional: Vec<usize> = selection
+        .log
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.index.is_none() && !entry.all)
+        .map(|(index, _)| index)
+        .collect();
+    let mut resolved = selection.log.clone();
+    if !positional.is_empty() {
+        match assign_log_positions(&top_level_worked, positional.len()) {
+            Ok(indices) => {
+                for (entry_index, index) in positional.iter().zip(indices) {
+                    resolved[*entry_index].index = Some(index);
+                }
+            }
+            Err(PositionalLogError::NoWorkedTask) => {
+                return Err(CloseSelectionError::LogPositionalNone {
+                    raw: selection.raw.clone(),
+                    total: lineup.len(),
+                    running_name: running.name.clone(),
+                });
+            }
+            Err(PositionalLogError::TooManyBullets { .. }) => {
+                return Err(CloseSelectionError::LogPositionalTooMany {
+                    raw: selection.raw.clone(),
+                    worked: top_level_worked,
+                    bullets: positional.len(),
+                    running_name: running.name.clone(),
+                    first_text: positional
+                        .first()
+                        .and_then(|index| selection.log.get(*index))
+                        .map(|entry| entry.text.clone())
+                        .unwrap_or_default(),
+                });
+            }
+        }
+    }
+    if !resolved.iter().any(|entry| entry.all) {
+        return Ok(resolved);
+    }
+    let in_progress = selection
+        .in_progress
+        .as_ref()
+        .map(|set| set.iter().copied().collect::<Vec<_>>());
+    let park: Vec<u32> = selection.park.iter().copied().collect();
+    let complete: Vec<u32> = selection.complete.iter().copied().collect();
+    let w_star = lexical_worked_tasks_with_all(
+        in_progress.as_deref(),
+        &park,
+        &complete,
+        selection.park_all,
+        selection.complete_all,
+    )
+    .unwrap_or_else(|| top_level_worked.clone());
+    if w_star.is_empty() {
+        return Err(CloseSelectionError::LogPositionalNone {
+            raw: selection.raw.clone(),
+            total: lineup.len(),
+            running_name: running.name.clone(),
+        });
+    }
+    let covered_indices: BTreeSet<u32> = resolved
+        .iter()
+        .filter(|entry| !entry.all)
+        .filter_map(|entry| entry.index)
+        .collect();
+    let remaining = remaining_star_indices(&w_star, &covered_indices, lineup);
+    if remaining.is_empty() {
+        return Err(CloseSelectionError::LogStarCovered {
+            raw: selection.raw.clone(),
+            worked: w_star,
+            running_name: running.name.clone(),
+        });
+    }
+    let mut expanded = Vec::new();
+    for entry in resolved {
+        if entry.all {
+            for index in &remaining {
+                let mut clone = entry.clone();
+                clone.index = Some(*index);
+                clone.all = true;
+                expanded.push(clone);
+            }
+        } else {
+            expanded.push(entry);
+        }
+    }
+    Ok(expanded)
+}
+
+/// Remaining worked tasks for star expansion: `W \ covered` in ascending
+/// order, dropping any index whose Task Link target matches a covered
+/// entry and keeping only the lowest index per remaining target.
+fn remaining_star_indices(
+    worked: &[u32],
+    covered_indices: &BTreeSet<u32>,
+    lineup: &[NumberedTaskLink],
+) -> Vec<u32> {
+    let covered_targets: BTreeSet<(String, String)> = covered_indices
+        .iter()
+        .filter_map(|index| {
+            lineup
+                .iter()
+                .find(|link| link.index == *index)
+                .map(|link| (link.path_part.clone(), link.block_id.clone()))
+        })
+        .collect();
+    let mut remaining = Vec::new();
+    let mut seen_targets: BTreeSet<(String, String)> = BTreeSet::new();
+    for index in worked {
+        if covered_indices.contains(index) {
+            continue;
+        }
+        if let Some(link) = lineup.iter().find(|link| link.index == *index) {
+            let target = (link.path_part.clone(), link.block_id.clone());
+            if covered_targets.contains(&target) {
+                continue;
+            }
+            if !seen_targets.insert(target) {
+                continue;
+            }
+        }
+        remaining.push(*index);
+    }
+    remaining
 }
 
 /// Every link with a worked outcome that sits at the session's top
@@ -1094,7 +1248,8 @@ fn validate_close_log_entries(
             TaskLinkOutcome::Deferred => {
                 let worked = match &entry.origin {
                     CloseLogOrigin::Bullet
-                    | CloseLogOrigin::PositionalBullet { .. } => None,
+                    | CloseLogOrigin::PositionalBullet { .. }
+                    | CloseLogOrigin::StarBullet { .. } => None,
                     CloseLogOrigin::Inline { explicit, .. } if *explicit => {
                         None
                     }
@@ -1126,7 +1281,8 @@ fn validate_close_log_entries(
         {
             let worked = match &entry.origin {
                 CloseLogOrigin::Bullet
-                | CloseLogOrigin::PositionalBullet { .. } => None,
+                | CloseLogOrigin::PositionalBullet { .. }
+                | CloseLogOrigin::StarBullet { .. } => None,
                 CloseLogOrigin::Inline { explicit, .. } if *explicit => None,
                 CloseLogOrigin::Inline { .. } => {
                     first_worked_link(lineup, &spans, entry_index)

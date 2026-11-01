@@ -11,11 +11,15 @@
 //! authored-bullet line rules. A first-level bullet is numbered when its
 //! first whitespace-separated token is all ASCII digits; a leading number is
 //! always the task number, so `- 2 bugs fixed` names task 2 and text that
-//! starts with a number must number every bullet. Every other first-level
-//! bullet is unnumbered and its whole body is entry text. Bullets are
-//! numbered all or none: the first first-level bullet (placeholder rows
-//! skipped) fixes the list's kind, a later bullet of the other kind fails,
-//! and dangling bullets (`- 1`) only occur in numbered lists.
+//! starts with a number must number every bullet. A first-level bullet whose
+//! first whitespace-separated body token is exactly `*` is a star bullet:
+//! `- * <text>` logs the same entry to every worked task no other entry in
+//! this close logs to. Every other first-level bullet is unnumbered and its
+//! whole body is entry text. Star bullets are numbered all or none-neutral:
+//! they never fix the list's kind. The first non-star first-level bullet
+//! (placeholder rows skipped) fixes the list's kind, a later non-star bullet
+//! of the other kind fails, and dangling bullets (`- 1`, `- *`) only occur
+//! as numbered or star heads.
 //!
 //! Unnumbered bullets log in order to the close's worked tasks `W`: without
 //! wildcard intent, selection mode (`<N>` typed, including `x0`, or a
@@ -47,7 +51,9 @@ use crate::native::capture_pomodoro_close::wikilink_tokens;
 /// the entry text (first text token start through last text token end), and
 /// each detail (first token start through last token end). Unnumbered
 /// bullets report `index: None` (positional, resolved at execution when the
-/// close names no selection) and `index_range: None` (no index span).
+/// close names no selection) and `index_range: None` (no index span). Star
+/// bullets report `all: true`, `index: None`, and `index_range` over the
+/// `*` token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloseLogEntryLex {
     pub(crate) index: Option<u32>,
@@ -56,14 +62,15 @@ pub(crate) struct CloseLogEntryLex {
     pub(crate) index_range: Option<(usize, usize)>,
     pub(crate) text_range: (usize, usize),
     pub(crate) detail_ranges: Vec<(usize, usize)>,
+    pub(crate) all: bool,
 }
 
 /// One dangling Work Log bullet: a first-level bullet whose body is only a
-/// task number. The editor reports it as an editing state; execution rejects
-/// it.
+/// task number, or a star head (`- *`) with `index: None`. The editor
+/// reports it as an editing state; execution rejects it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CloseLogDanglingBullet {
-    pub(crate) index: u32,
+    pub(crate) index: Option<u32>,
     pub(crate) index_range: (usize, usize),
 }
 
@@ -383,9 +390,17 @@ fn is_numbered_bullet_token(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+/// `true` when the bullet's first whitespace-separated body token is
+/// exactly `*`, making it a star bullet (`- * <text>`). Glued forms such
+/// as `*foo`, `*bold*`, and `**x**` stay ordinary unnumbered text.
+fn is_star_bullet_token(text: &str) -> bool {
+    text == "*"
+}
+
 /// `true` when the close item's first first-level child bullet is
-/// unnumbered. Placeholder rows are skipped; anything else (no children,
-/// an invalid line, a nested-first list) reports `false`. The
+/// unnumbered. Placeholder rows and star bullets (complete or dangling)
+/// are skipped; anything else (no children, an invalid line, a
+/// nested-first list, a list of only stars) reports `false`. The
 /// inline-mixing suggestion uses it to avoid proposing a numbered bullet
 /// that would itself fail as mixed numbering.
 pub(crate) fn close_first_bullet_is_unnumbered(
@@ -403,6 +418,9 @@ pub(crate) fn close_first_bullet_is_unnumbered(
                 let Some(first) = tokens.first() else {
                     return false;
                 };
+                if is_star_bullet_token(first.text) {
+                    continue;
+                }
                 return !is_numbered_bullet_token(first.text);
             }
         }
@@ -973,11 +991,38 @@ pub(crate) fn lex_close_log_bullets_with_all(
             }
             continue;
         }
-        // First-level bullet: all or none. The first one fixes the kind;
-        // a later bullet of the other kind fails before any index or
-        // loggability check on that bullet.
+        // First-level bullet: all or none among non-star bullets. Star
+        // bullets never fix the list's kind. The first non-star one
+        // does; a later non-star bullet of the other kind fails before
+        // any index or loggability check on that bullet.
         seen_first_level = true;
         let first = &tokens[0];
+        if is_star_bullet_token(first.text) {
+            if tokens.len() == 1 {
+                dangling.push(CloseLogDanglingBullet {
+                    index: None,
+                    index_range: (first.start, first.end),
+                });
+                last_entry = Some(None);
+                continue;
+            }
+            let text = check_bullet_text(&tokens[1..])?;
+            let text_range = (
+                tokens[1].start,
+                tokens.last().map(|token| token.end).unwrap_or(first.end),
+            );
+            entries.push(CloseLogEntryLex {
+                index: None,
+                text,
+                details: Vec::new(),
+                index_range: Some((first.start, first.end)),
+                text_range,
+                detail_ranges: Vec::new(),
+                all: true,
+            });
+            last_entry = Some(Some(entries.len() - 1));
+            continue;
+        }
         let numbered = is_numbered_bullet_token(first.text);
         match numbered_list {
             Some(kind) if kind != numbered => {
@@ -1037,6 +1082,7 @@ pub(crate) fn lex_close_log_bullets_with_all(
                 index_range: None,
                 text_range,
                 detail_ranges: Vec::new(),
+                all: false,
             });
             last_entry = Some(Some(entries.len() - 1));
             continue;
@@ -1055,7 +1101,7 @@ pub(crate) fn lex_close_log_bullets_with_all(
         )?;
         if tokens.len() == 1 {
             dangling.push(CloseLogDanglingBullet {
-                index,
+                index: Some(index),
                 index_range: (first.start, first.end),
             });
             last_entry = Some(None);
@@ -1073,27 +1119,35 @@ pub(crate) fn lex_close_log_bullets_with_all(
             index_range: Some((first.start, first.end)),
             text_range,
             detail_ranges: Vec::new(),
+            all: false,
         });
         last_entry = Some(Some(entries.len() - 1));
     }
 
-    // An unnumbered list resolves positions lexically in selection mode;
-    // otherwise every index stays `None` for execution to resolve against
-    // the running session.
-    if numbered_list == Some(false)
-        && !entries.is_empty()
-        && let Some(worked) = lexical_worked_tasks_with_all(
-            in_progress,
-            park,
-            complete,
-            park_all,
-            complete_all,
-        )
+    // Unnumbered (non-star) bullets resolve positions lexically in
+    // selection mode; otherwise every positional index stays `None` for
+    // execution to resolve against the running session. Star bullets stay
+    // unexpanded (`index: None`) through parsing.
+    let positional: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.index.is_none() && !entry.all)
+        .map(|(index, _)| index)
+        .collect();
+    let lexical_worked = lexical_worked_tasks_with_all(
+        in_progress,
+        park,
+        complete,
+        park_all,
+        complete_all,
+    );
+    if !positional.is_empty()
+        && let Some(worked) = lexical_worked.as_deref()
     {
-        match assign_log_positions(&worked, entries.len()) {
+        match assign_log_positions(worked, positional.len()) {
             Ok(resolved) => {
-                for (entry, index) in entries.iter_mut().zip(resolved) {
-                    entry.index = Some(index);
+                for (entry_index, index) in positional.iter().zip(resolved) {
+                    entries[*entry_index].index = Some(index);
                 }
             }
             Err(PositionalLogError::NoWorkedTask) => {
@@ -1104,8 +1158,9 @@ pub(crate) fn lex_close_log_bullets_with_all(
                     complete,
                     drop,
                 );
-                let range = entries
+                let range = positional
                     .first()
+                    .and_then(|index| entries.get(*index))
                     .map(|entry| entry.text_range)
                     .unwrap_or((0, 0));
                 return Err(CloseLogError {
@@ -1118,18 +1173,56 @@ pub(crate) fn lex_close_log_bullets_with_all(
                 });
             }
             Err(PositionalLogError::TooManyBullets { .. }) => {
-                let excess = &entries[worked.len()];
+                let excess = &entries[positional[worked.len()]];
                 let suggestion = format!("- {} {}", worked[0], excess.text);
                 return Err(CloseLogError {
                     message: close_log_positional_too_many_error(
                         close_token,
-                        &worked,
-                        entries.len(),
+                        worked,
+                        positional.len(),
                         &suggestion,
                     ),
                     range: excess.text_range,
                 });
             }
+        }
+    }
+
+    if entries.iter().any(|entry| entry.all)
+        && let Some(worked) = lexical_worked.as_deref()
+    {
+        let range = entries
+            .iter()
+            .find(|entry| entry.all)
+            .and_then(|entry| entry.index_range)
+            .unwrap_or((0, 0));
+        if worked.is_empty() {
+            let (listed, completed) =
+                not_worked_suggestions(1, in_progress, park, complete, drop);
+            return Err(CloseLogError {
+                message: close_log_positional_none_error(
+                    close_token,
+                    &listed,
+                    &completed,
+                ),
+                range,
+            });
+        }
+        let covered: Vec<u32> = entries
+            .iter()
+            .filter(|entry| !entry.all)
+            .filter_map(|entry| entry.index)
+            .collect();
+        let remaining = worked
+            .iter()
+            .copied()
+            .filter(|index| !covered.contains(index))
+            .count();
+        if remaining == 0 {
+            return Err(CloseLogError {
+                message: close_log_star_covered_error(close_token, worked),
+                range,
+            });
         }
     }
 
@@ -1141,7 +1234,8 @@ pub(crate) fn lex_close_log_bullets_with_all(
 /// [`CloseLogOrigin::Bullet`]; unnumbered entries use
 /// [`CloseLogOrigin::PositionalBullet`] with their 1-based typed position,
 /// whether the lexer already resolved an index (selection mode) or left it
-/// `None` for execution to resolve.
+/// `None` for execution to resolve. Star entries use
+/// [`CloseLogOrigin::StarBullet`] with `all: true` and keep `index: None`.
 pub(crate) fn log_entries_from_lex(
     entries: &[CloseLogEntryLex],
 ) -> Vec<CloseLogEntry> {
@@ -1149,16 +1243,19 @@ pub(crate) fn log_entries_from_lex(
         .iter()
         .enumerate()
         .map(|(ordinal, entry)| {
-            let origin = match entry.index_range {
-                Some(_) => CloseLogOrigin::Bullet,
-                None => CloseLogOrigin::PositionalBullet {
-                    position: ordinal as u32 + 1,
-                },
+            let position = ordinal as u32 + 1;
+            let origin = if entry.all {
+                CloseLogOrigin::StarBullet { position }
+            } else if entry.index_range.is_some() {
+                CloseLogOrigin::Bullet
+            } else {
+                CloseLogOrigin::PositionalBullet { position }
             };
             CloseLogEntry {
                 index: entry.index,
                 text: entry.text.clone(),
                 details: entry.details.clone(),
+                all: entry.all,
                 origin,
             }
         })
@@ -1183,6 +1280,7 @@ pub(crate) fn log_entry_from_inline(
             index: *index,
             text: text.clone(),
             details: Vec::new(),
+            all: false,
             origin: CloseLogOrigin::Inline {
                 close_token: close_token.to_string(),
                 explicit: index_range.is_some(),
@@ -1354,7 +1452,7 @@ mod tests {
             CloseLogLexed { entries, dangling } => {
                 assert!(entries.is_empty());
                 assert_eq!(dangling.len(), 1);
-                assert_eq!(dangling[0].index, 1);
+                assert_eq!(dangling[0].index, Some(1));
             }
         }
     }
@@ -1797,5 +1895,173 @@ mod tests {
         assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
         let lines = child_lines("x");
         assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
+        let lines = child_lines("x\n- * foo\n- bar");
+        assert!(close_first_bullet_is_unnumbered(&lines[1..]));
+        let lines = child_lines("x\n- * foo\n- 1 bar");
+        assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
+        let lines = child_lines("x\n- *\n- bar");
+        assert!(close_first_bullet_is_unnumbered(&lines[1..]));
+        let lines = child_lines("x\n- * foo");
+        assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
+    }
+
+    #[test]
+    fn star_bullets_are_recognized_and_stay_unexpanded() {
+        let entries = positional_entries("x", "x\n- * code review");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].all);
+        assert_eq!(entries[0].index, None);
+        assert_eq!(entries[0].text, "code review");
+        assert!(entries[0].index_range.is_some());
+        // A `*` marker child with a `*` body token is still a star.
+        let entries = positional_entries("x", "x\n* * foo");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].all);
+        assert_eq!(entries[0].text, "foo");
+        // Glued forms stay ordinary unnumbered text.
+        for draft in ["x\n- *foo", "x\n- *bold* x", "x\n- **x**"] {
+            let entries = positional_entries("x", draft);
+            assert_eq!(entries.len(), 1, "{draft}");
+            assert!(!entries[0].all, "{draft}");
+            assert_eq!(entries[0].index, None, "{draft}");
+        }
+        assert_eq!(positional_entries("x", "x\n- *foo")[0].text, "*foo");
+        assert_eq!(
+            positional_entries("x", "x\n- *bold* x")[0].text,
+            "*bold* x"
+        );
+        assert_eq!(positional_entries("x", "x\n- **x**")[0].text, "**x**");
+        // A leading number after the star is text.
+        let entries = positional_entries("x", "x\n- * 2 bugs");
+        assert!(entries[0].all);
+        assert_eq!(entries[0].text, "2 bugs");
+    }
+
+    #[test]
+    fn star_bullets_mix_with_either_list_kind() {
+        let entries = positional_entries("x1,2,3", "x1,2,3\n- a\n- * b");
+        assert_eq!(entries.len(), 2);
+        assert!(!entries[0].all);
+        assert_eq!(entries[0].index, Some(1));
+        assert_eq!(entries[0].text, "a");
+        assert!(entries[1].all);
+        assert_eq!(entries[1].index, None);
+        assert_eq!(entries[1].text, "b");
+        let entries = positional_entries("x1,2,3", "x1,2,3\n- * b\n- a");
+        assert!(entries[0].all);
+        assert_eq!(entries[0].index, None);
+        assert!(!entries[1].all);
+        assert_eq!(entries[1].index, Some(1));
+        let entries = positional_entries("x1,2,3", "x1,2,3\n- 1 a\n- * b");
+        assert_eq!(entries[0].index, Some(1));
+        assert!(!entries[0].all);
+        assert!(entries[1].all);
+        assert_eq!(entries[1].index, None);
+        let entries =
+            positional_entries("x1,2,3", "x1,2,3\n- 1 a\n- * b\n- 3 c");
+        assert_eq!(entries[0].index, Some(1));
+        assert!(entries[1].all);
+        assert_eq!(entries[2].index, Some(3));
+        // Mixed numbering still fires among non-star bullets.
+        let missing =
+            lex_bullets("x", "x\n- * skip\n- 1 a\n- b").expect_err("missing");
+        assert!(
+            missing.message.contains("numbered all or none"),
+            "{}",
+            missing.message
+        );
+        let mixed =
+            lex_bullets("x", "x\n- * skip\n- a\n- 2 b").expect_err("mixed");
+        assert!(
+            mixed.message.contains("numbered all or none"),
+            "{}",
+            mixed.message
+        );
+        // Too-many counts only unnumbered bullets.
+        let too_many =
+            lex_bullets("x1,2,3", "x1,2,3\n- a\n- b\n- c\n- d\n- * e")
+                .expect_err("too many");
+        assert!(
+            too_many
+                .message
+                .contains("has 4 unnumbered Work Log bullets"),
+            "{}",
+            too_many.message
+        );
+        assert!(too_many.message.contains("`- 1 d`"), "{}", too_many.message);
+    }
+
+    #[test]
+    fn star_bullets_carry_details_and_dangle() {
+        let entries = positional_entries(
+            "x",
+            "x\n- * code review\n  - cleaned the lexer",
+        );
+        assert!(entries[0].all);
+        assert_eq!(entries[0].details, vec!["cleaned the lexer".to_string()]);
+        match lex_bullets("x", "x\n- *").expect("dangling star") {
+            CloseLogLexed { entries, dangling } => {
+                assert!(entries.is_empty());
+                assert_eq!(dangling.len(), 1);
+                assert_eq!(dangling[0].index, None);
+            }
+        }
+        match lex_bullets("x", "x\n- *\n  - dropped").expect("dangling details")
+        {
+            CloseLogLexed { entries, dangling } => {
+                assert!(entries.is_empty());
+                assert_eq!(dangling.len(), 1);
+                assert_eq!(dangling[0].index, None);
+            }
+        }
+    }
+
+    #[test]
+    fn star_bullets_report_selection_mode_failures() {
+        let none =
+            lex_bullets("x0", "x0\n- * foo").expect_err("no worked task");
+        assert!(
+            none.message.contains(
+                "`x0` works no task, so its Work Log bullets have none to log to"
+            ),
+            "{}",
+            none.message
+        );
+        let covered = lex_bullets("x2", "x2\n- a\n- * b").expect_err("covered");
+        assert_eq!(
+            covered.message,
+            "every task `x2` works (1 task: 2) already has its own Work Log entry, so `- *` has no task left to log to; drop the `- *` bullet"
+        );
+        // The diagnostic points at the star token.
+        let draft = "x2\n- a\n- * b";
+        let star_at = draft.find('*').expect("star");
+        assert_eq!(covered.range, (star_at, star_at + 1));
+    }
+
+    #[test]
+    fn log_entries_from_lex_marks_star_origin() {
+        let lexed =
+            lex_bullets("x", "x\n- foo\n- * bar").expect("valid bullets");
+        let entries = log_entries_from_lex(&lexed.entries);
+        assert!(!entries[0].all);
+        assert_eq!(
+            entries[0].origin,
+            CloseLogOrigin::PositionalBullet { position: 1 }
+        );
+        assert!(entries[1].all);
+        assert_eq!(entries[1].index, None);
+        assert_eq!(
+            entries[1].origin,
+            CloseLogOrigin::StarBullet { position: 2 }
+        );
+        let lexed =
+            lex_bullets("x1,2", "x1,2\n- 1 foo\n- * bar").expect("valid");
+        let entries = log_entries_from_lex(&lexed.entries);
+        assert_eq!(entries[0].origin, CloseLogOrigin::Bullet);
+        assert_eq!(
+            entries[1].origin,
+            CloseLogOrigin::StarBullet { position: 2 }
+        );
+        assert!(entries[1].all);
     }
 }

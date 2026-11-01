@@ -2,7 +2,8 @@
 //!
 //! Work Log entries are child bullets under the close (`- [<n>] <text>`
 //! with two-space `  - <detail>` details). Unnumbered bullets log in order
-//! to the close's worked tasks; a leading number is always a task number.
+//! to the close's worked tasks; a `- * <text>` star bullet logs to every
+//! remaining worked task; a leading number is always a task number.
 
 use super::pomodoro_close::{
     close_worked_vault, run_close_expect_error, run_close_json,
@@ -1083,4 +1084,235 @@ fn capture_pomodoro_close_log_positional_nested_wording() {
         fs::read_to_string(vault.join("a.md")).expect("tasks"),
         before_tasks
     );
+}
+
+#[test]
+fn capture_pomodoro_close_log_star_bullet() {
+    let (_temp, vault, day_file) =
+        close_four_link_vault("bob-cli-close-log-star");
+    let json = run_close_json(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["x\n- wired the lexer\n- * code review\n  - cleaned up"],
+    );
+    assert_eq!(
+        json["pomodoro_close"]["log"],
+        serde_json::json!([
+            { "index": 1, "text": "wired the lexer" },
+            {
+                "index": 2,
+                "text": "code review",
+                "details": ["cleaned up"],
+                "all": true,
+            },
+            {
+                "index": 3,
+                "text": "code review",
+                "details": ["cleaned up"],
+                "all": true,
+            },
+            {
+                "index": 4,
+                "text": "code review",
+                "details": ["cleaned up"],
+                "all": true,
+            },
+        ])
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(day_after.contains("\t\t- wired the lexer\n"), "{day_after}");
+    assert_eq!(
+        day_after.matches("\t\t- code review\n").count(),
+        3,
+        "{day_after}"
+    );
+    assert_eq!(
+        day_after.matches("\t\t\t- cleaned up\n").count(),
+        3,
+        "{day_after}"
+    );
+    let bob_after = fs::read_to_string(vault.join("bob.md")).expect("read bob");
+    assert!(
+        bob_after.contains("*2026-09-28* — wired the lexer"),
+        "{bob_after}"
+    );
+    assert_eq!(
+        bob_after.matches("*2026-09-28* — code review").count(),
+        3,
+        "{bob_after}"
+    );
+    let tasks = json["pomodoro_close"]["tasks"].as_array().expect("tasks");
+    let row1 = tasks.iter().find(|task| task["index"] == 1).expect("row 1");
+    assert_eq!(
+        row1["typed_work_log"],
+        serde_json::json!(["*2026-09-28* — wired the lexer"]),
+        "{row1}"
+    );
+    for index in [2, 3, 4] {
+        let row = tasks
+            .iter()
+            .find(|task| task["index"] == index)
+            .unwrap_or_else(|| panic!("row {index}"));
+        assert_eq!(
+            row["typed_work_log"],
+            serde_json::json!(["*2026-09-28* — code review"]),
+            "{row}"
+        );
+        assert_eq!(
+            row["typed_work_log_details"],
+            serde_json::json!([["cleaned up"]]),
+            "{row}"
+        );
+    }
+
+    let (_temp, vault, day_file) =
+        close_four_link_vault("bob-cli-close-log-star-dry");
+    let before = fs::read_to_string(&day_file).expect("read");
+    let output = bob_command()
+        .arg("capture")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("x\n- wired the lexer\n- * code review")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("dry run");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("close json");
+    assert_eq!(
+        json["pomodoro_close"]["log"][1]["all"],
+        serde_json::json!(true)
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-log-star-covered");
+    let before = fs::read_to_string(&day_file).expect("read");
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["x\n- a\n- * b"],
+    );
+    assert!(
+        error.contains(
+            "already has its own Work Log entry, so `- *` has no task left to log to"
+        ),
+        "{error}"
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
+
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-log-star-dangling");
+    let error = run_close_expect_error(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["x\n- *"],
+    );
+    assert!(
+        error.contains("`- *` is incomplete: type the Work Log text after `*`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_log_star_parse() {
+    let value = parse_json("x\n- a\n- * code review");
+    assert_eq!(value["mode"], "pomodoro_close");
+    assert_eq!(
+        value["pomodoro_close"]["log"],
+        serde_json::json!([
+            { "text": "a" },
+            { "text": "code review", "all": true },
+        ])
+    );
+    let star_at = "x\n- a\n- * code review".find('*').expect("star");
+    assert!(
+        value["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .any(|span| {
+                span["kind"] == "pomodoro_close_log_index"
+                    && span["start"] == star_at
+                    && span["end"] == star_at + 1
+            }),
+        "{value}"
+    );
+
+    let dangling = parse_json("x\n- *");
+    assert_eq!(dangling["mode"], "incomplete");
+    assert_eq!(
+        dangling["needs"],
+        serde_json::json!(["pomodoro_close_log_text"])
+    );
+    assert!(
+        dangling["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .any(|span| {
+                span["kind"] == "interactive_placeholder"
+                    && span["start"] == 4
+                    && span["end"] == 5
+            }),
+        "{dangling}"
+    );
+
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("x\n- wired the lexer\n- * code review")
+        .output()
+        .expect("human parse");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains(r#"* "code review""#)
+            || human.contains("* \"code review\""),
+        "{human}"
+    );
+
+    let covered = parse_json("x2\n- a\n- * b");
+    assert_eq!(
+        covered["diagnostics"][0]["code"], "invalid_pomodoro_close",
+        "{covered}"
+    );
+    assert_eq!(
+        covered["diagnostics"][0]["message"],
+        "every task `x2` works (1 task: 2) already has its own Work Log entry, so `- *` has no task left to log to; drop the `- *` bullet",
+        "{covered}"
+    );
+}
+
+#[test]
+fn capture_complete_star_bullet_is_not_blocked_task_picker() {
+    let (_temp, vault, _day_file) =
+        close_worked_vault("bob-cli-close-log-star-complete");
+    let text = "x\n- *";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(text.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(text)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("complete star bullet");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete json");
+    assert!(json["context"].is_null(), "{json}");
+    assert_eq!(json["candidates"], serde_json::json!([]), "{json}");
 }

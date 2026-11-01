@@ -237,9 +237,10 @@ pub(crate) enum SessionOperator {
 /// Work Log bullets (`- [<n>] <text>` child lines under
 /// `x[<N>][*<P>][!<M>][~<K>]`) append `log` entries: each names a
 /// numbered Task Link plus the literal entry text and its nested details,
-/// in typed order. Bullets are numbered all or none; unnumbered bullets
-/// log in order to the close's worked tasks. The text is final; the
-/// grammar phase fills it.
+/// in typed order. A `- * <text>` star bullet logs to every remaining
+/// worked task. Numbered all-or-none excludes star bullets; unnumbered
+/// bullets log in order to the close's worked tasks. The text is final;
+/// the grammar phase fills it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
     /// Raw close token exactly as typed: the bare token (`x1*2!3~4`) for a
@@ -286,6 +287,8 @@ pub(crate) struct CloseLogEntry {
     /// unnumbered bullet under a close without `<N>`/`*<P>`, which
     /// `bob capture` resolves against the running session; omitted from
     /// JSON so `capture-parse` leaves it out until execution fills it.
+    /// Star bullets keep `None` in `capture-parse` and expand to real
+    /// indices in `bob capture`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) index: Option<u32>,
     /// Literal entry text, unescaped and final.
@@ -294,6 +297,11 @@ pub(crate) struct CloseLogEntry {
     /// unescaped, final, whitespace-normalized text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) details: Vec<String>,
+    /// `true` for a `- * <text>` star bullet that logs to every remaining
+    /// worked task. Omitted from JSON when false. Always matches
+    /// `origin == StarBullet`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) all: bool,
     /// Where the entry was typed: a child bullet or the close line itself.
     /// Skipped in JSON so `pomodoro_close.log` matches the bullet form.
     #[serde(skip)]
@@ -312,6 +320,10 @@ pub(crate) enum CloseLogOrigin {
     /// typed position among the close's entries; the task number comes
     /// from positional assignment, not from the bullet.
     PositionalBullet { position: u32 },
+    /// A `- * <text>` child bullet that logs to every remaining worked
+    /// task. `position` is the 1-based typed position among the close's
+    /// entries.
+    StarBullet { position: u32 },
     /// The close line's own text (`x wired the lexer`). `close_token` is
     /// the typed close token (`x`, `x1,3,4`); `explicit` is true when the
     /// entry typed its number; `default_index` is the lexical default used
