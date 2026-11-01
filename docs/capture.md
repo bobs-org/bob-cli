@@ -144,6 +144,8 @@ anything is written, and any failure rolls the whole batch back.
 | `- <task> ^<task-id>` (project-note bullet) | Name the task only: `- [ ] #task <task> [created::DATE] ^<task-id>` |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section <text>` | Child bullet under an ALL-CAPS section of that task |
+| `@route+block-id` + bullets, no note text | File each first-level bullet as its own note, drawer bullets into that task's drawers |
+| `@route+block-id#drawer` + bullets, no note text | File each first-level bullet as its own note inside that drawer |
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
 | `@route+block-id#<type>` with no other text | Ensure Next and retype that existing task; this attached marker applies only when the whole item has no body or authored children |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
@@ -4952,6 +4954,51 @@ task:
 	- FUTURE WORK
 ```
 
+#### Several notes at once
+
+A note-less `@route+id` (or `@route+id#drawer`) item files each first-level
+bullet as its own note. Plain bullets become notes under the task; drawer
+bullets (a leading `#slug` or an ALL-CAPS title with nested notes) file into
+that task's drawers. For example,
+
+```text
+@foo+bar
+- Ping Alice about the cutover
+- REQUIREMENTS
+  - Postgres 17 minimum
+- FUTURE WORK
+  - Try logical replication
+- Benchmarks look fine
+  - p99 under 40 ms
+```
+
+writes
+
+```markdown
+- [ ] #task Upgrade Postgres [created::2026-07-31] ^bar
+  - REQUIREMENTS
+    - 2 GB RAM
+    - Postgres 17 minimum
+  - Ping Alice about the cutover
+  - FUTURE WORK
+    - Try logical replication
+  - Benchmarks look fine
+    - p99 under 40 ms
+```
+
+Plain notes land at the plain-child anchor (the end of the task block, before
+the earliest direct Schedule, Work, or Rotten Log) in draft order. Drawer
+bullets naming an existing drawer append at that drawer's end; naming a
+missing drawer creates it at the plain-child anchor. A childless literal
+ALL-CAPS bullet that repeats a drawer the target already has is refused, and
+a childless drawer shortcut is refused because capture never creates an empty
+drawer. On a `^prj` target drawers are the note's `##` sections. With a glued
+drawer and no note text (`@route+id#drawer` + bullets) every bullet files
+inside that drawer. A same-line note (`@route+id <note>` + bullets) still
+nests, and ALL-CAPS stays literal there. Item-wide `s:<N>`, `$<N>`, `%c`,
+and `--clip` are refused on this form, while a separate `#type` retypes the
+target and `&`, `*`, `~` keep it as owner.
+
 Every sub-bullet batch also reports its parent tasks once, in final state,
 in the batch-level `task_blocks` array; see
 [Task blocks](#task-blocks).
@@ -5339,6 +5386,16 @@ capture with no authored children. A project-note capture always omits
 `## Tasks` and `##` sections, and the `project_note` summary below replaces
 it. Human output prints those lines directly
 beneath `task_line`, before any clipboard children and schedule log.
+
+A note-less `@route+id` (or `@route+id#drawer`) item files each first-level
+bullet as its own note. Its item JSON keeps `kind: "sub_bullet"` with
+`text: ""` and `task_line: ""`, omits `sub_bullets`, and adds `notes` (one
+entry per note in draft order, each with `text`, `task_line`, optional
+`sub_bullets`, and `drawer` with `title`, `key`, and `created` or null) plus
+`drawers` (every drawer the item filed into, in first-touch order). `drawer`
+is that single entry when exactly one drawer received every note, else null.
+Human output mirrors the draft order with drawer titles and `new drawer`
+tags.
 
 A `$<N>` capture additionally includes `priority` (the written value, such as
 `"high"`) and `priority_label` (the configured label, such as `"P1"`); a

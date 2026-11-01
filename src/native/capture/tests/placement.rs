@@ -316,6 +316,8 @@ fn json_success_shape_is_stable() {
             priority_label: None,
             placement: Placement::Inserted,
             sub_bullets: Vec::new(),
+            notes: Vec::new(),
+            drawers: Vec::new(),
             clip: None,
             schedule_log: None,
             block_id: None,

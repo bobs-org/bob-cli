@@ -99,6 +99,32 @@ pub(crate) fn is_under_task_kind(kind: &CaptureKind) -> bool {
     )
 }
 
+/// A note-less `@route+id` (or `@route+id#drawer`) item whose parent line
+/// carries no note text but has first-level bullets files each bullet as
+/// its own note. In that multi-note form the existing target is an
+/// under-task position for drawer bullets, so `- #future-work` names a
+/// drawer instead of reporting `drawer_bullet_position`. A same-line note
+/// (`@route+id <note>` + bullets) and a glued drawer item stay
+/// not-under-task.
+pub(crate) fn is_multi_note_sub_bullet(
+    kind: &CaptureKind,
+    parent_body: &str,
+    sub_bullets: &[AuthoredSubBullet],
+) -> bool {
+    if !parent_body.trim().is_empty() {
+        return false;
+    }
+    let CaptureKind::SubBullet { section, .. } = kind else {
+        return false;
+    };
+    if section.is_some() {
+        return false;
+    }
+    sub_bullets
+        .iter()
+        .any(|item| item.depth == AuthoredDepth::First)
+}
+
 pub(crate) fn is_under_task_mode(mode: EditorMode) -> bool {
     matches!(
         mode,
@@ -201,11 +227,59 @@ write `\\#` to keep a literal `#`"
         .to_string()
 }
 
+pub(crate) fn multi_note_marker_error(
+    marker: &str,
+    example: &str,
+    verb: &str,
+) -> String {
+    format!(
+        "`{marker}` decorates a single note: put the note on the `@foo+bar` \
+line to {verb} it (`@foo+bar Call Morgan {example}`)"
+    )
+}
+
+pub(crate) fn multi_note_schedule_error(offset: u64) -> String {
+    multi_note_marker_error(
+        &format!("s:{offset}"),
+        &format!("s:{offset}"),
+        "schedule",
+    )
+}
+
+pub(crate) fn multi_note_priority_error(level: u64) -> String {
+    multi_note_marker_error(
+        &format!("${level}"),
+        &format!("${level}"),
+        "prioritize",
+    )
+}
+
+pub(crate) fn multi_note_clip_error() -> String {
+    multi_note_marker_error("%c", "%c", "clip")
+}
+
+pub(crate) fn existing_drawer_empty_error(
+    title: &str,
+    block_id: &str,
+) -> String {
+    format!(
+        "`{title}` is already a drawer on ^{block_id}; nest the notes to add \
+beneath `- {title}`"
+    )
+}
+
 pub(crate) fn code_for_message(message: &str) -> Option<&'static str> {
     if message == drawer_bullet_text_error() {
         Some("drawer_bullet_text")
-    } else if message == empty_drawer_bullet_error() {
+    } else if message == empty_drawer_bullet_error()
+        || message.contains("is already a drawer on ^")
+            && message.contains("nest the notes to add beneath `- ")
+    {
         Some("empty_drawer_bullet")
+    } else if message
+        .contains("decorates a single note: put the note on the `@foo+bar`")
+    {
+        Some("multi_note_marker")
     } else if message.contains("names a drawer, but these bullets nest")
         || message.contains("already files every bullet into")
         || message.contains(
@@ -252,7 +326,8 @@ pub(crate) fn finish_execution_drawer_bullets(
     parent_body: &str,
     sub_bullets: &mut [AuthoredSubBullet],
 ) -> Result<(), String> {
-    let under_task = is_under_task_kind(kind);
+    let under_task = is_under_task_kind(kind)
+        || is_multi_note_sub_bullet(kind, parent_body, sub_bullets);
     let groups = first_level_groups(sub_bullets);
     for (start, end) in groups {
         let nested = end.saturating_sub(start) > 1;

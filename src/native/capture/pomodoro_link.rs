@@ -737,6 +737,8 @@ fn planned_item_from_pomodoro_link_plan(
             priority_label: None,
             placement: note_plan.placement,
             sub_bullets: Vec::new(),
+            notes: Vec::new(),
+            drawers: Vec::new(),
             clip: None,
             schedule_log: link.schedule_log.clone(),
             block_id: Some(link.block_id.clone()),

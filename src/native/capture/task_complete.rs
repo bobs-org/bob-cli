@@ -78,6 +78,8 @@ pub(super) fn plan_task_complete_item(
             priority_label: None,
             placement: Placement::Completed,
             sub_bullets: Vec::new(),
+            notes: Vec::new(),
+            drawers: Vec::new(),
             clip: None,
             schedule_log: None,
             block_id: Some(block_id.to_string()),

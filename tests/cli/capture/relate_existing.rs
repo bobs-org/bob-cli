@@ -500,26 +500,22 @@ fn rx9_relationship_needs_text_in_parse_and_execute() {
 
 // RX10
 #[test]
-fn rx10_child_bullets_need_text() {
+fn rx10_child_bullets_file_notes_on_existing_task() {
     let draft = "@body+excercise &foo:bar\n- note\n";
     let parsed = parse_stdin(draft);
-    assert_eq!(parsed["diagnostics"][0]["code"], "relationship_needs_text");
-    assert!(parsed["diagnostics"][0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("`child bullets` needs task text"));
+    assert_eq!(parsed["diagnostics"], serde_json::json!([]), "{draft}");
+    assert_eq!(
+        parsed["dependency_target"]["kind"], "existing_task",
+        "{draft}"
+    );
 
     let (_temp, vault, day) = setup("bob-cli-rx10");
     seed_standard(&vault);
-    let before = read(&vault, "body.md");
     let output = capture_stdin(&vault, &day, draft);
-    assert!(!output.status.success(), "{}", format_output(&output));
-    assert!(
-        stderr(&output).contains("`child bullets` needs task text"),
-        "{}",
-        format_output(&output)
-    );
-    assert_eq!(read(&vault, "body.md"), before);
+    assert_success(&output);
+    let body = read(&vault, "body.md");
+    assert!(body.contains("note"), "{body}");
+    assert_exercise_blocked(&vault);
 }
 
 // RX11

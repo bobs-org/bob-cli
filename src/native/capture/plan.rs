@@ -507,6 +507,8 @@ fn plan_ref_item(
                 Placement::Unchanged
             },
             sub_bullets: Vec::new(),
+            notes: Vec::new(),
+            drawers: Vec::new(),
             clip: None,
             schedule_log: None,
             block_id: None,
@@ -939,6 +941,8 @@ pub(super) fn plan_capture_item(
                 priority_label: None,
                 placement: note_plan.placement,
                 sub_bullets: Vec::new(),
+                notes: Vec::new(),
+                drawers: Vec::new(),
                 clip: None,
                 schedule_log: toggle.schedule_log.clone(),
                 block_id: Some(toggle.block_id.clone()),
@@ -1665,6 +1669,19 @@ pub(super) fn plan_capture_item(
             }
         }
     }
+    if is_multi_note_capture(&parsed, request) {
+        return plan_multi_note_sub_bullet_item(
+            request,
+            parsed,
+            parsed_item.index,
+            today,
+            planner,
+            warnings,
+            dependency_ctx,
+            task_theme_context,
+            sub_bullet_retype,
+        );
+    }
     let mut note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
@@ -2243,6 +2260,8 @@ pub(super) fn plan_capture_item(
                 .map(|resolved| resolved.label.clone()),
             placement: note_plan.placement,
             sub_bullets: sub_bullet_lines,
+            notes: Vec::new(),
+            drawers: Vec::new(),
             clip: clip_output,
             schedule_log,
             block_id: task_block_id
@@ -2763,4 +2782,649 @@ pub(super) fn append_scheduled_property(
 
 pub(super) fn append_block_id(line: &mut String, block_id: &str) {
     line.push_str(&format!(" ^{block_id}"));
+}
+
+/// Whether this parsed item is the multi-note form: a note-less
+/// `@route+id` (or `@route+id#drawer`) with at least one first-level
+/// bullet. Forced destinations keep their old single-note behavior.
+fn is_multi_note_capture(
+    parsed: &ParsedCaptureText,
+    request: &CaptureRequest,
+) -> bool {
+    if request.forced_sub_bullet_target.is_some()
+        || request.forced_route.is_some()
+        || request.forced_section.is_some()
+        || request.forced_drawer.is_some()
+    {
+        return false;
+    }
+    let CaptureKind::SubBullet { .. } = &parsed.kind else {
+        return false;
+    };
+    if !parsed.body.trim().is_empty() {
+        return false;
+    }
+    parsed
+        .sub_bullets
+        .iter()
+        .any(|bullet| bullet.depth == capture_language::AuthoredDepth::First)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plan_multi_note_sub_bullet_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    parsed_index: usize,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    warnings: &mut Vec<CaptureWarning>,
+    dependency_ctx: &mut DependencyContext,
+    task_theme_context: &mut CaptureTaskThemeContext,
+    sub_bullet_retype: Option<(
+        String,
+        ExistingTypeMarkerApplication,
+        Option<String>,
+        SubBulletTarget,
+    )>,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    // Item-wide single-note markers never spread over every note.
+    if let Some(offset) = parsed.scheduled_offset {
+        return Err(CaptureError::usage_code(
+            crate::native::capture_language::multi_note_schedule_error(offset),
+            "multi_note_marker",
+        ));
+    }
+    if let Some(level) = parsed.priority_level {
+        return Err(CaptureError::usage_code(
+            crate::native::capture_language::multi_note_priority_error(level),
+            "multi_note_marker",
+        ));
+    }
+    if parsed.clip.is_some() {
+        return Err(CaptureError::usage_code(
+            crate::native::capture_language::multi_note_clip_error(),
+            "multi_note_marker",
+        ));
+    }
+    if request.forced_clip.is_some() {
+        return Err(CaptureError::usage_code(
+            "`--clip` decorates a single note: put the note on the `@foo+bar` line to clip it (`@foo+bar Call Morgan --clip`)"
+                .to_string(),
+            "multi_note_marker",
+        ));
+    }
+    let CaptureKind::SubBullet {
+        target: sub_bullet_target,
+        section: glued_section,
+    } = parsed.kind.clone()
+    else {
+        return Err(CaptureError::io(
+            "multi-note capture invariant failed: not a sub-bullet",
+        ));
+    };
+    let route = parsed.route.clone().ok_or_else(|| {
+        CaptureError::io(
+            "sub-bullet capture invariant failed: route is missing",
+        )
+    })?;
+    let relative_target = relative_target(Some(&route));
+    let target = request.bob_dir.join(&relative_target);
+    let effective_target =
+        if let Some((_, _, _, effective)) = sub_bullet_retype.as_ref() {
+            effective.clone()
+        } else {
+            sub_bullet_target.clone()
+        };
+    // One indent unit for nested rendering, matching today's single-note
+    // field. Computed once before any notes stage.
+    let child_indent = child_indent_unit(planner, &target)
+        .unwrap_or_else(|_| "\t".to_string());
+    let groups = crate::native::capture_language::drawer_bullet_groups(
+        &parsed.sub_bullets,
+    );
+    let mut notes: Vec<crate::native::capture::SubBulletNoteJson> = Vec::new();
+    let mut drawers: Vec<DrawerJson> = Vec::new();
+    let mut seen_drawer_keys: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    let mut first_parent_line: Option<usize> = None;
+    let mut first_parent_text: Option<String> = None;
+    let mut first_parent_status_symbol: Option<char> = None;
+    let mut first_parent_status_name: Option<String> = None;
+    let mut first_block_id: Option<String> = None;
+    let mut first_placement: Option<Placement> = None;
+    // Plan notes in draft order against staged content, so one refusal
+    // rolls the whole draft back.
+    if let Some(glued) = glued_section.clone() {
+        for (start, end) in groups {
+            let header = &parsed.sub_bullets[start];
+            let nested = &parsed.sub_bullets[start + 1..end];
+            // In a glued drawer item every first-level bullet is already
+            // inside the drawer: ALL-CAPS stays plain and a drawer
+            // shortcut was already refused as `drawer_bullet_position`.
+            let text = header.body.trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            let mut capture_block = format!("- {text}");
+            let mut sub_json: Vec<String> = Vec::new();
+            for child in nested {
+                if child.depth != capture_language::AuthoredDepth::Nested {
+                    continue;
+                }
+                let child_text = child.body.trim().to_string();
+                if child_text.is_empty() {
+                    continue;
+                }
+                capture_block
+                    .push_str(&format!("\n{child_indent}- {child_text}"));
+                sub_json.push(format!("{child_indent}- {child_text}"));
+            }
+            let task_line = format!("- {text}");
+            let plan = plan_sub_bullet_capture(
+                planner,
+                &request.bob_dir,
+                &target,
+                &route,
+                &effective_target,
+                Some(&glued),
+                &capture_block,
+                warnings,
+            )?;
+            if first_parent_line.is_none() {
+                if let Some(details) = plan.sub_bullet.as_ref() {
+                    first_parent_line = Some(details.parent_line);
+                    first_parent_text = Some(details.parent_text.clone());
+                    first_parent_status_symbol =
+                        Some(details.parent_status_symbol);
+                    first_parent_status_name =
+                        Some(details.parent_status_name.clone());
+                    first_block_id = details.block_id.clone();
+                    first_placement = Some(plan.placement);
+                }
+            } else if first_placement.is_none() {
+                first_placement = Some(plan.placement);
+            }
+            let drawer =
+                plan.sub_bullet.as_ref().and_then(|d| d.drawer.clone());
+            if let Some(ref drawer_info) = drawer {
+                let key = drawer_info.key.clone();
+                if seen_drawer_keys.insert(key) {
+                    drawers.push(drawer_info.clone());
+                }
+            }
+            notes.push(crate::native::capture::SubBulletNoteJson {
+                text: text.clone(),
+                task_line: task_line.clone(),
+                sub_bullets: sub_json,
+                drawer,
+            });
+        }
+    } else {
+        for (start, end) in groups {
+            let header = &parsed.sub_bullets[start];
+            let nested = &parsed.sub_bullets[start + 1..end];
+            if let Some(selector) = header.drawer.clone() {
+                // Drawer bullets file each nested bullet as its own note.
+                if nested.is_empty() {
+                    return Err(CaptureError::usage_code(
+                        crate::native::capture_language::empty_drawer_bullet_error(),
+                        "empty_drawer_bullet",
+                    ));
+                }
+                for child in nested {
+                    if child.depth != capture_language::AuthoredDepth::Nested {
+                        continue;
+                    }
+                    let child_text = child.body.trim().to_string();
+                    if child_text.is_empty() {
+                        continue;
+                    }
+                    let capture_block = format!("- {child_text}");
+                    let task_line = capture_block.clone();
+                    let plan = plan_sub_bullet_capture(
+                        planner,
+                        &request.bob_dir,
+                        &target,
+                        &route,
+                        &effective_target,
+                        Some(&selector),
+                        &capture_block,
+                        warnings,
+                    )?;
+                    if first_parent_line.is_none()
+                        && let Some(details) = plan.sub_bullet.as_ref()
+                    {
+                        first_parent_line = Some(details.parent_line);
+                        first_parent_text = Some(details.parent_text.clone());
+                        first_parent_status_symbol =
+                            Some(details.parent_status_symbol);
+                        first_parent_status_name =
+                            Some(details.parent_status_name.clone());
+                        first_block_id = details.block_id.clone();
+                        first_placement = Some(plan.placement);
+                    }
+                    let drawer =
+                        plan.sub_bullet.as_ref().and_then(|d| d.drawer.clone());
+                    if let Some(ref drawer_info) = drawer {
+                        let key = drawer_info.key.clone();
+                        if seen_drawer_keys.insert(key) {
+                            drawers.push(drawer_info.clone());
+                        }
+                    }
+                    notes.push(crate::native::capture::SubBulletNoteJson {
+                        text: child_text.clone(),
+                        task_line,
+                        sub_bullets: Vec::new(),
+                        drawer,
+                    });
+                }
+            } else {
+                // Plain notes: one note per first-level bullet plus its
+                // nested children.
+                let header_text = header.body.trim().to_string();
+                if header_text.is_empty() {
+                    continue;
+                }
+                let is_childless = nested.is_empty();
+                if is_childless
+                    && capture_language::is_all_caps_drawer_title(&header_text)
+                {
+                    // A childless literal ALL-CAPS bullet that repeats a
+                    // drawer the target already has is refused so a
+                    // duplicate header is never written.
+                    let contents = planner.read_existing(&target)?;
+                    let settings = note_tasks::read_settings(&request.bob_dir);
+                    let scan = note_tasks::scan(&contents, &settings);
+                    let parent_task = match &effective_target {
+                        SubBulletTarget::BlockId(block_id) => {
+                            match scan.by_block_id(block_id) {
+                                BlockIdLookup::Found(task) => Some(task),
+                                _ => None,
+                            }
+                        }
+                        SubBulletTarget::Ref { line, digest } => {
+                            match scan.by_ref(*line, digest) {
+                                RefLookup::Found(task) => Some(task),
+                                _ => None,
+                            }
+                        }
+                    };
+                    if let Some(parent) = parent_task {
+                        let key =
+                            capture_drawers::drawer_key(header_text.trim());
+                        let already_has = if capture_drawers::is_prj_parent(
+                            &contents, parent,
+                        ) {
+                            capture_drawers::project_h2_drawers(&contents)
+                                .iter()
+                                .any(|d| d.key == key)
+                        } else {
+                            capture_drawers::drawers(&contents, parent)
+                                .iter()
+                                .any(|d| d.key == key)
+                        };
+                        if already_has {
+                            let block_label = parent
+                                .block_id
+                                .as_deref()
+                                .map(|id| id.to_string())
+                                .unwrap_or_default();
+                            let message = if block_label.is_empty() {
+                                format!(
+                                    "`{}` is already a drawer on the task; nest the notes to add beneath `- {}`",
+                                    header_text.trim(),
+                                    header_text.trim()
+                                )
+                            } else {
+                                crate::native::capture_language::existing_drawer_empty_error(
+                                    header_text.trim(),
+                                    &block_label,
+                                )
+                            };
+                            return Err(CaptureError::usage_code(
+                                message,
+                                "empty_drawer_bullet",
+                            ));
+                        }
+                    }
+                }
+                let mut capture_block = format!("- {header_text}");
+                let mut sub_json: Vec<String> = Vec::new();
+                for child in nested {
+                    if child.depth != capture_language::AuthoredDepth::Nested {
+                        continue;
+                    }
+                    let child_text = child.body.trim().to_string();
+                    if child_text.is_empty() {
+                        continue;
+                    }
+                    capture_block
+                        .push_str(&format!("\n{child_indent}- {child_text}"));
+                    sub_json.push(format!("{child_indent}- {child_text}"));
+                }
+                let task_line = format!("- {header_text}");
+                let plan = plan_sub_bullet_capture(
+                    planner,
+                    &request.bob_dir,
+                    &target,
+                    &route,
+                    &effective_target,
+                    None,
+                    &capture_block,
+                    warnings,
+                )?;
+                if first_parent_line.is_none()
+                    && let Some(details) = plan.sub_bullet.as_ref()
+                {
+                    first_parent_line = Some(details.parent_line);
+                    first_parent_text = Some(details.parent_text.clone());
+                    first_parent_status_symbol =
+                        Some(details.parent_status_symbol);
+                    first_parent_status_name =
+                        Some(details.parent_status_name.clone());
+                    first_block_id = details.block_id.clone();
+                    first_placement = Some(plan.placement);
+                }
+                notes.push(crate::native::capture::SubBulletNoteJson {
+                    text: header_text.clone(),
+                    task_line,
+                    sub_bullets: sub_json,
+                    drawer: None,
+                });
+            }
+        }
+    }
+    if notes.is_empty() {
+        return Err(CaptureError::io(
+            "multi-note capture invariant failed: no notes planned",
+        ));
+    }
+    // Item drawer: the single drawer that received every note, else null.
+    let all_have_drawer = notes.iter().all(|note| note.drawer.is_some());
+    let item_drawer = if drawers.len() == 1 && all_have_drawer {
+        Some(drawers[0].clone())
+    } else {
+        None
+    };
+    let created = date_string(today);
+    let kind_label = capture_kind_label(&parsed.kind);
+    // Retype reporting, mirroring the single-note path.
+    let mut sub_bullet_task_theme = None;
+    let mut sub_bullet_previous = None;
+    let mut sub_bullet_type_relocation = None;
+    if let Some((original, applied, block_id_opt, _)) = sub_bullet_retype {
+        sub_bullet_task_theme = Some(applied.summary.clone());
+        sub_bullet_previous = Some(original);
+        if let Some(block_id_owned) = block_id_opt {
+            let mut empty_refs = Vec::new();
+            if let Some(relocation) = task_theme_context.relocate_for_retype(
+                planner,
+                &block_id_owned,
+                &applied.type_key,
+                &applied.type_name,
+                &mut empty_refs,
+                warnings,
+            )? {
+                sub_bullet_type_relocation = Some(relocation.json);
+            }
+        }
+    }
+    // Dependency and relation effects report once for the whole item,
+    // with the target as owner.
+    let mut dependency_summaries: Vec<DependencyUpdateJson> = Vec::new();
+    let mut blocks_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let minted_dependent_block_id: Option<MintedDependentBlockIdJson> = None;
+    let mut dependency_block_refs: Vec<TaskBlockRef> = Vec::new();
+    let mut pomodoro_refs: Vec<PomodoroBlockRef> = Vec::new();
+    // Existing-task `&` writes.
+    if let Some(target_dep) = parsed.dependency_target.clone()
+        && target_dep.kind == ParsedDependencyTargetKind::ExistingTask
+        && matches!(parsed.kind, CaptureKind::SubBullet { .. })
+    {
+        let (route_dep, block_id_dep) = match target_dep {
+            ParsedDependencyTarget {
+                route: Some(route_dep),
+                block_id: Some(block_id_dep),
+                ..
+            } => (route_dep, block_id_dep),
+            _ => {
+                return Err(CaptureError::io(
+                        "dependency invariant failed: existing-task target without route and block ID",
+                    ));
+            }
+        };
+        if !parsed.dependencies.is_empty() {
+            let update = plan_existing_task_dependencies(
+                dependency_ctx,
+                planner,
+                &request.bob_dir,
+                &DependentRef::from_route(&route_dep, &block_id_dep),
+                &parsed.dependencies,
+                warnings,
+                ExistingDependencyOptions::ampersand(),
+            )?;
+            // Absorb like the single-note path.
+            let mut tmp_summaries = Vec::new();
+            let mut tmp_blocks = Vec::new();
+            let mut tmp_refs = Vec::new();
+            let mut tmp_pomo: Vec<PomodoroBlockRef> = Vec::new();
+            absorb_dependency_write(
+                update,
+                &mut tmp_summaries,
+                &mut tmp_refs,
+                &mut tmp_pomo,
+                &mut tmp_blocks,
+            );
+            dependency_summaries.extend(tmp_summaries);
+            blocks_line_updates.extend(tmp_blocks);
+            dependency_block_refs.extend(tmp_refs);
+            pomodoro_refs.extend(tmp_pomo);
+        }
+    }
+    if !parsed.blocked_tasks.is_empty() {
+        let owner = star_owner_ref(
+            &parsed,
+            &relative_target,
+            first_block_id.as_deref(),
+            minted_dependent_block_id.as_ref(),
+            None,
+        )?;
+        let options = match &parsed.dependency_target {
+            Some(target)
+                if target.kind == ParsedDependencyTargetKind::ExistingTask =>
+            {
+                ExistingDependencyOptions::star_existing_owner()
+            }
+            _ => ExistingDependencyOptions::star_new_blocker(),
+        };
+        let writes = plan_blocked_task_writes(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &owner,
+            &parsed.blocked_tasks,
+            warnings,
+            options,
+        )?;
+        for write in writes {
+            let mut tmp_summaries = Vec::new();
+            let mut tmp_blocks = Vec::new();
+            let mut tmp_refs = Vec::new();
+            let mut tmp_pomo: Vec<PomodoroBlockRef> = Vec::new();
+            absorb_dependency_write(
+                write,
+                &mut tmp_summaries,
+                &mut tmp_refs,
+                &mut tmp_pomo,
+                &mut tmp_blocks,
+            );
+            dependency_summaries.extend(tmp_summaries);
+            blocks_line_updates.extend(tmp_blocks);
+            dependency_block_refs.extend(tmp_refs);
+            pomodoro_refs.extend(tmp_pomo);
+        }
+    }
+    let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
+    let relation_cancels: Vec<RelationCancelJson> = Vec::new();
+    let relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
+        Vec::new();
+    let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
+    if !parsed.relations.is_empty() {
+        let owner = locate_relation_owner(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &parsed,
+            &relative_target,
+            first_block_id.as_deref(),
+            None,
+            None,
+            &String::new(),
+        )?;
+        let existing_owner = matches!(
+            parsed.dependency_target.as_ref().map(|target| target.kind),
+            Some(ParsedDependencyTargetKind::ExistingTask)
+        );
+        let reports = plan_relation_writes(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &owner,
+            &parsed.relations,
+            warnings,
+            existing_owner,
+        )?;
+        relation_updates = reports.updates;
+        linked_from_line_updates = reports.linked_from;
+        minted_relation_block_ids.extend(reports.minted);
+        mirror_skipped = reports.skipped;
+        dependency_block_refs.extend(reports.source_refs);
+    }
+    let (dependency_update, dependency_updates) =
+        fold_dependency_updates(dependency_summaries);
+    dependency_block_refs = relocate_task_block_refs(
+        dependency_ctx,
+        planner,
+        &request.bob_dir,
+        dependency_block_refs,
+    )?;
+    let (relation_label_hides, relation_hide_warnings) =
+        plan_relation_label_hides(&request.bob_dir, &parsed.relations);
+    warnings.extend(relation_hide_warnings);
+    let parent_line = first_parent_line;
+    let parent_text = first_parent_text;
+    let task_block_refs = if let (Some(line), Some(block_id)) =
+        (parent_line, first_block_id.clone())
+    {
+        // Parent line is 1-based in details; refs want 0-based.
+        vec![TaskBlockRef {
+            target: target.clone(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            route: route.clone(),
+            line: line.saturating_sub(1),
+            block_id: Some(block_id),
+            role: TaskBlockRole::SubBullet,
+        }]
+    } else if let Some(line) = parent_line {
+        vec![TaskBlockRef {
+            target: target.clone(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            route: route.clone(),
+            line: line.saturating_sub(1),
+            block_id: None,
+            role: TaskBlockRole::SubBullet,
+        }]
+    } else {
+        Vec::new()
+    };
+    let _ = parsed_index;
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: parsed.route.is_some(),
+            route_label: parsed
+                .route
+                .as_deref()
+                .map(route_label)
+                .unwrap_or_default(),
+            route: parsed.route.clone(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: target.display().to_string(),
+            text: String::new(),
+            task_line: String::new(),
+            task_theme: sub_bullet_task_theme,
+            type_relocation: sub_bullet_type_relocation,
+            kind: kind_label,
+            created,
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: first_placement.unwrap_or(Placement::Appended),
+            sub_bullets: Vec::new(),
+            notes,
+            drawers: drawers.clone(),
+            clip: None,
+            schedule_log: None,
+            block_id: first_block_id,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line,
+            parent_text,
+            drawer: item_drawer,
+            parent_status_symbol: first_parent_status_symbol,
+            parent_status_name: first_parent_status_name,
+            toggle_direction: None,
+            previous_task_line: sub_bullet_previous,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: None,
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: None,
+            dependency_update,
+            consumed_links: Vec::new(),
+            task_complete: None,
+            toggle_task_description: None,
+            r#ref: None,
+            link_guard: None,
+            dropped_dependencies: Vec::new(),
+            blocks_line_updates,
+            minted_dependent_block_id,
+            dependency_updates,
+            minted_blocker_block_id: None,
+            relation_updates,
+            relation_cancels,
+            relation_completes,
+            linked_from_line_updates,
+            minted_relation_block_ids,
+            mirror_skipped,
+            relation_label_hides,
+        },
+        clip_plan: None,
+        pomodoro_refs,
+        task_block_refs: {
+            let mut refs = task_block_refs;
+            refs.extend(dependency_block_refs);
+            refs
+        },
+    })
 }

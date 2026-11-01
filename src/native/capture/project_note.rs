@@ -642,6 +642,8 @@ pub(super) fn plan_project_note_item(
                 .map(|resolved| resolved.label.clone()),
             placement: Placement::Created,
             sub_bullets: Vec::new(),
+            notes: Vec::new(),
+            drawers: Vec::new(),
             clip: None,
             schedule_log,
             block_id: Some("prj".to_string()),

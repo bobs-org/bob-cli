@@ -1206,12 +1206,21 @@ fn parse_capture_item_masked<'a>(
     let has_creation_modifiers = aggregate.clip.is_some()
         || aggregate.scheduled_offset.is_some()
         || aggregate.priority_level.is_some();
+    // A note-less `@route+id` item with first-level bullets is the
+    // multi-note form: its bullets are notes, not children requiring
+    // parent text, and `&`/`*`/`~` keep the target as owner.
+    let is_multi_note_candidate = matches!(kind, CaptureKind::SubBullet { .. })
+        && parent_body_is_empty
+        && sub_bullets
+            .iter()
+            .any(|bullet| bullet.depth == AuthoredDepth::First);
     if has_dependencies
         && parent_body_is_empty
         && (has_creation_modifiers || !sub_bullets.is_empty())
         && !owner_marker_is_suffixed(
             local_destination_marker.as_deref().unwrap_or(""),
         )
+        && !is_multi_note_candidate
     {
         let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
         return Err(refuse_relationship_needs_text(
@@ -1226,9 +1235,9 @@ fn parse_capture_item_masked<'a>(
         kind,
         parent_body_is_empty,
         sub_bullets.is_empty(),
-        aggregate.clip.is_none()
-            && aggregate.scheduled_offset.is_none()
-            && aggregate.priority_level.is_none(),
+        aggregate.scheduled_offset,
+        aggregate.priority_level,
+        aggregate.clip.is_some(),
     )?;
     if matches!(kind, CaptureKind::PomodoroNote) {
         if aggregate.scheduled_offset.is_some() {
@@ -1426,8 +1435,23 @@ pub(super) fn resolve_sub_bullet_kind(
     kind: CaptureKind,
     parent_body_is_empty: bool,
     sub_bullets_is_empty: bool,
-    no_other_item_markers: bool,
+    scheduled_offset: Option<u64>,
+    priority_level: Option<u64>,
+    clip_present: bool,
 ) -> Result<CaptureKind, String> {
+    let no_other_item_markers =
+        scheduled_offset.is_none() && priority_level.is_none() && !clip_present;
+    // A multi-note item decorates one note per bullet, so item-wide
+    // single-note markers are refused with a teaching error.
+    let multi_note_marker_error = || {
+        if let Some(offset) = scheduled_offset {
+            super::drawer_bullet::multi_note_schedule_error(offset)
+        } else if let Some(level) = priority_level {
+            super::drawer_bullet::multi_note_priority_error(level)
+        } else {
+            super::drawer_bullet::multi_note_clip_error()
+        }
+    };
     if matches!(kind, CaptureKind::TaskToggle { .. }) {
         if parent_body_is_empty && sub_bullets_is_empty && no_other_item_markers
         {
@@ -1440,7 +1464,9 @@ pub(super) fn resolve_sub_bullet_kind(
     };
     // A glued `#drawer` suffix always stays a drawer capture, never a
     // toggle. Plain `@route+id` without a drawer keeps the old
-    // Ensure-Next toggle when the body is empty.
+    // Ensure-Next toggle when the body is empty. A note-less item with
+    // first-level bullets is the multi-note form: each bullet becomes
+    // its own note.
     if let Some(drawer) = section {
         if drawer.text.is_empty() {
             return Err(
@@ -1449,10 +1475,19 @@ pub(super) fn resolve_sub_bullet_kind(
             );
         }
         if parent_body_is_empty {
-            return Err(
-                "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
-                    .to_string(),
-            );
+            if sub_bullets_is_empty {
+                return Err(
+                    "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
+                        .to_string(),
+                );
+            }
+            if !no_other_item_markers {
+                return Err(multi_note_marker_error());
+            }
+            return Ok(CaptureKind::SubBullet {
+                target,
+                section: Some(drawer),
+            });
         }
         return Ok(CaptureKind::SubBullet {
             target,
@@ -1474,6 +1509,15 @@ pub(super) fn resolve_sub_bullet_kind(
         });
     }
     if parent_body_is_empty {
+        if !sub_bullets_is_empty {
+            if !no_other_item_markers {
+                return Err(multi_note_marker_error());
+            }
+            return Ok(CaptureKind::SubBullet {
+                target,
+                section: None,
+            });
+        }
         return Err(missing_text_error());
     }
     Ok(CaptureKind::SubBullet {

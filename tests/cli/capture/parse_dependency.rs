@@ -236,19 +236,21 @@ fn relationship_only_owner_reports_needs_text() {
         })
     );
 
+    // First-level bullets switch a note-less relationship owner to the
+    // multi-note form, so no text diagnostic is reported and the `&` link
+    // keeps the existing task as owner.
     let children = parse_json("@body+excercise &foo:bar\n- note");
+    assert_eq!(children["diagnostics"], serde_json::json!([]), "{children}");
     assert_eq!(
-        children["diagnostics"][0]["code"],
-        "relationship_needs_text"
+        children["dependency_target"],
+        serde_json::json!({
+            "kind": "existing_task",
+            "route": "body",
+            "block_id": "excercise",
+        }),
+        "{children}"
     );
-    assert!(
-        children["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("`child bullets` needs task text"),
-        "{}",
-        children["diagnostics"][0]["message"]
-    );
+    assert_eq!(children["dependencies"][0]["raw"], "&foo:bar", "{children}");
 }
 
 #[test]

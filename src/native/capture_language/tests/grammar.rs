@@ -2679,16 +2679,24 @@ fn relationship_only_owner_refuses_text_extras() {
         );
     }
 
+    // First-level bullets switch a note-less relationship owner to the
+    // multi-note form, so the child note satisfies the text requirement and
+    // the `&` link keeps the existing task as owner.
     let children = "@body+excercise &foo:bar\n- note";
-    let expected = relationship_needs_text_error(
-        "child bullets",
-        owner,
-        &[rel.to_string()],
+    let noted = execute(children).expect("owner with bullets is multi-note");
+    assert!(
+        matches!(noted.kind, CaptureKind::SubBullet { .. }),
+        "{children}"
     );
-    assert_eq!(execute(children).expect_err(children), expected);
+    assert_eq!(noted.dependencies.len(), 1, "{children}");
+    assert_eq!(noted.dependencies[0].raw, "&foo:bar", "{children}");
+    assert_eq!(
+        noted.dependency_target.as_ref().map(|target| &target.kind),
+        Some(&ParsedDependencyTargetKind::ExistingTask),
+        "{children}"
+    );
     let parsed = editor(children);
-    assert_eq!(codes(&parsed), vec!["relationship_needs_text"]);
-    assert_eq!(parsed.diagnostics[0].message, expected);
+    assert!(codes(&parsed).is_empty(), "{children}");
 }
 
 #[test]

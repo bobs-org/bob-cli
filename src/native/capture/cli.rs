@@ -453,7 +453,14 @@ Link itself: when no matching link sits under an open Pomodoro the task links \
 a matching link is already there every such link is removed with the lane \
 unchanged. To retype during an explicit toggle, put '#<type>' after the bang, \
 as in '@<route>+<block-id>! #<type>'; \
-'@<route>+<block-id>#<type>!' is refused.\n\n\
+'@<route>+<block-id>#<type>!' is refused. A note-less '@<route>+<block-id>' \
+(or '@<route>+<block-id>#<drawer>') item files each first-level bullet as its \
+own note: plain bullets become notes under the task, drawer bullets (a leading \
+'#slug' or an ALL-CAPS title with nested notes) file into that task's drawers, \
+and '@<route>+<block-id>#<drawer>' with no note text files every bullet inside \
+that drawer. Item-wide 's:<N>', '$<N>', '%c', and --clip are refused on this \
+form, while a separate '#<type>' retypes the target and '&', '*', '~' keep it \
+as owner.\n\n\
 Append `%n` at either edge of any physical line to capture the item as a \
 plain-text sub-bullet on a Pomodoro instead of a task. It renders as \
 '- <body>' with no [created::] stamp, no '#task' marker, and no block ID. \

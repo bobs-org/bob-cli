@@ -504,6 +504,16 @@ pub(super) struct CaptureItemResult {
     pub(super) placement: Placement,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) sub_bullets: Vec<String>,
+    /// Multi-note notes in draft order, present only on a note-less
+    /// `sub_bullet` item. Single-note output stays byte-identical by
+    /// leaving both empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) notes: Vec<SubBulletNoteJson>,
+    /// Every drawer a multi-note item filed into, in first-touch order.
+    /// Empty for single-note items and for multi-note items that filed
+    /// no drawer.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) drawers: Vec<DrawerJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) clip: Option<capture_clip::ClipOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -663,6 +673,20 @@ pub(super) struct DrawerJson {
     pub(super) title: String,
     pub(super) key: String,
     pub(super) created: bool,
+}
+
+/// One note filed by a note-less `@route+id` multi-note item. Each
+/// first-level bullet (and, for drawer bullets, each nested bullet under
+/// the drawer header) becomes one entry in draft order, with the same
+/// `task_line` and `sub_bullets` rendering as a single-note capture and
+/// the drawer it landed in (or null for a plain note).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct SubBulletNoteJson {
+    pub(super) text: String,
+    pub(super) task_line: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) sub_bullets: Vec<String>,
+    pub(super) drawer: Option<DrawerJson>,
 }
 
 impl CaptureItemResult {
@@ -2390,21 +2414,48 @@ pub(super) fn print_human_item_success(
             .as_deref()
             .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
             .unwrap_or_default();
-        let drawer_suffix = result
-            .drawer
-            .as_ref()
-            .map(|drawer| {
+        if !result.notes.is_empty() {
+            // Multi-note: `under … ^bar · 4 notes`, or with the single
+            // drawer that received every note.
+            let count = result.notes.len();
+            let note_word = if count == 1 { "note" } else { "notes" };
+            if let Some(drawer) = result.drawer.as_ref() {
                 let base = format!(" · {}", styler.cyan(&drawer.title));
-                if drawer.created {
-                    format!("{base}        new drawer")
+                let created = if drawer.created {
+                    "        new drawer"
                 } else {
-                    base
-                }
-            })
-            .unwrap_or_default();
-        println!("  under {marker}{parent_text}{block_id}{drawer_suffix}");
+                    ""
+                };
+                // Glued items read `· REQUIREMENTS · 2 notes`.
+                println!(
+                    "  under {marker}{parent_text}{block_id}{base} · {count} {note_word}{created}"
+                );
+            } else {
+                println!(
+                    "  under {marker}{parent_text}{block_id} · {count} {note_word}"
+                );
+            }
+        } else {
+            let drawer_suffix = result
+                .drawer
+                .as_ref()
+                .map(|drawer| {
+                    let base = format!(" · {}", styler.cyan(&drawer.title));
+                    if drawer.created {
+                        format!("{base}        new drawer")
+                    } else {
+                        base
+                    }
+                })
+                .unwrap_or_default();
+            println!("  under {marker}{parent_text}{block_id}{drawer_suffix}");
+        }
     }
-    println!("  {}", styler.dim(&result.task_line));
+    if !result.notes.is_empty() {
+        print_human_multi_note_notes(result, &styler);
+    } else {
+        println!("  {}", styler.dim(&result.task_line));
+    }
     print_human_link_guard(result, &styler);
     if result.kind == "pomodoro_task"
         && let Some(destination) = result.pomodoro_link_destination.as_ref()
@@ -3159,6 +3210,56 @@ fn print_human_owner_status_row(result: &CaptureItemResult, styler: &Styler) {
                 _ => "Ready",
             });
     println!("  {next} stays {status}  {description}{block_id}");
+}
+
+fn print_human_multi_note_notes(result: &CaptureItemResult, styler: &Styler) {
+    // Mirrors the draft order, grouping consecutive notes that share one
+    // drawer under a single drawer header. Plain notes print their
+    // task line plus children; drawer notes print indented under their
+    // header.
+    let mut index = 0usize;
+    while index < result.notes.len() {
+        let note = &result.notes[index];
+        if let Some(drawer) = note.drawer.as_ref() {
+            let key = drawer.key.clone();
+            let mut end = index + 1;
+            while end < result.notes.len()
+                && result.notes[end]
+                    .drawer
+                    .as_ref()
+                    .is_some_and(|d| d.key == key)
+            {
+                end += 1;
+            }
+            let header_drawer = &result.notes[index]
+                .drawer
+                .as_ref()
+                .expect("drawer note")
+                .clone();
+            // `new drawer` tag on first touch; subsequent groups in the
+            // same drawer (same item, later in draft order) omit it
+            // because their `created` is false.
+            let created_tag = if header_drawer.created {
+                "        new drawer"
+            } else {
+                ""
+            };
+            println!("  {}{created_tag}", styler.cyan(&header_drawer.title));
+            for grouped in &result.notes[index..end] {
+                println!("    {}", styler.dim(&grouped.task_line));
+                for child in &grouped.sub_bullets {
+                    println!("      {}", styler.dim(child.trim_start()));
+                }
+            }
+            index = end;
+        } else {
+            println!("  {}", styler.dim(&note.task_line));
+            for child in &note.sub_bullets {
+                println!("    {}", styler.dim(child.trim_start()));
+            }
+            index += 1;
+        }
+    }
 }
 
 fn parent_under_marker(result: &CaptureItemResult, styler: &Styler) -> String {
@@ -5024,6 +5125,8 @@ mod tests {
             priority_label: None,
             placement: Placement::Completed,
             sub_bullets: Vec::new(),
+            notes: Vec::new(),
+            drawers: Vec::new(),
             clip: None,
             schedule_log: None,
             block_id: Some("1".to_string()),

@@ -1517,7 +1517,19 @@ fn attach_drawer_bullet_metadata(
         DrawerBulletHit,
     };
 
-    let under_task = is_under_task_mode(*mode);
+    let has_first_level = sub_bullets
+        .iter()
+        .any(|bullet| bullet.depth == AuthoredDepth::First);
+    let is_glued = glued_section.is_some_and(|section| !section.is_empty());
+    // A note-less `@route+id` item with first-level bullets files each
+    // bullet as its own note, so the existing target is an under-task
+    // position for drawer bullets. Glued drawer items stay
+    // not-under-task: every bullet already lives inside that drawer.
+    let under_task = is_under_task_mode(*mode)
+        || (*mode == EditorMode::SubBullet
+            && parent_body.trim().is_empty()
+            && !is_glued
+            && has_first_level);
     let mut authored_lines: Vec<(AuthoredDepth, &str, usize)> = Vec::new();
     for line in item.lines.iter().skip(1) {
         let AuthoredLineClass::Item(authored) =
@@ -2174,15 +2186,23 @@ pub(super) fn parse_editor_item_inner<'a>(
         && body.trim().is_empty()
         && sub_bullet_relaxed_section_range.is_none()
     {
-        // A drawer capture with no parent note text is incomplete even
-        // with authored children.
-        if !needs.contains(&Need::DrawerText) {
-            needs.push(Need::DrawerText);
-        }
-        if mode != EditorMode::Incomplete {
-            // Keep SubBullet mode but mark incomplete via needs; the
-            // editor shows the drawer menu and the missing-text hint.
-            // Diagnostics stay empty so the menu can open.
+        // A glued drawer capture with no parent note text needs its note
+        // text, unless first-level bullets already supply the notes: each
+        // one becomes its own note inside the drawer.
+        let has_first_level_note = sub_bullets
+            .iter()
+            .any(|bullet| bullet.depth == AuthoredDepth::First);
+        if has_first_level_note {
+            needs.retain(|need| *need != Need::DrawerText);
+        } else {
+            if !needs.contains(&Need::DrawerText) {
+                needs.push(Need::DrawerText);
+            }
+            if mode != EditorMode::Incomplete {
+                // Keep SubBullet mode but mark incomplete via needs; the
+                // editor shows the drawer menu and the missing-text hint.
+                // Diagnostics stay empty so the menu can open.
+            }
         }
     } else if let Some(range) = sub_bullet_relaxed_section_range {
         mode = EditorMode::Task;
@@ -3062,6 +3082,15 @@ pub(super) fn parse_editor_item_inner<'a>(
                 item_dependencies.sigil(),
             ));
         }
+        // A note-less owner with first-level bullets is the multi-note
+        // form: the bullets are notes, so the text diagnostic only applies
+        // when item-wide markers are also present.
+        let multi_note_form = !seen.schedule
+            && !seen.priority
+            && !seen.clip
+            && sub_bullets
+                .iter()
+                .any(|bullet| bullet.depth == AuthoredDepth::First);
         if matches!(
             dependency_target.as_ref().map(|target| &target.kind),
             Some(DependencyTargetKind::ExistingTask)
@@ -3069,7 +3098,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             && (seen.schedule
                 || seen.priority
                 || seen.clip
-                || !sub_bullets.is_empty())
+                || (!sub_bullets.is_empty() && !multi_note_form))
         {
             let owner =
                 local_destination_marker.as_deref().unwrap_or("@route+id");

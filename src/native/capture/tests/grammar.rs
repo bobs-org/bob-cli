@@ -774,7 +774,8 @@ fn malformed_sub_bullet_markers_are_usage_errors() {
 }
 
 /// A bare `@route+block-id[#<type>]` marker with no other text is a task
-/// toggle operation, not a "task text is required" error.
+/// toggle operation, not a "task text is required" error. First-level child
+/// bullets switch the item to the multi-note form instead.
 #[test]
 fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
     let parsed = parse_capture_text("@cash+id", None)
@@ -806,14 +807,28 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
         Some("fix")
     );
 
-    for raw in ["@cash+id s:2", "@cash+id\n- child text"] {
-        let error = parse_capture_text(raw, None)
-            .expect_err(&format!("{raw} should still need text"));
-        assert!(
-            error.message.contains("task text is required"),
-            "{raw}: {error:?}"
-        );
-    }
+    let error = parse_capture_text("@cash+id s:2", None)
+        .expect_err("@cash+id s:2 should still need text");
+    assert!(
+        error.message.contains("task text is required"),
+        "@cash+id s:2: {error:?}"
+    );
+
+    let multi = parse_capture_text("@cash+id\n- child text", None)
+        .expect("note-less marker with bullets is multi-note");
+    assert_eq!(multi.body, "");
+    assert_eq!(multi.route.as_deref(), Some("cash"));
+    assert_eq!(
+        multi.kind,
+        CaptureKind::SubBullet {
+            target: SubBulletTarget::BlockId("id".to_string()),
+            section: None,
+        }
+    );
+    assert_eq!(multi.sub_bullets.len(), 1);
+    assert_eq!(multi.sub_bullets[0].body, "child text");
+    assert!(multi.sub_bullets[0].task_id.is_none());
+    assert!(multi.sub_bullets[0].drawer.is_none());
 
     let explicit = parse_capture_text("@cash+id!", None)
         .expect("bare explicit-toggle marker");
