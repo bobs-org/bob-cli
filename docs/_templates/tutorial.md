@@ -25,7 +25,7 @@ bob plan -b /path/to/vault
 ```text { .no-copy title="Output" }
 bob plan - Tue 2026-10-20 - no daily note yet
 
-  PLAN  0/5 themes - 0/15 links      TODAY 0 - PENDING 0/5 - NEXT 0/15
+  PLAN  0/15 links      TODAY 0 - PENDING 0/5 - NEXT 0/15
 ```
 
 An empty vault with no daily note still exits 0 and prints TODAY 0 plus the lane
@@ -33,7 +33,7 @@ counts. That line is the confirmation that Bob found the vault and read the plan
 
 ## 2. Read the counts
 
-The `PLAN` meter is themes and Task Links under today's open Pomodoros. `TODAY`,
+The `PLAN` meter is the distinct Task Links under today's open Pomodoros. `TODAY`,
 `PENDING`, and `NEXT` are the lane counts from the Tasks index. A missing daily note
 is a valid empty plan, not an error.
 
