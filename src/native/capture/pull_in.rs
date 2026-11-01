@@ -296,7 +296,14 @@ fn choice_required_error(
         "offers".to_string(),
         serde_json::to_value(&offers).expect("serialize offers"),
     );
-    CaptureError::pull_in_choice_required(extra, offers)
+    // The refusal's human output renders keep-moving groups with their
+    // folded counts, so carry the engine's folds for the offered projects.
+    let folds: Vec<crate::native::task_complete::KeepMovingFold> = items
+        .iter()
+        .flat_map(|item| super::output::all_keep_moving_folds(&item.result))
+        .cloned()
+        .collect();
+    CaptureError::pull_in_choice_required(extra, offers, folds)
 }
 
 pub(super) fn assemble_pull_in(

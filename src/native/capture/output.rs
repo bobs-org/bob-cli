@@ -1959,6 +1959,29 @@ pub(super) fn keep_moving_vecs_mut(
     vecs
 }
 
+/// Mutable access to every keep-moving vec an item reports together with
+/// its folded counts, in the same order as [`all_keep_moving`]. The net
+/// pass prunes both at once so a dropped group leaves no stale counts.
+pub(super) fn keep_moving_parts_mut(
+    item: &mut CaptureItemResult,
+) -> Vec<(
+    &mut Vec<TaskCompleteUnblockedJson>,
+    &mut Vec<crate::native::task_complete::KeepMovingFold>,
+)> {
+    let mut parts = Vec::new();
+    if let Some(summary) = item.task_complete.as_mut() {
+        parts.push((&mut summary.keep_moving, &mut summary.keep_moving_folds));
+    }
+    for complete in &mut item.relation_completes {
+        let summary = &mut complete.task_complete;
+        parts.push((&mut summary.keep_moving, &mut summary.keep_moving_folds));
+    }
+    if let Some(summary) = item.pomodoro_close.as_mut() {
+        parts.push((&mut summary.keep_moving, &mut summary.keep_moving_folds));
+    }
+    parts
+}
+
 /// Every keep-moving fold an item reports, in the same order as
 /// [`all_keep_moving`].
 pub(super) fn all_keep_moving_folds(
@@ -2046,13 +2069,21 @@ pub(super) fn print_task_complete_details(
         dry_run,
         styler,
     );
+    print_human_keep_moving_rows(
+        &summary.keep_moving,
+        &summary.keep_moving_folds,
+        dry_run,
+        styler,
+    );
 }
 
-fn pulled_in_phrase(unblocked: &[TaskCompleteUnblockedJson]) -> String {
-    let offer_count =
-        unblocked.iter().filter(|row| row.offer.is_some()).count();
-    let picked_count = unblocked
-        .iter()
+fn pulled_in_phrase(
+    unblocked: &[TaskCompleteUnblockedJson],
+    keep_moving: &[TaskCompleteUnblockedJson],
+) -> String {
+    let rows = || unblocked.iter().chain(keep_moving.iter());
+    let offer_count = rows().filter(|row| row.offer.is_some()).count();
+    let picked_count = rows()
         .filter(|row| row.offer.as_ref().is_some_and(|offer| offer.selected))
         .count();
     if picked_count == 0 {
@@ -2822,6 +2853,12 @@ pub(super) fn print_human_pomodoro_close_success(
         result.dry_run,
         styler,
     );
+    print_human_keep_moving_rows(
+        &close.keep_moving,
+        &close.keep_moving_folds,
+        result.dry_run,
+        styler,
+    );
     let mut parked: Vec<u32> = close
         .task_links
         .iter()
@@ -2868,7 +2905,7 @@ pub(super) fn print_human_pomodoro_close_success(
         } else {
             format!(" · {} unblocked", close.unblocked.len())
         };
-        let pulled = pulled_in_phrase(&close.unblocked);
+        let pulled = pulled_in_phrase(&close.unblocked, &close.keep_moving);
         println!(
             "  {}",
             styler.dim(&format!(
@@ -4024,7 +4061,7 @@ pub(super) fn print_human_task_complete_success(
     } else {
         format!("{previous_marker} → {current_marker} {text}")
     };
-    let pulled = pulled_in_phrase(&summary.unblocked);
+    let pulled = pulled_in_phrase(&summary.unblocked, &summary.keep_moving);
     println!(
         "{prefix} {verb} {head}  {ordinal}{target_label} {block_label}{pulled}"
     );
@@ -4088,6 +4125,172 @@ pub(super) fn print_human_successor_rows(
                 blocked.text
             );
         }
+    }
+}
+
+fn is_keep_moving_row(row: &TaskCompleteUnblockedJson) -> bool {
+    row.offer
+        .as_ref()
+        .is_some_and(|offer| offer.group == "keep_moving")
+}
+
+/// Human keep-moving groups (`docs/task-dependencies.md` §12.15): one
+/// header per leaf project that leads with why and says the rows are not
+/// dependents, the offered rows in the shared offer numbering, and the
+/// folded-count row. Never labeled "unblocked" and never the unlock glyph;
+/// the header takes the Next colour because picks land in Next.
+pub(super) fn print_human_keep_moving_rows(
+    rows: &[TaskCompleteUnblockedJson],
+    folds: &[crate::native::task_complete::KeepMovingFold],
+    dry_run: bool,
+    styler: &Styler,
+) {
+    let mut offered: Vec<&TaskCompleteUnblockedJson> =
+        rows.iter().filter(|row| row.offer.is_some()).collect();
+    offered.sort_by_key(|row| {
+        row.offer.as_ref().map(|offer| offer.n).unwrap_or(0)
+    });
+    let mut projects: Vec<String> = Vec::new();
+    for row in &offered {
+        let project = super::keep_moving_net::row_project(row);
+        if !projects.contains(&project) {
+            projects.push(project);
+        }
+    }
+    for project in projects {
+        let group: Vec<&&TaskCompleteUnblockedJson> = offered
+            .iter()
+            .filter(|row| super::keep_moving_net::row_project(row) == project)
+            .collect();
+        let Some(first) = group.first() else {
+            continue;
+        };
+        let stem = keep_moving_project_stem(&project);
+        println!(
+            "  {}",
+            styler.yellow(&keep_moving_header(&stem, &first.unblocked_by))
+        );
+        for row in &group {
+            print_human_keep_moving_row(row, &stem, dry_run, styler);
+        }
+        if let Some(fold) = folds
+            .iter()
+            .find(|fold| display_relative(&fold.project) == project)
+            && let Some(parts) = keep_moving_fold_text(fold)
+        {
+            println!("  {}", styler.dim(&format!("not offered  {parts}")));
+        }
+    }
+}
+
+/// N's note stem: the project path without directories or extension.
+fn keep_moving_project_stem(project: &str) -> String {
+    Path::new(project)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| project.to_string())
+}
+
+/// Group header: why the group appeared and that its rows are not
+/// dependents (§12.15). ‹T› is the predecessor's cleaned text cut to 48
+/// characters; several predecessors say "and k−1 more".
+fn keep_moving_header(
+    stem: &str,
+    predecessors: &[TaskCompleteUnblockedCauseJson],
+) -> String {
+    let first = predecessors
+        .first()
+        .map(|cause| super::super::style::truncate(cause.text.trim(), 48))
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "A task".to_string());
+    let why = match predecessors.len() {
+        0 | 1 => format!("{first} was its last task planned today"),
+        count => format!(
+            "{first} and {} more were its last tasks planned today",
+            count - 1
+        ),
+    };
+    format!("Keep {stem} moving \u{b7} {why} (ready tasks, not dependents)")
+}
+
+/// `2 blocked · 1 scheduled later · 1 hidden`, omitting zero parts; `None`
+/// when nothing folded.
+fn keep_moving_fold_text(
+    fold: &crate::native::task_complete::KeepMovingFold,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if fold.blocked > 0 {
+        parts.push(format!("{} blocked", fold.blocked));
+    }
+    if fold.scheduled > 0 {
+        parts.push(format!("{} scheduled later", fold.scheduled));
+    }
+    if fold.hidden > 0 {
+        parts.push(format!("{} hidden", fold.hidden));
+    }
+    (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
+}
+
+/// Destination of an unpicked offer: the entry the row would link under.
+fn offer_destination_label(
+    destination: &TaskCompleteOfferDestinationJson,
+) -> String {
+    match (destination.entry_role, destination.entry_name.as_str()) {
+        ("created", "") => "new session".to_string(),
+        ("created", name) => format!("new {name} session"),
+        (_, "") => "session".to_string(),
+        (_, name) => name.to_string(),
+    }
+}
+
+fn print_human_keep_moving_row(
+    row: &TaskCompleteUnblockedJson,
+    stem: &str,
+    dry_run: bool,
+    styler: &Styler,
+) {
+    let Some(offer) = row.offer.as_ref() else {
+        return;
+    };
+    let locator = task_complete_locator(&row.note_path, &row.block_id);
+    let text = if row.text.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", row.text)
+    };
+    if let Some(link) = row.link.as_ref() {
+        let verb = if dry_run { "would link" } else { "linked" };
+        let previous =
+            style_task_status_marker(styler, row.previous_status_symbol);
+        let current = style_task_status_marker(styler, row.status_symbol);
+        let minted = link
+            .block_link
+            .rsplit_once('^')
+            .filter(|_| link.block_id_created)
+            .map(|(_, id)| {
+                format!(" \u{b7} added ^{}", id.trim_end_matches("]]"))
+            })
+            .unwrap_or_default();
+        println!(
+            "  offer {}  {verb} {previous} \u{2192} {current}{text}  {locator} \u{2192} {} \u{b7} keeps {stem} moving{minted}",
+            offer.n,
+            successor_destination(link),
+        );
+    } else {
+        let marker = style_task_status_marker(styler, row.status_symbol);
+        // A real run says an unpicked row was not pulled in; a dry run
+        // shows the `-p` hint instead.
+        let reason = row
+            .not_linked
+            .as_deref()
+            .filter(|_| !dry_run)
+            .map(|reason| format!(" \u{b7} {}", not_linked_reason(reason)))
+            .unwrap_or_default();
+        println!(
+            "  offer {}  {marker}{text}  {locator} \u{2192} {}{reason}",
+            offer.n,
+            offer_destination_label(&offer.destination),
+        );
     }
 }
 
@@ -4317,9 +4520,17 @@ pub(super) fn print_capture_error(
             eprintln!("{COMMAND_NAME}: {}", error.message);
             if !error.human_unblocked.is_empty() {
                 let styler = Styler::detect();
-                print_human_successor_rows(
-                    &error.human_unblocked,
-                    &[],
+                // Keep-moving offers render as their own group, never
+                // under the dependency wording.
+                let (moving, dependents): (Vec<_>, Vec<_>) = error
+                    .human_unblocked
+                    .iter()
+                    .cloned()
+                    .partition(is_keep_moving_row);
+                print_human_successor_rows(&dependents, &[], false, &styler);
+                print_human_keep_moving_rows(
+                    &moving,
+                    &error.human_keep_moving_folds,
                     false,
                     &styler,
                 );
@@ -4355,6 +4566,9 @@ pub(crate) struct CaptureError {
     pub(super) extra: Option<serde_json::Map<String, serde_json::Value>>,
     /// Numbered offer rows printed on human `pull_in_choice_required`.
     pub(super) human_unblocked: Vec<TaskCompleteUnblockedJson>,
+    /// Folded counts for the keep-moving groups in `human_unblocked`.
+    pub(super) human_keep_moving_folds:
+        Vec<crate::native::task_complete::KeepMovingFold>,
     /// Typed failure kind for `bob ref today`. Capture JSON ignores this
     /// so `bob capture` stays byte-identical.
     pub(crate) typed: Option<CaptureFailureKind>,
@@ -4383,6 +4597,7 @@ impl CaptureError {
             code: None,
             extra: None,
             human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
             typed: None,
         }
     }
@@ -4397,6 +4612,7 @@ impl CaptureError {
             code: Some(code.into()),
             extra: None,
             human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
             typed: None,
         }
     }
@@ -4408,6 +4624,7 @@ impl CaptureError {
             code: None,
             extra: None,
             human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
             typed: None,
         }
     }
@@ -4415,6 +4632,9 @@ impl CaptureError {
     pub(super) fn pull_in_choice_required(
         extra: serde_json::Map<String, serde_json::Value>,
         human_unblocked: Vec<TaskCompleteUnblockedJson>,
+        human_keep_moving_folds: Vec<
+            crate::native::task_complete::KeepMovingFold,
+        >,
     ) -> Self {
         Self {
             kind: CaptureErrorKind::Io,
@@ -4423,6 +4643,7 @@ impl CaptureError {
             code: Some("pull_in_choice_required".to_string()),
             extra: Some(extra),
             human_unblocked,
+            human_keep_moving_folds,
             typed: None,
         }
     }
@@ -4445,6 +4666,7 @@ impl CaptureError {
             code: Some("inbox_route_choice_required".to_string()),
             extra: Some(extra),
             human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
             typed: None,
         }
     }
@@ -4477,6 +4699,7 @@ impl CaptureError {
             code: Some("inbox_route_stale".to_string()),
             extra: Some(extra),
             human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
             typed: None,
         }
     }
@@ -4510,6 +4733,7 @@ impl CaptureError {
             code: Some("inbox_route_refused".to_string()),
             extra: Some(extra),
             human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
             typed: None,
         }
     }
@@ -4523,6 +4747,7 @@ impl CaptureError {
             code: Some("pomodoro_override_refused".to_string()),
             extra: None,
             human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
             typed: None,
         }
     }

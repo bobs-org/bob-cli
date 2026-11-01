@@ -2387,6 +2387,14 @@ The remaining rules for the offer set:
     task drops that row;
   - a later item that links any open N task, or closes R, drops N's whole
     group.
+  - The net pass tracks item order. Links the originating close picked
+    never invalidate their own group, so several picks in one group all
+    survive, and a later duplicate link of a row that close already picked
+    changes nothing. Only a later item's links count against the group.
+  - Net reporting changes reporting, never files: a dropped group's picks
+    stay linked and stamped, but they and their folded counts are no
+    longer reported as keep-moving. A group left with no selectable row is
+    silent.
 
 **Reporting (additive; capture JSON stays schema version 1)**
 

@@ -343,3 +343,60 @@ fn cumulative_stages_into_one_note_commit() {
     assert_eq!(fs::read_to_string(&note).expect("read note"), cumulative);
     no_capture_litter(dir.path());
 }
+
+// KM24 (Rust equivalent of the cycler's re-plan case): a keep-moving
+// pick batch (predecessor close, the picked note, and the day link) is
+// refused whole when the picked note changed on disk after planning, so a
+// stale pick never half-applies.
+#[test]
+fn keep_moving_pick_batch_stale_preimage_refuses_whole_batch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("sase_badges.md");
+    let day = dir.path().join("today.md");
+    let project_original = concat!(
+        "- [ ] #task Draft the badge spec [id:: t] ^t\n",
+        "- [ ] #task Write badge docs [id:: a] ^a\n",
+    );
+    let day_original =
+        "## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[sase_badges#^t]]\n";
+    fs::write(&project, project_original).expect("write project");
+    fs::write(&day, day_original).expect("write day");
+    let planned = vec![
+        staged_existing(
+            &project,
+            project_original,
+            concat!(
+                "- [x] #task Draft the badge spec [id:: t]  [completion:: 2026-10-05] ^t\n",
+                "- [*] #task Write badge docs [fresh:: 2026-10-05] [id:: a] ^a\n",
+            ),
+        ),
+        staged_existing(
+            &day,
+            day_original,
+            "## Pomodoros\n- [ ] () \u{2014} FIX\n  - ~~[[sase_badges#^t]]~~\n  - [[sase_badges#^a]]\n",
+        ),
+    ];
+    // A became Blocked elsewhere after the picker rendered.
+    let external = concat!(
+        "- [ ] #task Draft the badge spec [id:: t] ^t\n",
+        "- [?] #task Write badge docs [dependsOn:: p] [id:: a] ^a\n",
+    );
+    fs::write(&project, external).expect("external edit");
+    let error = write_staged_files(&planned).expect_err("stale pick refuses");
+    assert!(
+        error.message.contains("refusing to overwrite"),
+        "refusal message: {}",
+        error.message
+    );
+    assert_eq!(
+        fs::read_to_string(&project).expect("read project"),
+        external,
+        "external edit is retained"
+    );
+    assert_eq!(
+        fs::read_to_string(&day).expect("read day"),
+        day_original,
+        "the day file is untouched"
+    );
+    no_capture_litter(dir.path());
+}

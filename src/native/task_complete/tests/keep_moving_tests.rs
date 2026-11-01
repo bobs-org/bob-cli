@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use super::super::super::pomodoro_homes::{HomeResolver, IndexedHomeSource};
 use super::super::super::vault_links::NoteIndex;
 use super::super::keep_moving::{
-    is_leaf_project, keep_moving_pre_gate, CountingHomeSource,
-    KEEP_MOVING_TRIGGER,
+    is_leaf_project, keep_moving_needs_dependents, keep_moving_pre_gate,
+    CountingHomeSource, KEEP_MOVING_TRIGGER,
 };
 use super::super::successors::{
     plan_successors, ClosingContext, ClosingContinuation, CompletedTask,
@@ -317,6 +317,50 @@ fn g1_g3_pre_gate_is_pure_held_text() {
         Some("## Pomodoros\n- [ ] () — FIX\n"),
         today(),
         &settings,
+    ));
+}
+
+// KM32 / §12.15 "Prerequisite checks": only a dependency-bearing open task
+// (a candidate or the `^prj`) needs the vault-wide snapshot proof; a
+// triggering close with none builds no snapshot.
+#[test]
+fn needs_dependents_only_for_dependency_bearing_open_tasks() {
+    let settings = test_settings();
+    let completed =
+        vec![pred("sase_badges.md", "t", "t", "Draft the badge spec")];
+    let plain = [(
+        PathBuf::from("sase_badges.md"),
+        badges_body(residents_pba()),
+    )];
+    assert!(!keep_moving_needs_dependents(&completed, &plain, &settings));
+
+    let candidate_dep = [(
+        PathBuf::from("sase_badges.md"),
+        badges_body("- [ ] #task Needs proof [dependsOn:: z] [id:: pr] ^pr\n"),
+    )];
+    assert!(keep_moving_needs_dependents(
+        &completed,
+        &candidate_dep,
+        &settings,
+    ));
+
+    // A closed task's old dependency is no proof burden, and a note that
+    // holds no completed task is not consulted.
+    let closed_dep = [(
+        PathBuf::from("sase_badges.md"),
+        badges_body("- [x] #task Old [dependsOn:: z] [id:: pr] ^pr\n"),
+    )];
+    assert!(!keep_moving_needs_dependents(
+        &completed,
+        &closed_dep,
+        &settings
+    ));
+    let elsewhere = [(
+        PathBuf::from("other.md"),
+        "- [ ] #task Needs proof [dependsOn:: z] [id:: pr] ^pr\n".to_string(),
+    )];
+    assert!(!keep_moving_needs_dependents(
+        &completed, &elsewhere, &settings
     ));
 }
 

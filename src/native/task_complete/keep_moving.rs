@@ -197,6 +197,31 @@ pub(crate) fn keep_moving_pre_gate(
     })
 }
 
+/// Whether proving a triggered project safe needs the vault-wide dependents
+/// snapshot (`docs/task-dependencies.md` §12.15 "Prerequisite checks").
+/// Only an open task of a completed task's note that carries a non-empty
+/// `[dependsOn::]` (which the managed Depends-On line mirrors onto `^prj`)
+/// has prerequisites to prove closed; project inheritance reads the
+/// `#prj_is_blocked` tag from held text. Held text only, no I/O, so the
+/// common triggering close pays for no snapshot.
+pub(crate) fn keep_moving_needs_dependents(
+    completed: &[CompletedTask],
+    note_texts: &[(PathBuf, String)],
+    tasks_settings: &TasksSettings,
+) -> bool {
+    note_texts.iter().any(|(path, text)| {
+        completed.iter().any(|task| &task.relative_path == path)
+            && parse_tasks(text, tasks_settings).iter().any(|task| {
+                task.status_recognized
+                    && task.status_type.is_open()
+                    && task
+                        .depends_on
+                        .iter()
+                        .any(|dependency| !dependency.is_empty())
+            })
+    })
+}
+
 /// Whether N is a leaf project: recognised, non-terminal, outside `done/`,
 /// one open `^prj`, Project kind, own path as key, different root parent.
 pub(crate) fn is_leaf_project<S: HomeSource>(

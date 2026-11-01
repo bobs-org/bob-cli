@@ -63,6 +63,7 @@ mod ensure_next;
 mod event_conflict;
 mod existing_task_link;
 mod inbox_route;
+mod keep_moving_net;
 mod link_guard;
 mod meet_event_run;
 mod open_notes;

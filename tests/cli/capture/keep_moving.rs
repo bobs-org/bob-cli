@@ -1,5 +1,6 @@
 //! Keep-moving capture integration (`docs/task-dependencies.md` §12.15,
-//! KM1–KM31; `plan:202611/leaf_keep_moving_rust.md` phase `capture`).
+//! KM1–KM32; `plan:202611/leaf_keep_moving_rust.md` phases `capture` and
+//! `finish`).
 //!
 //! Focused CLI coverage for `!`, Pomodoro completion, retargeted close,
 //! and nested complete labels: separate array shape, all/none/key/number
@@ -7,6 +8,10 @@
 //! no-candidate silence, both kill switches, write-free
 //! `--require-pull-in-choice` (KM30), and unavailable-snapshot behavior
 //! (KM31) through a controlled invalid-UTF-8 fixture.
+//!
+//! The `finish` phase adds the multi-item net pass (KM21), the approved
+//! human copy, the cheap-gate wiring (KM32), and the stale-pick refusals
+//! the Rust side has for the cycler's re-plan case (KM24).
 
 use crate::support::*;
 use std::fs;
@@ -573,4 +578,864 @@ fn km_mixed_hand_off_orders_first() {
         "{hand_n} {moving_ns:?}"
     );
     assert_eq!(json["pull_in"]["offer_count"], 4);
+}
+
+// ---------------------------------------------------------------------
+// Finish phase: net batch semantics (KM21)
+// ---------------------------------------------------------------------
+
+/// Blocked-aware Tasks settings so dependency drafts (`^note:id &note:id`)
+/// can re-block a candidate.
+fn blocked_leaf_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let (temp, vault, day_file) = leaf_vault(name);
+    write_blocked_tasks_settings(&vault);
+    (temp, vault, day_file)
+}
+
+/// The keep-moving block ids of capture `index`, ordered by offer number.
+fn moving_ids(json: &serde_json::Value, index: usize) -> Vec<String> {
+    let mut rows: Vec<&serde_json::Value> = json["captures"][index]
+        ["task_complete"]["keep_moving"]
+        .as_array()
+        .expect("keep_moving array")
+        .iter()
+        .collect();
+    rows.sort_by_key(|row| row["offer"]["n"].as_u64().unwrap_or(0));
+    rows.iter()
+        .map(|row| row["block_id"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+fn keep_moving_reason_lines(json: &serde_json::Value) -> Vec<String> {
+    json["pomodoro_blocks"]
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .flat_map(|block| {
+                    block["lines"].as_array().cloned().unwrap_or_default()
+                })
+                .filter(|line| line["reason"] == "keep_moving")
+                .map(|line| {
+                    line["text"].as_str().unwrap_or_default().trim().to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Real and dry runs of one draft agree on the net result.
+fn assert_net_dry_matches_real(
+    name: &str,
+    setup: impl Fn(&str) -> (TempDir, PathBuf, PathBuf),
+    flags: &[&str],
+    draft: &str,
+) -> serde_json::Value {
+    let (_temp, vault, day_file) = setup(&format!("{name}-dry"));
+    let before = vault_bytes(&vault);
+    let mut dry_flags = vec!["--dry-run"];
+    dry_flags.extend_from_slice(flags);
+    let dry = capture_json(&vault, &day_file, &dry_flags, draft);
+    assert_eq!(vault_bytes(&vault), before, "dry run writes nothing");
+    let (_temp2, vault2, day_file2) = setup(&format!("{name}-real"));
+    let real = capture_json(&vault2, &day_file2, flags, draft);
+    for index in 0..dry["captures"].as_array().map_or(0, Vec::len) {
+        assert_eq!(
+            dry["captures"][index]["task_complete"]["keep_moving"],
+            real["captures"][index]["task_complete"]["keep_moving"],
+            "capture {index} keep_moving"
+        );
+    }
+    assert_eq!(dry["pull_in"], real["pull_in"]);
+    assert_eq!(
+        keep_moving_reason_lines(&dry),
+        keep_moving_reason_lines(&real)
+    );
+    real
+}
+
+// KM21: `!N:t` then a later item linking unpicked candidate A drops N's
+// whole group; the later link itself is untouched and nothing else is
+// written for the dropped offers.
+#[test]
+fn km21_later_link_of_candidate_drops_group() {
+    let json = assert_net_dry_matches_real(
+        "bob-cli-km21-link",
+        leaf_vault,
+        &["-p", "none"],
+        "!sase_badges:t\n\n@sase_badges:a",
+    );
+    assert_eq!(moving_ids(&json, 0), Vec::<String>::new(), "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+    assert!(json["pull_in"].get("groups").is_none(), "{json}");
+    assert_eq!(json["captures"][1]["kind"], "pomodoro_link");
+}
+
+// KM21: the dropped group is gone from files too: later link kept, no
+// stamps or links for the unpicked rows.
+#[test]
+fn km21_later_link_keeps_only_the_explicit_link_on_disk() {
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km21-disk");
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["-p", "none"],
+        "!sase_badges:t\n\n@sase_badges:a",
+    );
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert_eq!(day.matches("sase_badges#^a").count(), 1, "{day}");
+    assert!(!day.contains("sase_badges#^b"), "{day}");
+    assert!(!day.contains("sase_badges#^p"), "{day}");
+    let note = fs::read_to_string(vault.join("sase_badges.md")).unwrap();
+    // The explicit link raises A to Next; B and P are untouched.
+    assert!(note.contains("- [*] #task Write badge docs"), "{note}");
+    assert!(
+        note.contains("- [*] #task Wire badges into the README [id:: b] ^b"),
+        "{note}"
+    );
+    assert!(!note.contains("[fresh:: 2026-10-05] [id:: b]"), "{note}");
+}
+
+// KM21: a later item completing B drops only B's row; remaining numbers
+// close up and a numeric pick addresses the survivors.
+#[test]
+fn km21_later_completion_drops_only_that_row() {
+    let json = assert_net_dry_matches_real(
+        "bob-cli-km21-complete",
+        leaf_vault,
+        &["-p", "none"],
+        "!sase_badges:t\n\n!sase_badges:b",
+    );
+    assert_eq!(moving_ids(&json, 0), vec!["p", "a"], "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 2);
+    let groups = json["pull_in"]["groups"].as_array().expect("groups");
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    let ns: Vec<u64> = json["captures"][0]["task_complete"]["keep_moving"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["offer"]["n"].as_u64().unwrap())
+        .collect();
+    let mut sorted = ns.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, vec![1, 2], "no gap left by the dropped row");
+
+    // `-p 2` addresses the second survivor (A), not the dropped B.
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km21-complete-num");
+    let picked = capture_json(
+        &vault,
+        &day_file,
+        &["-p", "2"],
+        "!sase_badges:t\n\n!sase_badges:b",
+    );
+    let rows = picked["captures"][0]["task_complete"]["keep_moving"]
+        .as_array()
+        .expect("keep_moving");
+    let selected: Vec<_> = rows
+        .iter()
+        .filter(|row| row["offer"]["selected"] == true)
+        .map(|row| row["block_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(selected, vec!["a"], "{rows:?}");
+    assert_eq!(picked["pull_in"]["picked_count"], 1);
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("sase_badges#^a"), "{day}");
+    assert!(!day.contains("sase_badges#^p"), "{day}");
+}
+
+// KM21: picks the originating close linked survive several-at-once, and
+// a later explicit link of an already-picked row changes nothing.
+#[test]
+fn km21_picks_survive_a_later_link_of_a_picked_row() {
+    let json = assert_net_dry_matches_real(
+        "bob-cli-km21-picked",
+        leaf_vault,
+        &["-p", "all"],
+        "!sase_badges:t\n\n@sase_badges:a",
+    );
+    assert_eq!(moving_ids(&json, 0), vec!["p", "b", "a"], "{json}");
+    assert_eq!(json["pull_in"]["picked_count"], 3);
+    assert_eq!(json["pull_in"]["offer_count"], 3);
+    for row in json["captures"][0]["task_complete"]["keep_moving"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(row.get("link").is_some_and(|link| !link.is_null()));
+    }
+    // Link reasons stay `keep_moving` for every surviving pick.
+    let reasons = keep_moving_reason_lines(&json);
+    assert_eq!(reasons.len(), 3, "{reasons:?}");
+}
+
+// KM21: a later completion of one picked row drops just that row; the
+// other picks keep their rows and link reasons.
+#[test]
+fn km21_later_completion_of_a_picked_row_keeps_other_picks() {
+    let json = assert_net_dry_matches_real(
+        "bob-cli-km21-picked-complete",
+        leaf_vault,
+        &["-p", "all"],
+        "!sase_badges:t\n\n!sase_badges:a",
+    );
+    assert_eq!(moving_ids(&json, 0), vec!["p", "b"], "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 2);
+    assert_eq!(json["pull_in"]["picked_count"], 2);
+    let reasons = keep_moving_reason_lines(&json);
+    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    assert!(
+        reasons.iter().all(|line| !line.contains("^a")),
+        "{reasons:?}"
+    );
+}
+
+// KM21: a later item linking a DIFFERENT open resident drops the whole
+// group, picks included; the picks' task edits and links stay written.
+#[test]
+fn km21_later_link_of_other_resident_drops_picked_group() {
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km21-other");
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["-p", "all"],
+        "!sase_badges:t\n\n@sase_badges:prj",
+    );
+    assert_eq!(moving_ids(&json, 0), Vec::<String>::new(), "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+    assert_eq!(json["pull_in"]["picked_count"], 0);
+    assert!(json["pull_in"].get("groups").is_none(), "{json}");
+    assert!(keep_moving_reason_lines(&json).is_empty(), "{json}");
+    // Net reporting never undoes the originating close's legitimate
+    // edits: the picks stay linked and stamped.
+    let day = fs::read_to_string(&day_file).unwrap();
+    for id in ["a", "b", "p", "prj"] {
+        assert!(day.contains(&format!("sase_badges#^{id}")), "{id}: {day}");
+    }
+    let note = fs::read_to_string(vault.join("sase_badges.md")).unwrap();
+    assert!(note.contains("[fresh:: 2026-10-05]"), "{note}");
+}
+
+// KM21: a later close of N's `^prj` drops the group.
+#[test]
+fn km21_later_close_of_prj_drops_group() {
+    let json = assert_net_dry_matches_real(
+        "bob-cli-km21-close-prj",
+        leaf_vault,
+        &["-p", "none"],
+        "!sase_badges:t\n\n!sase_badges:prj",
+    );
+    assert_eq!(moving_ids(&json, 0), Vec::<String>::new(), "{json}");
+    assert!(json["pull_in"].get("groups").is_none(), "{json}");
+}
+
+// KM21: a later item that re-blocks a candidate drops only that row.
+#[test]
+fn km21_later_reblock_drops_only_that_row() {
+    let json = assert_net_dry_matches_real(
+        "bob-cli-km21-reblock",
+        blocked_leaf_vault,
+        &["-p", "none"],
+        "!sase_badges:t\n\n^sase_badges:a &sase_badges:p",
+    );
+    assert_eq!(moving_ids(&json, 0), vec!["p", "b"], "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 2);
+}
+
+// KM21 + the folds: dropping every surviving row also drops the group's
+// folded counts, so no stale `groups` entry remains.
+#[test]
+fn km21_all_rows_dropped_leaves_no_stale_fold_counts() {
+    let (_temp, vault, day_file) = leaf_vault_extra(
+        "bob-cli-km21-folds",
+        "- [?] #task Stuck [id:: stuck] ^stuck\n",
+    );
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &["--dry-run"],
+        "!sase_badges:t\n\n!sase_badges:p\n\n!sase_badges:b\n\n!sase_badges:a",
+    );
+    assert_eq!(moving_ids(&json, 0), Vec::<String>::new(), "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+    assert!(json["pull_in"].get("groups").is_none(), "{json}");
+}
+
+// KM21 + KM22: a later link in one project drops only that project's
+// group; the other leaf project's group survives untouched.
+#[test]
+fn km21_multiple_project_groups_drop_independently() {
+    let setup = |name: &str| {
+        let (temp, vault, day_file) = leaf_vault(name);
+        write_file(
+            &vault.join("sase_docs.md"),
+            concat!(
+                "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+                "- [ ] #task Outline docs [id:: u] ^u\n",
+                "- [ ] #task #prj Docs ^prj\n",
+                "- [ ] #task Write intro [id:: d1] ^d1\n",
+                "- [ ] #task Write guide [id:: d2] ^d2\n",
+            ),
+        );
+        write_file(
+            &day_file,
+            concat!(
+                "## Pomodoros\n- [ ] () \u{2014} FIX\n",
+                "  - [[sase_badges#^t]]\n  - [[sase_docs#^u]]\n"
+            ),
+        );
+        (temp, vault, day_file)
+    };
+    let json = assert_net_dry_matches_real(
+        "bob-cli-km21-two",
+        setup,
+        &["-p", "none"],
+        "!sase_badges:t\n\n!sase_docs:u\n\n@sase_docs:d1",
+    );
+    assert_eq!(moving_ids(&json, 0), vec!["p", "b", "a"], "{json}");
+    assert_eq!(moving_ids(&json, 1), Vec::<String>::new(), "{json}");
+    assert_eq!(json["pull_in"]["offer_count"], 3);
+    let groups = json["pull_in"]["groups"].as_array().expect("groups");
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0]["project"], "sase_badges.md");
+}
+
+// KM22: one close draining two leaf projects reports two groups, ordered
+// by anchor then path, both in the one keep-moving array.
+#[test]
+fn km22_two_projects_two_groups_in_order() {
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km22");
+    write_file(
+        &vault.join("sase_docs.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+            "- [ ] #task Outline docs [id:: u] ^u\n",
+            "- [ ] #task #prj Docs ^prj\n",
+            "- [ ] #task Write intro [id:: d1] ^d1\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n",
+            "  - [[sase_badges#^t]]\n  - [[sase_docs#^u]]\n",
+            "- [ ] () \u{2014} FIX\n"
+        ),
+    );
+    let json = capture_json(&vault, &day_file, &["--dry-run"], "x!");
+    let rows = json["pomodoro_close"]["keep_moving"]
+        .as_array()
+        .expect("keep_moving");
+    let mut ordered: Vec<(u64, String, String)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row["offer"]["n"].as_u64().unwrap(),
+                row["offer"]["project"].as_str().unwrap().to_string(),
+                row["block_id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    ordered.sort();
+    let projects: Vec<&str> = ordered
+        .iter()
+        .map(|(_, project, _)| project.as_str())
+        .collect();
+    assert_eq!(
+        projects,
+        vec![
+            "sase_badges.md",
+            "sase_badges.md",
+            "sase_badges.md",
+            "sase_docs.md"
+        ],
+        "{ordered:?}"
+    );
+    assert_eq!(json["pull_in"]["groups"].as_array().unwrap().len(), 2);
+}
+
+// KM21 through a nested complete label: the relation's own summary
+// carries the group, and a later link in the same draft drops it.
+#[test]
+fn km21_nested_complete_label_group_and_net_drop() {
+    let setup = |name: &str| {
+        let (temp, vault, day_file) = blocked_leaf_vault(name);
+        write_file(
+            &vault.join("other.md"),
+            "- [ ] #task Implement badges [id:: x] ^x\n",
+        );
+        (temp, vault, day_file)
+    };
+    let config = |vault: &Path| {
+        let path = vault.parent().unwrap().join("relations.yml");
+        write_file(
+            &path,
+            "relations:\n  complete_labels:\n    - implemented by\n",
+        );
+        path
+    };
+    let (_temp, vault, day_file) = setup("bob-cli-km21-nested");
+    let config_path = config(&vault);
+    let output = capture_output_with_config(
+        &vault,
+        &day_file,
+        &["--dry-run"],
+        "@sase_badges+t ~other:x|\"implemented by\"",
+        false,
+        Some(&config_path),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    let nested = json["relation_completes"][0]["task_complete"]["keep_moving"]
+        .as_array()
+        .expect("nested keep_moving");
+    assert_eq!(nested.len(), 3, "{nested:?}");
+    assert_eq!(json["pull_in"]["offer_count"], 3);
+    assert_eq!(json["pull_in"]["groups"][0]["group"], "keep_moving");
+
+    // A later item linking a resident of N drops the nested group too.
+    let (_temp2, vault2, day_file2) = setup("bob-cli-km21-nested-net");
+    let config_path2 = config(&vault2);
+    let output = capture_output_with_config(
+        &vault2,
+        &day_file2,
+        &["--dry-run"],
+        "@sase_badges+t ~other:x|\"implemented by\"\n\n@sase_badges:a",
+        false,
+        Some(&config_path2),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    let nested = json["captures"][0]["relation_completes"][0]["task_complete"]
+        ["keep_moving"]
+        .as_array()
+        .expect("nested keep_moving");
+    assert!(nested.is_empty(), "{nested:?}");
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+    assert!(json["pull_in"].get("groups").is_none(), "{json}");
+}
+
+// ---------------------------------------------------------------------
+// Finish phase: approved human copy (§12.15)
+// ---------------------------------------------------------------------
+
+fn human_stdout(
+    vault: &Path,
+    day_file: &Path,
+    flags: &[&str],
+    text: &str,
+) -> String {
+    let output = capture_output(vault, day_file, flags, text, true);
+    assert_success(&output);
+    stdout(&output)
+}
+
+#[test]
+fn human_dry_run_leads_with_why_and_folds() {
+    let (_temp, vault, day_file) = leaf_vault_extra(
+        "bob-cli-km-human-dry",
+        concat!(
+            "- [?] #task Needs dep [dependsOn:: p] [id:: dep] ^dep\n",
+            "- [?] #task Stuck [id:: stuck] ^stuck\n",
+            "- [ ] #task Future work [scheduled:: 2026-10-06] [id:: fut] ^fut\n",
+            "- [ ] #task Hidden gem #hide [id:: hid] ^hid\n",
+        ),
+    );
+    let out = human_stdout(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    let lines: Vec<&str> = out.lines().collect();
+    let header = lines
+        .iter()
+        .position(|line| {
+            *line == "  Keep sase_badges moving \u{b7} Draft the badge spec was its last task planned today (ready tasks, not dependents)"
+        })
+        .unwrap_or_else(|| panic!("header missing:\n{out}"));
+    assert_eq!(
+        lines[header + 1],
+        "  offer 1  [/] Ship the badge renderer  sase_badges.md ^p \u{2192} FIX"
+    );
+    assert_eq!(
+        lines[header + 2],
+        "  offer 2  [*] Wire badges into the README  sase_badges.md ^b \u{2192} FIX"
+    );
+    assert_eq!(
+        lines[header + 3],
+        "  offer 3  [ ] Write badge docs  sase_badges.md ^a \u{2192} FIX"
+    );
+    assert_eq!(
+        lines[header + 4],
+        "  not offered  2 blocked \u{b7} 1 scheduled later \u{b7} 1 hidden"
+    );
+    assert_eq!(lines[header + 5], "  -p 1,2,3 \u{b7} -p all");
+    // The group never borrows dependency wording or the unlock glyph.
+    assert!(!out.contains("unblocked"), "{out}");
+    assert!(!out.contains('\u{1f513}'), "{out}");
+}
+
+#[test]
+fn human_fold_row_omits_zero_parts_and_empty_groups() {
+    let (_temp, vault, day_file) = leaf_vault_extra(
+        "bob-cli-km-human-fold",
+        "- [ ] #task Hidden gem #hide [id:: hid] ^hid\n",
+    );
+    let out = human_stdout(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    assert!(out.contains("  not offered  1 hidden\n"), "{out}");
+    assert!(!out.contains("blocked"), "{out}");
+    assert!(!out.contains("scheduled later"), "{out}");
+
+    // No fold, no `not offered` row at all.
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km-human-nofold");
+    let out = human_stdout(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    assert!(!out.contains("not offered"), "{out}");
+
+    // Nothing selectable: no header and no fold-only group.
+    let (_temp, vault, day_file) = self::vault("bob-cli-km-human-silent");
+    write_file(&vault.join("dev.md"), &area());
+    write_file(&vault.join("sase.md"), &top_project());
+    write_file(
+        &vault.join("sase_badges.md"),
+        "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n- [ ] #task Only task [id:: t] ^t\n- [ ] #task #prj Badges ^prj\n- [?] #task Stuck [id:: stuck] ^stuck\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[sase_badges#^t]]\n",
+    );
+    let out = human_stdout(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    assert!(!out.contains("Keep "), "{out}");
+    assert!(!out.contains("not offered"), "{out}");
+}
+
+#[test]
+fn human_pick_suffix_and_not_pulled_in() {
+    let (_temp, vault, day_file) = leaf_vault_extra(
+        "bob-cli-km-human-pick",
+        "- [ ] #task Write the changelog entry\n",
+    );
+    let out = human_stdout(&vault, &day_file, &["-p", "all"], "!sase_badges:t");
+    assert!(out.starts_with("\u{2713} completed"), "{out}");
+    assert!(
+        out.contains(
+            "linked [ ] \u{2192} [*] Write badge docs  sase_badges.md ^a \u{2192} FIX (next up) \u{b7} keeps sase_badges moving"
+        ),
+        "{out}"
+    );
+    // A minted ID is reported after the suffix.
+    assert!(
+        out.contains(
+            "keeps sase_badges moving \u{b7} added ^write-changelog-entry"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("unblocked"), "{out}");
+
+    // A partial pick marks the rest as not pulled in; an explicit none
+    // writes no task fields and prints no link.
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km-human-none");
+    let before_note = fs::read_to_string(vault.join("sase_badges.md")).unwrap();
+    let out =
+        human_stdout(&vault, &day_file, &["-p", "none"], "!sase_badges:t");
+    assert!(
+        out.contains("sase_badges.md ^p \u{2192} FIX \u{b7} not pulled in"),
+        "{out}"
+    );
+    assert!(!out.contains("linked"), "{out}");
+    let note = fs::read_to_string(vault.join("sase_badges.md")).unwrap();
+    assert_eq!(
+        note,
+        before_note.replacen(
+            "- [ ] #task Draft the badge spec [id:: t] ^t",
+            "- [x] #task Draft the badge spec [id:: t]  [completion:: 2026-10-05] ^t",
+            1
+        )
+    );
+}
+
+#[test]
+fn human_pomodoro_close_and_caption_for_several_predecessors() {
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km-human-pomo");
+    write_file(
+        &vault.join("sase_badges.md"),
+        &badges(
+            "- [ ] #task Review the badge spec with the whole design team at the offsite [id:: t2] ^t2\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n",
+            "  - [[sase_badges#^t]]\n  - [[sase_badges#^t2]]\n",
+            "- [ ] () \u{2014} FIX\n"
+        ),
+    );
+    let out = human_stdout(&vault, &day_file, &["--dry-run"], "x!");
+    assert!(
+        out.contains(
+            "  Keep sase_badges moving \u{b7} Draft the badge spec and 1 more were its last tasks planned today (ready tasks, not dependents)\n"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "  offer 1  [/] Ship the badge renderer  sase_badges.md ^p"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("unblocked"), "{out}");
+}
+
+#[test]
+fn human_caption_truncates_the_predecessor_to_48_characters() {
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km-human-trunc");
+    write_file(
+        &vault.join("sase_badges.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+            "- [ ] #task Review the badge spec with the whole design team at the offsite [id:: t] ^t\n",
+            "- [ ] #task #prj Badges ^prj\n",
+            "- [ ] #task Write badge docs [id:: a] ^a\n",
+        ),
+    );
+    let out = human_stdout(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    let truncated = "Review the badge spec with the whole design tea\u{2026}";
+    assert_eq!(truncated.chars().count(), 48);
+    assert!(
+        out.contains(&format!(
+            "  Keep sase_badges moving \u{b7} {truncated} was its last task planned today"
+        )),
+        "{out}"
+    );
+}
+
+#[test]
+fn human_mixed_hand_off_refusal_never_labels_keep_moving_unblocked() {
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km-human-mixed");
+    write_file(
+        &vault.join("other.md"),
+        "- [?] #task Follows badges [dependsOn:: t] [id:: f] ^f\n",
+    );
+    let before = vault_bytes(&vault);
+    let output = capture_output(
+        &vault,
+        &day_file,
+        &["--require-pull-in-choice"],
+        "!sase_badges:t",
+        true,
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert_eq!(vault_bytes(&vault), before, "refusal is write-free");
+    let out = stdout(&output);
+    let hand_offs = out.find("  Hand-offs\n").expect("hand-off group");
+    let keep = out
+        .find("  Keep sase_badges moving \u{b7} Draft the badge spec was its last task planned today (ready tasks, not dependents)\n")
+        .expect("keep-moving group");
+    assert!(hand_offs < keep, "{out}");
+    for line in out.lines() {
+        if line.contains("sase_badges.md") {
+            assert!(!line.contains("unblocked"), "{line}");
+        }
+    }
+    assert!(
+        out.contains(
+            "offer 1  unblocked [?] \u{2192} [ ] Follows badges  other.md ^f"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains('\u{1f513}'), "{out}");
+}
+
+// ---------------------------------------------------------------------
+// Finish phase: gates (KM32) and the cycler's re-plan equivalent (KM24)
+// ---------------------------------------------------------------------
+
+/// A marker-positive invalid-UTF-8 note makes any dependents snapshot
+/// unavailable, so a run that reports `unblocked_check: "checked"` never
+/// tried to build one.
+fn poison_snapshot(vault: &Path) {
+    fs::write(
+        vault.join("poison.md"),
+        [
+            b"- [?] #task Poison [dependsOn:: p] [id:: q]\n".as_slice(),
+            &[0xff],
+        ]
+        .concat(),
+    )
+    .expect("write poison");
+}
+
+// KM32 / G1-G3: a close outside any project note adds no keep-moving
+// work and builds no snapshot.
+#[test]
+fn km32_close_outside_a_project_note_does_no_added_work() {
+    let (_temp, vault, day_file) = vault("bob-cli-km32-plain");
+    write_file(&vault.join("scratch.md"), "- [ ] #task Plain chore ^c\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[scratch#^c]]\n",
+    );
+    poison_snapshot(&vault);
+    let json = capture_json(&vault, &day_file, &["--dry-run"], "!scratch:c");
+    assert_eq!(json["task_complete"]["keep_moving"], serde_json::json!([]));
+    assert_eq!(json["task_complete"]["unblocked_check"], "checked");
+}
+
+// G3: the baseline-day byte check rejects an unlinked project close
+// before any snapshot is built; the same close linked today does build it.
+#[test]
+fn km32_unlinked_project_close_builds_no_snapshot() {
+    let idless = concat!(
+        "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+        "- [ ] #task Draft the badge spec ^t\n",
+        "- [ ] #task #prj Badges ^prj\n",
+        "- [ ] #task Write badge docs [id:: a] ^a\n",
+    );
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km32-unlinked");
+    write_file(&vault.join("sase_badges.md"), idless);
+    write_file(&day_file, "## Pomodoros\n- [ ] () \u{2014} FIX\n");
+    poison_snapshot(&vault);
+    let json =
+        capture_json(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    assert_eq!(json["task_complete"]["keep_moving"], serde_json::json!([]));
+    assert_eq!(
+        json["task_complete"]["unblocked_check"], "checked",
+        "G3 rejected before any snapshot work: {json}"
+    );
+
+    // A triggering close with no `[dependsOn::]` in the project has no
+    // prerequisite to prove closed, so it builds no snapshot either and
+    // still offers its safe row.
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km32-linked");
+    write_file(&vault.join("sase_badges.md"), idless);
+    poison_snapshot(&vault);
+    let json =
+        capture_json(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    assert_eq!(json["task_complete"]["unblocked_check"], "checked");
+    assert_eq!(
+        json["task_complete"]["keep_moving"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Control: a candidate that carries `[dependsOn::]` needs the proof,
+    // so the poisoned vault makes the snapshot unavailable (KM31): the
+    // dependency-bearing row folds and the safe row still offers.
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km32-proof");
+    write_file(
+        &vault.join("sase_badges.md"),
+        &format!(
+            "{idless}- [ ] #task Needs proof [dependsOn:: z] [id:: pr] ^pr\n"
+        ),
+    );
+    poison_snapshot(&vault);
+    let json =
+        capture_json(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    assert_eq!(json["task_complete"]["unblocked_check"], "unavailable");
+    assert_eq!(
+        json["task_complete"]["keep_moving"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+// Both kill switches gate the trigger itself, so a disabled group builds
+// no snapshot and reads no dependency data (KM19 + KM32).
+#[test]
+fn km19_kill_switch_adds_no_snapshot_work() {
+    for setting in ["keep_moving", "link_unblocked"] {
+        let (_temp, vault, day_file) = leaf_vault("bob-cli-km19-nowork");
+        // An id-less predecessor, so only keep-moving could want a snapshot.
+        write_file(
+            &vault.join("sase_badges.md"),
+            concat!(
+                "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+                "- [ ] #task Draft the badge spec ^t\n",
+                "- [ ] #task #prj Badges ^prj\n",
+                "- [ ] #task Needs proof [dependsOn:: z] [id:: pr] ^pr\n",
+            ),
+        );
+        poison_snapshot(&vault);
+        let config = vault.parent().expect("temp dir").join("config.yml");
+        write_file(&config, &format!("plan:\n  {setting}: false\n"));
+        let output = capture_output_with_config(
+            &vault,
+            &day_file,
+            &["--dry-run"],
+            "!sase_badges:t",
+            false,
+            Some(&config),
+        );
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("json");
+        assert_eq!(
+            json["task_complete"]["unblocked_check"], "checked",
+            "{setting}: {json}"
+        );
+        assert_eq!(
+            json["task_complete"]["keep_moving"],
+            serde_json::json!([]),
+            "{setting}"
+        );
+    }
+}
+
+// KM24 (Rust equivalent): a candidate that became Blocked or linked before
+// apply is planned fresh, so its old pick key is stale and refused with
+// the vault untouched.
+#[test]
+fn km24_stale_pick_keys_refuse_after_a_replan() {
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km24-blocked");
+    let dry = capture_json(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    let key_a = dry["task_complete"]["keep_moving"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["block_id"] == "a")
+        .expect("row a")["offer"]["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // A became Blocked after the picker rendered.
+    let note = vault.join("sase_badges.md");
+    let text = fs::read_to_string(&note).unwrap().replace(
+        "- [ ] #task Write badge docs [id:: a] ^a",
+        "- [?] #task Write badge docs [dependsOn:: p] [id:: a] ^a",
+    );
+    write_file(&note, &text);
+    let before = vault_bytes(&vault);
+    let output = capture_output(
+        &vault,
+        &day_file,
+        &["-p", &key_a],
+        "!sase_badges:t",
+        false,
+    );
+    assert!(!output.status.success(), "{}", format_output(&output));
+    assert_eq!(vault_bytes(&vault), before, "stale pick writes nothing");
+
+    // A linked before apply: another planned N task suppresses the group
+    // (K4), so every old key is stale.
+    let (_temp, vault, day_file) = leaf_vault("bob-cli-km24-linked");
+    let dry = capture_json(&vault, &day_file, &["--dry-run"], "!sase_badges:t");
+    let key_b = dry["task_complete"]["keep_moving"][0]["offer"]["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[sase_badges#^t]]\n  - [[sase_badges#^a]]\n",
+    );
+    let before = vault_bytes(&vault);
+    let output = capture_output(
+        &vault,
+        &day_file,
+        &["-p", &key_b],
+        "!sase_badges:t",
+        false,
+    );
+    assert!(!output.status.success(), "{}", format_output(&output));
+    assert_eq!(vault_bytes(&vault), before, "stale pick writes nothing");
 }

@@ -388,6 +388,8 @@ pub(super) fn complete_existing_task(
     // Keep-moving G1-G3 pre-gate over held completed-note and baseline day
     // text: no I/O, so a non-leaf close adds no reads.
     let held_notes: Vec<(PathBuf, String)> = note_texts.clone();
+    // Both switches gate the trigger itself, so a disabled group costs the
+    // close nothing (the config is read only after G1-G3 pass).
     let keep_moving_candidate =
         crate::native::task_complete::keep_moving::keep_moving_pre_gate(
             &predecessors,
@@ -395,12 +397,21 @@ pub(super) fn complete_existing_task(
             pre_day_text.as_deref(),
             today,
             &tasks_settings,
+        ) && dependency_ctx.keep_moving()
+            && dependency_ctx.link_unblocked();
+    // The snapshot proves prerequisites closed, so it is built only when a
+    // candidate or `^prj` actually carries a `[dependsOn::]` (§12.15).
+    let keep_moving_needs_proof = keep_moving_candidate
+        && crate::native::task_complete::keep_moving::keep_moving_needs_dependents(
+            &predecessors,
+            &held_notes,
+            &tasks_settings,
         );
     if gate.has_candidates || gate.needs_dependents || keep_moving_candidate {
         // Build the vault-wide snapshot only when legacy gates need it
-        // or an eligible keep-moving candidate/project safety needs
-        // dependency proof. Otherwise only staged project text is needed.
-        let needs_snapshot = gate.needs_dependents || keep_moving_candidate;
+        // or keep-moving dependency proof does. Otherwise only staged
+        // project text is needed.
+        let needs_snapshot = gate.needs_dependents || keep_moving_needs_proof;
         let snapshot = if needs_snapshot {
             let overlay = staged_overlay_map(bob_dir, planner);
             let snapshot_ready = dependency_ctx
@@ -1114,19 +1125,22 @@ pub(super) fn staged_completed_note_texts(
 /// bullet no longer survives live in the final staged day text, or whose
 /// task is no longer open. Offer rows are also dropped when a later item
 /// completes, re-blocks, later-links, or `x~K`-drops them, or when a
-/// `project_finished` emptied-project predicate no longer holds. Runs on
+/// `project_finished` emptied-project predicate no longer holds. A
+/// keep-moving group is also dropped whole when a later item links an
+/// open resident of its project or closes its `^prj` (KM21). Runs on
 /// staged text, so dry-run and real-run JSON stay equal.
 pub(super) fn apply_successor_net_post_pass(
     items: &mut [PlannedCaptureItem],
     planner: &mut CaptureBatchPlanner,
     dependency_ctx: &DependencyContext,
     bob_dir: &Path,
+    keep_moving_trace: &super::keep_moving_net::KeepMovingTrace,
 ) {
     // Traverse whole-item `task_complete`, nested `relation_completes`,
     // and `pomodoro_close` rows together so nested completions share the
     // final net filtering with `!` closes. Both `unblocked[]` and
-    // `keep_moving[]` share the per-row net checks; full later-item group
-    // invalidation (KM21) is owned by the finish phase.
+    // `keep_moving[]` share the per-row net checks; keep-moving groups
+    // additionally drop whole by later-item provenance (KM21).
     let any_linked = items.iter().any(|item| {
         super::output::all_offer_rows(&item.result)
             .any(|row| row.link.is_some())
@@ -1142,6 +1156,13 @@ pub(super) fn apply_successor_net_post_pass(
     if !any_linked && !any_pull_in && !any_offer {
         return;
     }
+    super::keep_moving_net::drop_invalidated_groups(
+        items,
+        keep_moving_trace,
+        planner,
+        dependency_ctx,
+        bob_dir,
+    );
     let day_file = pomodoro::day_file_for(bob_dir);
     let day_relative = capture_pomodoros::relative_day_file(&day_file, bob_dir);
     let live = if any_linked || any_offer {
@@ -1193,6 +1214,8 @@ pub(super) fn apply_successor_net_post_pass(
             });
         }
     }
+    // A group with no surviving selectable row is silent, folds included.
+    super::keep_moving_net::prune_empty_folds(items);
 }
 
 fn refresh_project_offer_final_position(
@@ -1334,9 +1357,15 @@ fn successor_task_lookup(
             task.block_id.as_deref() == Some(row.block_id.as_str())
         });
     }
-    if row.trigger == crate::native::task_complete::PROJECT_CREATED_TRIGGER {
-        // Project-created ID-less rows have no stable block identity, so
-        // resolve by cleaned description plus their duplicate ordinal among
+    if row.trigger == crate::native::task_complete::PROJECT_CREATED_TRIGGER
+        || row
+            .offer
+            .as_ref()
+            .is_some_and(|offer| offer.group == "keep_moving")
+    {
+        // Project-created and keep-moving ID-less rows have no stable block
+        // identity, so resolve by cleaned description plus their duplicate
+        // ordinal among
         // the tasks that are still ID-less. The planner records that
         // settled ordinal after the picks have minted their IDs; the
         // ordinal inside the public key (`path@digest` or

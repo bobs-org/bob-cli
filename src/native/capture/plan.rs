@@ -1,4 +1,5 @@
 //! Batch/item planning and capture formatting helpers.
+use super::keep_moving_net::KeepMovingTrace;
 use super::*;
 
 pub(super) struct PlannedCaptureBatch {
@@ -113,6 +114,9 @@ pub(super) fn plan_capture_batch_with_config_path(
         CaptureTaskThemeContext::new(&request.bob_dir, today, config_path);
     let mut ref_assignments = assign_ref_verdicts(request, &parsed_items);
     let mut staged_jobs = Vec::new();
+    // Per-item day text for keep-moving group invalidation (KM21); empty
+    // until some item reports a keep-moving offer.
+    let mut keep_moving_trace = KeepMovingTrace::default();
 
     for parsed_item in parsed_items {
         let item_number = parsed_item.index + 1;
@@ -182,6 +186,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         }
         let task_refs = std::mem::take(&mut planned.task_block_refs);
         task_tracker.track_item(&planner, &pre_tasks, task_refs);
+        keep_moving_trace.record(items.len(), &planned, &planner, &day_file);
         items.push(planned);
     }
 
@@ -192,6 +197,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         &mut planner,
         &dependency_ctx,
         &request.bob_dir,
+        &keep_moving_trace,
     );
     let inbox_route = detect_inbox_routes(
         &planner,

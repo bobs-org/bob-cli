@@ -761,6 +761,8 @@ fn plan_close_successors(
     // Keep-moving G1-G3 pre-gate: no I/O, so a non-leaf close adds no
     // reads. Preserve `pre_day` versus `post_day` for Pomodoro closes.
     let held_notes: Vec<(PathBuf, String)> = note_texts.clone();
+    // Both switches gate the trigger itself, so a disabled group costs the
+    // close nothing (the config is read only after G1-G3 pass).
     let keep_moving_candidate =
         crate::native::task_complete::keep_moving::keep_moving_pre_gate(
             &predecessors,
@@ -768,12 +770,21 @@ fn plan_close_successors(
             pre_day.as_deref(),
             today,
             &tasks_settings,
-        );
+        ) && dependency_ctx.keep_moving()
+            && dependency_ctx.link_unblocked();
     if !gate.has_candidates && !gate.needs_dependents && !keep_moving_candidate
     {
         return Ok(empty("checked"));
     }
-    let needs_snapshot = gate.needs_dependents || keep_moving_candidate;
+    // The snapshot proves prerequisites closed, so it is built only when a
+    // candidate or `^prj` actually carries a `[dependsOn::]` (§12.15).
+    let keep_moving_needs_proof = keep_moving_candidate
+        && crate::native::task_complete::keep_moving::keep_moving_needs_dependents(
+            &predecessors,
+            &held_notes,
+            &tasks_settings,
+        );
+    let needs_snapshot = gate.needs_dependents || keep_moving_needs_proof;
     let mut unblocked_check = "checked";
     let snapshot = if needs_snapshot {
         let overlay =
