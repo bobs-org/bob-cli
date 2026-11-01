@@ -2577,8 +2577,24 @@
       "expected": false
     }
   ],
-  "retype": [
+  "land": [
     {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
       "name": "container-keeps",
       "field": "none",
       "effective": "build",
@@ -2586,8 +2602,13 @@
       "inherited": "build",
       "destination": "LATER",
       "selector": null,
-      "keep_type": false,
+      "retype": false,
       "tab_pick": null,
+      "expected": {
+        "kind": "container"
+      }
+    },
+    {
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2595,7 +2616,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2603,11 +2625,6 @@
       "inventory": [
         "LATER"
       ],
-      "expected": {
-        "kind": "container"
-      }
-    },
-    {
       "name": "consistent-exact",
       "field": "none",
       "effective": "fix",
@@ -2615,8 +2632,13 @@
       "inherited": "build",
       "destination": "BUILD + FIX",
       "selector": null,
-      "keep_type": false,
+      "retype": false,
       "tab_pick": null,
+      "expected": {
+        "kind": "consistent"
+      }
+    },
+    {
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2624,7 +2646,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2632,11 +2655,6 @@
       "inventory": [
         "LATER"
       ],
-      "expected": {
-        "kind": "consistent"
-      }
-    },
-    {
       "name": "consistent-label",
       "field": "none",
       "effective": "snack",
@@ -2644,8 +2662,13 @@
       "inherited": "build",
       "destination": "BUILD + SNACK",
       "selector": null,
-      "keep_type": false,
+      "retype": false,
       "tab_pick": null,
+      "expected": {
+        "kind": "consistent"
+      }
+    },
+    {
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2653,7 +2676,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2661,50 +2685,51 @@
       "inventory": [
         "LATER"
       ],
+      "name": "consistent-no-type",
+      "field": "none",
+      "effective": null,
+      "effective_name": null,
+      "inherited": null,
+      "destination": "BUILD",
+      "selector": null,
+      "retype": false,
+      "tab_pick": null,
       "expected": {
         "kind": "consistent"
       }
     },
     {
-      "name": "keep-type-merges",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "default-merges",
       "field": "none",
       "effective": "build",
       "effective_name": "BUILD",
       "inherited": "write",
       "destination": "FIX",
       "selector": null,
-      "keep_type": true,
+      "retype": false,
       "tab_pick": null,
-      "vocab": [
-        "BUILD",
-        "CHORE",
-        "FIX",
-        "MEET",
-        "PLAN",
-        "READ",
-        "WRITE"
-      ],
-      "exempt": [
-        "PLAN"
-      ],
-      "inventory": [
-        "LATER"
-      ],
       "expected": {
         "kind": "merge",
         "name": "FIX + BUILD"
       }
     },
     {
-      "name": "selector-picks-component",
-      "field": "none",
-      "effective": "write",
-      "effective_name": "WRITE",
-      "inherited": "chore",
-      "destination": "BUILD + FIX",
-      "selector": "fix",
-      "keep_type": false,
-      "tab_pick": null,
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2712,7 +2737,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2720,6 +2746,171 @@
       "inventory": [
         "LATER"
       ],
+      "name": "default-merges-into-composite",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": null,
+      "retype": false,
+      "tab_pick": null,
+      "expected": {
+        "kind": "merge",
+        "name": "BUILD + FIX + WRITE"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "default-merges-keeps-labels",
+      "field": "none",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "write",
+      "destination": "BOB + FIX",
+      "selector": null,
+      "retype": false,
+      "tab_pick": null,
+      "expected": {
+        "kind": "merge",
+        "name": "BOB + FIX + BUILD"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "default-into-plan-merges",
+      "field": "none",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "build",
+      "destination": "PLAN",
+      "selector": null,
+      "retype": false,
+      "tab_pick": null,
+      "expected": {
+        "kind": "merge",
+        "name": "PLAN + BUILD"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "meet-destination-sets",
+      "field": "none",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "build",
+      "destination": "MEET",
+      "selector": null,
+      "retype": false,
+      "tab_pick": null,
+      "expected": {
+        "kind": "set",
+        "name": "MEET",
+        "key": "meet"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "meet-destination-clear",
+      "field": "set",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "meet",
+      "destination": "MEET",
+      "selector": null,
+      "retype": false,
+      "tab_pick": null,
+      "expected": {
+        "kind": "clear"
+      },
+      "field_value": "BUILD"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "retype-selector-picks-component",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": "fix",
+      "retype": true,
+      "tab_pick": null,
       "expected": {
         "kind": "set",
         "name": "FIX",
@@ -2727,16 +2918,6 @@
       }
     },
     {
-      "name": "clear-on-inherited",
-      "field": "set",
-      "field_value": "FIX",
-      "effective": "fix",
-      "effective_name": "FIX",
-      "inherited": "build",
-      "destination": "BUILD",
-      "selector": null,
-      "keep_type": false,
-      "tab_pick": null,
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2744,7 +2925,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2752,35 +2934,46 @@
       "inventory": [
         "LATER"
       ],
+      "name": "retype-clear-on-inherited",
+      "field": "set",
+      "effective": "fix",
+      "effective_name": "FIX",
+      "inherited": "build",
+      "destination": "BUILD",
+      "selector": null,
+      "retype": true,
+      "tab_pick": null,
       "expected": {
         "kind": "clear"
-      }
+      },
+      "field_value": "FIX"
     },
     {
-      "name": "first-non-exempt-wins",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "retype-first-non-exempt-wins",
       "field": "none",
       "effective": "write",
       "effective_name": "WRITE",
       "inherited": "chore",
       "destination": "BUILD + FIX",
       "selector": null,
-      "keep_type": false,
+      "retype": true,
       "tab_pick": null,
-      "vocab": [
-        "BUILD",
-        "CHORE",
-        "FIX",
-        "MEET",
-        "PLAN",
-        "READ",
-        "WRITE"
-      ],
-      "exempt": [
-        "PLAN"
-      ],
-      "inventory": [
-        "LATER"
-      ],
       "expected": {
         "kind": "set",
         "name": "BUILD",
@@ -2788,15 +2981,6 @@
       }
     },
     {
-      "name": "exempt-plan-is-legal",
-      "field": "none",
-      "effective": "build",
-      "effective_name": "BUILD",
-      "inherited": "build",
-      "destination": "PLAN",
-      "selector": null,
-      "keep_type": false,
-      "tab_pick": null,
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2804,7 +2988,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2812,6 +2997,15 @@
       "inventory": [
         "LATER"
       ],
+      "name": "retype-exempt-plan-is-legal",
+      "field": "none",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "build",
+      "destination": "PLAN",
+      "selector": null,
+      "retype": true,
+      "tab_pick": null,
       "expected": {
         "kind": "set",
         "name": "PLAN",
@@ -2819,15 +3013,6 @@
       }
     },
     {
-      "name": "tab-pick-wins",
-      "field": "none",
-      "effective": "write",
-      "effective_name": "WRITE",
-      "inherited": "chore",
-      "destination": "BUILD + FIX",
-      "selector": null,
-      "keep_type": false,
-      "tab_pick": "fix",
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2835,7 +3020,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2843,6 +3029,15 @@
       "inventory": [
         "LATER"
       ],
+      "name": "retype-tab-pick-wins",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": null,
+      "retype": true,
+      "tab_pick": "fix",
       "expected": {
         "kind": "set",
         "name": "FIX",
@@ -2850,15 +3045,6 @@
       }
     },
     {
-      "name": "prefix-selector",
-      "field": "none",
-      "effective": "write",
-      "effective_name": "WRITE",
-      "inherited": "chore",
-      "destination": "BUILD + FIX",
-      "selector": "fi",
-      "keep_type": false,
-      "tab_pick": null,
       "vocab": [
         "BUILD",
         "CHORE",
@@ -2866,7 +3052,8 @@
         "MEET",
         "PLAN",
         "READ",
-        "WRITE"
+        "WRITE",
+        "SASE V18"
       ],
       "exempt": [
         "PLAN"
@@ -2874,6 +3061,15 @@
       "inventory": [
         "LATER"
       ],
+      "name": "retype-prefix-selector",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": "fi",
+      "retype": true,
+      "tab_pick": null,
       "expected": {
         "kind": "set",
         "name": "FIX",
@@ -3329,6 +3525,1573 @@
         "kind": "create_below",
         "from": 0,
         "name": "BUILD"
+      }
+    }
+  ],
+  "merge": [
+    {
+      "name": "appends-missing",
+      "base": "BUILD",
+      "others": [
+        "FIX",
+        "READ"
+      ],
+      "expected": "BUILD + FIX + READ"
+    },
+    {
+      "name": "first-spelling-wins",
+      "base": "BUILD",
+      "others": [
+        "Fix",
+        "FIX"
+      ],
+      "expected": "BUILD + Fix"
+    },
+    {
+      "name": "keeps-labels",
+      "base": "BOB + BUILD",
+      "others": [
+        "FIX"
+      ],
+      "expected": "BOB + BUILD + FIX"
+    },
+    {
+      "name": "already-present-skipped",
+      "base": "BUILD + FIX",
+      "others": [
+        "FIX + READ"
+      ],
+      "expected": "BUILD + FIX + READ"
+    },
+    {
+      "name": "empty-others",
+      "base": "BUILD",
+      "others": [],
+      "expected": "BUILD"
+    },
+    {
+      "name": "selector-order",
+      "base": "FIX",
+      "others": [
+        "READ",
+        "BUILD"
+      ],
+      "expected": "FIX + READ + BUILD"
+    }
+  ],
+  "split": [
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "two-type-implicit",
+      "entry": "BUILD + FIX",
+      "open": true,
+      "link_keys": [
+        "build",
+        "fix",
+        "fix"
+      ],
+      "split": null,
+      "expected": {
+        "kind": "ok",
+        "remaining": "BUILD",
+        "created": [
+          {
+            "name": "FIX",
+            "link_indices": [
+              1,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "two-type-explicit-refused",
+      "entry": "BUILD + FIX",
+      "open": true,
+      "link_keys": [
+        "fix"
+      ],
+      "split": [
+        "fix"
+      ],
+      "expected": {
+        "kind": "error",
+        "code": "split_type_not_needed"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "three-type-all",
+      "entry": "BUILD + FIX + READ",
+      "open": true,
+      "link_keys": [
+        "build",
+        "fix",
+        "read",
+        null
+      ],
+      "split": null,
+      "expected": {
+        "kind": "ok",
+        "remaining": "BUILD",
+        "created": [
+          {
+            "name": "FIX",
+            "link_indices": [
+              1
+            ]
+          },
+          {
+            "name": "READ",
+            "link_indices": [
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "three-type-subset-name-order",
+      "entry": "BUILD + FIX + READ",
+      "open": true,
+      "link_keys": [
+        "read",
+        "fix"
+      ],
+      "split": [
+        "read",
+        "fix"
+      ],
+      "expected": {
+        "kind": "ok",
+        "remaining": "BUILD",
+        "created": [
+          {
+            "name": "FIX",
+            "link_indices": [
+              1
+            ]
+          },
+          {
+            "name": "READ",
+            "link_indices": [
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "labels-stay",
+      "entry": "BOB + BUILD + FIX",
+      "open": true,
+      "link_keys": [
+        "fix"
+      ],
+      "split": null,
+      "expected": {
+        "kind": "ok",
+        "remaining": "BOB + BUILD",
+        "created": [
+          {
+            "name": "FIX",
+            "link_indices": [
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "empty-links-still-creates",
+      "entry": "BUILD + FIX + READ",
+      "open": true,
+      "link_keys": [
+        "build"
+      ],
+      "split": null,
+      "expected": {
+        "kind": "ok",
+        "remaining": "BUILD",
+        "created": [
+          {
+            "name": "FIX",
+            "link_indices": []
+          },
+          {
+            "name": "READ",
+            "link_indices": []
+          }
+        ]
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "prefix-selector",
+      "entry": "BUILD + FIX + READ",
+      "open": true,
+      "link_keys": [
+        "fix"
+      ],
+      "split": [
+        "fi"
+      ],
+      "expected": {
+        "kind": "ok",
+        "remaining": "BUILD + READ",
+        "created": [
+          {
+            "name": "FIX",
+            "link_indices": [
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "literal-selector",
+      "entry": "BUILD + FIX + SASE V18",
+      "open": true,
+      "link_keys": [
+        "sase v18"
+      ],
+      "split": [
+        "#\"SASE V18\""
+      ],
+      "expected": {
+        "kind": "ok",
+        "remaining": "BUILD + FIX",
+        "created": [
+          {
+            "name": "SASE V18",
+            "link_indices": [
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "base-refused",
+      "entry": "BUILD + FIX + READ",
+      "open": true,
+      "link_keys": [
+        "build"
+      ],
+      "split": [
+        "build"
+      ],
+      "expected": {
+        "kind": "error",
+        "code": "split_base_type"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "unknown-type",
+      "entry": "BUILD + FIX + READ",
+      "open": true,
+      "link_keys": [
+        "fix"
+      ],
+      "split": [
+        "chore"
+      ],
+      "expected": {
+        "kind": "error",
+        "code": "split_type_unknown"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "repeated-type",
+      "entry": "BUILD + FIX + READ",
+      "open": true,
+      "link_keys": [
+        "fix"
+      ],
+      "split": [
+        "fix",
+        "fix"
+      ],
+      "expected": {
+        "kind": "error",
+        "code": "split_type_repeated"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "meet-refused",
+      "entry": "MEET",
+      "open": true,
+      "link_keys": [
+        "meet"
+      ],
+      "split": null,
+      "expected": {
+        "kind": "error",
+        "code": "split_meet"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "not-merged",
+      "entry": "BUILD",
+      "open": true,
+      "link_keys": [
+        "build"
+      ],
+      "split": null,
+      "expected": {
+        "kind": "error",
+        "code": "split_not_merged"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "closed-refused",
+      "entry": "BUILD + FIX",
+      "open": false,
+      "link_keys": [
+        "fix"
+      ],
+      "split": null,
+      "expected": {
+        "kind": "error",
+        "code": "split_closed"
+      }
+    }
+  ],
+  "narrow": [
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "only-fix-worked",
+      "entry": "BUILD + FIX",
+      "worked": [
+        "fix"
+      ],
+      "expected": "FIX"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "labels-stay",
+      "entry": "BOB + BUILD + FIX",
+      "worked": [
+        "fix"
+      ],
+      "expected": "BOB + FIX"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "drift-only-unchanged",
+      "entry": "BUILD + FIX",
+      "worked": [
+        "snack"
+      ],
+      "expected": "BUILD + FIX"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "nothing-worked-unchanged",
+      "entry": "BUILD + FIX",
+      "worked": [],
+      "expected": "BUILD + FIX"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "single-type-unchanged",
+      "entry": "BUILD",
+      "worked": [
+        "build"
+      ],
+      "expected": "BUILD"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "meet-unchanged",
+      "entry": "MEET",
+      "worked": [
+        "meet"
+      ],
+      "expected": "MEET"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "both-worked-keeps-order",
+      "entry": "BUILD + FIX",
+      "worked": [
+        "fix",
+        "build"
+      ],
+      "expected": "BUILD + FIX"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "exempt-plan-worked",
+      "entry": "BUILD + PLAN",
+      "worked": [
+        "plan"
+      ],
+      "expected": "PLAN"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "order-preserved",
+      "entry": "BUILD + FIX + READ",
+      "worked": [
+        "read",
+        "build"
+      ],
+      "expected": "BUILD + READ"
+    }
+  ],
+  "shed": [
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "last-fix-completed",
+      "entry": "BUILD + FIX",
+      "before": [
+        "build",
+        "fix"
+      ],
+      "after": [
+        "build"
+      ],
+      "expected": "BUILD"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "keep-the-base",
+      "entry": "BUILD + FIX",
+      "before": [
+        "build",
+        "fix"
+      ],
+      "after": [],
+      "expected": "BUILD"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "labels-stay",
+      "entry": "BOB + BUILD + FIX",
+      "before": [
+        "fix"
+      ],
+      "after": [],
+      "expected": "BOB + BUILD"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "type-with-no-links-stays",
+      "entry": "BUILD + FIX + READ",
+      "before": [
+        "fix"
+      ],
+      "after": [],
+      "expected": "BUILD + READ"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "single-type-unchanged",
+      "entry": "BUILD",
+      "before": [
+        "build"
+      ],
+      "after": [],
+      "expected": "BUILD"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "meet-unchanged",
+      "entry": "MEET",
+      "before": [
+        "meet"
+      ],
+      "after": [],
+      "expected": "MEET"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "all-carried-unchanged",
+      "entry": "BUILD + FIX",
+      "before": [
+        "build",
+        "fix"
+      ],
+      "after": [
+        "build",
+        "fix"
+      ],
+      "expected": "BUILD + FIX"
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "keep-base-with-labels",
+      "entry": "BOB + BUILD + FIX",
+      "before": [
+        "build",
+        "fix"
+      ],
+      "after": [],
+      "expected": "BOB + BUILD"
+    }
+  ],
+  "select": [
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "running-exact-wins",
+      "selector": "build",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "PLAN + BUILD",
+          "open": true,
+          "running": true,
+          "timed": true
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "first-open-exact",
+      "selector": "build",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "containing-fallback",
+      "selector": "build",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "BUILD + FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "prefix-after-no-whole-key",
+      "selector": "fi",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "CHORE",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "literal-never-prefix",
+      "selector": "\"SASE V18\"",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "SASE V180",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "missing"
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "literal-whole-key",
+      "selector": "#\"SASE V18\"",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "SASE V18",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "closed-skipped",
+      "selector": "build",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "BUILD",
+          "open": false,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "merged-base-running",
+      "selector": "build",
+      "filter": "merged_base",
+      "entries": [
+        {
+          "name": "BUILD + FIX",
+          "open": true,
+          "running": true,
+          "timed": true
+        },
+        {
+          "name": "BUILD + READ",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "merged-base-prefix",
+      "selector": "bu",
+      "filter": "merged_base",
+      "entries": [
+        {
+          "name": "FIX + READ",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "BUILD + FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "merged-base-skips-single-type",
+      "selector": "build",
+      "filter": "merged_base",
+      "entries": [
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "BUILD + FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "untimed-planned-skips-timed",
+      "selector": "fix",
+      "filter": "untimed_planned",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": true,
+          "timed": true
+        },
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": true
+        },
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 2
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "untimed-planned-except",
+      "selector": "fix",
+      "filter": "untimed_planned",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      },
+      "except": 0
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "exempt-plan-plus-build-is-exact",
+      "selector": "build",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "PLAN + BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "BUILD + FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "hash-selector",
+      "selector": "#fix",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE",
+        "SASE V18"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "name": "missing",
+      "selector": "chore",
+      "filter": "open",
+      "entries": [
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "timed": false
+        },
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "timed": false
+        }
+      ],
+      "expected": {
+        "kind": "missing"
       }
     }
   ]

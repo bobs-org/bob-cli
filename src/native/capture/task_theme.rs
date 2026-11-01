@@ -695,21 +695,21 @@ impl CaptureTaskThemeContext {
         let inherited_key =
             inherited.as_ref().map(|item| item.theme.key.as_str());
         let sources = catalog.theme_sources();
-        let outcome = routing::retype(
-            &routing::RetypeInput {
+        let outcome = routing::land(
+            &routing::LandInput {
                 field: &field,
                 effective_key,
                 effective_name,
                 inherited_key,
                 destination: destination_name,
                 selector,
-                keep_type: false,
+                retype: true,
                 tab_pick: None,
             },
             &sources,
         );
         let change = match outcome {
-            routing::RetypeOutcome::Container => {
+            routing::LandOutcome::Container => {
                 if let Some(message) =
                     label_keep_warning(destination_name, &sources)
                 {
@@ -717,14 +717,14 @@ impl CaptureTaskThemeContext {
                 }
                 return Ok(None);
             }
-            routing::RetypeOutcome::Consistent
-            | routing::RetypeOutcome::Merge { .. } => {
+            routing::LandOutcome::Consistent
+            | routing::LandOutcome::Merge { .. } => {
                 return Ok(None);
             }
-            routing::RetypeOutcome::Set { name, key } => {
+            routing::LandOutcome::Set { name, key } => {
                 ThemeChange::Set { name, key }
             }
-            routing::RetypeOutcome::Clear => match field {
+            routing::LandOutcome::Clear => match field {
                 TaskThemeState::None => return Ok(None),
                 _ => ThemeChange::Clear,
             },

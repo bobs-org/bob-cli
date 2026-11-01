@@ -1,11 +1,12 @@
-//! Pure task-type routing planners: agreement, retype, placement,
-//! and relocation (task_types D4–D8, `routing-core`).
+//! Pure task-type routing planners: agreement, landing, placement,
+//! and relocation (task_types D4–D8 plus merged-Pomodoro R1–R7).
 //!
 //! These are the shared contract behind capture, move, link, ref-today,
 //! successor, and Task Card gestures. Every function is pure over plain
 //! data so the Ledger Tools JS mirror can consume the same vectors.
-//! Capture named `#NAME` / `=name` forms call `retype`; `place` and
-//! `relocate` wait for later phases.
+//! Capture named `#NAME` / `=name` forms still pass `retype: true` until
+//! their own phases; `place` and `relocate` wait for later phases.
+//! Merge, split, narrow, shed, and type-select live in [`super::merged`].
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
@@ -89,9 +90,9 @@ pub(crate) fn agrees(
         .any(|component| normalize_component(component) == key)
 }
 
-/// How a link landing in Pomodoro D retypes its task (D6).
+/// How a link landing in Pomodoro D agrees with its task (R2).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RetypeOutcome {
+pub(crate) enum LandOutcome {
     Container,
     Consistent,
     Merge { name: String },
@@ -99,69 +100,79 @@ pub(crate) enum RetypeOutcome {
     Clear,
 }
 
-pub(crate) struct RetypeInput<'a> {
+pub(crate) struct LandInput<'a> {
     pub(crate) field: &'a TaskThemeState,
     pub(crate) effective_key: Option<&'a str>,
     pub(crate) effective_name: Option<&'a str>,
     pub(crate) inherited_key: Option<&'a str>,
     pub(crate) destination: &'a str,
     pub(crate) selector: Option<&'a str>,
-    pub(crate) keep_type: bool,
+    /// When true, take today's Set/Clear path (Obsidian Alt+Enter,
+    /// capture named `#NAME` until the capture-link-merge phase, and
+    /// Pomodoro rename). False is the default merge.
+    pub(crate) retype: bool,
     pub(crate) tab_pick: Option<&'a str>,
 }
 
-/// Pure retype rule (D6). `effective_*` is the task's current effective
+/// Pure landing rule (R2). `effective_*` is the task's current effective
 /// type (field, reading, note, or default); `inherited_*` is the same
 /// cascade without the task field. `selector` is the authored `#NAME` /
-/// `=name` text; `keep_type` is the Obsidian Alt+Enter merge path;
-/// `tab_pick` is the Obsidian Tab-cycled composite choice, if any.
-pub(crate) fn retype(
-    input: &RetypeInput<'_>,
+/// `=name` text; `retype` is the explicit Set/Clear path; `tab_pick` is
+/// the Obsidian Tab-cycled composite choice, if any.
+pub(crate) fn land(
+    input: &LandInput<'_>,
     sources: &ThemeSources,
-) -> RetypeOutcome {
+) -> LandOutcome {
     let _ = input.field;
     let components = type_components(Some(input.destination), sources);
     if components.iter().all(|item| !item.is_type) {
-        return RetypeOutcome::Container;
+        return LandOutcome::Container;
     }
-    if let Some(effective) = input.effective_key {
-        let entry_keys: BTreeSet<String> = split_components(input.destination)
-            .into_iter()
-            .map(|component| normalize_component(&component))
-            .collect();
-        if entry_keys.contains(effective) {
-            return RetypeOutcome::Consistent;
-        }
+    let Some(effective) = input.effective_key else {
+        return LandOutcome::Consistent;
+    };
+    let entry_keys: BTreeSet<String> = split_components(input.destination)
+        .into_iter()
+        .map(|component| normalize_component(&component))
+        .collect();
+    if entry_keys.contains(effective) {
+        return LandOutcome::Consistent;
     }
-    if input.keep_type {
-        let current = input
-            .effective_name
-            .unwrap_or_else(|| input.effective_key.unwrap_or_default());
+    if !input.retype && !is_meet_name(Some(input.destination)) {
+        let current = input.effective_name.unwrap_or(effective);
         let current = canonical_theme_name(current)
             .unwrap_or_else(|| current.to_string());
-        return RetypeOutcome::Merge {
+        return LandOutcome::Merge {
             name: format!("{} + {current}", input.destination.trim()),
         };
     }
+    retype_destination(input, sources, &components)
+}
+
+fn retype_destination(
+    input: &LandInput<'_>,
+    sources: &ThemeSources,
+    components: &[TypeComponent],
+) -> LandOutcome {
     let candidates: Vec<&TypeComponent> =
         components.iter().filter(|item| item.is_type).collect();
     if candidates.is_empty() {
-        return RetypeOutcome::Container;
+        return LandOutcome::Container;
     }
     let mut chosen: Option<&TypeComponent> = None;
     if let Some(selector) = input.selector {
-        let want = normalize_component(&strip_selector(selector));
-        if !want.is_empty() {
+        let parsed = parse_type_selector(selector);
+        if !parsed.key.is_empty() {
             chosen = candidates
                 .iter()
-                .find(|item| item.key == want)
-                .copied()
-                .or_else(|| {
-                    candidates
-                        .iter()
-                        .find(|item| item.key.starts_with(&want))
-                        .copied()
-                });
+                .find(|item| item.key == parsed.key)
+                .copied();
+            if chosen.is_none() && !parsed.literal {
+                chosen = candidates
+                    .iter()
+                    .find(|item| item.key.starts_with(&parsed.key))
+                    .copied();
+            }
         }
     }
     if chosen.is_none()
@@ -186,24 +197,48 @@ pub(crate) fn retype(
     if let Some(inherited) = input.inherited_key
         && inherited == chosen.key.as_str()
     {
-        return RetypeOutcome::Clear;
+        return LandOutcome::Clear;
     }
-    RetypeOutcome::Set {
+    LandOutcome::Set {
         name: chosen.name.clone(),
         key: chosen.key.clone(),
     }
 }
 
-fn strip_selector(raw: &str) -> String {
+/// A type selector: bare `build`, `#build`, or `#"SASE V18"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedSelector {
+    pub(crate) raw: String,
+    pub(crate) key: String,
+    pub(crate) literal: bool,
+}
+
+/// Strip `#` / `=` / wrapping quotes from a type selector.
+pub(crate) fn parse_type_selector(raw: &str) -> ParsedSelector {
     let mut text = raw.trim().to_string();
     if let Some(stripped) = text.strip_prefix(['#', '=']) {
         text = stripped.to_string();
     }
     let text = text.trim().to_string();
-    if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
-        return text[1..text.len() - 1].to_string();
+    let literal =
+        text.len() >= 2 && text.starts_with('"') && text.ends_with('"');
+    let raw = if literal {
+        text[1..text.len() - 1].to_string()
+    } else {
+        text
+    };
+    ParsedSelector {
+        key: normalize_component(&raw),
+        raw,
+        literal,
     }
-    text
+}
+
+/// True when the whole name normalizes to `meet`. Calendar sync owns
+/// that exact name; merged-Pomodoro rules never rename, merge, or split
+/// it.
+pub(crate) fn is_meet_name(name: Option<&str>) -> bool {
+    name.is_some_and(|name| normalize_component(name) == "meet")
 }
 
 /// One ledger entry as seen by placement and relocation.
@@ -300,13 +335,53 @@ pub(crate) fn is_exact(
     kept.len() == 1 && kept.first().is_some_and(|only| only == key)
 }
 
-fn contains_key(name: Option<&str>, key: &str) -> bool {
+pub(crate) fn contains_key(name: Option<&str>, key: &str) -> bool {
     let Some(name) = name else {
         return false;
     };
     split_components(name)
         .iter()
         .any(|component| normalize_component(component) == key)
+}
+
+/// `is_exact` with key-prefix matching: after dropping exempt keys other
+/// than the prefix match, exactly one component remains and its key
+/// starts with `prefix`.
+pub(crate) fn is_prefix_exact(
+    name: Option<&str>,
+    prefix: &str,
+    exempt: &[String],
+) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    let Some(name) = name else {
+        return false;
+    };
+    let exempt: BTreeSet<String> = exempt
+        .iter()
+        .map(|value| normalize_component(value))
+        .collect();
+    let kept: Vec<String> = split_components(name)
+        .into_iter()
+        .map(|component| normalize_component(&component))
+        .filter(|component| {
+            component.starts_with(prefix) || !exempt.contains(component)
+        })
+        .collect();
+    kept.len() == 1 && kept.first().is_some_and(|only| only.starts_with(prefix))
+}
+
+pub(crate) fn contains_key_prefix(name: Option<&str>, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    let Some(name) = name else {
+        return false;
+    };
+    split_components(name)
+        .iter()
+        .any(|component| normalize_component(component).starts_with(prefix))
 }
 
 /// One ledger entry as seen by relocation, with its live-link count.
@@ -524,7 +599,7 @@ mod tests {
                 "{id}"
             );
         }
-        for case in vectors["retype"].as_array().expect("retype vectors") {
+        for case in vectors["land"].as_array().expect("land vectors") {
             let id = case["name"].as_str().unwrap_or("?");
             let field = match case["field"].as_str().unwrap() {
                 "none" => TaskThemeState::None,
@@ -552,15 +627,15 @@ mod tests {
                 &strings(&case["exempt"]),
                 &strings(&case["inventory"]),
             );
-            let outcome = retype(
-                &RetypeInput {
+            let outcome = land(
+                &LandInput {
                     field: &field,
                     effective_key: effective.as_deref(),
                     effective_name: effective_name.as_deref(),
                     inherited_key: inherited.as_deref(),
                     destination,
                     selector: selector.as_deref(),
-                    keep_type: case["keep_type"].as_bool().unwrap_or(false),
+                    retype: case["retype"].as_bool().unwrap_or(false),
                     tab_pick: case["tab_pick"].as_str(),
                 },
                 &made,
@@ -568,13 +643,13 @@ mod tests {
             let expected = &case["expected"];
             match expected["kind"].as_str().unwrap() {
                 "container" => {
-                    assert_eq!(outcome, RetypeOutcome::Container, "{id}");
+                    assert_eq!(outcome, LandOutcome::Container, "{id}");
                 }
                 "consistent" => {
-                    assert_eq!(outcome, RetypeOutcome::Consistent, "{id}");
+                    assert_eq!(outcome, LandOutcome::Consistent, "{id}");
                 }
                 "merge" => {
-                    let RetypeOutcome::Merge { name } = outcome else {
+                    let LandOutcome::Merge { name } = outcome else {
                         panic!("{id}: expected merge, got {outcome:?}");
                     };
                     assert_eq!(
@@ -584,7 +659,7 @@ mod tests {
                     );
                 }
                 "set" => {
-                    let RetypeOutcome::Set { name, key } = outcome else {
+                    let LandOutcome::Set { name, key } = outcome else {
                         panic!("{id}: expected set, got {outcome:?}");
                     };
                     assert_eq!(
@@ -595,9 +670,9 @@ mod tests {
                     assert_eq!(key, expected["key"].as_str().unwrap(), "{id}");
                 }
                 "clear" => {
-                    assert_eq!(outcome, RetypeOutcome::Clear, "{id}");
+                    assert_eq!(outcome, LandOutcome::Clear, "{id}");
                 }
-                other => panic!("{id}: unexpected retype kind {other}"),
+                other => panic!("{id}: unexpected land kind {other}"),
             }
         }
         for case in vectors["place"].as_array().expect("place vectors") {
@@ -764,6 +839,206 @@ mod tests {
                     );
                 }
                 other => panic!("{id}: unexpected relocate kind {other}"),
+            }
+        }
+        for case in vectors["merge"].as_array().expect("merge vectors") {
+            let id = case["name"].as_str().unwrap_or("?");
+            let base = case["base"].as_str().unwrap();
+            let others: Vec<&str> = case["others"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap())
+                .collect();
+            assert_eq!(
+                super::super::merged::merge_names(base, &others),
+                case["expected"].as_str().unwrap(),
+                "{id}"
+            );
+        }
+        for case in vectors["split"].as_array().expect("split vectors") {
+            let id = case["name"].as_str().unwrap_or("?");
+            let made = sources(
+                &strings(&case["vocab"]),
+                &strings(&case["exempt"]),
+                &strings(&case["inventory"]),
+            );
+            let link_owned: Vec<Option<String>> = case["link_keys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(opt_str)
+                .collect();
+            let link_keys: Vec<Option<&str>> =
+                link_owned.iter().map(|item| item.as_deref()).collect();
+            let split_owned = case["split"].as_array().map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            });
+            let split_refs: Option<Vec<&str>> = split_owned
+                .as_ref()
+                .map(|items| items.iter().map(String::as_str).collect());
+            let outcome = super::super::merged::split_plan(
+                &super::super::merged::SplitPlanInput {
+                    name: case["entry"].as_str().unwrap(),
+                    open: case["open"].as_bool().unwrap_or(true),
+                    link_keys: &link_keys,
+                    split_selectors: split_refs.as_deref(),
+                    sources: &made,
+                },
+            );
+            let expected = &case["expected"];
+            match expected["kind"].as_str().unwrap() {
+                "ok" => {
+                    let plan = outcome.unwrap_or_else(|error| {
+                        panic!("{id}: expected ok, got {error:?}")
+                    });
+                    assert_eq!(
+                        plan.remaining_name,
+                        expected["remaining"].as_str().unwrap(),
+                        "{id}"
+                    );
+                    let created = expected["created"].as_array().unwrap();
+                    assert_eq!(plan.created.len(), created.len(), "{id}");
+                    for (got, want) in plan.created.iter().zip(created) {
+                        assert_eq!(
+                            got.name,
+                            want["name"].as_str().unwrap(),
+                            "{id}"
+                        );
+                        let indices: Vec<usize> = want["link_indices"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|item| item.as_u64().unwrap() as usize)
+                            .collect();
+                        assert_eq!(got.link_indices, indices, "{id}");
+                    }
+                }
+                "error" => {
+                    let error = outcome
+                        .expect_err(&format!("{id}: expected error, got ok"));
+                    assert_eq!(
+                        error.code(),
+                        expected["code"].as_str().unwrap(),
+                        "{id}"
+                    );
+                }
+                other => panic!("{id}: unexpected split kind {other}"),
+            }
+        }
+        for case in vectors["narrow"].as_array().expect("narrow vectors") {
+            let id = case["name"].as_str().unwrap_or("?");
+            let made = sources(
+                &strings(&case["vocab"]),
+                &strings(&case["exempt"]),
+                &strings(&case["inventory"]),
+            );
+            let worked: Vec<&str> = case["worked"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap())
+                .collect();
+            assert_eq!(
+                super::super::merged::narrow_closed(
+                    case["entry"].as_str().unwrap(),
+                    &worked,
+                    &made,
+                ),
+                case["expected"].as_str().unwrap(),
+                "{id}"
+            );
+        }
+        for case in vectors["shed"].as_array().expect("shed vectors") {
+            let id = case["name"].as_str().unwrap_or("?");
+            let made = sources(
+                &strings(&case["vocab"]),
+                &strings(&case["exempt"]),
+                &strings(&case["inventory"]),
+            );
+            let before: Vec<&str> = case["before"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap())
+                .collect();
+            let after: Vec<&str> = case["after"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap())
+                .collect();
+            assert_eq!(
+                super::super::merged::shed(
+                    case["entry"].as_str().unwrap(),
+                    &before,
+                    &after,
+                    &made,
+                ),
+                case["expected"].as_str().unwrap(),
+                "{id}"
+            );
+        }
+        for case in vectors["select"].as_array().expect("select vectors") {
+            let id = case["name"].as_str().unwrap_or("?");
+            let made = sources(
+                &strings(&case["vocab"]),
+                &strings(&case["exempt"]),
+                &strings(&case["inventory"]),
+            );
+            let entries = case["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| super::super::merged::SelectEntry {
+                    name: entry["name"].as_str(),
+                    open: entry["open"].as_bool().unwrap(),
+                    running: entry["running"].as_bool().unwrap(),
+                    timed: entry["timed"].as_bool().unwrap_or(false),
+                })
+                .collect::<Vec<_>>();
+            let filter = match case["filter"].as_str().unwrap() {
+                "open" => super::super::merged::SelectFilter::Open,
+                "untimed_planned" => {
+                    super::super::merged::SelectFilter::UntimedPlanned {
+                        except: case["except"]
+                            .as_u64()
+                            .map(|index| index as usize),
+                    }
+                }
+                "merged_base" => super::super::merged::SelectFilter::MergedBase,
+                other => panic!("{id}: unexpected filter {other}"),
+            };
+            let outcome = super::super::merged::select_by_type(
+                &super::super::merged::SelectInput {
+                    entries: &entries,
+                    selector: case["selector"].as_str().unwrap(),
+                    filter,
+                    sources: &made,
+                },
+            );
+            let expected = &case["expected"];
+            match expected["kind"].as_str().unwrap() {
+                "entry" => {
+                    assert_eq!(
+                        outcome,
+                        super::super::merged::SelectOutcome::Entry(
+                            expected["index"].as_u64().unwrap() as usize
+                        ),
+                        "{id}"
+                    );
+                }
+                "missing" => {
+                    assert_eq!(
+                        outcome,
+                        super::super::merged::SelectOutcome::Missing,
+                        "{id}"
+                    );
+                }
+                other => panic!("{id}: unexpected select kind {other}"),
             }
         }
     }

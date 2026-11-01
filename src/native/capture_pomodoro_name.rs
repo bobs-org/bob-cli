@@ -587,24 +587,24 @@ fn plan_entry_retypes(
             .and_then(|opt| opt.as_ref().map(|inner| inner.theme.key.clone()));
         // Typeless tasks agree everywhere; nothing to do.
         // suggest returns None when no effective type, handled above.
-        let outcome = routing::retype(
-            &routing::RetypeInput {
+        let outcome = routing::land(
+            &routing::LandInput {
                 field: &field,
                 effective_key: Some(effective_key.as_str()),
                 effective_name: Some(effective_name.as_str()),
                 inherited_key: inherited_key.as_deref(),
                 destination: new_name,
                 selector: None,
-                keep_type: false,
+                retype: true,
                 tab_pick: None,
             },
             &sources,
         );
         let (action, new_task_line, theme) = match outcome {
-            routing::RetypeOutcome::Container
-            | routing::RetypeOutcome::Consistent
-            | routing::RetypeOutcome::Merge { .. } => continue,
-            routing::RetypeOutcome::Set { name, key } => {
+            routing::LandOutcome::Container
+            | routing::LandOutcome::Consistent
+            | routing::LandOutcome::Merge { .. } => continue,
+            routing::LandOutcome::Set { name, key } => {
                 let display = catalog.display_name(&key, &name);
                 let theme = catalog.theme_ref(&key, &display);
                 let updated = set_task_theme(&task_line, &display);
@@ -613,7 +613,7 @@ fn plan_entry_retypes(
                 }
                 ("set".to_string(), updated, theme)
             }
-            routing::RetypeOutcome::Clear => {
+            routing::LandOutcome::Clear => {
                 let cleared = clear_task_theme(&task_line);
                 if cleared == task_line {
                     continue;

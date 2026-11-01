@@ -22,6 +22,7 @@ mod defaults;
 mod hints;
 mod hue;
 mod journal;
+pub(crate) mod merged;
 pub(crate) mod migrate;
 pub(crate) mod preselect;
 mod rank;
@@ -305,7 +306,7 @@ impl Catalog {
 
     /// Config-derived type vocabulary, exempt set, and inventory labels
     /// for the routing planners. Capture named `#NAME` / `=name` forms
-    /// pass this to `routing::retype`.
+    /// pass this to `routing::land`.
     pub(crate) fn theme_sources(&self) -> config::themes::ThemeSources {
         config::themes::ThemeSources {
             exempt: self.exempt.clone(),

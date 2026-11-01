@@ -829,16 +829,17 @@ Dataview query filters on page `type` today (verified 2026-10-29). Raw
 Dataview `task.type` / `task.theme` is not an effective-type API; point
 readers at `bob types suggest`.
 
-## Routing: agreement, retype, placement, relocation
+## Routing: agreement, landing, placement, relocation
 
-Pure planners in `src/native/pomodoro_themes/routing.rs`, next to
-`preselect.rs`. Named capture `#NAME` / `=name` forms call `retype`.
-`place` now serves bare capture, existing-task links, ref-today, and
-successor offers; note moves relocate the link when inherited types
+Pure planners in `src/native/pomodoro_themes/routing.rs` and
+`merged.rs`, next to `preselect.rs`. Named capture `#NAME` / `=name`
+forms still call `land` with `retype: true` until the capture merge
+phase. `place` now serves bare capture, existing-task links, ref-today,
+and successor offers; note moves relocate the link when inherited types
 change, and Pomodoro naming and renames retype linked tasks (D6 Enter).
-Task Card integration remains later work. The `agree`,
-`retype`, `place`, and `relocate` vector sections are the Ledger Tools
-JS mirror's contract.
+Task Card integration remains later work. The `agree`, `land`,
+`place`, `relocate`, `merge`, `split`, `narrow`, `shed`, and `select`
+vector sections are the Ledger Tools JS mirror's contract.
 
 | Gesture | Changes | Bob restores agreement by |
 | --- | --- | --- |
@@ -864,17 +865,23 @@ JS mirror's contract.
   `type_mismatch` lint in `bob plan` plus a ledger mark in Obsidian.
   Closed Pomodoros are history. Type-only edits never stamp freshness,
   change lanes, consume dependency guards, or advance the review walk.
-- **Retype.** A link landing in Pomodoro D retypes its task: a container
-  D means no change (`keeps BUILD`); the task's type already among D's
-  components means consistent; Obsidian Alt+Enter merges (`Merge`, D's
-  name gains ` + TYPE`, no field change); otherwise retype to one type
+- **Landing.** A link landing in Pomodoro D keeps the task's type and
+  merges D's name unless the gesture asked to retype. The first matching
+  step wins: a container D means no change (`keeps BUILD`); the task has
+  no effective type, or its type is already a component of D, means
+  consistent; a MEET destination takes today's Set/Clear path (MEET
+  names never grow); an explicit retype (Obsidian Alt+Enter, or capture
+  named `#NAME` / `=name` until their merge phase) chooses one type
   component X of D — the authored selector's match (by slug or prefix),
   else the Obsidian Tab-cycled choice, else the first non-exempt type
-  component, else the first type component. When X equals the inherited
-  key the field is cleared, otherwise `[type:: X]` is set,
-  catalog-spelled. There is no suggestion-shown guard and no
-  single-non-exempt-component guard, so PLAN is a legal result. Capture
-  `#NAME` and `=name` always take the Enter path.
+  component, else the first type component — and when X equals the
+  inherited key the field is cleared, otherwise `[type:: X]` is set,
+  catalog-spelled; otherwise D's name gains ` + T` in catalog spelling
+  and no task field is written. Several links landing at once append
+  each missing type once, in link order, deduped by key. PLAN is a
+  legal retype result: there is no suggestion-shown guard and no
+  single-non-exempt-component guard. Naming or renaming an entry still
+  retypes its linked tasks.
 - **Placement.** Bob picks the Pomodoro for type T: an already-queued
   task keeps its queue (Ensure Next `@route+id` is the one exception,
   handled by `capture-placement`); otherwise the first running exact
@@ -898,6 +905,65 @@ JS mirror's contract.
   directly below the source entry. Among duplicates, ledger order decides.
 - **Lint.** `BUILD task under FIX · sase#^fix-x · Ctrl+Shift+M to move
   or Ctrl+Shift+P t to retype`.
+
+## Merged Pomodoros
+
+A **merged Pomodoro** is a ledger entry whose ` — NAME` has two or more
+type components (`routing::type_components`, labels excluded).
+`BUILD + FIX + READ` is merged; `BOB + BUILD` is not when BOB is a
+label; `LATER` is a container. The **base type** is the first type
+component, the one the others were merged into. A split never moves the
+base, and a merge keeps the survivor's base first. **Merged-in types**
+are every type component after the base, in name order. After any merge,
+split, move, or close, a name says which kinds of work its Task Links
+hold. Labels are never added, moved, or removed by these rules. An
+entry whose name normalizes to `meet` is owned by calendar sync: no
+rule here ever renames, merges, or splits it.
+
+- **Type selectors (R3).** A selector names an open Pomodoro by the
+  type work would land in, written as a bare name (`build`), as
+  `#name`, or as a literal `#"SASE V18"` (a literal matches a whole
+  component key exactly and never by prefix). Resolution reuses
+  `routing::place` without creating an entry: the running exact match,
+  else the first open exact match, else the first open entry containing
+  the selector. When no whole-key match exists, the same three steps
+  run with key-prefix matching. Ledger order breaks ties. Closed
+  entries never match. The `=/` **base** selector matches the base of
+  open merged Pomodoros (whole key, else prefix), preferring the
+  running entry, then ledger order. An omitted selector means the
+  running Pomodoro, or the next planned entry a bare `=` would start.
+- **Split (R4).** An open merged Pomodoro E and a split set K (a
+  nonempty subset of E's merged-in types) move each top-level Task
+  Link whose effective type is in K, with its subtree, into a new
+  planned `— T` entry inserted below E, in E's name order and spelling.
+  E loses exactly the K components and keeps its checkbox, timespan,
+  and position. An entry is created even when T had no links. With no
+  K, every merged-in type splits; with exactly two types that is the
+  right-hand one, and an explicit `#type` is refused
+  (`split_type_not_needed`). Other refusals: closed, not merged, MEET,
+  K names the base, K names a type E does not have, K names a type
+  twice. Prose, mentions, and unsplit or untyped links stay.
+- **Merge (R5).** Survivor S takes each absorbed open untimed planned
+  entry's components that S does not already have, deduped by
+  `normalize_component` (first spelling wins), keeping labels, in
+  selector order. Children append to S's block; exact duplicate
+  top-level Task Link bullets with no children drop. MEET, timed, or
+  running absorbed entries, a selector that matches nothing, a
+  selector that resolves to a type S already contains through the same
+  entry, and naming S twice each refuse.
+- **Close names (R6).** At close, **worked** links are in progress,
+  parked, or complete, and **carried** links are in progress or
+  deferred. When at least one worked link's type is a type component of
+  E, the closed name becomes E's labels plus exactly those type
+  components, in E's order and spelling; otherwise the name is
+  unchanged. When the close creates the next entry, that name **sheds**
+  each type T that had at least one link before and no carried link
+  after; if that would drop every type, the base stays; components that
+  never had a link stay; labels stay. Single-type entries, MEET, `x0`,
+  and a close that points at an existing later entry never rename.
+- **Shedding on move (R7).** When Task Links move out of an open merged
+  Pomodoro, the source sheds by the same rule. When the move empties
+  the source, the existing delete rule still wins.
 
 ## JSON contract
 
@@ -1027,7 +1093,8 @@ and writes nothing to the journal.
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
 `components`, `hue` (including the `areas` and `configured` inputs), `fold`,
 `rank`, `similar`, `menu`, `literal`, `suggest`, `task_field`,
-`preselect`, `agree`, `retype`, `place`, and `relocate`.
+`preselect`, `agree`, `land`, `place`, `relocate`, `merge`, `split`,
+`narrow`, `shed`, and `select`.
 CLI tests consume the menu and literal sections, including
 capture dry-run round trips; Rust tests consume the routing sections,
 including mini-vault suggest cases with expected JSON and warnings.
