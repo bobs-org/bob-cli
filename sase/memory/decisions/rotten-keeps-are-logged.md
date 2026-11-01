@@ -9,7 +9,9 @@ summary:
   and writes one dated 🥀 ROTTEN LOG entry with the stamp; the entry count is
   display-only history, never a field or a decay input."
 metadata:
-  status: accepted
+  status: superseded-in-part
+  superseded_by:
+    - decisions/next-keeps-ask-an-optional-rotten-reason
   decided: 2026-10-23
 ---
 
@@ -67,3 +69,7 @@ Supersedes in part [[decisions/rotten-keeps-use-priority-decay]] for the
 rejection of a new REVIEW LOG structure and "Keep anyway leaves only the line
 increment" only; counting, explicit consent, the priority ladder, and the other
 card outcomes stand.
+
+Superseded in part: Next keeps now ask for an optional reason and may write a
+`· kept in Next` entry — see
+[[decisions/next-keeps-ask-an-optional-rotten-reason]].

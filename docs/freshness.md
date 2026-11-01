@@ -202,19 +202,26 @@ not evidence of keeps. Git sync may lose an increment during conflict
 recovery; this scalar is not an exact global event counter. Cache
 uncertainty under-counts. Hand editing remains unobserved.
 
-**Rotten Log.** Every counted keep — Alt+F/Ctrl+Alt+F on an exact
-due Ready ROTTEN or scheduled TICKLER row, or the decay card's Keep —
-first asks "Why keep it as written?" and then writes one dated entry
-under a `🥀 **ROTTEN LOG**` direct child, in the same write as the
-stamp. The reason is optional (a blank Enter logs `🤷 no reason
-given`) but the entry is not; Esc writes nothing. Each entry reads
-`*YYYY-MM-DD* — <reason> · kept N×` with N the streak after that
-keep, newest first. The entry count ("N keeps logged") is
-display-only history: unlike `[keeps:: N]` it never resets, and
-nothing reads it to change decay, buckets, tiers, lanes, Today,
-schedule, priority, or freshness. Grammar lives in
+**Rotten Log.** Every counted keep — Alt+F/Ctrl+Alt+F on an exact due
+Ready ROTTEN or scheduled TICKLER row, or the decay card's Keep — first
+asks "Why keep it as written?" and writes one dated entry under a
+`🥀 **ROTTEN LOG**` direct child in the same write as the stamp. A blank
+Enter logs `🤷 no reason given`; Esc writes nothing. Counted entries read
+`*YYYY-MM-DD* — <reason> · kept N×`, with N the streak after that keep,
+newest first.
+
+Alt+F and Ctrl+Alt+F also ask every Next (`[*]`) target, including early
+tasks outside the due NEXT tier, "Why keep it in Next?" A typed reason writes
+`*YYYY-MM-DD* — <reason> · kept in Next`; a blank Enter stamps without a
+Rotten Log entry. This never changes `[keeps::]`. Multiple markers or an
+unreadable history allow a blank keep with no entry; a typed reason is refused.
+Pending asks for an optional Work Log summary and never writes the Rotten Log.
+The entry count ("N keeps logged") is display-only history: unlike
+`[keeps:: N]` it never resets, and nothing reads it to change decay, buckets,
+tiers, lanes, Today, schedule, priority, or freshness. Grammar lives in
 [the vault format](reference/vault-format.md). See
-[Rotten Keeps Are Logged](develop/decisions.md#rotten-keeps-are-logged).
+[Rotten Keeps Are Logged](develop/decisions.md#rotten-keeps-are-logged) and
+[Next keeps ask for an optional Rotten Log reason](develop/decisions.md#next-keeps-ask-for-an-optional-rotten-log-reason).
 
 **Configuration.**
 
@@ -615,8 +622,8 @@ the task and writes no Work Log entry. Escape cancels the refresh, so the
 task stays due and Ctrl+Alt+F does not advance.
 
 Only bob-navigation-hotkeys writes the Rotten Log (single keeps,
-counted batches, Task Link sessions, and the decay card's Keep
-stage). `bob capture`, Rust, hooks, and all other automation never
+counted batches, Task Link sessions, Next keep reasons, and the decay
+card's Keep stage). `bob capture`, Rust, hooks, and all other automation never
 write it: capture's stamps stay generic and clear `keeps` through the
 same default as any other generic stamp.
 
@@ -642,15 +649,15 @@ same default as any other generic stamp.
    Ctrl+Alt+F on a landed RECURRING row behaves like Alt+F: it writes nothing,
    shows the recurring-tier notice, and stays on the row.
    In the lanes, ask "still in this lane?": keep with Ctrl+Alt+F
-   (Pending asks for an optional Work Log summary; blank Enter still
-   keeps, while Escape leaves the task due), do it today with
+   (Pending asks for an optional Work Log summary; Next asks why it stays
+   in Next and logs only a nonblank reason; Escape leaves the task due), do it today with
    Ctrl+Shift+Enter (picks a Pomodoro), release with Alt+N. Every answer on a landed row
    moves on to the next remaining review item in the same keystroke —
    including a resolving Task Card commit. Ctrl+Shift+M never advances: it moves the
    task and follows it to its destination note, `<C-o>` returns to the source, and the
    next `]s` resumes the walk where the moved row was. The walk follows rows by
    note and line text and moves only from the row just answered, so a move, a
-   Work Log or SCHEDULE LOG insert, or any other line shift never makes an
+   Work Log, Rotten Log, or SCHEDULE LOG insert, or any other line shift never makes an
    answer or `]s` skip rows or jump ahead. Alt+F is the one answer that
    stays on the row;
    `]s` skips without answering, and `<C-o>` returns to the row just
@@ -659,8 +666,9 @@ same default as any other generic stamp.
    no priority takes P1. An immediate
    roll or decay uses the existing Ctrl+Enter path and advances the walk;
    when the recommendation is cancel, the card appears and a second Alt+P
-   confirms it. A Next or Pending task still offers the optional Work Log
-   summary. Ctrl+Shift+P `1`–`4` remains available to choose a specific
+   confirms it. Alt+F on Pending offers the optional Work Log summary; Next
+   asks why it stays in Next and writes only a typed reason to the Rotten Log.
+   Ctrl+Shift+P `1`–`4` remains available to choose a specific
    priority. Clear CROWDED to 0 (split,
    sequence, defer, drop via `bob ready`) and choose a highlight (≤3
    themes, highlight first). CROWDED does not depend on how far ROTTEN
@@ -877,9 +885,9 @@ an invalid `freshness:` block or a non-Dataview task format.
 | `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; grouped Review / Work / Browse navigation with NEW/PENDING/NEXT/READY/CROWDED/BLOCKED/ROTTEN/TODAY plus PROJECTS/REFERENCES chips; gated READY with whole-lane tooltip; CROWDED via `noteReady` v1 opening crowded.md; PROJECTS/REFERENCES via `dashboardCollections` v1 opening dash_projects/dash_references with Base-contract guards) |
 | `crowded.md` + `bob-ready-notes` + heading chips | per-note Ready cap rollout (landed: Crowded Notes page, ranked-bar code block, live `ready n/cap` chips on each note's `## Tasks` heading) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
-| keep-reason prompt (single keeps, counted batches, Task Link sessions) | rotten-log (landed: nav 2.54.0 single keeps, 2.56.0 batches; one prompt asks why, one dated `🥀 **ROTTEN LOG**` entry per counted target) |
+| keep-reason prompt (single keeps, counted batches, Task Link sessions, Next lane keeps) | rotten-log (landed: nav 2.54.0 single keeps, 2.56.0 batches; Next typed reasons in nav 2.64.0; a Next entry is optional and does not change `[keeps::]`) |
 | decay-card Keep stage | rotten-log (landed: nav 2.55.0; in-card reason stage, one transaction, Esc back to the choices) |
-| freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.65.0; `🥀 N keeps logged · last …` in source-note Live Preview + reading views only, never Tasks query rows) |
+| freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.65.0; `🥀 N keeps logged · last …` counts counted and `kept in Next` entries in source-note Live Preview + reading views only, never Tasks query rows; 1.81.0) |
 | note snapshots (`bob` highlights/ref) | rotten-log (open tasks: one condensed `KEPT` row with the newest entry; include-closed snapshots: every entry) |
 | Mac idle agenda rotten chip | rotten-log (`🥀 Rotten log` header folding with the other logs, `🥀 N` chip after `⚒ N` / `🗓 N`) |
 
@@ -1381,7 +1389,7 @@ builder near the `Alt+F to decide` string (tests
   (`Kept N reviews in a row` alone without the card capability,
   `· decay off` with decay off, `· Bob asks every review` for a zero
   threshold).
-- Rotten-log line (shipped ledger-tools 1.65.0):
+- Rotten-log line (shipped ledger-tools 1.65.0, extended to count `kept in Next` entries in 1.81.0):
   `🥀 3 keeps logged · last Oct 16 — waiting for the weekend…` after
   the keeps line and before the action line (`🥀 1 keep logged · …`
   for one entry). The reason truncates to 48 characters with `…`;
@@ -1568,6 +1576,9 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   prompt for a Pending release, then the route picker; `↵` acts and moves,
   `⇧↵` stays, `Esc` cancels) and answers from any due walk row, not only
   the landing (nav 2.63.0).
+- 2026-11-01: Next keeps ask why they stay in Next; blank Enter stamps only,
+  while a typed reason writes `· kept in Next` without changing `[keeps::]`
+  (bob-navigation-hotkeys 2.64.0; bob-ledger-tools 1.81.0).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

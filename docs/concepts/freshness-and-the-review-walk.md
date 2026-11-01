@@ -53,6 +53,8 @@ Repeated unchanged keeps on a due Ready row can prompt an explicit approved deci
 
 A counted keep asks "Why keep it as written?" and records the answer — or `🤷 no reason given` for a blank Enter — as a dated entry under the task's `🥀 **ROTTEN LOG**` child, in the same write as the stamp. The entry count is display-only history: it never resets like the keep streak, and nothing reads it to change decay, lanes, or schedule. Esc writes nothing.
 
+Marking a Next (`[*]`) task fresh also asks why it stays in Next, including when the task is early. A typed reason adds `· kept in Next`; a blank Enter writes no entry and never changes `[keeps::]`. Pending asks for a Work Log summary instead.
+
 ## Related
 
 - [Your first Bob day](../start/first-bob-day.md) — confirm work during morning review.

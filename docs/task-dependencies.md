@@ -121,7 +121,7 @@ target.
 | `🪢 **LINKED FROM:**` | any writable `#task` that other tasks relate to | reconcile (authority); nav and capture courtesy writes ([task-relations.md](task-relations.md) §6–§8) | after the LINKS subtree, else in the LINKS slot | same as LINKS, plus the LINKS parser |
 | `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `$<N>` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, Work Log, and Rotten Log parsers |
 | `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, Schedule Log, and Rotten Log parsers |
-| `🥀 **ROTTEN LOG**` and its dated entries | any `#task` with a keep history | nav counted keep and decay-card Keep | appended as the last direct child on creation, then reused | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, LINKS/LINKED FROM, Schedule Log, Work Log, and Cancel Log parsers |
+| `🥀 **ROTTEN LOG**` and its dated entries | any `#task` with a keep history | nav counted keep, Next keep reason, and decay-card Keep | appended as the last direct child on creation, then reused | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, LINKS/LINKED FROM, Schedule Log, Work Log, and Cancel Log parsers |
 
 ## 3. Identity and link form
 
