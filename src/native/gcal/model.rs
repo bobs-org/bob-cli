@@ -18,6 +18,7 @@ pub(crate) struct GcalEvent {
     pub status: String,
     pub title: String,
     pub title_route_hint: Option<String>,
+    pub untracked: bool,
     pub route_hint: Option<String>,
     pub location: Option<String>,
     pub html_link: Option<String>,
@@ -106,10 +107,16 @@ impl GcalEvent {
                 })
             })
             .or_else(|| raw.location.as_deref().and_then(location_url));
-        let title = raw
+        let raw_title = raw
             .summary
             .filter(|summary| !summary.trim().is_empty())
             .unwrap_or_else(|| "(untitled event)".to_string());
+        let (title, title_untracked) = strip_untracked_tokens(&raw_title);
+        let description_untracked = raw
+            .description
+            .as_deref()
+            .is_some_and(description_has_untracked);
+        let untracked = title_untracked || description_untracked;
         let title_route_hint =
             title.split_whitespace().last().and_then(parse_route_token);
         Ok(Self {
@@ -126,6 +133,7 @@ impl GcalEvent {
             status: raw.status.unwrap_or_else(|| "confirmed".to_string()),
             title,
             title_route_hint,
+            untracked,
             route_hint: raw.description.as_deref().and_then(description_route),
             location: raw.location,
             html_link: raw.html_link,
@@ -253,6 +261,43 @@ fn description_route(description: &str) -> Option<String> {
         }
         parse_route_token(line)
     })
+}
+
+/// A standalone `#untracked` token in a Google title (case-insensitive,
+/// whitespace-bounded, trailing `.,;:!?` allowed).
+fn is_untracked_token(token: &str) -> bool {
+    let stripped = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    stripped.eq_ignore_ascii_case("#untracked")
+}
+
+/// Strip `#untracked` tokens from a Google title. Returns the cleaned
+/// title and whether any token was removed. When no token is present the
+/// title is returned unchanged so journal hashes stay stable.
+fn strip_untracked_tokens(title: &str) -> (String, bool) {
+    if !title.to_ascii_lowercase().contains("#untracked") {
+        return (title.to_string(), false);
+    }
+    let kept: Vec<&str> = title
+        .split_whitespace()
+        .filter(|token| !is_untracked_token(token))
+        .collect();
+    if kept.len() == title.split_whitespace().count() {
+        return (title.to_string(), false);
+    }
+    let cleaned = kept.join(" ");
+    if cleaned.trim().is_empty() {
+        ("(untitled event)".to_string(), true)
+    } else {
+        (cleaned, true)
+    }
+}
+
+/// A description line containing only `#untracked` (case-insensitive,
+/// surrounding whitespace allowed).
+fn description_has_untracked(description: &str) -> bool {
+    description
+        .lines()
+        .any(|line| line.trim().eq_ignore_ascii_case("#untracked"))
 }
 
 fn location_url(location: &str) -> Option<String> {

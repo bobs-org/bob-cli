@@ -24,6 +24,7 @@ pub(crate) struct TaskRowInput<'a> {
     pub location: Option<&'a str>,
     pub root: Option<&'a str>,
     pub needs_type: bool,
+    pub untracked: bool,
     /// Task checkbox: `*` (Next), `/` (In Progress), or ` ` (Ready).
     pub status: char,
 }
@@ -36,7 +37,7 @@ pub(crate) struct ContextRowInput<'a> {
     pub qualifier: Option<&'a str>,
 }
 
-/// Render `- [status] #task **HHMM-HHMM** title badges [root::] [type::] ^id`.
+/// Render `- [status] #task **HHMM-HHMM** title badges [#untracked] [root::] [type::] ^id`.
 pub(crate) fn render_task_row(
     input: &TaskRowInput<'_>,
     block_id: &str,
@@ -57,7 +58,30 @@ pub(crate) fn render_task_row(
     if let Some(root) = input.root {
         row = crate::native::task_root::set_task_root(&row, root);
     }
+    if input.untracked {
+        // `#untracked` lives at the end of the badge run, before
+        // `[root::]` / `[type::]`, so the tag is Google-owned like the
+        // badges. The setters above insert before a trailing `#tag`,
+        // so place the tag here, ahead of any root/type fields.
+        if let Some(at) = earliest_metadata_field(&row) {
+            row.insert_str(at, " #untracked");
+        } else {
+            row.push_str(" #untracked");
+        }
+    }
     format!("{row} ^{block_id}")
+}
+
+/// Byte offset of the first trailing `[root::]` / `[type::]` / `(root::)` /
+/// `(type::)` field in `row`, when one is present.
+fn earliest_metadata_field(row: &str) -> Option<usize> {
+    let mut earliest: Option<usize> = None;
+    for marker in [" [root::", " [type::", " (root::", " (type::"] {
+        if let Some(at) = row.find(marker) {
+            earliest = Some(earliest.map_or(at, |best| best.min(at)));
+        }
+    }
+    earliest
 }
 
 /// Render `- **all day** title [· qualifier] [📅](…)` (or the timed span
@@ -113,14 +137,22 @@ pub(crate) fn needs_meet_type(
         .is_some_and(|suggestion| suggestion.theme.name == "MEET")
 }
 
-/// The badge suffix for one row (` 📅 …`, ` 📹 …`, ` 📍 …`), shared
-/// by the row renderer and the journal span hashes.
+/// The badge suffix for one row (` 📅 …`, ` 📹 …`, ` 📍 …`, plus
+/// ` #untracked` for untracked tasks), shared by the row renderer and
+/// the journal span hashes. Tracked rows hash exactly as before, so
+/// existing journals stay valid; a newly tagged untouched row updates
+/// its badges span in place.
 pub(crate) fn badge_text(
     html_link: Option<&str>,
     join_link: Option<&str>,
     location: Option<&str>,
+    untracked: bool,
 ) -> String {
-    badges(html_link, join_link, location)
+    let mut out = badges(html_link, join_link, location);
+    if untracked {
+        out.push_str(" #untracked");
+    }
+    out
 }
 
 fn badges(
@@ -247,6 +279,7 @@ mod tests {
             location: None,
             root,
             needs_type,
+            untracked: false,
             status,
         }
     }
@@ -331,6 +364,7 @@ mod tests {
                 location: None,
                 root: Some("body"),
                 needs_type: true,
+                untracked: false,
                 status: '*',
             },
             "party",

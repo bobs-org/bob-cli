@@ -908,3 +908,184 @@ fn doctor_reports_malformed_journal_and_last_error() {
         .expect("last sync check");
     assert_eq!(last["status"], "fail", "{last}");
 }
+
+#[test]
+fn untracked_tag_flip_updates_untouched_row_in_place() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-untracked-touch");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    // Future dentist stays untouched (open placeholder link, no closed work).
+    let mut future = dentist_event(&serde_json::Map::new());
+    future["start"] =
+        serde_json::json!({"dateTime": "2026-10-30T18:30:00-04:00"});
+    future["end"] =
+        serde_json::json!({"dateTime": "2026-10-30T19:00:00-04:00"});
+    fake.events_json(&events_envelope(vec![future]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let before = dentist_row(&today_note(&env));
+    assert!(!before.contains("#untracked"), "{before}");
+
+    // Google adds the token: title stays clean, badges gain the tag.
+    let mut patch = serde_json::Map::new();
+    patch.insert("summary".to_string(), "Dentist @body #untracked".into());
+    let mut events = base_events();
+    events.retain(|event| event["id"] != "dentist");
+    events.push(dentist_event(&patch));
+    // Keep only the dentist to stay untouched: drop other tasks' links.
+    events.retain(|event| event["id"] == "dentist");
+    events[0]["start"] =
+        serde_json::json!({"dateTime": "2026-10-30T18:30:00-04:00"});
+    events[0]["end"] =
+        serde_json::json!({"dateTime": "2026-10-30T19:00:00-04:00"});
+    fake.events_json(&events_envelope(events));
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let row = dentist_row(&today_note(&env));
+    assert!(row.contains("**1830-1900** Dentist "), "{row}");
+    assert!(!row.contains("Dentist #untracked"), "{row}");
+    assert!(row.contains(" #untracked [root:: body]"), "{row}");
+    assert!(
+        stdout(&output).contains("~ task"),
+        "tag flip updates in place: {}",
+        stdout(&output)
+    );
+
+    // A third sync is a no-op.
+    let journal_count = journal_lines(&env).len();
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(
+        stdout(&again).contains("unchanged"),
+        "tag flip settles: {}",
+        stdout(&again)
+    );
+    assert_eq!(journal_lines(&env).len(), journal_count);
+}
+
+#[test]
+fn untracked_tag_flip_on_worked_row_is_kept_once() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-untracked-worked");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    // Past dentist is worked from birth ([/] + closed MEET link).
+    let mut past = dentist_event(&serde_json::Map::new());
+    past["start"] =
+        serde_json::json!({"dateTime": "2026-10-30T08:00:00-04:00"});
+    past["end"] = serde_json::json!({"dateTime": "2026-10-30T08:30:00-04:00"});
+    fake.events_json(&events_envelope(vec![past]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let before = dentist_row(&today_note(&env));
+    assert!(before.starts_with("- [/]"), "{before}");
+    assert!(!before.contains("#untracked"), "{before}");
+
+    // Google adds the token after the session closed: report once, leave
+    // the row for a hand edit.
+    let mut patch = serde_json::Map::new();
+    patch.insert("summary".to_string(), "Dentist @body #untracked".into());
+    patch.insert(
+        "start".to_string(),
+        serde_json::json!({"dateTime": "2026-10-30T08:00:00-04:00"}),
+    );
+    patch.insert(
+        "end".to_string(),
+        serde_json::json!({"dateTime": "2026-10-30T08:30:00-04:00"}),
+    );
+    fake.events_json(&events_envelope(vec![dentist_event(&patch)]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let row = dentist_row(&today_note(&env));
+    assert!(!row.contains("#untracked"), "worked row kept:\n{row}");
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("#untracked"),
+        "flip reported once: {combined}"
+    );
+
+    // A rerun does not report again and still leaves the row alone.
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let row_again = dentist_row(&today_note(&env));
+    assert!(!row_again.contains("#untracked"), "{row_again}");
+    let combined_again = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(
+        !combined_again.contains("#untracked"),
+        "reported once only: {combined_again}"
+    );
+}
+
+#[test]
+fn preexisting_untracked_title_migrates_both_spans_in_place() {
+    use sha2::{Digest, Sha256};
+    fn span_hash(text: &str) -> String {
+        hex::encode(Sha256::digest(text.as_bytes()))[..16].to_string()
+    }
+
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-untracked-migrate");
+    prepare(&env);
+    // Old-style row: the token lives in the title, badges carry no tag.
+    let html = "https://calendar.google.com/event?eid=lunch";
+    let old_badges = format!(" [📅]({html} \"Open in Google Calendar\")");
+    let old_row = format!(
+        "- [*] #task **1200-1300** Lunch #untracked{old_badges} \
+         [root:: meet] ^lunch"
+    );
+    let note = format!(
+        "# Friday 2026-10-30\n\n## Events\n\n\
+         *↻ synced 11:00 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*\n\
+         {old_row}\n\n## Pomodoros\n"
+    );
+    fs::write(env.vault().join("2026/20261030.md"), &note).expect("write note");
+    // Old journal spans match the old write.
+    let journal_line = serde_json::json!({
+        "v": 1,
+        "ts": "2026-10-30T11:00:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.row",
+        "key": {"calendar_id": "primary", "event_id": "lunch"},
+        "day": "2026-10-30",
+        "path": "2026/20261030.md",
+        "block_id": "lunch",
+        "url": html,
+        "row": "task",
+        "spans": {
+            "time": span_hash("1200-1300"),
+            "title": span_hash("Lunch #untracked"),
+            "badges": span_hash(&old_badges),
+        },
+        "root": {"value": "meet", "source": "default"},
+    });
+    let journal_dir = env.vault().join(".bob/gcal");
+    fs::create_dir_all(&journal_dir).expect("journal dir");
+    fs::write(
+        journal_dir.join("test-host.jsonl"),
+        serde_json::to_string(&journal_line).expect("journal") + "\n",
+    )
+    .expect("write journal");
+
+    let fake = FakeGog::new(&env, "fake-gog");
+    let events = serde_json::json!({
+        "events": [{
+            "id": "lunch",
+            "summary": "Lunch #untracked",
+            "status": "confirmed",
+            "start": {"dateTime": "2026-10-30T12:00:00-04:00"},
+            "end": {"dateTime": "2026-10-30T13:00:00-04:00"},
+            "htmlLink": html,
+            "attendees": [{"self": true, "responseStatus": "accepted"}]
+        }],
+        "nextPageToken": serde_json::Value::Null,
+    });
+    fake.events_json(&serde_json::to_string(&events).expect("events"));
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("^lunch"))
+        .expect("lunch row");
+    assert!(row.contains("**1200-1300** Lunch "), "{row}");
+    assert!(!row.contains("Lunch #untracked"), "{row}");
+    assert!(row.contains(" #untracked [root:: meet]"), "{row}");
+}

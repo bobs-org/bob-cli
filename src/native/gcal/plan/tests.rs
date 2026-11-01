@@ -30,9 +30,21 @@ fn occurrence(
     time_label: &str,
     start_min: i32,
 ) -> PlannedOccurrence {
+    occurrence_untracked(event_id, title, task, time_label, start_min, false)
+}
+
+fn occurrence_untracked(
+    event_id: &str,
+    title: &str,
+    task: bool,
+    time_label: &str,
+    start_min: i32,
+    untracked: bool,
+) -> PlannedOccurrence {
     let html_link =
         Some(format!("https://calendar.google.com/event?eid={event_id}"));
-    let badges = render::badge_text(html_link.as_deref(), None, None);
+    let badges =
+        render::badge_text(html_link.as_deref(), None, None, untracked && task);
     let mut spans = BTreeMap::new();
     spans.insert("time".to_string(), span_hash(time_label));
     spans.insert("title".to_string(), span_hash(title));
@@ -55,6 +67,7 @@ fn occurrence(
         qualifier: None,
         spans,
         needs_type: false,
+        untracked,
         link_phase: None,
         all_day: time_label == "all day",
         start_min,

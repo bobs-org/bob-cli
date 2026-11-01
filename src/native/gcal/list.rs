@@ -149,7 +149,8 @@ fn past_open_meetings(
 }
 
 /// What sync did, or would do, with one event: `task · MEET`, `task`,
-/// `context`, `waiting for note`, or `removed by you`. Omitted events
+/// `context`, `waiting for note`, or `removed by you`, each with
+/// ` · untracked` appended for Google-untracked tasks. Omitted events
 /// keep their omission reason.
 fn vault_status(
     event: &ListedEvent,
@@ -174,6 +175,14 @@ fn vault_status(
     if state.is_some_and(|state| state.gone) {
         return "removed by you".to_string();
     }
+    // Context rows strip the token, so only tasks report trackedness here;
+    // the JSON `untracked` field still carries Google's flag for every row.
+    let untracked_suffix =
+        if event.event.untracked && event.inclusion == Inclusion::Task {
+            " · untracked"
+        } else {
+            ""
+        };
     match &event.inclusion {
         Inclusion::Omitted(_) => unreachable!("filtered above"),
         Inclusion::Context(_) => {
@@ -190,15 +199,15 @@ fn vault_status(
                     return "removed by you".to_string();
                 }
                 if meet_link_present(lines, &row.block_id) {
-                    return "task · MEET".to_string();
+                    return format!("task · MEET{untracked_suffix}");
                 }
-                return "task".to_string();
+                return format!("task{untracked_suffix}");
             }
             match adopted_block_id(lines, event_url(event)) {
                 Some(block_id) if meet_link_present(lines, &block_id) => {
-                    "task · MEET".to_string()
+                    format!("task · MEET{untracked_suffix}")
                 }
-                _ => "task".to_string(),
+                _ => format!("task{untracked_suffix}"),
             }
         }
     }
@@ -362,6 +371,7 @@ fn print_json(
                 "answer": event.event.my_answer.as_str(),
                 "inclusion": event.inclusion.name(),
                 "reason": event.inclusion.reason(),
+                "untracked": event.event.untracked,
                 "root": {
                     "value": root.and_then(|root| root.value.as_deref()),
                     "source": root.and_then(|root| root.source.as_deref()),

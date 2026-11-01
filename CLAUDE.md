@@ -300,8 +300,9 @@ edited in place.
     passes its dependency or schedule reason through its project descendants, with
     reconcile as the authority and the ^prj tag as the proxy for other engines.
 41. **Synced Meetings Are Linked By Phase At Birth** (`synced-meetings-link-by-phase`) -
-    A new Event Task is filed under a past, running, or planned MEET at birth: closed
-    clusters for ended meetings, one open MEET for current and future.
+    _[partly superseded by `decisions:untracked-sessions-omit-t-field`]_ A new Event
+    Task is filed under a past, running, or planned MEET at birth: closed clusters for
+    ended meetings, one open MEET for current and future.
 42. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
@@ -334,6 +335,9 @@ edited in place.
     `decisions:unblocked-tasks-are-offered`]_ Every automatic Blocked-to-Ready recovery
     records [unblocked:: today] unless a WRITE skip applies, so the task is TICKLER in
     the next morning review; a keep on that row leaves the streak unchanged.
+49. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) - A timed
+    ledger row without [t::] is an untracked session; writers decide trackedness when
+    they write a span and readers only look at the row.
 
 ### 3.2 Glossary Terms (glossary)
 

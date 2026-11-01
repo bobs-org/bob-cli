@@ -369,14 +369,17 @@ Task with its local block link under a Pomodoro.
 Events stamp: which Google account last synced the section, and when. A written Event Task carries a
 `📅` identity badge (Google's event link, also the adoption key), an optional
 `📹` join badge, and an optional `📍` maps badge for a non-URL location, then
+` #untracked` for Google-untracked events, then
 `[root::]`, then `[type:: MEET]` only when needed, then a `^block-id` minted
 from the bare title and unique within the note. A written context row carries
 the span (`**all day**` or `**HHMM-HHMM**`) plus optional `· *day N of M*`,
-`· *maybe*`, or `· *free*` tags and the `📅` badge. Event Tasks linked under
+`· *maybe*`, or `· *free*` tags and the `📅` badge, and never carries
+`#untracked`. Event Tasks linked under
 an open MEET show `[*]`; a row first synced after its event ended shows
 `[/]` under a closed MEET. Titles are data: `#task`, trailing `^id`, `%%`, `::`, `🔁`, Tasks
 emoji, and leading markers are escaped or neutralized, and a resolved
-`@route` token is stripped from the title.
+`@route` token is stripped from the title. `#untracked` is stripped before
+the route is read.
 
 Contract: [Event Task](glossary.md#event-task), [Bob Gcal](../gcal.md#sync).
 

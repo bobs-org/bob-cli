@@ -4,7 +4,9 @@ summary:
   "A new Event Task is filed under a past, running, or planned MEET at birth:
   closed clusters for ended meetings, one open MEET for current and future."
 metadata:
-  status: accepted
+  status: superseded-in-part
+  superseded_by:
+    - decisions:untracked-sessions-omit-t-field
 title: Synced Meetings Are Linked By Phase At Birth
 aliases:
   - synced-meetings-link-by-phase
@@ -64,6 +66,11 @@ attendance.
 
 Evidence: `plan:202610/gcal_meeting_pomodoros.md`; `docs/gcal.md` § Sync;
 `tests/gcal_sync.rs`.
+
+Superseded in part: past clusters no longer always share one closed MEET;
+they split by trackedness, so two closed MEETs may overlap (one with
+`[t::]`, one without). See
+[[decisions:untracked-sessions-omit-t-field]].
 
 [[decisions:calendar-events-are-daily-note-event-tasks]]
 

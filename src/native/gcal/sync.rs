@@ -82,6 +82,7 @@ struct ReportRow {
     title: String,
     root: Option<String>,
     source: Option<String>,
+    untracked: bool,
 }
 
 struct SyncReport {
@@ -412,10 +413,12 @@ fn build_occurrences(
         } else {
             false
         };
+        let untracked = event.event.untracked;
         let badges = render::badge_text(
             event.event.html_link.as_deref(),
             event.event.join_link.as_deref(),
             event.event.location.as_deref(),
+            untracked && task,
         );
         let mut spans = BTreeMap::new();
         spans.insert("time".to_string(), journal::span_hash(&time_label));
@@ -484,6 +487,7 @@ fn build_occurrences(
                 qualifier,
                 spans,
                 needs_type,
+                untracked,
                 link_phase,
                 all_day,
                 start_min,
@@ -719,6 +723,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: added.title.clone(),
             root: added.root.clone(),
             source: added.source.clone(),
+            untracked: added.untracked,
         });
     }
     for adopted in &plan.rows_adopted {
@@ -733,6 +738,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: adopted.title.clone(),
             root: adopted.root.clone(),
             source: adopted.source.clone(),
+            untracked: adopted.untracked,
         });
     }
     for _ in &plan.rows_gone {
@@ -743,6 +749,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: String::new(),
             root: None,
             source: None,
+            untracked: false,
         });
     }
     for updated in &plan.rows_updated {
@@ -757,6 +764,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: updated.title.clone(),
             root: updated.root.clone(),
             source: updated.source.clone(),
+            untracked: updated.untracked,
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -767,6 +775,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: format!("{} ({})", cancelled.title, cancelled.reason),
             root: None,
             source: None,
+            untracked: false,
         });
     }
     for removed in &plan.rows_removed {
@@ -777,6 +786,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: removed.reason.clone(),
             root: None,
             source: None,
+            untracked: false,
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -787,6 +797,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: upgraded.title.clone(),
             root: upgraded.root.clone(),
             source: upgraded.source.clone(),
+            untracked: upgraded.untracked,
         });
     }
     for learned in &plan.learned {
@@ -797,6 +808,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: learned.title.clone(),
             root: Some(learned.root.clone()),
             source: Some(format!("learned from your {} edit", learned.day)),
+            untracked: false,
         });
     }
     rows
@@ -1101,6 +1113,7 @@ fn print_json(report: &SyncReport) {
                 "title": row.title,
                 "root": row.root,
                 "source": row.source,
+                "untracked": row.untracked,
             })
         })
         .collect();

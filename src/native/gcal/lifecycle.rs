@@ -134,6 +134,11 @@ pub(crate) fn split_row_spans(line: &str) -> Option<RowSpans> {
     if let Some(badge_at) = middle.find(" [📅](") {
         badges = middle.get(badge_at..)?.to_string();
         middle = middle.get(..badge_at)?;
+    } else if let Some((head, tag)) = split_trailing_untracked_tag(middle) {
+        // `#untracked` lives in the badge span even when the row has no
+        // `📅` badge, so tag flips update the badges span in place.
+        badges = tag;
+        middle = head;
     }
     let middle = middle.trim_end();
     let (title, qualifier) = split_qualifier(middle, task);
@@ -175,6 +180,25 @@ fn split_suffix(middle: &str, task: bool) -> (&str, String) {
         }
     }
     (middle, String::new())
+}
+
+/// Split a trailing standalone `#untracked` token off `middle` when no
+/// `📅` badge is present. Returns the head and the badge span (keeping its
+/// leading space). Matching is case-insensitive and whitespace-bounded;
+/// trailing `.,;:!?` is allowed on the token.
+fn split_trailing_untracked_tag(middle: &str) -> Option<(&str, String)> {
+    let trimmed_end = middle.trim_end();
+    let token_start = trimmed_end.rfind([' ', '\t'])? + 1;
+    let token = trimmed_end.get(token_start..)?;
+    let stripped = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    if !stripped.eq_ignore_ascii_case("#untracked") {
+        return None;
+    }
+    // The token must be standalone: preceded by whitespace (guaranteed by
+    // the rfind) and followed only by the stripped punctuation/end.
+    let head = trimmed_end.get(..token_start)?.trim_end();
+    let badge = format!(" {}", token);
+    Some((head, badge))
 }
 
 /// Split a trailing `· *qualifier*` tag off a context row middle.

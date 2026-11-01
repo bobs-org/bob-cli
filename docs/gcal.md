@@ -23,6 +23,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [Calendars](#calendars)
 - [List](#list)
 - [Sync](#sync)
+- [Untracked events](#untracked-events)
 - [Reconciling Google-side changes](#reconciling-google-side-changes)
 - [Where it runs](#where-it-runs)
 - [Event inclusion](#event-inclusion)
@@ -317,7 +318,9 @@ snapshot.
 
 The table shows local time, title, RSVP, selected root, and the VAULT column:
 what sync did, or would do, with the event — `task · MEET`, `task`,
-`context`, `waiting for note`, or `removed by you`. Omitted events keep their
+`context`, `waiting for note`, or `removed by you`, each with
+` · untracked` appended for Google-untracked tasks
+(`task · MEET · untracked`). Omitted events keep their
 omission reason. `-a` also shows omitted events. Counts include omitted events
 even when their rows are hidden. The header carries the last sync: `synced
 3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
@@ -325,7 +328,7 @@ else `never synced`.
 
 JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
 `last_sync`, and `past_open` fields. Each event reports `time`, `title`,
-`answer`, `inclusion`, `reason`, `vault`, and `root.value`, `root.source`,
+`answer`, `inclusion`, `reason`, `untracked`, `vault`, and `root.value`, `root.source`,
 and `root.warnings`. Descriptions and attendee details are omitted. A root
 may be null when no candidate is valid; warnings explain each rejected
 candidate and its fix. `past_open` lists the open Event Tasks still sitting
@@ -367,13 +370,17 @@ upgraded in place) is linked by phase, on any day:
 
 | Phase at sync time | Pomodoro | Link line | Row checkbox |
 | --- | --- | --- | --- |
-| Past: the event ended (`end ≤ now`) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry | `🍅 [[#^id]]` | `[/]` |
+| Past: the event ended (`end ≤ now`) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry, or `(**SSSS-EEEE**)` without `[t::]` for an untracked cluster | `🍅 [[#^id]]` | `[/]` |
 | Current: `start ≤ now < end`, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
 | Future: the event has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
 
 Back-to-back or overlapping past meetings share one closed MEET whose span is
-the cluster (next start ≤ cluster end). All current meetings share one
-running MEET, and all future meetings share one placeholder. The run never
+the cluster (next start ≤ cluster end), split by trackedness: a mixed
+trackedness run becomes two closed MEETs that may overlap — one with
+`[t::]`, one without. All current meetings share one
+running MEET, and all future meetings share one placeholder. A created
+running MEET is untracked (no `[t::]`) only when every current event is
+untracked; mixed current events stay tracked. The run never
 leaves a second open MEET: current meetings with no running Pomodoro reuse
 an existing MEET placeholder if one is open, otherwise they create a running
 MEET; future meetings go under the running MEET when that running entry is
@@ -400,7 +407,7 @@ success, no-op, or waiting.
 
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
-(`action`, `kind`, `time`, `title`, `root`, `source`), `pomodoro`
+(`action`, `kind`, `time`, `title`, `root`, `source`, `untracked`), `pomodoro`
 (`entry_line`, `created`, `links_added`, `entries`), `warnings`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). `pomodoro.entries` lists each MEET this run
@@ -451,6 +458,7 @@ account, or set `gcal.account` to the stamp's account.
 | --- | --- | --- |
 | Checkbox | You | Never changed, except cancelling an untouched task (see below) |
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
+| `#untracked` | Google until you edit it | Follows Google's token while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_untracked` |
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Child bullets (meeting notes) | You | Never touched |
@@ -467,6 +475,39 @@ alone and reports it once. `[/]` rows count in the Pending lane and show in
 `list`'s `past_open` footer until they are completed or cancelled. MEET
 placeholders and running MEET entries are created only in the same write
 that adds their first link, so sync never leaves a second open MEET.
+
+## Untracked events
+
+Tag a Google Calendar event `#untracked` (lunch, school pickup, the gym) so
+it still lands in the day as an Event Task with a Pomodoro Task Link, but its
+session stays on the calendar and off the clock: the closed MEET omits
+`[t::]`, and stats, homes, `bob pomodoro --worked`, and the agenda skip its
+minutes and counts.
+
+In Google Calendar, write a standalone `#untracked` token anywhere in the
+title (case-insensitive), or a description line containing only `#untracked`.
+Sync strips the token from the displayed title, the way a resolved `@route`
+is stripped: the tag is removed first, then the title-ending `@route` is
+read, so `Lunch @love #untracked` routes to `love` and displays as `Lunch`.
+
+On the Event Task, sync writes ` #untracked` at the end of the badge run,
+before `[root::]`:
+
+```markdown
+- [*] #task **1200-1300** Lunch with Kelly [📅](… "Open in Google Calendar")
+  #untracked [root:: love] [type:: MEET] ^lunch-with-kelly
+```
+
+The tag is Google-owned exactly like the badges: updated in place while the
+row is untouched, and your vault edit (adding or deleting it) wins and is
+reported once. Context rows strip the token and carry no tag; a Maybe context
+row upgraded to a task renders the tag. A tag flip after the session closed
+is reported once and left for a hand edit — sync never retimes existing MEET
+entries. Rows synced before this feature migrate on the next sync: the title
+and badge spans both still match Bob's last write, so both update in place.
+
+`list` shows `task · MEET · untracked` in VAULT and `untracked` in JSON;
+`sync -f json` rows carry `untracked`.
 
 ## Reconciling Google-side changes
 
@@ -553,7 +594,8 @@ the daily note, be an area at any depth or a root project, and must not be
 
 Invalid candidates fall through to the next source with a warning that includes
 the R11 reason and fix. If a title route resolves, Bob removes the final token
-from the displayed title. An unknown route stays in the title and is reported.
+from the displayed title. `#untracked` is stripped before the route is read,
+so `Lunch @love #untracked` routes to `love`. An unknown route stays in the title and is reported.
 If the default root also fails, list shows no root and `doctor` reports the
 invalid default. Root sources are reported as `learned from your 2026-10-29
 edit`, `@body`, `colour tomato`, `calendar Health`, or `default`. The VAULT
@@ -600,7 +642,7 @@ including the `last_sync` check.
 
 `list -f json`: `day`, configured `calendars`, classified `events`,
 `counts`, and `last_sync`. `-a` adds omitted event rows. Each event contains
-no provider description or attendee list, and carries the `vault` state.
+no provider description or attendee list, and carries `untracked` and the `vault` state.
 
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
 `warnings`, and `stamp`. `stamp` is `{account, synced_at, refreshed}` or
@@ -642,5 +684,10 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 - Consent screens left in Testing expire in 7 days; publish them.
 - A closed or running MEET built from calendar spans may overlap a session
   already logged; sync does not clip it.
+- Past clusters split by trackedness, so two closed MEETs may overlap; that
+  is truthful. One running entry is allowed, so mixed current events stay
+  tracked.
+- A `#untracked` flip after the session closed is left for a hand edit and
+  reported once.
 - R9 may clear `[*]` Event Tasks on a future day's note until that day is
   today.

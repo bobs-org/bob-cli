@@ -1228,3 +1228,162 @@ fn current_meeting_reconcile_then_clock_close() {
         .expect("dentist");
     assert!(dentist.starts_with("- [x]"), "{dentist}");
 }
+
+#[test]
+fn untracked_token_splits_clusters_and_reports() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-untracked");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let events = serde_json::json!({
+        "events": [
+            {
+                "id": "standup",
+                "summary": "Standup",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T08:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T08:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=standup",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "lunch",
+                "summary": "Lunch #untracked",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T08:15:00-04:00"},
+                "end": {"dateTime": "2026-10-30T09:00:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=lunch",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "gym",
+                "summary": "Gym",
+                "description": "Bring shoes\n#untracked",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T09:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T09:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=gym",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "team-lunch",
+                "summary": "Team Lunch @job #untracked",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T11:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T11:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=team-lunch",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "focusnow",
+                "summary": "Focus #UNTRACKED",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T11:30:00-04:00"},
+                "end": {"dateTime": "2026-10-30T12:30:00-04:00"},
+                "htmlLink": "https://calendar.google.com/event?eid=focusnow",
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            }
+        ],
+        "nextPageToken": serde_json::Value::Null,
+    });
+    fake.events_json(&serde_json::to_string(&events).expect("events"));
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+
+    // Title token is stripped; the row carries the tag at the end of the
+    // badge run, before [root::].
+    let lunch = note
+        .lines()
+        .find(|line| line.contains("^lunch"))
+        .expect("lunch row");
+    assert!(lunch.contains("**0815-0900** Lunch "), "{lunch}");
+    assert!(!lunch.contains("Lunch #untracked"), "{lunch}");
+    assert!(lunch.contains(" #untracked [root::"), "{lunch}");
+    // Description-only token also marks the row.
+    let gym = note
+        .lines()
+        .find(|line| line.contains("^gym"))
+        .expect("gym row");
+    assert!(gym.contains("**0900-0930** Gym "), "{gym}");
+    assert!(gym.contains(" #untracked"), "{gym}");
+    // @route is read after the tag is stripped.
+    let team = note
+        .lines()
+        .find(|line| line.contains("^team-lunch"))
+        .expect("team lunch row");
+    assert!(team.contains("**1100-1130** Team Lunch "), "{team}");
+    assert!(!team.contains("@job"), "{team}");
+    assert!(team.contains("[root:: job]"), "{team}");
+    assert!(team.contains(" #untracked [root:: job]"), "{team}");
+    // Tracked rows carry no tag.
+    let standup = note
+        .lines()
+        .find(|line| line.contains("^standup"))
+        .expect("standup row");
+    assert!(!standup.contains("#untracked"), "{standup}");
+
+    // Mixed past cluster splits by trackedness: one tracked MEET and one
+    // untracked MEET that overlap.
+    let pomodoros = &note[note.find("## Pomodoros").expect("Pomodoros")..];
+    assert!(
+        pomodoros.contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{pomodoros}"
+    );
+    assert!(
+        pomodoros.contains("- [x] (**0815-0930** ) — MEET")
+            || pomodoros.contains("- [x] (**0815-0930**) — MEET"),
+        "lunch+gym share one untracked cluster:\n{pomodoros}"
+    );
+    assert!(
+        !pomodoros.contains("(**0815-0930** [t::"),
+        "untracked cluster omits [t::]:\n{pomodoros}"
+    );
+    // All-untracked current run creates a running MEET without [t::].
+    assert!(
+        pomodoros.contains("- [ ] (**1130-1230**) — MEET"),
+        "running untracked MEET:\n{pomodoros}"
+    );
+
+    // Sync JSON rows carry untracked.
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    let rows = report["rows"].as_array().expect("rows");
+    let lunch_json = rows
+        .iter()
+        .find(|row| row["title"] == "Lunch")
+        .expect("lunch json");
+    assert_eq!(lunch_json["untracked"], true);
+    let standup_json = rows
+        .iter()
+        .find(|row| row["title"] == "Standup")
+        .expect("standup json");
+    assert_eq!(standup_json["untracked"], false);
+
+    // List JSON and VAULT report the flag.
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let list_out = command.output().expect("run list");
+    assert_eq!(list_out.status.code(), Some(0), "{}", stderr(&list_out));
+    let list: Value =
+        serde_json::from_str(&stdout(&list_out)).expect("list JSON");
+    let events = list["events"].as_array().expect("events");
+    let lunch_list = events
+        .iter()
+        .find(|row| row["title"] == "Lunch")
+        .expect("lunch list");
+    assert_eq!(lunch_list["untracked"], true);
+    assert!(
+        lunch_list["vault"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("untracked"),
+        "VAULT shows the flag: {lunch_list}"
+    );
+    let standup_list = events
+        .iter()
+        .find(|row| row["title"] == "Standup")
+        .expect("standup list");
+    assert_eq!(standup_list["untracked"], false);
+}

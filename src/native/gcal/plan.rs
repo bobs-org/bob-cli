@@ -65,6 +65,9 @@ pub(crate) struct PlannedOccurrence {
     pub spans: BTreeMap<String, String>,
     /// Write `[type:: MEET]` (the PT13 suggestion is not MEET).
     pub needs_type: bool,
+    /// Google `#untracked` token (title or description). Context rows strip
+    /// it; task rows render ` #untracked` at the end of the badge run.
+    pub untracked: bool,
     /// Phase at sync time; `None` for context rows.
     pub link_phase: Option<LinkPhase>,
     pub all_day: bool,
@@ -152,6 +155,7 @@ pub(crate) struct PlannedRow {
     pub source: Option<String>,
     pub time_label: String,
     pub title: String,
+    pub untracked: bool,
 }
 
 /// One adopted crash-recovery row, for the journal and the report.
@@ -170,6 +174,7 @@ pub(crate) struct AdoptedRow {
     pub link_adopted: bool,
     pub time_label: String,
     pub title: String,
+    pub untracked: bool,
 }
 
 /// One tombstoned journal row, for the journal and the report.
@@ -380,6 +385,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         link_adopted,
                         time_label: occurrence.time_label.clone(),
                         title: occurrence.title.clone(),
+                        untracked: occurrence.untracked,
                     });
                     continue;
                 }
@@ -415,6 +421,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                     source: occurrence.source.clone(),
                     time_label: occurrence.time_label.clone(),
                     title: occurrence.title.clone(),
+                    untracked: occurrence.untracked,
                 });
             }
         }
@@ -495,11 +502,41 @@ fn apply_span_updates(
         return;
     }
     let current = spans.hashes();
+    // Context rows strip the token, so only task rows hash the tag.
     let fresh_badges = super::render::badge_text(
         occurrence.html_link.as_deref(),
         occurrence.join_link.as_deref(),
         occurrence.location.as_deref(),
+        occurrence.untracked && occurrence.task,
     );
+    // A tag flip on a worked row is reported once and left for a hand
+    // edit: sync never retimes existing entries, and the ledger row keeps
+    // its trackedness until Bryan edits it.
+    let current_untracked =
+        crate::native::event_task::line_has_untracked_tag(&current_line);
+    let untouched =
+        row_untouched(&working.as_string(), line_index, &journaled.block_id);
+    let keep_untracked = occurrence.task
+        && current_untracked != occurrence.untracked
+        && !untouched;
+    if keep_untracked {
+        let detail = if occurrence.untracked {
+            "kept your tracked row while Google now says #untracked; \
+             add #untracked by hand to go off the clock"
+        } else {
+            "kept your untracked row while Google dropped #untracked; \
+             remove #untracked by hand to go back on the clock"
+        };
+        push_kept_once(
+            input,
+            plan,
+            &occurrence.calendar_id,
+            &occurrence.event_id,
+            occurrence.title.clone(),
+            detail.to_string(),
+            "kept_untracked",
+        );
+    }
     let fresh = [
         ("time", occurrence.time_label.clone()),
         ("title", occurrence.title.clone()),
@@ -510,6 +547,9 @@ fn apply_span_updates(
     let mut hashes_changed = false;
     let mut updated = journaled.spans.clone();
     for (name, fresh_text) in fresh {
+        if name == "badges" && keep_untracked {
+            continue;
+        }
         let fresh_hash = super::journal::span_hash(&fresh_text);
         let current_hash = current.get(name).cloned().unwrap_or_default();
         let recorded = journaled.spans.get(name);
@@ -624,6 +664,7 @@ fn apply_span_updates(
         source,
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
+        untracked: occurrence.untracked,
     });
 }
 
@@ -831,6 +872,7 @@ fn upgrade_context_row(
         source: occurrence.source.clone(),
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
+        untracked: occurrence.untracked,
     });
     plan.extra_link_wants.push((
         occurrence.calendar_id.clone(),
@@ -1120,6 +1162,7 @@ fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
                 location: occurrence.location.as_deref(),
                 root: occurrence.root.as_deref(),
                 needs_type: occurrence.needs_type,
+                untracked: occurrence.untracked,
                 status: status_for_phase(occurrence.link_phase),
             },
             block_id,
@@ -1558,7 +1601,8 @@ fn plan_meet_pomodoros(
             cluster.iter().map(|link| link.start_min).min().unwrap_or(0);
         let end_min =
             cluster.iter().map(|link| link.end_min).max().unwrap_or(0);
-        let (span, time) = format_meet_span(start_min, end_min);
+        let untracked = cluster.first().is_some_and(|link| link.untracked);
+        let (span, time) = format_meet_span(start_min, end_min, untracked);
         let line_text = format!("- [x] {span} — MEET");
         let at = closed_insert_at(&contents, start_min);
         let (updated, line_0) = insert_ledger_line(&contents, at, &line_text);
@@ -1635,7 +1679,10 @@ fn plan_meet_pomodoros(
                 current.iter().map(|link| link.start_min).min().unwrap_or(0);
             let end_min =
                 current.iter().map(|link| link.end_min).max().unwrap_or(0);
-            let (span, time) = format_meet_span(start_min, end_min);
+            // One running entry is allowed, so a mixed current run stays
+            // tracked; only an all-untracked run goes off the clock.
+            let untracked = current.iter().all(|link| link.untracked);
+            let (span, time) = format_meet_span(start_min, end_min, untracked);
             let line_text = format!("- [ ] {span} — MEET");
             let at = running_insert_at(&contents);
             let (updated, line_0) =
@@ -1719,6 +1766,7 @@ struct WantedLink {
     start_min: i32,
     end_min: i32,
     title: String,
+    untracked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1813,6 +1861,7 @@ fn collect_wanted_links(
             start_min: occurrence.start_min,
             end_min: occurrence.end_min,
             title: occurrence.title.clone(),
+            untracked: occurrence.untracked,
         });
     }
     for (calendar_id, event_id, block_id) in &plan.extra_link_wants {
@@ -1855,6 +1904,7 @@ fn collect_wanted_links(
             start_min: occurrence.start_min,
             end_min: occurrence.end_min,
             title: occurrence.title.clone(),
+            untracked: occurrence.untracked,
         });
     }
     wanted
@@ -1884,7 +1934,13 @@ fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
         if let Some(last) = clusters.last_mut() {
             let cluster_end =
                 last.iter().map(|link| link.end_min).max().unwrap_or(0);
-            if item.start_min <= cluster_end {
+            let cluster_untracked =
+                last.first().is_some_and(|link| link.untracked);
+            // Past clusters split by trackedness: two closed MEETs may
+            // overlap, and that is truthful (one on the clock, one off).
+            if item.start_min <= cluster_end
+                && item.untracked == cluster_untracked
+            {
                 last.push(item);
                 continue;
             }
@@ -1894,16 +1950,24 @@ fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
     clusters
 }
 
-fn format_meet_span(start_min: i32, end_min: i32) -> (String, String) {
+fn format_meet_span(
+    start_min: i32,
+    end_min: i32,
+    untracked: bool,
+) -> (String, String) {
     let duration = (end_min - start_min).max(0);
     let start_mod = start_min.rem_euclid(1440);
     let end_mod = end_min.rem_euclid(1440);
     let start = format!("{:02}{:02}", start_mod / 60, start_mod % 60);
     let end = format!("{:02}{:02}", end_mod / 60, end_mod % 60);
-    (
-        format!("(**{start}-{end}** [t:: {duration}m])"),
-        format!("{start}-{end}"),
-    )
+    if untracked {
+        (format!("(**{start}-{end}**)"), format!("{start}-{end}"))
+    } else {
+        (
+            format!("(**{start}-{end}** [t:: {duration}m])"),
+            format!("{start}-{end}"),
+        )
+    }
 }
 
 fn status_for_phase(phase: Option<LinkPhase>) -> char {
