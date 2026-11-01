@@ -96,9 +96,10 @@ reading queue during this pull instead of becoming a task; see
 
 ## See the count in Obsidian
 
-The Ledger Tools desktop status bar shows the Keep count beside the open-task
-count in `gkeep_inbox.md`. It uses bob's cached status and asks bob to check
-Keep only while Obsidian is attended. See the [`bob gkeep status` contract](../gkeep.md#status).
+The Ledger Tools desktop status bar shows a bulb with the Keep count and an
+inbox tray with the open-task count in `gkeep_inbox.md`, each only while it is
+above zero. It uses bob's cached status and asks bob to check Keep only while
+Obsidian is attended. See the [`bob gkeep status` contract](../gkeep.md#status).
 
 ## If it goes wrong
 
