@@ -318,7 +318,7 @@ Failure matrix:
 `bob gkeep status` answers two questions in one call: how many Keep notes a
 default `bob gkeep pull` would act on, and how many top-level tasks in
 `gkeep_inbox.md` are open. It exists for status bars (the Obsidian footer
-reads it) and scripts. It observes and never pulls, archives, or edits the
+reads its Keep count) and scripts. It observes and never pulls, archives, or edits the
 vault.
 
 ```text
