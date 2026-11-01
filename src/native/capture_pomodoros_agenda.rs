@@ -1083,12 +1083,17 @@ fn event_conflict(
     let end_min = (end_h * 60 + end_m) as u16;
     let mut excluded = BTreeSet::new();
     if let Some(current_agenda) = agenda.get(current_index) {
-        excluded.extend(current_agenda.items.iter().filter_map(|item| {
-            (item.resolution == AgendaResolution::Resolved
-                && item.relative_target.as_deref()
-                    == Some(day_relative.to_string_lossy().as_ref()))
-            .then(|| item.block_id.clone())
-        }));
+        excluded.extend(
+            current_agenda
+                .items
+                .iter()
+                .filter(|item| {
+                    item.resolution == AgendaResolution::Resolved
+                        && item.relative_target.as_deref()
+                            == Some(day_relative.to_string_lossy().as_ref())
+                })
+                .map(|item| item.block_id.clone()),
+        );
     }
     let excluded: std::collections::HashSet<String> =
         excluded.into_iter().collect();

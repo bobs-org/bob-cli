@@ -764,12 +764,20 @@ fn agenda_reads_synced_rows_cleanly() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let agenda: Value =
         serde_json::from_str(&stdout(&output)).expect("agenda JSON");
-    let text = agenda.to_string();
+    let items: String = agenda["pomodoros"]
+        .as_array()
+        .expect("pomodoros")
+        .iter()
+        .flat_map(|entry| entry["items"].as_array().into_iter().flatten())
+        .filter_map(|item| item["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     // Linked rows resolve with clean titles; the ended interview sits
-    // under a closed MEET, so it stays out of the open agenda.
-    assert!(text.contains("Dentist"), "{text}");
-    assert!(text.contains("Late call"), "{text}");
-    assert!(!text.contains("Product interview"), "{text}");
+    // under a closed MEET, so it stays out of the open agenda. Event
+    // rows still list it; the open-agenda items must not.
+    assert!(items.contains("Dentist"), "{items}");
+    assert!(items.contains("Late call"), "{items}");
+    assert!(!items.contains("Product interview"), "{items}");
 }
 
 #[test]
