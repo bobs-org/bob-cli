@@ -23,7 +23,7 @@ mod render;
 mod root;
 mod signin;
 mod snapshot;
-mod stamp;
+pub(crate) mod stamp;
 mod sync;
 mod ui;
 

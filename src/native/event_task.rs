@@ -675,16 +675,6 @@ fn clean_event_title(after_span: &str) -> String {
     }
     loop {
         let trimmed = title.trim_end();
-        let Some(open) = trimmed.rfind('[') else {
-            break;
-        };
-        if markdown_link_end(trimmed, open) != Some(trimmed.len()) {
-            break;
-        }
-        title = trimmed[..open].trim_end().to_string();
-    }
-    loop {
-        let trimmed = title.trim_end();
         let Some(start) = trimmed.to_ascii_lowercase().rfind("#untracked")
         else {
             break;
@@ -697,6 +687,16 @@ fn clean_event_title(after_span: &str) -> String {
             break;
         }
         title = trimmed[..start].trim_end().to_string();
+    }
+    loop {
+        let trimmed = title.trim_end();
+        let Some(open) = trimmed.rfind('[') else {
+            break;
+        };
+        if markdown_link_end(trimmed, open) != Some(trimmed.len()) {
+            break;
+        }
+        title = trimmed[..open].trim_end().to_string();
     }
     if let Some((head, tail)) = title.rsplit_once(" · *")
         && tail.ends_with('*')

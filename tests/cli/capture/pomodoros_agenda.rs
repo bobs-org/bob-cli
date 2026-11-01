@@ -166,6 +166,87 @@ fn agenda_empty_golden() {
 }
 
 #[test]
+fn agenda_events_golden() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-events");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_tasks_vault(&vault);
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[area]]\ncolor: green\n---\n# Work\n",
+    );
+    write_file(
+        &vault.join("job.md"),
+        "---\ntype: [[project]]\nparent: [[work]]\nroot: true\n---\n# Job\n",
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Events\n",
+            "\n",
+            "*↻ synced 08:02 · [me@example.com](https://calendar.google.com/calendar/r/day/2026/8/28?authuser=me%40example.com)*\n",
+            "- **all day** School holiday · *day 2 of 3* [📅](https://calendar.google.com/event?eid=holiday \"Open in Google Calendar\")\n",
+            "- **1100-1130** Class meeting · *maybe* [📅](https://calendar.google.com/event?eid=class \"Open in Google Calendar\")\n",
+            "- [*] #task **0930-1000** Standup [📅](https://calendar.google.com/event?eid=standup \"Open in Google Calendar\") [📹](https://meet.google.com/abc \"Join call\") [📍](https://www.google.com/maps/search/?api=1&query=Office \"Office\") [root:: job] ^standup\n",
+            "- [ ] #task **1200-1300** Lunch with Kelly [📅](https://calendar.google.com/event?eid=lunch \"Open in Google Calendar\") #untracked ^lunch\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [x] (0730-0800) — UNTRACKED BREAK\n",
+            "- [ ] (0900-0940 [t:: 40m]) — BOB\n",
+            "- [ ] () — MEET\n",
+            "\t- [[#^standup]]\n",
+            "\t- [[#^lunch]]\n",
+        ),
+    );
+    check_golden("agenda-events", &vault, &day_file, &["--all"]);
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--tasks")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("run human capture-pomodoros agenda");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(human.contains("Calendar"), "{human}");
+    assert!(human.contains("Standup"), "{human}");
+    assert!(human.contains("Lunch with Kelly"), "{human}");
+    assert!(human.contains("untracked"), "{human}");
+}
+
+#[test]
+fn agenda_events_idle_gap_reports_a_plain_fit() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-events-gap");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_tasks_vault(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Events\n",
+            "- [ ] #task **1000-1030** Focus block ^focus\n",
+            "## Pomodoros\n",
+        ),
+    );
+    let json = agenda_json(&vault, &day_file, &[]);
+    assert_eq!(json["events"]["focus"], 0);
+    assert_eq!(
+        json["events"]["gap"],
+        serde_json::json!({
+            "from": "09:10",
+            "until": "10:00",
+            "minutes": 50,
+            "fits": "=10"
+        })
+    );
+    assert_eq!(json["events"]["refresh_at"], "2026-08-28T10:00");
+}
+
+#[test]
 fn agenda_no_daily_note_golden() {
     let temp = TempDir::new("bob-cli-pomodoros-agenda-no-note");
     let vault = temp.path().join("vault");

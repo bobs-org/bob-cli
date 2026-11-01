@@ -1,0 +1,315 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0,
+    "untracked_count": 1
+  },
+  "count": 3,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "events": {
+    "all_day": [
+      {
+        "line": 5,
+        "qualifier": "day 2 of 3",
+        "title": "School holiday"
+      }
+    ],
+    "conflict": {
+      "event": 0,
+      "overlap_minutes": 10,
+      "pomodoro_line": 12
+    },
+    "focus": 0,
+    "gap": null,
+    "refresh_at": "2026-08-28T09:30",
+    "rows": [
+      {
+        "block_id": "standup",
+        "calendar_url": "https://calendar.google.com/event?eid=standup",
+        "duration_minutes": 30,
+        "ends_at": "2026-08-28T10:00",
+        "home": {
+          "hue": "green",
+          "label": "job"
+        },
+        "join_url": "https://meet.google.com/abc",
+        "kind": "task",
+        "line": 7,
+        "location": "Office",
+        "phase": "upcoming",
+        "pomodoro": {
+          "index": 1,
+          "line": 13,
+          "role": "next"
+        },
+        "qualifier": null,
+        "root": "job",
+        "starts_at": "2026-08-28T09:30",
+        "status_symbol": "*",
+        "status_type": "ON_HOLD",
+        "time_range": "0930-1000",
+        "title": "Standup",
+        "untracked": false
+      },
+      {
+        "block_id": null,
+        "calendar_url": "https://calendar.google.com/event?eid=class",
+        "duration_minutes": 30,
+        "ends_at": "2026-08-28T11:30",
+        "home": null,
+        "join_url": null,
+        "kind": "timed_context",
+        "line": 6,
+        "location": null,
+        "phase": "upcoming",
+        "pomodoro": null,
+        "qualifier": "maybe",
+        "root": null,
+        "starts_at": "2026-08-28T11:00",
+        "status_symbol": null,
+        "status_type": null,
+        "time_range": "1100-1130",
+        "title": "Class meeting",
+        "untracked": false
+      },
+      {
+        "block_id": "lunch",
+        "calendar_url": "https://calendar.google.com/event?eid=lunch",
+        "duration_minutes": 60,
+        "ends_at": "2026-08-28T13:00",
+        "home": null,
+        "join_url": null,
+        "kind": "task",
+        "line": 8,
+        "location": null,
+        "phase": "upcoming",
+        "pomodoro": {
+          "index": 2,
+          "line": 13,
+          "role": "next"
+        },
+        "qualifier": null,
+        "root": null,
+        "starts_at": "2026-08-28T12:00",
+        "status_symbol": " ",
+        "status_type": "TODO",
+        "time_range": "1200-1300",
+        "title": "Lunch with Kelly",
+        "untracked": true
+      }
+    ],
+    "start_hint": "=meet",
+    "synced_at": "2026-08-28T08:02"
+  },
+  "ok": true,
+  "plan_budget": {
+    "links": {
+      "cap": 10,
+      "count": 2,
+      "over": false
+    },
+    "status": "ok"
+  },
+  "pomodoros": [
+    {
+      "child_count": 0,
+      "ends_at": "2026-08-28T08:00",
+      "homes": {
+        "chip": null,
+        "hue": null,
+        "kind": "unlinked",
+        "label": "",
+        "parts": [
+          {
+            "area": "@unlinked",
+            "area_label": "unlinked",
+            "hue": null,
+            "key": "@unlinked",
+            "kind": "bucket",
+            "label": "unlinked",
+            "minutes": 0,
+            "share": 100,
+            "tasks": 0
+          }
+        ],
+        "state": "attributed",
+        "untracked": true
+      },
+      "is_current": false,
+      "items": [],
+      "line": 11,
+      "name": "UNTRACKED BREAK",
+      "notes": [],
+      "placeholder": false,
+      "ref": "11:f6189f36",
+      "retired_link_count": 0,
+      "role": "completed",
+      "selectable": true,
+      "slug": "untracked-break",
+      "starts_at": "2026-08-28T07:30",
+      "state": "completed",
+      "status_symbol": "x",
+      "task_link_count": null,
+      "themes": [
+        {
+          "hue": "red",
+          "hue_source": "hash",
+          "key": "untracked break",
+          "name": "UNTRACKED BREAK"
+        }
+      ],
+      "time_range": "0730-0800",
+      "tracked": false
+    },
+    {
+      "child_count": 0,
+      "ends_at": "2026-08-28T09:40",
+      "homes": {
+        "chip": null,
+        "hue": null,
+        "kind": "unlinked",
+        "label": "",
+        "parts": [],
+        "state": "forecast"
+      },
+      "is_current": true,
+      "items": [],
+      "line": 12,
+      "name": "BOB",
+      "notes": [],
+      "placeholder": false,
+      "ref": "12:32109af6",
+      "retired_link_count": 0,
+      "role": "current",
+      "selectable": true,
+      "slug": "bob",
+      "starts_at": "2026-08-28T09:00",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": 0,
+      "themes": [
+        {
+          "hue": "magenta",
+          "hue_source": "hash",
+          "key": "bob",
+          "name": "BOB"
+        }
+      ],
+      "time_range": "0900-0940"
+    },
+    {
+      "child_count": 2,
+      "ends_at": null,
+      "homes": {
+        "chip": "job · unfiled",
+        "hue": "green",
+        "kind": "work",
+        "label": "job · unfiled",
+        "parts": [
+          {
+            "area": "work.md",
+            "area_label": "work",
+            "hue": "green",
+            "key": "job.md",
+            "kind": "project",
+            "label": "job",
+            "share": 50,
+            "tasks": 1
+          },
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 50,
+            "tasks": 1
+          }
+        ],
+        "state": "forecast"
+      },
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "standup",
+          "block_link": "[[#^standup]]",
+          "event": {
+            "ends_at": "2026-08-28T10:00",
+            "starts_at": "2026-08-28T09:30",
+            "time_range": "0930-1000",
+            "title": "Standup",
+            "untracked": false
+          },
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 14,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "2026/20260828.md",
+          "resolution": "resolved",
+          "status_name": "Next",
+          "status_symbol": "*",
+          "status_type": "ON_HOLD",
+          "text": "**0930-1000** Standup [📅](https://calendar.google.com/event?eid=standup \"Open in Google Calendar\") [📹](https://meet.google.com/abc \"Join call\") [📍](https://www.google.com/maps/search/?api=1&query=Office \"Office\")",
+          "warning": null
+        },
+        {
+          "block_id": "lunch",
+          "block_link": "[[#^lunch]]",
+          "event": {
+            "ends_at": "2026-08-28T13:00",
+            "starts_at": "2026-08-28T12:00",
+            "time_range": "1200-1300",
+            "title": "Lunch with Kelly",
+            "untracked": true
+          },
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 15,
+          "ledger_notes": [],
+          "line": 8,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "2026/20260828.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "**1200-1300** Lunch with Kelly [📅](https://calendar.google.com/event?eid=lunch \"Open in Google Calendar\") #untracked",
+          "warning": null
+        }
+      ],
+      "line": 13,
+      "name": "MEET",
+      "notes": [],
+      "placeholder": true,
+      "ref": "13:20ea0b2d",
+      "retired_link_count": 0,
+      "role": "next",
+      "selectable": true,
+      "slug": "meet",
+      "starts_at": null,
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "themes": [
+        {
+          "hue": "violet",
+          "hue_source": "hash",
+          "key": "meet",
+          "name": "MEET"
+        }
+      ],
+      "time_range": null
+    }
+  ],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "warnings": []
+}

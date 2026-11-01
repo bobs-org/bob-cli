@@ -10,13 +10,13 @@
 //! [`list_queued_links`](super::capture_pomodoro_start::list_queued_links).
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     ops::Range,
     path::{Path, PathBuf},
 };
 
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate, NaiveDateTime, Timelike};
 use serde::Serialize;
 
 use super::{
@@ -35,7 +35,11 @@ use super::{
     capture_pomodoros::bounded_warning,
     capture_tasks::status_type_label,
     collect_done::trailing_block_id_in_line,
-    env as bob_env, markdown, note_tasks, pomodoro,
+    env as bob_env,
+    event_task::{self, EventKind, EventNoteRow},
+    markdown, note_tasks, pomodoro,
+    pomodoro_homes::{DiskHomeSource, HomeResolver, Hue},
+    task_root::{self, TaskRootState},
     vault_links::{LinkResolution, VaultLinkResolver},
 };
 
@@ -125,6 +129,18 @@ pub(crate) struct AgendaItem {
     pub(crate) lines_truncated: usize,
     pub(crate) ledger_notes: Vec<AgendaLine>,
     pub(crate) warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) event: Option<AgendaItemEvent>,
+}
+
+/// Event details attached to a Task Link that targets today's Event Task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaItemEvent {
+    pub(crate) time_range: String,
+    pub(crate) starts_at: String,
+    pub(crate) ends_at: String,
+    pub(crate) untracked: bool,
+    pub(crate) title: String,
 }
 
 /// Per-entry agenda additions for `--tasks`.
@@ -138,11 +154,103 @@ pub(crate) struct AgendaEntry {
     pub(crate) items: Vec<AgendaItem>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgendaEventKind {
+    Task,
+    TimedContext,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgendaEventPhase {
+    Ended,
+    Running,
+    Upcoming,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaAllDayContext {
+    pub(crate) line: usize,
+    pub(crate) title: String,
+    pub(crate) qualifier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaEventHome {
+    pub(crate) label: String,
+    pub(crate) hue: Option<Hue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaEventPomodoro {
+    pub(crate) line: usize,
+    pub(crate) role: AgendaRole,
+    pub(crate) index: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaEventRow {
+    pub(crate) line: usize,
+    pub(crate) block_id: Option<String>,
+    pub(crate) kind: AgendaEventKind,
+    pub(crate) qualifier: Option<String>,
+    pub(crate) title: String,
+    pub(crate) time_range: Option<String>,
+    pub(crate) starts_at: Option<String>,
+    pub(crate) ends_at: Option<String>,
+    pub(crate) duration_minutes: Option<u64>,
+    pub(crate) phase: Option<AgendaEventPhase>,
+    pub(crate) status_symbol: Option<char>,
+    pub(crate) status_type: Option<String>,
+    pub(crate) untracked: bool,
+    pub(crate) root: Option<String>,
+    pub(crate) home: Option<AgendaEventHome>,
+    pub(crate) join_url: Option<String>,
+    pub(crate) calendar_url: Option<String>,
+    pub(crate) location: Option<String>,
+    pub(crate) pomodoro: Option<AgendaEventPomodoro>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaEventGap {
+    pub(crate) from: String,
+    pub(crate) until: String,
+    pub(crate) minutes: u64,
+    pub(crate) fits: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaEventConflict {
+    pub(crate) pomodoro_line: usize,
+    pub(crate) event: usize,
+    pub(crate) overlap_minutes: u64,
+}
+
+/// Calendar facts and timing hints for the Mac Capture idle agenda.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaEvents {
+    pub(crate) synced_at: Option<String>,
+    pub(crate) all_day: Vec<AgendaAllDayContext>,
+    pub(crate) rows: Vec<AgendaEventRow>,
+    pub(crate) focus: Option<usize>,
+    pub(crate) gap: Option<AgendaEventGap>,
+    pub(crate) conflict: Option<AgendaEventConflict>,
+    pub(crate) start_hint: Option<String>,
+    pub(crate) refresh_at: Option<String>,
+}
+
 /// Top-level agenda additions for `--tasks`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CompletedSummary {
     pub(crate) count: usize,
     pub(crate) minutes: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) untracked_count: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 /// Shared ledger context for resolving one entry's items: the daily
@@ -178,6 +286,7 @@ pub(crate) struct AgendaNotes<'a> {
     settings: note_tasks::NoteTaskSettings,
     cleared: note_tasks::NoteTaskSettings,
     cache: HashMap<(PathBuf, bool), Option<(String, note_tasks::NoteTaskScan)>>,
+    event_chips: HashMap<String, AgendaItemEvent>,
     #[cfg(test)]
     reads: usize,
 }
@@ -191,6 +300,7 @@ impl<'a> AgendaNotes<'a> {
         let settings = note_tasks::read_settings(bob_dir);
         let mut cleared = settings.clone();
         cleared.global_filter.clear();
+        let event_chips = event_item_chips(day_contents, agenda_date(day_path));
         let mut notes = Self {
             bob_dir,
             day_path: day_path.to_path_buf(),
@@ -198,6 +308,7 @@ impl<'a> AgendaNotes<'a> {
             settings,
             cleared,
             cache: HashMap::new(),
+            event_chips,
             #[cfg(test)]
             reads: 0,
         };
@@ -325,6 +436,7 @@ impl<'a> AgendaNotes<'a> {
                 lines_truncated: 0,
                 ledger_notes: ledger_notes.clone(),
                 warning,
+                event: None,
             };
         let filter_cleared = marker == TaskLinkMarker::Embedded;
         let day_path = context.day_path;
@@ -405,6 +517,11 @@ impl<'a> AgendaNotes<'a> {
                     lines_truncated,
                     ledger_notes,
                     warning: None,
+                    event: if target_path == day_path {
+                        self.event_chips.get(block_id).cloned()
+                    } else {
+                        None
+                    },
                 }
             }
             note_tasks::BlockIdLookup::NotATask {
@@ -653,6 +770,374 @@ pub(crate) fn agenda_entries(
         .collect()
 }
 
+/// Build the additive Events block for a day note that has an `## Events`
+/// section. The event parser remains the authority for row recognition;
+/// this layer adds agenda-facing links, homes, and clock hints.
+pub(crate) fn agenda_events_payload(
+    bob_dir: &Path,
+    contents: &str,
+    entries: &[super::capture_pomodoros::PomodoroEntry],
+    agenda: &[AgendaEntry],
+    date: NaiveDate,
+    now: NaiveDateTime,
+    day_path: &Path,
+) -> Option<AgendaEvents> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let section = event_task::events_section_range(&lines)?;
+    let synced_at = super::gcal::stamp::recognize(&lines, section)
+        .into_iter()
+        .find_map(|index| {
+            super::gcal::stamp::parse(lines.get(index).copied()?, date)
+                .map(|stamp| stamp.json_synced_at())
+        });
+    let note_rows = event_task::events_in_note(contents, date);
+    let day_relative = day_path
+        .strip_prefix(bob_dir)
+        .unwrap_or(day_path)
+        .to_path_buf();
+    let task_settings = note_tasks::read_settings(bob_dir);
+    let task_scan = note_tasks::scan(contents, &task_settings);
+    let mut home_resolver = HomeResolver::new(DiskHomeSource::new(bob_dir));
+    let mut all_day = Vec::new();
+    let mut rows = Vec::new();
+
+    for event in &note_rows {
+        let Some(raw_line) = lines.get(event.line_index).copied() else {
+            continue;
+        };
+        if event.kind == EventKind::AllDayContext {
+            all_day.push(AgendaAllDayContext {
+                line: event.line_index + 1,
+                title: event.title.clone(),
+                qualifier: event_qualifier(raw_line),
+            });
+            continue;
+        }
+        let Some(span) = event.span else {
+            continue;
+        };
+        let (starts_at, ends_at) = event_datetimes(date, span);
+        let task = task_scan.task_at(event.line_index);
+        let root = if event.kind == EventKind::Task {
+            match task_root::parse_task_root(raw_line) {
+                TaskRootState::Set { raw } => Some(display_root(&raw)),
+                TaskRootState::None | TaskRootState::Repair { .. } => None,
+            }
+        } else {
+            None
+        };
+        let home = if root.is_some() {
+            let resolved = home_resolver.home_for_task(
+                &day_relative,
+                event.line_index + 1,
+                raw_line,
+            );
+            Some(AgendaEventHome {
+                label: resolved.label,
+                hue: resolved.hue,
+            })
+        } else {
+            None
+        };
+        rows.push(AgendaEventRow {
+            line: event.line_index + 1,
+            block_id: event.block_id.clone(),
+            kind: match event.kind {
+                EventKind::Task => AgendaEventKind::Task,
+                EventKind::TimedContext => AgendaEventKind::TimedContext,
+                EventKind::AllDayContext => unreachable!(),
+            },
+            qualifier: event_qualifier(raw_line),
+            title: event.title.clone(),
+            time_range: Some(span.text()),
+            starts_at: Some(format_datetime(starts_at)),
+            ends_at: Some(format_datetime(ends_at)),
+            duration_minutes: Some(
+                u64::try_from(
+                    span.end_on_timeline() - i32::from(span.start_min),
+                )
+                .unwrap_or_default(),
+            ),
+            phase: Some(event_phase(starts_at, ends_at, now)),
+            status_symbol: event.status,
+            status_type: task
+                .map(|task| status_type_label(task.status_type).to_string()),
+            untracked: event.untracked,
+            root,
+            home,
+            join_url: markdown_link_target(raw_line, "📹"),
+            calendar_url: markdown_link_target(raw_line, "📅"),
+            location: markdown_link_title(raw_line, "📍"),
+            pomodoro: None,
+        });
+    }
+
+    for row in &mut rows {
+        row.pomodoro = row.block_id.as_deref().and_then(|block_id| {
+            linked_pomodoro(block_id, &day_relative, entries, agenda)
+        });
+    }
+
+    let focus = focus_event_index(&rows);
+    let gap =
+        focus.and_then(|index| event_gap(&rows[index], entries, date, now));
+    let conflict = focus.and_then(|index| {
+        event_conflict(index, &rows, &note_rows, entries, agenda, &day_relative)
+    });
+    let start_hint =
+        focus.and_then(|index| event_start_hint(&rows[index], entries, now));
+    let refresh_at = rows
+        .iter()
+        .flat_map(|row| [row.starts_at.as_deref(), row.ends_at.as_deref()])
+        .flatten()
+        .filter_map(parse_local_datetime)
+        .filter(|boundary| *boundary > now)
+        .min()
+        .map(format_datetime);
+
+    Some(AgendaEvents {
+        synced_at,
+        all_day,
+        rows,
+        focus,
+        gap,
+        conflict,
+        start_hint,
+        refresh_at,
+    })
+}
+
+fn event_datetimes(
+    date: NaiveDate,
+    span: event_task::EventSpan,
+) -> (NaiveDateTime, NaiveDateTime) {
+    let start_minute = i32::from(span.start_min);
+    let end_minute = span.end_on_timeline();
+    let start = date.and_hms_opt(0, 0, 0).expect("midnight is valid")
+        + Duration::minutes(i64::from(start_minute));
+    let end = date.and_hms_opt(0, 0, 0).expect("midnight is valid")
+        + Duration::minutes(i64::from(end_minute));
+    (start, end)
+}
+
+fn event_phase(
+    starts_at: NaiveDateTime,
+    ends_at: NaiveDateTime,
+    now: NaiveDateTime,
+) -> AgendaEventPhase {
+    if now < starts_at {
+        AgendaEventPhase::Upcoming
+    } else if now < ends_at {
+        AgendaEventPhase::Running
+    } else {
+        AgendaEventPhase::Ended
+    }
+}
+
+fn format_datetime(value: NaiveDateTime) -> String {
+    value.format("%Y-%m-%dT%H:%M").to_string()
+}
+
+fn parse_local_datetime(value: &str) -> Option<NaiveDateTime> {
+    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").ok()
+}
+
+fn event_qualifier(line: &str) -> Option<String> {
+    let (_, suffix) = line.split_once(" · *")?;
+    let qualifier = suffix.split_once('*')?.0.trim();
+    (!qualifier.is_empty()).then(|| qualifier.to_string())
+}
+
+fn display_root(raw: &str) -> String {
+    let raw = raw.trim();
+    let raw = raw
+        .strip_prefix("[[")
+        .and_then(|value| value.strip_suffix("]]"))
+        .unwrap_or(raw);
+    raw.split_once('|')
+        .map_or(raw, |(target, _)| target)
+        .trim()
+        .to_string()
+}
+
+fn markdown_link_target(line: &str, icon: &str) -> Option<String> {
+    let marker = format!("[{icon}](");
+    let start = line.find(&marker)? + marker.len();
+    let link = line.get(start..)?.split_once(')')?.0.trim();
+    let target = link.split_once(" \"").map_or(link, |(target, _)| target);
+    (!target.is_empty()).then(|| target.to_string())
+}
+
+fn markdown_link_title(line: &str, icon: &str) -> Option<String> {
+    let marker = format!("[{icon}](");
+    let start = line.find(&marker)? + marker.len();
+    let rest = line.get(start..)?;
+    let title_start = rest.find(" \"")? + 2;
+    let title = rest.get(title_start..)?.split_once("\")")?.0;
+    (!title.is_empty()).then(|| title.replace("&quot;", "\""))
+}
+
+fn linked_pomodoro(
+    block_id: &str,
+    day_relative: &Path,
+    entries: &[super::capture_pomodoros::PomodoroEntry],
+    agenda: &[AgendaEntry],
+) -> Option<AgendaEventPomodoro> {
+    for (entry, agenda_entry) in entries.iter().zip(agenda) {
+        if let Some(item) = agenda_entry.items.iter().find(|item| {
+            item.resolution == AgendaResolution::Resolved
+                && item.block_id == block_id
+                && item.relative_target.as_deref()
+                    == Some(day_relative.to_string_lossy().as_ref())
+        }) {
+            return Some(AgendaEventPomodoro {
+                line: entry.line,
+                role: agenda_entry.role,
+                index: item.index,
+            });
+        }
+    }
+    None
+}
+
+fn focus_event_index(rows: &[AgendaEventRow]) -> Option<usize> {
+    let eligible = |row: &&AgendaEventRow| {
+        row.kind == AgendaEventKind::Task
+            && row.status_symbol.is_some_and(event_task::is_open_status)
+    };
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| eligible(row))
+        .find(|(_, row)| row.phase == Some(AgendaEventPhase::Running))
+        .or_else(|| {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, row)| eligible(row))
+                .find(|(_, row)| row.phase == Some(AgendaEventPhase::Upcoming))
+        })
+        .map(|(index, _)| index)
+}
+
+fn event_gap(
+    focus: &AgendaEventRow,
+    entries: &[super::capture_pomodoros::PomodoroEntry],
+    date: NaiveDate,
+    now: NaiveDateTime,
+) -> Option<AgendaEventGap> {
+    let until = parse_local_datetime(focus.starts_at.as_deref()?)?;
+    let current = entries.iter().find(|entry| entry.is_current);
+    let from = if let Some(current) = current {
+        parse_local_datetime(
+            &agenda_datetimes(date, current.time_range.as_deref()).1?,
+        )?
+    } else {
+        next_five_minute_slot(now)
+    };
+    if until < from {
+        return None;
+    }
+    let minutes = u64::try_from((until - from).num_minutes()).ok()?;
+    let fits = if current.is_none() {
+        let count = minutes / 5;
+        (count > 0).then(|| format!("={count}"))
+    } else {
+        None
+    };
+    Some(AgendaEventGap {
+        from: from.format("%H:%M").to_string(),
+        until: until.format("%H:%M").to_string(),
+        minutes,
+        fits,
+    })
+}
+
+fn next_five_minute_slot(now: NaiveDateTime) -> NaiveDateTime {
+    let minute =
+        i64::from(now.hour() * 60 + now.minute()) + i64::from(now.second() > 0);
+    let rounded = (minute + 4) / 5 * 5;
+    now.date().and_hms_opt(0, 0, 0).expect("midnight is valid")
+        + Duration::minutes(rounded)
+}
+
+fn event_conflict(
+    focus_index: usize,
+    rows: &[AgendaEventRow],
+    note_rows: &[EventNoteRow],
+    entries: &[super::capture_pomodoros::PomodoroEntry],
+    agenda: &[AgendaEntry],
+    day_relative: &Path,
+) -> Option<AgendaEventConflict> {
+    let focus = rows.get(focus_index)?;
+    let current_index = entries.iter().position(|entry| entry.is_current)?;
+    let current = &entries[current_index];
+    if current.name.as_deref().is_some_and(|name| {
+        super::plan_budget::normalize_component(name) == "meet"
+    }) {
+        return None;
+    }
+    let range = current.time_range.as_deref()?;
+    let (start, end) = range.split_once('-')?;
+    let (start_h, start_m) = parse_hhmm(start)?;
+    let (end_h, end_m) = parse_hhmm(end)?;
+    let start_min = (start_h * 60 + start_m) as u16;
+    let end_min = (end_h * 60 + end_m) as u16;
+    let mut excluded = BTreeSet::new();
+    if let Some(current_agenda) = agenda.get(current_index) {
+        excluded.extend(current_agenda.items.iter().filter_map(|item| {
+            (item.resolution == AgendaResolution::Resolved
+                && item.relative_target.as_deref()
+                    == Some(day_relative.to_string_lossy().as_ref()))
+            .then(|| item.block_id.clone())
+        }));
+    }
+    let excluded: std::collections::HashSet<String> =
+        excluded.into_iter().collect();
+    let crossed = event_task::first_event_start_crossed(
+        start_min, end_min, note_rows, &excluded,
+    )?;
+    if crossed.line_index + 1 != focus.line {
+        return None;
+    }
+    let span = crossed.span?;
+    let session_start = i32::from(start_min);
+    let mut session_end = i32::from(end_min);
+    if session_end <= session_start {
+        session_end += 24 * 60;
+    }
+    let overlap_start = i32::from(span.start_min).max(session_start);
+    let overlap_end = span.end_on_timeline().min(session_end);
+    let overlap_minutes =
+        u64::try_from((overlap_end - overlap_start).max(0)).ok()?;
+    Some(AgendaEventConflict {
+        pomodoro_line: current.line,
+        event: focus_index,
+        overlap_minutes,
+    })
+}
+
+fn event_start_hint(
+    focus: &AgendaEventRow,
+    entries: &[super::capture_pomodoros::PomodoroEntry],
+    now: NaiveDateTime,
+) -> Option<String> {
+    let linked = focus.pomodoro.as_ref()?;
+    let entry = entries.iter().find(|entry| entry.line == linked.line)?;
+    if entry.is_current
+        || entry.name.as_deref().is_none_or(|name| {
+            super::plan_budget::normalize_component(name) != "meet"
+        })
+    {
+        return None;
+    }
+    if focus.phase == Some(AgendaEventPhase::Running) {
+        return Some("x =meet".to_string());
+    }
+    let starts_at = parse_local_datetime(focus.starts_at.as_deref()?)?;
+    let until = starts_at - now;
+    (until >= Duration::zero() && until <= Duration::minutes(25))
+        .then(|| "=meet".to_string())
+}
+
 fn agenda_role(
     entry: &super::capture_pomodoros::PomodoroEntry,
     next_line: Option<usize>,
@@ -699,6 +1184,46 @@ pub(crate) fn agenda_datetimes(
     };
     let ends_at = format!("{end_date}T{end_h:02}:{end_m:02}");
     (Some(starts_at), Some(ends_at))
+}
+
+fn event_item_chips(
+    contents: &str,
+    date: NaiveDate,
+) -> HashMap<String, AgendaItemEvent> {
+    let mut chips = HashMap::new();
+    let mut duplicates = HashSet::new();
+    for event in event_task::events_in_note(contents, date) {
+        if event.kind != EventKind::Task {
+            continue;
+        }
+        let Some(block_id) = event.block_id else {
+            continue;
+        };
+        if duplicates.contains(&block_id) {
+            continue;
+        }
+        let Some(span) = event.span else {
+            continue;
+        };
+        let time_range = span.text();
+        let (Some(starts_at), Some(ends_at)) =
+            agenda_datetimes(date, Some(&time_range))
+        else {
+            continue;
+        };
+        let chip = AgendaItemEvent {
+            time_range,
+            starts_at,
+            ends_at,
+            untracked: event.untracked,
+            title: event.title,
+        };
+        if chips.insert(block_id.clone(), chip).is_some() {
+            chips.remove(&block_id);
+            duplicates.insert(block_id);
+        }
+    }
+    chips
 }
 
 /// Minutes spanned by one normalized `HHMM-HHMM` ledger range, for the

@@ -7411,13 +7411,19 @@ into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
 name or today) and `completed_summary` (`count` of completed ledger entries and
 their summed `minutes`: each tracked entry's recorded `[t:: Nm]` or
 stopwatch duration; untracked sessions (timed rows without either) contribute
-to neither count nor minutes). Each entry adds a derived `homes`
-object (the shared R9 shape from [Pomodoro homes](pomodoro-homes.md): `state`,
+to neither count nor minutes). Its `untracked_count` counts those completed
+sessions and is omitted when zero. Each untracked timed entry adds
+`tracked: false`; the field is omitted for tracked entries and placeholders.
+Each entry adds a derived `homes` object (the shared R9 shape from
+[Pomodoro homes](pomodoro-homes.md): `state`,
 `kind`, `label`, nullable `chip` and `hue`, and `parts`). Open entries are a
 forecast; completed entries are an attribution with `minutes` on each part.
 Human output appends a dim chip with its forecast `○` or attributed `●` dot
 after the entry name when `chip` is set. The schema stays version `1`. Calls
-without `--tasks` omit `homes`. Each entry also adds `role` (`current`, `next`,
+without `--tasks` omit `homes`. When the day note has an `## Events` section,
+`--tasks` also adds a top-level `events` object; without that section the key is
+omitted. Human output places a compact Calendar block before the Pomodoro rows.
+Each entry also adds `role` (`current`, `next`,
 `later`, `open`, or `completed`), naive `starts_at`/`ends_at` datetimes
 (`"YYYY-MM-DDTHH:MM"` for timed entries, `null` otherwise; both keys are always
 present with `--tasks`, and an end before the start rolls to the next day),
@@ -7439,6 +7445,32 @@ lines use the clean description, bullets the body after the list marker, other
 lines the line without indentation), relative `depth`, `kind` (`bullet`,
 `task`, `text`, `code`, or `log_marker`), `status_symbol` on task lines, and a
 `work`/`schedule`/`rotten` `log` tag on managed log markers and their subtrees.
+
+An item linked to an Event Task in today's daily note also carries `event` with
+its `time_range`, naive `starts_at`/`ends_at`, `untracked` flag, and clean
+`title`; other items omit this field.
+
+The top-level `events` object has `synced_at` (the Events stamp time or `null`),
+`all_day` context rows (`line`, `title`, and nullable `qualifier`), and timed
+`rows`. Event Task rows carry their `line`, nullable `block_id`, `kind`, nullable
+`qualifier`, `title`, `time_range`, naive `starts_at`/`ends_at`,
+`duration_minutes`, `phase` (`ended`, `running`, or `upcoming`), nullable task
+`status_symbol`/`status_type`, `untracked`, nullable `root`/`home`, nullable
+`join_url`, `calendar_url`, and `location`, and nullable `pomodoro` attribution
+(`line`, `role`, and lineup `index`). Timed context rows use
+`kind: "timed_context"` and have no task status or Pomodoro attribution.
+`focus` is the row index of the earliest running open Event Task, or the next
+upcoming open Event Task. `gap` reports free minutes to that event from the
+running Pomodoro's end, or the next five-minute slot when no Pomodoro is
+running; `fits` is the largest plain five-minute `=N` start and is present only
+while idle. `conflict` identifies a running non-MEET Pomodoro that crosses the
+focus event's start and its overlap in minutes. `start_hint` is `=meet` or
+`x =meet` when the focus event is linked under a non-running MEET and is
+starting soon. `refresh_at` is the next timed event phase boundary. Empty
+optional values are `null`, and the schema remains version `1`.
+
+The `events` block is derived read-only from the daily note. It adds no calendar
+fetch and does not write the vault.
 
 Numbering follows the session operators exactly: on the current entry `index`
 is the `x` number, and on every other open entry it is the `=` lineup number

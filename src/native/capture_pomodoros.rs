@@ -83,10 +83,12 @@ link counts, and the current entry's numbered Task Link count for picker callers
 --all to include completed entries. A missing daily note or missing \
 Pomodoros section returns a successful empty list with a warning.\n\n\
 With --tasks, each listed entry also carries its agenda payload: the entry \
-role, naive start/end datetimes, the retired-link count, session notes, the \
-resolved Task Link lineup with operator numbers, clean titles, statuses, \
-task-block lines, and ledger notes, and a derived homes object from those \
-Task Links. Every named entry carries its component ThemeRefs in `themes`. \
+role, naive start/end datetimes, trackedness, the retired-link count, session \
+notes, the resolved Task Link lineup with operator numbers, clean titles, \
+statuses, task-block lines, event chips for links to today's Event Tasks, and \
+ledger notes, and a derived homes object from those Task Links. When the day \
+has an `## Events` section, the response also includes its calendar rows and \
+timing hints. Every named entry carries its component ThemeRefs in `themes`. \
 Human output appends a dim home chip with its forecast or attributed dot \
 after each entry name. Its optional plan_budget is computed from the saved \
 daily note and the configured plan limits.",
@@ -207,6 +209,8 @@ struct CapturePomodorosResult {
     completed_summary: Option<capture_pomodoros_agenda::CompletedSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_budget: Option<CapturePomodorosPlanBudget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    events: Option<capture_pomodoros_agenda::AgendaEvents>,
 }
 
 /// Saved daily-plan budget for idle agenda clients. Capture's before/after
@@ -238,6 +242,8 @@ struct CapturePomodorosOutputEntry {
     items: Option<Vec<capture_pomodoros_agenda::AgendaItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     homes: Option<pomodoro_homes::Homes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tracked: Option<bool>,
 }
 
 fn list_capture_pomodoros(
@@ -252,6 +258,7 @@ fn list_capture_pomodoros(
             capture_pomodoros_agenda::CompletedSummary {
                 count: 0,
                 minutes: 0,
+                untracked_count: 0,
             },
         )
     };
@@ -273,6 +280,7 @@ fn list_capture_pomodoros(
                 date: request.include_tasks.then(|| agenda_date.to_string()),
                 completed_summary: empty_summary(),
                 plan_budget: None,
+                events: None,
             });
         }
         Err(error) => {
@@ -361,6 +369,17 @@ fn list_capture_pomodoros(
     } else {
         None
     };
+    let events = agenda.as_deref().and_then(|entries| {
+        capture_pomodoros_agenda::agenda_events_payload(
+            &request.bob_dir,
+            &contents,
+            &listed,
+            entries,
+            agenda_date,
+            bob_env::current_datetime(),
+            &day_file,
+        )
+    });
     let completed_summary = request
         .include_tasks
         .then(|| completed_summary_for(&scan.entries, &contents));
@@ -400,6 +419,16 @@ fn list_capture_pomodoros(
                     .map(|catalog| catalog.theme_refs_for_name(name))
             })
             .unwrap_or_default();
+        let tracked = if request.include_tasks {
+            let raw_line = contents
+                .lines()
+                .nth(entry.line.saturating_sub(1))
+                .unwrap_or("");
+            matches!(session_tracking(raw_line), SessionTracking::Untracked)
+                .then_some(false)
+        } else {
+            None
+        };
         pomodoros.push(CapturePomodorosOutputEntry {
             entry,
             themes,
@@ -412,6 +441,7 @@ fn list_capture_pomodoros(
             notes: agenda_entry.map(|agenda| agenda.notes.clone()),
             items: agenda_entry.map(|agenda| agenda.items.clone()),
             homes,
+            tracked,
         });
     }
 
@@ -426,6 +456,7 @@ fn list_capture_pomodoros(
         date: request.include_tasks.then(|| agenda_date.to_string()),
         completed_summary,
         plan_budget,
+        events,
     })
 }
 
@@ -452,6 +483,7 @@ pub(crate) fn completed_summary_for(
     let ledger_lines: Vec<&str> = contents.lines().collect();
     let mut count = 0;
     let mut minutes = 0;
+    let mut untracked_count = 0;
     for entry in entries {
         if entry.state != PomodoroState::Completed {
             continue;
@@ -462,7 +494,10 @@ pub(crate) fn completed_summary_for(
             .and_then(|index| ledger_lines.get(index).copied())
             .unwrap_or("");
         match session_tracking(raw_line) {
-            SessionTracking::Untracked => continue,
+            SessionTracking::Untracked => {
+                untracked_count += 1;
+                continue;
+            }
             SessionTracking::Tracked { minutes: duration } => {
                 count += 1;
                 minutes += duration;
@@ -472,7 +507,11 @@ pub(crate) fn completed_summary_for(
             }
         }
     }
-    capture_pomodoros_agenda::CompletedSummary { count, minutes }
+    capture_pomodoros_agenda::CompletedSummary {
+        count,
+        minutes,
+        untracked_count,
+    }
 }
 
 fn current_task_link_count(
@@ -1073,6 +1112,10 @@ fn human_success(result: &CapturePomodorosResult, styler: &Styler) -> String {
         output.push('\n');
     }
 
+    if let Some(events) = result.events.as_ref() {
+        output.push_str(&human_events_block(events, styler));
+    }
+
     if result.pomodoros.is_empty() {
         output.push_str("  No Pomodoros found.\n");
     } else if result.date.is_some() {
@@ -1138,6 +1181,92 @@ fn agenda_minutes_label(minutes: u64) -> String {
     } else {
         format!("{minutes}m")
     }
+}
+
+fn human_events_block(
+    events: &capture_pomodoros_agenda::AgendaEvents,
+    styler: &Styler,
+) -> String {
+    use capture_pomodoros_agenda::{AgendaEventKind, AgendaEventPhase};
+
+    let visible = events
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            row.phase != Some(AgendaEventPhase::Ended)
+                && (row.kind == AgendaEventKind::TimedContext
+                    || (row.kind == AgendaEventKind::Task
+                        && row.status_symbol.is_some_and(|symbol| {
+                            !matches!(symbol, 'x' | 'X' | '-')
+                        })))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let synced = events
+        .synced_at
+        .as_deref()
+        .and_then(|value| value.split_once('T').map(|(_, time)| time))
+        .map(|time| format!(" {}", styler.dim(&format!("↻ {time}"))))
+        .unwrap_or_default();
+    let mut output = format!("  {} Calendar{synced}\n", styler.cyan("📅"));
+    if visible.is_empty() && events.all_day.is_empty() {
+        output
+            .push_str(&format!("    {}\n", styler.dim("No upcoming events.")));
+    }
+    for (index, row) in events.rows.iter().enumerate() {
+        if !visible.contains(&index) {
+            continue;
+        }
+        let time = row
+            .time_range
+            .as_deref()
+            .map(|range| agenda_time_label(Some(range)))
+            .unwrap_or_else(|| "all day".to_string());
+        let marker = if events.focus == Some(index) {
+            "▶"
+        } else {
+            "·"
+        };
+        let mut detail = format!("{marker} {time} {}", row.title);
+        if row.untracked {
+            detail.push_str(" · untracked");
+        }
+        if events.focus == Some(index)
+            && let Some(hint) = events.start_hint.as_deref()
+        {
+            detail.push_str(&format!(" · {hint}"));
+        }
+        output.push_str(&format!("    {detail}\n"));
+    }
+    for row in &events.all_day {
+        let qualifier = row
+            .qualifier
+            .as_deref()
+            .map(|value| format!(" · {value}"))
+            .unwrap_or_default();
+        output.push_str(&format!("    · {}{qualifier}\n", row.title));
+    }
+    if let Some(gap) = events.gap.as_ref() {
+        let fit = gap
+            .fits
+            .as_deref()
+            .map(|value| format!(" · {value} fits"))
+            .unwrap_or_default();
+        output.push_str(&format!(
+            "    {} free{fit}\n",
+            styler.dim(&format!("{}m", gap.minutes)),
+        ));
+    }
+    if let Some(conflict) = events.conflict.as_ref() {
+        output.push_str(&format!(
+            "    {} running session overlaps its event by {}m\n",
+            styler.yellow("⚠"),
+            conflict.overlap_minutes,
+        ));
+    }
+    output.push('\n');
+    output
 }
 
 /// `HHMM-HHMM` ledger range for human eyes.
@@ -1734,11 +1863,13 @@ mod tests {
                 notes: None,
                 items: None,
                 homes: None,
+                tracked: None,
             }],
             warnings: Vec::new(),
             date: None,
             completed_summary: None,
             plan_budget: None,
+            events: None,
         };
 
         let value: serde_json::Value =
@@ -1769,6 +1900,7 @@ mod tests {
             "notes",
             "items",
             "homes",
+            "tracked",
         ] {
             assert!(
                 value["pomodoros"][0].get(key).is_none(),
@@ -1778,6 +1910,7 @@ mod tests {
         assert!(value.get("date").is_none());
         assert!(value.get("completed_summary").is_none());
         assert!(value.get("plan_budget").is_none());
+        assert!(value.get("events").is_none());
         assert_eq!(value["warnings"].as_array().expect("warnings").len(), 0);
     }
 
@@ -1845,6 +1978,7 @@ mod tests {
                     notes: None,
                     items: None,
                     homes: None,
+                    tracked: None,
                 },
                 CapturePomodorosOutputEntry {
                     entry: PomodoroEntry {
@@ -1872,12 +2006,14 @@ mod tests {
                     notes: None,
                     items: None,
                     homes: None,
+                    tracked: None,
                 },
             ],
             warnings: vec!["watch out".to_string()],
             date: None,
             completed_summary: None,
             plan_budget: None,
+            events: None,
         };
         let human = human_success(&result, &Styler::plain());
         assert!(human.contains("warning - watch out"));
