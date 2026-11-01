@@ -62,7 +62,26 @@ fn incomplete_invalid_and_duplicate_markers_have_teaching_errors() {
     assert!(execute("Fix the parser #\"DEEP")
         .unwrap_err()
         .contains("`#` is incomplete"));
-    assert!(scan_line("jot idea #", 0).is_empty());
+    let trailing = scan_line("jot idea #", 0);
+    assert!(matches!(
+        trailing.as_slice(),
+        [TypeMarkerOccurrence::Incomplete { .. }]
+    ));
+    assert_eq!(&"jot idea #"[trailing[0].span().clone()], "#");
+    let error = execute("jot idea #").unwrap_err();
+    assert!(
+        error.contains("`#` is incomplete: add a task type (`#fix`)"),
+        "{error}"
+    );
+    assert!(
+        error.contains("or write `\\#` to keep a literal `#`"),
+        "{error}"
+    );
+    let heading = execute("# Heading text").unwrap_err();
+    assert!(heading.contains("`#` is incomplete"), "{heading}");
+    let escaped = execute("\\# Heading text").unwrap();
+    assert_eq!(escaped.body, "# Heading text");
+    assert!(escaped.type_marker.is_none());
     assert!(execute("Fix the parser #fix.")
         .unwrap_err()
         .contains("is not a task type"));
@@ -75,6 +94,23 @@ fn incomplete_invalid_and_duplicate_markers_have_teaching_errors() {
     assert!(execute("Fix the parser #fix\n- #bug")
         .unwrap_err()
         .contains("type marker (#<type>)"));
+}
+
+#[test]
+fn digit_heading_dash_and_midline_hashes_stay_prose() {
+    for raw in [
+        "issue #123",
+        "#123 issue",
+        "## Heading",
+        "#-not-a-type",
+        "Ask about # in the middle",
+        "glued#hash",
+    ] {
+        assert!(scan_line(raw, 0).is_empty(), "{raw:?}");
+        let parsed = execute(raw).expect("unclaimed hash stays ordinary prose");
+        assert_eq!(parsed.body, raw, "{raw:?}");
+        assert!(parsed.type_marker.is_none(), "{raw:?}");
+    }
 }
 
 #[test]

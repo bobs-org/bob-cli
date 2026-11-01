@@ -213,15 +213,21 @@ fn task_type_shell_completion_returns_configured_hash_type_rows() {
     let fixture = fixture();
     let config = fixture._temp.path().join("config.yml");
     write_file(&config, "types:\n  BUILD: yellow\n  FIX: blue\n");
-    // A bare free-standing hash remains the Pomodoro-note marker, so it
-    // does not open the task-type menu. A letter starts the type query.
+    // A bare free-standing hash is an incomplete type marker, so it
+    // opens the task-type menu with an empty query.
     let bare = complete_with_config(
         &fixture,
         &config,
         &["bob", "capture", "Fix", "the", "parser", "#"],
     );
     assert_success(&bare);
-    assert!(values(&bare).is_empty(), "{:?}", lines(&bare));
+    let bare_values = values(&bare);
+    assert!(
+        bare_values.contains(&"#build".to_string()),
+        "{bare_values:?}"
+    );
+    assert!(bare_values.contains(&"#fix".to_string()), "{bare_values:?}");
+    assert!(groups(&bare).contains(&"task types".to_string()));
 
     let output = complete_with_config(
         &fixture,

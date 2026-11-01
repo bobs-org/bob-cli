@@ -520,13 +520,13 @@ pub(crate) struct LineDependencies {
 }
 
 /// Whether a trailing-run token is a marker a dependency may interleave
-/// with (in either order): `@...` destination shapes, the bare `#`
-/// Pomodoro-note marker, and schedule/priority/clipboard markers (whole
-/// or still-typed). Skipped tokens stay in the stream for terminal-marker
-/// extraction and route selection; only modifiers are directive.
+/// with (in either order): `@...` destination shapes, schedule/priority
+/// markers (whole or still-typed), and `%` directives. Type markers are
+/// masked before this scan. Skipped tokens stay in the stream for
+/// terminal-marker extraction and route selection; only modifiers are
+/// directive.
 pub(crate) fn is_trailing_transparent(text: &str, _parse_clip: bool) -> bool {
     text.starts_with('@')
-        || text == "#"
         || text == "s:"
         || parse_schedule_token(text).is_some()
         || is_priority_marker_token(text)

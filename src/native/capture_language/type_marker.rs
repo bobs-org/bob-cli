@@ -149,12 +149,15 @@ fn scan_line_with_positions(
             continue;
         }
         let after_hash = &body[sigil + 1..];
-        let opens = after_hash.chars().next().is_some_and(|character| {
+        let next = after_hash.chars().next();
+        let opens = next.is_some_and(|character| {
             character.is_ascii_alphabetic() || matches!(character, '"' | '“')
         });
-        // A free-standing bare hash remains the Pomodoro-note marker (or
-        // prose). Only an attached @route^/+ suffix may be incomplete at #.
-        if !opens {
+        // A free-standing bare `#` is an incomplete type marker. `#`+digit,
+        // `##…`, and `#-…` stay prose; attached `@route^/+` suffixes still
+        // parse through `attached_route_candidate`.
+        let bare = next.is_none() || next.is_some_and(char::is_whitespace);
+        if !opens && !bare {
             index += char_len(body, index);
             continue;
         }
@@ -1050,12 +1053,17 @@ pub(crate) fn invalid_marker_error(raw: &str) -> String {
     )
 }
 
+pub(crate) fn incomplete_type_marker_error() -> String {
+    "`#` is incomplete: add a task type (`#fix`), or write `\\#` to keep a literal `#`"
+        .to_string()
+}
+
 pub(crate) fn needs_task_error(name: Option<&str>) -> String {
     match name {
         Some(name) => format!(
             "`#{name}` needs a task: add the task text (`Fix the parser #{name}`) or target one (`^sase:fix-x #{name}`)"
         ),
-        None => "`#` is incomplete: type a task type after `#` (for example `#fix`)".to_string(),
+        None => incomplete_type_marker_error(),
     }
 }
 

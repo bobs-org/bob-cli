@@ -620,8 +620,8 @@ fn capture_complete_cursor_in_body_text_is_an_empty_success() {
 }
 
 #[test]
-fn capture_complete_bare_hash_marker_is_an_empty_success() {
-    let temp = TempDir::new("bob-cli-capture-complete-pomodoro-note");
+fn capture_complete_bare_hash_marker_opens_task_type() {
+    let temp = TempDir::new("bob-cli-capture-complete-bare-hash");
     let output = bob_command()
         .arg("capture-complete")
         .arg("-b")
@@ -639,12 +639,13 @@ fn capture_complete_bare_hash_marker_is_an_empty_success() {
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-complete JSON");
     assert_eq!(json["ok"], true);
-    assert!(json["context"].is_null());
+    assert_eq!(json["context"], "task_type");
+    assert_eq!(json["query"], "");
     assert_eq!(
         json["replacement"],
-        serde_json::json!({"start": 10, "end": 10})
+        serde_json::json!({"start": 9, "end": 10})
     );
-    assert_eq!(json["candidates"], serde_json::json!([]));
+    assert!(json["candidates"].is_array());
 }
 
 #[test]

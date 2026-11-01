@@ -150,6 +150,7 @@ anything is written, and any failure rolls the whole batch back.
 | `%c` / `%c<N>` | Capture clipboard content as child bullets (`%c` is one live value; `%c3` is three) |
 | `%` | Incomplete directive except on a bare URL where `%l` requests companion audio; add `%c`, `%n`, `%l` or write `\%` to keep a literal `%` |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
+| `#` | Incomplete `#<type>` at an item edge: add a type (`#fix`) or write `\#` to keep a literal `#`; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
 
@@ -157,7 +158,8 @@ anything is written, and any failure rolls the whole batch back.
 
 | You typed | Meaning |
 | --- | --- |
-| `remembered the timeout #` | Pomodoro note |
+| `remembered the timeout #` | Incomplete type marker: add `#fix` or write `\#` |
+| `remembered the timeout %n` | Pomodoro note |
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
 | `@cash+id#requirements <text>` | Child under that task's `REQUIREMENTS` section |
@@ -495,9 +497,13 @@ backslash).
 Add a free-standing `#<type>` marker at either item edge (`#fix Fix it`,
 `Fix it #fix`). A slug starts with an ASCII letter and uses letters, digits,
 and hyphens (`#fix`, `#deep-work`); quote spaces or punctuation
-(`#"DEEP WORK"`, `#"Q&A"`). A bare `#` stays literal prose and
-does not open the type menu. Escape a marker as `\#fix` to keep the literal
-`#fix` text in the body. The retired `t:` spelling is ordinary prose.
+(`#"DEEP WORK"`, `#"Q&A"`). A free-standing bare `#` at an item edge is an
+incomplete type marker: add a type (`#fix`) or write `\#` to keep a
+literal `#`. A leading `# Heading text` is therefore incomplete, and
+`\# Heading text` is the literal. `#` plus a digit, `##…`, `#-…`, mid-line
+`#`, and glued hashes stay ordinary prose. Escape a marker as `\#fix` to
+keep the literal `#fix` text in the body. The retired `t:` spelling is
+ordinary prose.
 
 The marker can attach to a new task with an explicit block ID
 (`Fix it @sase^fix-x#fix`). It can also attach to `@route+block-id#type` to
@@ -1708,7 +1714,7 @@ Quote `*` on the shell, because zsh globs it:
 1. **Placement.** It starts a whitespace-delimited token in the parent
    line's leading run or in any line's trailing run, exactly where `&`
    is allowed. A mid-line `*foo:bar` stays body text. Both runs skip
-   the `is_trailing_transparent` marker shapes (`@…`, `#…`, `s:`,
+   the `is_trailing_transparent` marker shapes (`@…`, `%…`, `s:`,
    `$`/`$<N>`, schedule, priority, and clip tokens).
 2. **Next byte.** The byte after `*` is neither whitespace nor `*`.
    This keeps `**bold**`, `* bullet`, and `5 * 3` literal.
@@ -4953,7 +4959,7 @@ actual move. Relocation is never described as later duplicate removal through
 
 Append a bare `%n` marker to capture the item as a plain-text
 sub-bullet on a Pomodoro instead of a task. For example,
-`bob capture 'remembered to bump the timeout #'` writes:
+`bob capture 'remembered to bump the timeout %n'` writes:
 
 ```markdown
 - remembered to bump the timeout
@@ -4978,7 +4984,7 @@ rejected alongside `s:<N>`, `$<N>`, any `@route` token, and `--route`, since
 a plain Pomodoro bullet has no field for a schedule, priority, or routed
 destination:
 
-| Marker                                                         | With `#` |
+| Marker                                                         | With `%n` |
 | ---------------------------------------------------------------| -------- |
 | `%c`, `%c<N>`, `--clip`                                         | allowed  |
 | `s:<N>`                                                         | rejected |
@@ -5020,8 +5026,7 @@ lead or trail the body, so `@notes#Ideas jot idea` and `jot idea @notes#Ideas`
 both capture into `notes.md`. A standalone terminal `#<section-prefix>`
 marker not appended to an `@route` token, such as `note #Ideas @foo`, is
 still not accepted and fails with a usage error; a standalone bare `#`, such
-as `note @foo #`, is instead the Pomodoro-note marker described above and
-still fails, since it conflicts with the `@route` token on the same item.
+as `note @foo #`, is an incomplete type marker (add `#fix`, or write `\#`).
 
 A `--route` target keeps `@tokens` literal. Add `--section TITLE` with
 `--route` to force bullet mode and place the bullet in a non-`Tasks` heading
@@ -6936,7 +6941,8 @@ the Add block ID flow. See
 [Linking tasks with '~' and '~~'](#linking-tasks).
 
 A marker-position `#` token also opens `task_type` completion, whether the item
-will create a task or target an existing task. The response replaces the whole
+will create a task or target an existing task. A free-standing bare `#` at an
+item edge is that marker with an empty query. The response replaces the whole
 marker, including `#`, returns the decoded name as `query`, and identifies the
 subject as `new` or `existing`. This context does not open for prose such as
 `Ask about #fix today`; another completion field still owns its own token.
@@ -7275,7 +7281,7 @@ These read-only discovery commands support interactive capture pickers. A
 *route* is the canonical lowercase name for a `<route>.md` note at the vault
 root; for example, route `cash` selects `cash.md`. The command-line route
 options accept ASCII uppercase too and normalize it to lowercase. A picker
-normally uses the commands in this order. Pomodoro notes (`text #`) skip this
+normally uses the commands in this order. Pomodoro notes (`text %n`) skip this
 list and call `bob capture` directly:
 
 1. Run `capture-targets` and let the user choose a route.

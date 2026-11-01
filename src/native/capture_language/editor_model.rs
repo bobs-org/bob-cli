@@ -525,8 +525,8 @@ pub(crate) struct EditorItemParse {
 
 /// One complete local destination marker token an item owns, with the span
 /// the marker text (`@route`, `@route+block-id`, `@route#Section`,
-/// `@route^block-id`, `@route:block-id`, `@route:block-id#pomodoro`, or a
-/// trailing bare `#`) occupies in the original draft.
+/// `@route^block-id`, `@route:block-id`, or `@route:block-id#pomodoro`)
+/// occupies in the original draft.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalDestinationMarker {
     pub(crate) start: usize,

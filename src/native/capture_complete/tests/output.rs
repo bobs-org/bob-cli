@@ -44,6 +44,24 @@ fn trailing_hash_fragment_requests_task_type_completion() {
 }
 
 #[test]
+fn bare_edge_hash_requests_task_type_completion() {
+    let temp = TempDir::new("bob-cli-capture-complete-bare-hash-type");
+    let raw = "Fix it #";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::TaskType));
+    assert_eq!(
+        value.replacement,
+        Replacement {
+            start: "Fix it ".len(),
+            end: raw.len()
+        }
+    );
+    let Candidates::TaskType(_) = &value.candidates else {
+        panic!("expected task-type candidates");
+    };
+}
+
+#[test]
 fn close_items_and_suffixes_request_no_completion() {
     let temp = TempDir::new("bob-cli-capture-complete-close");
     let day_file = active_task_fixture(temp.path());

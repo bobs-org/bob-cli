@@ -199,7 +199,9 @@ markers are valid input, \
 not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
 '@route^', '@+', '@route+', '@route+id#', '@:', '@route:', '@route:id#', \
 '@route:#name', and the legacy '@!' aliases \
-all report mode 'incomplete' plus what they still need. A valid `=<X>` start \
+all report mode 'incomplete' plus what they still need. A free-standing '#' \
+at an item edge reports mode 'incomplete' needing 'task_type'; '#' plus a \
+digit, '##…', '#-…', mid-line '#', and glued hashes stay ordinary prose. A valid `=<X>` start \
 suffix on a `@<route>:<block-id>[#<name>]` marker reports mode \
 'pomodoro_task' with a `pomodoro_start` object (`raw` plus 5-minute \
 `duration_units`/`offset_units`) and a `pomodoro_start` span covering the \

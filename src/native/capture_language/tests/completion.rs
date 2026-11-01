@@ -350,14 +350,15 @@ fn free_standing_hash_fragments_request_task_type_completion() {
         ("Fix it #n", 9, "n"),
         ("Fix it @sase #no", 15, "n"),
         ("Fix it #now", 11, "now"),
+        ("Fix #", 5, ""),
     ] {
         let completion = field(raw, cursor).expect(raw);
         assert_eq!(completion.context, CompletionContext::TaskType, "{raw}");
         assert_eq!(completion.query, query, "{raw}");
     }
 
-    // A lone `#` stays the Pomodoro-note marker: no tag completion.
-    assert_eq!(field("Fix #", 5), None);
+    let bare = field("Fix #", 5).expect("bare edge hash");
+    assert_eq!(bare.replacement, (4, 5));
 }
 
 #[test]

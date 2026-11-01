@@ -216,7 +216,7 @@ replacement covers the whole marker, `query` is the decoded type name, and \
 completes `task_type` (subject `new`), and a marker-only '@route+block-id#...' \
 suffix completes `task_type` (subject `existing`), including an empty '#'; an \
 attached suffix replacement never adds a space, and a bare unattached '#' \
-returns no `task_type` context. Configured rows follow config order for \
+opens `task_type` with an empty query. Configured rows follow config order for \
 an empty query; hidden types remain available on exact matches. Candidates \
 carry Bob's theme refs, current and inherited annotations, and a `set`, \
 `clear`, or `keep` effect. An unconfigured typed name appears as a refused \

@@ -668,7 +668,10 @@ post-image without writing.
 A `#<type>` marker on a new or selected existing task writes the resolved type X before
 placement, following the field table: X equals the inherited suggestion I
 with no field means kept; with an authored exception means cleared;
-otherwise a field already equal to X is kept, else set. The marker is the
+otherwise a field already equal to X is kept, else set. A free-standing bare
+`#` at an item edge is an incomplete marker: add a type (`#fix`) or write
+`\#` to keep a literal `#`. `#` plus a digit, `##…`, `#-…`, mid-line `#`,
+and glued hashes stay ordinary prose. The marker is the
 authority over any `#NAME` retype: a container destination accepts X, a
 matching component accepts that explicit pick, otherwise the capture
 refuses with `type_marker_conflict`. With `types:` configured, only configured

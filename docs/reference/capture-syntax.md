@@ -105,6 +105,7 @@ what they attach to, not as one global operator.
 | `+` | after `#name` | Part of the Pomodoro name (`BUGS+`) |
 | `%n` | `%n` at an item edge | Pomodoro note |
 | `#` | `@route#Section` | Heading in that note |
+| `#` | free-standing `#` at an item edge | Incomplete type marker: add `#fix` or write `\#` |
 | `#` | free-standing `#<type>` at an item edge | Type the new task or retype its selected task; unconfigured names refuse |
 | `#` | `@route^id#<type>` at an item edge | Type the new task with that block ID |
 | `#` | `@route+id#<type>` with no body or children | Retype the existing task and ensure Next |
@@ -1246,7 +1247,7 @@ Contract: [Task Link toggle](../capture.md#task-link-toggle).
 `%n` at an item edge is a plain-text note on a Pomodoro, not a routed task.
 
 ```bash
-bob capture 'remembered the timeout #'
+bob capture 'remembered the timeout %n'
 ```
 
 ```text { .no-copy title="Output" }
@@ -1329,9 +1330,12 @@ Contract: [Directives (`%`)](../capture.md#directives) · [Clipboard](../capture
 Type a new task at either item edge (`#fix Fix it`, `Fix it #fix`), or retype
 an existing task the item targets. Slugs start with an ASCII letter and use
 letters, digits, and hyphens; quoted literals allow spaces and punctuation
-(`#"DEEP WORK"`). A bare `#` stays literal prose and does not
-open task-type completion. `t:` is ordinary prose. Escape `\#fix` to keep
-the literal hash text in the body.
+(`#"DEEP WORK"`). A free-standing bare `#` at an item edge is an incomplete
+type marker: add a type (`#fix`) or write `\#` to keep a literal `#`. A
+leading `# Heading text` is incomplete; `\# Heading text` is the literal.
+`#` plus a digit, `##…`, `#-…`, mid-line `#`, and glued hashes stay ordinary
+prose. `t:` is ordinary prose. Escape `\#fix` to keep the literal hash text
+in the body.
 
 With configured `types:`, only configured entries are accepted. Without that
 vocabulary, only names already present in Pomodoro history are accepted;

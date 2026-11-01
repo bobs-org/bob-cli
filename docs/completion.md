@@ -455,8 +455,9 @@ another thin client of that service (see `docs/capture.md`
   changes type preferences. See [Menu composition](task-types.md#pt7-menu-composition).
 - **`#` completes task types.** A marker-position `#<type>` opens the
   `task_type` context at either item edge and accepts full `#<slug>` or
-  quoted `#"NAME"` replacements. Bare `#` remains a Pomodoro note and does
-  not open the type menu. Marker-only `@route+block-id#` uses this context for
+  quoted `#"NAME"` replacements. A free-standing bare `#` at an item edge
+  is an incomplete type marker and opens the type menu with an empty query.
+  Marker-only `@route+block-id#` uses this context for
   an existing-task Ensure Next, and `@route^block-id#` (the new-task attached
   form, including an empty `#`) uses it too. Empty queries list configured types in
   config order; hidden types appear on exact matches. An unknown typed row

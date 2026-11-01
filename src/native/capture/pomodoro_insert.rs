@@ -12,7 +12,7 @@ pub(super) enum PomodoroSelection<'a> {
     /// the shared path keeps for the legacy selection.
     TypedEntry { index: usize },
     /// Current Pomodoro, else the last completed one, else the first future
-    /// one. Used by the bare `#` Pomodoro-note marker.
+    /// one. Used by the `%n` Pomodoro-note directive.
     CurrentOrLastCompleted,
     /// Explicit named selector from `@<route>:<id>#<pomodoro>`. Resolves
     /// an open match first, otherwise creates a named future entry using the

@@ -989,11 +989,34 @@ fn capture_parse_json_reports_sub_bullet_section_and_incomplete_needs() {
         .arg("--")
         .arg("remembered to bump the timeout %n")
         .output()
-        .expect("run bare hash parse");
+        .expect("run pomodoro-note parse");
     assert_success(&pomodoro_note);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&pomodoro_note).trim()).expect("json");
     assert_eq!(json["mode"], "pomodoro_note");
+
+    let incomplete = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("jot idea #")
+        .output()
+        .expect("run bare hash parse");
+    assert_success(&incomplete);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&incomplete).trim()).expect("json");
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["needs"], serde_json::json!(["task_type"]));
+    assert_eq!(json["body"], "jot idea");
+    let span = json["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|span| span["kind"] == "task_type")
+        .expect("task_type span");
+    assert_eq!(span["start"], "jot idea ".len());
+    assert_eq!(span["end"], "jot idea #".len());
 }
 
 #[test]

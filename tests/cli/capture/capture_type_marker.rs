@@ -801,6 +801,8 @@ fn marker_errors_keep_their_json_codes() {
         ("Fix it #\"BUILD + FIX\"", "invalid_type_marker"),
         ("Fix it #fix #write", "duplicate_capture_marker"),
         ("#fix", "type_marker_needs_task"),
+        ("Fix it #", "type_marker_needs_task"),
+        ("# Heading text", "type_marker_needs_task"),
         ("https://example.test/a\n#fix", "type_marker_not_applicable"),
         (
             "https://example.test/a\n- #fix",
@@ -810,6 +812,17 @@ fn marker_errors_keep_their_json_codes() {
         let (_, json) =
             capture_error_json(&vault, &day_file, &config, &[draft]);
         assert_eq!(json["code"], code, "{draft:?}: {json}");
+        if matches!(draft, "Fix it #" | "# Heading text") {
+            let error = json["error"].as_str().unwrap_or_default();
+            assert!(
+                error.contains("`#` is incomplete: add a task type (`#fix`)"),
+                "{draft:?}: {json}"
+            );
+            assert!(
+                error.contains("or write `\\#` to keep a literal `#`"),
+                "{draft:?}: {json}"
+            );
+        }
     }
 }
 

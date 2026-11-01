@@ -86,7 +86,7 @@ fn marker_offsets_survive_unicode_and_escaped_text() {
 
 #[test]
 fn incomplete_marker_needs_a_task_type_without_a_diagnostic() {
-    for raw in ["Fix it #\"", "Fix it #\"DEEP"] {
+    for raw in ["Fix it #\"", "Fix it #\"DEEP", "Fix it #"] {
         let parse = editor(raw);
         assert_eq!(parse.body, "Fix it", "{raw:?}");
         assert_eq!(parse.mode, EditorMode::Incomplete, "{raw:?}");
@@ -94,6 +94,12 @@ fn incomplete_marker_needs_a_task_type_without_a_diagnostic() {
         assert_eq!(task_type_spans(&parse).len(), 1, "{raw:?}");
         assert!(parse.diagnostics.is_empty(), "{raw:?}");
     }
+    let heading = editor("# Heading text");
+    assert_eq!(heading.body, "Heading text");
+    assert_eq!(heading.mode, EditorMode::Incomplete);
+    assert!(heading.needs.contains(&Need::TaskType));
+    assert_eq!(task_type_spans(&heading), vec![(0, 1)]);
+    assert!(heading.diagnostics.is_empty());
 }
 
 #[test]
