@@ -1494,9 +1494,11 @@ fn classify_pomodoro_offer_token(
             ),
         ));
     };
-    if sealed_core.is_empty() {
+    if sealed_core.is_empty() && name_part.is_none() {
         // `@r:@` is an incomplete block ID with a typed seal: keep the
-        // placeholder path, mirroring the `^` form.
+        // placeholder path, mirroring the `^` form. A `#name` after the
+        // empty ID takes the named path below so the seal span stays on the
+        // seal byte instead of the token's last byte.
         let mut marker_parse = marker_parse(
             token,
             MarkerShape {
@@ -1516,11 +1518,15 @@ fn classify_pomodoro_offer_token(
             },
         );
         apply_project_note_offer(&mut marker_parse.spans, false);
+        // The seal names the offer form even while the route or ID is
+        // missing; the needs keep the draft from submitting.
+        marker_parse.mode = EditorMode::PomodoroProjectNote;
         return TokenParse::Marker(marker_parse);
     }
-    if sealed_core.contains('@')
-        || sealed_core.contains('+')
-        || !is_block_id(sealed_core)
+    if !sealed_core.is_empty()
+        && (sealed_core.contains('@')
+            || sealed_core.contains('+')
+            || !is_block_id(sealed_core))
     {
         return TokenParse::Invalid(token_diagnostic(
             token,
@@ -1559,9 +1565,7 @@ fn classify_pomodoro_offer_token(
             &mut marker_parse,
         );
         apply_project_note_offer(&mut marker_parse.spans, false);
-        if !sealed_core.is_empty() && route_part.is_empty() {
-            marker_parse.mode = EditorMode::PomodoroProjectNote;
-        }
+        marker_parse.mode = EditorMode::PomodoroProjectNote;
         return TokenParse::Marker(marker_parse);
     };
     if !name.is_empty()
@@ -1631,6 +1635,9 @@ fn classify_pomodoro_offer_token(
         &mut marker_parse,
     );
     apply_project_note_offer(&mut marker_parse.spans, true);
+    // Every recognized sealed offer keeps the project-note mode, whatever
+    // route, ID, or name is still missing; the needs report what is.
+    marker_parse.mode = EditorMode::PomodoroProjectNote;
     // Resolve a `#"…"` literal name like the `@route:id#` path: a complete
     // one reports its canonical name; an invalid one is an error; an
     // unterminated one is an editing state.
@@ -1654,8 +1661,9 @@ fn classify_pomodoro_offer_token(
                 }
             }
             _ => {
+                // An unfinished name is an editing state: the offer mode
+                // stays, and the name need blocks submission.
                 marker_parse.section = None;
-                marker_parse.mode = EditorMode::Incomplete;
                 if !marker_parse.needs.contains(&Need::PomodoroName) {
                     marker_parse.needs.push(Need::PomodoroName);
                 }

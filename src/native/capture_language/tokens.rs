@@ -50,7 +50,9 @@ pub(super) fn parse_terminal_route_token(
     if is_retired_double_colon_marker_candidate(token) {
         return Err(RETIRED_DOUBLE_COLON_ERROR.to_string());
     }
-    if let Some(message) = retired_route_less_project_note_error(token) {
+    if let Some(message) = retired_route_less_project_note_error(token)
+        .or_else(|| route_less_sealed_project_note_error(token))
+    {
         return Err(message);
     }
     if is_pomodoro_marker_candidate(token) {
@@ -2745,6 +2747,23 @@ pub(super) fn retired_route_less_project_note_error(
     ))
 }
 
+/// Route-less sealed colon project marker (`@:<id>@`, `@:<id>@#<name>`,
+/// `@:@`): the editor recognizes the offer form and reports a route need, so
+/// execution must refuse it with the Pomodoro route error instead of letting
+/// it fall through to prose (and writing the unfinished marker into a task).
+/// The guard is scoped to a seal inside the block part, before any `#` name or
+/// `=` suffix: unsealed `@:` / `@:<id>` and tokens whose only `@` follows a
+/// `#` or `=` stay literal, and the retired `@:<id>+` teaching runs first.
+pub(super) fn route_less_sealed_project_note_error(
+    token: &str,
+) -> Option<String> {
+    let rest = token.strip_prefix("@:")?;
+    let block_part = rest.split(['#', '=']).next().unwrap_or(rest);
+    block_part
+        .contains('@')
+        .then(|| POMODORO_ROUTE_ERROR.to_string())
+}
+
 /// Return whether a terminal token belongs to the Pomodoro-marker grammar.
 /// A colon that follows `#` remains part of an ordinary bullet section prefix.
 pub(super) fn is_pomodoro_marker_candidate(token: &str) -> bool {
@@ -2794,7 +2813,9 @@ pub(super) fn validate_special_terminal_markers_line(
         if is_retired_double_colon_marker_candidate(token) {
             return Err(RETIRED_DOUBLE_COLON_ERROR.to_string());
         }
-        if let Some(message) = retired_route_less_project_note_error(token) {
+        if let Some(message) = retired_route_less_project_note_error(token)
+            .or_else(|| route_less_sealed_project_note_error(token))
+        {
             return Err(message);
         }
         if is_pomodoro_marker_candidate(token) {

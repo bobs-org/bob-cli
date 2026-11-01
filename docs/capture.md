@@ -5821,6 +5821,10 @@ pickers: `<task> @^block-id@` still prompts only for the destination, while
 `<task> @route:block-id@` is a complete offer-form project note (mode
 `pomodoro_project_note`), `@:<id>@` needs a route, a `%n` after the
 seal opens Pomodoro-name completion, and a completed seal offers no picker.
+A missing route, ID, or name keeps that mode and reports `route`,
+`pomodoro_id`, or `pomodoro_name` in `needs`, and `bob capture` refuses a
+route-less sealed marker (`@:<id>@`, with or without a `#name`) with the
+Pomodoro route error before it writes anything.
 The retired `<task> @:block-id+` spelling offers nothing. Once the project note is addressed, typing ` :` or
 ` ^` at the end of a first-level task bullet opens the New ID flow: the
 panel offers a `project_task_block_id` completion with the project-note stem
@@ -6070,7 +6074,8 @@ close line, marker and block-link completion are suppressed and note and heading
 completion keep working. The picker's in-progress
 `@^`, `@route^`, `@^id`, `@:`, `@route:`, and `@:id` spellings are unchanged,
 and `@^id@` and `@:id@` carry the project-note intent with `needs: ["route"]`
-(the `:` form reports `pomodoro_project_note`). A retired `:` project-note
+(the `:` form reports `pomodoro_project_note`, and keeps it while its ID or
+name is still missing). A retired `:` project-note
 spelling (`@:id+`, `@route:id+`, `@route:id+#name`) is a
 `retired_project_note_marker` diagnostic teaching both `@`-sealed forms. The retired
 `@route::...` spelling is a diagnostic directing users to `@route^...`;

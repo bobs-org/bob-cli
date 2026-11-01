@@ -1630,13 +1630,167 @@ fn execution_parses_project_note_offer_markers() {
     let error = execute("@cash:goog-exit@").expect_err("solo offer");
     assert!(!error.is_empty(), "solo offer must fail");
 
-    // A route-less `@:id@` stays literal prose in execution (the editor
-    // reports the route need); an ID-less `@r:@` keeps the family wording.
-    let parsed = execute("Finish it @:goog-exit@").expect("route-less");
-    assert!(matches!(parsed.kind, CaptureKind::Task), "{parsed:?}");
-    assert_eq!(parsed.body, "Finish it @:goog-exit@", "{parsed:?}");
+    // A route-less `@:id@` is an editor route need and an execution route
+    // error, never literal task text; an ID-less `@r:@` keeps the family
+    // wording.
+    let error = execute("Finish it @:goog-exit@").expect_err("route-less");
+    assert_eq!(error, POMODORO_ROUTE_ERROR, "{error}");
     let error = execute("Finish it @cash:@").expect_err("missing ID");
     assert_eq!(error, POMODORO_BLOCK_ID_ERROR, "{error}");
+}
+
+#[test]
+fn execution_refuses_route_less_sealed_project_note_offers() {
+    // Leading and trailing destination positions, bare and named, quoted
+    // names, multibyte body text, and an ID-less seal all refuse with the
+    // Pomodoro route error instead of falling through to prose.
+    for raw in [
+        "Finish packet @:pkt@",
+        "Finish packet @:pkt@#admin",
+        "Finish packet @:pkt@#\"Lit Name\"",
+        "@:pkt@ Finish packet",
+        "@:pkt@#admin Finish packet",
+        "@:pkt@#\"Lit Name\" Finish packet",
+        "@:pkt@",
+        "@:pkt@#admin",
+        "@:@",
+        "Finish packet @:@",
+        "Finish packet @:@#admin",
+        "Ünï packet 日本 @:pkt@#admin",
+        "Ünï packet 日本 @:pkt@",
+        // Authored children do not change the refusal.
+        "Finish packet @:pkt@\n- Draft memo",
+        "Finish packet @:pkt@#admin\n- Draft memo\n  - nested",
+        "@:pkt@#\"Lit Name\" Finish packet\n- Draft memo",
+        // Suffixes on a seal still read as the route-less sealed family.
+        "Finish packet @:pkt@=3",
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert_eq!(error, POMODORO_ROUTE_ERROR, "{raw}: {error}");
+        // The draft path adds the item/line prefix to the same error.
+        let error = execute_draft(raw).expect_err(raw);
+        assert_eq!(
+            error,
+            format!(
+                "capture item 1 starting on line 1: {POMODORO_ROUTE_ERROR}"
+            ),
+            "{raw}"
+        );
+    }
+
+    // A routed offer on the same drafts still parses, and the unsealed
+    // route-less forms and mid-prose tokens stay literal task text.
+    for raw in [
+        "Finish packet @cash:pkt@",
+        "Finish packet @cash:pkt@#admin",
+        "Finish packet @cash:pkt@#\"Lit Name\"",
+    ] {
+        let parsed = execute(raw).expect(raw);
+        assert!(
+            matches!(
+                parsed.kind,
+                CaptureKind::ProjectNote {
+                    form: ProjectNoteForm::Offer,
+                    ..
+                }
+            ),
+            "{raw}: {parsed:?}"
+        );
+    }
+    for raw in [
+        "Finish packet @:",
+        "Finish packet @:pkt",
+        "Finish packet @:pkt#admin",
+        "Finish @:pkt@ later",
+        "Finish @:pkt@#admin later",
+        "Finish @:@ later",
+        // The only `@` sits in the name or start suffix, past the block ID.
+        "Finish packet @:pkt=3@",
+        "Finish packet @:pkt#admin@",
+    ] {
+        let parsed = execute(raw).expect(raw);
+        assert!(
+            matches!(parsed.kind, CaptureKind::Task),
+            "{raw}: {parsed:?}"
+        );
+        assert_eq!(parsed.body, raw, "{raw}");
+    }
+
+    // The retired route-less `+` spelling keeps its teaching diagnostic.
+    let error = execute("Finish packet @:pkt+").expect_err("retired");
+    assert!(
+        error.contains("is retired") && error.contains("@<route>:pkt@"),
+        "{error}"
+    );
+
+    // A forced route disables destination detection, so every `@...` token
+    // stays literal, exactly like the other special markers.
+    let forced = parse_capture_text_with_options(
+        "Finish packet @:pkt@",
+        Some("work"),
+        None,
+        &CaptureParseOptions::routing_off(),
+    )
+    .expect("forced route keeps the marker literal");
+    assert_eq!(forced.route.as_deref(), Some("work"));
+    assert_eq!(forced.kind, CaptureKind::Task);
+    assert_eq!(forced.body, "Finish packet @:pkt@");
+}
+
+#[test]
+fn execution_route_less_sealed_guard_agrees_across_destination_paths() {
+    // `parse_terminal_route_token` (leading and trailing route resolution)
+    // and `validate_special_terminal_markers_line` (lone invalid marker
+    // checks) both refuse the same sealed tokens and leave the rest alone.
+    for token in [
+        "@:pkt@",
+        "@:pkt@#admin",
+        "@:pkt@#\"Lit Name\"",
+        "@:@",
+        "@:@#admin",
+        "@:pkt@=3",
+    ] {
+        assert_eq!(
+            route_less_sealed_project_note_error(token).as_deref(),
+            Some(POMODORO_ROUTE_ERROR),
+            "{token}"
+        );
+        assert_eq!(
+            parse_terminal_route_token(token).err().as_deref(),
+            Some(POMODORO_ROUTE_ERROR),
+            "{token}"
+        );
+        for check_first in [true, false] {
+            assert_eq!(
+                validate_special_terminal_markers_line(
+                    &["Finish", token],
+                    check_first
+                ),
+                Err(POMODORO_ROUTE_ERROR.to_string()),
+                "{token}"
+            );
+        }
+        assert_eq!(
+            validate_special_terminal_markers_line(&[token, "Finish"], true),
+            Err(POMODORO_ROUTE_ERROR.to_string()),
+            "{token}"
+        );
+    }
+    for token in [
+        "@:",
+        "@:pkt",
+        "@:pkt#admin",
+        "@:pkt=3@",
+        "@:pkt#admin@",
+        "@cash:pkt@",
+        "@cash^pkt@",
+    ] {
+        assert_eq!(
+            route_less_sealed_project_note_error(token),
+            None,
+            "{token}"
+        );
+    }
 }
 
 #[test]

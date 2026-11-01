@@ -485,6 +485,159 @@ fn capture_parse_json_reports_project_note_offer_spans_and_mode() {
 }
 
 #[test]
+fn capture_parse_json_keeps_offer_mode_while_a_sealed_offer_is_incomplete() {
+    // Every recognized sealed offer keeps `pomodoro_project_note` and the
+    // `offer` modifier on its marker, route/ID, and placeholder spans; the
+    // needs name the missing route, ID, or name, and a `#name` keeps no
+    // modifier. Spans are byte offsets, so the multibyte prefix shifts them.
+    let vault_temp = TempDir::new("bob-cli-capture-parse-offer-incomplete");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
+
+    // (input, needs, spans as (start, end, kind, project_note))
+    let cases: &[(&str, &[&str], &[(u64, u64, &str, &str)])] = &[
+        (
+            "café @:pkt@",
+            &["route"],
+            &[
+                (6, 8, "interactive_placeholder", "offer"),
+                (8, 11, "pomodoro_block_id", "offer"),
+                (11, 12, "project_note_offer_marker", "offer"),
+            ],
+        ),
+        (
+            "café @:pkt@#admin",
+            &["route"],
+            &[
+                (6, 8, "interactive_placeholder", "offer"),
+                (8, 11, "pomodoro_block_id", "offer"),
+                (11, 12, "project_note_offer_marker", "offer"),
+                (13, 18, "pomodoro_name", ""),
+            ],
+        ),
+        (
+            "café @:pkt@#\"Lit Name\"",
+            &["route"],
+            &[
+                (6, 8, "interactive_placeholder", "offer"),
+                (8, 11, "pomodoro_block_id", "offer"),
+                (11, 12, "project_note_offer_marker", "offer"),
+                (13, 23, "pomodoro_name", ""),
+            ],
+        ),
+        (
+            "@:pkt@#admin Finish café",
+            &["route"],
+            &[
+                (0, 2, "interactive_placeholder", "offer"),
+                (2, 5, "pomodoro_block_id", "offer"),
+                (5, 6, "project_note_offer_marker", "offer"),
+                (7, 12, "pomodoro_name", ""),
+            ],
+        ),
+        (
+            "café @:pkt@#",
+            &["route", "pomodoro_name"],
+            &[
+                (6, 8, "interactive_placeholder", "offer"),
+                (8, 11, "pomodoro_block_id", "offer"),
+                (11, 12, "project_note_offer_marker", "offer"),
+                (12, 13, "interactive_placeholder", ""),
+            ],
+        ),
+        (
+            "café @cash:@",
+            &["pomodoro_id"],
+            &[
+                (6, 11, "pomodoro_route", "offer"),
+                (11, 12, "interactive_placeholder", "offer"),
+                (12, 13, "project_note_offer_marker", "offer"),
+            ],
+        ),
+        (
+            "café @cash:@#bugs",
+            &["pomodoro_id"],
+            &[
+                (6, 11, "pomodoro_route", "offer"),
+                (11, 12, "interactive_placeholder", "offer"),
+                (12, 13, "project_note_offer_marker", "offer"),
+                (14, 18, "pomodoro_name", ""),
+            ],
+        ),
+        (
+            "café @cash:pkt@#",
+            &["pomodoro_name"],
+            &[
+                (6, 11, "pomodoro_route", "offer"),
+                (11, 12, "project_note_separator", "offer"),
+                (12, 15, "pomodoro_block_id", "offer"),
+                (15, 16, "project_note_offer_marker", "offer"),
+                (16, 17, "interactive_placeholder", ""),
+            ],
+        ),
+        (
+            "café @cash:pkt@#\"Lit Na",
+            &["pomodoro_name"],
+            &[
+                (6, 11, "pomodoro_route", "offer"),
+                (11, 12, "project_note_separator", "offer"),
+                (12, 15, "pomodoro_block_id", "offer"),
+                (15, 16, "project_note_offer_marker", "offer"),
+                (17, 24, "pomodoro_name", ""),
+            ],
+        ),
+        (
+            "café @:@#",
+            &["route", "pomodoro_id", "pomodoro_name"],
+            &[
+                (6, 8, "interactive_placeholder", "offer"),
+                (8, 9, "project_note_offer_marker", "offer"),
+                (9, 10, "interactive_placeholder", ""),
+            ],
+        ),
+    ];
+
+    for (input, needs, spans) in cases {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(input)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("run bob capture-parse incomplete offer marker");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("capture-parse JSON");
+        assert_eq!(json["mode"], "pomodoro_project_note", "{input}");
+        assert_eq!(json["needs"], serde_json::json!(needs), "{input}");
+        assert!(
+            json["diagnostics"].as_array().unwrap().is_empty(),
+            "{input}: {json}"
+        );
+        let observed: Vec<(u64, u64, &str, &str)> = json["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .map(|span| {
+                (
+                    span["start"].as_u64().expect("start"),
+                    span["end"].as_u64().expect("end"),
+                    span["kind"].as_str().expect("kind"),
+                    span["project_note"].as_str().unwrap_or(""),
+                )
+            })
+            .collect();
+        assert_eq!(&observed, spans, "{input}");
+        for pair in observed.windows(2) {
+            assert!(pair[0].1 <= pair[1].0, "{input}: overlapping spans");
+        }
+    }
+}
+
+#[test]
 fn capture_parse_json_reports_project_task_ids_spans_and_mode() {
     let input = "Finish the Google exit packet! @cash^goog-exit@#admin\n- Draft the resignation memo :draft-memo\n  - keep it short\n- Collect the equity paperwork ^equity-docs";
     let output = bob_command()

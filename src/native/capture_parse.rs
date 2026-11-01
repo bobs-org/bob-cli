@@ -339,7 +339,10 @@ route is typed. A '@:id@' marker is the offer form: it reports mode \
 'pomodoro_project_note' with a 'route' need until the route is typed, and \
 every marker span carries the 'offer' project-note modifier with a \
 'project_note_offer_marker' seal span. A completed seal offers no picker and \
-carries no needs; a trailing '#' opens Pomodoro-name completion. A '@^id+' or '@:id+' marker is the retired project-note form and \
+carries no needs; a trailing '#' opens Pomodoro-name completion. A missing ID \
+or Pomodoro name keeps the offer mode and reports 'pomodoro_id' or \
+'pomodoro_name' in 'needs', and `bob capture` refuses a route-less sealed \
+marker with the Pomodoro route error before writing anything. A '@^id+' or '@:id+' marker is the retired project-note form and \
 reports a `retired_project_note_marker` diagnostic. In a project-note item, a trailing \
 ` :id` / ` ^id` word on a first-level task bullet names that task: ` :id` additionally makes it Next and \
 links it into the Pomodoro, reporting mode 'pomodoro_project_note' with a `project_task_link_marker` span over \

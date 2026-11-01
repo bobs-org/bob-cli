@@ -1261,3 +1261,161 @@ fn offer_picking_several_duplicates_keeps_the_rest_and_matches_authored() {
     assert_eq!(created["ok"], true, "{created}");
     assert_eq!(offer.snapshot(), authored.snapshot());
 }
+
+/// A fixture whose default destination is an existing `mac_inbox.md`, so a
+/// route-less draft would write an unfinished marker there if it ever fell
+/// through to prose.
+fn inbox_fixture(prefix: &str) -> Fixture {
+    let fixture = Fixture::plain(prefix);
+    write_file(&fixture.vault.join("inbox.md"), "# Inbox\n");
+    write_file(
+        &fixture.vault.join("mac_inbox.md"),
+        concat!(
+            "---\n",
+            "type: [[area]]\n",
+            "parent: [[inbox]]\n",
+            "---\n",
+            "## Tasks\n",
+            "- [ ] #task Route me ^route-task\n",
+        ),
+    );
+    fixture
+}
+
+const ROUTE_ERROR: &str =
+    "Pomodoro capture route must contain only A-Z, a-z, 0-9, '_' or '-'";
+
+#[test]
+fn route_less_sealed_offers_refuse_dry_run_and_submit_without_writing() {
+    // The editor reports a route need for `@:pkt@`; execution must refuse it
+    // with the Pomodoro route error instead of capturing the unfinished
+    // marker (and its children) as inbox task text. Leading and trailing
+    // positions, named and quoted names, authored children, and multibyte
+    // body text all refuse; the caret form keeps its own route error.
+    for draft in [
+        "Finish packet @:pkt@\n",
+        "Finish packet @:pkt@\n- Draft memo\n",
+        "Finish packet @:pkt@#admin\n- Draft memo\n- Collect docs\n",
+        "Finish packet @:pkt@#\"Lit Name\"\n- Draft memo\n",
+        "@:pkt@ Finish packet\n- Draft memo\n",
+        "@:pkt@#admin Finish packet\n- Draft memo\n",
+        "@:pkt@#\"Lit Name\" Finish packet\n- Draft memo\n",
+        "Ünï packet 日本 @:pkt@#admin\n- Draft memo\n",
+        "@:pkt@\n",
+    ] {
+        for flags in [&["--dry-run"][..], &[][..], &["-p", "all"][..]] {
+            let fixture = inbox_fixture("bob-cli-route-less-offer-refusal");
+            let before = fixture.snapshot();
+            let day_before = fixture.day();
+            let output = fixture.run(draft, flags);
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{draft:?} {flags:?}\n{}",
+                format_output(&output)
+            );
+            let message = format_output(&output);
+            assert!(
+                message.contains(ROUTE_ERROR),
+                "{draft:?} {flags:?}\n{message}"
+            );
+            assert_eq!(fixture.snapshot(), before, "{draft:?} {flags:?}");
+            assert_eq!(fixture.day(), day_before, "{draft:?} {flags:?}");
+            assert!(!fixture.vault.join("cash_pkt.md").exists());
+            assert!(!fixture.vault.join("_pkt.md").exists());
+        }
+    }
+
+    // JSON mode reports the same error and leaves the same files alone.
+    let fixture = inbox_fixture("bob-cli-route-less-offer-refusal-json");
+    let before = fixture.snapshot();
+    let output = fixture.run(
+        "Finish packet @:pkt@#admin\n- Draft memo\n",
+        &["-f", "json"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], false, "{json}");
+    assert!(
+        json["error"].as_str().is_some_and(|error| {
+            error.contains(ROUTE_ERROR) && error.contains("capture item 1")
+        }),
+        "{json}"
+    );
+    assert_eq!(fixture.snapshot(), before);
+}
+
+#[test]
+fn route_less_sealed_offer_refuses_a_mixed_draft_atomically() {
+    // A valid earlier item must not be written when a later item is a
+    // route-less sealed offer: the refusal is atomic across the batch.
+    for draft in [
+        "Earlier task @cash\n\nFinish packet @:pkt@\n- Draft memo\n",
+        "Finish packet @cash:pkt@\n- Draft memo\n\nOther packet @:other@#admin\n- Collect docs\n",
+        "Earlier task @cash\n\n@:pkt@#\"Lit Name\" Finish packet\n",
+    ] {
+        for flags in [&["--dry-run"][..], &[][..]] {
+            let fixture = inbox_fixture("bob-cli-route-less-offer-mixed");
+            let before = fixture.snapshot();
+            let day_before = fixture.day();
+            let output = fixture.run(draft, flags);
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{draft:?} {flags:?}\n{}",
+                format_output(&output)
+            );
+            let message = format_output(&output);
+            assert!(
+                message.contains(ROUTE_ERROR),
+                "{draft:?} {flags:?}\n{message}"
+            );
+            assert!(
+                message.contains("capture item 2"),
+                "{draft:?} {flags:?}\n{message}"
+            );
+            assert_eq!(fixture.snapshot(), before, "{draft:?} {flags:?}");
+            assert_eq!(fixture.day(), day_before, "{draft:?} {flags:?}");
+        }
+    }
+}
+
+#[test]
+fn routed_sealed_offers_and_literal_route_less_forms_are_unchanged() {
+    // The route-less guard is scoped to the sealed family: a routed offer
+    // still creates its project note, and unsealed `@:` / `@:id` or a
+    // mid-prose sealed token stay literal inbox task text.
+    let routed = inbox_fixture("bob-cli-route-less-offer-routed");
+    let json = routed.json(
+        "Finish packet @cash:pkt@#admin\n- Draft memo\n",
+        &["-p", "all"],
+    );
+    assert_eq!(json["ok"], true, "{json}");
+    assert!(routed.snapshot().contains_key("cash_pkt.md"));
+
+    for (draft, task_line) in [
+        (
+            "Finish packet @:pkt\n",
+            "- [ ] #task Finish packet @:pkt [created::2026-09-20]",
+        ),
+        (
+            "Finish packet @:\n",
+            "- [ ] #task Finish packet @: [created::2026-09-20]",
+        ),
+        (
+            "Finish @:pkt@ later\n",
+            "- [ ] #task Finish @:pkt@ later [created::2026-09-20]",
+        ),
+    ] {
+        let fixture = inbox_fixture("bob-cli-route-less-offer-literal");
+        let json = fixture.json(draft, &[]);
+        assert_eq!(json["ok"], true, "{draft:?}\n{json}");
+        assert_eq!(json["kind"], "task", "{draft:?}\n{json}");
+        assert_eq!(json["task_line"], task_line, "{draft:?}\n{json}");
+        let inbox = &fixture.snapshot()["mac_inbox.md"];
+        assert!(inbox.contains(task_line), "{draft:?}\n{inbox}");
+    }
+}

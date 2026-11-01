@@ -86,6 +86,163 @@ fn plan_worked_example_matches_documented_offsets() {
     assert_eq!(&raw[15..16], "+");
 }
 
+/// Every recognized sealed offer keeps `pomodoro_project_note` and puts the
+/// offer modifier on its marker, route/ID, and placeholder spans while a
+/// missing route, ID, or name stays a need; a name keeps no modifier. Spans
+/// are byte-exact after non-ASCII text and never overlap.
+#[test]
+fn incomplete_sealed_offers_keep_offer_modifiers_and_byte_exact_spans() {
+    use ProjectNoteForm::Offer;
+    // "café " is 6 bytes, so a trailing token starts at byte 6.
+    let cases: &[(
+        &str,
+        &[(usize, usize, SpanKind, Option<ProjectNoteForm>)],
+        &[Need],
+    )] = &[
+        (
+            "café @:pkt@",
+            &[
+                (6, 8, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (8, 11, SpanKind::PomodoroBlockId, Some(Offer)),
+                (11, 12, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+            ],
+            &[Need::Route],
+        ),
+        (
+            "café @:pkt@#admin",
+            &[
+                (6, 8, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (8, 11, SpanKind::PomodoroBlockId, Some(Offer)),
+                (11, 12, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (13, 18, SpanKind::PomodoroName, None),
+            ],
+            &[Need::Route],
+        ),
+        (
+            "café @:pkt@#\"Lit Name\"",
+            &[
+                (6, 8, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (8, 11, SpanKind::PomodoroBlockId, Some(Offer)),
+                (11, 12, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (13, 23, SpanKind::PomodoroName, None),
+            ],
+            &[Need::Route],
+        ),
+        (
+            "café @:pkt@#",
+            &[
+                (6, 8, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (8, 11, SpanKind::PomodoroBlockId, Some(Offer)),
+                (11, 12, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (12, 13, SpanKind::InteractivePlaceholder, None),
+            ],
+            &[Need::Route, Need::PomodoroName],
+        ),
+        (
+            "café @cash:@",
+            &[
+                (6, 11, SpanKind::PomodoroRoute, Some(Offer)),
+                (11, 12, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (12, 13, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+            ],
+            &[Need::PomodoroId],
+        ),
+        (
+            "café @cash:@#bugs",
+            &[
+                (6, 11, SpanKind::PomodoroRoute, Some(Offer)),
+                (11, 12, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (12, 13, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (14, 18, SpanKind::PomodoroName, None),
+            ],
+            &[Need::PomodoroId],
+        ),
+        (
+            "café @cash:@#",
+            &[
+                (6, 11, SpanKind::PomodoroRoute, Some(Offer)),
+                (11, 12, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (12, 13, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (13, 14, SpanKind::InteractivePlaceholder, None),
+            ],
+            &[Need::PomodoroId, Need::PomodoroName],
+        ),
+        (
+            "café @cash:pkt@#",
+            &[
+                (6, 11, SpanKind::PomodoroRoute, Some(Offer)),
+                (11, 12, SpanKind::ProjectNoteSeparator, Some(Offer)),
+                (12, 15, SpanKind::PomodoroBlockId, Some(Offer)),
+                (15, 16, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (16, 17, SpanKind::InteractivePlaceholder, None),
+            ],
+            &[Need::PomodoroName],
+        ),
+        (
+            "café @cash:pkt@#\"Lit Na",
+            &[
+                (6, 11, SpanKind::PomodoroRoute, Some(Offer)),
+                (11, 12, SpanKind::ProjectNoteSeparator, Some(Offer)),
+                (12, 15, SpanKind::PomodoroBlockId, Some(Offer)),
+                (15, 16, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (17, 24, SpanKind::PomodoroName, None),
+            ],
+            &[Need::PomodoroName],
+        ),
+        (
+            "café @:@#bugs",
+            &[
+                (6, 8, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (8, 9, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (10, 14, SpanKind::PomodoroName, None),
+            ],
+            &[Need::Route, Need::PomodoroId],
+        ),
+        // Leading placement: the marker is the first token of the item.
+        (
+            "@:pkt@#admin Finish café",
+            &[
+                (0, 2, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (2, 5, SpanKind::PomodoroBlockId, Some(Offer)),
+                (5, 6, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (7, 12, SpanKind::PomodoroName, None),
+            ],
+            &[Need::Route],
+        ),
+        (
+            "@cash:@#bugs Finish café",
+            &[
+                (0, 5, SpanKind::PomodoroRoute, Some(Offer)),
+                (5, 6, SpanKind::InteractivePlaceholder, Some(Offer)),
+                (6, 7, SpanKind::ProjectNoteOfferMarker, Some(Offer)),
+                (8, 12, SpanKind::PomodoroName, None),
+            ],
+            &[Need::PomodoroId],
+        ),
+    ];
+
+    for (raw, expected, needs) in cases {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::PomodoroProjectNote, "{raw}");
+        assert_eq!(parse.needs, needs.to_vec(), "{raw}");
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+        let observed: Vec<_> = parse
+            .spans
+            .iter()
+            .map(|span| (span.start, span.end, span.kind, span.project_note))
+            .collect();
+        assert_eq!(&observed, expected, "{raw}");
+        for span in &parse.spans {
+            assert!(raw.is_char_boundary(span.start), "{raw}");
+            assert!(raw.is_char_boundary(span.end), "{raw}");
+            assert!(span.start < span.end, "{raw}");
+        }
+        for pair in parse.spans.windows(2) {
+            assert!(pair[0].end <= pair[1].start, "{raw}");
+        }
+    }
+}
+
 #[test]
 fn editor_reports_terminal_marker_spans() {
     let raw = "body $2 s:1 %c @groceries";
