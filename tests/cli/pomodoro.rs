@@ -39,7 +39,7 @@ fn tmux_pomodoro_formats_native_pomodoro_status() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "[<65m] 0945-1015 Review crate skeleton · plan 0/3 · 0/10 | "
+        "[<65m] 0945-1015 Review crate skeleton · plan 0/10 | "
     );
 }
 
@@ -71,24 +71,22 @@ fn tmux_pomodoro_appends_named_budget_meter() {
         .expect("run bob pomodoro tmux with a named ledger");
 
     assert_success(&output);
-    assert_eq!(stdout(&output), "plan 2/3 · 3/10 | ");
+    assert_eq!(stdout(&output), "plan 3/10 | ");
 }
 
 #[test]
 fn tmux_pomodoro_reverses_over_cap_meter() {
+    // The link cap drives `over`: eleven links on one entry with the
+    // default cap of ten render reversed.
     let temp = TempDir::new("bob-cli-tmux-over");
     let vault = temp.path().join("vault");
-    write_file(
-        &vault.join("2026/20260601.md"),
-        concat!(
-            "# Daily\n\n",
-            "## Pomodoros\n\n",
-            "- [ ] () — ONE\n",
-            "- [ ] () — TWO\n",
-            "- [ ] () — THREE\n",
-            "- [ ] () — FOUR\n",
-        ),
-    );
+    let mut note =
+        String::from("# Daily\n\n## Pomodoros\n\n- [ ] () — GOALS\n");
+    for index in 0..11 {
+        note.push_str(&format!("  - [[tasks#^{index:04}]]\n"));
+    }
+    write_file(&vault.join("2026/20260601.md"), &note);
+    write_file(&vault.join("tasks.md"), "- [ ] #task One ^0000\n");
 
     let output = bob_command()
         .args(["pomodoro", "tmux"])
@@ -97,10 +95,10 @@ fn tmux_pomodoro_reverses_over_cap_meter() {
         .env("BOB_NOW", "2026-06-01 09:10:01")
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob pomodoro tmux over the theme cap");
+        .expect("run bob pomodoro tmux over the link cap");
 
     assert_success(&output);
-    assert_eq!(stdout(&output), "#[reverse]plan 4/3 · 0/10#[noreverse] | ");
+    assert_eq!(stdout(&output), "#[reverse]plan 11/10#[noreverse] | ");
 }
 
 #[test]
@@ -427,10 +425,7 @@ fn tmux_pomodoro_prints_derived_chip_for_unnamed_linked_session() {
         .expect("run bob pomodoro tmux unnamed homes");
 
     assert_success(&output);
-    assert_eq!(
-        stdout(&output),
-        "[<23m] 0950-1015 sase · plan 1/3 · 1/10 | "
-    );
+    assert_eq!(stdout(&output), "[<23m] 0950-1015 sase · plan 1/10 | ");
 }
 
 #[test]

@@ -13,12 +13,7 @@
       "count": 0,
       "over": false
     },
-    "status": "ok",
-    "themes": {
-      "cap": 3,
-      "count": 0,
-      "over": false
-    }
+    "status": "ok"
   },
   "pomodoros": [],
   "relative_day_file": "2026/20260828.md",

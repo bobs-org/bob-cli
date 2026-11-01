@@ -28,13 +28,6 @@ pub(crate) enum LinkRelocationError {
     MultipleMovableLinks,
     StalePomodoro,
     PomodoroClosed,
-    /// A D7 typed placement would create a type past `plan.max_themes`
-    /// under `plan.strict`. `count` is the refused post-image type count.
-    StrictTypeCap {
-        name: String,
-        count: usize,
-        cap: u32,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,11 +257,8 @@ fn resolve_typed_relocation_destination(
     typed: &TypedImplicit<'_>,
     source_entry_line_index: usize,
 ) -> Result<ResolvedRelocationDestination, LinkRelocationError> {
-    let map_error = |error| match typed_implicit_plan_error(error) {
-        LinkPlanError::StrictTypeCap { name, count, cap } => {
-            LinkRelocationError::StrictTypeCap { name, count, cap }
-        }
-        other => relocation_from_link_plan_error(other),
+    let map_error = |error| {
+        relocation_from_link_plan_error(typed_implicit_plan_error(error))
     };
     match super::links::select_typed_implicit_entry(scan, typed)
         .map_err(map_error)?
@@ -317,11 +307,8 @@ fn destination_endpoint_after_typed_move(
     content: &str,
     typed: &TypedImplicit<'_>,
 ) -> Result<PomodoroEndpoint, LinkRelocationError> {
-    let map_error = |error| match typed_implicit_plan_error(error) {
-        LinkPlanError::StrictTypeCap { name, count, cap } => {
-            LinkRelocationError::StrictTypeCap { name, count, cap }
-        }
-        other => relocation_from_link_plan_error(other),
+    let map_error = |error| {
+        relocation_from_link_plan_error(typed_implicit_plan_error(error))
     };
     let scan = capture_pomodoros::scan(content);
     match super::links::select_typed_implicit_entry(&scan, typed)
@@ -581,9 +568,6 @@ pub(super) fn relocation_from_link_plan_error(
         }
         LinkPlanError::InvalidPomodoroName => {
             LinkRelocationError::InvalidPomodoroName
-        }
-        LinkPlanError::StrictTypeCap { name, count, cap } => {
-            LinkRelocationError::StrictTypeCap { name, count, cap }
         }
     }
 }

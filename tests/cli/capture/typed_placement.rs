@@ -7,7 +7,7 @@ const NOW: &str = "2026-07-10 13:40:00";
 
 fn typed_config() -> String {
     concat!(
-        "plan:\n  max_themes: 30\n  default_type: CHORE\n",
+        "plan:\n  default_type: CHORE\n",
         "types:\n  BUILD: yellow\n  FIX: blue\n  READ: green\n",
         "  WRITE: magenta\n  PLAN: blue\n  CHORE: yellow\n",
     )
@@ -241,7 +241,7 @@ fn bare_new_ref_task_places_into_read() {
 fn bare_link_without_a_default_keeps_legacy_selection() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-cli-typed-placement-legacy",
-        "plan:\n  max_themes: 30\ntypes:\n  BUILD: yellow\n  MEET: blue\n",
+        "plan:\ntypes:\n  BUILD: yellow\n  MEET: blue\n",
         &[(
             "inbox.md",
             "# Inbox\n## Tasks\n- [ ] #task Existing inbox task ^aaa\n",
@@ -308,14 +308,15 @@ fn bare_batch_links_share_one_typed_placeholder() {
 }
 
 #[test]
-fn bare_link_strict_refusal_names_the_type_cap_and_escape() {
+fn bare_link_stale_strict_key_creates_the_placeholder() {
+    // `plan.strict` is retired: a stale strict config still creates the
+    // fourth type instead of refusing.
     let (_temp, vault, day_file, config) = fixture(
         "bob-cli-typed-placement-strict",
         "plan:\n  max_themes: 3\n  strict: true\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  MEET: blue\n  READ: green\n  CHORE: yellow\n",
         &[("inbox.md", "# Inbox\n## Tasks\n- [ ] #task Existing inbox task ^aaa\n")],
         "# 2026-07-10\n## Pomodoros\n- [ ] (**1330-1400** [t:: 30m]) — BUILD\n- [ ] () — MEET\n- [ ] () — READ\n## Later\n",
     );
-    let before = fs::read_to_string(&day_file).expect("read day");
     let mut command = bob_command();
     command
         .arg("capture")
@@ -328,21 +329,15 @@ fn bare_link_strict_refusal_names_the_type_cap_and_escape() {
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", NOW)
         .env("BOB_CONFIG_FILE", &config);
-    let output = command.output().expect("run strict capture");
-    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let output = command.output().expect("run stale-strict capture");
+    assert_success(&output);
     let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("failure JSON");
-    assert_eq!(json["ok"], false, "{json}");
-    assert_eq!(json["code"], "strict_cap", "{json}");
-    let error = json["error"].as_str().expect("error message");
-    assert!(error.contains("CHORE"), "{error}");
-    assert!(error.contains("4 of 3"), "{error}");
-    assert!(error.contains("#CHORE"), "{error}");
-    assert_eq!(
-        fs::read_to_string(&day_file).expect("read day"),
-        before,
-        "refused batch writes nothing"
-    );
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["ok"], true, "{json}");
+    assert_eq!(json["pomodoro_link_destination"]["name"], "CHORE", "{json}");
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(day.contains("— CHORE\n"), "{day}");
+    assert!(day.contains("[[inbox#^aaa]]"), "{day}");
 }
 
 #[test]

@@ -16,8 +16,8 @@ shared entry gains ` + TYPE`, otherwise the link moves to the entry
 `— TYPE` placeholder directly below the source. A task with an explicit
 field keeps its type, so no relocation happens. Frontmatter `parent:`,
 `task_type:`, and config edits are not gestures; the `type_mismatch` lint
-covers them. With `plan.strict: true`, a creation past the cap refuses the
-whole edit.
+covers them. Type creations are never refused: the relocation always
+applies and the whole edit is written.
 
 ## Command
 

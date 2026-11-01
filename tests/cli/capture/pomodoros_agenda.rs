@@ -269,8 +269,7 @@ fn agenda_all_lists_completed_with_empty_payloads() {
     assert_eq!(json["plan_budget"]["status"], "ok");
     // The completed EARLY entry and its link are visible under --all but
     // don't contribute to the saved open-ledger budget.
-    assert_eq!(json["plan_budget"]["themes"]["count"], 1);
-    assert_eq!(json["plan_budget"]["themes"]["cap"], 3);
+    assert!(json["plan_budget"].get("themes").is_none());
     assert_eq!(json["plan_budget"]["links"]["count"], 0);
     assert_eq!(json["plan_budget"]["links"]["cap"], 10);
 }
@@ -321,7 +320,7 @@ fn agenda_default_output_stays_byte_identical() {
 }
 
 #[test]
-fn agenda_budget_uses_configured_caps_and_strict_over_comparison() {
+fn agenda_budget_uses_configured_link_cap() {
     let temp = TempDir::new("bob-cli-pomodoros-agenda-budget-caps");
     let vault = temp.path().join("vault");
     let day_file = vault.join("2026/20260828.md");
@@ -341,28 +340,23 @@ fn agenda_budget_uses_configured_caps_and_strict_over_comparison() {
             "\t- [[tasks#^d]]\n",
         ),
     );
-    write_file(
-        &config,
-        "plan:\n  max_themes: 4\n  max_links: 4\n  strict: true\n",
-    );
+    write_file(&config, "plan:\n  max_links: 4\n");
 
     let at_cap = agenda_json_with_config(&vault, &day_file, &[], Some(&config));
     assert_eq!(
         at_cap["plan_budget"],
         serde_json::json!({
             "status": "ok",
-            "themes": {"count": 4, "cap": 4, "over": false},
             "links": {"count": 4, "cap": 4, "over": false}
         })
     );
 
-    write_file(&config, "plan:\n  max_themes: 3\n  max_links: 3\n");
+    write_file(&config, "plan:\n  max_links: 3\n");
     let over = agenda_json_with_config(&vault, &day_file, &[], Some(&config));
     assert_eq!(
         over["plan_budget"],
         serde_json::json!({
             "status": "over",
-            "themes": {"count": 4, "cap": 3, "over": true},
             "links": {"count": 4, "cap": 3, "over": true}
         })
     );
@@ -376,8 +370,7 @@ fn agenda_budget_includes_real_zero_for_empty_and_completed_only_ledgers() {
     write_file(&day_file, "# Day\n## Pomodoros\n");
 
     let empty = agenda_json(&vault, &day_file, &[]);
-    assert_eq!(empty["plan_budget"]["themes"]["count"], 0);
-    assert_eq!(empty["plan_budget"]["themes"]["cap"], 3);
+    assert!(empty["plan_budget"].get("themes").is_none());
     assert_eq!(empty["plan_budget"]["links"]["count"], 0);
     assert_eq!(empty["plan_budget"]["links"]["cap"], 10);
 
@@ -387,7 +380,7 @@ fn agenda_budget_includes_real_zero_for_empty_and_completed_only_ledgers() {
     );
     let closed = agenda_json_with_config(&vault, &day_file, &["--all"], None);
     assert_eq!(closed["pomodoros"].as_array().unwrap().len(), 1);
-    assert_eq!(closed["plan_budget"]["themes"]["count"], 0);
+    assert!(closed["plan_budget"].get("themes").is_none());
     assert_eq!(closed["plan_budget"]["links"]["count"], 0);
 }
 
@@ -402,7 +395,7 @@ fn agenda_budget_omits_missing_section_and_degrades_on_invalid_config() {
     assert!(missing_section.get("plan_budget").is_none());
 
     write_file(&day_file, "# Day\n## Pomodoros\n- [ ] () — ALPHA\n");
-    write_file(&config, "plan:\n  max_themes: many\n");
+    write_file(&config, "plan:\n  max_links: many\n");
     let invalid =
         agenda_json_with_config(&vault, &day_file, &[], Some(&config));
     assert!(invalid.get("plan_budget").is_none());
@@ -510,10 +503,6 @@ fn agenda_numbers_match_operator_lineups() {
     let close_json: Value =
         serde_json::from_str(stdout(&close).trim()).expect("close json");
     assert_eq!(
-        close_json["plan_budget"]["themes"]["before"],
-        saved_budget["themes"]["count"]
-    );
-    assert_eq!(
         close_json["plan_budget"]["links"]["before"],
         saved_budget["links"]["count"]
     );
@@ -570,21 +559,15 @@ fn agenda_numbers_match_operator_lineups() {
     let start_json: Value =
         serde_json::from_str(stdout(&start).trim()).expect("start json");
     assert_eq!(
-        start_json["plan_budget"]["themes"]["before"],
-        idle_agenda["plan_budget"]["themes"]["count"]
-    );
-    assert_eq!(
         start_json["plan_budget"]["links"]["before"],
         idle_agenda["plan_budget"]["links"]["count"]
     );
-    for meter in ["themes", "links"] {
-        for field in ["count", "cap", "over"] {
-            assert_eq!(
-                start_json["plan_budget"][meter][field],
-                idle_agenda["plan_budget"][meter][field],
-                "{meter}.{field}"
-            );
-        }
+    for field in ["count", "cap", "over"] {
+        assert_eq!(
+            start_json["plan_budget"]["links"][field],
+            idle_agenda["plan_budget"]["links"][field],
+            "links.{field}"
+        );
     }
     let rows = start_json["pomodoro_start"]["tasks"]
         .as_array()
@@ -649,12 +632,10 @@ fn agenda_budget_matches_plan_for_merged_exempt_alias_and_prose_links() {
         let field = "status";
         assert_eq!(agenda["plan_budget"][field], plan[field]);
     }
-    for meter in ["themes", "links"] {
-        for field in ["count", "cap", "over"] {
-            assert_eq!(
-                agenda["plan_budget"][meter][field], plan[meter][field],
-                "{meter}.{field}"
-            );
-        }
+    for field in ["count", "cap", "over"] {
+        assert_eq!(
+            agenda["plan_budget"]["links"][field], plan["links"][field],
+            "links.{field}"
+        );
     }
 }

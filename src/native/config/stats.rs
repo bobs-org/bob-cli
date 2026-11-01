@@ -373,7 +373,7 @@ properties:
         min_days: 1
         max_days: 1
 plan:
-  max_themes: 5
+  max_links: 5
 freshness:
   interval: 7
 highlights:
@@ -394,7 +394,7 @@ stats:
         let file = dir.path().join("config.yml");
         std::fs::write(&file, text).unwrap();
         let plan = load_plan_config(&file).expect("plan loader ignores stats");
-        assert_eq!(plan.max_themes(), 5);
+        assert_eq!(plan.max_links(), 5);
         let freshness =
             load_freshness_config(&file).expect("freshness ignores stats");
         assert_eq!(freshness.interval(), 7);

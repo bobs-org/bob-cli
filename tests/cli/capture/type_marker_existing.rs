@@ -26,7 +26,7 @@ fn fixture(
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "themes:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n",
         ),
     );
@@ -197,7 +197,7 @@ fn ensure_next_attached_literal_retypes_before_placing_the_task_link() {
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "types:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n  \"DEEP WORK\": violet\n",
         ),
     );
@@ -253,7 +253,7 @@ fn relationship_owner_retype_sets_field() {
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "themes:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n",
         ),
     );
@@ -357,7 +357,7 @@ fn closed_target_refuses_without_a_write() {
 }
 
 #[test]
-fn strict_cap_refuses_before_any_write() {
+fn stale_strict_key_retypes_without_refusing() {
     let temp = TempDir::new("bob-type-existing-strict");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -372,9 +372,9 @@ fn strict_cap_refuses_before_any_write() {
     );
     write_file(&vault.join("foo.md"), "- [ ] #task Buy shoes ^bar\n");
     write_file(&vault.join("body.md"), "- [ ] #task Exercise ^excercise\n");
-    // Ledger already holds BUILD; retyping to FIX would add a second type.
+    // Ledger already holds BUILD; retyping to FIX adds a second type.
     // The live link sits in a multi-link running entry so the D8 applier
-    // must create a new FIX entry, which the strict cap refuses.
+    // must create a new FIX entry. The retired strict cap never refuses.
     write_file(
         &day_file,
         concat!(
@@ -384,7 +384,6 @@ fn strict_cap_refuses_before_any_write() {
             "  - [[foo#^bar]]\n",
         ),
     );
-    let before_body = fs::read_to_string(vault.join("body.md")).unwrap();
     let before_day = fs::read_to_string(&day_file).unwrap();
     let mut command = bob_command();
     command
@@ -400,26 +399,18 @@ fn strict_cap_refuses_before_any_write() {
         .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2026-07-10 09:15:00");
     // Use a relationship-only retype so the ledger must relocate (no bare
-    // placement move) and the strict cap can refuse.
-    let output = command.output().expect("run strict-cap retype");
-    // The retype either relocates (then strict-cap refuses) or agrees.
-    // When it refuses, nothing is written and the code is strict_cap.
-    if !output.status.success() {
-        let json: Value = serde_json::from_str(stdout(&output).trim())
-            .expect("parse strict JSON");
-        let code = json["code"].as_str().unwrap_or("");
-        let error = json["error"].as_str().unwrap_or("").to_string();
-        assert!(code == "strict_cap" || error.contains("strict"), "{json}");
-        assert_eq!(
-            fs::read_to_string(vault.join("body.md")).unwrap(),
-            before_body
-        );
-        assert_eq!(fs::read_to_string(&day_file).unwrap(), before_day);
-    } else {
-        let json: Value = serde_json::from_str(stdout(&output).trim())
-            .expect("parse strict JSON");
-        assert!(json["task_theme"].is_object(), "{json}");
-    }
+    // placement move).
+    let output = command.output().expect("run stale-strict retype");
+    assert_success(&output);
+    let json: Value = serde_json::from_str(stdout(&output).trim())
+        .expect("parse retype JSON");
+    assert!(json["task_theme"].is_object(), "{json}");
+    assert!(json.get("code").is_none(), "no refusal code: {json}");
+    assert_ne!(
+        fs::read_to_string(&day_file).unwrap(),
+        before_day,
+        "retype writes the new FIX entry"
+    );
 }
 
 #[test]

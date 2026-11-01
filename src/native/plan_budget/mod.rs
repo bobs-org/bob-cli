@@ -26,7 +26,6 @@ use super::{
 
 /// Lint codes emitted by [`compute`]. They appear verbatim in human
 /// output and JSON so every surface can match on them.
-pub(crate) const LINT_THEME_CAP: &str = "plan_theme_cap_exceeded";
 pub(crate) const LINT_LINK_CAP: &str = "plan_link_cap_exceeded";
 pub(crate) const LINT_DUPLICATE_NAME: &str = "duplicate_open_pomodoro_name";
 pub(crate) const LINT_INVENTORY_LABEL: &str = "inventory_label_open";
@@ -82,12 +81,10 @@ pub(crate) struct TodayBudget {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PlanCaps {
-    pub(crate) max_themes: u32,
     pub(crate) max_links: u32,
     pub(crate) max_next: u32,
     pub(crate) max_pending: u32,
     pub(crate) max_ready: u32,
-    pub(crate) strict: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -140,7 +137,6 @@ pub(crate) struct PlanLint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LedgerBudget {
     pub(crate) has_section: bool,
-    pub(crate) themes: PlanMeter,
     pub(crate) links: PlanMeter,
     pub(crate) status: PlanStatus,
     pub(crate) theme_names: Vec<String>,
@@ -155,7 +151,6 @@ pub(crate) struct PlanReport {
     pub(crate) daily_file: String,
     pub(crate) caps: PlanCaps,
     pub(crate) status: PlanStatus,
-    pub(crate) themes: PlanMeter,
     pub(crate) links: PlanMeter,
     pub(crate) today: TodayBudget,
     pub(crate) next: LaneBudget,
@@ -170,12 +165,10 @@ pub(crate) struct PlanReport {
 impl PlanReport {
     pub(crate) fn caps_of(config: &PlanConfig) -> PlanCaps {
         PlanCaps {
-            max_themes: config.max_themes(),
             max_links: config.max_links(),
             max_next: config.max_next(),
             max_pending: config.max_pending(),
             max_ready: config.max_ready(),
-            strict: config.strict(),
         }
     }
 }
@@ -183,8 +176,8 @@ impl PlanReport {
 /// The full report shared by `bob plan` and the hooks: the pure
 /// ledger half plus the Today rows and lane meters. Lane over-cap
 /// appends `next_cap_exceeded` / `pending_cap_exceeded` but never
-/// changes `status`: status depends only on themes and links (rule
-/// 8). Being exactly at a cap is fine. Nothing is ever refused.
+/// changes `status`: status depends only on links (rule 8). Being
+/// exactly at a cap is fine. Nothing is ever refused.
 pub(crate) fn assemble_report(
     today: NaiveDate,
     daily_file: &str,
@@ -231,7 +224,6 @@ pub(crate) fn assemble_report(
         daily_file: daily_file.to_string(),
         caps: PlanReport::caps_of(config),
         status,
-        themes: ledger.themes.clone(),
         links: ledger.links.clone(),
         today: TodayBudget {
             count: today_result.tasks.len(),
@@ -667,28 +659,12 @@ pub(crate) fn compute_for_daily(
         entries[first].highlight = true;
     }
 
-    let themes = meter(theme_names.len(), config.max_themes());
     let links = meter(seen_links.len(), config.max_links());
-    let status = if themes.over || links.over {
+    let status = if links.over {
         PlanStatus::Over
     } else {
         PlanStatus::Ok
     };
-    if themes.over {
-        warnings.push(PlanLint {
-            code: LINT_THEME_CAP.to_string(),
-            message: format!(
-                "today's plan has {}/{cap} themes",
-                themes.count,
-                cap = themes.cap
-            ),
-            line: None,
-            link: None,
-            entry: None,
-            task_type: None,
-            entry_types: None,
-        });
-    }
     if links.over {
         warnings.push(PlanLint {
             code: LINT_LINK_CAP.to_string(),
@@ -707,7 +683,6 @@ pub(crate) fn compute_for_daily(
 
     LedgerBudget {
         has_section: true,
-        themes,
         links,
         status,
         theme_names,
@@ -719,7 +694,6 @@ pub(crate) fn compute_for_daily(
 fn empty_budget(config: &PlanConfig) -> LedgerBudget {
     LedgerBudget {
         has_section: false,
-        themes: meter(0, config.max_themes()),
         links: meter(0, config.max_links()),
         status: PlanStatus::Ok,
         theme_names: Vec::new(),
@@ -907,8 +881,6 @@ mod tests {
         );
         assert!(ledger.has_section);
         assert_eq!(ledger.theme_names, vec!["BOB", "DECKS"]);
-        assert_eq!(ledger.themes.count, 2);
-        assert!(!ledger.themes.over);
         assert_eq!(ledger.links.count, 2);
         assert_eq!(ledger.status, PlanStatus::Ok);
         assert_eq!(codes(&ledger), vec![LINT_DUPLICATE_NAME]);
@@ -933,6 +905,8 @@ mod tests {
         );
         assert_eq!(ledger.theme_names, vec!["GOALS", "DECKS"]);
         assert_eq!(ledger.links.count, 3);
+        // Types are listed, never budgeted: three types is fine.
+        assert_eq!(ledger.status, PlanStatus::Ok);
         assert!(ledger.warnings.is_empty());
         let gtd = ledger
             .entries
@@ -973,7 +947,6 @@ mod tests {
             ledger.theme_names,
             vec![UNNAMED_THEME.to_string(), "GOALS".to_string()]
         );
-        assert_eq!(ledger.themes.count, 2);
         assert_eq!(ledger.links.count, 1);
         assert_eq!(ledger.entries.len(), 2);
         assert!(ledger.entries[0].highlight);
@@ -1005,14 +978,15 @@ mod tests {
             \x20   - [[task#^aaa]]\n",
         );
         assert_eq!(ledger.theme_names, vec!["LATER"]);
-        assert_eq!(ledger.themes.count, 1);
         assert_eq!(codes(&ledger), vec![LINT_INVENTORY_LABEL]);
         assert_eq!(ledger.warnings[0].line, Some(3));
     }
 
     #[test]
-    fn four_themes_are_over_but_three_are_fine() {
-        let over = budget(
+    fn many_types_never_go_over() {
+        // The type cap is gone: any number of types stays Ok with no
+        // lint, while links still drive `over`.
+        let ledger = budget(
             "## Pomodoros\n\
             \n\
             - [ ] () — ONE\n\
@@ -1020,21 +994,9 @@ mod tests {
             - [ ] () — THREE\n\
             - [ ] () — FOUR\n",
         );
-        assert_eq!(over.themes.count, 4);
-        assert!(over.themes.over);
-        assert_eq!(over.status, PlanStatus::Over);
-        assert_eq!(codes(&over), vec![LINT_THEME_CAP]);
-        assert_eq!(over.warnings[0].line, None);
-
-        let fine = budget(
-            "## Pomodoros\n\
-            \n\
-            - [ ] () — ONE\n\
-            - [ ] () — TWO\n\
-            - [ ] () — THREE\n",
-        );
-        assert_eq!(fine.status, PlanStatus::Ok);
-        assert!(fine.warnings.is_empty());
+        assert_eq!(ledger.theme_names, vec!["ONE", "TWO", "THREE", "FOUR"]);
+        assert_eq!(ledger.status, PlanStatus::Ok);
+        assert!(ledger.warnings.is_empty());
     }
 
     #[test]
@@ -1105,7 +1067,6 @@ mod tests {
             - [ ] () — GOALS\n",
         );
         assert_eq!(ledger.theme_names, vec!["goals"]);
-        assert_eq!(ledger.themes.count, 1);
         assert_eq!(codes(&ledger), vec![LINT_DUPLICATE_NAME]);
     }
 

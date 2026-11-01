@@ -88,26 +88,25 @@ fn plan_reports_full_budget_as_json() {
     let (_output, value) = plan_json(&temp);
 
     assert_eq!(value["ok"], Value::Bool(true));
-    assert_eq!(value["schema_version"], Value::from(2));
+    assert_eq!(value["schema_version"], Value::from(3));
     assert_eq!(value["date"], Value::from("2026-09-30"));
     assert_eq!(value["daily_file"], Value::from("2026/20260930.md"));
     assert_eq!(value["status"], Value::from("ok"));
-    assert_eq!(value["themes"]["count"], Value::from(3));
-    assert_eq!(value["themes"]["cap"], Value::from(3));
-    assert_eq!(value["themes"]["over"], Value::Bool(false));
+    assert!(
+        value.get("themes").is_none(),
+        "schema 3 drops the themes meter"
+    );
     assert_eq!(value["links"]["count"], Value::from(6));
     assert_eq!(value["links"]["cap"], Value::from(10));
     assert_eq!(value["links"]["over"], Value::Bool(false));
-    assert!(value.get("now").is_none(), "schema 2 drops now");
+    assert!(value.get("now").is_none(), "schema 3 drops now");
     assert_eq!(
         value["caps"],
         serde_json::json!({
-            "max_themes": 3,
             "max_links": 10,
             "max_next": 15,
             "max_pending": 10,
             "max_ready": 100,
-            "strict": false,
         })
     );
 
@@ -299,8 +298,7 @@ fn plan_reports_human_budget_without_ansi_when_piped() {
         "expected plan header:\n{human}"
     );
     assert!(
-        human.contains("3/3 types")
-            && human.contains("6/10 links")
+        human.contains("6/10 links")
             && human.contains("TODAY 6")
             && human.contains("PENDING 2/10")
             && human.contains("NEXT 1/15"),
@@ -427,21 +425,30 @@ fn plan_placeholder_only_section_shows_daily_file() {
 }
 
 #[test]
-fn plan_reports_over_cap_with_lints() {
+fn plan_reports_link_over_cap_with_lints() {
+    // The type cap is gone: four types stay Ok, while eleven links on
+    // one entry trip the link cap.
     let temp = TempDir::new("bob-cli-plan-over");
     let vault = vault_dir(&temp);
     write_blocked_tasks_settings(&vault);
-    write_file(
-        &vault.join("2026/20260930.md"),
+    let mut note = String::from(
         "## Pomodoros\n\
         \n\
         - [ ] () — ONE\n\
         - [ ] () — TWO\n\
         - [ ] () — THREE\n\
         - [ ] () — FOUR\n\
-        - [ ] () — LATER\n\
-        \x20   - [[task#^aaa]]\n",
+        - [ ] () — LATER\n",
     );
+    for index in 0..11 {
+        note.push_str(&format!("\x20   - [[task#^{index:04}]]\n"));
+    }
+    write_file(&vault.join("2026/20260930.md"), &note);
+    let mut tasks = String::from("# Tasks\n\n## Tasks\n\n");
+    for index in 0..11 {
+        tasks.push_str(&format!("- [ ] #task Task {index} ^{index:04}\n"));
+    }
+    write_file(&vault.join("task.md"), &tasks);
 
     let output = bob_command()
         .arg("plan")
@@ -455,17 +462,19 @@ fn plan_reports_over_cap_with_lints() {
     let value: Value =
         serde_json::from_str(&stdout(&output)).expect("plan JSON parses");
     assert_eq!(value["status"], Value::from("over"));
-    assert_eq!(value["themes"]["over"], Value::Bool(true));
+    assert!(
+        value.get("themes").is_none(),
+        "schema 3 drops the themes meter"
+    );
     let codes: Vec<&str> = value["warnings"]
         .as_array()
         .expect("warnings")
         .iter()
         .map(|warning| warning["code"].as_str().expect("lint code"))
         .collect();
-    assert!(
-        codes.contains(&"plan_theme_cap_exceeded")
-            && codes.contains(&"inventory_label_open"),
-        "expected cap and inventory lints: {codes:?}"
+    assert_eq!(
+        codes,
+        vec!["inventory_label_open", "plan_link_cap_exceeded"]
     );
 }
 
@@ -514,7 +523,10 @@ fn plan_loads_a_config_that_still_has_max_now() {
     write_blocked_tasks_settings(&vault);
     write_file(&vault.join("2026/20260930.md"), "## Pomodoros\n");
     let config = temp.path().join("config.yml");
-    write_file(&config, "plan:\n  max_now: 4\n");
+    write_file(
+        &config,
+        "plan:\n  max_now: 4\n  max_themes: 0\n  strict: true\n",
+    );
 
     let output = bob_command()
         .arg("plan")
@@ -532,6 +544,8 @@ fn plan_loads_a_config_that_still_has_max_now() {
     assert_eq!(value["caps"]["max_next"], Value::from(15));
     assert_eq!(value["caps"]["max_pending"], Value::from(10));
     assert_eq!(value["caps"]["max_ready"], Value::from(100));
+    assert!(value["caps"].get("max_themes").is_none());
+    assert!(value["caps"].get("strict").is_none());
 }
 
 #[test]
@@ -540,7 +554,7 @@ fn plan_rejects_invalid_config_with_exit_2() {
     let vault = vault_dir(&temp);
     fs::create_dir_all(&vault).expect("create vault dir");
     let config = temp.path().join("config.yml");
-    write_file(&config, "plan:\n  max_themes: 0\n");
+    write_file(&config, "plan:\n  max_links: 0\n");
 
     let output = bob_command()
         .arg("plan")
@@ -557,7 +571,7 @@ fn plan_rejects_invalid_config_with_exit_2() {
         stderr(&output)
     );
     assert!(
-        stderr(&output).contains("max_themes"),
+        stderr(&output).contains("max_links"),
         "expected config error naming the key:\n{}",
         stderr(&output)
     );
@@ -612,7 +626,7 @@ fn plan_lints_unconfigured_theme_and_invalid_themes_block() {
     let config = temp.path().join("config.yml");
     write_file(
         &config,
-        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n  PLAN: blue\n",
+        "plan:\n  max_links: 30\nthemes:\n  BUILD: yellow\n  PLAN: blue\n",
     );
 
     let output = bob_command()
@@ -644,7 +658,7 @@ fn plan_lints_unconfigured_theme_and_invalid_themes_block() {
         "{warnings:?}"
     );
 
-    write_file(&config, "plan:\n  max_themes: 30\nthemes: [BUILD]\n");
+    write_file(&config, "plan:\n  max_links: 30\nthemes: [BUILD]\n");
     let invalid = bob_command()
         .arg("plan")
         .env("BOB_DIR", &vault)
@@ -675,7 +689,7 @@ fn plan_lints_a_default_type_outside_the_configured_vocabulary() {
     let config = temp.path().join("config.yml");
     write_file(
         &config,
-        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  PLAN: blue\n",
+        "plan:\n  max_links: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  PLAN: blue\n",
     );
 
     let output = bob_command()

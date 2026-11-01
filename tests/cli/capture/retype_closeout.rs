@@ -29,7 +29,7 @@ fn fixture(
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "themes:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n",
         ),
     );

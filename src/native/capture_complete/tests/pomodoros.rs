@@ -4,14 +4,11 @@ use super::{
             Candidates, CaptureCompleteResult, Replacement, SCHEMA_VERSION,
         },
         pomodoros::{
-            apply_bare_start_name_replacements, plan_themes_after_for,
-            pomodoro_name_candidates_at, pomodoro_name_candidates_from_entries,
+            apply_bare_start_name_replacements, pomodoro_name_candidates_at,
+            pomodoro_name_candidates_from_entries,
             pomodoro_name_candidates_from_scan,
-            pomodoro_name_candidates_from_scan_with_hint,
             pomodoro_start_name_candidates_at,
             pomodoro_start_name_candidates_from_scan,
-            pomodoro_start_name_candidates_from_scan_with_hint,
-            PlanCreationHint,
         },
         render::candidate_lines,
     },
@@ -410,105 +407,27 @@ fn pomodoro_start_name_filters_and_creates_by_query() {
 }
 
 #[test]
-fn pomodoro_start_name_again_rows_preview_plan_budget() {
+fn pomodoro_start_name_rows_carry_no_budget_preview() {
+    // The type cap is gone: create and again rows no longer preview a
+    // themes budget.
     let scan = named_start_ledger();
-    let hint = PlanCreationHint {
-        before: 3,
-        keys: vec![
-            "bugs".to_string(),
-            "deep work".to_string(),
-            "goals".to_string(),
-        ],
-        exempt: vec!["gtd".to_string()],
-        cap: 3,
-        strict: false,
-    };
-    let candidates = pomodoro_start_name_candidates_from_scan_with_hint(
-        &scan,
-        "",
-        Some(hint),
-    );
+    let candidates = pomodoro_start_name_candidates_from_scan(&scan, "");
     let again = candidates
         .iter()
         .find(|row| row.replacement == "plan")
         .expect("again PLAN row");
     assert!(again.creates_pomodoro);
-    assert_eq!(again.plan_themes_after, Some(4));
-    assert_eq!(again.plan_themes_cap, Some(3));
-    for slug in ["bugs", "deep-work"] {
-        let row = candidates
-            .iter()
-            .find(|row| row.replacement == slug)
-            .expect("start row");
-        assert!(!row.creates_pomodoro, "{slug}");
-        assert_eq!(row.plan_themes_after, None, "{slug}");
-        assert_eq!(row.plan_themes_cap, None, "{slug}");
-    }
-    let name_it = candidates
-        .iter()
-        .find(|row| row.requires_name)
-        .expect("name-it row");
-    assert_eq!(name_it.plan_themes_after, None);
-    assert_eq!(name_it.plan_themes_cap, None);
-
-    let hint = PlanCreationHint {
-        before: 3,
-        keys: vec![
-            "bugs".to_string(),
-            "deep work".to_string(),
-            "goals".to_string(),
-        ],
-        exempt: vec!["gtd".to_string()],
-        cap: 3,
-        strict: false,
-    };
-    let novel = pomodoro_start_name_candidates_from_scan_with_hint(
-        &scan,
-        "fresh",
-        Some(hint),
-    );
+    let novel = pomodoro_start_name_candidates_from_scan(&scan, "fresh");
     let created = novel
         .iter()
         .find(|row| row.replacement == "fresh")
         .expect("new FRESH row");
     assert!(created.creates_pomodoro);
-    assert_eq!(created.plan_themes_after, Some(4));
-    assert_eq!(created.plan_themes_cap, Some(3));
-
-    let running_scan = capture_pomodoros::scan(concat!(
-        "## Pomodoros\n",
-        "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
-        "- [ ] (**0840-0905** [t:: 25m]) — BUGS\n",
-        "  - [[sase#^deep-fix]]\n",
-        "- [ ] () — DEEP WORK\n",
-        "  - [[bob#^outline]]\n",
-        "- [ ] ()\n",
-        "  - [[bob#^inbox-zero]]\n",
-    ));
-    let hint = PlanCreationHint {
-        before: 3,
-        keys: vec![
-            "bugs".to_string(),
-            "deep work".to_string(),
-            "goals".to_string(),
-        ],
-        exempt: vec!["gtd".to_string()],
-        cap: 3,
-        strict: false,
-    };
-    let running = pomodoro_start_name_candidates_from_scan_with_hint(
-        &running_scan,
-        "",
-        Some(hint),
-    );
-    let timed = running
-        .iter()
-        .find(|row| {
-            row.state == PomodoroState::Open && row.time_range.is_some()
-        })
-        .expect("running row");
-    assert_eq!(timed.plan_themes_after, None);
-    assert_eq!(timed.plan_themes_cap, None);
+    let value = serde_json::to_value(&candidates).expect("candidates JSON");
+    for row in value.as_array().expect("candidate array") {
+        assert!(row.get("plan_themes_after").is_none());
+        assert!(row.get("plan_themes_cap").is_none());
+    }
 }
 
 #[test]
@@ -745,62 +664,6 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
     assert_eq!(json["candidates"][0]["placeholder"], true);
     assert!(json["candidates"][0].get("ref").is_none());
     assert!(json["candidates"][0].get("line").is_none());
-}
-
-#[test]
-fn plan_themes_after_counts_only_fresh_non_exempt_components() {
-    let hint = PlanCreationHint {
-        before: 2,
-        keys: vec!["a".to_string(), "goals".to_string()],
-        exempt: vec!["gtd".to_string()],
-        cap: 3,
-        strict: false,
-    };
-    assert_eq!(
-        plan_themes_after_for(Some(&hint), "GTD"),
-        (Some(2), Some(3))
-    );
-    assert_eq!(
-        plan_themes_after_for(Some(&hint), "A + B"),
-        (Some(3), Some(3))
-    );
-    assert_eq!(
-        plan_themes_after_for(Some(&hint), "B + C"),
-        (Some(4), Some(3))
-    );
-    assert_eq!(plan_themes_after_for(None, "B"), (None, None));
-
-    let scan = capture_pomodoros::scan("## Pomodoros\n- [ ] () — A\n");
-    for candidates in [
-        pomodoro_name_candidates_from_scan_with_hint(
-            &scan,
-            "gtd",
-            Some(PlanCreationHint {
-                before: 2,
-                keys: vec!["a".to_string(), "goals".to_string()],
-                exempt: vec!["gtd".to_string()],
-                cap: 3,
-                strict: false,
-            }),
-        ),
-        pomodoro_start_name_candidates_from_scan_with_hint(
-            &scan,
-            "gtd",
-            Some(PlanCreationHint {
-                before: 2,
-                keys: vec!["a".to_string(), "goals".to_string()],
-                exempt: vec!["gtd".to_string()],
-                cap: 3,
-                strict: false,
-            }),
-        ),
-    ] {
-        let created = candidates
-            .iter()
-            .find(|row| row.creates_pomodoro)
-            .expect("creation row");
-        assert_eq!(created.plan_themes_after, Some(2));
-    }
 }
 
 #[test]

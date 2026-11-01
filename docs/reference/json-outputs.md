@@ -41,7 +41,7 @@ one `ok` / `error` / `schema_version` shape:
 
 The `bob capture-parse` envelope below is a verbatim captured line from the
 isolated fixture. The `bob plan` illustration after it is a shortened excerpt
-of the schema-2 keys from a synthetic vault with no daily note yet; `…` marks
+of the schema-3 keys from a synthetic vault with no daily note yet; `…` marks
 omitted nested numbers.
 
 ```bash
@@ -57,7 +57,7 @@ bob plan -f json -b /path/to/synthetic-vault
 ```
 
 ```text { .no-copy title="Output (excerpt)" }
-{"ok":true,"schema_version":2,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_themes":…,"max_links":…,"max_next":…,"max_pending":…,"max_ready":…,"strict":false},"today":{"count":0},"today_tasks":[],"themes":{"count":0,"cap":…,"over":false},"links":{"count":0,"cap":…,"over":false},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
+{"ok":true,"schema_version":3,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_links":…,"max_next":…,"max_pending":…,"max_ready":…},"today":{"count":0},"today_tasks":[],"links":{"count":0,"cap":…,"over":false},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
 ```
 
 `type_mismatch` warnings in `bob plan` carry additive `link` (`route`,

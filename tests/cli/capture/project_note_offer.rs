@@ -65,7 +65,7 @@ impl Fixture {
         write_file(
             &config,
             concat!(
-                "plan:\n  max_themes: 30\n  default_type: CHORE\n",
+                "plan:\n  default_type: CHORE\n",
                 "types:\n  BUILD: yellow\n  FIX: blue\n  READ: green\n",
                 "  WRITE: magenta\n  PLAN: blue\n  CHORE: yellow\n",
             ),

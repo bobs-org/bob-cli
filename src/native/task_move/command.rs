@@ -723,37 +723,29 @@ fn compute_move_relocation(
         };
         // Shared D8 applier keeps the live link agreeing with the moved
         // task's new type; capture `#<type>` retypes call the same helper.
-        match crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
-            &day_contents,
-            &block_id,
-            &after_key,
-            &after_name,
-            &sources,
-            cfg.max_themes(),
-            cfg.strict(),
-        ) {
-            Ok(None) => continue,
-            Ok(Some((updated, info))) => {
-                day_contents = updated;
-                changed = true;
-                relocated.push(RelocatedInfo {
-                    route: mv
-                        .dest_path
-                        .with_extension("")
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                    block_id: block_id.clone(),
-                    from: info.from,
-                    to: info.to,
-                    type_name: after_name.clone(),
-                });
-            }
-            Err(refusal) => {
-                return Err(format!(
-                    "plan.strict: {} would be type {} of {} · nothing written",
-                    refusal.name, refusal.count, refusal.cap
-                ));
-            }
+        // Types are listed, never budgeted, so the applier never refuses.
+        if let Some((updated, info)) =
+            crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
+                &day_contents,
+                &block_id,
+                &after_key,
+                &after_name,
+                &sources,
+            )
+        {
+            day_contents = updated;
+            changed = true;
+            relocated.push(RelocatedInfo {
+                route: mv
+                    .dest_path
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                block_id: block_id.clone(),
+                from: info.from,
+                to: info.to,
+                type_name: after_name.clone(),
+            });
         }
     }
     if changed {

@@ -2159,11 +2159,6 @@ fn named_relocation_error(
         capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
             CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
         }
-        capture_task_toggle::LinkRelocationError::StrictTypeCap {
-            name,
-            count,
-            cap,
-        } => CaptureError::strict_type_cap(&name, count, cap),
         capture_task_toggle::LinkRelocationError::NoMovableLink
         | capture_task_toggle::LinkRelocationError::MultipleMovableLinks
         | capture_task_toggle::LinkRelocationError::StalePomodoro

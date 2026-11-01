@@ -6,13 +6,11 @@ use crate::native::task_fields::canonical_theme_name;
 /// Today's plan budget configuration (`plan:` block).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlanConfig {
-    pub(crate) max_themes: u32,
     pub(crate) max_links: u32,
     pub(crate) max_next: u32,
     pub(crate) max_pending: u32,
     pub(crate) max_ready: u32,
     pub(crate) max_ready_per_note: u32,
-    pub(crate) strict: bool,
     pub(crate) link_unblocked: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
@@ -25,13 +23,11 @@ pub(crate) struct PlanConfig {
 impl Default for PlanConfig {
     fn default() -> Self {
         Self {
-            max_themes: 3,
             max_links: 10,
             max_next: 15,
             max_pending: 10,
             max_ready: 100,
             max_ready_per_note: 5,
-            strict: false,
             link_unblocked: true,
             exempt: vec!["PLAN".to_string()],
             inventory_labels: vec![
@@ -47,10 +43,6 @@ impl Default for PlanConfig {
 }
 
 impl PlanConfig {
-    pub(crate) fn max_themes(&self) -> u32 {
-        self.max_themes
-    }
-
     pub(crate) fn max_links(&self) -> u32 {
         self.max_links
     }
@@ -69,10 +61,6 @@ impl PlanConfig {
 
     pub(crate) fn max_ready_per_note(&self) -> u32 {
         self.max_ready_per_note
-    }
-
-    pub(crate) fn strict(&self) -> bool {
-        self.strict
     }
 
     pub(crate) fn link_unblocked(&self) -> bool {
@@ -230,17 +218,6 @@ pub(crate) fn parse_plan_config(
             })
     };
 
-    let strict_value = match get("strict") {
-        None | Some(serde_yaml::Value::Null) => defaults.strict,
-        Some(serde_yaml::Value::Bool(flag)) => flag,
-        Some(other) => {
-            return Err(ConfigError::Invalid(format!(
-                "plan.strict in {path_display} must be a boolean; got {}",
-                render_scalar(&other)
-            )));
-        }
-    };
-
     // Successor linking kill switch (`docs/task-dependencies.md` §12.8):
     // boolean only; an invalid value fails the load and the caller falls
     // back to `true` through the existing warning paths.
@@ -302,9 +279,9 @@ pub(crate) fn parse_plan_config(
     let reading_theme = parse_reading_type(reading_value, reading_key, path)?;
     let default_type = parse_default_type(get("default_type"), path)?;
 
-    // A stale `max_now` stays ignored like any other unknown key.
+    // Retired type-cap keys (`max_now`, `max_themes`, `strict`) stay
+    // ignored like any other unknown key: bob never fails on them.
     Ok(PlanConfig {
-        max_themes: cap("max_themes", get("max_themes"), defaults.max_themes)?,
         max_links: cap("max_links", get("max_links"), defaults.max_links)?,
         max_next: cap("max_next", get("max_next"), defaults.max_next)?,
         max_pending: cap(
@@ -318,7 +295,6 @@ pub(crate) fn parse_plan_config(
             get("max_ready_per_note"),
             defaults.max_ready_per_note,
         )?,
-        strict: strict_value,
         link_unblocked: link_unblocked_value,
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
@@ -402,13 +378,11 @@ mod tests {
             load_plan_config(Path::new("/definitely/missing/config.yml"))
                 .expect("missing file gives defaults");
         assert_eq!(config, PlanConfig::default());
-        assert_eq!(config.max_themes(), 3);
         assert_eq!(config.max_links(), 10);
         assert_eq!(config.max_next(), 15);
         assert_eq!(config.max_pending(), 10);
         assert_eq!(config.max_ready(), 100);
         assert_eq!(config.max_ready_per_note(), 5);
-        assert!(!config.strict());
         assert_eq!(config.exempt(), ["PLAN"]);
         assert_eq!(
             config.inventory_labels(),
@@ -439,36 +413,47 @@ mod tests {
         let config = parse_plan_config(
             "unknown_top_level: ignored\n\
             plan:\n\
-            \x20 max_themes: 5\n\
             \x20 max_links: 12\n\
             \x20 max_next: 20\n\
             \x20 max_pending: 7\n\
             \x20 max_ready: 42\n\
             \x20 max_ready_per_note: 3\n\
             \x20 max_now: 99\n\
-            \x20 strict: true\n\
             \x20 exempt: [GTD, ADMIN]\n\
             \x20 inventory_labels: [LATER]\n\
             \x20 unknown_key: ignored\n",
             Path::new("/config.yml"),
         )
         .expect("valid plan block");
-        assert_eq!(config.max_themes(), 5);
         assert_eq!(config.max_links(), 12);
         assert_eq!(config.max_next(), 20);
         assert_eq!(config.max_pending(), 7);
         assert_eq!(config.max_ready(), 42);
         assert_eq!(config.max_ready_per_note(), 3);
-        assert!(config.strict());
         assert!(config.link_unblocked());
         assert_eq!(config.exempt(), ["GTD", "ADMIN"]);
         assert_eq!(config.inventory_labels(), ["LATER"]);
     }
 
     #[test]
+    fn retired_type_cap_keys_load_cleanly() {
+        let config = parse_plan_config(
+            "plan:\n  max_themes: 0\n  strict: true\n",
+            Path::new("/config.yml"),
+        )
+        .expect("retired type-cap keys stay ignored");
+        assert_eq!(config, PlanConfig::default());
+        let mistyped = parse_plan_config(
+            "plan:\n  max_themes: many\n  strict: \"yes\"\n",
+            Path::new("/config.yml"),
+        )
+        .expect("mistyped retired keys stay ignored");
+        assert_eq!(mistyped, PlanConfig::default());
+    }
+
+    #[test]
     fn rejects_invalid_plan_values() {
         for text in [
-            "plan:\n  max_themes: 0\n",
             "plan:\n  max_links: -2\n",
             "plan:\n  max_next: 0\n",
             "plan:\n  max_pending: 0\n",
@@ -483,8 +468,6 @@ mod tests {
             "plan:\n  max_ready_per_note: 1.5\n",
             "plan:\n  max_ready_per_note: many\n",
             "plan:\n  max_ready_per_note: 4294967296\n",
-            "plan:\n  max_themes: many\n",
-            "plan:\n  strict: \"yes\"\n",
             "plan:\n  link_unblocked: \"yes\"\n",
             "plan:\n  link_unblocked: 1\n",
             "plan:\n  exempt: GTD\n",
@@ -643,8 +626,8 @@ mod tests {
     #[test]
     fn mistyped_plan_block_leaves_other_loaders_working() {
         for text in [
-            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  max_themes: many\n",
-            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  strict: \"yes\"\n",
+            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  max_links: many\n",
+            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  link_unblocked: \"yes\"\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  exempt: GTD\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  reading_theme: BUILD + FIX\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  reading_theme: null\n",

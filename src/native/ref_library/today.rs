@@ -509,14 +509,7 @@ fn list_pomodoros(
         today,
     );
     let theme_suggestion = task.map(|task| {
-        theme_menu_for_task(
-            bob_dir,
-            &daily_path,
-            &contents,
-            task,
-            &mut pomodoros,
-            today,
-        )
+        theme_menu_for_task(bob_dir, &contents, task, &mut pomodoros, today)
     });
     TodayListing {
         pomodoros,
@@ -526,7 +519,6 @@ fn list_pomodoros(
 
 fn theme_menu_for_task(
     bob_dir: &Path,
-    daily_path: &Path,
     day_contents: &str,
     task: &ResolvedReadingTask,
     rows: &mut [TodayPomodoroRow],
@@ -562,12 +554,6 @@ fn theme_menu_for_task(
     );
     let suggestion = resolved.suggestion?;
 
-    let daily_key = crate::native::plan_budget::daily_key_from_path(daily_path);
-    let ledger = crate::native::plan_budget::compute_for_daily(
-        day_contents,
-        &config,
-        daily_key.as_deref(),
-    );
     let entries = rows
         .iter()
         .map(|row| preselect::MenuEntry {
@@ -596,11 +582,7 @@ fn theme_menu_for_task(
         &suggestion.theme,
         &entries,
         config.exempt(),
-        &ledger.theme_names,
         creation_allowed,
-        config.strict(),
-        ledger.themes.count,
-        config.max_themes(),
         already_queued,
     );
     if let preselect::MenuChoice::Entry(index) = choice
@@ -650,7 +632,6 @@ fn run_link(
                 );
                 let theme_suggestion = Some(theme_menu_for_task(
                     bob_dir,
-                    &daily_path,
                     &contents,
                     task,
                     &mut pomodoros,

@@ -36,7 +36,6 @@ properties:
         max_days: 7
 
 plan:
-  max_themes: 3
   max_links: 10
   link_unblocked: true
   default_type: CHORE
@@ -103,13 +102,11 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `plan.max_themes` | Positive integer | `3` | Maximum distinct non-exempt Task types before the plan reports over budget. |
 | `plan.max_links` | Positive integer | `10` | Maximum distinct Task Links in today's open Pomodoros before the plan reports over budget. |
 | `plan.max_next` | Positive integer | `15` | NEXT lane count cap. It is reported; it does not refuse work. |
 | `plan.max_pending` | Positive integer | `10` | PENDING lane count cap. It is reported; it does not refuse work. |
 | `plan.max_ready` | Positive integer | `100` | Dashboard READY backlog cap. |
 | `plan.max_ready_per_note` | Integer, 1–999 | `5` | Soft cap for the Ready lane in each area or project note; note frontmatter may override it with `ready_cap`. |
-| `plan.strict` | Boolean | `false` | When true, refuse a `#NAME` capture that would add a theme past `max_themes`. |
 | `plan.link_unblocked` | Boolean | `true` | Offer recovered dependents as successor choices after a managed close; false recovers without offering links. |
 | `plan.exempt` | Sequence of nonempty strings | `[PLAN]` | Themes excluded from theme and link budgets. |
 | `plan.inventory_labels` | Sequence of nonempty strings | `[LATER, MISC, NEW FEATURES, SASE]` | Labels that produce an inventory warning when used as open Task types. |

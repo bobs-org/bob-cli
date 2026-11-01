@@ -1056,23 +1056,6 @@ fn typed(key: &'static str, name: &'static str) -> TypedImplicit<'static> {
         type_key: key,
         type_name: name,
         exempt,
-        cap: 30,
-        strict: false,
-    }
-}
-
-fn strict_typed(
-    key: &'static str,
-    name: &'static str,
-    cap: u32,
-) -> TypedImplicit<'static> {
-    let exempt: &'static [String] = Box::leak(Box::new(Vec::new()));
-    TypedImplicit {
-        type_key: key,
-        type_name: name,
-        exempt,
-        cap,
-        strict: true,
     }
 }
 
@@ -1124,7 +1107,9 @@ fn typed_selection_keeps_timed_ambiguity_without_an_exact_match() {
 }
 
 #[test]
-fn typed_selection_refuses_a_strict_creation_past_cap() {
+fn typed_selection_creates_past_the_old_cap() {
+    // The type cap is gone: a new type always creates, no matter how
+    // many types the ledger already holds.
     let contents = concat!(
         "## Pomodoros\n",
         "- [ ] (**0900-0930**) — BUILD\n",
@@ -1132,13 +1117,11 @@ fn typed_selection_refuses_a_strict_creation_past_cap() {
         "- [ ] () — READ\n",
     );
     let scan = crate::native::capture_pomodoros::scan(contents);
-    let chore = strict_typed("chore", "CHORE", 3);
+    let chore = typed("chore", "CHORE");
     assert_eq!(
         select_typed_implicit_entry(&scan, &chore),
-        Err(TypedImplicitError::StrictTypeCap {
+        Ok(TypedImplicitOutcome::Create {
             name: "CHORE".to_string(),
-            count: 4,
-            cap: 3,
         })
     );
 }

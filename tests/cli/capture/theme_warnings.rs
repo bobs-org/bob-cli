@@ -8,7 +8,7 @@ fn write_vocab(config: &Path) {
     write_file(
         config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "themes:\n  BUILD: yellow\n  PLAN: blue\n",
             "properties:\n",
             "  - name: scheduled\n",
@@ -125,7 +125,7 @@ fn capture_skips_close_link_inventory_and_unconfigured_vocab() {
     assert!(warning_codes(&inventory).is_empty(), "{inventory}");
 
     let none = temp.path().join("none.yml");
-    write_file(&none, "plan:\n  max_themes: 30\n");
+    write_file(&none, "plan:\n");
     let unconfigured_vocab =
         capture_json(&vault, &day_file, &none, &["=CHORE"]);
     assert!(

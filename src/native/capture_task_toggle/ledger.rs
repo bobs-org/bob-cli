@@ -264,11 +264,8 @@ fn plan_typed_implicit_ledger(
     block_link: &str,
     typed: &TypedImplicit<'_>,
 ) -> Result<PomodoroLinkLedgerPlan, LinkRelocationError> {
-    let map_error = |error| match typed_implicit_plan_error(error) {
-        super::links::LinkPlanError::StrictTypeCap { name, count, cap } => {
-            LinkRelocationError::StrictTypeCap { name, count, cap }
-        }
-        other => relocation_from_link_plan_error(other),
+    let map_error = |error| {
+        relocation_from_link_plan_error(typed_implicit_plan_error(error))
     };
     match select_typed_implicit_entry(scan, typed).map_err(map_error)? {
         TypedImplicitOutcome::Entry(dest_index) => {

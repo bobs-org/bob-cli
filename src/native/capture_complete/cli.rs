@@ -137,8 +137,6 @@ accepting it edits only the draft, and `bob capture` creates the named placehold
 Recent rows set origin=history, last_used, days_used, and creates_pomodoro. \
 Named rows expose their component themes and hues. A create row may set \
 hidden or similar_to to explain an existing preference or nearby name. \
-Recent, create, and again rows preview the plan budget with plan_themes_after \
-and plan_themes_cap (omitted when the daily note or plan config is unavailable). \
 Replacements preserve the displayed name, using an exact-name quoted literal \
 when a plain selector would change it or select another theme. Partial quoted \
 names match theme-key prefixes; plain names also match slug substrings.\n\n\

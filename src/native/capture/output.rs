@@ -1504,28 +1504,13 @@ pub(super) fn print_plan_budget(result: &CaptureResult) {
         return;
     };
     let styler = Styler::detect();
-    let types = format!("{}/{} types", budget.themes.count, budget.themes.cap);
     let links = format!("{}/{} links", budget.links.count, budget.links.cap);
-    let types = if budget.themes.over {
-        styler.red(&types)
-    } else {
-        styler.green(&types)
-    };
     let links = if budget.links.over {
         styler.red(&links)
     } else {
         styler.green(&links)
     };
-    let mut line = format!("plan {types} · {links}");
-    if !budget.added_themes.is_empty() {
-        let count = budget.added_themes.len();
-        let noun = if count == 1 { "type" } else { "types" };
-        line.push_str(&format!(
-            "  (+{count} {noun}: {})",
-            budget.added_themes.join(", ")
-        ));
-    }
-    println!("{line}");
+    println!("plan {links}");
     for warning in &budget.warnings {
         eprintln!(
             "{COMMAND_NAME}: {}: {}",
@@ -4250,8 +4235,8 @@ pub(super) fn print_capture_error(
 pub(crate) struct CaptureError {
     pub(super) kind: CaptureErrorKind,
     pub(crate) message: String,
-    /// Machine-readable failure code for template errors, strict plan
-    /// budgets, and capture choice refusals.
+    /// Machine-readable failure code for template errors and capture
+    /// choice refusals.
     pub(super) code: Option<String>,
     /// Extra JSON object fields merged into the error value (offers and
     /// `pull_in` on `pull_in_choice_required`).
@@ -4309,37 +4294,6 @@ impl CaptureError {
             kind: CaptureErrorKind::Io,
             message: message.into(),
             code: None,
-            extra: None,
-            human_unblocked: Vec::new(),
-            typed: None,
-        }
-    }
-
-    /// Strict-mode refusal: an I/O-class error (exit 1) carrying the
-    /// `plan_theme_cap_exceeded` code for machine callers.
-    pub(super) fn strict(message: impl Into<String>) -> Self {
-        Self {
-            kind: CaptureErrorKind::Io,
-            message: message.into(),
-            code: Some(plan_budget::LINT_THEME_CAP.to_string()),
-            extra: None,
-            human_unblocked: Vec::new(),
-            typed: None,
-        }
-    }
-
-    /// D7 typed-placement strict refusal: creating the placed `— T` entry
-    /// would grow today's plan past `plan.max_themes` under `plan.strict`.
-    /// Names the type, the refused count and cap, and the `#NAME` escape,
-    /// under the `strict_cap` code. Writes nothing.
-    pub(super) fn strict_type_cap(name: &str, count: usize, cap: u32) -> Self {
-        Self {
-            kind: CaptureErrorKind::Io,
-            message: format!(
-                "plan.strict: {name} would be type {count} of {cap}; name \
-                the Pomodoro explicitly with #{name} or raise plan.max_themes"
-            ),
-            code: Some("strict_cap".to_string()),
             extra: None,
             human_unblocked: Vec::new(),
             typed: None,

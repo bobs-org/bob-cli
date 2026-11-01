@@ -70,9 +70,8 @@ fn pomodoro_candidates_inner(
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| canonical.clone());
-    let (scan, contents, mut warnings) = read_daily(&day_file)?;
-    let daily_key = plan_budget::daily_key_from_path(&day_file);
-    let hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
+    let (scan, _contents, mut warnings) = read_daily(&day_file)?;
+    let hint = plan_creation_hint(&scan);
     let keys = scan
         .entries
         .iter()
@@ -118,7 +117,6 @@ fn pomodoro_candidates_inner(
         let candidates = theme_menu::compose_task_aware(
             &scan,
             query,
-            hint.as_ref(),
             catalog.as_ref(),
             start,
             literal,
@@ -139,14 +137,7 @@ fn pomodoro_candidates_inner(
         )
     } else {
         (
-            theme_menu::compose(
-                &scan,
-                query,
-                hint.as_ref(),
-                catalog.as_ref(),
-                start,
-                literal,
-            ),
+            theme_menu::compose(&scan, query, catalog.as_ref(), start, literal),
             None,
         )
     };
@@ -239,18 +230,7 @@ fn menu_choice(
     scan: &capture_pomodoros::PomodoroScan,
     hint: Option<&PlanCreationHint>,
 ) -> MenuChoice {
-    let (exempt, ledger_keys, before, cap, strict) = hint.map_or_else(
-        || (Vec::new(), Vec::new(), 0, 0, false),
-        |hint| {
-            (
-                hint.exempt.clone(),
-                hint.keys.clone(),
-                hint.before,
-                hint.cap,
-                hint.strict,
-            )
-        },
-    );
+    let exempt = hint.map_or_else(Vec::new, |hint| hint.exempt.clone());
     let entries = scan
         .entries
         .iter()
@@ -273,11 +253,7 @@ fn menu_choice(
         &suggestion.theme,
         &entries,
         &exempt,
-        &ledger_keys,
         creation_allowed,
-        strict,
-        before,
-        cap,
         false,
     )
 }
@@ -330,17 +306,10 @@ fn candidates_at(
     query: &str,
     start: bool,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
-    let (scan, contents, warnings) = read_daily(day_file)?;
-    let daily_key = plan_budget::daily_key_from_path(day_file);
-    let hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
+    let (scan, _contents, warnings) = read_daily(day_file)?;
     Ok((
         Candidates::PomodoroName(theme_menu::compose(
-            &scan,
-            query,
-            hint.as_ref(),
-            None,
-            start,
-            false,
+            &scan, query, None, start, false,
         )),
         warnings,
     ))
@@ -408,16 +377,7 @@ pub(super) fn pomodoro_start_name_candidates_from_scan(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
 ) -> Vec<PomodoroNameCandidate> {
-    pomodoro_start_name_candidates_from_scan_with_hint(scan, query, None)
-}
-
-#[cfg(test)]
-pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
-    scan: &capture_pomodoros::PomodoroScan,
-    query: &str,
-    plan_hint: Option<PlanCreationHint>,
-) -> Vec<PomodoroNameCandidate> {
-    theme_menu::compose(scan, query, plan_hint.as_ref(), None, true, false)
+    theme_menu::compose(scan, query, None, true, false)
 }
 
 fn entry_key(entry: &PomodoroEntry) -> String {
@@ -427,7 +387,6 @@ fn entry_key(entry: &PomodoroEntry) -> String {
 pub(super) fn today_start_rows(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
-    plan_hint: Option<&PlanCreationHint>,
 ) -> Vec<PomodoroNameCandidate> {
     let next_up_line =
         capture_pomodoros::next_future_pomodoro(scan).map(|entry| entry.line);
@@ -516,10 +475,6 @@ pub(super) fn today_start_rows(
         )
         .or_else(|| entry.name.clone());
         candidate.creates_pomodoro = true;
-        let display =
-            candidate.name.clone().unwrap_or_else(|| entry.slug.clone());
-        (candidate.plan_themes_after, candidate.plan_themes_cap) =
-            plan_themes_after_for(plan_hint, &display);
         again.push(candidate);
     }
     let again = rank(again, query, |candidate| {
@@ -572,62 +527,28 @@ pub(super) fn today_start_rows(
     combined
 }
 
-/// Theme count preview for a `creates_pomodoro` row: today's theme
-/// count plus one for the new name, with the configured cap. `None`
-/// when the ledger or the plan config is unavailable.
+/// Exempt-type context for a `creates_pomodoro` row: the shared PT12
+/// preselection rule skips exempt components when matching entries.
+/// `None` when the daily note has no Pomodoros section or the plan
+/// config is unavailable.
 pub(super) struct PlanCreationHint {
-    pub(super) before: usize,
-    pub(super) keys: Vec<String>,
     pub(super) exempt: Vec<String>,
-    pub(super) cap: u32,
-    pub(super) strict: bool,
 }
 
 pub(super) fn plan_creation_hint(
-    contents: &str,
     scan: &capture_pomodoros::PomodoroScan,
-    daily_file: Option<&str>,
 ) -> Option<PlanCreationHint> {
     if !scan.has_section {
         return None;
     }
     let config = config::load_plan_config(&config::config_path()).ok()?;
-    let ledger = plan_budget::compute_for_daily(contents, &config, daily_file);
     Some(PlanCreationHint {
-        before: ledger.themes.count,
-        keys: ledger
-            .theme_names
-            .iter()
-            .map(|name| plan_budget::normalize_component(name))
-            .collect(),
         exempt: config
             .exempt()
             .iter()
             .map(|name| plan_budget::normalize_component(name))
             .collect(),
-        cap: config.max_themes(),
-        strict: config.strict(),
     })
-}
-
-pub(super) fn plan_themes_after_for(
-    hint: Option<&PlanCreationHint>,
-    name: &str,
-) -> (Option<usize>, Option<u32>) {
-    let Some(hint) = hint else {
-        return (None, None);
-    };
-    let mut fresh: Vec<String> = Vec::new();
-    for component in plan_budget::split_components(name) {
-        let key = plan_budget::normalize_component(&component);
-        if hint.exempt.contains(&key) || hint.keys.contains(&key) {
-            continue;
-        }
-        if !fresh.contains(&key) {
-            fresh.push(key);
-        }
-    }
-    (Some(hint.before + fresh.len()), Some(hint.cap))
 }
 
 #[cfg(test)]
@@ -635,25 +556,13 @@ pub(super) fn pomodoro_name_candidates_from_scan(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
 ) -> Vec<PomodoroNameCandidate> {
-    pomodoro_name_candidates_from_scan_with_hint(scan, query, None)
-}
-
-#[cfg(test)]
-pub(super) fn pomodoro_name_candidates_from_scan_with_hint(
-    scan: &capture_pomodoros::PomodoroScan,
-    query: &str,
-    plan_hint: Option<PlanCreationHint>,
-) -> Vec<PomodoroNameCandidate> {
-    theme_menu::compose(scan, query, plan_hint.as_ref(), None, false, false)
+    theme_menu::compose(scan, query, None, false, false)
 }
 
 pub(super) fn creation_candidate(
     scan: &capture_pomodoros::PomodoroScan,
     name: String,
-    hint: Option<&PlanCreationHint>,
 ) -> PomodoroNameCandidate {
-    let (plan_themes_after, plan_themes_cap) =
-        plan_themes_after_for(hint, &name);
     PomodoroNameCandidate {
         replacement: theme_menu::lossless_replacement(scan, &name),
         pomodoro_ref: None,
@@ -669,8 +578,6 @@ pub(super) fn creation_candidate(
         next_up: false,
         suggested: false,
         suggestion_label: None,
-        plan_themes_after,
-        plan_themes_cap,
         line: None,
         state: PomodoroState::Open,
         status_symbol: ' ',
@@ -774,8 +681,6 @@ pub(super) fn pomodoro_name_candidate_with_next_up(
         next_up,
         suggested: false,
         suggestion_label: None,
-        plan_themes_after: None,
-        plan_themes_cap: None,
         line: Some(entry.line),
         state: entry.state,
         status_symbol: entry.status_symbol,

@@ -1201,10 +1201,7 @@ fn capture_pomodoro_name_warns_when_name_is_unconfigured() {
     let day_file = vault.join("2026/20261024.md");
     let config = temp.path().join("config.yml");
     write_file(&day_file, concat!("## Pomodoros\n", "- [ ] ()\n"));
-    write_file(
-        &config,
-        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n",
-    );
+    write_file(&config, "plan:\nthemes:\n  BUILD: yellow\n");
     let unnamed_ref = capture_pomodoro_ref("- [ ] ()", 2);
 
     let output = bob_command()
@@ -1270,7 +1267,7 @@ fn naming_unnamed_entry_retypes_its_tasks_to_keep_agreement() {
     );
     write_file(
         &config,
-        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  MEET: blue\n  CHORE: yellow\n",
+        "plan:\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  MEET: blue\n  CHORE: yellow\n",
     );
     let unnamed_ref = capture_pomodoro_ref("- [ ] ()", 3);
     // Naming to FIX retypes the BUILD task to FIX.
@@ -1319,7 +1316,7 @@ fn naming_unnamed_entry_retypes_its_tasks_to_keep_agreement() {
     );
     write_file(
         &config2,
-        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
+        "plan:\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
     );
     let ref2 = capture_pomodoro_ref("- [ ] ()", 3);
     let output2 = bob_command()

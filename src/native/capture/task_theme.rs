@@ -58,13 +58,10 @@ pub(super) struct AppliedRelocation {
 }
 
 /// Owned D7 typed-placement inputs for one bare link-creating capture:
-/// the task's effective type (D3, from the staged line) plus the budget
-/// context `routing::place` needs.
+/// the task's effective type (D3, from the staged line).
 pub(super) struct PlacementType {
     pub(super) suggestion: ThemeSuggestion,
     pub(super) exempt: Vec<String>,
-    pub(super) cap: u32,
-    pub(super) strict: bool,
 }
 
 impl PlacementType {
@@ -76,8 +73,6 @@ impl PlacementType {
             type_key: &self.suggestion.theme.key,
             type_name: &self.suggestion.theme.name,
             exempt: &self.exempt,
-            cap: self.cap,
-            strict: self.strict,
         }
     }
 
@@ -843,11 +838,11 @@ impl CaptureTaskThemeContext {
     }
 
     /// Resolve one staged task line's effective type (D3) for bare-form
-    /// typed placement, with the catalog vocab, exempt list, and plan
-    /// caps `routing::place` needs. Returns `None` when no effective type
-    /// applies (no default configured, closed task, unreadable catalog),
-    /// in which case the caller keeps the legacy implicit selection.
-    /// Pushes the same suggestion warnings as the named-capture path.
+    /// typed placement, with the catalog vocab and exempt list.
+    /// Returns `None` when no effective type applies (no default
+    /// configured, closed task, unreadable catalog), in which case the
+    /// caller keeps the legacy implicit selection. Pushes the same
+    /// suggestion warnings as the named-capture path.
     pub(super) fn placement_for_task(
         &mut self,
         planner: &mut CaptureBatchPlanner,
@@ -881,8 +876,6 @@ impl CaptureTaskThemeContext {
         Some(PlacementType {
             suggestion,
             exempt: sources.exempt.into_iter().collect(),
-            cap: cfg.max_themes(),
-            strict: cfg.strict(),
         })
     }
 
@@ -890,8 +883,8 @@ impl CaptureTaskThemeContext {
     /// restore ledger agreement for `block_id` becoming `type_key`/`type_name`.
     /// Stages the day-note edit, pins explicit Pomodoro block refs for the
     /// renamed or created headlines, and rebases existing gesture refs.
-    /// Returns `None` when the ledger already agrees. A strict-cap refusal
-    /// fails with `strict_cap` before any write.
+    /// Returns `None` when the ledger already agrees; types are never
+    /// refused.
     pub(super) fn relocate_for_retype(
         &mut self,
         planner: &mut CaptureBatchPlanner,
@@ -905,7 +898,6 @@ impl CaptureTaskThemeContext {
         if !self.load_config(warnings) || !self.load_catalog(warnings) {
             return Ok(None);
         }
-        let cfg = self.cfg.as_ref().expect("loaded plan config");
         let catalog = self.catalog.as_ref().expect("loaded theme catalog");
         let sources = catalog.theme_sources();
         let day_file = crate::native::pomodoro::day_file_for(&self.root);
@@ -913,37 +905,30 @@ impl CaptureTaskThemeContext {
             Ok(contents) => contents,
             Err(_) => return Ok(None),
         };
-        match crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
-            &day_contents,
-            block_id,
-            type_key,
-            type_name,
-            &sources,
-            cfg.max_themes(),
-            cfg.strict(),
-        ) {
-            Ok(None) => Ok(None),
-            Ok(Some((updated, info))) => {
-                let refs = std::mem::take(pomodoro_refs);
-                *pomodoro_refs =
-                    compose_type_relocation_refs(refs, &info, &day_contents, &updated);
-                planner.stage(&day_file, updated)?;
-                Ok(Some(AppliedRelocation {
-                    json: super::output::TypeRelocationJson {
-                        outcome: info.outcome,
-                        from: info.from,
-                        to: info.to,
-                    },
-                    dest_after: info.dest_after,
-                    dest_created: info.dest_created,
-                }))
-            }
-            Err(refusal) => Err(CaptureError::strict_type_cap(
-                &refusal.name,
-                refusal.count,
-                refusal.cap,
-            )),
-        }
+        let Some((updated, info)) =
+            crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
+                &day_contents,
+                block_id,
+                type_key,
+                type_name,
+                &sources,
+            )
+        else {
+            return Ok(None);
+        };
+        let refs = std::mem::take(pomodoro_refs);
+        *pomodoro_refs =
+            compose_type_relocation_refs(refs, &info, &day_contents, &updated);
+        planner.stage(&day_file, updated)?;
+        Ok(Some(AppliedRelocation {
+            json: super::output::TypeRelocationJson {
+                outcome: info.outcome,
+                from: info.from,
+                to: info.to,
+            },
+            dest_after: info.dest_after,
+            dest_created: info.dest_created,
+        }))
     }
 
     fn load_catalog(&mut self, warnings: &mut Vec<CaptureWarning>) -> bool {

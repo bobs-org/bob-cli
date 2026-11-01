@@ -2237,14 +2237,7 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "plan",
-        "build"
-      ],
       "creation_allowed": true,
-      "strict": false,
-      "themes_before": 2,
-      "cap": 3,
       "already_queued": false,
       "expected": {
         "kind": "entry",
@@ -2273,14 +2266,7 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "plan",
-        "build"
-      ],
       "creation_allowed": true,
-      "strict": false,
-      "themes_before": 2,
-      "cap": 3,
       "already_queued": false,
       "expected": {
         "kind": "entry",
@@ -2309,14 +2295,7 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "fix",
-        "build"
-      ],
       "creation_allowed": true,
-      "strict": false,
-      "themes_before": 2,
-      "cap": 3,
       "already_queued": false,
       "expected": {
         "kind": "entry",
@@ -2334,11 +2313,7 @@
       "exempt": [
         "plan"
       ],
-      "ledger_keys": [],
       "creation_allowed": true,
-      "strict": false,
-      "themes_before": 1,
-      "cap": 3,
       "already_queued": false,
       "query": "",
       "expected": {
@@ -2360,13 +2335,7 @@
         }
       ],
       "exempt": [],
-      "ledger_keys": [
-        "secret"
-      ],
       "creation_allowed": true,
-      "strict": false,
-      "themes_before": 1,
-      "cap": 3,
       "already_queued": false,
       "expected": {
         "kind": "fallback",
@@ -2382,37 +2351,11 @@
       },
       "entries": [],
       "exempt": [],
-      "ledger_keys": [],
       "creation_allowed": false,
-      "strict": false,
-      "themes_before": 0,
-      "cap": 3,
       "already_queued": false,
       "expected": {
         "kind": "fallback",
         "code": "creation_blocked"
-      }
-    },
-    {
-      "id": "strict-cap-blocks-new-theme",
-      "suggestion": {
-        "key": "write",
-        "name": "WRITE",
-        "known": true
-      },
-      "entries": [],
-      "exempt": [],
-      "ledger_keys": [
-        "build"
-      ],
-      "creation_allowed": true,
-      "strict": true,
-      "themes_before": 3,
-      "cap": 3,
-      "already_queued": false,
-      "expected": {
-        "kind": "fallback",
-        "code": "strict_cap"
       }
     },
     {
@@ -2430,13 +2373,7 @@
         }
       ],
       "exempt": [],
-      "ledger_keys": [
-        "build"
-      ],
       "creation_allowed": true,
-      "strict": false,
-      "themes_before": 1,
-      "cap": 3,
       "already_queued": true,
       "expected": {
         "kind": "fallback",
@@ -2964,12 +2901,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "BUILD"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "already_queued": false,
       "expected": {
         "kind": "entry",
@@ -2995,12 +2926,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "BUILD"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "already_queued": false,
       "expected": {
         "kind": "entry",
@@ -3026,13 +2951,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "BUILD",
-        "FIX"
-      ],
-      "themes_before": 2,
-      "cap": 3,
-      "strict": false,
       "already_queued": false,
       "expected": {
         "kind": "entry",
@@ -3053,12 +2971,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "already_queued": false,
       "expected": {
         "kind": "create",
@@ -3079,12 +2991,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "already_queued": false,
       "expected": {
         "kind": "create",
@@ -3092,35 +2998,7 @@
       }
     },
     {
-      "name": "strict-refuses-new-type",
-      "type": "chore",
-      "type_name": "CHORE",
-      "entries": [
-        {
-          "name": "FIX",
-          "open": true,
-          "running": false
-        }
-      ],
-      "exempt": [
-        "PLAN"
-      ],
-      "ledger_keys": [
-        "BUILD",
-        "FIX",
-        "WRITE"
-      ],
-      "themes_before": 3,
-      "cap": 3,
-      "strict": true,
-      "already_queued": false,
-      "expected": {
-        "kind": "refused",
-        "code": "strict_cap"
-      }
-    },
-    {
-      "name": "strict-allows-exempt",
+      "name": "exempt-always-creates",
       "type": "plan",
       "type_name": "PLAN",
       "entries": [
@@ -3133,14 +3011,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "BUILD",
-        "FIX",
-        "WRITE"
-      ],
-      "themes_before": 3,
-      "cap": 3,
-      "strict": true,
       "already_queued": false,
       "expected": {
         "kind": "create",
@@ -3161,12 +3031,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "already_queued": true,
       "expected": {
         "kind": "already_queued"
@@ -3186,12 +3050,6 @@
       "exempt": [
         "PLAN"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "already_queued": false,
       "expected": {
         "kind": "no_type"
@@ -3227,12 +3085,6 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "expected": {
         "kind": "unchanged"
       }
@@ -3265,12 +3117,6 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "expected": {
         "kind": "unchanged"
       }
@@ -3303,12 +3149,6 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "expected": {
         "kind": "rename_entry",
         "index": 0,
@@ -3343,13 +3183,6 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "BOB",
-        "FIX"
-      ],
-      "themes_before": 2,
-      "cap": 5,
-      "strict": false,
       "expected": {
         "kind": "rename_entry",
         "index": 0,
@@ -3384,12 +3217,6 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "expected": {
         "kind": "append_component",
         "index": 0,
@@ -3430,13 +3257,6 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "FIX",
-        "BUILD"
-      ],
-      "themes_before": 2,
-      "cap": 3,
-      "strict": false,
       "expected": {
         "kind": "move_to",
         "from": 0,
@@ -3471,12 +3291,6 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "expected": {
         "kind": "rename_placeholder",
         "index": 0,
@@ -3511,57 +3325,10 @@
       "inventory": [
         "LATER"
       ],
-      "ledger_keys": [
-        "FIX"
-      ],
-      "themes_before": 1,
-      "cap": 3,
-      "strict": false,
       "expected": {
         "kind": "create_below",
         "from": 0,
         "name": "BUILD"
-      }
-    },
-    {
-      "name": "strict-refuses-create",
-      "entries": [
-        {
-          "name": "FIX",
-          "open": true,
-          "running": false,
-          "links": 2
-        }
-      ],
-      "live_link": 0,
-      "type": "chore",
-      "type_name": "CHORE",
-      "vocab": [
-        "BUILD",
-        "CHORE",
-        "FIX",
-        "MEET",
-        "PLAN",
-        "READ",
-        "WRITE"
-      ],
-      "exempt": [
-        "PLAN"
-      ],
-      "inventory": [
-        "LATER"
-      ],
-      "ledger_keys": [
-        "BUILD",
-        "FIX",
-        "WRITE"
-      ],
-      "themes_before": 3,
-      "cap": 3,
-      "strict": true,
-      "expected": {
-        "kind": "refused",
-        "code": "strict_cap"
       }
     }
   ]

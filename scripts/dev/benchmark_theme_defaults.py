@@ -69,7 +69,7 @@ def main():
         manifest.write_text(json.dumps(facts, indent=2) + '\n')
     facts = json.loads(manifest.read_text())
     config = scratch / 'config.yml'
-    config.write_text('plan:\n  exempt: [PLAN]\n  max_themes: 30\n')
+    config.write_text('plan:\n  exempt: [PLAN]\n')
     env = os.environ.copy()
     env.update(BOB_DIR=str(vault), BOB_NOW='2026-10-28 12:00:00',
                BOB_CONFIG_FILE=str(config), NO_COLOR='1', HOSTNAME='apollo')

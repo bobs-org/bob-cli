@@ -1,4 +1,4 @@
-//! Capture plan-budget reporting, strict mode, and destination roles.
+//! Capture plan-budget reporting and destination roles.
 
 use crate::support::*;
 use std::fs;
@@ -48,7 +48,7 @@ fn parse_json(output: &std::process::Output) -> serde_json::Value {
 }
 
 #[test]
-fn capture_plan_budget_warns_when_new_theme_grows_past_cap() {
+fn capture_plan_budget_ignores_new_types() {
     let temp = TempDir::new("bob-cli-capture-budget-warn");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -69,22 +69,15 @@ fn capture_plan_budget_warns_when_new_theme_grows_past_cap() {
     assert_eq!(json["pomodoro_name"], "NEWT");
 
     let budget = &json["plan_budget"];
-    assert_eq!(budget["status"], "over");
-    assert_eq!(budget["themes"]["count"], 4);
-    assert_eq!(budget["themes"]["cap"], 3);
-    assert_eq!(budget["themes"]["over"], true);
-    assert_eq!(budget["themes"]["before"], 3);
+    assert_eq!(budget["status"], "ok");
+    assert!(budget.get("themes").is_none(), "no themes meter: {budget}");
     assert_eq!(budget["links"]["count"], 4);
     assert_eq!(budget["links"]["before"], 3);
     assert_eq!(budget["links"]["over"], false);
     assert_eq!(budget["added_themes"], serde_json::json!(["NEWT"]));
-    assert_eq!(budget["warnings"][0]["code"], "plan_theme_cap_exceeded");
     assert!(
-        budget["warnings"][0]["message"]
-            .as_str()
-            .expect("warning message")
-            .contains("4/3 types (adds NEWT)"),
-        "{budget}"
+        budget.get("warnings").is_none(),
+        "new types never warn: {budget}"
     );
     assert!(
         json.get("warnings").is_none(),
@@ -115,20 +108,18 @@ fn capture_plan_budget_human_reports_meter_and_destination() {
         .expect("run human capture");
     assert_success(&output);
     let out = stdout(&output);
-    assert!(
-        out.contains("plan 4/3 types · 4/10 links  (+1 type: NEWT)"),
-        "{out}"
-    );
+    assert!(out.contains("plan 4/10 links"), "{out}");
+    assert!(!out.contains("types"), "no types meter: {out}");
     assert!(out.contains("→ new Pomodoro NEWT"), "{out}");
     assert!(
-        stderr(&output).contains("bob capture: warning:"),
-        "{}",
+        stderr(&output).is_empty(),
+        "new types never warn: {}",
         format_output(&output)
     );
 }
 
 #[test]
-fn capture_plan_budget_stays_quiet_when_over_cap_does_not_grow() {
+fn capture_plan_budget_stays_quiet_without_cap_pressure() {
     let temp = TempDir::new("bob-cli-capture-budget-quiet");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -148,15 +139,14 @@ fn capture_plan_budget_stays_quiet_when_over_cap_does_not_grow() {
         ),
     );
 
-    // Linking under an existing entry keeps the theme count at 4/3:
+    // Linking under an existing entry grows links but trips no cap:
     // the budget is reported but no warning fires.
     let output = capture_json(&vault, &day_file, &["@dev:quid"], None);
     assert_success(&output);
     let json = parse_json(&output);
     let budget = &json["plan_budget"];
-    assert_eq!(budget["status"], "over");
-    assert_eq!(budget["themes"]["count"], 4);
-    assert_eq!(budget["themes"]["before"], 4);
+    assert_eq!(budget["status"], "ok");
+    assert!(budget.get("themes").is_none(), "no themes meter: {budget}");
     let warnings = budget
         .get("warnings")
         .and_then(|warnings| warnings.as_array())
@@ -189,7 +179,7 @@ fn capture_plan_budget_warns_on_link_growth_past_cap() {
     let json = parse_json(&output);
     let budget = &json["plan_budget"];
     assert_eq!(budget["status"], "over");
-    assert_eq!(budget["themes"]["count"], 1);
+    assert!(budget.get("themes").is_none(), "no themes meter: {budget}");
     assert_eq!(budget["links"]["count"], 11);
     assert_eq!(budget["links"]["before"], 10);
     assert_eq!(budget["warnings"][0]["code"], "plan_link_cap_exceeded");
@@ -248,7 +238,7 @@ fn capture_plan_budget_invalid_config_skips_with_warning() {
     let config = temp.path().join("config.yml");
     write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
     write_file(&day_file, three_theme_day());
-    write_file(&config, "plan:\n  max_themes: 0\n");
+    write_file(&config, "plan:\n  max_links: 0\n");
 
     let output = capture_json(
         &vault,
@@ -393,7 +383,9 @@ fn capture_destination_human_arrows_name_each_role() {
 }
 
 #[test]
-fn capture_strict_mode_refuses_new_theme_past_cap_atomically() {
+fn capture_stale_strict_key_never_refuses() {
+    // `plan.strict` is retired: a stale key loads cleanly and the
+    // fourth type is created like any other.
     let temp = TempDir::new("bob-cli-capture-budget-strict");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -411,29 +403,24 @@ fn capture_strict_mode_refuses_new_theme_past_cap_atomically() {
         &["@dev:newid#NEWT", "Ship", "it."],
         Some(&config),
     );
-    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert_success(&output);
     let json = parse_json(&output);
-    assert_eq!(json["ok"], false);
-    assert_eq!(json["code"], "plan_theme_cap_exceeded");
-    let error = json["error"].as_str().expect("error message");
-    assert!(error.contains("4/3 types"), "{error}");
-    assert!(error.contains("GOALS"), "{error}");
-    assert!(error.contains("queue it with ^"), "{error}");
-    assert!(!error.contains("#now"), "{error}");
-    assert_eq!(
+    assert_eq!(json["creates_pomodoro"], true);
+    assert_eq!(json["pomodoro_name"], "NEWT");
+    assert_ne!(
         fs::read_to_string(&day_file).expect("read day"),
         before_day,
-        "refused batch writes nothing"
+        "accepted batch writes the day note"
     );
-    assert_eq!(
+    assert_ne!(
         fs::read_to_string(&target).expect("read target"),
         before_target,
-        "refused batch writes nothing"
+        "accepted batch writes the task note"
     );
 }
 
 #[test]
-fn capture_strict_mode_never_refuses_session_starts() {
+fn capture_stale_strict_key_allows_session_starts() {
     let temp = TempDir::new("bob-cli-capture-budget-strict-start");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -457,7 +444,7 @@ fn capture_strict_mode_never_refuses_session_starts() {
 }
 
 #[test]
-fn capture_complete_create_row_reports_plan_themes() {
+fn capture_complete_create_row_carries_no_budget_preview() {
     let temp = TempDir::new("bob-cli-complete-plan-themes");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -497,17 +484,15 @@ fn capture_complete_create_row_reports_plan_themes() {
         .iter()
         .find(|candidate| candidate["creates_pomodoro"] == true)
         .expect("a creates_pomodoro row");
-    assert_eq!(created["plan_themes_after"], 3);
-    assert_eq!(created["plan_themes_cap"], 3);
+    assert_eq!(created["replacement"], "newtheme");
     for candidate in candidates {
-        if candidate["creates_pomodoro"] != true {
-            assert!(candidate.get("plan_themes_after").is_none());
-        }
+        assert!(candidate.get("plan_themes_after").is_none(), "{candidate}");
+        assert!(candidate.get("plan_themes_cap").is_none(), "{candidate}");
     }
 }
 
 #[test]
-fn capture_complete_start_name_again_row_reports_plan_themes() {
+fn capture_complete_start_name_again_row_carries_no_budget_preview() {
     let temp = TempDir::new("bob-cli-complete-start-name-again-themes");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -551,21 +536,14 @@ fn capture_complete_start_name_again_row_reports_plan_themes() {
         .find(|candidate| candidate["replacement"] == "plan")
         .expect("an again PLAN row");
     assert_eq!(again["creates_pomodoro"], true);
-    assert_eq!(again["plan_themes_after"], 3);
-    assert_eq!(again["plan_themes_cap"], 3);
     for candidate in candidates {
-        if candidate["creates_pomodoro"] != true {
-            assert!(
-                candidate.get("plan_themes_after").is_none(),
-                "{candidate}"
-            );
-            assert!(candidate.get("plan_themes_cap").is_none(), "{candidate}");
-        }
+        assert!(candidate.get("plan_themes_after").is_none(), "{candidate}");
+        assert!(candidate.get("plan_themes_cap").is_none(), "{candidate}");
     }
 }
 
 #[test]
-fn capture_complete_start_name_new_row_reports_plan_themes() {
+fn capture_complete_start_name_new_row_carries_no_budget_preview() {
     let temp = TempDir::new("bob-cli-complete-start-name-new-themes");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -609,12 +587,14 @@ fn capture_complete_start_name_new_row_reports_plan_themes() {
         .find(|candidate| candidate["replacement"] == "fr")
         .expect("a new FR row");
     assert_eq!(created["creates_pomodoro"], true);
-    assert_eq!(created["plan_themes_after"], 4);
-    assert_eq!(created["plan_themes_cap"], 3);
+    for candidate in candidates {
+        assert!(candidate.get("plan_themes_after").is_none(), "{candidate}");
+        assert!(candidate.get("plan_themes_cap").is_none(), "{candidate}");
+    }
 }
 
 #[test]
-fn capture_strict_mode_never_refuses_named_starts() {
+fn capture_stale_strict_key_allows_named_starts() {
     let temp = TempDir::new("bob-cli-capture-budget-strict-named");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -635,14 +615,10 @@ fn capture_strict_mode_never_refuses_named_starts() {
         json["plan_budget"]["added_themes"],
         serde_json::json!(["FRESH"])
     );
-    let warnings = json["plan_budget"]["warnings"]
-        .as_array()
-        .expect("budget warnings");
+    assert!(json["plan_budget"].get("themes").is_none(), "{json}");
     assert!(
-        warnings
-            .iter()
-            .any(|warning| warning["code"] == "plan_theme_cap_exceeded"),
-        "{json}"
+        json["plan_budget"].get("warnings").is_none(),
+        "new types never warn: {json}"
     );
 }
 
@@ -663,7 +639,7 @@ fn capture_complete_create_row_omits_plan_themes_without_config() {
             "## Later\n",
         ),
     );
-    write_file(&config, "plan:\n  max_themes: 0\n");
+    write_file(&config, "plan:\n  max_links: 0\n");
 
     let draft = "Do work @dev:abc#NEWTHEME";
     let output = bob_command()
@@ -721,7 +697,7 @@ fn capture_invalid_config_without_ledger_change_has_no_warning() {
     let config = temp.path().join("config.yml");
     write_file(&target, "# Dev\n## Tasks\n- [ ] #task Existing\n");
     write_file(&day_file, three_theme_day());
-    write_file(&config, "plan:\n  max_themes: 0\n");
+    write_file(&config, "plan:\n  max_links: 0\n");
 
     let output = capture_json(
         &vault,
@@ -745,7 +721,7 @@ fn capture_invalid_config_without_ledger_change_has_no_warning() {
 }
 
 #[test]
-fn capture_strict_mode_refuses_toggle_path() {
+fn capture_stale_strict_key_never_refuses_toggle_path() {
     let temp = TempDir::new("bob-cli-capture-strict-toggle");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -772,18 +748,13 @@ fn capture_strict_mode_refuses_toggle_path() {
 
     let output =
         capture_json(&vault, &day_file, &["@dev+newid #NEWT"], Some(&config));
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "toggle should be refused: {}",
-        format_output(&output)
-    );
+    assert_success(&output);
     let json = parse_json(&output);
-    assert_eq!(json["code"], "strict_cap", "{json}");
+    assert_eq!(json["ok"], true);
 }
 
 #[test]
-fn capture_strict_mode_refuses_project_note_path() {
+fn capture_stale_strict_key_never_refuses_project_note_path() {
     let temp = TempDir::new("bob-cli-capture-strict-project-note");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -804,14 +775,9 @@ fn capture_strict_mode_refuses_project_note_path() {
             .env("BOB_CONFIG_FILE", &config),
         "Body @cash^human1@#NEWT\n- Draft the memo :draft-memo\n",
     );
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "project-note should be refused: {}",
-        format_output(&output)
-    );
+    assert_success(&output);
     let json = parse_json(&output);
-    assert_eq!(json["code"], "plan_theme_cap_exceeded", "{json}");
+    assert_eq!(json["ok"], true);
 }
 
 #[test]

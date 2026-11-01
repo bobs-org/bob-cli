@@ -31,7 +31,7 @@ fn fixture(
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "themes:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n",
         ),
     );
@@ -349,7 +349,7 @@ fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "types:\n",
             "  BUILD: yellow\n",
             "  FIX: blue\n",
@@ -408,7 +408,7 @@ fn refusal_copy_uses_marker_spelling_suggestions_and_attachment_hints() {
         }
     }
 
-    write_file(&config, "plan:\n  max_themes: 30\n");
+    write_file(&config, "plan:\n");
     let no_vocabulary_hint = format!(
         "`#fxi` is not a task type yet: no Pomodoro has used FXI and no `types:` vocabulary is configured; add `types:` to {}, or write `\\#fxi` to keep it as a tag",
         config.display()
@@ -442,7 +442,7 @@ fn vocabulary_is_authoritative_and_history_is_the_fallback() {
         capture_error_json(&vault, &day_file, &config, &["Do work #snack"]);
     assert_eq!(configured_rejection["code"], "type_not_configured");
 
-    write_file(&config, "plan:\n  max_themes: 30\n");
+    write_file(&config, "plan:\n");
     let (_, historical) =
         capture_json(&vault, &day_file, &config, &["Do work #snack"], true);
     assert_eq!(historical["task_theme"]["theme"]["name"], "SNACK");
@@ -591,7 +591,7 @@ fn leading_attached_project_marker_accepts_a_spaced_literal() {
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "types:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n  \"DEEP WORK\": violet\n",
         ),
     );
@@ -627,7 +627,7 @@ fn root_and_reading_defaults_precede_the_note_default() {
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n  reading_type: READ\n",
+            "plan:\n  reading_type: READ\n",
             "types:\n  BUILD: yellow\n  FIX: blue\n  WRITE: magenta\n  PLAN: blue\n  READ: green\n",
         ),
     );

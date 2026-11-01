@@ -34,7 +34,7 @@ const COMMAND_NAME: &str = "bob plan";
 
 /// Bump only for a breaking change to the JSON object below; new
 /// optional fields keep the current version.
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -83,8 +83,8 @@ pub(crate) fn build_cli() -> ClapCommand {
             Pomodoros, and the NEXT/PENDING lane counts from the Tasks \
             index.\n\n\
             The command is read-only. Types are the distinct open Pomodoro \
-            name components besides the exempt ones; links are the distinct Task Links \
-            under them. See docs/plan.md for the full definition. A missing \
+            name components besides the exempt ones, listed as names only; the \
+            budget caps links alone. See docs/plan.md for the full definition. A missing \
             daily note or missing Pomodoros section still reports TODAY 0 \
             and the lanes, and exits 0.",
         )
@@ -290,11 +290,6 @@ fn report_without_ledger(
 ) -> PlanReport {
     let ledger = LedgerBudget {
         has_section: false,
-        themes: super::PlanMeter {
-            count: 0,
-            cap: config.max_themes(),
-            over: false,
-        },
         links: super::PlanMeter {
             count: 0,
             cap: config.max_links(),
@@ -365,8 +360,6 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
     }
     output.push('\n');
 
-    let themes_meter =
-        format!("{}/{} types", report.themes.count, report.themes.cap);
     let links_meter =
         format!("{}/{} links", report.links.count, report.links.cap);
     let today_meter = format!("TODAY {}", report.today.count);
@@ -381,8 +374,7 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
         }
     };
     output.push_str(&format!(
-        "  PLAN  {} {sep} {}      {} {sep} PENDING {} {sep} NEXT {}\n",
-        paint_meter(styler, &themes_meter, report.themes.over),
+        "  PLAN  {}      {} {sep} PENDING {} {sep} NEXT {}\n",
         paint_meter(styler, &links_meter, report.links.over),
         paint_meter(styler, &today_meter, false),
         paint_meter(styler, &pending_meter, report.pending.over),

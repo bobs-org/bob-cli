@@ -1368,10 +1368,9 @@ stale `[ ]` resident).
   - `selected`: true when this offer was picked;
   - `block_id_needed`: true when a pick would mint.
 - `not_linked` is one of `already_planned`, `project_task`,
-  `project_member`, `hidden`, `disabled`, `not_selected`,
-  `no_destination`, `strict_cap`. `strict_cap` means a requested typed
-  destination could not be created under the configured cap. Serde omits
-  the key when the row was linked.
+  `project_member`, `hidden`, `disabled`, `not_selected`, or
+  `no_destination` (typed placement has no eligible destination).
+  Serde omits the key when the row was linked.
   - The cycler-only model adds `failed` and `cancelled`; Rust never
     emits them.
   - `breaker` and `not_planned_today` are never emitted again.
@@ -1584,7 +1583,7 @@ notification line). This is the plain fallback and walk-toast form:
 │  ＋ Re-launch all failed agents on apollo!               [ Next ] │
 │  🔒 Start adding sase--<name> badges · waits until Oct 13         │
 │ ──────────────────────────────────────────────────────────────── │
-│  (plan 3/3 · 10/10)  (added ^relaunch-failed-agents)  (Alt+N releases) │
+│  (plan 10/10)  (added ^relaunch-failed-agents)  (Alt+N releases) │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1686,7 +1685,7 @@ Capture / Ctrl+Shift+Enter as the way to link later:
   surfaced Ship the outcome!  proj.md ^prj · project has no open tasks
   still blocked  Start adding sase--<name> badges  sase_agents_repo.md ^badges · until 2026-10-13
   still blocked  Ship the outcome!  proj.md ^prj · project has no open tasks · waits on 1 more
-plan 3/3 types · 10/10 links
+plan 10/10 links
 ```
 
 - **Destinations:**
@@ -2229,9 +2228,9 @@ subprocess argument, absent from `--help`): when offers exist and no
              "picked_count": 0}}
 ```
 
-Same exit status (1) and shape conventions as the
-`plan_theme_cap_exceeded` refusal. `code` appears on these two
-refusals; every other capture failure omits it. Offers from a project
+Same exit status (1) and shape conventions as any `ok: false`
+refusal with a `code`. `code` appears on this refusal;
+every other capture failure omits it. Offers from a project
 note created by `@route:id@` take part in the refusal, the flat `offers`
 payload, and the pick validation like any other offer, and the refusal
 writes neither the project note nor the daily note.

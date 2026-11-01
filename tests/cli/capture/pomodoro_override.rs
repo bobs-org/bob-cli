@@ -999,7 +999,7 @@ fn override_swap_did_you_mean_spells_override() {
 }
 
 #[test]
-fn override_swap_strict_never_refuses_created_target() {
+fn override_swap_stale_strict_key_allows_created_target() {
     let temp = TempDir::new("bob-cli-override-swap-strict");
     let vault = temp.path().join("vault");
     let day_file = vault.join("day.md");
@@ -1022,7 +1022,8 @@ fn override_swap_strict_never_refuses_created_target() {
         "## Tasks\n\n- [ ] #task Aaa [created::2026-10-01] ^aaa\n- [ ] #task Bbb [created::2026-10-01] ^bbb\n- [ ] #task Ccc [created::2026-10-01] ^ccc\n",
     );
     write_file(&config, "plan:\n  strict: true\n");
-    // A swap that creates a fourth theme past the cap still succeeds.
+    // A swap that creates a fourth theme past the old cap still succeeds:
+    // `strict` is a stale key and types are never budgeted.
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -1045,14 +1046,10 @@ fn override_swap_strict_never_refuses_created_target() {
         json["pomodoro_start"]["override"]["action"], "swap",
         "{json}"
     );
-    let warnings = json["plan_budget"]["warnings"]
-        .as_array()
-        .expect("budget warnings");
+    assert!(json["plan_budget"].get("themes").is_none(), "{json}");
     assert!(
-        warnings
-            .iter()
-            .any(|warning| warning["code"] == "plan_theme_cap_exceeded"),
-        "{json}"
+        json["plan_budget"].get("warnings").is_none(),
+        "new types never warn: {json}"
     );
 }
 

@@ -109,7 +109,7 @@ Print the current Pomodoro status in tmux status-line format.
 When an active or recently overdue Pomodoro exists, the output is the regular
 Pomodoro status followed by ` | `. Missing or stale Pomodoros produce no
 status. When today's daily note has a Pomodoros section, the plan-budget
-meter `plan T/Tc · L/Lc` is appended after the status (or alone when there
+meter `plan L/Lc` is appended after the status (or alone when there
 is no status), wrapped in `#[reverse]...#[noreverse]` when over the cap.
 With `BOB_CLI_USE_SCRIPT=1` the script fallback stays budget-less.
 Each known, non-exempt name component gets a tmux `■` swatch; `NO_COLOR`

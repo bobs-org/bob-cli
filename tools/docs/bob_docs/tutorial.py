@@ -350,8 +350,8 @@ def _checkpoint_fixture(sandbox: BobSandbox) -> None:
 
 def _checkpoint_initial_plan(sandbox: BobSandbox) -> None:
     plan = _load_plan(sandbox)
-    if not isinstance(plan, dict) or plan.get("schema_version") != 2:
-        raise DocsError("bob plan JSON did not match schema_version 2")
+    if not isinstance(plan, dict) or plan.get("schema_version") != 3:
+        raise DocsError("bob plan JSON did not match schema_version 3")
     if plan.get("date") != _date_for(sandbox) or plan.get("status") != "ok":
         raise DocsError("bob plan JSON does not report today's successful plan")
     if (plan.get("today") or {}).get("count") != 0:
@@ -405,8 +405,8 @@ def _checkpoint_linked(sandbox: BobSandbox) -> None:
     ):
         raise DocsError("the Task Link must be a direct child of the open FOCUS Pomodoro")
     plan = _load_plan(sandbox)
-    if not isinstance(plan, dict) or plan.get("schema_version") != 2:
-        raise DocsError("bob plan JSON did not match schema_version 2")
+    if not isinstance(plan, dict) or plan.get("schema_version") != 3:
+        raise DocsError("bob plan JSON did not match schema_version 3")
     today_tasks = plan.get("today_tasks")
     if not isinstance(today_tasks, list) or plan.get("today", {}).get("count") != 1:
         raise DocsError("bob plan JSON should report one Today Task Link")

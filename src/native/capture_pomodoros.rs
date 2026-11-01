@@ -211,11 +211,10 @@ struct CapturePomodorosResult {
 
 /// Saved daily-plan budget for idle agenda clients. Capture's before/after
 /// budget is mutation-specific, so the agenda exposes only the shared engine's
-/// status and current meters.
+/// status and the current link meter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct CapturePomodorosPlanBudget {
     status: plan_budget::PlanStatus,
-    themes: plan_budget::PlanMeter,
     links: plan_budget::PlanMeter,
 }
 
@@ -329,7 +328,6 @@ fn list_capture_pomodoros(
             );
             CapturePomodorosPlanBudget {
                 status: budget.status,
-                themes: budget.themes,
                 links: budget.links,
             }
         })

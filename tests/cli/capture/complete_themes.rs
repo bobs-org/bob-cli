@@ -17,7 +17,7 @@ fn command(root: &Path) -> Command {
 fn fixture(root: &Path, case: &Value) {
     let vault = root.join("vault");
     write_capture_task_settings(&vault);
-    let mut config = String::from("plan:\n  max_themes: 30\n");
+    let mut config = String::from("plan:\n");
     if let Some(configured) = case.get("configured") {
         config.push_str("themes:\n");
         match configured {
@@ -127,8 +127,9 @@ fn theme_menu_vectors() {
                 } else {
                     assert!(row.get("days_used").is_none());
                 }
-                assert!(row["plan_themes_after"].is_number());
-                assert_eq!(row["plan_themes_cap"], 30);
+                // No budget preview: the type cap is gone.
+                assert!(row.get("plan_themes_after").is_none());
+                assert!(row.get("plan_themes_cap").is_none());
             }
             if case.get("configured").is_some()
                 && row.get("origin").is_none()
@@ -156,7 +157,7 @@ fn pomodoro_name_completion_preselects_the_existing_task_theme() {
     write_capture_task_settings(&vault);
     write_file(
         &temp.path().join("config.yml"),
-        "plan:\n  max_themes: 30\nthemes:\n  READ: auto\n",
+        "plan:\nthemes:\n  READ: auto\n",
     );
     write_file(
         &vault.join("sase.md"),
@@ -182,7 +183,7 @@ fn pomodoro_name_completion_adds_suggested_create_row_for_note_default() {
     write_capture_task_settings(&vault);
     write_file(
         &temp.path().join("config.yml"),
-        "plan:\n  max_themes: 30\nthemes:\n  BUILD: auto\n  READ: auto\n",
+        "plan:\nthemes:\n  BUILD: auto\n  READ: auto\n",
     );
     write_file(
         &vault.join("sase.md"),

@@ -842,7 +842,7 @@ The envelope also includes `theme_suggestion` for the reading task. One
 `suggestion_label`. If no open bucket matches, a known type that can be
 created gets `theme_suggestion.create: true`; the client can offer a new
 Pomodoro. Otherwise `theme_suggestion.fallback` reports
-`unknown_theme`, `creation_blocked`, or `strict_cap`. If the task already
+`unknown_theme` or `creation_blocked`. If the task already
 has a live link under an open entry, `already_queued` wins and no row is
 marked suggested. This metadata describes the reading task's effective type
 and matching daily entries. On a write with no explicit destination,

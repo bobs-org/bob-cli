@@ -1,12 +1,14 @@
 # Plan budget, Today, and lanes
 
-By default, the plan budget allows 3 types and 10 distinct Task Links
-under today's open Pomodoros. PLAN is exempt. The first open, non-exempt
-Pomodoro is the highlight. Separately, Today lists the open tasks with
-a dedicated Task Link under today's open Pomodoros, and the NEXT and
-PENDING lanes count every `[*]` and `[/]` task visible today (caps 15
-and 10). Removing a Task Link never changes a task's lane: only an
-explicit release (Alt+N) returns Next or Pending work to Ready.
+By default, the plan budget allows 10 distinct Task Links
+under today's open Pomodoros. Types are listed, never budgeted:
+no type count, cap, warning, or refusal exists. PLAN is exempt. The
+first open, non-exempt Pomodoro is the highlight. Separately, Today
+lists the open tasks with a dedicated Task Link under today's open
+Pomodoros, and the NEXT and PENDING lanes count every `[*]` and `[/]`
+task visible today (caps 15 and 10). Removing a Task Link never
+changes a task's lane: only an explicit release (Alt+N) returns Next
+or Pending work to Ready.
 
 For a typical day, capture or link work into the daily Pomodoro ledger,
 inspect it with read-only `bob plan`, then run `bob task reconcile`
@@ -50,11 +52,12 @@ Stats attributes every entry through its Task Links
 
 ## Types
 
-The number of distinct non-exempt type components across open entries. An
-**unnamed** open entry counts as one unit in the type budget, shown as
-`(unnamed)`, but only when it holds at least one counted link. An empty
-`()` placeholder never counts. The remembered catalog, hues, hide state,
-and `bob types` command live in [Task types](task-types.md).
+The distinct non-exempt type components across open entries, listed
+as names and never budgeted. An **unnamed** open entry lists as one
+`(unnamed)` type, but only when it holds at least one counted link.
+An empty `()` placeholder never lists. The remembered catalog, hues,
+hide state, and `bob types` command live in
+[Task types](task-types.md).
 
 ## Links
 
@@ -84,8 +87,8 @@ counts once.
 
 ## Status
 
-`over` when types > `max_themes` or links > `max_links`; otherwise
-`ok`. Being exactly at the cap is fine.
+`over` when links > `max_links`; otherwise `ok`. Types never affect
+it. Being exactly at the cap is fine.
 
 ## Lints
 
@@ -94,10 +97,9 @@ one applies:
 
 | Code | When |
 | --- | --- |
-| `plan_theme_cap_exceeded` | types are over the cap |
 | `plan_link_cap_exceeded` | links are over the cap |
 | `duplicate_open_pomodoro_name` | the same non-exempt component is on two open entries |
-| `inventory_label_open` | an open component is in `plan.inventory_labels`; it still counts as a type |
+| `inventory_label_open` | an open component is in `plan.inventory_labels`; it is listed as a type anyway |
 | `subheading_in_pomodoros` | a `###`–`######` heading sits inside the section; it splits the heading's time total |
 | `next_cap_exceeded` | NEXT is over the cap; never changes `status`, nothing is refused |
 | `pending_cap_exceeded` | PENDING is over the cap; never changes `status`, nothing is refused |
@@ -210,7 +212,7 @@ so TODAY-driven excess does not color an at-cap section red. Orange (80% up to t
 and magenta (exactly at the cap) are presentation states, not lints or `over` conditions. Magenta marks a lane that is exactly full, and no other
 Bob chip uses that hue.
 Daily badges on older notes follow today's live section, while that
-note's TODAY type/link budget keeps its own ledger. Daily
+note's TODAY link budget keeps its own ledger. Daily
 `next_cap_exceeded` / `pending_cap_exceeded` lints follow the badge's section
 count and appear only when that count is strictly over its cap. The `bob plan`
 CLI warnings and navigation notices still check the whole lane, including
@@ -603,16 +605,14 @@ everywhere.
 ```yaml
 # Today's plan budget (bob plan, capture, tmux, Obsidian) and the NEXT/PENDING/READY lane caps.
 plan:
-  max_themes: 3 # distinct open Pomodoro names besides the exempt ones
   max_links: 10 # distinct open Task Links outside exempt entries
   max_next: 15 # open Next tasks visible today (see above)
   max_pending: 10 # open In Progress tasks visible today (see above)
   max_ready: 100 # soft limit for dashboard READY tasks, excluding Today (see above)
   max_ready_per_note: 5 # soft cap per area/project note; frontmatter ready_cap overrides
-  strict: false # refuse #NAME captures that would create a type past max_themes
   link_unblocked: true # offer a closed planned task's unblocked dependents, project residents, and project pull-ins (docs/task-dependencies.md §12); false recovers only
   keep_moving: true # offer a leaf project's ready tasks when you close its last task planned today (docs/task-dependencies.md §12.15); false turns off only these offers
-  exempt: [PLAN] # open entries that never count toward the type cap
+  exempt: [PLAN] # open entries whose names never list as types and whose links never count
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open labels that are storage, not types
   reading_type: READ # type suggested for reading tasks; off disables the rule
   default_type: CHORE # final fallback for task suggestions; off or null disables it
@@ -623,8 +623,9 @@ defaults above, shared by Rust and JavaScript. Unknown keys stay
 ignored.
 
 **Validation.** Caps are integers ≥ 1 (`max_ready_per_note` is
-`1–999`), `strict`, `link_unblocked`, and `keep_moving` are booleans,
-and the lists hold non-empty strings. `reading_type` is a single task type name (default
+`1–999`), `link_unblocked` and `keep_moving` are booleans,
+and the lists hold non-empty strings. The retired `max_themes` and `strict` keys stay
+silently ignored, like the retired `max_now`. `reading_type` is a single task type name (default
 `READ`); `off` disables the reading-task suggestion rule. The legacy
 `reading_theme` alias is accepted, but setting both is a config error.
 `default_type` is a single task type name, `off`, or `null`; unset, `off`,
@@ -637,7 +638,7 @@ loaders keep their independence.
 - `bob plan` and `bob ready` exit 2 with a clear message.
 - Capture skips its `plan_budget` report and adds a warning string; hooks
   return `plan_budget: null` with a stderr warning. Their vault writes
-  continue, and capture's strict plan enforcement is unavailable.
+  continue.
 - An invalid `link_unblocked` falls back to `true` through the same
   warning paths: close-time recovery still runs, and offering stays on.
 - An invalid `keep_moving` falls back to `true` through the same warning
@@ -653,16 +654,15 @@ loaders keep their independence.
 `-f/--format human|json`, `-h/--help`. Environment: `BOB_DIR`,
 `BOB_DAY_FILE`, `BOB_NOW`, `BOB_CONFIG_FILE`, `NO_COLOR`.
 
-JSON adds `ok: true` and `schema_version: 2` to the report. This example
+JSON adds `ok: true` and `schema_version: 3` to the report. This example
 shows all report fields for one open type and one exempt entry:
 
 ```json
 {
   "date": "2026-10-01",
   "daily_file": "2026/20261001.md",
-  "caps": { "max_themes": 3, "max_links": 10, "max_next": 15, "max_pending": 10, "max_ready": 100, "strict": false },
+  "caps": { "max_links": 10, "max_next": 15, "max_pending": 10, "max_ready": 100 },
   "status": "ok",
-  "themes": { "count": 1, "cap": 3, "over": false },
   "links": { "count": 3, "cap": 10, "over": false },
   "today": { "count": 2 },
   "next": { "count": 12, "cap": 15, "over": false },
@@ -735,17 +735,17 @@ shows all report fields for one open type and one exempt entry:
   ],
   "warnings": [],
   "ok": true,
-  "schema_version": 2
+  "schema_version": 3
 }
 ```
 
 `theme_names` lists the ordered type names alongside `theme_refs`; the refs
 use the same order. Each named `entries[]` row carries its component refs in
-`themes`. The arrays are additive and keep `schema_version: 2`.
+`themes`. The arrays are additive and keep `schema_version: 3`.
 Lint objects omit `line` when none applies; entries omit
 `time_range` when untimed. Each `entries[]` object also carries the
-additive `homes` object from [Pomodoro homes](pomodoro-homes.md)
-(schema 2 is unchanged). Open entries are forecasts. `today_tasks` is
+additive `homes` object from [Pomodoro homes](pomodoro-homes.md).
+Open entries are forecasts. `today_tasks` is
 in ledger order of first occurrence; `today.count` is its length.
 
 Human output:
@@ -753,7 +753,7 @@ Human output:
 ```text
 bob plan · Thu 2026-10-01 · 2026/20261001.md
 
-  PLAN  3/3 types · 7/10 links      TODAY 7 · PENDING 8/10 · NEXT 12/15
+  PLAN  7/10 links      TODAY 7 · PENDING 8/10 · NEXT 12/15
 
   ★ ■GOALS   ▶ 0945-1015   3 links
     …
@@ -773,7 +773,7 @@ An unnamed entry prints the same dim homes chip with its dot that
 Meters are green within the cap and red when over. ★ is yellow and
 ▶ is cyan; exempt rows are dimmed. When lints occur, they appear below
 the entries in yellow, with the code dimmed. An open inventory label such
-as MISC appears as a row and counts as a type even though it also raises
+as MISC appears as a listed type row even though it also raises
 `inventory_label_open`.
 
 With no daily note the header says `no daily note yet`; with no
@@ -858,17 +858,17 @@ non-Dataview task format, or an unresolvable note, and 3 with
 | --- | --- |
 | `bob plan` | The full plan report: meters, today's types (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
 | `bob ready` | The per-note Ready cap report: crowded/full/room bar overview, the single-note worklist, schema-1 JSON, `--check` (exit 3), and `--cap` preview |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v4: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a type line, and any lints. Task Links under today's open Pomodoros carry a rendered half-ring In Progress mark (◐) when their target is `[/]`; Next targets show none (see `## In Progress marks and the Task Link lane toggle`). TODAY is the type/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT badges show the live dashboard section counts (`PENDING n/cap`, `NEXT n/cap`, or `–` when Tasks/Today data is unavailable), including on older daily notes; `pendingBudget`/`nextBudget` keep whole-lane semantics for CLI and notices. Daily cap lints appear only for a strict section excess and quote the badge's section count; `bob plan` CLI warnings and navigation notices still use whole-lane counts, including TODAY. |
-| `dash.md` | Its ten badges in grouped Review / Work / Browse navigation above `## Tasks` and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v4 (`dashboardLaneBudget`/`renderDashboardLaneBadge` for PENDING/NEXT sections, `readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded) plus the `noteReady` namespace v1 `renderCrowdedChip` and the `dashboardCollections` namespace v1 `snapshot`/`renderChip` for PROJECTS/REFERENCES on the Browse row (each guarded with a clickable unavailable fallback when the plugin is older, unloaded, or throwing). Work is TODAY · PENDING · NEXT · READY; Review is NEW · ROTTEN · CROWDED; Browse is PROJECTS · REFERENCES · BLOCKED opening `dash_projects`, `dash_references`, and `blocked.md`. `dashboardCollections` still supplies only PROJECTS/REFERENCES; BLOCKED is the existing generic chip after that loop. PENDING/NEXT badges show and color the section count against the cap; whole-lane pressure stays labeled in tooltips and accessibility text, while non-dashboard `pendingBudget`/`nextBudget` and CLI warnings keep whole-lane semantics. Daily `bob-plan` PENDING/NEXT badges share the dashboard section counts and warning color. BLOCKED is informational, has no cap, and uses the same informational accent as its Browse neighbors. TODAY is that same type/link budget and opens today's daily note. PROJECTS counts `projects.base#Active & Waiting` once per path and REFERENCES counts `refs.base#Reading Queue` once per path; a changed Base contract or pending metadata shows `–` with a reason instead of a stale number. |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v4: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a type line, and any lints. Task Links under today's open Pomodoros carry a rendered half-ring In Progress mark (◐) when their target is `[/]`; Next targets show none (see `## In Progress marks and the Task Link lane toggle`). TODAY is the link budget (`TODAY 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT badges show the live dashboard section counts (`PENDING n/cap`, `NEXT n/cap`, or `–` when Tasks/Today data is unavailable), including on older daily notes; `pendingBudget`/`nextBudget` keep whole-lane semantics for CLI and notices. Daily cap lints appear only for a section excess and quote the badge's section count; `bob plan` CLI warnings and navigation notices still use whole-lane counts, including TODAY. |
+| `dash.md` | Its ten badges in grouped Review / Work / Browse navigation above `## Tasks` and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v4 (`dashboardLaneBudget`/`renderDashboardLaneBadge` for PENDING/NEXT sections, `readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded) plus the `noteReady` namespace v1 `renderCrowdedChip` and the `dashboardCollections` namespace v1 `snapshot`/`renderChip` for PROJECTS/REFERENCES on the Browse row (each guarded with a clickable unavailable fallback when the plugin is older, unloaded, or throwing). Work is TODAY · PENDING · NEXT · READY; Review is NEW · ROTTEN · CROWDED; Browse is PROJECTS · REFERENCES · BLOCKED opening `dash_projects`, `dash_references`, and `blocked.md`. `dashboardCollections` still supplies only PROJECTS/REFERENCES; BLOCKED is the existing generic chip after that loop. PENDING/NEXT badges show and color the section count against the cap; whole-lane pressure stays labeled in tooltips and accessibility text, while non-dashboard `pendingBudget`/`nextBudget` and CLI warnings keep whole-lane semantics. Daily `bob-plan` PENDING/NEXT badges share the dashboard section counts and warning color. BLOCKED is informational, has no cap, and uses the same informational accent as its Browse neighbors. TODAY is that same link budget and opens today's daily note. PROJECTS counts `projects.base#Active & Waiting` once per path and REFERENCES counts `refs.base#Reading Queue` once per path; a changed Base contract or pending metadata shows `–` with a reason instead of a stale number. |
 | `crowded.md` | The Crowded Notes page (`parent: "[[gtd]]"`, aliases Crowded Notes and Crowded): a `bob-ready-notes` block with the ranked CROWDED/FULL bar rows plus a `### CROWDED Tasks` query grouped by the noteReady group label. |
 | `bob-ready-notes` code block | The same model as the `bob ready` overview: a CROWDED summary line, CROWDED and FULL ranked-bar rows, compressed ROOM pills, dimmed exempt notes, and a remedies footer; `–` when unavailable. |
 | Note `## Tasks` heading chip | A live per-note chip on the first `## Tasks` heading of eligible and exempt notes (Live Preview widget plus Reading-view post-processor): `ready n/cap`, `· full`, `· +k`, `· no cap`, or `–`. It opens crowded and never edits the note. |
-| `bob pomodoro tmux` | Adds a tmux-colored `■` before each known, non-exempt type component, then appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; `NO_COLOR` leaves the status text unchanged, and an over-cap meter uses tmux reverse video. |
-| `bob task reconcile` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 types · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
-| `bob capture` | When a capture changes today's Pomodoros section, a before/after type and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap type. |
-| Bob Mac Capture | The same budget in types and Links capsules, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
-| Obsidian Notices | A lane-aware suffix on Task Link changes. Ctrl+Shift+Enter link and unlink Notices name the destination and append the plan meter, for example `Linked to CAPTURE · Next · plan 1/3 · 2/10` (🔴 when over a plan cap); Alt+N lane Notices report the lanes, for example `→ Ready · 2 tasks · unlinked 1 from today · NEXT 11/15 · PENDING 7/10`, with 🔴 plus a prune hint when over a lane cap. Alt+[ / Alt+] Task Link lane-toggle Notices report the toggle, for example `◐ In Progress · Fix the parser crash · PENDING 8/10 · NEXT 11/15` or `→ Next · Fix … · logged`. |
-| Link to today picker | The Ctrl+Shift+Enter picker footer shows the plan meter (`plan 2/3 · 6/10`, red when over) and the create row carries a `+1 type` badge (red `+1 type · 4/3` when over the type cap). |
+| `bob pomodoro tmux` | Adds a tmux-colored `■` before each known, non-exempt type component, then appends `plan L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; `NO_COLOR` leaves the status text unchanged, and an over-cap meter uses tmux reverse video. |
+| `bob task reconcile` | A `plan_budget` object in JSON and a human meter line such as `plan 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
+| `bob capture` | When a capture changes today's Pomodoros section, a before/after link budget, a link-cap warning if the count grows over the cap, and the Task Link destination (for example `→ under GOALS (next up)`). New types never warn and never refuse. |
+| Bob Mac Capture | The same budget in a Links capsule, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
+| Obsidian Notices | A lane-aware suffix on Task Link changes. Ctrl+Shift+Enter link and unlink Notices name the destination and append the plan meter, for example `Linked to CAPTURE · Next · plan 2/10` (🔴 when over the link cap); Alt+N lane Notices report the lanes, for example `→ Ready · 2 tasks · unlinked 1 from today · NEXT 11/15 · PENDING 7/10`, with 🔴 plus a prune hint when over a lane cap. Alt+[ / Alt+] Task Link lane-toggle Notices report the toggle, for example `◐ In Progress · Fix the parser crash · PENDING 8/10 · NEXT 11/15` or `→ Next · Fix … · logged`. |
+| Link to today picker | The Ctrl+Shift+Enter picker footer shows the plan meter (`plan 6/10`, red when over). |
 
 ## Conformance examples
 
@@ -889,7 +889,7 @@ unless noted.
        - [[b#^two]]
    ```
 
-   types are `BOB`, `DECKS` (2/3); links are 2/10; one
+   types are `BOB`, `DECKS`; links are 2/10; one
    `duplicate_open_pomodoro_name` at the second entry's line.
 
 2. **Link forms and exclusions.** A struck link, the `^gtd` bridge,
@@ -912,8 +912,8 @@ unless noted.
    struck link never counts, the twice-planned link counts once,
    and the exempt entry's bridge link is ignored with the entry.
 
-3. **Unnamed placeholders.** An unnamed entry with links counts as
-   one `(unnamed)` type; one without links never counts:
+3. **Unnamed placeholders.** An unnamed entry with links lists as
+   one `(unnamed)` type; one without links never lists:
 
    ```markdown
    ## Pomodoros
@@ -924,7 +924,7 @@ unless noted.
    - [ ] () — GOALS
    ```
 
-   types are `(unnamed)`, `GOALS` (2/3); links are 1/10.
+   types are `(unnamed)`, `GOALS`; links are 1/10.
 
 4. **Subheading in the section.** A `### Notes` heading raises
    `subheading_in_pomodoros` and closes the entry span above it:
@@ -942,7 +942,7 @@ unless noted.
 
    Links are 1/10: the prose link sits outside any entry span.
 
-5. **Open inventory label.** An open `LATER` still counts as a
+5. **Open inventory label.** An open `LATER` is still listed as a
    type and raises `inventory_label_open`:
 
    ```markdown
@@ -952,10 +952,11 @@ unless noted.
        - [[task#^aaa]]
    ```
 
-   types are 1/3 with one `inventory_label_open`.
+   one listed type with one `inventory_label_open`.
 
-6. **Over the cap.** Four types with the default cap raises
-   `plan_theme_cap_exceeded` and sets status `over`:
+6. **No type cap.** Four types with the default config stay `ok`:
+   types are never budgeted, so no lint fires and status ignores
+   them:
 
    ```markdown
    ## Pomodoros
@@ -966,8 +967,8 @@ unless noted.
    - [ ] () — FOUR
    ```
 
-   types are 4/3; being exactly at the cap is fine, going past
-   it is not.
+   links are 0/10; status is `ok`. Only links can set status
+   `over`.
 
 7. **Cancelled and completed entries.** A `[-]` entry and a
    completed entry never count:

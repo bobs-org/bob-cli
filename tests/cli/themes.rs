@@ -596,7 +596,7 @@ fn themes_list_emits_not_configured_hints() {
     let config = cache.join("config.yml");
     write_file(
         &config,
-        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n  CHORE: magenta\n",
+        "plan:\nthemes:\n  BUILD: yellow\n  CHORE: magenta\n",
     );
 
     let output = themes_command(&vault, &cache)

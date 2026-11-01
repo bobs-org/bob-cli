@@ -1461,10 +1461,7 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
     assert_success(&dry_run);
     let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
         .expect("plan budget dry-run JSON");
-    assert_eq!(
-        json["plan_budget"]["themes"],
-        serde_json::json!({"count": 2, "cap": 3, "over": false})
-    );
+    assert!(json["plan_budget"].get("themes").is_none());
     assert_eq!(
         json["plan_budget"]["links"],
         serde_json::json!({"count": 3, "cap": 10, "over": false})
@@ -1481,12 +1478,10 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
     assert_eq!(
         json["plan_budget"]["caps"],
         serde_json::json!({
-            "max_themes": 3,
             "max_links": 10,
             "max_next": 15,
             "max_pending": 10,
             "max_ready": 100,
-            "strict": false,
         })
     );
     assert_eq!(
@@ -1508,9 +1503,8 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
         .expect("dry-run plan budget human output");
     assert_success(&human);
     assert!(
-        stdout(&human).contains(
-            "plan 2/3 themes · 3/10 links · TODAY 3 · PENDING 0/10 · NEXT 0/15"
-        ),
+        stdout(&human)
+            .contains("plan 3/10 links · TODAY 3 · PENDING 0/10 · NEXT 0/15"),
         "expected a plan budget stats line:\n{}",
         format_output(&human)
     );
@@ -1532,7 +1526,7 @@ fn task_status_hooks_nulls_plan_budget_on_invalid_config() {
     );
     write_file(&vault.join("tasks.md"), "- [ ] #task One ^one\n");
     let config = temp.path().join("config.yml");
-    write_file(&config, "plan:\n  max_themes: 0\n");
+    write_file(&config, "plan:\n  max_links: 0\n");
 
     let dry_run = bob_command()
         .args(["task", "reconcile"])

@@ -24,7 +24,7 @@ fn fixture(
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n",
+            "plan:\n",
             "themes:\n  BUILD: yellow\n  FIX: blue\n  READ: green\n  WRITE: magenta\n  PLAN: blue\n",
         ),
     );
@@ -212,7 +212,7 @@ fn new_named_capture_uses_the_global_default_after_note_defaults() {
     write_file(
         &config,
         concat!(
-            "plan:\n  max_themes: 30\n  default_type: CHORE\n",
+            "plan:\n  default_type: CHORE\n",
             "types:\n  CHORE: magenta\n  FIX: blue\n",
         ),
     );

@@ -41,7 +41,7 @@ workflow guide.
   - [Linking tasks with '~' and '~~'](#linking-tasks)
   - [Completing tasks with '!'](#completing-tasks-with)
   - [Routing inbox tasks out](#routing-inbox-tasks-out)
-  - [Plan budget and strict mode](#plan-budget-and-strict-mode)
+  - [Plan budget](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
   - [Adjusting the current Pomodoro](#adjusting-the-current-pomodoro)
@@ -543,9 +543,8 @@ then relocated so it keeps agreeing with the new type (D8): Ensure Next
 already moves the link to its typed placement, while already-queued links,
 relationship-only owners, and toggles that link an already-linked task run
 the shared relocation applier. The item reports `type_relocation` when the
-ledger moves. A strict-cap refusal fails before any write with code
-`strict_cap`. Closed targets are refused: closed tasks keep their fields as
-history.
+ledger moves; types are never refused. Closed targets are refused:
+closed tasks keep their fields as history.
 
 With a configured `types:` vocabulary, only its entries are accepted.
 Without one, only names already present in Pomodoro history are accepted;
@@ -1289,8 +1288,7 @@ queue: the destination is _Q_ and nothing moves. Without a name and no _Q_,
 the task's effective type places the link: the running exact entry, else
 the first open exact entry, else the first open entry whose name contains
 the type, else a created `— T` placeholder, exactly like a new-task
-capture. A type that would grow the plan past `plan.max_themes` under
-`plan.strict` refuses with code `strict_cap` before any write.
+capture. Types are never refused: any new `— T` entry is created.
 `=<X>` uses the same `se<X>` math, clock, and guards: any open timed Pomodoro
 fails with "finish the current Pomodoro first"; `#name=<X>` needs an untimed
 open placeholder or creates a started entry; no-name with _Q_ starts _Q_
@@ -2915,63 +2913,37 @@ dry-run output the rows say `would route`; ordinary previews never write.
 The `run 'bob task reconcile' to reconcile Blocked state` hint prints when
 `needs_reconcile` is true.
 
-### Plan budget and strict mode
+### Plan budget {#plan-budget-and-strict-mode}
 
 When a batch changes today's Pomodoros section, the result carries a
-top-level `plan_budget` with before/after meters (dry-run and real runs
-use the same planner, so they agree). It is never per item, and it is
-omitted when the ledger is unchanged:
+top-level `plan_budget` with the before/after link meter (dry-run and
+real runs use the same planner, so they agree). It is never per item,
+and it is omitted when the ledger is unchanged. Types are listed,
+never budgeted: new types never warn and never refuse:
 
 ```json
-"plan_budget": {"status": "over",
-  "themes": {"count": 4, "cap": 3, "over": true, "before": 3},
+"plan_budget": {"status": "ok",
   "links": {"count": 8, "cap": 10, "over": false, "before": 7},
   "added_themes": ["BOB"],
   "added_theme_refs": [{"key": "bob", "name": "BOB", "hue": "magenta",
-    "hue_source": "hash"}],
-  "warnings": [{"code": "plan_theme_cap_exceeded",
-    "message": "today's plan now has 4/3 types (adds BOB); queue it with ^ or defer with $<N>"}]}
+    "hue_source": "hash"}]}
 ```
 
-Warnings fire only for `plan_theme_cap_exceeded` and
-`plan_link_cap_exceeded`, and only while the batch grows that meter past
+The link-cap warning fires only while the batch grows the meter past
 its cap (`after > cap` and `after > before`). A capture that leaves an
 over-cap plan alone stays quiet. Human output prints one meter line
-after the result (`plan 4/3 types · 8/10 links  (+1 type: BOB)`) and
+after the result (`plan 8/10 links`) and
 one `bob capture: warning: …` stderr line per fired warning; the
 warnings never join the item `warnings` array. An invalid plan config
 skips the budget and pushes one plain string into `warnings` instead.
 
-`added_theme_refs` is ordered with `added_themes`. Human Task Link
+`added_theme_refs` is ordered with `added_themes` and tints capture
+destination pills. Human Task Link
 destinations add a colored square before each known, non-exempt component
 when stdout is a color terminal; `NO_COLOR` keeps the existing destination
 text unchanged.
 
-With `plan.strict: true`, the whole batch is refused, atomically, when
-a non-start item creates a new named Pomodoro entry past the type cap
-(`<text> @r:id#NAME`, `@r^id@#NAME` project notes, and any other
-non-start creation path; marker-only `@r+id#type` retypes an existing task
-and does not create a named Pomodoro). A bare link-creating
-capture whose task type would add a type past the cap is refused before
-any write with code `strict_cap`, including a bare link-start
-(`@r:id=<X>`) that would create a started `— T` entry; pure `=` starts
-and named starts and overrides (`=<X>#NAME`, `#NAME=`, and named link
-starts) are never refused. A named start
-that creates a type still reports `plan_budget` and the cap warning. The
-refusal is an
-I/O-class error (exit 1) whose JSON carries a machine-readable `code`:
-
-```json
-{"ok": false, "error": "refusing capture: today's plan would grow to 4/3 types (adds BOB); …", "code": "plan_theme_cap_exceeded"}
-```
-
-The bare-form strict refusal instead teaches the escape:
-
-```json
-{"ok": false, "error": "capture item 1 starting on line 1: plan.strict: CHORE would be type 4 of 3; name the Pomodoro explicitly with #CHORE or raise plan.max_themes", "code": "strict_cap"}
-```
-
-`code` appears on this refusal and on `pull_in_choice_required`
+`code` appears on `pull_in_choice_required`
 (§12.14 when `--require-pull-in-choice` is set, offers exist, and no
 `--pull-in` was given); every other capture failure omits it.
 
@@ -2987,12 +2959,7 @@ and named destinations omit it, and the `role` values are unchanged. New
 too, and human output names the landing spot: `→ into running GOALS
 (0945-1015)`, `→ under GOALS (next up)`, `→ under GOALS (named)`, or
 `→ new Pomodoro BOB`, each with ` · <label>` appended when Bob placed
-by type. In the
-`pomodoro_name` completion context, `creates_pomodoro` rows preview the
-result with `plan_themes_after` and `plan_themes_cap`, omitted when the
-daily note or the plan config is unavailable. In the `pomodoro_start_name`
-context, the new and again rows carry `plan_themes_after` and
-`plan_themes_cap` too.
+by type.
 
 ### Starting the next Pomodoro
 
@@ -3277,8 +3244,8 @@ minutes with a 10-minute offset. The running session stays the same; Bob
 replaces its parenthesized time ledger and moves it to the current slot. A
 trailing `~<K>` drops Task Links from the session that remains running,
 numbered from the start lineup. Restarting is allowed even when the running
-session is overdue or has notes; `plan.strict` never refuses a start or
-override.
+session is overdue or has notes; starts and overrides are never
+refused.
 
 The dry-run warning is printed ahead of the result. With the worked example
 below, Bob prints these exact lines:
@@ -5194,7 +5161,7 @@ the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on
-`plan_theme_cap_exceeded`, `pull_in_choice_required`,
+`pull_in_choice_required`,
 `inbox_route_choice_required`, `inbox_route_stale`, and `inbox_route_refused`
 refusals.
 
@@ -5440,8 +5407,8 @@ group, `destination` `{day_file, entry_name, entry_role, fallback}`
 (`entry_role` is `slot` / `closing` / `implicit` / `created` / `typed`),
 `selected`, and `block_id_needed`, `not_linked` with one of
 `already_planned`, `project_task`, `project_member`, `hidden`,
-`disabled`, `not_selected`, `no_destination`, or `strict_cap` (a requested
-typed placement was refused by the strict type cap; the key is omitted
+`disabled`, `not_selected`, or `no_destination` (typed placement has
+no eligible destination; the key is omitted
 when linked; `breaker` and `not_planned_today` are never emitted
 again), `trigger` `"dependency"` or `"project_empty"` (a missing key
 means an older bob), and `hide_removed` true when this item
@@ -6793,8 +6760,7 @@ sessions, most recent first. Utility rows are the unnamed “Name it” entries
 filtered out, so `=#zzz` still offers creation before those utilities.
 Recent rows exclude hidden types and components of any Today row before
 query filtering. Empty queries show at most 5 Recent rows; other queries show
-at most 12. New, Recent, and again rows carry `plan_themes_after` and
-`plan_themes_cap`. Recent and again replacements preserve the displayed name:
+at most 12. Recent and again replacements preserve the displayed name:
 a slug that loses spaces or selects another name is replaced with an exact
 quoted literal, including `#` when the input uses a bare start. A named-start name field keeps context `pomodoro_start_name` and its
 candidates when exactly one timed session runs. The object is reported as soon
@@ -6837,14 +6803,14 @@ suggested create row at the top for an empty query when creation is allowed;
 its Recent duplicate is removed. Hidden types remain eligible for this
 suggested row. With a nonempty query, PT7 ordering stays unchanged and a
 matching row is marked in place. The top-level suggestion adds
-`fallback: "unknown_theme" | "creation_blocked" | "strict_cap"` when no
+`fallback: "unknown_theme" | "creation_blocked"` when no
 row can be preselected. Zsh descriptions for a marked row read
 `suggested · <label>`. `pomodoro_start_name` and all other contexts keep
 their existing response shape.
 
 Accepting a creation or Recent row edits the draft only; the later
 `bob capture` transaction performs the write with its normal placement,
-missing-section, multiple-running, and strict-budget checks. A new create row
+missing-section, and multiple-running checks. A new create row
 requires a valid name and a ledger that can place it. Recent rows carry
 `origin: "history"`, `last_used`, and `days_used`, with no `ref` or `line`.
 An exact Recent match serves as the create row. A hidden exact name remains

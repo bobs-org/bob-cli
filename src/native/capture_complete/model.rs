@@ -655,14 +655,6 @@ pub(super) struct PomodoroNameCandidate {
     pub(super) suggested: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) suggestion_label: Option<String>,
-    /// Resulting theme count and cap when this create row is accepted.
-    /// Only on `creates_pomodoro` rows (new and again rows in
-    /// `pomodoro_start_name`); omitted when the daily note or the plan
-    /// config is unavailable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) plan_themes_after: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) plan_themes_cap: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) line: Option<usize>,
     pub(super) state: PomodoroState,

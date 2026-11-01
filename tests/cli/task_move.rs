@@ -972,7 +972,7 @@ fn move_without_field_relocates_live_link_to_new_inherited_type() {
     let config = temp.path().join("config.yml");
     write_file(
         &config,
-        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
+        "plan:\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
     );
     write_file(
         &vault.join("areas/dev.md"),
@@ -1019,7 +1019,7 @@ fn move_without_field_relocates_live_link_to_new_inherited_type() {
     let config2 = temp2.path().join("config.yml");
     write_file(
         &config2,
-        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
+        "plan:\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
     );
     write_file(
         &vault2.join("areas/dev.md"),

@@ -132,8 +132,8 @@ pub(crate) struct OfferDraft {
     pub key: String,
     pub block_id_needed: bool,
     pub selected: bool,
-    /// A typed default was refused by the strict cap or has no eligible
-    /// destination. The offer remains visible for an explicit retarget.
+    /// A typed default has no eligible destination. The offer remains
+    /// visible for an explicit retarget.
     pub placement_refusal: Option<&'static str>,
     /// The default destination was changed by D7 type placement.
     pub placement_routed: bool,
@@ -1897,8 +1897,6 @@ fn route_successor_offers(
             type_key: &suggestion.theme.key,
             type_name: &suggestion.theme.name,
             exempt: &exempt,
-            cap: type_routing.config.max_themes(),
-            strict: type_routing.config.strict(),
         };
         match select_typed_implicit_entry(&scan, &typed) {
             Ok(TypedImplicitOutcome::Entry(line)) => {
@@ -1931,11 +1929,10 @@ fn route_successor_offers(
                 offer.destination.fallback = false;
                 offer.placement_routed = true;
             }
-            Err(error) => {
-                offer.placement_refusal = Some(match error {
-                    super::super::capture_task_toggle::TypedImplicitError::StrictTypeCap { .. } => "strict_cap",
-                    _ => "no_destination",
-                });
+            Err(_) => {
+                // Typed placement never refuses for budget reasons; any
+                // planning failure means no destination.
+                offer.placement_refusal = Some("no_destination");
                 offer.destination.entry_name = suggestion.theme.name;
                 offer.destination.entry_role = EntryRole::Created;
                 offer.destination.fallback = false;

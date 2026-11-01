@@ -57,10 +57,7 @@ impl TodayVault {
         let temp = TempDir::new(prefix);
         let vault = temp.path().join("vault");
         write_toggle_task_settings(&vault);
-        write_file(
-            &temp.path().join("config.yml"),
-            "plan:\n  max_themes: 30\n",
-        );
+        write_file(&temp.path().join("config.yml"), "plan:\n");
         write_file(&vault.join("ref/papers/attention.md"), ATTENTION);
         write_file(&vault.join("sase.md"), &area(task));
         let day_file = vault.join("day.md");
@@ -80,10 +77,7 @@ impl TodayVault {
         let temp = TempDir::new(prefix);
         let vault = temp.path().join("vault");
         write_toggle_task_settings(&vault);
-        write_file(
-            &temp.path().join("config.yml"),
-            "plan:\n  max_themes: 30\n",
-        );
+        write_file(&temp.path().join("config.yml"), "plan:\n");
         for (relative, contents) in notes {
             write_file(&vault.join(relative), contents);
         }
@@ -124,7 +118,7 @@ fn today_listing_marks_the_task_theme_suggestion() {
     );
     write_file(
         &vault._temp.path().join("config.yml"),
-        "plan:\n  max_themes: 30\nthemes:\n  READ: auto\n",
+        "plan:\nthemes:\n  READ: auto\n",
     );
     let (output, json) = run_today_json(&vault, &["attention", "-d"]);
     assert_success(&output);
@@ -900,7 +894,7 @@ fn ledger_and_resolution_refusals() {
     );
     write_file(
         &no_type._temp.path().join("config.yml"),
-        "plan:\n  max_themes: 30\n  reading_type: off\n",
+        "plan:\n  reading_type: off\n",
     );
     let (output, json) = run_today_json(&no_type, &["attention"]);
     assert_eq!(output.status.code(), Some(1));

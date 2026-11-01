@@ -547,10 +547,7 @@ fn themes_rename_refuses_configured_old_and_warns_unconfigured_new() {
     let temp = TempDir::new("bob-cli-themes-rename-configured");
     let (vault, cache) = rename_vault(temp.path());
     let config = cache.join("config.yml");
-    write_file(
-        &config,
-        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n  FIXES: red\n",
-    );
+    write_file(&config, "plan:\nthemes:\n  BUILD: yellow\n  FIXES: red\n");
 
     let (output, value) = {
         let mut command = rename_command(&vault, &cache);
@@ -573,10 +570,7 @@ fn themes_rename_refuses_configured_old_and_warns_unconfigured_new() {
         "{value}"
     );
 
-    write_file(
-        &config,
-        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n",
-    );
+    write_file(&config, "plan:\nthemes:\n  BUILD: yellow\n");
     let mut command = rename_command(&vault, &cache);
     command
         .env("BOB_CONFIG_FILE", &config)
@@ -595,10 +589,7 @@ fn themes_rename_refuses_configured_old_and_warns_unconfigured_new() {
         "{warnings:?}"
     );
 
-    write_file(
-        &config,
-        "plan:\n  max_themes: 30\nthemes:\n  FIXES: red\n  FIX: yellow\n",
-    );
+    write_file(&config, "plan:\nthemes:\n  FIXES: red\n  FIX: yellow\n");
     let mut merge = rename_command(&vault, &cache);
     merge.env("BOB_CONFIG_FILE", &config).args([
         "themes", "rename", "FIXES", "FIX", "-d", "--merge", "-f", "json",

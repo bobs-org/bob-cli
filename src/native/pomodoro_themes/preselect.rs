@@ -12,7 +12,6 @@ use crate::native::plan_budget::{normalize_component, split_components};
 pub(crate) enum MenuFallback {
     UnknownTheme,
     CreationBlocked,
-    StrictCap,
     AlreadyQueued,
 }
 
@@ -68,11 +67,7 @@ pub(crate) fn choose(
     suggestion: &ThemeRef,
     entries: &[MenuEntry<'_>],
     exempt: &[String],
-    ledger_keys: &[String],
     creation_allowed: bool,
-    strict: bool,
-    themes_before: usize,
-    cap: u32,
     already_queued: bool,
 ) -> MenuChoice {
     if already_queued {
@@ -129,14 +124,6 @@ pub(crate) fn choose(
     if !creation_allowed {
         return MenuChoice::Fallback(MenuFallback::CreationBlocked);
     }
-    let exempt_suggestion = exempt.contains(key);
-    let already_in_ledger = ledger_keys
-        .iter()
-        .any(|name| normalize_component(name) == key);
-    let adds_theme = !exempt_suggestion && !already_in_ledger;
-    if strict && adds_theme && themes_before.saturating_add(1) > cap as usize {
-        return MenuChoice::Fallback(MenuFallback::StrictCap);
-    }
     MenuChoice::Create
 }
 
@@ -145,7 +132,6 @@ fn fallback_code(fallback: MenuFallback) -> &'static str {
     match fallback {
         MenuFallback::UnknownTheme => "unknown_theme",
         MenuFallback::CreationBlocked => "creation_blocked",
-        MenuFallback::StrictCap => "strict_cap",
         MenuFallback::AlreadyQueued => "already_queued",
     }
 }
@@ -193,30 +179,26 @@ mod tests {
             },
         ];
         assert_eq!(
-            choose(
-                &suggestion(true),
-                &entries,
-                &["PLAN".into()],
-                &[],
-                true,
-                false,
-                0,
-                5,
-                false
-            ),
+            choose(&suggestion(true), &entries, &["PLAN".into()], true, false),
             MenuChoice::Entry(1)
         );
     }
 
     #[test]
-    fn unknown_and_cap_fallbacks_are_explicit() {
+    fn unknown_and_creation_blocked_fallbacks_are_explicit() {
         assert_eq!(
-            choose(&suggestion(false), &[], &[], &[], true, false, 0, 5, false),
+            choose(&suggestion(false), &[], &[], true, false),
             MenuChoice::Fallback(MenuFallback::UnknownTheme)
         );
         assert_eq!(
-            choose(&suggestion(true), &[], &[], &[], true, true, 5, 5, false),
-            MenuChoice::Fallback(MenuFallback::StrictCap)
+            choose(&suggestion(true), &[], &[], false, false),
+            MenuChoice::Fallback(MenuFallback::CreationBlocked)
+        );
+        // No cap remains: a known type with creation allowed always
+        // creates, no matter how many types the ledger holds.
+        assert_eq!(
+            choose(&suggestion(true), &[], &[], true, false),
+            MenuChoice::Create
         );
     }
 
@@ -255,21 +237,11 @@ mod tests {
                 .iter()
                 .map(|value| value.as_str().unwrap().to_string())
                 .collect::<Vec<_>>();
-            let ledger_keys = case["ledger_keys"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|value| value.as_str().unwrap().to_string())
-                .collect::<Vec<_>>();
             let choice = choose(
                 &suggestion,
                 &entries,
                 &exempt,
-                &ledger_keys,
                 case["creation_allowed"].as_bool().unwrap(),
-                case["strict"].as_bool().unwrap(),
-                case["themes_before"].as_u64().unwrap() as usize,
-                case["cap"].as_u64().unwrap() as u32,
                 case["already_queued"].as_bool().unwrap(),
             );
             let expected = &case["expected"];

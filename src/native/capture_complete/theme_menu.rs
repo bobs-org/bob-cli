@@ -6,7 +6,7 @@ use super::{
     model::PomodoroNameCandidate,
     pomodoros::{
         creation_candidate, pomodoro_name_candidates_from_entries,
-        today_start_rows, PlanCreationHint,
+        today_start_rows,
     },
 };
 use crate::native::{
@@ -61,13 +61,12 @@ fn match_rank(name: &str, query: &str, literal: bool) -> Option<u8> {
 pub(super) fn compose(
     scan: &PomodoroScan,
     query: &str,
-    hint: Option<&PlanCreationHint>,
     catalog: Option<&Catalog>,
     start: bool,
     literal: bool,
 ) -> Vec<PomodoroNameCandidate> {
     let today = if start {
-        today_start_rows(scan, "", hint)
+        today_start_rows(scan, "")
     } else {
         pomodoro_name_candidates_from_entries(&scan.entries, "")
     };
@@ -121,7 +120,7 @@ pub(super) fn compose(
             .filter(|record| match_rank(&record.name, query, literal).is_some())
             .take(if query.is_empty() { empty_cap } else { 12 })
         {
-            let mut row = creation_candidate(scan, record.name.clone(), hint);
+            let mut row = creation_candidate(scan, record.name.clone());
             row.origin = Some("history");
             row.last_used = record.last_used.map(|date| date.to_string());
             row.days_used = record.days_used;
@@ -150,7 +149,7 @@ pub(super) fn compose(
         .then(|| canonicalize_pomodoro_name(query))
         .flatten()
         .map(|name| {
-            let mut row = creation_candidate(scan, name.clone(), hint);
+            let mut row = creation_candidate(scan, name.clone());
             if let Some(catalog) = catalog {
                 row.hidden = catalog.is_hidden(&normalize_component(&name));
                 row.similar_to = catalog.similar_to(&name);
@@ -186,14 +185,13 @@ pub(super) fn compose(
 pub(super) fn compose_task_aware(
     scan: &PomodoroScan,
     query: &str,
-    hint: Option<&PlanCreationHint>,
     catalog: Option<&Catalog>,
     start: bool,
     literal: bool,
     suggestion: &ThemeSuggestion,
     choice: MenuChoice,
 ) -> Vec<PomodoroNameCandidate> {
-    let mut rows = compose(scan, query, hint, catalog, start, literal);
+    let mut rows = compose(scan, query, catalog, start, literal);
     let selected_line = match choice {
         MenuChoice::Entry(index) => {
             scan.entries.get(index).map(|entry| entry.line)
@@ -263,8 +261,7 @@ pub(super) fn compose_task_aware(
                 .as_deref()
                 .is_some_and(|name| normalize_component(name) == key)
     });
-    let mut create =
-        creation_candidate(scan, suggestion.theme.name.clone(), hint);
+    let mut create = creation_candidate(scan, suggestion.theme.name.clone());
     create.origin = Some("history");
     if let Some(record) = catalog.and_then(|catalog| catalog.get(key)) {
         create.last_used = Some(record.last_used.to_string());

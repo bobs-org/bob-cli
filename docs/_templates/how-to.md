@@ -25,7 +25,7 @@ bob plan -b /path/to/vault -f json
 ```
 
 ```text { .no-copy title="Output" }
-{"caps":{"max_links":15,"max_next":15,"max_pending":5,"max_ready":45,"max_themes":5,"strict":false},"daily_file":"2026/20261020.md","date":"2026-10-20","entries":[],"links":{"cap":15,"count":0,"over":false},"next":{"cap":15,"count":0,"over":false},"ok":true,"pending":{"cap":5,"count":0,"over":false},"schema_version":2,"status":"ok","theme_names":[],"themes":{"cap":5,"count":0,"over":false},"today":{"count":0},"today_tasks":[],"warnings":[]}
+{"caps":{"max_links":15,"max_next":15,"max_pending":5,"max_ready":45},"daily_file":"2026/20261020.md","date":"2026-10-20","entries":[],"links":{"cap":15,"count":0,"over":false},"next":{"cap":15,"count":0,"over":false},"ok":true,"pending":{"cap":5,"count":0,"over":false},"schema_version":3,"status":"ok","theme_names":[],"today":{"count":0},"today_tasks":[],"warnings":[]}
 ```
 
 Confirm `status` is `ok`. On an empty vault `today.count` is 0 and `entries` is empty.

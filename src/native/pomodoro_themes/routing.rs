@@ -219,7 +219,6 @@ pub(crate) struct PlaceEntry<'a> {
 pub(crate) enum PlaceOutcome {
     Entry(usize),
     Create { name: String },
-    Refused { code: &'static str },
     AlreadyQueued,
     NoType,
 }
@@ -229,10 +228,6 @@ pub(crate) struct PlaceInput<'a> {
     pub(crate) type_name: Option<&'a str>,
     pub(crate) entries: &'a [PlaceEntry<'a>],
     pub(crate) exempt: &'a [String],
-    pub(crate) ledger_keys: &'a [String],
-    pub(crate) themes_before: usize,
-    pub(crate) cap: u32,
-    pub(crate) strict: bool,
     pub(crate) already_queued: bool,
 }
 
@@ -275,21 +270,6 @@ pub(crate) fn place(input: &PlaceInput<'_>) -> PlaceOutcome {
         })
     {
         return PlaceOutcome::Entry(index);
-    }
-    let exempt_suggestion = input
-        .exempt
-        .iter()
-        .any(|value| normalize_component(value) == key);
-    let already_in_ledger = input
-        .ledger_keys
-        .iter()
-        .any(|name| normalize_component(name) == key);
-    let adds_theme = !exempt_suggestion && !already_in_ledger;
-    if input.strict
-        && adds_theme
-        && input.themes_before.saturating_add(1) > input.cap as usize
-    {
-        return PlaceOutcome::Refused { code: "strict_cap" };
     }
     PlaceOutcome::Create {
         name: input.type_name.unwrap_or(key).to_string(),
@@ -348,7 +328,6 @@ pub(crate) enum RelocateOutcome {
     MoveTo { from: usize, to: usize },
     RenamePlaceholder { index: usize, new_name: String },
     CreateBelow { from: usize, name: String },
-    Refused { code: &'static str },
 }
 
 pub(crate) struct RelocateInput<'a> {
@@ -357,10 +336,6 @@ pub(crate) struct RelocateInput<'a> {
     pub(crate) type_key: &'a str,
     pub(crate) type_name: &'a str,
     pub(crate) sources: &'a ThemeSources,
-    pub(crate) ledger_keys: &'a [String],
-    pub(crate) themes_before: usize,
-    pub(crate) cap: u32,
-    pub(crate) strict: bool,
 }
 
 /// Pure relocation rule (D8). A backlog task never gains a link, so no
@@ -421,10 +396,6 @@ pub(crate) fn relocate(input: &RelocateInput<'_>) -> RelocateOutcome {
         type_name: Some(input.type_name),
         entries: &planned,
         exempt: &exempt,
-        ledger_keys: input.ledger_keys,
-        themes_before: input.themes_before,
-        cap: input.cap,
-        strict: false,
         already_queued: false,
     });
     if let PlaceOutcome::Entry(to) = placed
@@ -441,23 +412,6 @@ pub(crate) fn relocate(input: &RelocateInput<'_>) -> RelocateOutcome {
                 input.sources,
             ),
         };
-    }
-    let exempt_set: BTreeSet<String> = input
-        .sources
-        .exempt
-        .iter()
-        .map(|value| normalize_component(value))
-        .collect();
-    let already_in_ledger = input
-        .ledger_keys
-        .iter()
-        .any(|name| normalize_component(name) == input.type_key);
-    let adds_theme = !exempt_set.contains(input.type_key) && !already_in_ledger;
-    if input.strict
-        && adds_theme
-        && input.themes_before.saturating_add(1) > input.cap as usize
-    {
-        return RelocateOutcome::Refused { code: "strict_cap" };
     }
     RelocateOutcome::CreateBelow {
         from,
@@ -659,16 +613,11 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let exempt = strings(&case["exempt"]);
-            let ledger_keys = strings(&case["ledger_keys"]);
             let outcome = place(&PlaceInput {
                 type_key: case["type"].as_str(),
                 type_name: case["type_name"].as_str(),
                 entries: &entries,
                 exempt: &exempt,
-                ledger_keys: &ledger_keys,
-                themes_before: case["themes_before"].as_u64().unwrap() as usize,
-                cap: case["cap"].as_u64().unwrap() as u32,
-                strict: case["strict"].as_bool().unwrap(),
                 already_queued: case["already_queued"].as_bool().unwrap(),
             });
             let expected = &case["expected"];
@@ -689,13 +638,6 @@ mod tests {
                     assert_eq!(
                         name,
                         expected["name"].as_str().unwrap(),
-                        "{id}"
-                    );
-                }
-                "refused" => {
-                    assert_eq!(
-                        outcome,
-                        PlaceOutcome::Refused { code: "strict_cap" },
                         "{id}"
                     );
                 }
@@ -726,7 +668,6 @@ mod tests {
                 &strings(&case["exempt"]),
                 &strings(&case["inventory"]),
             );
-            let ledger_keys = strings(&case["ledger_keys"]);
             let outcome = relocate(&RelocateInput {
                 entries: &entries,
                 live_link: case["live_link"]
@@ -735,10 +676,6 @@ mod tests {
                 type_key: case["type"].as_str().unwrap(),
                 type_name: case["type_name"].as_str().unwrap(),
                 sources: &made,
-                ledger_keys: &ledger_keys,
-                themes_before: case["themes_before"].as_u64().unwrap() as usize,
-                cap: case["cap"].as_u64().unwrap() as u32,
-                strict: case["strict"].as_bool().unwrap(),
             });
             let expected = &case["expected"];
             match expected["kind"].as_str().unwrap() {
@@ -823,13 +760,6 @@ mod tests {
                     assert_eq!(
                         name,
                         expected["name"].as_str().unwrap(),
-                        "{id}"
-                    );
-                }
-                "refused" => {
-                    assert_eq!(
-                        outcome,
-                        RelocateOutcome::Refused { code: "strict_cap" },
                         "{id}"
                     );
                 }

@@ -6,8 +6,6 @@
 //! link, runs `routing::relocate`, applies the winning edit, and reports
 //! the ledger relocation for JSON and human output.
 
-use std::collections::BTreeSet;
-
 use crate::native::capture::{
     line_spans, list_item_body, nearest_shallower_list_item_parent,
 };
@@ -16,7 +14,6 @@ use crate::native::capture_task_toggle::{
     child_block_end_line, move_subtree_to_entry,
 };
 use crate::native::config::themes::ThemeSources;
-use crate::native::plan_budget::{normalize_component, split_components};
 use crate::native::pomodoro_themes::routing;
 
 /// One ledger relocation applied to the daily note.
@@ -50,35 +47,23 @@ fn dest_headline_after_removing_source(
     }
 }
 
-/// Strict-cap refusal from the shared applier.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StrictCapRefusal {
-    pub(crate) name: String,
-    pub(crate) count: usize,
-    pub(crate) cap: u32,
-}
-
 /// Apply D8 relocation to `day_contents` for `block_id` becoming
 /// `type_key`/`type_name`. Returns `None` when the ledger needs no change
-/// (no live link, already agreeing, or no Pomodoros section).
+/// (no live link, already agreeing, or no Pomodoros section). The ledger
+/// never refuses: types are listed, never budgeted.
 pub(crate) fn apply_to_day_contents(
     day_contents: &str,
     block_id: &str,
     type_key: &str,
     type_name: &str,
     sources: &ThemeSources,
-    cap: u32,
-    strict: bool,
-) -> Result<Option<(String, TypeRelocation)>, StrictCapRefusal> {
+) -> Option<(String, TypeRelocation)> {
     if !capture_pomodoros::scan(day_contents).has_section {
-        return Ok(None);
+        return None;
     }
-    let Some(found) = find_live_link(day_contents, block_id) else {
-        return Ok(None);
-    };
+    let found = find_live_link(day_contents, block_id)?;
     let scan = capture_pomodoros::scan(day_contents);
     let mut entries = Vec::new();
-    let mut ledger_keys = Vec::new();
     for entry in &scan.entries {
         let open = entry.state == PomodoroState::Open;
         let running = open && entry.time_range.is_some();
@@ -87,14 +72,6 @@ pub(crate) fn apply_to_day_contents(
         } else {
             0
         };
-        if open && let Some(name) = entry.name.as_deref() {
-            for component in split_components(name) {
-                let key = normalize_component(&component);
-                if !key.is_empty() {
-                    ledger_keys.push(key);
-                }
-            }
-        }
         entries.push(routing::RelocateEntry {
             name: entry.name.clone(),
             open,
@@ -106,45 +83,22 @@ pub(crate) fn apply_to_day_contents(
         .entries
         .iter()
         .position(|entry| entry.line == found.entry_line);
-    let Some(live_index) = live_index else {
-        return Ok(None);
-    };
-    let exempt: Vec<String> = sources.exempt.iter().cloned().collect();
-    let exempt_set: BTreeSet<String> = exempt
-        .iter()
-        .map(|value| normalize_component(value))
-        .collect();
-    let themes_before = ledger_keys
-        .iter()
-        .filter(|key| !exempt_set.contains(key.as_str()))
-        .collect::<BTreeSet<_>>()
-        .len();
+    let live_index = live_index?;
     let outcome = routing::relocate(&routing::RelocateInput {
         entries: &entries,
         live_link: Some(live_index),
         type_key,
         type_name,
         sources,
-        ledger_keys: &ledger_keys,
-        themes_before,
-        cap,
-        strict,
     });
     match outcome {
-        routing::RelocateOutcome::Unchanged => Ok(None),
-        routing::RelocateOutcome::Refused { .. } => Err(StrictCapRefusal {
-            name: type_name.to_string(),
-            count: themes_before.saturating_add(1),
-            cap,
-        }),
+        routing::RelocateOutcome::Unchanged => None,
         routing::RelocateOutcome::RenameEntry { index, new_name } => {
-            let Some(entry) = scan.entries.get(index) else {
-                return Ok(None);
-            };
+            let entry = scan.entries.get(index)?;
             let from = entry.name.clone();
             let line = entry.line.saturating_sub(1);
             match rename_entry(day_contents, entry.line, &new_name) {
-                Some(updated) => Ok(Some((
+                Some(updated) => Some((
                     updated,
                     TypeRelocation {
                         outcome: "rename_entry",
@@ -155,18 +109,16 @@ pub(crate) fn apply_to_day_contents(
                         dest_after: line,
                         dest_created: false,
                     },
-                ))),
-                None => Ok(None),
+                )),
+                None => None,
             }
         }
         routing::RelocateOutcome::RenamePlaceholder { index, new_name } => {
-            let Some(entry) = scan.entries.get(index) else {
-                return Ok(None);
-            };
+            let entry = scan.entries.get(index)?;
             let from = entry.name.clone();
             let line = entry.line.saturating_sub(1);
             match rename_entry(day_contents, entry.line, &new_name) {
-                Some(updated) => Ok(Some((
+                Some(updated) => Some((
                     updated,
                     TypeRelocation {
                         outcome: "rename_placeholder",
@@ -177,18 +129,16 @@ pub(crate) fn apply_to_day_contents(
                         dest_after: line,
                         dest_created: false,
                     },
-                ))),
-                None => Ok(None),
+                )),
+                None => None,
             }
         }
         routing::RelocateOutcome::AppendComponent { index, new_name } => {
-            let Some(entry) = scan.entries.get(index) else {
-                return Ok(None);
-            };
+            let entry = scan.entries.get(index)?;
             let from = entry.name.clone();
             let line = entry.line.saturating_sub(1);
             match rename_entry(day_contents, entry.line, &new_name) {
-                Some(updated) => Ok(Some((
+                Some(updated) => Some((
                     updated,
                     TypeRelocation {
                         outcome: "append_component",
@@ -199,25 +149,19 @@ pub(crate) fn apply_to_day_contents(
                         dest_after: line,
                         dest_created: false,
                     },
-                ))),
-                None => Ok(None),
+                )),
+                None => None,
             }
         }
         routing::RelocateOutcome::MoveTo { from, to } => {
-            let Some(source_entry) = scan.entries.get(from) else {
-                return Ok(None);
-            };
-            let Some(dest_entry) = scan.entries.get(to) else {
-                return Ok(None);
-            };
+            let source_entry = scan.entries.get(from)?;
+            let dest_entry = scan.entries.get(to)?;
             let from_name = source_entry.name.clone();
             let to_name = dest_entry
                 .name
                 .clone()
                 .unwrap_or_else(|| type_name.to_string());
-            let Some(link) = find_live_link(day_contents, block_id) else {
-                return Ok(None);
-            };
+            let link = find_live_link(day_contents, block_id)?;
             let dest_before = dest_entry.line.saturating_sub(1);
             let dest_after = dest_headline_after_removing_source(
                 dest_before,
@@ -230,7 +174,7 @@ pub(crate) fn apply_to_day_contents(
                 link.subtree_end,
                 dest_before,
             ) {
-                Ok((updated, _)) => Ok(Some((
+                Ok((updated, _)) => Some((
                     updated,
                     TypeRelocation {
                         outcome: "move_to",
@@ -241,18 +185,14 @@ pub(crate) fn apply_to_day_contents(
                         dest_after,
                         dest_created: false,
                     },
-                ))),
-                Err(_) => Ok(None),
+                )),
+                Err(_) => None,
             }
         }
         routing::RelocateOutcome::CreateBelow { from, name } => {
-            let Some(source_entry) = scan.entries.get(from) else {
-                return Ok(None);
-            };
+            let source_entry = scan.entries.get(from)?;
             let from_name = source_entry.name.clone();
-            let Some(link) = find_live_link(day_contents, block_id) else {
-                return Ok(None);
-            };
+            let link = find_live_link(day_contents, block_id)?;
             let spans = line_spans(day_contents);
             let source_index = source_entry.line.saturating_sub(1);
             let source_end = child_block_end_line(&spans, source_index);
@@ -269,7 +209,7 @@ pub(crate) fn apply_to_day_contents(
                 link.subtree_end,
                 &name,
             ) {
-                Some(updated) => Ok(Some((
+                Some(updated) => Some((
                     updated,
                     TypeRelocation {
                         outcome: "create_below",
@@ -280,8 +220,8 @@ pub(crate) fn apply_to_day_contents(
                         dest_after,
                         dest_created: true,
                     },
-                ))),
-                None => Ok(None),
+                )),
+                None => None,
             }
         }
     }
@@ -500,6 +440,8 @@ pub(crate) fn create_below_and_move(
 #[allow(dead_code)]
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::native::config::themes::{ConfiguredTheme, ThemesConfig};
 
@@ -525,22 +467,12 @@ mod tests {
         }
     }
 
-    const CAP: u32 = 30;
-
     #[test]
     fn rename_running_entry() {
         let day = "## Pomodoros\n- [ ] (**0900-1000**) — BUILD\n  - [[sase#^fix-x]]\n";
-        let (updated, info) = apply_to_day_contents(
-            day,
-            "fix-x",
-            "fix",
-            "FIX",
-            &sources(),
-            CAP,
-            false,
-        )
-        .expect("relocate")
-        .expect("changed");
+        let (updated, info) =
+            apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources())
+                .expect("changed");
         assert_eq!(info.outcome, "rename_entry");
         assert_eq!(info.from.as_deref(), Some("BUILD"));
         assert_eq!(info.to, "FIX");
@@ -555,17 +487,9 @@ mod tests {
     #[test]
     fn append_to_running_entry() {
         let day = "## Pomodoros\n- [ ] (**0900-1000**) — BUILD\n  - [[sase#^fix-x]]\n  - [[sase#^other-x]]\n";
-        let (updated, info) = apply_to_day_contents(
-            day,
-            "fix-x",
-            "fix",
-            "FIX",
-            &sources(),
-            CAP,
-            false,
-        )
-        .expect("relocate")
-        .expect("changed");
+        let (updated, info) =
+            apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources())
+                .expect("changed");
         assert_eq!(info.outcome, "append_component");
         assert_eq!(info.from.as_deref(), Some("BUILD"));
         assert_eq!(info.to, "BUILD + FIX");
@@ -578,17 +502,9 @@ mod tests {
     #[test]
     fn move_to_existing_entry() {
         let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^fix-x]]\n- [ ] () — FIX\n";
-        let (updated, info) = apply_to_day_contents(
-            day,
-            "fix-x",
-            "fix",
-            "FIX",
-            &sources(),
-            CAP,
-            false,
-        )
-        .expect("relocate")
-        .expect("changed");
+        let (updated, info) =
+            apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources())
+                .expect("changed");
         assert_eq!(info.outcome, "move_to");
         assert_eq!(info.to, "FIX");
         assert_eq!(info.source_before, 1);
@@ -601,17 +517,9 @@ mod tests {
     #[test]
     fn rename_placeholder_entry() {
         let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^fix-x]]\n";
-        let (updated, info) = apply_to_day_contents(
-            day,
-            "fix-x",
-            "fix",
-            "FIX",
-            &sources(),
-            CAP,
-            false,
-        )
-        .expect("relocate")
-        .expect("changed");
+        let (updated, info) =
+            apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources())
+                .expect("changed");
         assert_eq!(info.outcome, "rename_placeholder");
         assert_eq!(info.from.as_deref(), Some("BUILD"));
         assert_eq!(info.to, "FIX");
@@ -624,17 +532,9 @@ mod tests {
     #[test]
     fn create_below_entry() {
         let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^fix-x]]\n  - [[sase#^other-x]]\n";
-        let (updated, info) = apply_to_day_contents(
-            day,
-            "fix-x",
-            "fix",
-            "FIX",
-            &sources(),
-            CAP,
-            false,
-        )
-        .expect("relocate")
-        .expect("changed");
+        let (updated, info) =
+            apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources())
+                .expect("changed");
         assert_eq!(info.outcome, "create_below");
         assert_eq!(info.to, "FIX");
         assert_eq!(info.source_before, 1);
@@ -645,35 +545,24 @@ mod tests {
     }
 
     #[test]
-    fn strict_cap_refuses() {
+    fn new_type_past_old_cap_still_creates() {
+        // The type cap is gone: a new type always creates below, even
+        // when the ledger already holds many types.
         let day = "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^fix-x]]\n  - [[sase#^other-x]]\n";
-        let error = apply_to_day_contents(
-            day,
-            "fix-x",
-            "fix",
-            "FIX",
-            &sources(),
-            1,
-            true,
-        )
-        .expect_err("strict-cap refuses");
-        assert_eq!(error.name, "FIX");
-        assert_eq!(error.cap, 1);
+        let (updated, info) =
+            apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources())
+                .expect("changed");
+        assert_eq!(info.outcome, "create_below");
+        assert_eq!(info.to, "FIX");
+        assert!(info.dest_created);
+        assert!(updated.contains("[[sase#^fix-x]]"));
     }
 
     #[test]
     fn already_agreeing_needs_no_change() {
         let day = "## Pomodoros\n- [ ] () — FIX\n  - [[sase#^fix-x]]\n";
-        let result = apply_to_day_contents(
-            day,
-            "fix-x",
-            "fix",
-            "FIX",
-            &sources(),
-            CAP,
-            false,
-        )
-        .expect("relocate");
+        let result =
+            apply_to_day_contents(day, "fix-x", "fix", "FIX", &sources());
         assert!(result.is_none());
     }
 }

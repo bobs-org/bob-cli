@@ -377,10 +377,7 @@ fn capture_prj_drawer_separate_type_and_plain_child_still_work() {
     let config = temp.path().join("config.yml");
     write_file(
         &config,
-        concat!(
-            "plan:\n  max_themes: 30\n",
-            "themes:\n  BUILD: yellow\n  FIX: blue\n",
-        ),
+        concat!("plan:\n", "themes:\n  BUILD: yellow\n  FIX: blue\n",),
     );
 
     // A separate `#type` retypes in the same transaction as the H2 write.

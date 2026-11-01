@@ -1959,7 +1959,7 @@ properties:
 
     #[test]
     fn mistyped_plan_block_leaves_priority_loader_working() {
-        let text = "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  max_themes: many\n";
+        let text = "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  max_links: many\n";
         parse_priority_property(text, Path::new("/config.yml"))
             .expect("priority loader must ignore a mistyped plan block");
     }
@@ -1967,7 +1967,7 @@ properties:
     #[test]
     fn mistyped_plan_block_leaves_highlights_loader_working() {
         let text =
-            "highlights:\n  pre_scan_hook: hook\nplan:\n  strict: \"yes\"\n";
+            "highlights:\n  pre_scan_hook: hook\nplan:\n  link_unblocked: \"yes\"\n";
         let config = parse_highlights_config(text, Path::new("/config.yml"))
             .expect("highlights loader must ignore a mistyped plan block");
         assert_eq!(config.pre_scan_hook(), Some("hook"));
@@ -1983,13 +1983,13 @@ properties:
 
     #[test]
     fn mistyped_gcal_block_leaves_other_loaders_working() {
-        let text = "gkeep:\n  email: a@b.c\nplan:\n  max_themes: 3\nhighlights:\n  pre_scan_hook: hook\ngcal:\n  timeout_secs: soon\n";
+        let text = "gkeep:\n  email: a@b.c\nplan:\n  max_links: 3\nhighlights:\n  pre_scan_hook: hook\ngcal:\n  timeout_secs: soon\n";
         let settings = parse_gkeep_config(text, Path::new("/config.yml"))
             .expect("gkeep loader must ignore a mistyped gcal block");
         assert_eq!(settings.email.as_deref(), Some("a@b.c"));
         let plan = parse_plan_config(text, Path::new("/config.yml"))
             .expect("plan loader must ignore a mistyped gcal block");
-        assert_eq!(plan.max_themes(), 3);
+        assert_eq!(plan.max_links(), 3);
         let highlights =
             parse_highlights_config(text, Path::new("/config.yml"))
                 .expect("highlights loader must ignore a mistyped gcal block");

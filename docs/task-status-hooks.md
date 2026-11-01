@@ -1007,7 +1007,7 @@ without changing any file. Warnings go to stderr. A no-op prints a single
 and grouping diagnostics are all unchanged.
 
 When a plan budget is available, both changed and no-op reports print one
-meter line, for example `plan 3/3 types · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`.
+meter line, for example `plan 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`.
 It follows the sync stats line on changed runs and the `already in sync`
 summary on no-op runs. Over-cap meters are red.
 When the report carries plan warnings, the line appends the count and points
@@ -1268,9 +1268,8 @@ JSON mode prints one object on stdout with these stable fields:
   "plan_budget": {
     "date": "2026-07-10",
     "daily_file": "2026/20260710.md",
-    "caps": { "max_themes": 3, "max_links": 10, "max_next": 15, "max_pending": 10, "strict": false },
+    "caps": { "max_links": 10, "max_next": 15, "max_pending": 10 },
     "status": "ok",
-    "themes": { "count": 1, "cap": 3, "over": false },
     "links": { "count": 2, "cap": 10, "over": false },
     "today": { "count": 0 },
     "next": { "count": 0, "cap": 15, "over": false },

@@ -1472,9 +1472,6 @@ pub(super) fn relocation_plan_error(
         capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
             link_plan_error(capture_task_toggle::LinkPlanError::InvalidPomodoroName)
         }
-        capture_task_toggle::LinkRelocationError::StrictTypeCap { name, count, cap } => {
-            CaptureError::strict_type_cap(&name, count, cap)
-        }
         capture_task_toggle::LinkRelocationError::NoMovableLink => CaptureError::io(format!(
             "no movable open Pomodoro Task Link for {block_link}; use @{route}+{block_id}! to run the explicit toggle and add one"
         )).with_typed(CaptureFailureKind::LedgerInvariant),
@@ -1530,17 +1527,11 @@ pub(super) fn link_plan_error(
             CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
                 .with_typed(CaptureFailureKind::InvalidPomodoroName)
         }
-        capture_task_toggle::LinkPlanError::StrictTypeCap {
-            name,
-            count,
-            cap,
-        } => CaptureError::strict_type_cap(&name, count, cap),
     }
 }
 
 /// Map a D7 typed-placement failure to the capture error contract:
-/// the passing ledger errors stay byte-identical and a strict-cap refusal
-/// carries the `strict_cap` code with the teaching message.
+/// the passing ledger errors stay byte-identical.
 pub(super) fn typed_implicit_error(
     error: capture_task_toggle::TypedImplicitError,
 ) -> CaptureError {
@@ -1554,9 +1545,6 @@ pub(super) fn typed_implicit_error(
         }
         Typed::MultipleOpenTimedEntries => {
             CaptureError::io("Bob daily note has multiple open timed Pomodoros")
-        }
-        Typed::StrictTypeCap { name, count, cap } => {
-            CaptureError::strict_type_cap(&name, count, cap)
         }
     }
 }

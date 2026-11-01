@@ -704,10 +704,8 @@ is the one exception and relocates its link to the placed entry, which is
 a no-op when already there. With no effective type (no default
 configured) the legacy implicit selection is used unchanged, and
 multiple open timed entries without a running exact match still fail the
-same way. A creation that adds a type past `plan.max_themes` under
-`plan.strict` is refused before any write with code `strict_cap`, naming
-the type, the count and cap, and the `#NAME` escape; otherwise creation
-appends the existing budget warnings.
+same way. Creations are never refused: a new `— T` placeholder is
+always created, and creation appends the existing budget warnings.
 
 Forms: a new task (`<text> @route:id`) and project-note ` :<id>` bullets
 (each links by its own type), whole-item `@route:id` / `^route:id`, Ensure
@@ -772,10 +770,10 @@ Exact entries contain only S after removing exempt keys other than S.
 Prefer a running exact entry, else the first exact entry in ledger
 order, else the first containing entry; keep Today order. Otherwise a
 known S may create a top `New S Pomodoro` row when a Pomodoros section
-exists, at most one timed open entry exists, and strict type caps
-permit it; remove its Recent duplicate. Otherwise preserve today's
-default and report `unknown_theme`, `creation_blocked`, or
-`strict_cap`; ref-today additionally uses `already_queued`. A nonempty
+exists and at most one timed open entry exists; remove its Recent
+duplicate. Otherwise preserve today's
+default and report `unknown_theme` or
+`creation_blocked`; ref-today additionally uses `already_queued`. A nonempty
 query keeps PT7 ranking and first-row behavior while annotating at most
 one best matching row. Ctrl+D on suggested creation is consumed without
 writing. The later completion phase owns implementation and the
@@ -797,12 +795,13 @@ Capture completion emits a top-level `theme_suggestion` in
 `pomodoro_name` context (null when there is no suggestion). At most one
 candidate adds `suggested: true` and `suggestion_label`. With an empty
 query, a known suggestion with no matching open entry becomes a suggested
-create row at the top when the daily note and type cap allow it; the row
+create row at the top when the daily note allows it and creation is
+allowed; the row
 uses the normal Recent/create shape and is removed from Recent to avoid a
 duplicate. A hidden type can appear in this row. With a nonempty query,
 PT7 order and first-row behavior stay fixed and a matching row only gets the
 suggested marker. `theme_suggestion.fallback` is
-`unknown_theme`, `creation_blocked`, or `strict_cap` when no row can be
+`unknown_theme` or `creation_blocked` when no row can be
 preselected. Zsh descriptions use `suggested · <label>`.
 
 `bob ref today` adds the same row marker and label to its `pomodoros`
@@ -884,9 +883,8 @@ JS mirror's contract.
   `{T}`), else the first open entry containing T, else a new `— T`
   placeholder at the existing named-creation insertion point. Unlike
   menus, placement may create entries for unknown or unconfigured names
-  (with the `theme_not_configured` warning). With `plan.strict: true`,
-  a creation that adds a type past `plan.max_themes` is refused before
-  any write. With no effective type, today's implicit current/next
+  (with the `theme_not_configured` warning). Creations are never
+  refused for budget reasons. With no effective type, today's implicit current/next
   selection is unchanged.
 - **Relocation.** When a task's type becomes X: no live link, or the
   link's entry already agreeing with X, means ledger unchanged (a
@@ -897,8 +895,7 @@ JS mirror's contract.
   never changes). Otherwise the first planned entry `place(X)` would
   choose (skipping running entries) takes the move; else a sole-link
   planned entry renames in place; else a `— X` placeholder is created
-  directly below the source entry. Strict cap refusal applies to the
-  creation case only. Among duplicates, ledger order decides.
+  directly below the source entry. Among duplicates, ledger order decides.
 - **Lint.** `BUILD task under FIX · sase#^fix-x · Ctrl+Shift+M to move
   or Ctrl+Shift+P t to retype`.
 

@@ -4,7 +4,7 @@ use crate::native::{
         LineSpan,
     },
     capture_pomodoros::{self, NamedSelection, PomodoroEntry, PomodoroState},
-    markdown, plan_budget, pomodoro,
+    markdown, pomodoro,
     pomodoro_themes::routing,
 };
 
@@ -22,27 +22,17 @@ pub(crate) enum LinkPlanError {
     NoEligibleOpenEntry,
     MultipleOpenTimedEntries,
     InvalidPomodoroName,
-    /// A D7 typed placement would create a type past `plan.max_themes`
-    /// under `plan.strict`. `count` is the refused post-image type count.
-    StrictTypeCap {
-        name: String,
-        count: usize,
-        cap: u32,
-    },
 }
 
-/// Resolved effective type plus the D7 budget context for a bare
-/// link-creating capture. Callers resolve the task's effective type (D3,
-/// from the staged line) through the theme catalog; `None` (no effective
-/// type, e.g. no default configured) keeps the legacy implicit
-/// current/next selection.
+/// Resolved effective type for a bare link-creating capture. Callers
+/// resolve the task's effective type (D3, from the staged line) through
+/// the theme catalog; `None` (no effective type, e.g. no default
+/// configured) keeps the legacy implicit current/next selection.
 #[derive(Debug, Clone)]
 pub(crate) struct TypedImplicit<'a> {
     pub(crate) type_key: &'a str,
     pub(crate) type_name: &'a str,
     pub(crate) exempt: &'a [String],
-    pub(crate) cap: u32,
-    pub(crate) strict: bool,
 }
 
 /// Where D7 typed selection landed: an existing open entry (0-based line
@@ -59,11 +49,6 @@ pub(crate) enum TypedImplicitError {
     NoPomodorosSection,
     NoEligibleOpenEntry,
     MultipleOpenTimedEntries,
-    StrictTypeCap {
-        name: String,
-        count: usize,
-        cap: u32,
-    },
 }
 
 pub(crate) fn typed_implicit_plan_error(
@@ -78,9 +63,6 @@ pub(crate) fn typed_implicit_plan_error(
         }
         TypedImplicitError::MultipleOpenTimedEntries => {
             LinkPlanError::MultipleOpenTimedEntries
-        }
-        TypedImplicitError::StrictTypeCap { name, count, cap } => {
-            LinkPlanError::StrictTypeCap { name, count, cap }
         }
     }
 }
@@ -169,37 +151,11 @@ pub(crate) fn select_typed_implicit_entry(
     {
         return Err(TypedImplicitError::MultipleOpenTimedEntries);
     }
-    let mut ledger_keys = Vec::new();
-    for entry in scan
-        .entries
-        .iter()
-        .filter(|entry| entry.state == PomodoroState::Open)
-    {
-        for component in
-            plan_budget::split_components(entry.name.as_deref().unwrap_or(""))
-        {
-            let key = plan_budget::normalize_component(&component);
-            if !key.is_empty() {
-                ledger_keys.push(key);
-            }
-        }
-    }
-    let exempt: std::collections::BTreeSet<&str> =
-        typed.exempt.iter().map(String::as_str).collect();
-    let themes_before = ledger_keys
-        .iter()
-        .filter(|key| !exempt.contains(key.as_str()))
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
     match routing::place(&routing::PlaceInput {
         type_key: Some(typed.type_key),
         type_name: Some(typed.type_name),
         entries: &entries,
         exempt: typed.exempt,
-        ledger_keys: &ledger_keys,
-        themes_before,
-        cap: typed.cap,
-        strict: typed.strict,
         already_queued: false,
     }) {
         routing::PlaceOutcome::Entry(index) => scan
@@ -209,13 +165,6 @@ pub(crate) fn select_typed_implicit_entry(
             .ok_or(TypedImplicitError::NoEligibleOpenEntry),
         routing::PlaceOutcome::Create { name } => {
             Ok(TypedImplicitOutcome::Create { name })
-        }
-        routing::PlaceOutcome::Refused { .. } => {
-            Err(TypedImplicitError::StrictTypeCap {
-                name: typed.type_name.to_string(),
-                count: themes_before + 1,
-                cap: typed.cap,
-            })
         }
         routing::PlaceOutcome::AlreadyQueued
         | routing::PlaceOutcome::NoType => {

@@ -95,8 +95,7 @@ or write '\\#' to keep a literal '#'. '#' plus a digit, '##…', '#-…', \
 mid-line '#', and glued hashes stay ordinary prose. One marker per \
 item; unknown names are refused with a suggestion. With a named Pomodoro, the \
 marker must agree with its type or capture refuses. Retyping stages the \
-field before the gesture and relocates the live Task Link to agree; a strict-cap \
-refusal fails before any write.\n\n\
+field before the gesture and relocates the live Task Link to agree.\n\n\
 Append a `%` directive at either edge of any physical line, with only \
 other markers between it and that edge. `%c` reads the clipboard into child \
 bullets of this item; `%c<N>` (N ≥ 2) captures that many values, starting \
@@ -245,22 +244,18 @@ separates them: `+2 x` means `+2`, blank line, `x`, and `x =` closes \
 then starts the next session. Quote `=` items in zsh, which expands a \
 leading `=word` to a command path.\n\n\
 Batches that change today's `## Pomodoros` section also report the plan \
-budget: a top-level `plan_budget` object with before/after type and link \
-meters, an `added_themes` list, and cap warnings that fire only while the \
-batch grows a meter past its cap. Human output prints one `plan T/Tc \
-types · L/Lc links` meter line after the result plus one `bob capture: \
+budget: a top-level `plan_budget` object with the before/after link meter, \
+an `added_themes` list of new type names, and a link-cap warning that fires \
+only while the batch grows the meter past its cap. Human output prints one \
+`plan L/Lc links` meter line after the result plus one `bob capture: \
 warning: …` stderr line per fired warning, and names where each new Task \
 Link landed (`→ into running GOALS (0945-1015)`, `→ under GOALS (next \
 up)`, `→ under GOALS (named)`, or `→ new Pomodoro BOB`; JSON reports the \
 same destination with a `role` of `current`, `next_up`, `named`, or \
 `created`, plus a `type` object when Bob placed the link by the task's \
-type). With `plan.strict: true` in the Bob config, a batch that \
-creates a new named Pomodoro past the type cap is refused atomically \
-(exit 1, JSON `code: plan_theme_cap_exceeded`), and a bare-form creation \
-past the cap is refused before any write (JSON `code: strict_cap`); \
-pure `=` starts and named starts are never refused. An invalid plan \
+type). New types never warn and never refuse. An invalid plan \
 config skips the budget with one plain warning. \
-See `docs/capture.md` (`Plan budget and strict mode`) and `docs/plan.md`.\n\n\
+See `docs/capture.md` (`Plan budget`) and `docs/plan.md`.\n\n\
 Capture a whole item `=`/`=<X>` (for example `=`, `=3`, `=-2`, `=2-1`) to \
 start today's next future Pomodoro now with the same timing as the `se<X>` \
 snippet: empty is 25 minutes, `3` is 15 minutes, `-` is 25 minutes with a \
