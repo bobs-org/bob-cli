@@ -60,11 +60,38 @@ A link gets a ring only when **all** of these hold:
 2. **It is not an embed.** `![[…]]` and `![…](…)` get no ring, because the transclusion
    already shows the task's own checkbox.
 3. **It is not inside** inline code, a fenced code block, a `%% … %%` comment, or
-   frontmatter or properties.
+   frontmatter or properties. Context is tracked once per document, in this order:
+   - Frontmatter lines take no part in fence or comment state.
+   - A fence opens with three or more backticks or tildes. A backtick fence's info
+     string cannot contain a backtick, so ``` ``a`` ``` style inline code opens
+     nothing. It closes only on a run of the **same** character at least as long as
+     the opener, with nothing after the run but whitespace. A shorter run, the other
+     character, or a line with an info string is fence content, and an unclosed fence
+     runs to the end of the note.
+   - Fence lines never change comment state, and a comment never opens a fence.
+     `%%` and backticks inside a fence are literal text.
+   - Outside fences each line is read left to right and the first delimiter wins:
+     `%%` inside inline code is literal, and a backtick inside a comment is comment
+     text. A `%%` with no partner opens a multi-line comment that runs to the next
+     `%%`.
+   - Only the comment itself is excluded. The text before the opening `%%` and the
+     text after the closing `%%` are ordinary prose, and only a line that lies wholly
+     inside the comment is inert.
 4. **It is not on a managed edge row.** Depends-On, BLOCKS, LINKS, LINKED FROM, and
    Sub-projects rows (any `mentionIsEdgeLine` verdict except not-a-line) get no ring.
    Chips own those rows. When chips are toggled off, or the cursor reveals the raw
-   text, the row is meant to read raw.
+   text, the row is meant to read raw. Recognition is by managed-label syntax and
+   structure, never by a label word alone:
+   - In source, a line that starts, after an optional list marker, checkbox, and
+     managed glyph (`⛓️ 🔗 🪢 🧱 🚧 🧩`), with a bold managed label (`**DEPENDS ON:**`,
+     `**LINKS**:`, `**Sub-projects**`; labels are case-sensitive) is a managed row,
+     malformed or not. A line with no list marker needs a glyph. A label word later in
+     the line, or outside bold, does not make a managed row.
+   - In rendered views, a list item whose own content leads with a bold managed label
+     is a managed row. For flattened rendered text, the exact uppercase label and a
+     colon after a managed glyph or a literal bullet also counts.
+   - Ordinary prose that begins with a label word, such as `Links worth reading:
+     [[bob#^fix]]`, keeps its ring.
 5. **It is not a dedicated Pomodoro Task Link row** in a canonical daily note's
    `## Pomodoros` section. Such a row is a direct child bullet of a column-0 Pomodoro
    entry (open or closed). Its body is exactly one `[[target#^id]]` (alias allowed),
@@ -152,7 +179,11 @@ section, per the stylesheet contracts.
   it. The host carries `bob-task-link-mark-swap` for a short window (about 400 ms) after
   the change, so a rebuild during the animation keeps the same element.
 - **Accessibility and print:**
-  - `prefers-reduced-motion: reduce` turns off the animation and transitions.
+  - `prefers-reduced-motion: reduce` turns off the animation and transitions. The
+    reset uses the same selector specificity as the swap rule, so a browser in reduced
+    motion computes `animation-name: none` and no transition for a swapped ring while
+    normal motion keeps the swap. Tests check the computed style, not the media-query
+    text.
   - In `forced-colors: active` the ink is `CanvasText`, so the shapes still carry state.
   - `print-color-adjust: exact`.
 - **Gate:** use the mark-gate mirror (`applyMarkGateClass("bob-task-link-marks", on)`
@@ -214,6 +245,20 @@ and popouts), adding, updating, or removing rings in place without re-rendering 
 note. A Live Preview rebuild also happens on `docChanged`, `viewportChanged`, a Live
 Preview ↔ source switch, and a file switch, the same as
 `progressMarkShouldRebuild`. It never rebuilds on selection alone.
+
+Obsidian post-processes every Reading section when a note opens but keeps the sections
+outside the viewport in memory, detached from the page. A status change must reach
+those too, or a ring far down a long note would reappear stale when scrolled into
+view. Stamped anchors are therefore remembered weakly (bounded at about 2,000), and
+each refresh also reconciles the ones that are detached from every document, in place
+and **quietly**: the new state is recorded but no swap plays, because nobody saw the
+change and a ring never animates when it scrolls into view.
+
+A status change plays the swap exactly once per rendered ring instance, on every
+surface that shows it: a task edit elsewhere in the vault reaches an already-open Live
+Preview source and an already-open Reading source through the normal Tasks and
+metadata events, within about a second. First paint, an unchanged refresh, scrolling,
+and rerendering never play it.
 
 ## Surfaces
 
@@ -278,6 +323,8 @@ ring goes.
 | TS13 | `[[bob#^fix]] and [[#^ship]]` | two spans, in order |
 | TS14 | `[[bob#^not an id]]` | none |
 | TS15 | `%%[[bob#^fix]]%%` | none (inline comment) |
+| TS16 | `` `%%` then [[bob#^fix]] `` | one span: at 10 (`%%` in inline code is literal) |
+| TS17 | `%% hidden %% [[bob#^fix]]` | one span: at 13 (text after the comment is prose) |
 
 **TC — context.** These are document-level line eligibility rules.
 
@@ -296,6 +343,13 @@ ring goes.
 | TC11 | `- [[bob#^fix]]` in an area note | yes |
 | TC12 | a daily note outside `## Pomodoros` (Notes, Events rows) | yes |
 | TC13 | a heading, blockquote, or callout line | yes |
+| TC14 | a link inside a four-backtick fence after a three-backtick line (` ```` `, ` ``` `, link, ` ```` `), inside a tilde fence after a shorter `~~~` line, or after a ` ```js ` line | no |
+| TC15 | prose after the fence's own closing line (same character, at least as long, nothing after it) | yes |
+| TC16 | prose after a line holding only `` `%%` is a literal delimiter `` | yes |
+| TC17 | prose after a fenced block whose content held a lone `%%` | yes |
+| TC18 | a multi-line comment: text before the opening `%%` and after the closing `%%` on their own lines; lines wholly inside | yes; no |
+| TC19 | ordinary prose beginning with a managed-label word: `Links worth reading: [[bob#^fix]]`, `- Links worth reading: …`, `Review **LINKS** in …`, or `**LINKS:** …` with no list marker or glyph | yes |
+| TC20 | a rendered list item that leads with a bold managed label (`DEPENDS ON:`, `BLOCKS:`, `LINKS:`, `LINKED FROM:`, `Sub-projects:`), with or without a glyph, checkbox, or loose-list paragraph; and a rendered list item `Links worth reading: …` | no; yes |
 
 **TR — resolve and state.** Each row gives a target line, or a situation, and its
 result.
