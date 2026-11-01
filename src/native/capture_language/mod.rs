@@ -20,6 +20,7 @@ mod completion;
 mod dependencies;
 mod directive;
 mod draft;
+mod drawer_bullet;
 mod editor_classify;
 mod editor_model;
 mod editor_parse;
@@ -38,7 +39,7 @@ mod tokens;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 3;
+pub(crate) const GRAMMAR_REVISION: u32 = 4;
 
 #[cfg(test)]
 mod tests;
@@ -67,6 +68,7 @@ pub(crate) use self::draft::parse_capture_text_with_options;
 #[cfg(test)]
 pub(crate) use self::draft::split_capture_draft;
 pub(crate) use self::draft::split_physical_lines;
+pub(crate) use self::drawer_bullet::first_level_groups as drawer_bullet_groups;
 pub(crate) use self::editor_model::DependencyEntry;
 pub(crate) use self::editor_model::DependencyTarget;
 pub(crate) use self::editor_model::DependencyTargetKind;

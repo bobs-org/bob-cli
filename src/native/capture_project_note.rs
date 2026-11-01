@@ -572,6 +572,7 @@ mod tests {
             body: body.to_string(),
             depth,
             task_id: None,
+            drawer: None,
         }
     }
 
@@ -588,6 +589,7 @@ mod tests {
                 block_id: id.to_string(),
                 link,
             }),
+            drawer: None,
         }
     }
 

@@ -247,9 +247,9 @@ fn bodiless_forms_need_a_task_like_their_masked_parse() {
 
 #[test]
 fn marker_only_continuation_lines_contribute_no_child_body() {
-    let parse = editor("Fix it\n- #fix");
+    let parse = editor("Fix it\n#fix");
     assert_eq!(parse.body, "Fix it");
-    assert_eq!(task_type_spans(&parse), vec![(9, 13)]);
+    assert_eq!(task_type_spans(&parse), vec![(7, 11)]);
     assert!(parse.diagnostics.is_empty());
     assert!(parse.sub_bullets.is_empty());
 }
@@ -393,12 +393,6 @@ fn masked_items_match_their_baseline_across_grammar_families() {
         "Fix it\n- check details #fix",
         22,
         " #fix",
-    );
-    check_masking_parity(
-        "Fix it\n- check details",
-        "Fix it\n- #fix check details",
-        9,
-        "#fix ",
     );
     // A batch keeps every item's parse; later items shift by the
     // inserted marker length while the marked item gains one span.

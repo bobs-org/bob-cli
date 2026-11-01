@@ -40,7 +40,7 @@
     "type": "fix"
   },
   {
-    "input": "Fix the parser\n- #fix",
+    "input": "Fix the parser\n- check\n  - #fix",
     "body": "Fix the parser",
     "type": "fix"
   }

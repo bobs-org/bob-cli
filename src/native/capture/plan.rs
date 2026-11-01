@@ -1358,7 +1358,12 @@ pub(super) fn plan_capture_item(
         Vec::new()
     } else {
         let indent = child_indent.as_deref().unwrap_or("\t");
-        render_authored_sub_bullets(&parsed.sub_bullets, indent)
+        let resolved = resolve_new_task_drawer_bullets(
+            &parsed.sub_bullets,
+            &request.bob_dir,
+            warnings,
+        )?;
+        render_authored_sub_bullets(&resolved, indent)
     };
     let clip_plan = match parsed.clip.as_ref() {
         Some(clip) if request.no_clip => {
@@ -2343,6 +2348,75 @@ pub(super) fn assemble_capture_block(
         lines.extend(schedule_log_lines.iter().map(String::as_str));
     }
     lines.join("\n")
+}
+
+pub(super) fn resolve_new_task_drawer_bullets(
+    sub_bullets: &[AuthoredSubBullet],
+    bob_dir: &Path,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<Vec<AuthoredSubBullet>, CaptureError> {
+    if sub_bullets.iter().all(|item| item.drawer.is_none()) {
+        return Ok(sub_bullets.to_vec());
+    }
+    let catalog =
+        capture_drawers::load_drawer_catalog(bob_dir).unwrap_or_default();
+    let mut groups: Vec<(AuthoredSubBullet, Vec<AuthoredSubBullet>)> =
+        Vec::new();
+    let mut key_at: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (start, end) in
+        crate::native::capture_language::drawer_bullet_groups(sub_bullets)
+    {
+        let first = sub_bullets[start].clone();
+        let nested = sub_bullets[start + 1..end].to_vec();
+        let Some(selector) = first.drawer.clone() else {
+            groups.push((first, nested));
+            continue;
+        };
+        let resolved = capture_drawers::resolve_drawer_for_write(
+            &[],
+            &selector.text,
+            selector.exact,
+            &catalog,
+            "",
+            None,
+            capture_drawers::DrawerScope::Task,
+        )
+        .map_err(|error| CaptureError::usage_code(error.message, error.code))?;
+        if let Some(message) = resolved.warning {
+            warnings.push(CaptureWarning::Structured(
+                StructuredCaptureWarning {
+                    code: "drawer_near_catalog",
+                    label: None,
+                    count: None,
+                    message,
+                },
+            ));
+        }
+        let title = match resolved.outcome {
+            capture_drawers::DrawerResolveOutcome::Existing { drawer } => {
+                drawer.title
+            }
+            capture_drawers::DrawerResolveOutcome::Create { title, .. } => {
+                title
+            }
+        };
+        let key = capture_drawers::drawer_key(&title);
+        if let Some(&at) = key_at.get(&key) {
+            groups[at].1.extend(nested);
+            continue;
+        }
+        let mut header = first;
+        header.body = title;
+        key_at.insert(key, groups.len());
+        groups.push((header, nested));
+    }
+    let mut out = Vec::new();
+    for (header, nested) in groups {
+        out.push(header);
+        out.extend(nested);
+    }
+    Ok(out)
 }
 
 pub(super) fn render_authored_sub_bullets(

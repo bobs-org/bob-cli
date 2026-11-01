@@ -115,7 +115,7 @@ fn empty_drawer_menu_json_pins_groups_fields_and_the_unselected_open() {
     let draft = "Postgres 17 minimum @foo+bar#";
     let json = complete(&temp, &vault, draft);
 
-    assert_eq!(json["grammar"], 3);
+    assert_eq!(json["grammar"], 4);
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["context"], "drawer");
     assert_eq!(json["initial_selection"], "none");

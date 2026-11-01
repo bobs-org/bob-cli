@@ -176,6 +176,17 @@ fn scan_line_with_positions(
             continue;
         }
         let parsed = parse_candidate(body, index, sigil, escaped);
+        // A first-level bullet's leading `#` is a drawer shortcut, never
+        // a type marker — including escaped `\#`, incomplete `#`, and
+        // invalid shapes. Nested `  - #fix` still types.
+        if let Some(hit) = super::drawer_bullet::scan_first_level_line(line, 0)
+        {
+            let hit_start = hit.span().start.saturating_sub(body_start);
+            if parsed.occurrence.span().start == hit_start {
+                index = parsed.edge_end.max(index + 1);
+                continue;
+            }
+        }
         index = parsed.edge_end.max(index + 1);
         candidates.push(parsed);
     }

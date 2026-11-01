@@ -811,10 +811,7 @@ fn marker_errors_keep_their_json_codes() {
         ("Fix it #", "type_marker_needs_task"),
         ("# Heading text", "type_marker_needs_task"),
         ("https://example.test/a\n#fix", "type_marker_not_applicable"),
-        (
-            "https://example.test/a\n- #fix",
-            "type_marker_not_applicable",
-        ),
+        ("https://example.test/a\n- #fix", "empty_drawer_bullet"),
     ] {
         let (_, json) =
             capture_error_json(&vault, &day_file, &config, &[draft]);

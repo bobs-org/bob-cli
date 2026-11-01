@@ -244,7 +244,7 @@ fn json_shape_is_stable() {
 
     assert_eq!(pomodoro_json["context"], "pomodoro_name");
     assert_eq!(pomodoro_json["schema_version"], 1);
-    assert_eq!(pomodoro_json["grammar"], 3);
+    assert_eq!(pomodoro_json["grammar"], 4);
     assert_eq!(pomodoro_json["candidates"][0]["replacement"], "memory");
     assert_eq!(pomodoro_json["candidates"][0]["name"], "MEMORY");
     assert_eq!(pomodoro_json["candidates"][0]["requires_name"], false);

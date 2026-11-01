@@ -21,6 +21,7 @@ mod complete_task_link;
 mod complete_task_types;
 mod complete_themes;
 mod complete_wikilink_task;
+mod drawer_bullets;
 mod ensure_next;
 mod event_task_close;
 mod flag_guard;

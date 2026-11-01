@@ -568,6 +568,10 @@ pub(crate) struct AuthoredSubBullet {
     pub(crate) body: String,
     pub(crate) depth: AuthoredDepth,
     pub(crate) task_id: Option<ProjectTaskId>,
+    /// Leading `#slug` / `#"TITLE"` drawer shortcut, when this first-level
+    /// bullet names a drawer. Literal ALL-CAPS drawer bullets gain this
+    /// after grouping. Nested notes keep `None`.
+    pub(crate) drawer: Option<DrawerSelector>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

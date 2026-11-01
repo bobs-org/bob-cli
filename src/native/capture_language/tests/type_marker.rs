@@ -90,7 +90,10 @@ fn incomplete_invalid_and_duplicate_markers_have_teaching_errors() {
     assert!(execute("Fix the parser #bob+decks")
         .unwrap_err()
         .contains("names two types"));
-    assert!(execute("Fix the parser #fix\n- #bug")
+    assert!(execute("Fix the parser #fix #bug")
+        .unwrap_err()
+        .contains("type marker (#<type>)"));
+    assert!(execute("Fix the parser #fix\n- check\n  - #bug")
         .unwrap_err()
         .contains("type marker (#<type>)"));
 }
@@ -164,7 +167,7 @@ fn only_task_subjects_accept_markers() {
 
 #[test]
 fn marker_only_continuations_stay_with_the_original_item() {
-    for input in ["Fix parser\n#fix", "Fix parser\n- #fix"] {
+    for input in ["Fix parser\n#fix", "Fix parser\n- check\n  - #fix"] {
         let draft = execute_draft(input).expect("one task item");
         assert_eq!(draft.items.len(), 1, "{input:?}");
         assert_eq!(draft.items[0].parsed.body, "Fix parser");

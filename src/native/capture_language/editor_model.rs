@@ -70,6 +70,9 @@ pub(crate) enum SpanKind {
     WikilinkAlias,
     WikilinkTaskDelimiter,
     WikilinkTaskQuery,
+    /// An ALL-CAPS first-level drawer bullet (the title text, not a `#`
+    /// shortcut).
+    DrawerBullet,
 }
 
 impl SpanKind {
@@ -135,6 +138,7 @@ impl SpanKind {
             Self::WikilinkAlias => "wikilink_alias",
             Self::WikilinkTaskDelimiter => "wikilink_task_delimiter",
             Self::WikilinkTaskQuery => "wikilink_task_query",
+            Self::DrawerBullet => "drawer_bullet",
         }
     }
 }
@@ -253,6 +257,8 @@ pub(crate) enum Need {
     Task,
     Drawer,
     DrawerText,
+    /// A complete first-level drawer shortcut still needs nested notes.
+    DrawerNotes,
     ActiveTask,
     TaskLink,
     /// A whole-draft `/query` Go To picker is still open.
@@ -292,6 +298,7 @@ impl Need {
             Self::Task => "task",
             Self::Drawer => "drawer",
             Self::DrawerText => "drawer_text",
+            Self::DrawerNotes => "drawer_notes",
             Self::ActiveTask => "active_task",
             Self::TaskLink => "task_link",
             Self::TaskGoto => "task_goto",

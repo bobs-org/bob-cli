@@ -347,6 +347,9 @@ pub(super) fn parse_capture_item<'a>(
                     error,
                 ));
             }
+            if let Some(code) = super::drawer_bullet::code_for_message(&error) {
+                return Err(CaptureItemParseError::coded(code, error));
+            }
             if error.starts_with("a new task has no drawers:") {
                 return Err(CaptureItemParseError::coded(
                     "invalid_drawer",
@@ -885,7 +888,40 @@ fn parse_capture_item_masked<'a>(
             outcome.declarations,
             line_number,
         ));
-        if outcome.body.is_empty() {
+        let drawer_hit = (authored.depth == AuthoredDepth::First)
+            .then(|| super::drawer_bullet::scan_leading(authored.body, 0))
+            .flatten();
+        if let Some(hit) = drawer_hit.as_ref() {
+            use super::drawer_bullet::DrawerBulletHit;
+            match hit {
+                DrawerBulletHit::Incomplete { .. } => {
+                    return Err(super::drawer_bullet::incomplete_drawer_error());
+                }
+                DrawerBulletHit::Invalid { raw, .. } => {
+                    if raw.starts_with('"')
+                        || raw.starts_with('“')
+                        || !raw.starts_with('#')
+                    {
+                        return Err(
+                            super::drawer_bullet::invalid_quoted_drawer_error(
+                                raw,
+                            ),
+                        );
+                    }
+                    return Err(INVALID_DRAWER_ERROR.to_string());
+                }
+                DrawerBulletHit::Complete { leftover, .. }
+                    if !leftover.is_empty() =>
+                {
+                    return Err(
+                        super::drawer_bullet::drawer_bullet_text_error(),
+                    );
+                }
+                DrawerBulletHit::Complete { .. }
+                | DrawerBulletHit::Escaped { .. } => {}
+            }
+        }
+        if outcome.body.is_empty() && drawer_hit.is_none() {
             // A child holding only dependency modifiers contributes no
             // empty bullet; any other emptied child stays an error.
             if child_line_dependencies.stripped_tokens > 0 {
@@ -894,10 +930,30 @@ fn parse_capture_item_masked<'a>(
             return Err(empty_child_after_markers_error(line_number));
         }
         aggregate.absorb(outcome.markers, outcome.route)?;
+        let (body, drawer) = match drawer_hit {
+            Some(super::drawer_bullet::DrawerBulletHit::Escaped { .. }) => (
+                super::drawer_bullet::unescape_escaped_body(&outcome.body),
+                None,
+            ),
+            Some(super::drawer_bullet::DrawerBulletHit::Complete {
+                selector,
+                title,
+                ..
+            }) => (title, Some(selector)),
+            Some(_) => (outcome.body, None),
+            None => (outcome.body, None),
+        };
+        if body.is_empty() && drawer.is_none() {
+            if child_line_dependencies.stripped_tokens > 0 {
+                continue;
+            }
+            return Err(empty_child_after_markers_error(line_number));
+        }
         sub_bullets.push(AuthoredSubBullet {
-            body: outcome.body,
+            body,
             depth: authored.depth,
             task_id: None,
+            drawer,
         });
         sub_bullet_lines.push(line_number);
         if authored.depth == AuthoredDepth::First {
@@ -1045,16 +1101,22 @@ fn parse_capture_item_masked<'a>(
                 relationship_sigil,
             ));
         }
+        let kind = CaptureKind::Bullet {
+            section_prefix: Some(section.to_string()),
+            exact: true,
+        };
+        super::drawer_bullet::finish_execution_drawer_bullets(
+            &kind,
+            &parent_outcome.body,
+            &mut sub_bullets,
+        )?;
         return Ok(parsed_capture_item_outcome(
             item,
             ParsedCaptureText {
                 body: parent_outcome.body,
                 clip: aggregate.clip,
                 route: Some(route),
-                kind: CaptureKind::Bullet {
-                    section_prefix: Some(section.to_string()),
-                    exact: true,
-                },
+                kind,
                 scheduled_offset: aggregate.scheduled_offset,
                 priority_level: aggregate.priority_level,
                 sub_bullets,
@@ -1092,6 +1154,11 @@ fn parse_capture_item_masked<'a>(
         } else {
             (Vec::new(), None)
         };
+        super::drawer_bullet::finish_execution_drawer_bullets(
+            &CaptureKind::Task,
+            &parent_outcome.body,
+            &mut sub_bullets,
+        )?;
         return Ok(parsed_capture_item_outcome(
             item,
             ParsedCaptureText {
@@ -1232,6 +1299,11 @@ fn parse_capture_item_masked<'a>(
     {
         return Err(unused_project_note_pomodoro_error(name));
     }
+    super::drawer_bullet::finish_execution_drawer_bullets(
+        &kind,
+        &parent_outcome.body,
+        &mut sub_bullets,
+    )?;
     let (dependencies, dependency_target) = execution_item_dependencies(
         &item_dependencies,
         &kind,

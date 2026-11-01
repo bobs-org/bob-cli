@@ -1501,6 +1501,148 @@ fn attach_type_marker_metadata(
     parsed.spans.sort_by_key(|span| (span.start, span.end));
 }
 
+fn attach_drawer_bullet_metadata(
+    item: &CaptureItem<'_>,
+    mode: &mut EditorMode,
+    parent_body: &str,
+    glued_section: Option<&str>,
+    needs: &mut Vec<Need>,
+    spans: &mut Vec<Span>,
+    diagnostics: &mut Vec<Diagnostic>,
+    sub_bullets: &mut [AuthoredSubBullet],
+) {
+    use super::drawer_bullet::{
+        editor_drawer_bullet_position_error, first_level_groups,
+        is_all_caps_drawer_title, is_under_task_mode, scan_leading,
+        DrawerBulletHit,
+    };
+
+    let under_task = is_under_task_mode(*mode);
+    let mut authored_lines: Vec<(AuthoredDepth, &str, usize)> = Vec::new();
+    for line in item.lines.iter().skip(1) {
+        let AuthoredLineClass::Item(authored) =
+            classify_authored_line(line.raw)
+        else {
+            continue;
+        };
+        authored_lines.push((
+            authored.depth,
+            authored.body,
+            authored.body_start,
+        ));
+    }
+
+    let mut index = 0usize;
+    while index < authored_lines.len() {
+        if authored_lines[index].0 != AuthoredDepth::First {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < authored_lines.len()
+            && authored_lines[index].0 == AuthoredDepth::Nested
+        {
+            index += 1;
+        }
+        let nested = index - start > 1;
+        let (_, body_text, body_start) = authored_lines[start];
+        match scan_leading(body_text, body_start) {
+            Some(DrawerBulletHit::Complete {
+                span,
+                title,
+                key,
+                leftover,
+                ..
+            }) => {
+                spans.push(Span {
+                    start: span.start,
+                    end: span.end,
+                    kind: SpanKind::Drawer,
+                    project_note: None,
+                    title: Some(title),
+                    key: Some(key),
+                });
+                if !leftover.is_empty() {
+                    continue;
+                }
+                if !under_task {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "drawer_bullet_position",
+                        message: editor_drawer_bullet_position_error(
+                            *mode,
+                            parent_body,
+                            glued_section,
+                        ),
+                        range: Some((span.start, span.end)),
+                    });
+                    continue;
+                }
+                if !nested {
+                    if !needs.contains(&Need::DrawerNotes) {
+                        needs.push(Need::DrawerNotes);
+                    }
+                    *mode = EditorMode::Incomplete;
+                }
+            }
+            Some(DrawerBulletHit::Incomplete { span }) => {
+                spans.push(Span {
+                    start: span.start,
+                    end: span.end,
+                    kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+                if !needs.contains(&Need::Drawer) {
+                    needs.push(Need::Drawer);
+                }
+                *mode = EditorMode::Incomplete;
+            }
+            Some(DrawerBulletHit::Invalid { .. })
+            | Some(DrawerBulletHit::Escaped { .. })
+            | None => {
+                if under_task && nested && is_all_caps_drawer_title(body_text) {
+                    let title = body_text.trim().to_string();
+                    let key =
+                        crate::native::capture_drawers::drawer_key(&title);
+                    let leading =
+                        body_text.len() - body_text.trim_start().len();
+                    let trailing = body_text.len() - body_text.trim_end().len();
+                    let start = body_start + leading;
+                    let end = body_start + body_text.len() - trailing;
+                    spans.push(Span {
+                        start,
+                        end,
+                        kind: SpanKind::DrawerBullet,
+                        project_note: None,
+                        title: Some(title),
+                        key: Some(key),
+                    });
+                }
+            }
+        }
+    }
+
+    if !under_task {
+        return;
+    }
+    for (start, end) in first_level_groups(sub_bullets) {
+        if sub_bullets[start].drawer.is_some() {
+            continue;
+        }
+        if end - start > 1 && is_all_caps_drawer_title(&sub_bullets[start].body)
+        {
+            let title = sub_bullets[start].body.trim().to_string();
+            sub_bullets[start].drawer = Some(DrawerSelector {
+                text: title,
+                exact: true,
+            });
+        }
+    }
+}
+
 fn attach_directive_metadata(
     parsed: &mut EditorItemParse,
     occurrences: &[super::directive::DirectiveOccurrence],
@@ -1892,7 +2034,49 @@ pub(super) fn parse_editor_item_inner<'a>(
             }
         }
 
-        if child_parse.body.is_empty() {
+        let drawer_hit = (authored.depth == AuthoredDepth::First)
+            .then(|| {
+                super::drawer_bullet::scan_leading(
+                    authored.body,
+                    authored.body_start,
+                )
+            })
+            .flatten();
+        if let Some(super::drawer_bullet::DrawerBulletHit::Complete {
+            leftover,
+            ..
+        }) = drawer_hit.as_ref()
+            && !leftover.is_empty()
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "drawer_bullet_text",
+                message: super::drawer_bullet::drawer_bullet_text_error(),
+                range: Some((raw.start, raw.end)),
+            });
+        }
+        if let Some(super::drawer_bullet::DrawerBulletHit::Invalid {
+            span,
+            raw: token,
+        }) = drawer_hit.as_ref()
+        {
+            let message = if token.starts_with('"')
+                || token.starts_with('“')
+                || !token.starts_with('#')
+            {
+                super::drawer_bullet::invalid_quoted_drawer_error(token)
+            } else {
+                INVALID_DRAWER_ERROR.to_string()
+            };
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_drawer",
+                message,
+                range: Some((span.start, span.end)),
+            });
+        }
+
+        if child_parse.body.is_empty() && drawer_hit.is_none() {
             // A child holding only dependency modifiers contributes no
             // empty bullet: its prerequisites belong to the item's
             // dependent. Any other emptied child stays an error.
@@ -1904,17 +2088,52 @@ pub(super) fn parse_editor_item_inner<'a>(
                     range: Some((raw.start, raw.end)),
                 });
             }
+        } else if matches!(
+            drawer_hit,
+            Some(super::drawer_bullet::DrawerBulletHit::Incomplete { .. })
+                | Some(super::drawer_bullet::DrawerBulletHit::Invalid { .. })
+        ) {
+            if authored.depth == AuthoredDepth::First {
+                has_first_level_owner = true;
+            }
         } else {
             child_task_tokens.push(child_parse.body_tokens.last().copied());
             child_task_lines.push(line_number);
-            let child_body = child_parse.body;
-            sub_bullets.push(AuthoredSubBullet {
-                body: child_body,
-                depth: authored.depth,
-                task_id: None,
-            });
-            if authored.depth == AuthoredDepth::First {
-                has_first_level_owner = true;
+            let (child_body, drawer) = match drawer_hit {
+                Some(super::drawer_bullet::DrawerBulletHit::Escaped {
+                    ..
+                }) => (
+                    super::drawer_bullet::unescape_escaped_body(
+                        &child_parse.body,
+                    ),
+                    None,
+                ),
+                Some(super::drawer_bullet::DrawerBulletHit::Complete {
+                    selector,
+                    title,
+                    ..
+                }) => (title, Some(selector)),
+                _ => (child_parse.body, None),
+            };
+            if child_body.is_empty() && drawer.is_none() {
+                if child_parse.dependencies.stripped_tokens == 0 {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "empty_child_after_markers",
+                        message: empty_child_after_markers_error(line_number),
+                        range: Some((raw.start, raw.end)),
+                    });
+                }
+            } else {
+                sub_bullets.push(AuthoredSubBullet {
+                    body: child_body,
+                    depth: authored.depth,
+                    task_id: None,
+                    drawer,
+                });
+                if authored.depth == AuthoredDepth::First {
+                    has_first_level_owner = true;
+                }
             }
         }
     }
@@ -2975,6 +3194,17 @@ pub(super) fn parse_editor_item_inner<'a>(
             });
         }
     }
+
+    attach_drawer_bullet_metadata(
+        item,
+        &mut mode,
+        &body,
+        section.as_deref(),
+        &mut needs,
+        &mut spans,
+        &mut diagnostics,
+        &mut sub_bullets,
+    );
 
     spans.sort_by_key(|span| (span.start, span.end));
     EditorItemOutcome {

@@ -154,9 +154,12 @@ anything is written, and any failure rolls the whole batch back.
 | `%` | Incomplete directive: add `%c`, `%n`, `%t`, `%l` or write `\%` to keep a literal `%` |
 | bare `#` / `%` | Open the task-type or directive menu with no row preselected |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
-| `#` | Incomplete `#<type>` at an item edge: add a type (`#fix`) or write `\#` to keep a literal `#`; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
+| `#` | Incomplete `#<type>` at a parent-line or nested-bullet edge: add a type (`#fix`) or write `\#` to keep a literal `#`; a first-level `- #` names a drawer instead; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
+| `- #future-work` | Drawer shortcut on a first-level bullet under a new task or new project note: nest notes beneath it; capture writes `- FUTURE WORK` |
+| `- FUTURE WORK` with nested notes | Drawer bullet: an ALL-CAPS title with nested notes is a drawer; a childless ALL-CAPS bullet stays a plain note |
+| `- #` | Incomplete drawer shortcut: add `#future-work` (`needs: ["drawer"]`) or write `\#`; a complete childless shortcut needs nested notes (`needs: ["drawer_notes"]`) |
 
 `#` is not one marker. Read it by what it is attached to:
 
@@ -166,6 +169,7 @@ anything is written, and any failure rolls the whole batch back.
 | `remembered the timeout %n` | Pomodoro note |
 | `@notes#Ideas` | Bullet under a heading in `notes.md` |
 | `@notes#` | Bullet under any non-`Tasks` heading in `notes.md` |
+| `- #requirements` | First-level drawer shortcut: names the `REQUIREMENTS` drawer |
 | `@cash+id#requirements <text>` | Child under that task's `REQUIREMENTS` section |
 | `@cash+id#coding` with no other text | Ensure Next and retype that existing task to `CODING` |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
@@ -511,6 +515,10 @@ literal `#`. A leading `# Heading text` is therefore incomplete, and
 keep the literal `#fix` text in the body. The retired `t:` spelling is
 ordinary prose.
 
+A `#` that begins a first-level authored bullet (`- #future-work`) names a
+drawer, never a type. Nested `  - #fix` still types. Type markers keep
+working at every line's trailing edge and on the parent line.
+
 The marker types a new task with an explicit block ID
 (`Fix it @sase^fix-x #fix`). A separate `#type` token on `@route+block-id`
 retypes the existing task in the same transaction; a marker-only item also
@@ -844,6 +852,18 @@ keeps the established leading `@route text` form; later lines compose trailing
 markers only. A `sub_bullet`
 capture (`@route+block-id`) nests the newly captured line under the selected
 existing task, then preserves both authored levels relative to that new line.
+
+On a new task or a new project note, a first-level bullet that starts with
+`#` is a drawer shortcut: `- #future-work` with nested notes writes
+`- FUTURE WORK` (the catalog's most-used spelling when the slug matches).
+A first-level ALL-CAPS title with nested notes is the same drawer
+(`- FUTURE WORK` / `  - try replication`). A childless ALL-CAPS bullet
+stays a plain note. Same-line notes under `@route+id <note>` still nest,
+and a drawer shortcut there is refused (`drawer_bullet_position`). A
+drawer shortcut takes no same-line text (`drawer_bullet_text`); nest the
+note beneath it. Capture never creates an empty drawer
+(`empty_drawer_bullet`). On a new project note the shortcut becomes a
+`## Title Case` section through the existing writer.
 
 Authored children render before clipboard children and the priority
 schedule log, so the full block order is: parent line, authored children,
@@ -5410,7 +5430,8 @@ title is the matched `##` section title, with `created` true when the `##`
 was appended. A separate `#type` on a body-bearing `@route+id` child retypes
 the target in the same transaction; human and dry-run output show
 `new drawer` when `created` and the type row together. Drawer refusals carry
-a JSON `code` (`invalid_drawer`, `drawer_text`, `ambiguous_drawer`,
+a JSON `code` (`invalid_drawer`, `drawer_text`, `drawer_bullet_text`,
+`drawer_bullet_position`, `empty_drawer_bullet`, `ambiguous_drawer`,
 `reserved_drawer`, `drawer_near_duplicate`, `drawer_toggle`), and creating a
 drawer near a catalog name emits the `drawer_near_catalog` warning.
 The batch-level `task_blocks` array carries the same parents in full; see
@@ -5975,7 +5996,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 3` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 4` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -6200,7 +6221,7 @@ JSON output is a single versioned object:
 {
   "ok": true,
   "schema_version": 1,
-  "grammar": 3,
+  "grammar": 4,
   "input": "Call bank @Cash+",
   "body": "Call bank",
   "mode": "incomplete",
@@ -6270,10 +6291,11 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `drawer_notes`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with an empty drawer name reports mode
-`incomplete` and needs `["drawer"]`, and `@route:id#` reports mode
+`incomplete` and needs `["drawer"]`, a first-level `- #` reports `["drawer"]`, a
+complete childless `- #future-work` reports `["drawer_notes"]`, and `@route:id#` reports mode
 `incomplete` and needs `["pomodoro_name"]`. A complete
 `@route+id#drawer <text>` sub-bullet populates `route`, `block_id`, and
 `drawer` together. A complete `@route:id#name` Pomodoro marker populates
@@ -6400,13 +6422,16 @@ generic capture/block presentation.
 non-overlapping, and always on a character boundary. Each `kind` is one of
 `route`, `section`, `task_block_id_route`, `task_block_id`,
 `pomodoro_route`, `pomodoro_block_id`, `pomodoro_name`, `pomodoro_start`, `pomodoro_adjust`, `pomodoro_shift`, `pomodoro_close`, `pomodoro_close_in_progress`, `pomodoro_close_park`, `pomodoro_close_complete`, `pomodoro_close_drop`, `active_task_route`, `active_task_block_id`, `pomodoro_note`, `project_note_marker`, `project_note_offer_marker`, `project_note_separator`, `sub_bullet_route`,
-`sub_bullet_block_id`, `drawer`, `task_toggle_route`,
+`sub_bullet_block_id`, `drawer`, `drawer_bullet`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_explicit_toggle`, `task_type`, `global_route`,
 `schedule`, `priority`, `clipboard`,
 `ref_url`, `ref_listen`,
 `interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `blocked_task_sigil`, `blocked_task_note`, `blocked_task_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, `wikilink_alias`,
-`wikilink_task_delimiter`, or `wikilink_task_query`. A placeholder
+`wikilink_task_delimiter`, or `wikilink_task_query`. A first-level
+`- #future-work` shortcut is a `drawer` span with lexical `title` and `key`.
+An ALL-CAPS first-level drawer bullet with nested notes is a `drawer_bullet`
+span over the title text. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
 `@cash+`, the `%n` in `@cash:id#`, a task-type span in
 `@cash+id#`, the dangling `,` or `!` in `x1,` or `x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
@@ -6449,6 +6474,7 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_drawer`,
+`drawer_bullet_text`, `drawer_bullet_position`, `empty_drawer_bullet`,
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a `%n` directive on the same item as `@route`,
 `s:<N>`, or `$<N>`),
@@ -7050,7 +7076,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 3`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 4`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

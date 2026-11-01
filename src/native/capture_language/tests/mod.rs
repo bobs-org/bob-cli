@@ -92,6 +92,7 @@ mod bare_close;
 mod chain;
 mod completion;
 mod draft;
+mod drawer_bullet;
 mod editor_modes;
 mod editor_spans;
 mod exact_name;

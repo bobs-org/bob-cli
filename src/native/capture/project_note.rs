@@ -156,6 +156,9 @@ pub(super) fn plan_project_note_item(
         .map(|log| log.lines.clone())
         .unwrap_or_default();
     let settings = note_tasks::read_settings(&request.bob_dir);
+    // Shortcuts already carry their ALL-CAPS title from the lexer. The
+    // project-note writer converts those titles into `##` sections, merges
+    // repeats, and keeps structural headings such as TASKS.
     let mut rendered = capture_project_note::render_project_note(
         &capture_project_note::ProjectNoteRenderInput {
             route: &route,
@@ -1044,6 +1047,7 @@ mod tests {
             body: body.to_string(),
             depth,
             task_id: None,
+            drawer: None,
         }
     }
 
@@ -1060,6 +1064,7 @@ mod tests {
                 block_id: id.to_string(),
                 link,
             }),
+            drawer: None,
         }
     }
 

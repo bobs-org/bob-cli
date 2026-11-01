@@ -171,7 +171,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 3` for the capture-language revision while \
+Success JSON reports `grammar: 4` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
@@ -204,7 +204,9 @@ not errors, on any line: '@', '@#', '@#Ideas', '@route#', '@^', \
 '@route^', '@+', '@route+', '@route+id#', '@:', '@route:', '@route:id#', \
 '@route:#name', and the legacy '@!' aliases \
 all report mode 'incomplete' plus what they still need. A free-standing '#' \
-at an item edge reports mode 'incomplete' needing 'task_type'; '#' plus a \
+at an item edge reports mode 'incomplete' needing 'task_type', except a \
+first-level bullet start (`- #`) which names a drawer (`needs: [\"drawer\"]` \
+or `[\"drawer_notes\"]`). '#' plus a \
 digit, '##…', '#-…', mid-line '#', and glued hashes stay ordinary prose. A valid `=<X>` start \
 suffix on a `@<route>:<block-id>[#<name>]` marker reports mode \
 'pomodoro_task' with a `pomodoro_start` object (`raw` plus 5-minute \
@@ -2901,7 +2903,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 3);
+        assert_eq!(value["grammar"], 4);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");

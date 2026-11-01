@@ -90,9 +90,10 @@ expanded by the shell.\n\n\
 Append a lowercase '#<type>' token at either edge of any line to type the \
 new task (#fix, #\"DEEP WORK\") or retype the existing task an item targets \
 (whole-item links, Ensure Next, explicit toggle, relationship owners). A \
-free-standing bare '#' at an item edge is incomplete: add a type (`#fix`) \
-or write '\\#' to keep a literal '#'. '#' plus a digit, '##…', '#-…', \
-mid-line '#', and glued hashes stay ordinary prose. One marker per \
+first-level bullet start (`- #requirements`) names a drawer instead; nest \
+notes beneath it. A free-standing bare '#' at an item edge is incomplete: \
+add a type (`#fix`) or write '\\#' to keep a literal '#'. '#' plus a digit, \
+'##…', '#-…', mid-line '#', and glued hashes stay ordinary prose. One marker per \
 item; unknown names are refused with a suggestion. With a named Pomodoro, the \
 marker must agree with its type or capture refuses. Retyping stages the \
 field before the gesture and relocates the live Task Link to agree.\n\n\
