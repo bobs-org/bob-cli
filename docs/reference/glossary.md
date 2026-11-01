@@ -190,6 +190,24 @@ instead of stamping; see [Rotten Keeps Decay Through The Priority Ladder](../dev
 [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers), and
 [Task Freshness](#task-freshness).
 
+### Leaf Project {#leaf-project}
+
+# Leaf Project
+
+*Requested · project*
+
+A [Project Note](#project-note) that is not its own [Root Parent](#root-parent), meaning a sub-project
+at any depth whose `parent` walk meets another project before any
+[Area Note](#area-note) and that does not set `root: true` itself. A
+[Top-Level Project](#top-level-project), a `root: true` project, and an orphan project (nothing
+above it) are roots, never leaves. "Leaf" names the reporting role, not tree
+position: a leaf project may have sub-projects. Leafness is derived from the
+note tree at gesture time, never stored, and a task's `[root::]` field never
+changes it. Closing the task behind a leaf project's last live
+[Task Link](#task-link) in today's Pomodoros offers the project's ready tasks as
+keep-moving [Successor Offer](#successor-offer)s, which are never dependents (see
+`docs/task-dependencies.md` §12.15).
+
 ### Mac Menu Bar Pomodoro Indicator {#mac-menu-bar-pomodoro-indicator}
 
 *Aliases: mac pom.*
@@ -370,7 +388,10 @@ aka offer, pull-in offer
 
 A [Task Successor](#task-successor) that a gesture may link under its Pomodoro destination is a
 successor offer. A managed Done gesture offers the tasks it recovered, grouped as
-direct hand-offs, residents of a recovered project, or project-finished pull-ins.
+direct hand-offs, residents of a recovered project, or project-finished pull-ins,
+and, when it closes the task behind a [Leaf Project](#leaf-project)'s last live Task Link
+today, that project's ready tasks as keep-moving offers, which are never
+dependents.
 Promoting a task that is linked in today's Pomodoros offers the new project note's
 open tasks in that link's place. A capture `@route:id@` offers the new project
 note's open tasks, never its `^prj`. Offers are not linked until explicitly picked;
@@ -489,7 +510,9 @@ aka successor
 A task positioned to take its predecessor's place in today's Pomodoro plan when the
 predecessor leaves it. The successors of a managed Done gesture are the tasks it
 unblocks: direct dependents, open residents of a project whose `^prj` it recovered,
-and project-finished pull-ins. Promoting a task to a [Project Note](#project-note) makes the new
+and project-finished pull-ins, plus, when it closes the task behind a
+[Leaf Project](#leaf-project)'s last live Task Link today, that project's ready tasks, which
+need not depend on it. Promoting a task to a [Project Note](#project-note) makes the new
 note's open tasks its successors, because the [Project Task](#project-task) never inherits the
 predecessor's [Task Link](#task-link). Creating a project note with capture's `@route:id@`
 likewise makes the new note's open tasks successors of its `^prj` task, the same way

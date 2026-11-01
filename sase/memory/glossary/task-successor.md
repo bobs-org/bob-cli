@@ -17,7 +17,9 @@ aka successor
 A task positioned to take its predecessor's place in today's Pomodoro plan when the
 predecessor leaves it. The successors of a managed Done gesture are the tasks it
 unblocks: direct dependents, open residents of a project whose `^prj` it recovered,
-and project-finished pull-ins. Promoting a task to a [[project-note]] makes the new
+and project-finished pull-ins, plus, when it closes the task behind a
+[[leaf-project]]'s last live Task Link today, that project's ready tasks, which
+need not depend on it. Promoting a task to a [[project-note]] makes the new
 note's open tasks its successors, because the [[project-task]] never inherits the
 predecessor's [[task-link]]. Creating a project note with capture's `@route:id@`
 likewise makes the new note's open tasks successors of its `^prj` task, the same way

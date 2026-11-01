@@ -2643,10 +2643,13 @@ engine, in this order and all against the staged batch snapshot:
    and have no strictly future `scheduled` date recover to their derived
    rank, exactly like Task Status Cycler's Ctrl+Enter recovery. Every
    dependent this close fully unblocked, plus every available resident
-   of a project whose `^prj` this close unblocked and each project
-   pull-in, is **offered**; only `--pull-in` picks are linked into the
-   predecessor's slot and become Next in the same write, per
-   [task-dependencies.md §12](task-dependencies.md#12-successor-offers).
+   of a project whose `^prj` this close unblocked, each project
+   pull-in, and each leaf project's ready tasks when this close drains
+   its last task planned today, is **offered**; only `--pull-in` picks
+   are linked into the predecessor's slot and become Next in the same
+   write, per
+   [task-dependencies.md §12](task-dependencies.md#12-successor-offers)
+   and [§12.15](task-dependencies.md#1215-keep-moving-offers-leaf-projects).
    Capture never prompts and never auto-links. Picked successor links
    are placed **before** retirement runs (step 5), so retirement strikes
    or moves the predecessor around them and the vacated slot keeps the
@@ -2715,9 +2718,13 @@ clean `text` and named ledger entries:
 ```
 
 The batch also carries top-level `pull_in` on every success (`supported:
-true`, `offer_count`, `choice`, `picked_count`). Dry-run JSON equals
-real-run JSON with the same flags, including `--pull-in`. A sealed
-`@route:id@` project note contributes its tasks to the same offer set
+true`, `offer_count`, `choice`, `picked_count`) and a `keep_moving`
+array on every `task_complete` and `pomodoro_close` object (always
+present, possibly empty; see
+[task-dependencies.md §12.15](task-dependencies.md#1215-keep-moving-offers-leaf-projects)).
+Dry-run JSON equals real-run JSON with the same flags, including
+`--pull-in`. A sealed `@route:id@` project note contributes its tasks
+to the same offer set
 ([Offer a new project's tasks](#offer-a-new-projects-tasks)). To pull in
 numbered offers, pass `-p 1,2`, `-p all`, or `-p none`:
 
@@ -3684,7 +3691,8 @@ Work Log entries under a `🛠️ **WORK LOG**` marker (newest on top) or append
 one after the task's child block. Notes stay in the ledger (copied, not
 moved). Close-time recovery plus successor **offers** run on every close
 that completes tasks, per
-[task-dependencies.md §12](task-dependencies.md#12-successor-offers):
+[task-dependencies.md §12](task-dependencies.md#12-successor-offers)
+and [§12.15](task-dependencies.md#1215-keep-moving-offers-leaf-projects):
 picked successors go into the same-name continuation, created when
 needed, and count as carried. Without `--pull-in`, capture recovers and
 reports numbered offers (`not_selected`). The continuation rule is the
@@ -3774,15 +3782,18 @@ Field notes:
   `offer` object, the same `not_linked` reasons (`not_selected`,
   `no_destination`, `project_member`; never `breaker` or
   `not_planned_today`), the same `trigger` / `hide_removed` fields, and
-  the same gate semantics over the close's completed set. Dry-run JSON
-  equals real-run JSON with the same flags. The batch also carries
-  top-level `pull_in` on every success.
+  the same gate semantics over the close's completed set, plus the same
+  `keep_moving[]` array as `task_complete` (always present, possibly
+  empty; `trigger: "last_planned"`). Dry-run JSON equals real-run JSON
+  with the same flags. The batch also carries top-level `pull_in` on
+  every success.
 - When the successor logic created the continuation, `next_pomodoro`
   reports it (`{line, name, time_range: None, created: true}`); picked
   successors count as carried.
 - Added block lines that equal a surviving picked successor bullet carry
-  `"reason": "unblocked"` in the `pomodoro_blocks` line objects; rows
-  dropped by net batch reporting lose the reason.
+  `"reason": "unblocked"` (or `"keep_moving"` for a surviving
+  keep-moving pick) in the `pomodoro_blocks` line objects; rows dropped
+  by net batch reporting lose the reason.
 
 Human output prints `closed NAME old → new (Nm, −Xm) · file line N` (or a
 single range with no decrement, plus `(ran Nm over)` on overruns), always
@@ -5458,24 +5469,31 @@ top-level `pull_in` with `supported: true`, `offer_count`, `choice`
 project-group `folded` counts. Dry-run JSON equals real-run JSON with
 the same flags. The batch-level
 `task_blocks` array gains roles `"completed"` (the root and each closed
-subtask) and `"unblocked"` (each recovered or picked dependent); see
-[Task blocks](#task-blocks). Human output prints
+subtask), `"unblocked"` (each recovered or picked dependent), and
+`"keep_moving"` (each keep-moving pick); see [Task blocks](#task-blocks).
+Human output prints
 `✓ completed [*] → [x] <text>  <note> ^<id>` (dry-run: `would complete`),
 one indented row per closed subtask and left-open descendant, a `ledger`
 line in struck, moved, dropped, removed order ending with the day file
 (an unnamed entry prints as `line N`), numbered `offer N` rows under
-group headers, one `linked` row per picked successor
+group headers (including a `Keep <N> moving · <T> was its last task
+planned today (ready tasks, not dependents)` header for keep-moving
+groups; see
+[`docs/task-dependencies.md`](task-dependencies.md#1215-keep-moving-offers-leaf-projects)
+§12.15), one `linked` row per picked successor
 (`linked [?] → [*] <text>  <note> ^<id> → <destination>`,
 dry-run: `would link`, with destinations `→ FIX`, `→ FIX (next up)`,
 `→ new BOB session (next up)`, `→ new session`, and `→ line 37`, plus
-`· added ^<id>` when an ID was minted), one `unblocked` row per
-recovered-but-unlinked dependent (with suffixes `· already planned`,
-`· not pulled in`, `· no open Pomodoro`, `· project task`,
-`· project member`, `· hidden`, `· linking off`), one `surfaced` row per
-project pull-in that removed `#hide` without linking or changing status
-(dry-run: `would surface`; every project row puts `· project has no
-open tasks` before any reason suffix; see
-[`docs/task-dependencies.md`](task-dependencies.md) §12.10), and one
+`· added ^<id>` when an ID was minted and `· keeps <N> moving` for a
+keep-moving pick), one `unblocked` row per recovered-but-unlinked
+dependent (with suffixes `· already planned`, `· not pulled in`,
+`· no open Pomodoro`, `· project task`, `· project member`, `· hidden`,
+`· linking off`), one `surfaced` row per project pull-in that removed
+`#hide` without linking or changing status (dry-run: `would surface`;
+every project row puts `· project has no open tasks` before any reason
+suffix; see [`docs/task-dependencies.md`](task-dependencies.md) §12.10),
+one `not offered` fold row per keep-moving group with only folds
+(`not offered  2 blocked · 1 scheduled later · 1 hidden`), and one
 `still blocked` row per remaining blocked dependent (`· waits on N more`,
 `· until YYYY-MM-DD`, `· project <path>`). A dry-run hint shows
 `-p 1,2 · -p all`; a real run without a pick says the offers were not

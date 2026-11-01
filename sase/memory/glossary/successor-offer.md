@@ -13,7 +13,10 @@ aka offer, pull-in offer
 
 A [[task-successor]] that a gesture may link under its Pomodoro destination is a
 successor offer. A managed Done gesture offers the tasks it recovered, grouped as
-direct hand-offs, residents of a recovered project, or project-finished pull-ins.
+direct hand-offs, residents of a recovered project, or project-finished pull-ins,
+and, when it closes the task behind a [[leaf-project]]'s last live Task Link
+today, that project's ready tasks as keep-moving offers, which are never
+dependents.
 Promoting a task that is linked in today's Pomodoros offers the new project note's
 open tasks in that link's place. A capture `@route:id@` offers the new project
 note's open tasks, never its `^prj`. Offers are not linked until explicitly picked;

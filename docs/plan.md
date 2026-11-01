@@ -611,6 +611,7 @@ plan:
   max_ready_per_note: 5 # soft cap per area/project note; frontmatter ready_cap overrides
   strict: false # refuse #NAME captures that would create a type past max_themes
   link_unblocked: true # offer a closed planned task's unblocked dependents, project residents, and project pull-ins (docs/task-dependencies.md §12); false recovers only
+  keep_moving: true # offer a leaf project's ready tasks when you close its last task planned today (docs/task-dependencies.md §12.15); false turns off only these offers
   exempt: [PLAN] # open entries that never count toward the type cap
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open labels that are storage, not types
   reading_type: READ # type suggested for reading tasks; off disables the rule
@@ -622,8 +623,8 @@ defaults above, shared by Rust and JavaScript. Unknown keys stay
 ignored.
 
 **Validation.** Caps are integers ≥ 1 (`max_ready_per_note` is
-`1–999`), `strict` and `link_unblocked` are booleans, and the lists hold
-non-empty strings. `reading_type` is a single task type name (default
+`1–999`), `strict`, `link_unblocked`, and `keep_moving` are booleans,
+and the lists hold non-empty strings. `reading_type` is a single task type name (default
 `READ`); `off` disables the reading-task suggestion rule. The legacy
 `reading_theme` alias is accepted, but setting both is a config error.
 `default_type` is a single task type name, `off`, or `null`; unset, `off`,
@@ -639,6 +640,8 @@ loaders keep their independence.
   continue, and capture's strict plan enforcement is unavailable.
 - An invalid `link_unblocked` falls back to `true` through the same
   warning paths: close-time recovery still runs, and offering stays on.
+- An invalid `keep_moving` falls back to `true` through the same warning
+  paths: the keep-moving trigger stays on.
 - Capture completion omits the plan-creation hint.
 - The native tmux meter silently uses defaults. Obsidian budget surfaces
   use defaults and flag invalid config in their feedback. Invalid plan config

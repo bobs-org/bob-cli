@@ -930,13 +930,15 @@ the NEW and TICKLER review tiers resurface unpicked work.
   available open resident of a project whose `^prj` this gesture
   recovered, plus each §12.10 pull-in, plus — for capture's sealed
   `@route:id@` — each eligible open task of the project note that capture
-  creates (trigger `project_created`, §12.5). One row per task identity.
+  creates (trigger `project_created`, §12.5), plus every §12.15
+  keep-moving offer (trigger `last_planned`). One row per task identity.
 - **Pick / selection.** The input that chooses which offers to link.
   Nothing is pre-checked. ↵ applies the marked rows, or the highlighted
   row when none are marked; Esc means none.
 - **Groups.** `hand_off` (direct dependents), `project` (residents of an
   unblocked project, or of a project note capture just created),
-  `project_finished` (§12.10 pull-ins).
+  `project_finished` (§12.10 pull-ins), `keep_moving` (§12.15
+  keep-moving offers from a leaf project's last planned task).
 - **Destination.** Where a picked link is inserted. Hand-offs and
   pull-ins use the §12.3 anchor (slot / closing / inherit). Project
   residents use the earliest anchor among `preds(R)` (the tasks that
@@ -977,7 +979,11 @@ offers.
 | `bob capture '<text> @route:id@'` — a sealed project note. This is the one trigger that completes nothing: the project's creation is the gesture, and its rows say `trigger: "project_created"` | bob-cli |
 
 The same complete gestures produce project offers and project-finished
-pull-in offers (§12.10).
+pull-in offers (§12.10). Every managed Done row above also runs the
+keep-moving trigger (§12.15 K1–K8): when it closes the task behind a
+leaf project's last live Task Link today, that project's ready tasks
+are offered as `keep_moving` rows. Cancel and the other exclusions
+below stay unchanged.
 
 Promotion is not a Done gesture, but nav's Create project note from task offers
 the new project's open tasks with the same picker, KEYS, and PICK rule. Only
@@ -1082,10 +1088,18 @@ PROJECT OFFERS: when a `^prj` R recovers (step 4) and R has no own or
            back to IMPLICIT DESTINATION.
 DEDUP    : one row per task identity; causes are merged. A resident
            that is also a direct dependent appears once, in hand_off.
-           In a multi-item capture draft, a later item that links,
+           Priority is hand_off > project > project_finished > keep_moving
+           (§12.15). In a multi-item capture draft, a later item that links,
            completes, re-blocks, or explicitly drops (`x~K`) a task
            removes its offer; a later item that adds open work to N
-           removes N's project_finished offer.
+           removes N's project_finished offer; a later item that links
+           any open task of N, or closes R, drops N's whole keep_moving
+           group (§12.15, KM21).
+ORDER    : offers by group (hand_off, then project, then
+           project_finished, then keep_moving), then anchor ledger position,
+           then note path, then line. Within keep_moving, rows sort by
+           anchor ledger position, then note path, then lane pull order
+           (Pending → Next → Ready), then line (§12.15).
 BREAKER  : deleted. No replacement cap. SL17, PP15, and the breaker
            notice tests are retired. Keep the unrelated
            embedded-completion safeguards (25 levels / 250 targets).
@@ -1100,9 +1114,6 @@ KEYS     : row with a block ID → `<note_path>#^<block_id>`;
 SELECTION: an input to each engine's existing single write pass
            (plan → choose → apply). Unpicked offers recover with
            not_linked: not_selected. Nothing is pre-checked.
-ORDER    : offers by group (hand_off, then project, then
-           project_finished), then anchor ledger position, then note
-           path, then line
 recover  : '?' → derived rank on the POST-gesture day text: '*' if D has a live link
            there, else ' '. ' ', '*', '/' are unchanged.
 PICK     : '?' or ' ' → '*'; '*' and '/' are unchanged. Mint a missing ^block-id,
@@ -1326,7 +1337,9 @@ stale `[ ]` resident).
   `"project_created"`. Every existing successor row says
   `"dependency"`; a missing key means an older bob. Project pull-in
   rows say `"project_empty"` (§12.10). Rows for a project note created
-  by capture's `@route:id@` say `"project_created"`.
+  by capture's `@route:id@` say `"project_created"`. Keep-moving rows
+  never appear in `unblocked[]`; they live in `keep_moving[]` with
+  `trigger: "last_planned"` (§12.15).
 - `hide_removed` is true when this gesture removed a whole-token
   `#hide` from the row's task. Existing successor rows send `false`.
 - The row `text` of a project (`^prj`) row is the post-write
@@ -1344,8 +1357,10 @@ stale `[ ]` resident).
   - `key`: the offer key (§12.2 KEYS);
   - `n`: 1-based index in the numbered offer list this command reports
     without a selection;
-  - `group`: `"hand_off"` | `"project"` | `"project_finished"`;
-  - `project`: vault-relative path of N, present on the `project` group;
+  - `group`: `"hand_off"` | `"project"` | `"project_finished"` |
+    `"keep_moving"` (§12.15);
+  - `project`: vault-relative path of N, present on the `project` and
+    `keep_moving` groups;
   - `destination`: `{day_file, entry_name, entry_role, fallback}` where
     `entry_role` is `"slot"` | `"closing"` | `"implicit"` | `"created"` | `"typed"`
     and `fallback` is true when the implicit destination was used
@@ -1403,6 +1418,22 @@ future schedule reports `successors: []`, the `project_schedule`
 or links a created task drops its offer (SL20 below); a pick survives
 only when its final task and link do.
 
+**Keep-moving rows (`keep_moving[]`)**
+
+Every `task_complete` and `pomodoro_close` object carries an additive
+`keep_moving` array, always present and possibly empty, in schema
+version 1. Its rows use the exact `unblocked[]` row shape, with:
+
+- `trigger: "last_planned"`;
+- `offer.group: "keep_moving"` and `offer.project: <N path>`;
+- `unblocked_by` = PRED(N), the tasks whose close triggered the group;
+- `previous_status_*` equal to `status_*` unless picked;
+- `link` set only when picked; `not_linked: "not_selected"` when unpicked.
+
+Keep-moving rows **never** appear in `unblocked[]`. Nested
+`relation_completes[].task_complete` carries the array automatically.
+See §12.15 for the trigger, the offer set, and the copy.
+
 **`still_blocked[]` rows**
 
 - `reason` is `waits_on`, `scheduled`, or `project`.
@@ -1417,7 +1448,8 @@ only when its final task and link do.
   reason. `^prj` reports only its own reasons, never a `project_*`
   reason.
 - `trigger` is `"dependency"` or `"project_empty"`, same rule as
-  `unblocked[]`.
+  `unblocked[]`. Keep-moving candidates fold into the keep-moving
+  group's `blocked` / `scheduled` counts instead (§12.15).
 
 **`unblocked_check`**
 
@@ -1450,8 +1482,15 @@ Present on **every** successful capture JSON (dry-run too):
   `"none"`, or `"subset"`.
 - `picked_count`: how many offers were linked.
 - `groups`: folded counts (hidden, already planned, sub-projects) per
-  project group. Omitted when every folded count is zero and there is
-  no project group.
+  project group, plus one entry per keep-moving group:
+  `{"group": "keep_moving", "project": "<N path>", "folded":
+  {"hidden": h, "already_planned": 0, "sub_projects": 0, "blocked": b,
+  "scheduled": s}}`. `blocked` and `scheduled` are additive folded keys
+  for keep-moving (§12.15). Omitted when every folded count is zero and
+  there is no project or keep-moving group.
+- `offer_count` and `picked_count` include keep-moving offers. The
+  `pull_in_choice_required` refusal and its flat `offers` payload include
+  them too.
 
 **Elsewhere in the result**
 
@@ -1461,13 +1500,19 @@ Present on **every** successful capture JSON (dry-run too):
 - **`pomodoro_close.next_pomodoro`** names the successor's continuation
   when the successor logic created it.
 - **`pomodoro_blocks[].lines[].reason`.** Optional `"unblocked"` on
-  added lines that are surviving picked successor links.
+  added lines that are surviving picked successor links, and
+  `"keep_moving"` on added lines that are surviving keep-moving picks
+  (§12.15).
 - **Net batch reporting (SL20).** After all items are planned, an offer
   whose task is no longer open, or whose later item linked, completed,
   re-blocked, or dropped it, is dropped from its item's `unblocked[]`
-  and loses its block-line `reason`. A later item that adds open work
-  to N removes N's `project_finished` offer.
-- **`task_blocks`.** Picked successors keep role `unblocked`.
+  (or `keep_moving[]`) and loses its block-line `reason`. A later item
+  that adds open work to N removes N's `project_finished` offer. A later
+  item that links any open task of N, or closes R, drops N's whole
+  keep-moving group (KM21).
+- **`task_blocks`.** Picked successors keep role `unblocked`;
+  `TaskBlockRole` gains `KeepMoving` (`"keep_moving"`) for keep-moving
+  picks (§12.15).
 
 **Shared notice model** (cycler → nav `api.notice.showUnblocked(model)`).
 It is the JSON row shape above, kept in snake_case on purpose so one
@@ -1493,8 +1538,11 @@ vocabulary serves Rust, JS, Swift, and the vectors:
 - Each row reads successor text first, then the destination, then the
   cause.
 - Offer lists use group headers: `Hand-offs`, `Project ‹note›`,
-  `Project finished`. The project group's `^prj` is the header, not a
-  choice, when N still has open work.
+  `Project finished`, `Keep ‹N› moving` (§12.15). The project group's
+  `^prj` is the header, not a choice, when N still has open work.
+- Keep-moving surfaces always lead with **why** and always say **not
+  dependents**; they never use 🔓 or the word "unblocked". Their glyph
+  is ⏭. See the §12.15 copy table and mocks.
 - Use only existing glyphs: 🔓 unblocked (Mac `lock.open.fill`), 🔒
   still blocked (Mac `lock.fill`), ✓ done.
 - Use only existing `--task-status-*` colour tokens, with no new hex
@@ -1685,10 +1733,11 @@ plan 3/3 types · 10/10 links
 
 ### 12.8 Kill switch
 
-`plan.link_unblocked: true` lives in `~/.config/bob/config.yml` and is
-read by Rust and the cycler. The config keeps its boolean spelling;
-`true`, the default, now means **offer**. Setting it to `false` turns
-off **offering, linking, and minting**:
+`plan.link_unblocked: true` and `plan.keep_moving: true` live in
+`~/.config/bob/config.yml` and are read by Rust and the cycler. The
+config keeps its boolean spelling; `true`, the default, now means
+**offer**. Setting `link_unblocked` to `false` turns off **offering,
+linking, and minting**:
 
 - close-time recovery still runs and still uses the derived rank;
 - each unblocked row reports `not_linked: "disabled"`;
@@ -1696,11 +1745,15 @@ off **offering, linking, and minting**:
 - project pull-ins obey the same kill switch: no offer, no link, status
   unchanged, `not_linked: "disabled"`; un-hiding still happens
   (§12.10).
+- `plan.keep_moving: false` disables only the keep-moving trigger
+  (§12.15): no `keep_moving` group, no array, no picker section. Other
+  groups follow their own switch.
 
 Recovery is the honest half of the feature and costs nothing extra once
 the dependents are found. An invalid value falls back to `true` and
 surfaces through the existing invalid-plan-config warning paths
-(`docs/plan.md` "Invalid values").
+(`docs/plan.md` "Invalid values"). An invalid `keep_moving` falls back
+to `true` through the same warning paths.
 
 ### 12.9 Undo
 
@@ -2081,7 +2134,7 @@ successors: {
   pre-gesture day: the fresh text with a closed Pomodoro's headline
   restored, so a Pomodoro-line close keeps its `closing` anchor.
 
-**Model shape**
+**Model shape (v1)**
 
 ```js
 {
@@ -2106,6 +2159,54 @@ successors: {
   budget?: { links: number, max: number },  // plan meter; warns, never refuses
 }
 ```
+
+**Picker API v2 (keep-moving).** Nav bumps `api.successors.version` to
+`2`. Groups may be `keep_moving` and carry `caption` and `tag`:
+
+```js
+{
+  title: string,  // "Keep ‹N› moving" / "Keep 2 projects moving" when only keep_moving groups
+  predecessors: [{ notePath, blockId, text }],
+  groups: [{
+    group: "hand_off" | "project" | "project_finished" | "keep_moving",
+    header: string,   // "Hand-offs" / project ^prj text / "Project finished" / "Keep ‹N› moving"
+    caption?: string, // keep_moving why caption (§12.15)
+    tag?: string,     // keep_moving contrast tag (§12.15)
+    project?: string,
+    rows: [{
+      key: string,
+      text: string,
+      notePath: string,
+      status: string,
+      lane?: string,  // "Pending" | "Next" | "Ready" | "Blocked"; every surface shows the lane name
+      destinationLabel: string,
+      needsBlockId: boolean,
+      selectable: boolean,
+      mutedReason?: string,
+    }],
+    folded?: { hidden: number, alreadyPlanned: number, subProjects: number,
+               blocked?: number, scheduled?: number },
+  }],
+  budget?: { links: number, max: number },
+}
+```
+
+- `normalizeSuccessorPickerModel` accepts the `keep_moving` group,
+  optional `caption` and `tag`, folded `blocked` and `scheduled`, and an
+  optional row `lane`. Unknown groups are still dropped. Rows show the
+  lane name for every group, deriving it from `status` when `lane` is
+  absent, so the raw symbol is never shown.
+- The cycler offers keep-moving groups only when
+  `api.successors.version >= 2`. It must never hand an older nav a group
+  it would drop.
+- v1 models render exactly as before.
+
+**Notice API v2.** `api.notice.version` bumps to `2`.
+`buildUnblockedNoticeModel` reads an optional `keep_moving` row array.
+When every row is keep-moving, the card title is `Keep ‹N› moving` with
+⏭ in the glyph slot; in a mixed card, keep-moving rows render after the
+others with the `keeps ‹N› moving` chip. The fallback text matches the
+§12.15 copy table.
 
 ### 12.14 CLI selection
 
@@ -2140,6 +2241,398 @@ created by capture's `@route:id@` prints `New project <basename>`). A dry-run
 hint shows `-p 1,2 · -p all`. A real run without a pick says the
 offers were not pulled in and names Obsidian / Bob Mac Capture /
 Ctrl+Shift+Enter as the way to link later.
+
+### 12.15 Keep-moving offers (leaf projects)
+
+When any managed Done gesture closes the task behind a leaf project's
+last live Task Link in today's Pomodoros, Bob offers that project's
+ready tasks as successors in one picker. The picker says plainly why it
+appeared and that the rows are not dependents. Rust and the JS cycler
+apply one rule, pinned by the shared vectors in §12.16–§12.17.
+Obsidian, `bob capture`, and Bob Mac Capture present it with one copy
+and visual system. See the Leaf Project term in
+[Glossary](reference/glossary.md#leaf-project) (generated).
+
+**Vocabulary**
+
+- **Leaf project.** A project note that is **not its own root parent**.
+  Leafness is computed with the R2 root-parent walk
+  ([pomodoro-homes.md R2](pomodoro-homes.md#r2-root-parent)) on the note
+  tree and never stored. The rule:
+  - A top-level project, a project marked `root: true`, and an orphan
+    project (no project or area above it) are roots, so they are never
+    leaves.
+  - A sub-project at any depth without `root: true` is a leaf.
+  - "Leaf" names the reporting role, not the tree position, so a leaf
+    project may have sub-projects of its own.
+  - A task's `[root::]` field never changes its note's leafness.
+  - Areas, daily notes, inbox files, `done/` archives, and terminal
+    projects are never leaves.
+- **Keep-moving offer.** A successor offer in the new group
+  `keep_moving`, with the new row trigger `last_planned`. It offers a
+  ready task of a leaf project N because this gesture closed the task
+  behind N's last live link today. **It is never a dependent**, and
+  every surface says so.
+- **Live link.** The existing §12 term: an unstruck Task Link sub-bullet
+  (plain, embed, or `#`-deferred) under an open `[ ]` entry of today's
+  `## Pomodoros`. Planned `()` placeholders are open entries.
+
+**Trigger (both engines, every managed Done gesture)**
+
+Read the trigger on the **same baseline §12.2 uses for anchors**:
+today's day text before this gesture strikes, moves, retires, or drops
+anything, but after any explicit link step of the same item. Read note
+statuses from the staged post-gesture text.
+
+```text
+C = tasks this gesture moved open → Done (roots + closed embedded subtasks)   (§12.2)
+
+For each note N that holds some c ∈ C:
+  K1  N is a project note that sync recognizes: outside done/, non-terminal, exactly
+      one open ^prj R, no scan issue (the §12.10 recognition)
+  K2  LEAF(N): the R2 root parent of N is not N        (Rust: HomeResolver::resolve_note)
+  K3  PRED(N) = { c ∈ C : c lives in N, c ≠ R, c has a block ID, and c has its OWN live
+                  link on the baseline }               — must be non-empty
+  K4  no live link on the baseline targets an OPEN task of N outside C
+      (the ^prj R counts as open N work; links to tasks already closed do not count;
+       links to tasks in N's sub-projects do not count — residence is N only)
+  K5  R ∉ C, and R is not Blocked: no own open prerequisite, no future SCHED(N), no
+      #prj_is_blocked
+  K6  N is not EMPTY(N) (§12.10). An emptied N is a project_finished pull-in instead.
+  K7  this gesture produced no `project` group and no `project_finished` row for N
+  K8  plan.link_unblocked and plan.keep_moving are both true, and the close is not a
+      cancel
+⇒ N opens a keep_moving group with PRED(N) as its predecessors (`unblocked_by`)
+```
+
+Two consequences follow from the baseline:
+
+- A link that this same close carries forward (an incomplete task in a
+  closed Pomodoro) keeps N planned, so nothing is offered.
+- A link that this close drops with `x~K` also blocks the trigger: the
+  drop wins, exactly as in §12.2.
+
+A task closed outside its link still triggers, for example with
+Ctrl+Enter in its own note or with Alt+] into Done, provided its own
+live link exists.
+
+**Never triggers:**
+
+- cancel of any kind (nav cancel, Alt+[ into Cancelled, capture cancel
+  labels);
+- reopen;
+- raw checkbox clicks;
+- `bob task reconcile` / hooks;
+- `x*` parks;
+- Ctrl+Enter on a Depends-On line;
+- capture's `@route:id@` project creation, which closes nothing.
+
+This is the §12.1 exclusion list, unchanged.
+
+**Offer set**
+
+For a triggered N, classify every open `#task` line of N on the staged
+post-gesture text, other than R and C:
+
+| Resident | Outcome |
+| --- | --- |
+| a direct dependent offered as `hand_off` by this gesture | stays in `hand_off` (dedup: hand_off > project > project_finished > keep_moving) |
+| `[?]`, or own open prerequisite (`task_dependency_states`), or `#prj_is_blocked` | folded: `blocked` |
+| `scheduled` after today | folded: `scheduled` |
+| whole-token `#hide` | folded: `hidden` |
+| `[ ]` Ready, `[*]` Next, `[/]` Pending, none of the above | **offered** (see `offer_lanes`) |
+| custom or unknown mark | ignored |
+
+Offer Pending, Next, and Ready residents. **Order:** lane in pull order
+(Pending → Next → Ready, as in `decisions:task-lanes-are-sticky`),
+then line in N.
+
+The remaining rules for the offer set:
+
+- **What gets offered.** `#ref` tasks, nested subtasks, and recurring
+  tasks whose occurrence is today or past are offered like any resident.
+  Residents of N's sub-projects are never offered.
+- **Already planned.** By K4 no N resident is live-linked, so there is no
+  `already_planned` fold.
+- **No selectable rows.** When no row is selectable, the group is omitted
+  entirely: no picker, no notice, and no JSON group. This is silence, as
+  §12.6 requires.
+- **Prerequisite checks.** A candidate that carries a non-empty
+  `[dependsOn::]` needs the vault-wide dependents snapshot to prove its
+  prerequisites are closed. Build the snapshot only in that case, using
+  the §12.10 gate pattern. If it is unavailable, fold those candidates
+  as `blocked`, because Bob must never offer a task it cannot prove
+  unblocked.
+- **Keys, numbering, selection, picks.** These reuse §12.2 KEYS, the
+  existing numbering (`n`), and SELECTION.
+  - Ordering puts `keep_moving` after every other group, including
+    `project_created` rows. Within the group, rows sort by anchor ledger
+    position, then note path, then the lane order above.
+  - Destination follows the §12.3 anchors over PRED(N): `slot` places
+    the row right after the closed task's bullet, and `closing` is used
+    for Pomodoro closes. D7 type routing applies as for any offer,
+    through `route_successor_offers` and its JS twin. K3 guarantees an
+    anchor, so there is no implicit fallback.
+- **Picks** write exactly like a picked `hand_off`:
+  - `' '` → `'*'`; `'*'` and `'/'` stay, so Pending is never demoted;
+  - mint a missing block ID;
+  - stamp `[fresh:: today]`, clearing `[unblocked::]` and `[keeps::]`;
+  - insert the plain Task Link.
+- **Unpicked rows.** Nothing is written: no recovery, no `[unblocked::]`,
+  no mint.
+- **Re-validation.** A picked row that has since become Blocked, linked,
+  or closed is refused per row (SO30).
+- **Multi-item capture drafts** extend the SL20 net pass:
+  - a later item that links, completes, re-blocks, or drops an offered
+    task drops that row;
+  - a later item that links any open N task, or closes R, drops N's whole
+    group.
+
+**Reporting (additive; capture JSON stays schema version 1)**
+
+- The `keep_moving` array (§12.5) uses the exact `unblocked[]` row shape
+  with `trigger: "last_planned"`, `offer.group: "keep_moving"`,
+  `unblocked_by` = PRED(N), and `not_linked: "not_selected"` when
+  unpicked. Keep-moving rows never appear in `unblocked[]`.
+- `pull_in` `offer_count` and `picked_count` include keep-moving offers.
+  `groups` gains one entry per group with the additive `blocked` and
+  `scheduled` folded keys. The `pull_in_choice_required` refusal and its
+  flat `offers` payload include keep-moving offers.
+- In Pomodoro block diffs, an added line that is a surviving keep-moving
+  pick gets `reason: "keep_moving"`; dependency picks keep `"unblocked"`.
+- `TaskBlockRole` gains `KeepMoving` (`"keep_moving"`).
+- Dry-run JSON equals real-run JSON with the same flags. This is additive
+  JSON, so commits do not need `!`.
+
+**Copy and visual system (identical on every surface)**
+
+‹N› is N's note stem, and ‹T› is the predecessor's cleaned text,
+truncated to 48 characters with `…`. Keep-moving surfaces always lead
+with **why** and always say **not dependents**. They never use 🔓 or the
+word "unblocked". Their glyph is **⏭**:
+
+- emoji/text: ⏭;
+- Obsidian lucide: `skip-forward`;
+- Mac SF Symbol: `forward.end.fill`.
+
+They use the existing **Next** status colour token, because picks land in
+Next. No new hex values are added.
+
+| Element | Copy |
+| --- | --- |
+| Group title | `Keep ‹N› moving` |
+| Why caption, one predecessor | `✓ ‹T› was the last ‹N› task planned today` |
+| Why caption, k ≥ 2 predecessors | `✓ ‹T› and k−1 more were the last ‹N› tasks planned today` |
+| Contrast tag | `ready in ‹N› · not dependents` |
+| Fold line (omit zero parts) | `2 blocked · 1 scheduled later · 1 hidden` |
+| Picker title, only keep_moving groups | `Keep ‹N› moving` / `Keep 2 projects moving` (else the existing title) |
+| Notice, one pick | `⏭ Next in FIX: Ship the badge renderer · keeps ‹N› moving` |
+| Notice, several picks | `⏭ 2 linked → FIX · keeps ‹N› moving` |
+| Notice, mixed with dependency rows | existing 🔓 forms; keep-moving picks count as linked |
+| Notice, nothing picked and nothing else to say | silence |
+| Nav card title, every row keep_moving | `Keep ‹N› moving` with ⏭ in the glyph slot |
+| Nav card row chip in a mixed card | `keeps ‹N› moving` |
+| CLI group header | `Keep N moving · ‹T› was its last task planned today (ready tasks, not dependents)` |
+| CLI linked suffix | `· keeps N moving` |
+| CLI fold row | `not offered  2 blocked · 1 scheduled later · 1 hidden` |
+| Mac capsule / section | `Keep moving` / `Keep ‹N› moving` |
+| Mac notification line | `⏭ Pulled in 1 · keeps ‹N› moving` |
+
+Rows on every surface show the lane name (`Pending`, `Next`, `Ready`,
+`Blocked`) and never a raw status symbol.
+
+**Obsidian picker (only keep_moving groups):**
+
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⏭  Keep ‹sase_badges› moving                                          │
+│ [ Filter tasks, notes, and groups                                  ]  │
+│ ┃ Keep ‹sase_badges› moving        ready in sase_badges · not dependents │
+│ ┃ ✓ Draft the badge spec was the last sase_badges task planned today  │
+│ ┃ □ Ship the badge renderer                                           │
+│ ┃   sase_badges · Pending · → FIX                                     │
+│ ┃   Wire badges into the README                                       │
+│ ┃   sase_badges · Next · → FIX                                        │
+│ ┃ □ Write badge docs                                                  │
+│ ┃   sase_badges · Ready · → FIX · needs ^id                           │
+│ ┃   2 blocked · 1 scheduled later · 1 hidden                          │
+│  plan 6/10 → 7/10                                                     │
+│  Tab toggle and move · Ctrl+A mark group · ↵ pull in · Esc none        │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+The `┃` rule is a left accent in the Next token. In a mixed picker the
+keep_moving group renders last, below `Hand-offs` and the project
+groups, with the same heading, caption, and tag. Its contrast with the
+dependents above is the point.
+
+**Obsidian card after a pick:**
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│ ⏭  Keep ‹sase_badges› moving   1 → FIX      ✓ Draft the badge spec │
+│  ＋ Ship the badge renderer                           [ Pending ]  │
+│ ──────────────────────────────────────────────────────────────── │
+│  (plan 7/10 · 7/10)  (Alt+N releases)                             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**`bob capture` human output:**
+
+```text
+✓ completed [*] → [x] Draft the badge spec  sase_badges.md ^draft-spec
+  ledger  Task Link struck in FIX · 2026/20261101.md
+  Keep sase_badges moving · Draft the badge spec was its last task planned today (ready tasks, not dependents)
+  offer 1  [/] Ship the badge renderer  sase_badges.md ^ship-renderer → FIX
+  offer 2  [*] Wire badges into the README  sase_badges.md ^readme-badges → FIX
+  offer 3  [ ] Write badge docs  sase_badges.md → FIX
+  not offered  2 blocked · 1 scheduled later · 1 hidden
+```
+
+The existing dry-run hint (`-p 1,2 · -p all`) and the real-run "not
+pulled in" line keep working. A pick prints
+`linked [ ] → [*] Write badge docs  sase_badges.md ^write-badge-docs → FIX · keeps sase_badges moving · added ^write-badge-docs`.
+
+**Bob Mac Capture Pull-In card:**
+
+```text
+ ⏭ Keep moving                                                (capsule)
+ Draft the badge spec was the last sase_badges task planned today · ready tasks, not dependents
+ ⏭ Keep ‹sase_badges› moving
+   ☐ 1  Ship the badge renderer          Pending   → FIX
+   ☐ 2  Wire badges into the README      Next      → FIX
+   ☐ 3  Write badge docs                 Ready     → FIX
+   2 blocked · 1 scheduled later · 1 hidden
+```
+
+Preview cards (`!` / `x`) get the same section with the hint
+`↩ choose what to pull in`. Block-diff lines with
+`reason == "keep_moving"` get a trailing `forward.end.fill` badge with
+`.help("Keeps ‹N› moving")`.
+
+**Kill switch**
+
+`plan.keep_moving: true` in `~/.config/bob/config.yml` controls only
+this group. Rust and the cycler both read it. `false` disables the
+trigger. An invalid value falls back to `true` through the same warning
+paths as `link_unblocked`. `plan.link_unblocked: false` already turns
+off all offering, including this group. See §12.8.
+
+**Walk, undo, and plan budget**
+
+- **Walk.** The picker holds the review-walk gesture lock. After it
+  settles, Esc included, the walk advances exactly once, and a pick
+  composes into the single walk toast line.
+- **Undo.** A same-day Obsidian reopen of a predecessor takes back its
+  untouched keep-moving links and restores the picked rows' lines from
+  the receipt. Alt+N releases one pick. Rust has no reopen take-back.
+- **Plan budget.** The plan meter warns and never refuses.
+
+**Gates and performance**
+
+Order the checks from cheapest to most expensive, in both engines:
+
+1. **G1, no I/O.** Some c ∈ C has a block ID, is not a `^prj`, and lives
+   in a note whose held staged text has project frontmatter and is
+   non-terminal.
+2. **G2, no I/O.** N's staged text has at least one candidate: open `' '`,
+   `'*'`, or `'/'`, not `#hide`, not future-scheduled, and neither R nor
+   in C.
+3. **G3, byte check on the day text.** The day text contains
+   `#^<c.block_id>`. Capture already holds the day text. The cycler reads
+   the daily note only now, and only for project-note closes.
+4. **G4.** LEAF(N), using frontmatter reads of N's ancestors only.
+5. **G5.** K3 and K4 on the `DayView` / live-link parse. This is the first
+   step that may need the `NoteIndex`.
+
+Budgets:
+
+- Closes outside project notes, and closes whose task is not linked
+  today, add zero I/O. The cycler's zero-read wiring test must keep
+  passing.
+- A triggering `!` on apollo, built in release mode against a **temporary
+  copy** of `~/bob`, stays within §12.7's ≤ 70 ms target.
+
+**Interplay with accepted decisions**
+
+- **`decisions:unblocked-tasks-are-offered`.** This change extends that
+  decision: nothing is auto-linked or preselected, there is one picker
+  per gesture, and there is no cap. See
+  [Unblocked Tasks Are Offered](develop/decisions.md#unblocked-tasks-are-offered).
+- **`decisions:task-lanes-are-sticky`.** A pick raises the task to Next
+  like any link.
+- **`decisions:today-is-read-from-the-ledger`.** Planned work is read
+  from live links at gesture time and never stored.
+- **`decisions:mac-capture-is-a-thin-client`.** bob computes and writes;
+  the Mac presents.
+- **`decisions:bob-cli-releases-ride-a-daily-train`.** No phase edits
+  `Cargo.toml`'s version or `CHANGELOG.md`.
+
+### 12.16 KM — keep-moving vectors
+
+All rows use leaf N = `sase_badges.md` (→ `sase` → `dev`). Its `^prj` R
+is open and unblocked. Its predecessor T has a live link in FIX.
+Select-all is the default selection unless a row says otherwise.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| KM1 | N has Ready A, Next B, Pending P; close T with `!N:t` | `keep_moving` group for N: P, B, A (lane order); `trigger: last_planned`; `unblocked_by: [T]`; slot after T's bullet; nothing written without `-p`; pick A → `[*]`, minted ID, `[fresh:: today]`, linked after T's bullet |
+| KM2 | N's U (open) is also live-linked today | nothing |
+| KM3 | U's live link targets a task already Done | group (closed targets do not count) |
+| KM4 | U's link is struck, or sits under a closed Pomodoro | group |
+| KM5 | R itself is live-linked today | nothing |
+| KM6 | N is top-level, `root: true`, or orphan (LP2/3/6) | nothing |
+| KM7 | N is a middle project with child K (LP9); K's tasks are Ready | group lists N's residents only |
+| KM8 | T has no live link (not planned today), even though no N work is planned | nothing |
+| KM9 | T's link sits under a planned `()` placeholder | group; destination is that placeholder |
+| KM10 | `x` closes FIX completing T; U in FIX is incomplete and carried | nothing |
+| KM11 | `x` closes FIX completing T only | group at the §12.3 closing anchor (continuation, same-name entry, or created placeholder) |
+| KM12 | the same close drops U with `x~K` | nothing (the drop wins; pre-gesture baseline) |
+| KM13 | every remaining resident is Blocked, hidden, or future-dated | no group, no picker, silence |
+| KM14 | T was N's last open task | `project_finished` pull-in only (§12.10); no group |
+| KM15 | A is also a direct dependent of T | one row, in `hand_off` |
+| KM16 | R has an open prerequisite, a future date, or `#prj_is_blocked` | nothing |
+| KM17 | resident `[?]` / Ready with an open prerequisite / `scheduled` tomorrow / `#hide` | folded as `blocked` / `blocked` / `scheduled` / `hidden`; `scheduled` today is offered |
+| KM18 | `#ref` resident, nested subtask, recurring task due today | offered |
+| KM19 | `plan.keep_moving: false`, or `plan.link_unblocked: false` | no group; other groups follow their own switch |
+| KM20 | any cancel, reopen, `x*` park, raw checkbox click, or reconcile | nothing |
+| KM21 | draft `!N:t` then `@route:a` (links A) | the net pass drops N's group; a later item completing B drops only B's row |
+| KM22 | one `x` drains two leaf projects | two groups, ordered by anchor then path |
+| KM23 | T carries `[root:: sase]` | still triggers (leafness is by note) |
+| KM24 | picked A became Blocked or linked before apply (cycler re-plan) | A refused per row; others apply |
+| KM25 | Esc / `-p none` | nothing written, no IDs minted, no notice |
+| KM26 | Obsidian: T closed with Ctrl+Enter in its own note, or Alt+] into Done | group |
+| KM27 | walk-landing Ctrl+Enter | picker holds the gesture lock; the walk advances once after it settles |
+| KM28 | same-day Obsidian reopen of T after picking A | A's untouched link is taken back, and A's line is restored |
+| KM29 | T is R | nothing (the project closed) |
+| KM30 | only keep-moving offers, plus `--require-pull-in-choice` without `-p` | write-free refusal `pull_in_choice_required` listing them |
+| KM31 | a candidate carries `[dependsOn::]` and the dependents snapshot is unavailable | that candidate is folded `blocked`; the others are offered |
+| KM32 | close of a task outside any project note | zero added reads (wiring test) |
+
+Implementations copy the rows they implement into tests, citing the
+vector id in a comment. If an implementation disagrees with a vector,
+fix this section first in the same change.
+
+### 12.17 LP — leaf vectors
+
+Both engines compute leafness with the R2 walk
+([pomodoro-homes.md R2](pomodoro-homes.md#r2-root-parent)); Rust uses
+`HomeResolver::resolve_note`.
+
+| # | Note | Leaf? |
+| --- | --- | --- |
+| LP1 | `sase_goals.md` (project → `sase` project → `dev` area) | leaf |
+| LP2 | `sase.md` (project → `dev` area) | no (top-level) |
+| LP3 | `sase_blog.md` (project, `root: true`, → `sase`) | no (root project) |
+| LP4 | `sase_pre_blog.md` (project → `sase_blog`) | leaf |
+| LP5 | `p.md` (project → sub-area `gtd_daily`) | no |
+| LP6 | orphan project `o.md` (no `parent`) | no (outermost project) |
+| LP7 | project whose `parent` is unresolved or ambiguous | no (the walk stops; it is outermost) |
+| LP8 | project `k.md` → untyped wrapper note → `sase` | leaf (wrappers are walked through) |
+| LP9 | `m.md` (project → `sase`) that has its own child project | leaf ("leaf" is the reporting role) |
+| LP10 | task in `sase_goals.md` with `[root:: sase_blog]` | its note is still a leaf |
+| LP11 | area, daily note, inbox file, `done/` archive, terminal project | never a leaf |
+| LP12 | `parent` cycle `a ↔ b`, neither with `root: true` | leaf (matches `resolve_note`) |
 
 ## 13. Project dependencies
 

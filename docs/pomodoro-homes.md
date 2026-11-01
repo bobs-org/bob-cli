@@ -71,8 +71,13 @@ above it. The flag is read with `frontmatter_value(fm, "root")` and counts
 only when `trim_yaml_scalar` equals `true` ASCII-case-insensitively, so
 `"true"` and `True` count while an absent, `false`, `yes`, empty, or list
 value is silently off. The key is ignored on every non-project note.
-Reporting only: it changes no blocking, Sub-projects lines, Ready caps,
-review tiers, capture routing, plan budget, or `bob projects` output.
+A **leaf project** is a project note that is not its own root parent
+(see [Leaf projects](projects.md#leaf-projects) and
+[Keep-moving offers](task-dependencies.md#1215-keep-moving-offers-leaf-projects)).
+It changes no blocking, Sub-projects lines, Ready caps, review tiers,
+capture routing, plan budget, or `bob projects` output, with one
+workflow effect: a `root: true` project is never a leaf, so it never
+gets keep-moving offers.
 
 | Task lives in | Walk | Root parent |
 | --- | --- | --- |

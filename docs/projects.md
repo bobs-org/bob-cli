@@ -71,10 +71,26 @@ Bare `type: [[project]]` is accepted too. The scan skips `done/`, `.git/`,
 `sync` also reads an optional `parent` frontmatter field when it is an Obsidian
 wikilink, such as `parent: "[[Parent Project]]"`.
 
-A project note may also set optional `root: true` in its frontmatter. It is
-reporting only: the note becomes its own root parent for Stats grouping,
-instead of folding into the top-level project above it. See
+A project note may also set optional `root: true` in its frontmatter. It
+makes the note its own root parent for Stats grouping, instead of folding
+into the top-level project above it. See
 [R2 — Root parent](pomodoro-homes.md#r2-root-parent).
+
+### Leaf projects
+
+A **leaf project** is a project note that is not its own root parent: a
+sub-project at any depth whose `parent` walk meets another project
+before any area note, and that does not set `root: true` itself. A
+top-level project, a `root: true` project, and an orphan project
+(nothing above it) are roots, never leaves. "Leaf" names the reporting
+role, not tree position: a leaf project may have sub-projects of its
+own. Leafness is derived from the note tree at gesture time, never
+stored, and a task's `[root::]` field never changes it. A root project
+is never a leaf, so it never gets keep-moving offers. Closing the task
+behind a leaf project's last live Task Link in today's Pomodoros offers
+the project's ready tasks as keep-moving successor offers, which are
+never dependents. See
+[Keep-moving offers](task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
 ## External Names (`project_name_aliases`)
 
