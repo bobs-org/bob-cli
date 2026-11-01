@@ -424,6 +424,8 @@ pub(super) fn complete_existing_task(
                 tasks_settings: &tasks_settings,
                 note_settings: &settings,
                 link_unblocked: dependency_ctx.link_unblocked(),
+                keep_moving: false,
+                snapshot_complete: unblocked_check != "unavailable",
                 selection: request.selection.clone(),
                 index,
             });

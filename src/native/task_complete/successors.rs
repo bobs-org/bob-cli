@@ -70,8 +70,10 @@ pub(crate) enum SuccessorSelection {
     Keys(BTreeSet<String>),
 }
 
-/// Draft-list sort key: group, anchor (entry, bullet), note path, task line.
-pub(crate) type OfferOrderKey = (u8, (usize, usize), PathBuf, usize);
+/// Draft-list sort key: group, anchor (entry, bullet), note path, lane, line.
+/// Lane is 0 for existing groups so their relative order is unchanged;
+/// keep-moving uses Pending → Next → Ready (`keep_moving_lane`).
+pub(crate) type OfferOrderKey = (u8, (usize, usize), PathBuf, u8, usize);
 
 /// Offer group (`docs/task-dependencies.md` §12.2 ORDER).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -79,6 +81,7 @@ pub(crate) enum OfferGroup {
     HandOff,
     Project,
     ProjectFinished,
+    KeepMoving,
 }
 
 impl OfferGroup {
@@ -87,6 +90,7 @@ impl OfferGroup {
             Self::HandOff => "hand_off",
             Self::Project => "project",
             Self::ProjectFinished => "project_finished",
+            Self::KeepMoving => "keep_moving",
         }
     }
 }
@@ -204,6 +208,12 @@ pub(crate) struct SuccessorInput<'a> {
     pub tasks_settings: &'a TasksSettings,
     pub note_settings: &'a NoteTaskSettings,
     pub link_unblocked: bool,
+    /// When false, keep-moving is not considered. Capture callers pass
+    /// false until the capture phase wires `plan.keep_moving`.
+    pub keep_moving: bool,
+    /// When false, an empty snapshot is unavailable input, not proof that
+    /// prerequisites are closed (`docs/task-dependencies.md` KM31).
+    pub snapshot_complete: bool,
     pub selection: SuccessorSelection,
     pub index: &'a NoteIndex,
 }
@@ -308,6 +318,11 @@ pub(crate) struct SuccessorPlan {
     pub new_day_text: Option<String>,
     /// One record per project whose `^prj` entered project offers.
     pub project_folds: Vec<ProjectFold>,
+    /// Keep-moving rows (`docs/task-dependencies.md` §12.15). Never mixed
+    /// into `unblocked` or `still_blocked`.
+    pub keep_moving: Vec<UnblockedRow>,
+    /// Folded keep-moving counts per project with at least one selectable row.
+    pub keep_moving_folds: Vec<super::keep_moving::KeepMovingFold>,
 }
 
 /// Whether a vault-relative note is an inbox note, mirroring nav's
@@ -654,6 +669,9 @@ pub(crate) struct DependentVerdict {
     pub(crate) offer: Option<OfferDraft>,
     /// Project note for a muted still-blocked resident (PDC3 / SO9).
     pub(crate) muted_project: Option<PathBuf>,
+    /// True for §12.15 keep-moving verdicts: unpicked rows write nothing
+    /// and emit into `SuccessorPlan.keep_moving`.
+    pub(crate) keep_moving: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -832,12 +850,27 @@ fn plan_successors_inner(
             input.today,
         )
     };
+    let held_notes: Vec<(PathBuf, String)> = files
+        .iter()
+        .map(|file| (file.relative_path.clone(), file.contents.clone()))
+        .collect();
+    let keep_moving_eligible = input.keep_moving
+        && !mode.is_cancel_recovery()
+        && super::keep_moving::keep_moving_pre_gate(
+            &input.completed,
+            &held_notes,
+            input.pre_day.as_deref(),
+            input.today,
+            input.tasks_settings,
+        );
     // GATE: without an `[id::]` on any completed task no dependent can
     // name this close, so skip the lookup with no extra reads — unless a
-    // pull-in candidate was detected from the staged texts.
+    // pull-in candidate was detected from the staged texts, or the
+    // keep-moving G1–G3 pre-gate found an eligible leaf close.
     if !input.completed.iter().any(|task| !task.task_id.is_empty())
         && pull_ins.is_empty()
         && mode.cancelled_project_paths().is_empty()
+        && !keep_moving_eligible
     {
         return SuccessorPlan::default();
     }
@@ -973,6 +1006,7 @@ fn plan_successors_inner(
                     pull_in: true,
                     offer: None,
                     muted_project: None,
+                    keep_moving: false,
                 });
                 continue;
             }
@@ -1043,6 +1077,7 @@ fn plan_successors_inner(
                 pull_in: false,
                 offer: None,
                 muted_project: None,
+                keep_moving: false,
             });
         }
     }
@@ -1070,6 +1105,7 @@ fn plan_successors_inner(
                     pull_in: false,
                     offer: None,
                     muted_project: None,
+                    keep_moving: false,
                 });
             }
         }
@@ -1121,6 +1157,69 @@ fn plan_successors_inner(
         input.link_unblocked,
         input.note_settings,
     );
+
+    let mut keep_moving_folds = Vec::new();
+    if keep_moving_eligible {
+        let source = super::keep_moving::KeepMovingHomeSource::new(
+            &files,
+            input.index,
+            input.bob_dir,
+        );
+        let mut resolver =
+            super::super::pomodoro_homes::HomeResolver::new(source);
+        let classified = super::keep_moving::classify_keep_moving(
+            &mut resolver,
+            super::keep_moving::KeepMovingClassInput {
+                completed: &input.completed,
+                files: &files,
+                surfaces: &surfaces,
+                project_states: &project_states,
+                states: &states,
+                verdicts: &verdicts,
+                live: &day.live,
+                today: input.today,
+                snapshot_complete: input.snapshot_complete,
+                link_unblocked: input.link_unblocked,
+                index: input.index,
+            },
+        );
+        for offer in classified.offers {
+            let mut verdict = DependentVerdict {
+                file: offer.file,
+                task: offer.task,
+                preds: offer.preds.clone(),
+                anchor: earliest_anchor(&offer.preds, &anchors),
+                kind: VerdictKind::Offer,
+                open_count: 0,
+                pull_in: false,
+                offer: None,
+                muted_project: None,
+                keep_moving: true,
+            };
+            if attach_offer(
+                &mut verdict,
+                &files,
+                &day,
+                &input.day_relative,
+                input.closing.is_some(),
+                None,
+                OfferGroup::KeepMoving,
+                Some(offer.project),
+            ) {
+                verdicts.push(verdict);
+            }
+        }
+        let offered: BTreeSet<PathBuf> = verdicts
+            .iter()
+            .filter(|verdict| verdict.keep_moving && verdict.offer.is_some())
+            .map(|verdict| files[verdict.file].relative_path.clone())
+            .collect();
+        keep_moving_folds = classified
+            .folds
+            .into_iter()
+            .filter(|fold| offered.contains(&fold.project))
+            .collect();
+    }
 
     if !mode.is_cancel_recovery()
         && let Some(root) = input.bob_dir
@@ -1177,6 +1276,7 @@ fn plan_successors_inner(
         &project_states,
         &surfaces,
         project_folds,
+        keep_moving_folds,
     )
 }
 
@@ -1335,15 +1435,27 @@ fn successor_order_key(
 fn offer_order_key(
     verdict: &DependentVerdict,
     files: &[FileScan],
-) -> (u8, (usize, usize), PathBuf, usize) {
+) -> OfferOrderKey {
     let group = match verdict.offer.as_ref().map(|offer| offer.group) {
         Some(OfferGroup::HandOff) => 0,
         Some(OfferGroup::Project) => 1,
         Some(OfferGroup::ProjectFinished) => 2,
-        None => 3,
+        Some(OfferGroup::KeepMoving) => 3,
+        None => 4,
+    };
+    let lane = if verdict
+        .offer
+        .as_ref()
+        .is_some_and(|offer| offer.group == OfferGroup::KeepMoving)
+    {
+        super::keep_moving::keep_moving_lane(
+            files[verdict.file].tasks[verdict.task].status,
+        )
+    } else {
+        0
     };
     let ((entry, bullet), path, line) = successor_order_key(verdict, files);
-    (group, (entry, bullet), path, line)
+    (group, (entry, bullet), path, lane, line)
 }
 
 struct ImplicitDest {
@@ -1428,7 +1540,7 @@ fn make_offer(
         placement_refusal: None,
         placement_routed: false,
         n: 0,
-        order_key: (3, (usize::MAX, usize::MAX), PathBuf::new(), 0),
+        order_key: (4, (usize::MAX, usize::MAX), PathBuf::new(), 0, 0),
     }
 }
 
@@ -1683,6 +1795,7 @@ fn apply_project_member_classes(
                 pull_in: false,
                 offer: None,
                 muted_project,
+                keep_moving: false,
             };
             if kind == VerdictKind::Offer {
                 attach_offer(
@@ -2114,10 +2227,12 @@ fn apply_verdicts(
     project_states: &super::project_close::ProjectCloseStates,
     surfaces: &[Option<ProjectSurface>],
     project_folds: Vec<ProjectFold>,
+    keep_moving_folds: Vec<super::keep_moving::KeepMovingFold>,
 ) -> SuccessorPlan {
     let mut plan = SuccessorPlan {
         ran_lookup: true,
         project_folds,
+        keep_moving_folds,
         ..SuccessorPlan::default()
     };
     // Mint successor block IDs in placement order so the per-note used
@@ -2348,6 +2463,9 @@ fn apply_verdicts(
         let VerdictKind::Recover(reason) = verdict.kind else {
             continue;
         };
+        if verdict.keep_moving {
+            continue;
+        }
         let file = &files[verdict.file];
         let task = &file.tasks[verdict.task];
         if verdict.pull_in {

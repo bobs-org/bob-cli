@@ -81,6 +81,8 @@ pub(crate) fn recover_cancelled_source(
             tasks_settings,
             note_settings,
             link_unblocked: false,
+            keep_moving: false,
+            snapshot_complete: true,
             selection: SuccessorSelection::None,
             index,
         },

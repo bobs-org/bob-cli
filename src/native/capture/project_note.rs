@@ -248,6 +248,7 @@ pub(super) fn plan_project_note_item(
                     crate::native::task_complete::OfferGroup::Project as u8,
                     (usize::MAX, usize::MAX),
                     relative.clone(),
+                    0,
                     row.line,
                 ),
                 source_index: row.source_index,

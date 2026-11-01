@@ -5,6 +5,7 @@
 //! No user-visible behavior changes here; later phases call into this
 //! module. Keep everything `pub(crate)`.
 
+pub(crate) mod keep_moving;
 pub(crate) mod project_close;
 pub(crate) mod project_pull_in;
 #[cfg(test)]

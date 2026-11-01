@@ -803,6 +803,8 @@ fn plan_close_successors(
         tasks_settings: &tasks_settings,
         note_settings: &settings,
         link_unblocked: dependency_ctx.link_unblocked(),
+        keep_moving: false,
+        snapshot_complete: true,
         selection: request.selection.clone(),
         index,
     });

@@ -82,6 +82,8 @@ fn run_sel(
         tasks_settings: &settings,
         note_settings: &settings,
         link_unblocked,
+        keep_moving: false,
+        snapshot_complete: true,
         selection,
         index: vault_index,
     })
@@ -1307,6 +1309,8 @@ fn r3_project_reason_carries_scheduled() {
         tasks_settings: &settings,
         note_settings: &settings,
         link_unblocked: true,
+        keep_moving: false,
+        snapshot_complete: true,
         selection: SuccessorSelection::All,
         index: &vault_index,
     });

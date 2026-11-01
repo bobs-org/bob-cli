@@ -35,6 +35,7 @@ use super::super::task_status_hooks::{
     parse_tasks, FileScan, TaskLine, TasksSettings,
 };
 use super::super::vault_links::NoteIndex;
+use super::keep_moving::KEEP_MOVING_TRIGGER;
 use super::successors::{
     is_inbox_note, raw_task_line, successor_link_text, successor_new_status,
     CompletedTask, DayView, DependentVerdict, PlacedSuccessor, PredecessorRef,
@@ -629,7 +630,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
         );
         let (trigger, hide_removed, text) =
             successor_row_fields(file, task, verdict);
-        plan.unblocked.push(UnblockedRow {
+        let row = UnblockedRow {
             note_path: file.relative_path.clone(),
             block_id,
             line,
@@ -658,7 +659,12 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
             trigger,
             hide_removed,
             offer: verdict.offer.as_ref().map(super::successors::offer_report),
-        });
+        };
+        if verdict.keep_moving {
+            plan.keep_moving.push(row);
+        } else {
+            plan.unblocked.push(row);
+        }
     }
     for verdict in verdicts.iter() {
         let file = &files[verdict.file];
@@ -747,6 +753,20 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                 });
             }
             super::successors::VerdictKind::Recover(reason) => {
+                if verdict.keep_moving {
+                    emit_keep_moving_recover(
+                        plan,
+                        completed,
+                        day_task_lines,
+                        day_relative,
+                        index,
+                        verdict,
+                        file,
+                        task,
+                        reason,
+                    );
+                    continue;
+                }
                 if verdict.pull_in {
                     emit_pull_in_recover(
                         plan,
@@ -829,9 +849,47 @@ fn successor_row_fields(
             pull_in_hide_removed(&raw),
             pull_in_display_text(&task.description),
         )
+    } else if verdict.keep_moving {
+        (KEEP_MOVING_TRIGGER, false, task.description.clone())
     } else {
         (DEPENDENCY_TRIGGER, false, task.description.clone())
     }
+}
+
+fn emit_keep_moving_recover(
+    plan: &mut SuccessorPlan,
+    completed: &[CompletedTask],
+    day_task_lines: &BTreeMap<String, usize>,
+    day_relative: &Path,
+    index: &NoteIndex,
+    verdict: &DependentVerdict,
+    file: &FileScan,
+    task: &TaskLine,
+    reason: &'static str,
+) {
+    let block_id = task.block_id.clone().unwrap_or_default();
+    let line = day_line(
+        day_task_lines,
+        day_relative,
+        &file.relative_path,
+        &block_id,
+        task.line_index + 1,
+    );
+    plan.keep_moving.push(UnblockedRow {
+        note_path: file.relative_path.clone(),
+        block_id,
+        line,
+        text: task.description.clone(),
+        previous_status_symbol: task.status,
+        status_symbol: task.status,
+        inbox: is_inbox_note(&file.relative_path, &file.contents, index),
+        unblocked_by: predecessor_refs(completed, &verdict.preds),
+        link: None,
+        not_linked: Some(reason),
+        trigger: KEEP_MOVING_TRIGGER,
+        hide_removed: false,
+        offer: verdict.offer.as_ref().map(super::successors::offer_report),
+    });
 }
 
 /// `trigger` and `project` for a `waits_on` still-blocked row. A pull-in
