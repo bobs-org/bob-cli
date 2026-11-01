@@ -1931,6 +1931,14 @@ pub(super) fn completion_field_from_parts(
     }
     let third_end = third_start + third.part.len();
     let split = cursor.clamp(third_start, third_end) - third_start;
+    // A drawer replacement owns the glued `#` as well as the name, so a
+    // row's `#slug` or `#"TITLE"` swaps the whole selector; a Pomodoro
+    // name keeps its `#` outside the replacement.
+    let replacement_start = if third.context == CompletionContext::Drawer {
+        third_start - third.separator_len
+    } else {
+        third_start
+    };
     // Strip the project-note seal from the block ID handed to Pomodoro-name
     // completion, so `@route^id@#name` reports `id` rather than `id@`.
     let third_block = if right_is_block_id {
@@ -1941,14 +1949,32 @@ pub(super) fn completion_field_from_parts(
     // A partial literal completes on the literal's decoded text; the
     // replacement still covers the whole partial literal.
     let raw_query = &third.part[..split];
-    let query = if third.context == CompletionContext::PomodoroName
-        && super::pomodoro_literal::opens_exact_name(third.part)
+    let query = if matches!(
+        third.context,
+        CompletionContext::PomodoroName | CompletionContext::Drawer
+    ) && super::pomodoro_literal::opens_exact_name(third.part)
     {
-        let inner = raw_query
-            .strip_prefix('"')
-            .or_else(|| raw_query.strip_prefix('“'))
-            .unwrap_or(raw_query);
-        super::pomodoro_literal::decode_partial_literal_text(inner)
+        // A drawer's cursor past a closed literal queries the whole
+        // decoded name, never the closing quote with it.
+        let closed = (third.context == CompletionContext::Drawer)
+            .then(|| {
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    third.part,
+                    third.part.len(),
+                )
+            })
+            .flatten()
+            .filter(|lex| lex.complete && split >= lex.literal_len);
+        match closed {
+            Some(lex) => lex.decoded,
+            None => {
+                let inner = raw_query
+                    .strip_prefix('"')
+                    .or_else(|| raw_query.strip_prefix('“'))
+                    .unwrap_or(raw_query);
+                super::pomodoro_literal::decode_partial_literal_text(inner)
+            }
+        }
     } else {
         raw_query.to_string()
     };
@@ -1957,7 +1983,7 @@ pub(super) fn completion_field_from_parts(
         route: Some(parts.route_part.to_ascii_lowercase()),
         block_id: (!third_block.is_empty()).then(|| third_block.to_string()),
         query,
-        replacement: (third_start, third_end),
+        replacement: (replacement_start, third_end),
         bare_name: false,
     })
 }

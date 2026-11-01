@@ -24,7 +24,7 @@ struct Fixture {
 }
 
 /// A vault with one area (`cash`), one project (`dev`), open tasks
-/// with block IDs, task sections, and a daily note with open
+/// with block IDs, drawers, and a daily note with open
 /// Pomodoros; plus a plugins repo checkout and a priority config.
 fn fixture() -> Fixture {
     let temp = TempDir::new("bob-cli-complete-vault");
@@ -391,8 +391,8 @@ fn drawers_offer_exact_titles() {
     assert_eq!(
         stdout(&output),
         concat!(
-            "FIRST STEPS\t1 item\ttask sections\tspace\n",
-            "SECOND STEPS\t\ttask sections\tspace\n",
+            "FIRST STEPS\t1 item\tdrawers\tspace\n",
+            "SECOND STEPS\t\tdrawers\tspace\n",
         )
     );
 }

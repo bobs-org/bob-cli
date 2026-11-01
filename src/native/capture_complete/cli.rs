@@ -116,8 +116,9 @@ that item overrides it. Route completion is backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
 backed by the same scan as `bob capture-sections`. Drawer completion \
 covers '@route+id#prefix' and a bare '@route+id#' once the item has body text, backed by the same \
-scanner as `bob capture-drawers`; replacement text is the drawer \
-slug. Pomodoro-name completion covers '@route:id#prefix', a bare \
+scanner as `bob capture-drawers`; the replacement range and text cover the \
+`#` and the name (`#future-work`, or a quoted `#\"TITLE\"` when the slug does \
+not resolve back to the same drawer). Pomodoro-name completion covers '@route:id#prefix', a bare \
 '@route:id#', '@route:#prefix', '@route^id@#prefix', and a bare '@route^id@#'; \
 Today rows come from `bob capture-pomodoros`: link-name completion offers \
 open entries, while start-name completion also offers completed names as \
@@ -225,7 +226,8 @@ note, and Template rows; bare-URL items also offer Listen. A typed letter \
 filters the rows, and opening the menu never reads the clipboard. Bare `#` \
 opens `task_type` with no row preselected. Every success response reports \
 `grammar: 3` while `schema_version` stays 1; an empty bare `#` or `%` \
-query adds `initial_selection: \"none\"`. \
+query, or an empty drawer query after `@route+id#`, adds \
+`initial_selection: \"none\"`. \
 A solo leading `:` token \
 completes `task_link`: every linkable open task (Ready, Blocked, Next, In \
 Progress) in the routable inbox, area, and non-terminal project notes, in \
@@ -240,9 +242,13 @@ first-level bullet of a project-note item completes as `project_task_block_id`, 
 parent task returns a successful empty list plus one bounded warning. Other \
 contexts still rank \
 exact prefix matches before substring matches, case-insensitively, while \
-keeping each discovery source's stable order. Drawer ranking uses \
-slug-prefix matches first, then slug-substring matches, in document order \
-inside each tier.\n\n\
+keeping each discovery source's stable order. Drawer rows come in three \
+groups: `task` (the target's drawers), `recent` (catalog drawers the task \
+lacks), and one `new` row for a typed name nothing claims; each group ranks \
+key- or slug-prefix matches first, then substring matches, in document order \
+inside each tier. Rows carry Bob-authored `detail` and `consequence` copy, \
+`creates`, `cursor_after`, and a `refused` reason straight from the commit's \
+resolver; the response adds `target` and the decoded `query`.\n\n\
 When the cursor is inside an Obsidian wikilink, wikilink completion takes \
 precedence over capture-marker completion. Note completion covers `[[note` \
 and offers Markdown note paths, stems, and aliases. Heading and block \

@@ -138,7 +138,7 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
   - `capture --task` and `capture-drawers --block-id`: open tasks
     of the routed note by block ID, grouped `tasks in <route>`.
   - `capture --drawer`: ALL-CAPS child drawers of the `--task`
-    parent by exact title, grouped `task sections`.
+    parent by exact title, grouped `drawers`.
   - `capture-pomodoro-name --pomodoro-ref`: open Pomodoros by
     stale-safe ref, grouped `open Pomodoros`.
   - `plugins sync --plugin`: directory names under
@@ -457,13 +457,32 @@ another thin client of that service (see `docs/capture.md`
   `task_type` context at either item edge and accepts full `#<slug>` or
   quoted `#"NAME"` replacements. A free-standing bare `#` at an item edge
   is an incomplete type marker and opens the type menu with an empty query.
-  Marker-only `@route+block-id#` uses this context for
-  an existing-task Ensure Next, and `@route^block-id#` (the new-task attached
-  form, including an empty `#`) uses it too. Empty queries list configured types in
+  A separate `#type` after `@route+block-id` (marker-only, to Ensure Next, or
+  with body text, to retype the target) and after `@route^block-id` (the new
+  task) uses this context; a `#` glued to the ID is a drawer instead. Empty
+  queries list configured types in
   config order; hidden types appear on exact matches. An unknown typed row
   carries `refused: "type_not_configured"` and near-name suggestions. Shell completion puts
   them in the `task types` group, with the last-use date and day count or
   `never used`, plus the current-task or inherited-type annotation.
+- **`#` glued to `@route+block-id` completes drawers.** The `drawer`
+  context opens with the caret inside or at the end of the glued `#…`, with or
+  without body text, and the replacement covers the `#` and the name (a quoted
+  partial literal included), with no trailing space. Rows come in three groups:
+  `task` (the target's own drawers, in document order; on a `^prj` target, the
+  note's eligible `##` sections), `recent` (catalog drawers the task lacks: an
+  empty query lists at most eight keys used in at least two notes, a typed query
+  searches the whole catalog by key or slug, prefix before substring), and one
+  `new` row for a nonempty typed name no other row claims. Bob authors each
+  row's `detail` (`2 notes`, `empty`, `used in 12 notes · 3 days ago`) and
+  `consequence` (`Adds after "2 GB RAM" in REQUIREMENTS`, `Creates FUTURE WORK
+  under ^bar`). A row's `replacement` is `#slug` only when the slug resolves
+  back to exactly that drawer on the whole target, else `#"TITLE"`. `refused` is
+  the commit's own reason for a reserved, near-duplicate, or ambiguous choice,
+  so accepting a row and committing always agree. An empty query reports
+  `initial_selection: "none"`; a missing, duplicate, or non-task target returns
+  its diagnostic and no rows. Zsh lists the target's own unrefused drawers in
+  the `drawers` group.
 - **`%` completes capture directives.** A bare `%` opens the Clip (`%c`),
   Pomodoro note (`%n`), and Template (`%t`) rows; a bare-URL reference also
   offers Listen (`%l`). Bob supplies the row labels, details, and disabled
@@ -499,7 +518,7 @@ another thin client of that service (see `docs/capture.md`
   `@dev:remote-power`. Descriptions come from the row: task text, route
   kind, `new block ID`, or Pomodoro time and name. Groups are human
   words: `inbox` / `areas` / `projects`, `sections in dev`,
-  `tasks in dev`, `parent tasks`, `new task ID`, `task sections`,
+  `tasks in dev`, `parent tasks`, `new task ID`, `drawers`,
   `open Pomodoros`, `active tasks`, `prerequisite tasks`, `blocked tasks`,
   `links to`, `linked from`, and `relation labels`. A value ending in `:` `+` `#` `=` `^` is `nospace`;
   a complete marker gets a space. A quoted word carrying its own prefix

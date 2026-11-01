@@ -12,6 +12,7 @@ use crate::native::env::TestEnvGuard;
 mod active_tasks;
 mod blocked_tasks;
 mod directives;
+mod drawers;
 mod output;
 mod parent_tasks;
 mod pomodoros;

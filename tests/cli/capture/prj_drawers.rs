@@ -474,14 +474,14 @@ fn capture_complete_prj_drawer_menu_lists_h2_sections() {
     // Structural `## Pomodoros` is excluded; the rest list in order.
     assert_eq!(titles, ["Requirements", "Q&A"]);
     assert_eq!(json["candidates"][0]["group"], "task");
-    assert_eq!(json["candidates"][0]["replacement"], "requirements");
+    assert_eq!(json["candidates"][0]["replacement"], "#requirements");
     assert_eq!(json["candidates"][0]["entry_count"], 2);
     assert_eq!(
         json["candidates"][0]["consequence"],
         "Adds to ## Requirements"
     );
     // `Q&A` has no slug spelling, so the row carries a quoted literal.
-    assert_eq!(json["candidates"][1]["replacement"], "\"Q&A\"");
+    assert_eq!(json["candidates"][1]["replacement"], "#\"Q&A\"");
     assert_eq!(json["candidates"][1]["entry_count"], 0);
     assert_eq!(json["target"]["block_id"], "prj");
 
@@ -502,14 +502,19 @@ fn capture_complete_prj_drawer_menu_lists_h2_sections() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("menu JSON");
+    let candidates = json["candidates"].as_array().expect("candidates array");
+    assert_eq!(candidates.len(), 2, "{json}");
+    assert_eq!(candidates[0]["title"], "Requirements");
+    assert_eq!(candidates[0]["group"], "task");
+    // The typed prefix of an existing section is a refused new row, never
+    // a plausible create.
+    assert_eq!(candidates[1]["group"], "new");
+    assert_eq!(candidates[1]["title"], "REQ");
     assert_eq!(
-        json["candidates"]
-            .as_array()
-            .expect("candidates array")
-            .len(),
-        1
+        candidates[1]["refused"],
+        "did you mean `#requirements`? write `#\"Requirements\"` to create Requirements"
     );
-    assert_eq!(json["candidates"][0]["title"], "Requirements");
+    assert!(json.get("initial_selection").is_none());
 }
 
 #[test]

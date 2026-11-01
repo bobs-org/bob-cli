@@ -1,4 +1,4 @@
-//! Forced section, task section, sections and tasks.
+//! Forced section, drawer, sections and tasks.
 
 use crate::support::*;
 use sha2::Digest;

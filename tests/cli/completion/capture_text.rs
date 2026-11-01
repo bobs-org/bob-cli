@@ -17,7 +17,7 @@ struct Fixture {
 }
 
 /// A vault with an area (`cash`), a project (`dev`), open tasks with block
-/// IDs (plus one without, for the safe-rows gate), task sections, active
+/// IDs (plus one without, for the safe-rows gate), drawers, active
 /// tasks (`/` and `*`), and a daily note with open Pomodoros.
 fn fixture() -> Fixture {
     let temp = TempDir::new("bob-cli-complete-capture-text");
@@ -383,7 +383,7 @@ fn drawers_complete_after_id_hash() {
         values.contains(&"@cash+fix-sink#first-steps".to_string()),
         "{values:?}"
     );
-    assert!(groups(&output).contains(&"task sections".to_string()));
+    assert!(groups(&output).contains(&"drawers".to_string()));
 }
 
 #[test]

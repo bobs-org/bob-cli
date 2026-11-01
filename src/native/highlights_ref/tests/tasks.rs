@@ -712,7 +712,7 @@ fn annotation_task_batches_append_in_insertion_order() {
 }
 
 #[test]
-fn annotation_task_section_stays_after_ref_child_lines() {
+fn annotation_tasks_stay_after_ref_child_lines() {
     let child = "\t- ⛓️ **DEPENDS ON:** [[other#^dep]]";
     let body = format!(
         "# Example\n\n- [?] #task #ref [[lib/example.pdf]] [dependsOn:: dep] #hide ^ref\n{child}\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n"

@@ -5,6 +5,7 @@ mod candidates;
 mod cli;
 mod complete;
 mod directives;
+mod drawers;
 mod engine;
 mod model;
 mod pomodoros;

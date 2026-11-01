@@ -438,10 +438,12 @@ pub(super) fn candidate_lines(
         Candidates::Drawer(items) => items
             .iter()
             .map(|item| {
-                (
-                    item.replacement.clone(),
-                    format!("{}  {} items", item.title, item.entry_count),
-                )
+                let note = match item.refused.as_deref() {
+                    Some(reason) => format!("refused: {reason}"),
+                    None if item.detail.is_empty() => item.group.clone(),
+                    None => format!("{}  · {}", item.detail, item.group),
+                };
+                (item.replacement.clone(), format!("{}  {note}", item.title))
             })
             .collect(),
         Candidates::ActiveTask(items) => items

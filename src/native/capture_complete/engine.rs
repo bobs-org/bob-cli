@@ -3,11 +3,11 @@ use std::path::Path;
 use super::{
     candidates::{
         active_task_candidates, apply_relationship_picker,
-        blocked_task_candidates, dependency_candidates, drawer_candidates,
-        link_candidates, relation_candidates, relation_label_suggestions,
-        route_candidates, section_candidates, task_candidates,
-        task_complete_candidates, task_goto_candidates, task_link_candidates,
-        task_parent_candidates, TaskSearch,
+        blocked_task_candidates, dependency_candidates, link_candidates,
+        relation_candidates, relation_label_suggestions, route_candidates,
+        section_candidates, task_candidates, task_complete_candidates,
+        task_goto_candidates, task_link_candidates, task_parent_candidates,
+        TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
@@ -335,11 +335,14 @@ fn build_result_inner(
         }
         CompletionContext::Drawer => {
             let route = field.route.as_deref().expect("route resolved");
-            drawer_candidates(
+            super::drawers::drawer_candidates(
                 bob_dir,
                 route,
                 field.block_id.as_deref(),
                 &field.query,
+                raw_text[field.replacement.0..]
+                    .strip_prefix('#')
+                    .is_some_and(|name| name.starts_with(['"', '“'])),
             )?
         }
         CompletionContext::PomodoroName => {
@@ -573,6 +576,7 @@ fn build_result_inner(
             | CompletionContext::TaskComplete
             | CompletionContext::TaskType
             | CompletionContext::Directive
+            | CompletionContext::Drawer
             | CompletionContext::RelationTo
             | CompletionContext::RelationFrom
             | CompletionContext::RelationLabel
@@ -640,6 +644,12 @@ fn build_result_inner(
         });
     if field.bare_name {
         apply_bare_start_name_replacements(&mut candidates);
+    }
+    if field.context == CompletionContext::Drawer {
+        super::drawers::place_cursor_after(
+            &mut candidates,
+            field.replacement.0,
+        );
     }
 
     let drawer_target = if field.context == CompletionContext::Drawer {

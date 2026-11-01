@@ -1,4 +1,4 @@
-//! Capture task id and task sections.
+//! Capture task id and drawers.
 
 use crate::support::*;
 use std::fs;

@@ -6692,10 +6692,15 @@ covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate
-`replacement` is the drawer slug (`future-work` for `FUTURE WORK`) or a quoted literal when the slug is ambiguous.
-On the project note's own `^prj` task the menu lists the note's eligible
-`##` sections instead, with `entry_count` set to their top-level list items
-and a `consequence` that names the section (`Adds to ## Requirements`).
+`replacement` covers the `#` and the name, as `#slug` (`#future-work` for
+`FUTURE WORK`) or a quoted `#"TITLE"` when the slug does not resolve back to
+exactly that drawer, and the field's `replacement` range starts at the `#`.
+Rows form three groups: `task` (the target's drawers), `recent` (catalog
+drawers the task lacks), and `new` (one row for a typed name nothing claims);
+an empty query adds `initial_selection: "none"`. On the project note's own
+`^prj` task the `task` group lists the note's eligible `##` sections instead,
+with `entry_count` set to their top-level list items and a `consequence` that
+names the section (`Adds to ## Requirements`).
 Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
 `@route:#prefix`, and `@route:id=name` (e.g. `@work:outline=bu|`); only the route
 must already resolve because the Pomodoro list does not depend on the block
@@ -7009,8 +7014,8 @@ plus one bounded `warnings` entry; the warning names the route and block ID
 without logging draft text or the task description.
 Route, section, and wikilink candidates rank exact prefix matches before
 substring matches, case-insensitively, while keeping each discovery source's
-stable order. Drawer candidates rank slug-prefix matches first, then
-slug-substring matches, in document order inside each tier. Task candidates in `@route+` search block ID (when present),
+stable order. Drawer candidates rank key- or slug-prefix matches first, then
+substring matches, in document order inside each tier of each group. Task candidates in `@route+` search block ID (when present),
 task text, section, and status name or symbol the same way, but identified
 tasks always stay ahead of unidentified tasks and prefix matches precede
 substring matches inside each of those two groups. A non-matching candidate
@@ -7206,11 +7211,19 @@ deduplicating or synthesizing the closing `]]`. A route candidate has `route`,
 `label`, `kind` (`inbox`, `area`, or `project`), and nullable `status`. A
 section candidate has `title` and `level`. A drawer candidate has
 `title` (the original ALL-CAPS body), `key`, `slug`, `route`, nullable `block_id`,
-`text` (the parent task description), `line`, `entry_count`, `group`,
-`detail`, `creates`, and an optional `consequence`; `replacement`
-is the slug, or a quoted literal when the slug does not resolve back to the
-row. On a `^prj` parent the rows are the note's eligible `##` sections
-instead of task-child drawers. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
+`text` (the parent task description), `line`, `entry_count`, `group`
+(`task`, `recent`, or `new`), `detail`, `creates`, and optional
+`note_count` and `last_seen` (recent rows), `refused`, `consequence`, and
+`cursor_after`. `detail` and `consequence` are Bob-authored with correct
+singular and plural (`1 note`, `used in 12 notes · 3 days ago`, `Adds after
+"2 GB RAM" in REQUIREMENTS`, `Creates FUTURE WORK under ^bar`); `creates` is
+true on `recent` and `new` rows; `refused` is the commit resolver's reason for
+a reserved, near-duplicate, or ambiguous choice. `replacement` is `#slug`,
+or a quoted `#"TITLE"` when the slug does not resolve back to exactly that
+drawer; it covers the `#` and the name, and `cursor_after` is the draft offset
+just past it. The response adds `target: {route, block_id, text}`, and a
+`query` holding the decoded drawer query. On a `^prj` parent the `task` rows
+are the note's eligible `##` sections instead of task-child drawers. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
 `requires_name`, optional `creates_pomodoro` (absent or false on existing
 rows), nullable `line`, `state`, `status_symbol`, nullable `time_range`,
 `placeholder`, `is_current`, `child_count`, and `match_count`; selectable named

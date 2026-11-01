@@ -440,23 +440,23 @@ fn completion_field_uses_byte_offsets_after_multibyte_prefix_text() {
 fn drawer_completes_after_hash_on_a_sub_bullet_marker() {
     let raw = "note @Cash+goog#req";
     let hash = raw.find('#').expect("hash");
-    let completion = field(raw, raw.len()).expect("task section");
+    let completion = field(raw, raw.len()).expect("drawer");
     assert_eq!(completion.context, CompletionContext::Drawer);
     assert_eq!(completion.route.as_deref(), Some("cash"));
     assert_eq!(completion.block_id.as_deref(), Some("goog"));
     assert_eq!(completion.query, "req");
-    assert_eq!(completion.replacement, (hash + 1, raw.len()));
+    assert_eq!(completion.replacement, (hash, raw.len()));
 }
 
 #[test]
-fn empty_selector_after_hash_is_a_zero_length_drawer_field() {
+fn empty_selector_after_hash_is_a_one_byte_drawer_field() {
     let raw = "note @Cash+goog#";
-    let completion = field(raw, raw.len()).expect("task section");
+    let completion = field(raw, raw.len()).expect("drawer");
     assert_eq!(completion.context, CompletionContext::Drawer);
     assert_eq!(completion.route.as_deref(), Some("cash"));
     assert_eq!(completion.block_id.as_deref(), Some("goog"));
     assert_eq!(completion.query, "");
-    assert_eq!(completion.replacement, (raw.len(), raw.len()));
+    assert_eq!(completion.replacement, (raw.len() - 1, raw.len()));
 }
 
 #[test]
@@ -485,7 +485,7 @@ fn hash_after_a_bare_block_id_marker_completes_a_task_type() {
     // Once the item has body text, the same glued `#` keeps its drawer
     // meaning -- unaffected by the toggle rule.
     let with_body = "note @Cash+goog#bu";
-    let section = field(with_body, with_body.len()).expect("task section");
+    let section = field(with_body, with_body.len()).expect("drawer");
     assert_eq!(section.context, CompletionContext::Drawer);
 }
 
@@ -540,7 +540,7 @@ fn cursor_in_route_or_block_id_of_three_component_marker_keeps_existing_contexts
 }
 
 #[test]
-fn hash_separator_is_not_part_of_block_id_or_section_replacement() {
+fn hash_ends_the_block_id_and_opens_the_drawer_replacement() {
     let raw = "note @Cash+goog#";
     let plus = raw.find('+').expect("plus");
     let hash = raw.find('#').expect("hash");
@@ -550,17 +550,41 @@ fn hash_separator_is_not_part_of_block_id_or_section_replacement() {
 
     let section = field(raw, hash + 1).expect("cursor after hash");
     assert_eq!(section.context, CompletionContext::Drawer);
-    assert_eq!(section.replacement, (hash + 1, hash + 1));
+    assert_eq!(section.replacement, (hash, hash + 1));
 }
 
 #[test]
 fn empty_block_id_with_section_still_yields_a_drawer_field() {
     let raw = "note @Cash+#req";
-    let completion = field(raw, raw.len()).expect("task section");
+    let completion = field(raw, raw.len()).expect("drawer");
     assert_eq!(completion.context, CompletionContext::Drawer);
     assert_eq!(completion.route.as_deref(), Some("cash"));
     assert_eq!(completion.block_id, None);
     assert_eq!(completion.query, "req");
+}
+
+#[test]
+fn quoted_drawer_literal_decodes_its_query_and_replaces_the_quotes() {
+    let hash = "note @Cash+goog".len();
+
+    // A partial literal queries its decoded text; the replacement still
+    // covers the `#` and the whole partial literal.
+    let partial = "note @Cash+goog#\"FUTURE W";
+    let field_partial = field(partial, partial.len()).expect("partial");
+    assert_eq!(field_partial.context, CompletionContext::Drawer);
+    assert_eq!(field_partial.query, "FUTURE W");
+    assert_eq!(field_partial.replacement, (hash, partial.len()));
+
+    // A closed literal queries the whole name, never its closing quote.
+    let closed = "note @Cash+goog#\"Q&A\"";
+    let field_closed = field(closed, closed.len()).expect("closed");
+    assert_eq!(field_closed.query, "Q&A");
+    assert_eq!(field_closed.replacement, (hash, closed.len()));
+
+    // A cursor inside the closed literal queries the text before it.
+    let inside = field(closed, hash + 3).expect("inside");
+    assert_eq!(inside.query, "Q");
+    assert_eq!(inside.replacement, (hash, closed.len()));
 }
 
 #[test]
@@ -576,10 +600,10 @@ fn completion_field_stays_on_boundaries_of_a_three_component_marker() {
         let _ = field(raw, cursor);
     }
     let hash = raw.find('#').expect("hash");
-    let section = field(raw, raw.len()).expect("task section");
+    let section = field(raw, raw.len()).expect("drawer");
     assert_eq!(section.context, CompletionContext::Drawer);
     assert_eq!(section.block_id.as_deref(), Some("goog-exit"));
-    assert_eq!(section.replacement, (hash + 1, raw.len()));
+    assert_eq!(section.replacement, (hash, raw.len()));
 }
 
 #[test]
@@ -599,7 +623,7 @@ fn leading_three_component_marker_completes_each_component() {
 
     let section = field(raw, hash + 2).expect("section");
     assert_eq!(section.context, CompletionContext::Drawer);
-    assert_eq!(section.replacement, (hash + 1, space));
+    assert_eq!(section.replacement, (hash, space));
     assert_eq!(section.query, "r");
 }
 

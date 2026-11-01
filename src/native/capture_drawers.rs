@@ -168,7 +168,7 @@ pub(crate) struct DrawerCatalogRecord {
     pub(crate) notes: Vec<String>,
 }
 
-fn drawer_now_unix() -> u64 {
+pub(crate) fn drawer_now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -769,30 +769,6 @@ pub(crate) fn h2_consequence(title: &str) -> String {
     format!("Adds to ## {title}")
 }
 
-/// Completion replacement for an H2 row: the slug when it parses back to
-/// exactly this section, else a quoted literal the drawer lexer takes
-/// verbatim.
-pub(crate) fn h2_replacement(drawers: &[Drawer], drawer: &Drawer) -> String {
-    if is_drawer_slug(&drawer.slug) {
-        let empty: BTreeMap<String, DrawerCatalogRecord> = BTreeMap::new();
-        if let Ok(resolved) = resolve_drawer_for_write(
-            drawers,
-            &drawer.slug,
-            false,
-            &empty,
-            "",
-            None,
-            DrawerScope::ProjectSection,
-        ) && let DrawerResolveOutcome::Existing { drawer: found } =
-            &resolved.outcome
-            && found.line == drawer.line
-        {
-            return drawer.slug.clone();
-        }
-    }
-    format!("\"{}\"", drawer.title)
-}
-
 fn parse_drawer_catalog_version_and_hash(
     version_and_hash: &str,
 ) -> Option<(u32, &str)> {
@@ -911,37 +887,57 @@ pub(crate) fn drawer_catalog_recent<'a>(
         .collect()
 }
 
-/// Typed query: prefix before substring, on key or slug.
-// TODO(bob-cli-ey.2): wire into drawer completion menu (task/recent/new).
-#[allow(dead_code)]
+/// How a typed drawer query matches a drawer's key or slug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DrawerMatch {
+    Prefix,
+    Substring,
+}
+
+/// Match a typed query against a drawer's key or slug: the key by its
+/// uppercased text, the slug by its hyphenated lowercase form, so both
+/// `fut` and `FUTURE W` find `FUTURE WORK`. An empty query matches nothing;
+/// callers list their unfiltered rows themselves.
+pub(crate) fn drawer_query_match(
+    key: &str,
+    slug: &str,
+    query: &str,
+) -> Option<DrawerMatch> {
+    let q = capture_language::normalize_task_text(query).to_ascii_uppercase();
+    let q_slug = capture_language::selector_slug(query);
+    if q.is_empty() && q_slug.is_empty() {
+        return None;
+    }
+    if (!q.is_empty() && key.starts_with(&q))
+        || (!q_slug.is_empty() && slug.starts_with(&q_slug))
+    {
+        return Some(DrawerMatch::Prefix);
+    }
+    if (!q.is_empty() && key.contains(&q))
+        || (!q_slug.is_empty() && slug.contains(&q_slug))
+    {
+        return Some(DrawerMatch::Substring);
+    }
+    None
+}
+
+/// Typed query: prefix before substring, on key or slug, in catalog rank
+/// order within each tier.
 pub(crate) fn drawer_catalog_search<'a>(
     records: &'a BTreeMap<String, DrawerCatalogRecord>,
     query: &str,
     exclude_keys: &HashSet<String>,
 ) -> Vec<&'a DrawerCatalogRecord> {
-    let q = query.trim().to_ascii_uppercase();
-    let q_slug = capture_language::selector_slug(query);
-    if q.is_empty() && q_slug.is_empty() {
-        return Vec::new();
-    }
     let mut prefix = Vec::new();
     let mut substr = Vec::new();
     for record in rank_drawer_catalog(records) {
         if exclude_keys.contains(&record.key) {
             continue;
         }
-        let key = &record.key;
-        let slug = &record.slug;
-        let is_prefix = (!q.is_empty() && key.starts_with(&q))
-            || (!q_slug.is_empty() && slug.starts_with(&q_slug));
-        if is_prefix {
-            prefix.push(record);
-            continue;
-        }
-        let is_sub = (!q.is_empty() && key.contains(&q))
-            || (!q_slug.is_empty() && slug.contains(&q_slug));
-        if is_sub {
-            substr.push(record);
+        match drawer_query_match(&record.key, &record.slug, query) {
+            Some(DrawerMatch::Prefix) => prefix.push(record),
+            Some(DrawerMatch::Substring) => substr.push(record),
+            None => {}
         }
     }
     prefix.into_iter().chain(substr).collect()
@@ -998,11 +994,7 @@ pub(crate) fn resolve_drawer_for_write(
     if exact {
         let key = drawer_key(selector_text);
         if is_reserved_drawer_key(&key) {
-            return Err(DrawerResolveError::new(
-                "reserved_drawer",
-                "LINKS is managed by Bob; name the drawer something else"
-                    .to_string(),
-            ));
+            return Err(reserved_drawer_error(&key, scope));
         }
         // Exact key matching.
         let matches: Vec<&Drawer> =
@@ -1084,13 +1076,10 @@ pub(crate) fn resolve_drawer_for_write(
     }
     // No match: reserved?
     // A slug whose key (either interpretation) is reserved refuses.
-    if is_reserved_drawer_key(&key_plain) || is_reserved_drawer_key(&key_spaced)
-    {
-        return Err(DrawerResolveError::new(
-            "reserved_drawer",
-            "LINKS is managed by Bob; name the drawer something else"
-                .to_string(),
-        ));
+    for key in [&key_plain, &key_spaced] {
+        if is_reserved_drawer_key(key) {
+            return Err(reserved_drawer_error(key, scope));
+        }
     }
     // Near-duplicate guard (slug only): strict prefix or edit distance 1.
     if let Some(near) = find_near_duplicate_drawer(drawers, &slug) {
@@ -1127,6 +1116,18 @@ pub(crate) fn resolve_drawer_for_write(
         created: true,
         warning,
     })
+}
+
+/// The `reserved_drawer` refusal for a managed key, naming the key the
+/// writer would have used.
+fn reserved_drawer_error(key: &str, scope: DrawerScope) -> DrawerResolveError {
+    DrawerResolveError::new(
+        "reserved_drawer",
+        format!(
+            "`{key}` is managed by Bob; name the {} something else",
+            scope.noun()
+        ),
+    )
 }
 
 fn find_near_duplicate_drawer<'a>(
@@ -1185,23 +1186,26 @@ fn near_catalog_warning(
     scope: DrawerScope,
 ) -> Option<String> {
     let noun = scope.noun();
-    for (key, record) in catalog {
-        if key == new_key {
-            continue;
-        }
-        if record.note_count < 2 {
-            continue;
-        }
-        if crate::native::note_tasks::bounded_levenshtein(new_key, key, 2)
-            .is_some()
-        {
-            return Some(format!(
-                "new {noun} {new_key} · did you mean {}?",
-                record.title
-            ));
-        }
-    }
-    None
+    near_catalog_title(new_key, catalog)
+        .map(|title| format!("new {noun} {new_key} · did you mean {title}?"))
+}
+
+/// Title of a catalog key within edit distance 2 of `new_key` that is used
+/// in at least two notes: the typo hint behind `drawer_near_catalog`.
+pub(crate) fn near_catalog_title(
+    new_key: &str,
+    catalog: &BTreeMap<String, DrawerCatalogRecord>,
+) -> Option<String> {
+    catalog
+        .iter()
+        .filter(|(key, record)| {
+            key.as_str() != new_key && record.note_count >= 2
+        })
+        .find(|(key, _)| {
+            crate::native::note_tasks::bounded_levenshtein(new_key, key, 2)
+                .is_some()
+        })
+        .map(|(_, record)| record.title.clone())
 }
 
 /// Creation title for `scope`: ALL-CAPS drawer titles stay as resolved,
@@ -1412,6 +1416,27 @@ pub(crate) fn drawer_insertion(
         offset,
         indentation,
     }
+}
+
+/// Text of the last direct entry a capture lands after in `drawer`, or
+/// `None` for an empty drawer. Managed logs never count: a capture lands
+/// before them.
+pub(crate) fn drawer_last_entry_text(
+    contents: &str,
+    drawer: &Drawer,
+) -> Option<String> {
+    let lines = line_spans(contents);
+    let insertion = drawer_insertion(contents, drawer);
+    direct_child_list_indexes(&lines, drawer.line_index(), drawer.block_end)
+        .into_iter()
+        .filter(|&index| line_start(&lines, index) < insertion.offset)
+        .filter(|&index| {
+            parse_managed_task_log_marker(lines[index].text).is_none()
+        })
+        .next_back()
+        .and_then(|index| list_item_body(lines[index].text))
+        .map(capture_language::normalize_task_text)
+        .filter(|text| !text.is_empty())
 }
 
 /// Title of a list-item body when it is a drawer, else `None`.
@@ -2049,6 +2074,106 @@ mod tests {
             .iter()
             .find(|drawer| drawer.title == title)
             .unwrap_or_else(|| panic!("missing drawer {title:?}"))
+    }
+
+    #[test]
+    fn query_matches_a_key_or_slug_by_prefix_before_substring() {
+        let m = |query: &str| {
+            drawer_query_match("FUTURE WORK", "future-work", query)
+        };
+        assert_eq!(m("fut"), Some(DrawerMatch::Prefix));
+        assert_eq!(m("FUTURE W"), Some(DrawerMatch::Prefix));
+        assert_eq!(m("future-wo"), Some(DrawerMatch::Prefix));
+        assert_eq!(m("work"), Some(DrawerMatch::Substring));
+        assert_eq!(m("e w"), Some(DrawerMatch::Substring));
+        assert_eq!(m("perf"), None);
+        // An empty query matches nothing; callers list their own rows.
+        assert_eq!(m(""), None);
+        assert_eq!(m("  "), None);
+    }
+
+    #[test]
+    fn catalog_search_ranks_prefix_tier_first_and_skips_excluded_keys() {
+        let record = |key: &str, notes: u64| DrawerCatalogRecord {
+            key: key.to_string(),
+            title: key.to_string(),
+            slug: capture_language::selector_slug(key),
+            note_count: notes,
+            recent_count: notes,
+            ..DrawerCatalogRecord::default()
+        };
+        let records: BTreeMap<String, DrawerCatalogRecord> = [
+            record("SUB FUTURE", 9),
+            record("FUTURE ONE", 1),
+            record("FUTURE TWO", 5),
+            record("OTHER", 9),
+        ]
+        .into_iter()
+        .map(|record| (record.key.clone(), record))
+        .collect();
+        let exclude: HashSet<String> =
+            ["FUTURE TWO".to_string()].into_iter().collect();
+        let keys: Vec<&str> =
+            drawer_catalog_search(&records, "future", &exclude)
+                .into_iter()
+                .map(|record| record.key.as_str())
+                .collect();
+        assert_eq!(keys, ["FUTURE ONE", "SUB FUTURE"]);
+        assert!(drawer_catalog_search(&records, "", &exclude).is_empty());
+    }
+
+    #[test]
+    fn last_entry_text_is_the_direct_entry_a_capture_lands_after() {
+        let contents = concat!(
+            "- [ ] #task Parent ^p\n",
+            "\t- REQUIREMENTS\n",
+            "\t\t- first\n",
+            "\t\t- last   entry\n",
+            "\t\t\t- nested\n",
+            "\t\t- \u{1f5d3}\u{fe0f} **SCHEDULE LOG**\n",
+            "\t- EMPTY\n",
+        );
+        let found = drawers_of(contents);
+        assert_eq!(
+            drawer_last_entry_text(
+                contents,
+                drawer_named(&found, "REQUIREMENTS")
+            )
+            .as_deref(),
+            Some("last entry")
+        );
+        assert_eq!(
+            drawer_last_entry_text(contents, drawer_named(&found, "EMPTY")),
+            None
+        );
+    }
+
+    #[test]
+    fn reserved_refusals_name_the_reserved_key() {
+        let empty = BTreeMap::new();
+        for (selector, exact, key) in [
+            ("tasks", false, "TASKS"),
+            ("links", false, "LINKS"),
+            ("Tasks", true, "TASKS"),
+        ] {
+            let error = resolve_drawer_for_write(
+                &[],
+                selector,
+                exact,
+                &empty,
+                "foo",
+                Some("bar"),
+                DrawerScope::Task,
+            )
+            .expect_err("reserved key refuses");
+            assert_eq!(error.code, "reserved_drawer");
+            assert_eq!(
+                error.message,
+                format!(
+                    "`{key}` is managed by Bob; name the drawer something else"
+                )
+            );
+        }
     }
 
     #[test]

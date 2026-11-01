@@ -7,23 +7,22 @@ use std::{
 use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
-        Candidates, CompleteError, DependencyCandidate, DrawerCandidate,
-        PickerRelationEntry, PickerRelationship, PickerRelationshipEntry,
-        RelationCandidate, RelationLabelSuggestion, RouteCandidate,
-        SectionCandidate, TaskCandidate, TaskCompleteCandidate,
-        TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
+        Candidates, CompleteError, DependencyCandidate, PickerRelationEntry,
+        PickerRelationship, PickerRelationshipEntry, RelationCandidate,
+        RelationLabelSuggestion, RouteCandidate, SectionCandidate,
+        TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate,
+        TaskLinkCandidate, TaskParentCandidate,
     },
     support::rank,
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
-    capture_completable_tasks, capture_dependency_tasks, capture_drawers,
+    capture_completable_tasks, capture_dependency_tasks,
     capture_language::{
         DependencyEntry, DependencyTarget, DependencyTargetKind,
         EditorItemParse, RelationDirection, RelationEntry,
     },
-    capture_link_tasks, capture_targets, capture_tasks, config,
-    note_tasks::{self, BlockIdLookup},
+    capture_link_tasks, capture_targets, capture_tasks, config, note_tasks,
     pomodoro, project_dependencies, task_complete, task_relations,
     task_status_hooks,
 };
@@ -308,142 +307,6 @@ pub(super) fn task_match_kind(
     } else {
         None
     }
-}
-
-pub(super) fn drawer_candidates(
-    bob_dir: &Path,
-    route: &str,
-    block_id: Option<&str>,
-    query: &str,
-) -> Result<(Candidates, Vec<String>), CompleteError> {
-    let Some(block_id) = block_id.filter(|id| !id.is_empty()) else {
-        return Ok((Candidates::Drawer(Vec::new()), Vec::new()));
-    };
-
-    let target = bob_dir.join(capture::route_label(route));
-    let contents = match fs::read_to_string(&target) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok((
-                Candidates::Drawer(Vec::new()),
-                vec![unresolvable_parent_warning(
-                    route,
-                    block_id,
-                    DrawerLookupFailure::MissingNote,
-                )],
-            ));
-        }
-        Err(error) => {
-            return Err(CompleteError::io(format!(
-                "read target {}: {error}",
-                target.display()
-            )));
-        }
-    };
-
-    let settings = note_tasks::read_settings(bob_dir);
-    let scan = note_tasks::scan(&contents, &settings);
-    let parent = match scan.by_block_id(block_id) {
-        BlockIdLookup::Found(task) => task,
-        BlockIdLookup::Missing => {
-            return Ok((
-                Candidates::Drawer(Vec::new()),
-                vec![unresolvable_parent_warning(
-                    route,
-                    block_id,
-                    DrawerLookupFailure::Missing {
-                        suggestion: scan
-                            .suggest_block_id(block_id)
-                            .map(str::to_string),
-                    },
-                )],
-            ));
-        }
-        BlockIdLookup::Duplicate(count) => {
-            return Ok((
-                Candidates::Drawer(Vec::new()),
-                vec![unresolvable_parent_warning(
-                    route,
-                    block_id,
-                    DrawerLookupFailure::Duplicate(count),
-                )],
-            ));
-        }
-        BlockIdLookup::NotATask { .. } => {
-            return Ok((
-                Candidates::Drawer(Vec::new()),
-                vec![unresolvable_parent_warning(
-                    route,
-                    block_id,
-                    DrawerLookupFailure::NotATask,
-                )],
-            ));
-        }
-    };
-
-    let parent_text = parent.description.clone();
-    let parent_block_id = parent.block_id.clone();
-    // On the project note's own `^prj` task, the drawer menu lists the
-    // note's eligible `##` sections instead of task-child drawers.
-    let prj = capture_drawers::is_prj_parent(&contents, parent);
-    let listed = if prj {
-        capture_drawers::project_h2_drawers(&contents)
-    } else {
-        capture_drawers::drawers(&contents, parent)
-    };
-    // The H2 replacement round-trips against every eligible section
-    // (ambiguity depends on the whole list), so keep the unranked list.
-    let full = prj.then(|| listed.clone());
-    let ranked = rank(listed, query, |section| section.slug.as_str());
-
-    Ok((
-        Candidates::Drawer(
-            ranked
-                .into_iter()
-                .map(|section| {
-                    let (replacement, group, detail, consequence) = if prj {
-                        let every =
-                            full.as_ref().expect("kept H2 list for ^prj");
-                        (
-                            capture_drawers::h2_replacement(every, &section),
-                            "task".to_string(),
-                            String::new(),
-                            Some(capture_drawers::h2_consequence(
-                                &section.title,
-                            )),
-                        )
-                    } else {
-                        (
-                            section.slug.clone(),
-                            "drawers".to_string(),
-                            String::new(),
-                            None,
-                        )
-                    };
-                    DrawerCandidate {
-                        replacement,
-                        title: section.title.clone(),
-                        slug: section.slug.clone(),
-                        route: route.to_string(),
-                        block_id: parent_block_id.clone(),
-                        text: parent_text.clone(),
-                        line: section.line,
-                        entry_count: section.entry_count,
-                        key: section.key.clone(),
-                        group,
-                        note_count: None,
-                        last_seen: None,
-                        detail,
-                        creates: false,
-                        refused: None,
-                        consequence,
-                        cursor_after: None,
-                    }
-                })
-                .collect(),
-        ),
-        Vec::new(),
-    ))
 }
 
 /// Active-task candidates for a solo leading `^` token: In Progress and
@@ -2141,44 +2004,6 @@ pub(super) fn task_complete_candidates(
         })
         .collect();
     (Candidates::TaskComplete(candidates), catalog.warnings)
-}
-
-pub(super) enum DrawerLookupFailure {
-    MissingNote,
-    Missing { suggestion: Option<String> },
-    Duplicate(usize),
-    NotATask,
-}
-
-/// One warning, no draft text, and no task description.
-pub(super) fn unresolvable_parent_warning(
-    route: &str,
-    block_id: &str,
-    failure: DrawerLookupFailure,
-) -> String {
-    match failure {
-        DrawerLookupFailure::MissingNote => {
-            format!("note does not exist: {route}.md")
-        }
-        DrawerLookupFailure::Missing { suggestion } => {
-            match suggestion {
-                Some(suggestion) => format!(
-                    "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}?"
-                ),
-                None => {
-                    format!("no task with block ID ^{block_id} in {route}.md")
-                }
-            }
-        }
-        DrawerLookupFailure::Duplicate(count) => {
-            format!(
-                "block ID ^{block_id} appears {count} times in {route}.md"
-            )
-        }
-        DrawerLookupFailure::NotATask => {
-            format!("^{block_id} in {route}.md is not a task")
-        }
-    }
 }
 
 pub(super) fn task_search_fields(

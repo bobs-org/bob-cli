@@ -361,11 +361,15 @@ fn capture_complete_drawer_json_covers_components_and_warnings() {
     let section_json: serde_json::Value =
         serde_json::from_str(stdout(&section).trim()).expect("json");
     assert_eq!(section_json["context"], "drawer");
+    // The replacement covers the glued `#` as well as the name.
     assert_eq!(
         section_json["replacement"],
-        serde_json::json!({"start": hash + 1, "end": raw.len()})
+        serde_json::json!({"start": hash, "end": raw.len()})
     );
-    assert_eq!(section_json["candidates"][0]["replacement"], "requirements");
+    assert_eq!(
+        section_json["candidates"][0]["replacement"],
+        "#requirements"
+    );
     assert_eq!(section_json["candidates"][0]["title"], "REQUIREMENTS");
     assert_eq!(section_json["candidates"][0]["slug"], "requirements");
     assert_eq!(section_json["candidates"][0]["route"], "foo");
@@ -396,7 +400,8 @@ fn capture_complete_drawer_json_covers_components_and_warnings() {
         .map(|candidate| candidate["title"].as_str().expect("title"))
         .collect();
     assert_eq!(titles, ["REQUIREMENTS", "FUTURE WORK"]);
-    assert_eq!(bare_json["candidates"][1]["replacement"], "future-work");
+    assert_eq!(bare_json["candidates"][1]["replacement"], "#future-work");
+    assert_eq!(bare_json["initial_selection"], "none");
 
     let empty_id = bob_command()
         .arg("capture-complete")

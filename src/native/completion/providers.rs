@@ -235,7 +235,7 @@ fn open_tasks(context: &Context, route: &str) -> Vec<note_tasks::NoteTask> {
 }
 
 /// ALL-CAPS child drawers of the `--task` parent, in document order
-/// under `task sections`. The value is the exact TITLE the flag
+/// under `drawers`. The value is the exact TITLE the flag
 /// expects.
 fn drawers(context: &Context) -> Vec<String> {
     let Some(route) = context.route.as_deref() else {
@@ -267,7 +267,7 @@ fn drawers(context: &Context) -> Vec<String> {
             protocol::candidate_line(
                 OsStr::new(&section.title),
                 &description,
-                "task sections",
+                "drawers",
                 false,
             )
         })

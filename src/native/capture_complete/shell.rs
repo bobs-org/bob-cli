@@ -2,11 +2,10 @@ use std::path::Path;
 
 use super::{
     candidates::{
-        active_task_candidates, blocked_task_candidates, drawer_candidates,
-        link_candidates, relation_candidates, relation_label_suggestions,
-        route_candidates, section_candidates, task_candidates,
-        task_complete_candidates, task_link_candidates, task_parent_candidates,
-        TaskSearch,
+        active_task_candidates, blocked_task_candidates, link_candidates,
+        relation_candidates, relation_label_suggestions, route_candidates,
+        section_candidates, task_candidates, task_complete_candidates,
+        task_link_candidates, task_parent_candidates, TaskSearch,
     },
     model::{Candidates, RouteCandidateKind},
     pomodoros::{apply_bare_start_name_replacements, pomodoro_candidates},
@@ -233,11 +232,10 @@ pub(crate) fn shell_completion(
             let Some(route) = field.route.as_deref() else {
                 return Ok(None);
             };
-            let (candidates, _) = drawer_candidates(
+            let (candidates, _) = super::drawers::target_drawer_candidates(
                 bob_dir,
                 route,
                 field.block_id.as_deref(),
-                "",
             )
             .map_err(|error| error.message.clone())?;
             let Candidates::Drawer(items) = candidates else {
@@ -255,7 +253,7 @@ pub(crate) fn shell_completion(
                     nospace: ends_in_continuation(&full),
                     full,
                     description: item.text.clone(),
-                    group: "task sections".to_string(),
+                    group: "drawers".to_string(),
                 });
             }
         }
