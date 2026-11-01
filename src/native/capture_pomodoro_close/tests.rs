@@ -232,6 +232,23 @@ fn nothing_carried_with_later_entry_creates_nothing() {
 }
 
 #[test]
+fn untracked_close_keeps_the_row_untracked() {
+    let contents = note(&["## Pomodoros", "- [ ] (**1200-1300**) — MEET"]);
+    let plan = close_at(&contents, 12, 37);
+    assert!(
+        plan.contents.contains("- [x] (**1200-1240**) — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(!plan.contents.contains("[t::]"), "{}", plan.contents);
+    let timing = plan.timing.expect("timing");
+    assert_eq!(timing.planned_duration, 60);
+    assert_eq!(timing.closed_duration, 40);
+    assert_eq!(timing.decremented_minutes, 20);
+    assert_eq!(timing.new_range_text.as_deref(), Some("(**1200-1240**)"));
+}
+
+#[test]
 fn deferred_lookalikes_are_not_removed() {
     let lookalikes = [
         "\t- ![[bob#^embedded]]#",

@@ -126,9 +126,11 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
 (`orange`, `violet`, `green`, `blue`, `gray`), never hex.
 
 - `pomodoro`: closed `[x]`/`[X]` ledger rows under `## Pomodoros`.
-  `measure: minutes` (default) uses each row's recorded `[t:: Nm]` first,
-  then its time-range estimate (flagged `partial`); `measure: count` counts
-  matching rows. `themes` / `exclude_themes` filter uppercase composite
+  `measure: minutes` (default) uses each row's recorded `[t:: Nm]` or
+  legacy stopwatch; a timed row without either is an **untracked session**
+  and leaves minutes, counts, homes aggregates, and the Day strip.
+  Range-less rows stay `missing`. `measure: count` counts matching tracked
+  rows. `themes` / `exclude_themes` filter uppercase composite
   components (`PLAN + SASE` splits its minutes across both parts, remainder to
   the first); unnamed rows are `(unnamed)`. Count mode attributes each row to
   its first matching component so parts add up to the total. `in:` /
@@ -300,8 +302,9 @@ adds a colored `■` before known type parts and a muted `□` for exempt types;
 
 - `ok`: a real observed value (including a real zero, e.g. an empty
   Pomodoros section).
-- `partial`: usable but estimated or incomplete (range-estimated minutes, a
-  clipped bucket mixing known and missing days).
+- `partial`: usable but incomplete (a clipped bucket mixing known and
+  missing days). Closed Pomodoro minutes no longer fall back to a
+  range estimate.
 - `missing`: no value and no history claim (no daily note, no matching
   instance, a journal gap, an invalid field).
 - `not_tracked`: before tracking began. Never a silent zero.
@@ -337,7 +340,8 @@ invalid, journal metrics report a `journal_limitation` instead.
 task counts once per limitation, never once per metric or day),
 `health.journal` (tracking start, malformed-line count, and per-host event
 counts with the latest timestamp and day), and `health.homes` (in-window
-`unlinked_minutes` / `unlinked_sessions` / `unfiled_links` /
+`unlinked_minutes` / `unlinked_sessions` / additive `untracked_sessions` /
+`unfiled_links` /
 `ambiguous_links` / `unresolved_links`, plus global
 `area_color_invalid` and hue-collision lists, and additive
 `root_field_invalid` / `root_field_not_root` lists keyed by

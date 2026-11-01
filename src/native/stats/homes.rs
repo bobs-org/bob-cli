@@ -90,6 +90,7 @@ impl<'a> HomesEngine<'a> {
             &session.links,
             true,
             counted_minutes,
+            session.untracked,
             daily_path,
             &mut self.resolver.borrow_mut(),
         );
@@ -198,8 +199,15 @@ impl<'a> HomesEngine<'a> {
             }
             let daily_path = Path::new(&note.path);
             for session in &note.closed_pomodoros {
-                let minutes =
-                    session.recorded_minutes.or(session.range_minutes);
+                if session.untracked {
+                    health.untracked_sessions =
+                        health.untracked_sessions.saturating_add(1);
+                }
+                let minutes = if session.untracked {
+                    Some(0)
+                } else {
+                    session.recorded_minutes
+                };
                 let attributed = self.attribute(session, daily_path, minutes);
                 if collect_sessions {
                     sessions.push(session_fact(
@@ -1154,6 +1162,7 @@ mod tests {
         assert!(!report.homes.contains_key("invalid.md"));
         assert_eq!(report.health.homes.unlinked_sessions, 2);
         assert_eq!(report.health.homes.unlinked_minutes, 35);
+        assert_eq!(report.health.homes.untracked_sessions, 0);
         assert_eq!(report.health.homes.unfiled_links, 1);
         assert!(!report.health.homes.hue_collisions.is_empty());
         assert!(report

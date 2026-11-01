@@ -116,7 +116,7 @@ fn agenda_current_golden() {
         concat!(
             "# Day\n",
             "## Pomodoros\n",
-            "- [x] (0700-0730) — EARLY\n",
+            "- [x] (0700-0730 [t:: 30m]) — EARLY\n",
             "\t- [[tasks#^closed-task]]\n",
             "- [ ] (**08:00 - 08:30** [t:: 30m]) — FIX\n",
             "\t- [[tasks#^deep-fix]]\n",
@@ -185,9 +185,9 @@ fn agenda_multiple_timed_golden() {
         concat!(
             "# Day\n",
             "## Pomodoros\n",
-            "- [ ] (0800-0830) — ONE\n",
+            "- [ ] (0800-0830 [t:: 30m]) — ONE\n",
             "\t- [[tasks#^deep-fix]]\n",
-            "- [ ] (0835-0905) — TWO\n",
+            "- [ ] (0835-0905 [t:: 30m]) — TWO\n",
             "\t- [[tasks#^second-task]]\n",
             "- [ ] () — NEXT UP\n",
         ),
@@ -211,7 +211,7 @@ fn agenda_heavy_golden() {
     }
     let day_file = vault.join("2026/20260828.md");
     let mut day = String::from("# Day\n## Pomodoros\n");
-    day.push_str("- [ ] (0800-0830) — FIRST\n");
+    day.push_str("- [ ] (0800-0830 [t:: 30m]) — FIRST\n");
     for link in 0..3 {
         day.push_str(&format!("\t- [[n{link}#^n{link}-t{link}]]\n"));
     }
@@ -242,7 +242,7 @@ fn agenda_all_lists_completed_with_empty_payloads() {
         concat!(
             "# Day\n",
             "## Pomodoros\n",
-            "- [x] (0700-0730) — EARLY\n",
+            "- [x] (0700-0730 [t:: 30m]) — EARLY\n",
             "\t- [[tasks#^closed-task]]\n",
             "- [ ] () — SASE\n",
         ),
@@ -383,7 +383,7 @@ fn agenda_budget_includes_real_zero_for_empty_and_completed_only_ledgers() {
 
     write_file(
         &day_file,
-        "# Day\n## Pomodoros\n- [x] (0700-0730) — CLOSED\n\t- [[tasks#^closed]]\n",
+        "# Day\n## Pomodoros\n- [x] (0700-0730 [t:: 30m]) — CLOSED\n\t- [[tasks#^closed]]\n",
     );
     let closed = agenda_json_with_config(&vault, &day_file, &["--all"], None);
     assert_eq!(closed["pomodoros"].as_array().unwrap().len(), 1);
@@ -627,7 +627,7 @@ fn agenda_budget_matches_plan_for_merged_exempt_alias_and_prose_links() {
             "  - [[tasks#^second]]\n",
             "- [ ] () — PLAN\n",
             "  - [[tasks#^exempt]]\n",
-            "- [x] (0700-0730) — CLOSED\n",
+            "- [x] (0700-0730 [t:: 30m]) — CLOSED\n",
             "  - [[tasks#^closed]]\n",
             "- [ ] ()\n",
             "  - [[tasks#^unnamed]]\n",

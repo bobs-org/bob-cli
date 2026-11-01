@@ -313,10 +313,16 @@ pub(crate) struct HealthReport {
     pub(crate) homes: HomesHealthReport,
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct HomesHealthReport {
     pub(crate) unlinked_minutes: u32,
     pub(crate) unlinked_sessions: u32,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub(crate) untracked_sessions: u32,
     pub(crate) unfiled_links: u32,
     pub(crate) ambiguous_links: u32,
     pub(crate) unresolved_links: u32,

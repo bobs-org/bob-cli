@@ -88,7 +88,17 @@ pub(crate) fn attribute_ledger_entry<S: HomeSource>(
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
     let links = session_links(contents, entry_line.saturating_sub(1));
-    attribute_session(name, &links, closed, minutes, daily_path, resolver)
+    let raw_line = contents
+        .lines()
+        .nth(entry_line.saturating_sub(1))
+        .unwrap_or("");
+    let untracked = matches!(
+        crate::native::capture::session_tracking(raw_line),
+        crate::native::capture::SessionTracking::Untracked
+    );
+    attribute_session(
+        name, &links, closed, minutes, untracked, daily_path, resolver,
+    )
 }
 
 pub(crate) fn attribute_session<S: HomeSource>(
@@ -96,6 +106,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
     links: &[SessionLink],
     closed: bool,
     minutes: Option<u32>,
+    untracked: bool,
     daily_path: &Path,
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
@@ -122,6 +133,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
                 label: String::new(),
                 chip: None,
                 hue: None,
+                untracked,
                 parts,
             },
             task_homes: Vec::new(),
@@ -221,6 +233,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
             label: display_label,
             chip: display_chip,
             hue: lead_hue,
+            untracked,
             parts,
         },
         task_homes,

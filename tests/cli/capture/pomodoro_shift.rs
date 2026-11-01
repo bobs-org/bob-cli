@@ -373,7 +373,7 @@ fn capture_pomodoro_shift_preserves_metadata_and_matches_plugin() {
     assert_eq!(json3["pomodoro_shift"]["duration_minutes"], 30);
     assert_eq!(
         fs::read_to_string(&day3).expect("read fallback day"),
-        "## Pomodoros\n- [ ] (**0855-0925** [t:: 30m]) — PLAIN\n",
+        "## Pomodoros\n- [ ] (**0855-0925**) — PLAIN\n",
     );
 
     // Byte-for-byte with bob-plugins `offsetPomodoroLineRange` on canonical

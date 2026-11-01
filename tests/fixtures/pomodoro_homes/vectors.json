@@ -63,7 +63,7 @@
       "expected_lead_homes": [
         "sase_blog_notes.md"
       ],
-      "pomodoros": "- [x] (0800-0805 5m) \u2014 HACK\n  - [[sase_blog_notes#^one]]\n  - ![[hack#^two]]\n  - ~~[[bob#^three]]~~\n  - [[sase_blog_notes#^one]]\n",
+      "pomodoros": "- [x] (0800-0805 [t:: 5m]) \u2014 HACK\n  - [[sase_blog_notes#^one]]\n  - ![[hack#^two]]\n  - ~~[[bob#^three]]~~\n  - [[sase_blog_notes#^one]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -118,7 +118,7 @@
         "@unlinked",
         "gtd_daily.md"
       ],
-      "pomodoros": "- [x] (0900-0925 25m) \u2014 PLAN\n  - [[#^gtd]]\n- [x] (1000-1005 5m) \u2014 PLAN\n  - [[bob#^work]]\n- [x] (0930-0935 5m) \u2014 PLAN\n- [x] (1010-1020 10m) \u2014 PLAN + BOB\n  - [[#^gtd]]\n  - [[bob#^work]]\n",
+      "pomodoros": "- [x] (0900-0925 [t:: 25m]) \u2014 PLAN\n  - [[#^gtd]]\n- [x] (1000-1005 [t:: 5m]) \u2014 PLAN\n  - [[bob#^work]]\n- [x] (0930-0935 [t:: 5m]) \u2014 PLAN\n- [x] (1010-1020 [t:: 10m]) \u2014 PLAN + BOB\n  - [[#^gtd]]\n  - [[bob#^work]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -228,7 +228,7 @@
         "@unfiled",
         "sase_blog.md"
       ],
-      "pomodoros": "- [x] (0900-0925 25m) \u2014 GTD\n  - [[#^gtd]]\n  - [[bob#^work]]\n- [x] (0930-0935 5m) \u2014 GTD\n- [x] (1000-1010 10m) \u2014 GTD\n  - [[2026/20261017#^gtd]]\n  - [[bob#^work]]\n- [ ] () \u2014 GTD\n  - [[sase_blog#^work]]\n",
+      "pomodoros": "- [x] (0900-0925 [t:: 25m]) \u2014 GTD\n  - [[#^gtd]]\n  - [[bob#^work]]\n- [x] (0930-0935 [t:: 5m]) \u2014 GTD\n- [x] (1000-1010 [t:: 10m]) \u2014 GTD\n  - [[2026/20261017#^gtd]]\n  - [[bob#^work]]\n- [ ] () \u2014 GTD\n  - [[sase_blog#^work]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -346,7 +346,7 @@
       "expected_lead_homes": [
         "@unfiled"
       ],
-      "pomodoros": "- [x] (1200-1204 4m)\n  - [[duplicate#^d]]\n",
+      "pomodoros": "- [x] (1200-1204 [t:: 4m])\n  - [[duplicate#^d]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -382,7 +382,7 @@
         "invalid_project.md",
         "love.md"
       ],
-      "pomodoros": "- [x] (1100-1110 10m)\n  - [[done/task_done#^done]]\n- [x] (1120-1127 7m)\n  - [[ref#^ref]]\n- [x] (1130-1134 4m)\n  - [[closed#^prj]]\n- [x] (1140-1144 4m)\n  - [[cycle_a#^a]]\n- [x] (1150-1154 4m)\n  - [[unfiled#^u]]\n- [x] (1210-1212 2m)\n  - [[invalid_project#^i]]\n  - [[invalid_project#^again]]\n- [x] (1220-1224 4m)\n  - [[love#^resident]]\n",
+      "pomodoros": "- [x] (1100-1110 [t:: 10m])\n  - [[done/task_done#^done]]\n- [x] (1120-1127 [t:: 7m])\n  - [[ref#^ref]]\n- [x] (1130-1134 [t:: 4m])\n  - [[closed#^prj]]\n- [x] (1140-1144 [t:: 4m])\n  - [[cycle_a#^a]]\n- [x] (1150-1154 [t:: 4m])\n  - [[unfiled#^u]]\n- [x] (1210-1212 [t:: 2m])\n  - [[invalid_project#^i]]\n  - [[invalid_project#^again]]\n- [x] (1220-1224 [t:: 4m])\n  - [[love#^resident]]\n",
       "expected_health": {
         "unfiled_links": 1,
         "ambiguous_links": 0,
@@ -550,7 +550,7 @@
         "sase_blog_notes.md",
         "sase_blog_notes.md"
       ],
-      "pomodoros": "- [x] (1300-1303 3m) \u2014 SASE\n  - [[sase_blog_notes#^one]]\n- [x] (1310-1314 4m) \u2014 SASE + BOB\n  - [[sase_blog_notes#^two]]\n  - [[bob#^two]]\n- [ ] (1320-1325)\n  - [[unfiled#^forecast]]\n- [x] (1330-1335 5m)\n- [ ] ()\n- [ ] (1340-1350) \u2014 SASE\n  - [[sase_blog_notes#^forecast]]\n- [ ] (1400-1410) \u2014 TIE\n  - [[sase_blog_notes#^tie]]\n  - [[bob#^tie]]\n",
+      "pomodoros": "- [x] (1300-1303 [t:: 3m]) \u2014 SASE\n  - [[sase_blog_notes#^one]]\n- [x] (1310-1314 [t:: 4m]) \u2014 SASE + BOB\n  - [[sase_blog_notes#^two]]\n  - [[bob#^two]]\n- [ ] (1320-1325 [t:: 5m])\n  - [[unfiled#^forecast]]\n- [x] (1330-1335 [t:: 5m])\n- [ ] ()\n- [ ] (1340-1350 [t:: 10m]) \u2014 SASE\n  - [[sase_blog_notes#^forecast]]\n- [ ] (1400-1410 [t:: 10m]) \u2014 TIE\n  - [[sase_blog_notes#^tie]]\n  - [[bob#^tie]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -707,7 +707,7 @@
         "sase.md",
         "bob.md"
       ],
-      "pomodoros": "- [x] (0800-0850 50m)\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (0900-0950 50m) [t:: 40m]\n  - [[bob#^duration]]\n",
+      "pomodoros": "- [x] (0800-0850 [t:: 50m])\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (0900-0950 50m) [t:: 40m]\n  - [[bob#^duration]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -768,6 +768,37 @@
               "tasks": 1,
               "share": 100,
               "minutes": 40
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "untracked-zero-minutes",
+      "daily_path": "2026/20261018.md",
+      "expected_lead_homes": [
+        "sase.md"
+      ],
+      "pomodoros": "- [x] (1200-1300) \u2014 MEET\n  - [[sase#^a]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "untracked": true,
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 0
             }
           ]
         }
@@ -835,7 +866,7 @@
         "gtd_daily.md",
         "@unfiled"
       ],
-      "pomodoros": "- [x] (1000-1010 10m)\n  - [[2026/20261028#^gtd]]\n- [x] (1010-1020 10m)\n  - [[#^gtd]]\n",
+      "pomodoros": "- [x] (1000-1010 [t:: 10m])\n  - [[2026/20261028#^gtd]]\n- [x] (1010-1020 [t:: 10m])\n  - [[#^gtd]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -894,7 +925,7 @@
         "dev.md",
         "@unfiled"
       ],
-      "pomodoros": "- [x] (1100-1110 10m)\n  - [[sase_direct_child#^a]]\n  - [[sase_grandchild#^b]]\n- [x] (1120-1121 1m)\n  - [[list_parent#^c]]\n  - [[self_parent#^d]]\n- [x] (1130-1131 1m)\n  - [[unquoted_parent#^e]]\n- [x] (1140-1141 1m)\n  - [[depth0#^cap]]\n",
+      "pomodoros": "- [x] (1100-1110 [t:: 10m])\n  - [[sase_direct_child#^a]]\n  - [[sase_grandchild#^b]]\n- [x] (1120-1121 [t:: 1m])\n  - [[list_parent#^c]]\n  - [[self_parent#^d]]\n- [x] (1130-1131 [t:: 1m])\n  - [[unquoted_parent#^e]]\n- [x] (1140-1141 [t:: 1m])\n  - [[depth0#^cap]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -1002,7 +1033,7 @@
         "sase.md",
         "@unfiled"
       ],
-      "pomodoros": "- [x] ()\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (1200-1205 5m)\n  - [[not_a_note#^missing]]\n",
+      "pomodoros": "- [x] ()\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (1200-1205 [t:: 5m])\n  - [[not_a_note#^missing]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -1082,7 +1113,7 @@
         "@unfiled",
         "@unfiled"
       ],
-      "pomodoros": "- [x] (1500-1501 1m)\n  - [[quoted_parent#^a]]\n- [x] (1510-1511 1m)\n  - [[single_list_parent#^b]]\n- [x] (1520-1521 1m)\n  - [[bare_parent#^c]]\n",
+      "pomodoros": "- [x] (1500-1501 [t:: 1m])\n  - [[quoted_parent#^a]]\n- [x] (1510-1511 [t:: 1m])\n  - [[single_list_parent#^b]]\n- [x] (1520-1521 [t:: 1m])\n  - [[bare_parent#^c]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -1158,7 +1189,7 @@
       "expected_lead_homes": [
         "@unfiled"
       ],
-      "pomodoros": "- [x] (1400-1410 10m)\n  - [[2026/20261017#^errand]]\n  - [[bob#^work]]\n",
+      "pomodoros": "- [x] (1400-1410 [t:: 10m])\n  - [[2026/20261017#^errand]]\n  - [[bob#^work]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -1215,7 +1246,7 @@
         "inbox.md",
         "sase.md"
       ],
-      "pomodoros": "- [x] (0800-0805 5m)\n  - [[#^gtd]]\n- [x] (0805-0810 5m)\n  - [[inbox#^inbox-sase]]\n- [x] (0810-0815 5m)\n  - [[inbox#^inbox-paren]]\n- [x] (0815-0820 5m)\n  - [[inbox#^inbox-goals]]\n- [x] (0820-0825 5m)\n  - [[inbox#^inbox-missing]]\n- [x] (0825-0830 5m)\n  - [[inbox#^inbox-dup]]\n- [x] (0830-0835 5m)\n  - [[inbox#^inbox-invalid]]\n- [x] (0835-0840 5m)\n  - [[inbox#^inbox-nohome]]\n- [x] (0840-0845 5m)\n  - [[inbox#^inbox-closed]]\n",
+      "pomodoros": "- [x] (0800-0805 [t:: 5m])\n  - [[#^gtd]]\n- [x] (0805-0810 [t:: 5m])\n  - [[inbox#^inbox-sase]]\n- [x] (0810-0815 [t:: 5m])\n  - [[inbox#^inbox-paren]]\n- [x] (0815-0820 [t:: 5m])\n  - [[inbox#^inbox-goals]]\n- [x] (0820-0825 [t:: 5m])\n  - [[inbox#^inbox-missing]]\n- [x] (0825-0830 [t:: 5m])\n  - [[inbox#^inbox-dup]]\n- [x] (0830-0835 [t:: 5m])\n  - [[inbox#^inbox-invalid]]\n- [x] (0835-0840 [t:: 5m])\n  - [[inbox#^inbox-nohome]]\n- [x] (0840-0845 [t:: 5m])\n  - [[inbox#^inbox-closed]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -1414,7 +1445,7 @@
         "bob.md",
         "quoted_root_child.md"
       ],
-      "pomodoros": "- [ ] () \u2014 BLOG\n  - [[sase#^a]]\n  - [[sase_blog_notes#^b]]\n- [x] (0900-0910 10m)\n  - [[rooted_blog_notes#^c]]\n  - [[rooted_blog#^d]]\n- [ ] ()\n  - [[sase_goals#^e]]\n  - [[sase_blog#^f]]\n  - [[bob#^g]]\n  - [[bob#^h]]\n- [x] (0920-0925 5m)\n  - [[quoted_root_child#^i]]\n",
+      "pomodoros": "- [ ] () \u2014 BLOG\n  - [[sase#^a]]\n  - [[sase_blog_notes#^b]]\n- [x] (0900-0910 [t:: 10m])\n  - [[rooted_blog_notes#^c]]\n  - [[rooted_blog#^d]]\n- [ ] ()\n  - [[sase_goals#^e]]\n  - [[sase_blog#^f]]\n  - [[bob#^g]]\n  - [[bob#^h]]\n- [x] (0920-0925 [t:: 5m])\n  - [[quoted_root_child#^i]]\n",
       "expected": [
         {
           "state": "forecast",

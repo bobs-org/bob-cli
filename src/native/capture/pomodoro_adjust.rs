@@ -756,6 +756,26 @@ pub(crate) fn adjustment_duration_for_range(range: &AdjustRange) -> u64 {
     })
 }
 
+/// How a ledger line is counted. A timed row with `[t::]` or the legacy
+/// stopwatch is tracked; a timed row with neither is untracked; `()` is a
+/// placeholder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionTracking {
+    Tracked { minutes: u64 },
+    Untracked,
+    Placeholder,
+}
+
+pub(crate) fn session_tracking(ledger_line: &str) -> SessionTracking {
+    if parse_adjustment_range(ledger_line).is_none() {
+        return SessionTracking::Placeholder;
+    }
+    match duration_from_range_text(ledger_line) {
+        Some(minutes) => SessionTracking::Tracked { minutes },
+        None => SessionTracking::Untracked,
+    }
+}
+
 pub(crate) fn duration_from_range_text(range_text: &str) -> Option<u64> {
     if let Some(value) = duration_field_value(range_text)
         && let Some(minutes) = parse_adjustment_duration(&value)
@@ -1006,8 +1026,15 @@ pub(crate) fn format_adjusted_range(
 ) -> String {
     let start = format!("{:02}{:02}", start_minutes / 60, start_minutes % 60);
     let end = format!("{:02}{:02}", end_minutes / 60, end_minutes % 60);
+    let tracked = duration_from_range_text(metadata).is_some();
     let rest = remove_adjustment_duration_metadata(metadata);
-    if rest.is_empty() {
+    if !tracked {
+        if rest.is_empty() {
+            format!("(**{start}-{end}**)")
+        } else {
+            format!("(**{start}-{end}** {rest})")
+        }
+    } else if rest.is_empty() {
         format!("(**{start}-{end}** [t:: {duration_minutes}m])")
     } else {
         format!("(**{start}-{end}** [t:: {duration_minutes}m] {rest})")
@@ -1016,4 +1043,45 @@ pub(crate) fn format_adjusted_range(
 
 pub(crate) fn normalize_minutes(value: i64) -> u64 {
     value.rem_euclid(1440) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_tracking_classifies_tracked_untracked_and_placeholder() {
+        assert_eq!(
+            session_tracking("- [x] (**1100-1130** [t:: 30m]) — MEET"),
+            SessionTracking::Tracked { minutes: 30 }
+        );
+        assert_eq!(
+            session_tracking("- [x] (**1200-1300**) — MEET"),
+            SessionTracking::Untracked
+        );
+        assert_eq!(
+            session_tracking("- [ ] () — MEET"),
+            SessionTracking::Placeholder
+        );
+        assert_eq!(
+            session_tracking("- [x] (**0900-0930** ⏱ 25m) — FOCUS"),
+            SessionTracking::Tracked { minutes: 25 }
+        );
+    }
+
+    #[test]
+    fn format_adjusted_range_preserves_missing_duration() {
+        assert_eq!(
+            format_adjusted_range(12 * 60, 13 * 60, 60, ""),
+            "(**1200-1300**)"
+        );
+        assert_eq!(
+            format_adjusted_range(12 * 60, 12 * 60 + 45, 45, " [t:: 60m]"),
+            "(**1200-1245** [t:: 45m])"
+        );
+        assert_eq!(
+            format_adjusted_range(9 * 60, 9 * 60 + 55, 55, " extra"),
+            "(**0900-0955** extra)"
+        );
+    }
 }

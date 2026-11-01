@@ -320,10 +320,12 @@ parent: "[[day]]"
 ```
 
 Column-0 checkbox items are Pomodoro entries. A timespan is a timed
-session; `()` is a placeholder. An optional ` — NAME` suffix (em dash plus
-ALL-CAPS name) names it. Child bullets that are exactly one Task Link are
-that session's queued work. `bob capture` session operators (`=`, `+N`,
-`++N`, `x`) rewrite this section.
+session; `()` is a placeholder. A timed row with `[t:: Nm]` (or the legacy
+stopwatch) is tracked; a timed row without either is an **untracked
+session** — on the ledger, off the clock. An optional ` — NAME` suffix (em
+dash plus ALL-CAPS name) names it. Child bullets that are exactly one Task
+Link are that session's queued work. `bob capture` session operators (`=`,
+`+N`, `++N`, `x`) rewrite this section.
 
 ### Events section and Event Tasks
 
@@ -354,10 +356,13 @@ qualify too; Google Calendar is not required.
 The span is local to the daily note's `timezone:` (or the host timezone).
 Hours are `00`–`23` and minutes are `00`–`59`; when the end is earlier than
 the start, the event crosses midnight. Context rows have no checkbox, so they
-are not Event Tasks. An Event Task may carry `[root:: NOTE]` to attribute its
-Pomodoro time to that area or project; `[type:: MEET]` is needed only when
-the root's suggested task type is not already `MEET`. Link an Event Task with
-its local block link under a Pomodoro.
+are not Event Tasks. A standalone `#untracked` tag (case-insensitive, not
+inside a Markdown link or code span) marks an untracked Event Task: the
+session that links it is a timed ledger row without `[t::]`, so `[root::]`
+attributes no minutes. An Event Task may carry `[root:: NOTE]` to attribute
+its Pomodoro time to that area or project; `[type:: MEET]` is needed only
+when the root's suggested task type is not already `MEET`. Link an Event
+Task with its local block link under a Pomodoro.
 
 `bob gcal sync` writes rows in this shape, with a blank line between the
 `## Events` heading and the section's first line. That first line is Bob's

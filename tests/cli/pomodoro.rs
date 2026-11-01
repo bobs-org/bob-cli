@@ -317,7 +317,11 @@ fn pomodoro_worked_reports_closed_ledger_total_only_when_status_is_empty() {
             false,
         );
         assert_success(&output);
-        assert_eq!(stdout(&output), "[WORKED 95m]\n");
+        assert_eq!(
+            stdout(&output),
+            "[WORKED 50m]\n",
+            "tracked DEEP WORK 50m counts; untracked GTD and LATE NIGHT do not"
+        );
         assert!(stderr(&output).is_empty());
     }
 

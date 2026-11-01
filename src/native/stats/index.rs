@@ -88,6 +88,7 @@ pub(crate) struct PomodoroSession {
     pub(crate) time_range: Option<String>,
     pub(crate) line: u32,
     pub(crate) links: Vec<pomodoro_homes::SessionLink>,
+    pub(crate) untracked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -582,9 +583,17 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 .checked_sub(1)
                 .and_then(|line| lines.get(line).copied())
                 .unwrap_or("");
-            let recorded =
-                crate::native::capture::duration_from_range_text(raw_line)
-                    .and_then(|minutes| u32::try_from(minutes).ok());
+            let tracking = crate::native::pomodoro::session_tracking(raw_line);
+            let untracked = matches!(
+                tracking,
+                crate::native::pomodoro::SessionTracking::Untracked
+            );
+            let recorded = match tracking {
+                crate::native::pomodoro::SessionTracking::Tracked {
+                    minutes,
+                } => u32::try_from(minutes).ok(),
+                _ => None,
+            };
             let range = entry
                 .time_range
                 .as_deref()
@@ -600,6 +609,7 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                     &prepared,
                     entry.line.saturating_sub(1),
                 ),
+                untracked,
             }
         })
         .collect();
@@ -1106,6 +1116,7 @@ mod tests {
                 time_range: Some("0800-0825".to_string()),
                 line: 12,
                 links: Vec::new(),
+                untracked: false,
             }],
             frontmatter_fields: BTreeMap::from([(
                 "energy".to_string(),
@@ -1302,8 +1313,10 @@ mod tests {
         assert_eq!(note.closed_pomodoros.len(), 2);
         assert_eq!(note.closed_pomodoros[0].recorded_minutes, Some(25));
         assert_eq!(note.closed_pomodoros[0].range_minutes, Some(30));
+        assert!(!note.closed_pomodoros[0].untracked);
         assert_eq!(note.closed_pomodoros[0].name.as_deref(), Some("GTD + BOB"));
         assert_eq!(note.closed_pomodoros[1].recorded_minutes, None);
+        assert!(note.closed_pomodoros[1].untracked);
         assert_eq!(
             note.inline_fields.get("energy").map(String::as_str),
             Some("4")

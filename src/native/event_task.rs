@@ -1,11 +1,14 @@
 //! Event Task grammar and clock classification shared by capture and gcal.
 
 use std::{
+    collections::HashSet,
     ops::Range,
     path::{Path, PathBuf},
 };
 
-use super::{markdown, task_status_hooks::canonical_daily_date};
+use chrono::NaiveDate;
+
+use super::{collect_done, markdown, task_status_hooks::canonical_daily_date};
 
 const MINUTES_PER_DAY: i32 = 24 * 60;
 
@@ -37,10 +40,69 @@ impl EventSpan {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventKind {
+    Task,
+    TimedContext,
+    AllDayContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EventTask {
     pub line_index: usize,
     pub span: EventSpan,
+    pub untracked: bool,
+    pub status: char,
+    pub block_id: Option<String>,
+    pub title: String,
+}
+
+impl EventTask {
+    #[allow(dead_code)]
+    pub(crate) fn is_open(&self) -> bool {
+        is_open_status(self.status)
+    }
+}
+
+/// One Events-section row: an Event Task or a timed/all-day context row.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EventNoteRow {
+    pub line_index: usize,
+    pub kind: EventKind,
+    pub span: Option<EventSpan>,
+    pub untracked: bool,
+    pub status: Option<char>,
+    pub block_id: Option<String>,
+    pub title: String,
+}
+
+impl EventNoteRow {
+    #[allow(dead_code)]
+    pub(crate) fn is_open_task(&self) -> bool {
+        self.kind == EventKind::Task && self.status.is_some_and(is_open_status)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn as_event_task(&self) -> Option<EventTask> {
+        if self.kind != EventKind::Task {
+            return None;
+        }
+        Some(EventTask {
+            line_index: self.line_index,
+            span: self.span?,
+            untracked: self.untracked,
+            status: self.status?,
+            block_id: self.block_id.clone(),
+            title: self.title.clone(),
+        })
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn is_open_status(status: char) -> bool {
+    !matches!(status, 'x' | 'X' | '-')
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +138,7 @@ pub(crate) struct CloseClock {
 }
 
 impl CloseClock {
-    pub(crate) fn classify(self: &Self, span: EventSpan) -> ClockClass {
+    pub(crate) fn classify(&self, span: EventSpan) -> ClockClass {
         classify(span, self.session_start_min, self.close_at_min)
     }
 }
@@ -153,11 +215,23 @@ fn is_level_two_heading(line: &str) -> bool {
 }
 
 pub(crate) fn parse_event_span(line: &str) -> Option<EventSpan> {
+    parse_event_task_line(line).map(|parsed| parsed.span)
+}
+
+struct ParsedEventTask<'a> {
+    status: char,
+    span: EventSpan,
+    after: &'a str,
+}
+
+fn parse_event_task_line(line: &str) -> Option<ParsedEventTask<'_>> {
     let mut body = line.trim_start_matches([' ', '\t']).strip_prefix("- ")?;
     body = body.strip_prefix('[')?;
     let close = body.find(']')?;
     let status = body.get(..close)?;
-    if status.chars().count() != 1 {
+    let mut status_chars = status.chars();
+    let status = status_chars.next()?;
+    if status_chars.next().is_some() {
         return None;
     }
     body = body.get(close + 1..)?;
@@ -165,7 +239,19 @@ pub(crate) fn parse_event_span(line: &str) -> Option<EventSpan> {
     if let Some(rest) = body.strip_prefix("#task") {
         body = rest.trim_start_matches([' ', '\t']);
     }
-    let body = body.strip_prefix("**")?;
+    let (span, after) = parse_bold_span(body)?;
+    Some(ParsedEventTask {
+        status,
+        span,
+        after,
+    })
+}
+
+fn parse_bold_span(body: &str) -> Option<(EventSpan, &str)> {
+    parse_hhmm_span_after_bold(body.strip_prefix("**")?)
+}
+
+fn parse_hhmm_span_after_bold(body: &str) -> Option<(EventSpan, &str)> {
     let raw = body.get(..9)?;
     if raw.as_bytes().get(4) != Some(&b'-') {
         return None;
@@ -186,11 +272,50 @@ pub(crate) fn parse_event_span(line: &str) -> Option<EventSpan> {
     }
     let start_min = parse_hhmm(&raw[..4])?;
     let end_min = parse_hhmm(&raw[5..9])?;
-    Some(EventSpan {
-        start_min,
-        end_min,
-        crosses_midnight: end_min < start_min,
+    Some((
+        EventSpan {
+            start_min,
+            end_min,
+            crosses_midnight: end_min < start_min,
+        },
+        after,
+    ))
+}
+
+struct ParsedContextRow<'a> {
+    kind: EventKind,
+    span: Option<EventSpan>,
+    after: &'a str,
+}
+
+fn parse_context_row(line: &str) -> Option<ParsedContextRow<'_>> {
+    let body = line.trim_start_matches([' ', '\t']).strip_prefix("- ")?;
+    if body.starts_with('[') {
+        return None;
+    }
+    let body = body.strip_prefix("**")?;
+    if let Some(rest) = strip_all_day_close(body) {
+        if !rest.is_empty() && !rest.starts_with([' ', '\t']) {
+            return None;
+        }
+        return Some(ParsedContextRow {
+            kind: EventKind::AllDayContext,
+            span: None,
+            after: rest,
+        });
+    }
+    let (span, after) = parse_hhmm_span_after_bold(body)?;
+    Some(ParsedContextRow {
+        kind: EventKind::TimedContext,
+        span: Some(span),
+        after,
     })
+}
+
+fn strip_all_day_close(body: &str) -> Option<&str> {
+    const MARK: &str = "all day**";
+    let (head, rest) = body.split_at_checked(MARK.len())?;
+    head.eq_ignore_ascii_case("all day**").then_some(rest)
 }
 
 fn parse_hhmm(value: &str) -> Option<u16> {
@@ -216,9 +341,34 @@ pub(crate) fn event_task_at(
     if !section.contains(&line_index) || is_fenced_line(&lines, line_index) {
         return None;
     }
+    event_task_from_line(line_index, lines.get(line_index).copied()?)
+}
+
+fn event_task_from_line(line_index: usize, line: &str) -> Option<EventTask> {
+    let parsed = parse_event_task_line(line)?;
     Some(EventTask {
         line_index,
-        span: parse_event_span(lines.get(line_index).copied()?)?,
+        span: parsed.span,
+        untracked: line_has_untracked_tag(line),
+        status: parsed.status,
+        block_id: collect_done::trailing_block_id_in_line(line),
+        title: clean_event_title(parsed.after),
+    })
+}
+
+fn context_row_from_line(
+    line_index: usize,
+    line: &str,
+) -> Option<EventNoteRow> {
+    let parsed = parse_context_row(line)?;
+    Some(EventNoteRow {
+        line_index,
+        kind: parsed.kind,
+        span: parsed.span,
+        untracked: line_has_untracked_tag(line),
+        status: None,
+        block_id: collect_done::trailing_block_id_in_line(line),
+        title: clean_event_title(parsed.after),
     })
 }
 
@@ -254,6 +404,309 @@ pub(crate) fn event_task_by_id(
     found
 }
 
+/// Every Event Task and timed/all-day context row in `contents`, in time
+/// order (all-day first, then by start, end, and ledger line).
+#[allow(dead_code)]
+pub(crate) fn events_in_note(
+    contents: &str,
+    _date: NaiveDate,
+) -> Vec<EventNoteRow> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let Some(section) = events_section_range(&lines) else {
+        return Vec::new();
+    };
+    let mut events = Vec::new();
+    for index in section {
+        if is_fenced_line(&lines, index) {
+            continue;
+        }
+        let Some(line) = lines.get(index).copied() else {
+            continue;
+        };
+        if let Some(task) = event_task_from_line(index, line) {
+            events.push(EventNoteRow {
+                line_index: task.line_index,
+                kind: EventKind::Task,
+                span: Some(task.span),
+                untracked: task.untracked,
+                status: Some(task.status),
+                block_id: task.block_id,
+                title: task.title,
+            });
+            continue;
+        }
+        if let Some(row) = context_row_from_line(index, line) {
+            events.push(row);
+        }
+    }
+    events.sort_by(|left, right| match (left.span, right.span) {
+        (None, None) => left.line_index.cmp(&right.line_index),
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(left_span), Some(right_span)) => left_span
+            .start_min
+            .cmp(&right_span.start_min)
+            .then(
+                left_span
+                    .end_on_timeline()
+                    .cmp(&right_span.end_on_timeline()),
+            )
+            .then(left.line_index.cmp(&right.line_index)),
+    });
+    events
+}
+
+/// Earliest open Event Task whose start lies in `[session_start, session_end)`,
+/// wrapping overnight when the session end is earlier than its start.
+#[allow(dead_code)]
+pub(crate) fn first_event_start_crossed<'a>(
+    session_start_min: u16,
+    session_end_min: u16,
+    events: &'a [EventNoteRow],
+    exclude_ids: &HashSet<String>,
+) -> Option<&'a EventNoteRow> {
+    let mut best: Option<&'a EventNoteRow> = None;
+    for event in events {
+        if !event.is_open_task() {
+            continue;
+        }
+        if event
+            .block_id
+            .as_ref()
+            .is_some_and(|id| exclude_ids.contains(id))
+        {
+            continue;
+        }
+        let Some(span) = event.span else {
+            continue;
+        };
+        if !start_in_session(span.start_min, session_start_min, session_end_min)
+        {
+            continue;
+        }
+        let better = best.is_none_or(|current| {
+            let current_span = current.span.expect("open task has a span");
+            (
+                start_rank(span.start_min, session_start_min, session_end_min),
+                span.end_on_timeline(),
+                event.line_index,
+            ) < (
+                start_rank(
+                    current_span.start_min,
+                    session_start_min,
+                    session_end_min,
+                ),
+                current_span.end_on_timeline(),
+                current.line_index,
+            )
+        });
+        if better {
+            best = Some(event);
+        }
+    }
+    best
+}
+
+fn start_in_session(
+    event_start: u16,
+    session_start: u16,
+    session_end: u16,
+) -> bool {
+    if session_start == session_end {
+        return false;
+    }
+    if session_end > session_start {
+        event_start >= session_start && event_start < session_end
+    } else {
+        event_start >= session_start || event_start < session_end
+    }
+}
+
+/// Overnight sessions walk the evening half first, then the morning wrap.
+fn start_rank(
+    event_start: u16,
+    session_start: u16,
+    session_end: u16,
+) -> (u8, u16) {
+    if session_end > session_start || event_start >= session_start {
+        (0, event_start)
+    } else {
+        (1, event_start)
+    }
+}
+
+/// Cluster items that touch or overlap (`next.start ≤ cluster.end`) while they
+/// share trackedness. Callers sort first when they need a stable tie-break.
+#[allow(dead_code)]
+pub(crate) fn cluster_by_trackedness<T>(
+    mut items: Vec<T>,
+    start_min: impl Fn(&T) -> i32,
+    end_min: impl Fn(&T) -> i32,
+    untracked: impl Fn(&T) -> bool,
+) -> Vec<Vec<T>> {
+    items.sort_by(|left, right| {
+        start_min(left)
+            .cmp(&start_min(right))
+            .then(end_min(left).cmp(&end_min(right)))
+    });
+    let mut clusters: Vec<Vec<T>> = Vec::new();
+    for item in items {
+        if let Some(last) = clusters.last_mut() {
+            let cluster_end = last.iter().map(&end_min).max().unwrap_or(0);
+            let cluster_untracked = last.first().is_some_and(&untracked);
+            if start_min(&item) <= cluster_end
+                && untracked(&item) == cluster_untracked
+            {
+                last.push(item);
+                continue;
+            }
+        }
+        clusters.push(vec![item]);
+    }
+    clusters
+}
+
+pub(crate) fn line_has_untracked_tag(line: &str) -> bool {
+    let masked = mask_code_and_markdown_links(line);
+    let lower = masked.to_ascii_lowercase();
+    let needle = "#untracked";
+    let mut search = 0;
+    while let Some(relative) = lower[search..].find(needle) {
+        let start = search + relative;
+        let end = start + needle.len();
+        let before = masked[..start].chars().next_back();
+        let after = masked.get(end..).and_then(|rest| rest.chars().next());
+        let left_ok = before.is_none_or(char::is_whitespace);
+        let right_ok = after.is_none_or(|ch| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    ']' | ')' | '}' | ':' | '.' | ',' | ';' | '!' | '?'
+                )
+        });
+        if left_ok && right_ok {
+            return true;
+        }
+        search = start + 1;
+    }
+    false
+}
+
+fn mask_code_and_markdown_links(line: &str) -> String {
+    let mut out = line.as_bytes().to_vec();
+    let mut index = 0;
+    while index < line.len() {
+        if line.as_bytes()[index] == b'`' {
+            let width = line.as_bytes()[index..]
+                .iter()
+                .take_while(|byte| **byte == b'`')
+                .count();
+            if let Some(close) = find_code_close(line, index + width, width) {
+                blank(&mut out, index, close);
+                index = close;
+                continue;
+            }
+        }
+        if line.as_bytes()[index] == b'['
+            && let Some(end) = markdown_link_end(line, index)
+        {
+            blank(&mut out, index, end);
+            index = end;
+            continue;
+        }
+        index += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| line.to_string())
+}
+
+fn find_code_close(line: &str, start: usize, width: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut search = start;
+    while search < bytes.len() {
+        if bytes[search] != b'`' {
+            search += 1;
+            continue;
+        }
+        let close = search;
+        while search < bytes.len() && bytes[search] == b'`' {
+            search += 1;
+        }
+        if search - close == width {
+            return Some(search);
+        }
+    }
+    None
+}
+
+fn markdown_link_end(line: &str, open: usize) -> Option<usize> {
+    let rest = line.get(open + 1..)?;
+    let text_close = rest.find(']')?;
+    let after = rest.get(text_close + 1..)?;
+    if !after.starts_with('(') {
+        return None;
+    }
+    let url_close = after.get(1..)?.find(')')?;
+    Some(open + 1 + text_close + 1 + 1 + url_close + 1)
+}
+
+fn blank(bytes: &mut [u8], start: usize, end: usize) {
+    for byte in bytes.iter_mut().take(end).skip(start) {
+        *byte = b' ';
+    }
+}
+
+fn clean_event_title(after_span: &str) -> String {
+    let mut title = after_span.trim().to_string();
+    if let Some(block_id) = collect_done::trailing_block_id_in_line(&title) {
+        let suffix = format!("^{block_id}");
+        if let Some(stripped) = title.strip_suffix(&suffix) {
+            title = stripped.trim_end().to_string();
+        }
+    }
+    loop {
+        let trimmed = title.trim_end();
+        let Some(open) = trimmed.rfind('[') else {
+            break;
+        };
+        if !(trimmed[open..].contains("::") && trimmed.ends_with(']')) {
+            break;
+        }
+        title = trimmed[..open].trim_end().to_string();
+    }
+    loop {
+        let trimmed = title.trim_end();
+        let Some(open) = trimmed.rfind('[') else {
+            break;
+        };
+        if markdown_link_end(trimmed, open) != Some(trimmed.len()) {
+            break;
+        }
+        title = trimmed[..open].trim_end().to_string();
+    }
+    loop {
+        let trimmed = title.trim_end();
+        let Some(start) = trimmed.to_ascii_lowercase().rfind("#untracked")
+        else {
+            break;
+        };
+        if start + "#untracked".len() != trimmed.len() {
+            break;
+        }
+        let before = trimmed[..start].chars().next_back();
+        if before.is_some_and(|ch| !ch.is_whitespace()) {
+            break;
+        }
+        title = trimmed[..start].trim_end().to_string();
+    }
+    if let Some((head, tail)) = title.rsplit_once(" · *")
+        && tail.ends_with('*')
+        && !tail[..tail.len() - 1].contains('*')
+    {
+        title = head.trim_end().to_string();
+    }
+    title.trim().to_string()
+}
+
 fn is_fenced_line(lines: &[&str], line_index: usize) -> bool {
     let frontmatter_end = markdown::strictly_closed_frontmatter_end(lines);
     let mut fence = None;
@@ -277,6 +730,9 @@ fn is_fenced_line(lines: &[&str], line_index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    use chrono::NaiveDate;
     use serde_json::Value;
 
     fn hhmm(value: &str) -> u16 {
@@ -361,5 +817,125 @@ mod tests {
                 case["id"]
             );
         }
+    }
+
+    fn events_note(body: &str) -> String {
+        format!("## Events\n{body}## Pomodoros\n")
+    }
+
+    #[test]
+    fn events_in_note_orders_all_day_then_timed_and_reads_untracked() {
+        let contents = events_note(concat!(
+            "- [ ] #task **1000-1030** Standup [root:: job] ^standup\n",
+            "- **all day** School holiday\n",
+            "- [*] #task **0930-1000** 1:1 #untracked [root:: love] ^one-on-one\n",
+            "- **1400-1500** Toddler class · *maybe*\n",
+        ));
+        let date = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
+        let events = events_in_note(&contents, date);
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].kind, EventKind::AllDayContext);
+        assert_eq!(events[0].title, "School holiday");
+        assert_eq!(events[1].kind, EventKind::Task);
+        assert_eq!(events[1].title, "1:1");
+        assert!(events[1].untracked);
+        assert_eq!(events[1].status, Some('*'));
+        assert_eq!(events[1].block_id.as_deref(), Some("one-on-one"));
+        assert!(events[1].is_open_task());
+        let task = events[1].as_event_task().expect("task row");
+        assert!(task.is_open());
+        assert_eq!(task.title, "1:1");
+        assert_eq!(events[2].title, "Standup");
+        assert!(!events[2].untracked);
+        assert_eq!(events[3].kind, EventKind::TimedContext);
+        assert_eq!(events[3].title, "Toddler class");
+    }
+
+    #[test]
+    fn line_has_untracked_tag_skips_code_spans_and_markdown_links() {
+        assert!(line_has_untracked_tag(
+            "- [*] #task **1200-1300** Lunch #untracked [root:: love]"
+        ));
+        assert!(line_has_untracked_tag(
+            "- [*] #task **1200-1300** Lunch #UNTRACKED."
+        ));
+        assert!(!line_has_untracked_tag(
+            "- [*] #task **1200-1300** `#untracked` in code"
+        ));
+        assert!(!line_has_untracked_tag(
+            "- [*] #task **1200-1300** [see #untracked](https://example.com)"
+        ));
+        assert!(!line_has_untracked_tag(
+            "- [*] #task **1200-1300** lunch#untracked glued"
+        ));
+    }
+
+    #[test]
+    fn first_event_start_crossed_wraps_overnight_and_skips_exclusions() {
+        let contents = events_note(concat!(
+            "- [ ] #task **2330-0030** Late ^late\n",
+            "- [ ] #task **0030-0100** After midnight ^after\n",
+            "- [x] #task **2345-0015** Done ^done\n",
+            "- [ ] #task **2200-2230** Before ^before\n",
+        ));
+        let date = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
+        let events = events_in_note(&contents, date);
+        let exclude = HashSet::new();
+        let crossed = first_event_start_crossed(23 * 60, 60, &events, &exclude)
+            .expect("crossed");
+        assert_eq!(crossed.block_id.as_deref(), Some("late"));
+        let mut skip_late = HashSet::new();
+        skip_late.insert("late".to_string());
+        let next = first_event_start_crossed(23 * 60, 60, &events, &skip_late)
+            .expect("after midnight");
+        assert_eq!(next.block_id.as_deref(), Some("after"));
+        assert!(
+            first_event_start_crossed(12 * 60, 12 * 60, &events, &exclude)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cluster_by_trackedness_splits_on_mixed_trackedness() {
+        struct Item {
+            start: i32,
+            end: i32,
+            untracked: bool,
+            id: &'static str,
+        }
+        let clusters = cluster_by_trackedness(
+            vec![
+                Item {
+                    start: 10 * 60,
+                    end: 11 * 60,
+                    untracked: false,
+                    id: "a",
+                },
+                Item {
+                    start: 11 * 60,
+                    end: 12 * 60,
+                    untracked: true,
+                    id: "b",
+                },
+                Item {
+                    start: 11 * 60 + 30,
+                    end: 12 * 60 + 30,
+                    untracked: true,
+                    id: "c",
+                },
+            ],
+            |item| item.start,
+            |item| item.end,
+            |item| item.untracked,
+        );
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(
+            clusters[0].iter().map(|item| item.id).collect::<Vec<_>>(),
+            ["a"]
+        );
+        assert_eq!(
+            clusters[1].iter().map(|item| item.id).collect::<Vec<_>>(),
+            ["b", "c"]
+        );
     }
 }

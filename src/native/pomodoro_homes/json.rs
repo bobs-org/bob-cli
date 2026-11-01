@@ -45,5 +45,7 @@ pub(crate) struct Homes {
     pub(crate) label: String,
     pub(crate) chip: Option<String>,
     pub(crate) hue: Option<Hue>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) untracked: bool,
     pub(crate) parts: Vec<HomePart>,
 }

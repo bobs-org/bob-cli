@@ -213,6 +213,9 @@ fn evaluate_pomodoros(
         }
         let daily_path = Path::new(&note.path);
         for session in &note.closed_pomodoros {
+            if session.untracked {
+                continue;
+            }
             let components = pomodoro_components(session.name.as_deref());
             let selected = components
                 .iter()
@@ -230,10 +233,7 @@ fn evaluate_pomodoros(
                 PomodoroMeasure::Minutes => {
                     let (minutes, fallback) = match session.recorded_minutes {
                         Some(minutes) => (Some(i64::from(minutes)), false),
-                        None => (
-                            session.range_minutes.map(i64::from),
-                            session.range_minutes.is_some(),
-                        ),
+                        None => (None, false),
                     };
                     let Some(minutes) = minutes else {
                         per_day.entry(*date).or_default().missing_duration =
@@ -1438,6 +1438,7 @@ mod tests {
                         time_range: Some("0900-0907".to_string()),
                         line: 2,
                         links: Vec::new(),
+                        untracked: false,
                     },
                     super::super::index::PomodoroSession {
                         name: Some("GTD".to_string()),
@@ -1446,6 +1447,7 @@ mod tests {
                         time_range: Some("0800-0825".to_string()),
                         line: 3,
                         links: Vec::new(),
+                        untracked: true,
                     },
                 ],
                 ..DailyNoteInputs::default()
@@ -1459,11 +1461,11 @@ mod tests {
             evaluate_metric(&metric, &index, &[date(10)], date(11), None)
                 .unwrap();
         let value = &result.values[0];
-        // The 7m composite splits 4m to SASE and 3m to GTD. The second
-        // session uses its 25m range estimate.
-        assert_eq!(value.value, Some(28));
-        assert_eq!(value.parts["theme"]["GTD"], 28);
-        assert_eq!(value.quality, DataQuality::Partial);
+        // The 7m composite splits 4m to SASE and 3m to GTD. The untracked
+        // second session is excluded from minutes and quality stays ok.
+        assert_eq!(value.value, Some(3));
+        assert_eq!(value.parts["theme"]["GTD"], 3);
+        assert_eq!(value.quality, DataQuality::Ok);
         assert_eq!(result.since, Some(date(10)));
     }
 
@@ -1487,6 +1489,7 @@ mod tests {
                         line: 3,
                         embedded: false,
                     }],
+                    untracked: false,
                 }],
                 ..DailyNoteInputs::default()
             },
@@ -1540,6 +1543,7 @@ mod tests {
                         time_range: Some("0800-0825".to_string()),
                         line: 2,
                         links: Vec::new(),
+                        untracked: false,
                     },
                     super::super::index::PomodoroSession {
                         name: Some("PLAN".to_string()),
@@ -1555,6 +1559,7 @@ mod tests {
                                 embedded: false,
                             },
                         ],
+                        untracked: false,
                     },
                 ],
                 ..DailyNoteInputs::default()
@@ -1597,6 +1602,7 @@ mod tests {
                     time_range: None,
                     line: 2,
                     links: Vec::new(),
+                    untracked: false,
                 }],
                 ..DailyNoteInputs::default()
             },
@@ -1941,11 +1947,12 @@ mod tests {
                 has_pomodoros_heading: true,
                 closed_pomodoros: vec![super::super::index::PomodoroSession {
                     name: Some("GTD".to_string()),
-                    recorded_minutes: None,
+                    recorded_minutes: Some(180),
                     range_minutes: Some(180),
                     time_range: Some("2200-0100".to_string()),
                     line: 2,
                     links: Vec::new(),
+                    untracked: false,
                 }],
                 ..DailyNoteInputs::default()
             },
@@ -1955,7 +1962,53 @@ mod tests {
             evaluate_metric(&metric, &index, &[date(10)], date(11), None)
                 .unwrap();
         assert_eq!(result.values[0].value, Some(180));
-        assert_eq!(result.values[0].quality, DataQuality::Partial);
+        assert_eq!(result.values[0].quality, DataQuality::Ok);
+    }
+
+    #[test]
+    fn untracked_sessions_are_excluded_from_minutes_and_counts() {
+        let mut index = StatsIndex::default();
+        index.daily_notes.insert(
+            date(10),
+            DailyNoteInputs {
+                path: "2026/20261010.md".to_string(),
+                has_pomodoros_heading: true,
+                closed_pomodoros: vec![
+                    super::super::index::PomodoroSession {
+                        name: Some("MEET".to_string()),
+                        recorded_minutes: None,
+                        range_minutes: Some(60),
+                        time_range: Some("1200-1300".to_string()),
+                        line: 2,
+                        links: Vec::new(),
+                        untracked: true,
+                    },
+                    super::super::index::PomodoroSession {
+                        name: Some("BOB".to_string()),
+                        recorded_minutes: Some(25),
+                        range_minutes: Some(25),
+                        time_range: Some("1300-1325".to_string()),
+                        line: 4,
+                        links: Vec::new(),
+                        untracked: false,
+                    },
+                ],
+                ..DailyNoteInputs::default()
+            },
+        );
+        let minutes = builtin("worked");
+        let minute_result =
+            evaluate_metric(&minutes, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(minute_result.values[0].value, Some(25));
+        assert_eq!(minute_result.values[0].quality, DataQuality::Ok);
+
+        let counts = builtin("sessions");
+        let count_result =
+            evaluate_metric(&counts, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(count_result.values[0].value, Some(1));
+        assert_eq!(count_result.values[0].quality, DataQuality::Ok);
     }
 
     #[test]

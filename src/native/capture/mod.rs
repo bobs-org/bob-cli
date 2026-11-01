@@ -139,9 +139,8 @@ pub(crate) use existing_task_link::{
 pub(crate) use output::{CaptureError, CaptureFailureKind, Placement};
 pub(crate) use plan::{format_task_line, inbox_route, route_label};
 pub(crate) use pomodoro_adjust::{
-    adjustment_duration_for_range, duration_from_range_text,
-    format_adjusted_range, normalize_minutes, parse_adjustment_range,
-    AdjustRange,
+    adjustment_duration_for_range, format_adjusted_range, normalize_minutes,
+    parse_adjustment_range, session_tracking, AdjustRange, SessionTracking,
 };
 pub(crate) use pomodoro_insert::{
     select_default_pomodoro_line, DefaultPomodoroBranch,

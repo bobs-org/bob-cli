@@ -1170,15 +1170,20 @@ mod tests {
         assert_eq!(review_time.summary.p25, Some(0));
         assert_eq!(review_time.summary.p75, Some(0));
 
-        assert_eq!(report.sessions.len(), 3);
+        assert_eq!(report.sessions.len(), 4);
         assert_eq!(report.sessions[0].name.as_deref(), Some("PLAN"));
         assert_eq!(report.sessions[0].minutes, Some(25));
         assert_eq!(report.sessions[0].quality, DataQuality::Ok);
         assert_eq!(report.sessions[1].name.as_deref(), Some("PLAN + SASE"));
         assert_eq!(report.sessions[1].minutes, Some(7));
-        assert_eq!(report.sessions[2].name.as_deref(), Some("SASE"));
-        assert_eq!(report.sessions[2].minutes, Some(10));
-        assert_eq!(report.sessions[2].date, day(11));
+        assert_eq!(report.sessions[2].name.as_deref(), Some("MEET"));
+        assert_eq!(report.sessions[2].minutes, Some(0));
+        assert_eq!(report.sessions[2].quality, DataQuality::Ok);
+        assert!(report.sessions[2].homes.untracked);
+        assert_eq!(report.sessions[3].name.as_deref(), Some("SASE"));
+        assert_eq!(report.sessions[3].minutes, Some(10));
+        assert_eq!(report.sessions[3].date, day(11));
+        assert_eq!(report.health.homes.untracked_sessions, 1);
 
         // M11 sessions: count mode counts each closed row once even when it
         // carries two themes; parts still attribute the row to PLAN.

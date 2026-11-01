@@ -8,8 +8,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::native::{
+    capture::{session_tracking, SessionTracking},
     capture_pomodoros::{self, PomodoroState},
-    capture_pomodoros_agenda,
     vault_links::NoteIndex,
 };
 
@@ -756,19 +756,20 @@ fn evaluate_case<S: HomeSource>(
         .iter()
         .map(|entry| {
             let links = session_links(daily, entry.line - 1);
+            let raw_line = daily
+                .lines()
+                .nth(entry.line.saturating_sub(1))
+                .unwrap_or("");
+            let tracking = session_tracking(raw_line);
+            let untracked = matches!(tracking, SessionTracking::Untracked);
             let minutes = if entry.state == PomodoroState::Completed {
-                let raw_line = daily
-                    .lines()
-                    .nth(entry.line.saturating_sub(1))
-                    .unwrap_or("");
-                crate::native::capture::duration_from_range_text(raw_line)
-                    .or_else(|| {
-                        entry
-                            .time_range
-                            .as_deref()
-                            .and_then(capture_pomodoros_agenda::range_minutes)
-                    })
-                    .and_then(|minutes| u32::try_from(minutes).ok())
+                match tracking {
+                    SessionTracking::Tracked { minutes } => {
+                        u32::try_from(minutes).ok()
+                    }
+                    SessionTracking::Untracked => Some(0),
+                    SessionTracking::Placeholder => None,
+                }
             } else {
                 None
             };
@@ -777,6 +778,7 @@ fn evaluate_case<S: HomeSource>(
                 &links,
                 entry.state == PomodoroState::Completed,
                 minutes,
+                untracked,
                 &case.daily_path,
                 &mut resolver,
             );

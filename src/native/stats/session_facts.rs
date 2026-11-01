@@ -15,12 +15,14 @@ pub(crate) fn session_fact(
     session: &PomodoroSession,
     attributed: &SessionHomes,
 ) -> SessionFact {
-    let (minutes, quality) =
+    let (minutes, quality) = if session.untracked {
+        (Some(0), DataQuality::Ok)
+    } else {
         match (session.recorded_minutes, session.range_minutes) {
             (Some(minutes), _) => (Some(minutes), DataQuality::Ok),
-            (None, Some(minutes)) => (Some(minutes), DataQuality::Partial),
-            (None, None) => (None, DataQuality::Missing),
-        };
+            (None, _) => (None, DataQuality::Missing),
+        }
+    };
     let minutes_display = match minutes {
         Some(minutes) => format_minutes(i64::from(minutes)),
         None => "–".to_string(),

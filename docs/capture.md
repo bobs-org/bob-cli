@@ -3467,9 +3467,10 @@ timed entry, multiple open timed entries, or an unparseable target range
 fail without writing. The start stays fixed; `new_duration =
 max(0, old_duration + signed_units * 5)` with checked arithmetic and
 `new_end = (start + new_duration) modulo 24 hours`. Only that ledger line is
-rewritten to Bob's canonical `(**HHMM-HHMM** [t:: Nm])` form, preserving its
-checkbox, name, non-duration metadata, child bullets, newline style, and
-surrounding bytes. Subtraction clamps at zero and reports both requested
+rewritten in the same trackedness it already had: a tracked row stays
+`(**HHMM-HHMM** [t:: Nm])`, an untracked row stays `(**HHMM-HHMM**)`,
+preserving its checkbox, name, non-duration metadata, child bullets,
+newline style, and surrounding bytes. Subtraction clamps at zero and reports both requested
 units and actual applied minutes when clamping changes the delta.
 
 A `@@route` declaration still routes ordinary items in the same draft but
@@ -3524,8 +3525,9 @@ column-zero entry in today's `## Pomodoros` section. Both endpoints
 translate modulo 24 hours (`new_start = (start + delta) mod 1440`,
 `new_end = (end + delta) mod 1440`), so shifts wrap across midnight and
 never clamp; a `++288` wraps a full day. There is no overlap check against
-neighbouring entries. Only that ledger line is rewritten to Bob's canonical
-`(**HHMM-HHMM** [t:: Nm])` form, preserving its checkbox, name,
+neighbouring entries. Only that ledger line is rewritten, keeping its
+trackedness: a tracked row stays `(**HHMM-HHMM** [t:: Nm])` and an
+untracked row stays `(**HHMM-HHMM**)`, preserving its checkbox, name,
 non-duration metadata, child bullets, newline style, and surrounding bytes.
 A `@@route` declaration never applies to shift items, and forced
 destination/task/section and clipboard options (`--route`, `--section`,
@@ -3639,8 +3641,9 @@ closed before its planned end is shortened to the stop time
 20m]`): `remaining = end − now` normalized into (−720, 720] minutes, and
 when `remaining ≥ 5`, `units = floor(remaining / 5)`,
 `new_duration = max(0, duration − 5·units)`,
-`new_end = (start + new_duration) mod 1440`, rewritten in the same canonical
-`(**HHMM-HHMM** [t:: Nm])` form `+N`/`-N` writes. Otherwise the range bytes
+`new_end = (start + new_duration) mod 1440`, rewritten in the same
+trackedness `+N`/`-N` writes: tracked rows keep `[t:: Nm]`, untracked rows
+omit it. Otherwise the range bytes
 are untouched; Bob never extends a session, and an overrun is reported
 (`ran 7m over`). Closed at `09:49` or later, `0920-0950` stays unchanged.
 
@@ -7440,8 +7443,9 @@ untypeable slugs stay in the list with `selectable: false`.
 With `-t/--tasks`, `capture-pomodoros` resolves each listed entry's Task Links
 into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
 name or today) and `completed_summary` (`count` of completed ledger entries and
-their summed `minutes`: each entry's recorded `[t:: Nm]` or stopwatch duration
-when present, else its time-range span). Each entry adds a derived `homes`
+their summed `minutes`: each tracked entry's recorded `[t:: Nm]` or
+stopwatch duration; untracked sessions (timed rows without either) contribute
+to neither count nor minutes). Each entry adds a derived `homes`
 object (the shared R9 shape from [Pomodoro homes](pomodoro-homes.md): `state`,
 `kind`, `label`, nullable `chip` and `hue`, and `parts`). Open entries are a
 forecast; completed entries are an attribution with `minutes` on each part.

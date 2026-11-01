@@ -16,8 +16,9 @@ use serde_json::json;
 
 use super::{
     capture::{
-        duration_from_range_text, leading_spaces_or_tabs_len, line_spans,
-        list_item_body, nearest_shallower_list_item_parent, LineSpan,
+        leading_spaces_or_tabs_len, line_spans, list_item_body,
+        nearest_shallower_list_item_parent, session_tracking, LineSpan,
+        SessionTracking,
     },
     capture_drawers, capture_language, capture_pomodoro_close,
     capture_pomodoros_agenda, config, env as bob_env, markdown, note_tasks,
@@ -439,13 +440,11 @@ fn attributed_minutes(entry: &PomodoroEntry, contents: &str) -> Option<u32> {
         .checked_sub(1)
         .and_then(|index| contents.lines().nth(index))
         .unwrap_or("");
-    let minutes = duration_from_range_text(raw_line).or_else(|| {
-        entry
-            .time_range
-            .as_deref()
-            .and_then(capture_pomodoros_agenda::range_minutes)
-    })?;
-    u32::try_from(minutes).ok()
+    match session_tracking(raw_line) {
+        SessionTracking::Tracked { minutes } => u32::try_from(minutes).ok(),
+        SessionTracking::Untracked => Some(0),
+        SessionTracking::Placeholder => None,
+    }
 }
 
 pub(crate) fn completed_summary_for(
@@ -459,19 +458,20 @@ pub(crate) fn completed_summary_for(
         if entry.state != PomodoroState::Completed {
             continue;
         }
-        count += 1;
         let raw_line = entry
             .line
             .checked_sub(1)
             .and_then(|index| ledger_lines.get(index).copied())
             .unwrap_or("");
-        if let Some(duration) = duration_from_range_text(raw_line) {
-            minutes += duration;
-        } else if let Some(range) = entry.time_range.as_deref()
-            && let Some(duration) =
-                capture_pomodoros_agenda::range_minutes(range)
-        {
-            minutes += duration;
+        match session_tracking(raw_line) {
+            SessionTracking::Untracked => continue,
+            SessionTracking::Tracked { minutes: duration } => {
+                count += 1;
+                minutes += duration;
+            }
+            SessionTracking::Placeholder => {
+                count += 1;
+            }
         }
     }
     capture_pomodoros_agenda::CompletedSummary { count, minutes }
@@ -2073,8 +2073,8 @@ mod tests {
         );
         let found = scan(contents);
         let summary = completed_summary_for(&found.entries, contents);
-        assert_eq!(summary.count, 2);
-        assert_eq!(summary.minutes, 25 + 30);
+        assert_eq!(summary.count, 1);
+        assert_eq!(summary.minutes, 25);
     }
 
     #[test]
@@ -2108,7 +2108,7 @@ mod tests {
             &day_path,
             concat!(
                 "## Pomodoros\n",
-                "- [x] (0700-0730) — EARLY\n",
+                "- [x] (0700-0730 [t:: 30m]) — EARLY\n",
                 "- [ ] (**08:00 - 08:30** [t:: 30m]) — FIX\n",
                 "\t- [[tasks#^alpha]]\n",
                 "\t- [[missing#^nope]]\n",
@@ -2156,7 +2156,7 @@ mod tests {
             &day_path,
             concat!(
                 "## Pomodoros\n",
-                "- [x] (0700-0730) — EARLY\n",
+                "- [x] (0700-0730 [t:: 30m]) — EARLY\n",
                 "\t- [[sase#^alpha]]\n",
                 "- [ ] (**08:00 - 08:30** [t:: 30m]) — FIX\n",
                 "\t- [[sase#^alpha]]\n",
@@ -2184,6 +2184,7 @@ mod tests {
         assert_eq!(early_homes.label, "sase");
         assert_eq!(early_homes.chip.as_deref(), Some("sase"));
         assert_eq!(early_homes.hue, Some(pomodoro_homes::Hue::Orange));
+        assert!(!early_homes.untracked);
         assert_eq!(early_homes.parts[0].minutes, Some(30));
         let named = result
             .pomodoros
