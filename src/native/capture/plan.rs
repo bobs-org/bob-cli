@@ -1528,10 +1528,13 @@ pub(super) fn plan_capture_item(
     // before the child write; a later failure leaves the vault
     // byte-identical because the batch never commits. Only marker-only
     // `@route+id #type` (Ensure Next) keeps its lane behavior elsewhere.
+    // An ID-less `--task-ref` selection retypes by line index without minting
+    // an ID, link, or lane change; its child resolves via a recomputed ref.
     let mut sub_bullet_retype: Option<(
         String,
         ExistingTypeMarkerApplication,
-        String,
+        Option<String>,
+        SubBulletTarget,
     )> = None;
     if let (
         Some(marker),
@@ -1548,21 +1551,40 @@ pub(super) fn plan_capture_item(
         })?;
         let target_path =
             request.bob_dir.join(PathBuf::from(route_label(route)));
-        let block_id_owned: String = match sub_bullet_target {
-            SubBulletTarget::BlockId(block_id) => block_id.clone(),
+        match sub_bullet_target {
+            SubBulletTarget::BlockId(block_id) => {
+                let block_id_owned = block_id.clone();
+                let original = read_staged_task_line(
+                    planner,
+                    &request.bob_dir,
+                    &target_path,
+                    route,
+                    &block_id_owned,
+                )?;
+                let applied = task_theme_context
+                    .apply_type_marker_to_existing(
+                        planner,
+                        &target_path,
+                        route,
+                        &block_id_owned,
+                        &marker,
+                        warnings,
+                    )?;
+                let effective =
+                    SubBulletTarget::BlockId(block_id_owned.clone());
+                sub_bullet_retype =
+                    Some((original, applied, Some(block_id_owned), effective));
+            }
             SubBulletTarget::Ref { line, digest } => {
                 let contents = planner.read_existing(&target_path)?;
                 let settings = note_tasks::read_settings(&request.bob_dir);
                 let scan = note_tasks::scan(&contents, &settings);
-                match scan.by_ref(*line, digest) {
-                    RefLookup::Found(task) => task
-                        .block_id
-                        .clone()
-                        .ok_or_else(|| {
-                            CaptureError::io(format!(
-                                "the selected task in {route}.md has no block ID; rerun the task picker"
-                            ))
-                        })?,
+                let (line_index, block_id_opt) = match scan
+                    .by_ref(*line, digest)
+                {
+                    RefLookup::Found(task) => {
+                        (task.line_index, task.block_id.clone())
+                    }
                     RefLookup::Stale => {
                         return Err(CaptureError::io(format!(
                             "the selected task is no longer in {route}.md; rerun the task picker"
@@ -1573,25 +1595,57 @@ pub(super) fn plan_capture_item(
                             "the selected task matches more than one line in {route}.md; rerun the task picker"
                         )));
                     }
+                };
+                if let Some(block_id_owned) = block_id_opt {
+                    let original = read_staged_task_line(
+                        planner,
+                        &request.bob_dir,
+                        &target_path,
+                        route,
+                        &block_id_owned,
+                    )?;
+                    let applied = task_theme_context
+                        .apply_type_marker_to_existing(
+                            planner,
+                            &target_path,
+                            route,
+                            &block_id_owned,
+                            &marker,
+                            warnings,
+                        )?;
+                    let effective =
+                        SubBulletTarget::BlockId(block_id_owned.clone());
+                    sub_bullet_retype = Some((
+                        original,
+                        applied,
+                        Some(block_id_owned),
+                        effective,
+                    ));
+                } else {
+                    let original =
+                        line_text_at(&contents, line_index)?.to_string();
+                    let applied = task_theme_context
+                        .apply_type_marker_to_existing_line(
+                            planner,
+                            &target_path,
+                            route,
+                            line_index,
+                            &marker,
+                            warnings,
+                        )?;
+                    let updated = planner.read_existing(&target_path)?;
+                    let edited_line =
+                        line_text_at(&updated, line_index)?.to_string();
+                    let new_digest = note_tasks::line_digest(&edited_line);
+                    let effective = SubBulletTarget::Ref {
+                        line: line_index + 1,
+                        digest: new_digest,
+                    };
+                    sub_bullet_retype =
+                        Some((original, applied, None, effective));
                 }
             }
-        };
-        let original = read_staged_task_line(
-            planner,
-            &request.bob_dir,
-            &target_path,
-            route,
-            &block_id_owned,
-        )?;
-        let applied = task_theme_context.apply_type_marker_to_existing(
-            planner,
-            &target_path,
-            route,
-            &block_id_owned,
-            &marker,
-            warnings,
-        )?;
-        sub_bullet_retype = Some((original, applied, block_id_owned));
+        }
     }
     let mut note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
@@ -1603,15 +1657,14 @@ pub(super) fn plan_capture_item(
                     "sub-bullet capture invariant failed: route is missing",
                 )
             })?;
-            // After a retype the parent line digest changed, so a `--task-ref`
-            // child resolves by its stable block ID for the write.
-            let owned_block_target;
-            let effective_target = if let Some((_, _, block_id_owned)) =
+            // After a retype the parent line digest changed, so the child
+            // resolves via the validated post-edit selection: stable block ID
+            // when one exists, otherwise the recomputed ref for an ID-less
+            // parent. Never retry against the old digest.
+            let effective_target = if let Some((_, _, _, effective)) =
                 sub_bullet_retype.as_ref()
             {
-                owned_block_target =
-                    SubBulletTarget::BlockId(block_id_owned.clone());
-                &owned_block_target
+                effective
             } else {
                 sub_bullet_target
             };
@@ -1776,21 +1829,25 @@ pub(super) fn plan_capture_item(
         )?;
     }
     // A SubBullet retype moves a live Task Link with the existing D8
-    // relocation. No Ensure Next, no new Task Link, and no lane change.
+    // relocation when the parent carries a block ID. An ID-less parent has
+    // no live block-ID link to relocate. No Ensure Next, no new Task Link,
+    // and no lane change either way.
     let mut sub_bullet_type_relocation: Option<TypeRelocationJson> = None;
     let mut sub_bullet_task_theme: Option<CaptureTaskThemeChange> = None;
     let mut sub_bullet_previous: Option<String> = None;
-    if let Some((original, applied, block_id_owned)) = sub_bullet_retype {
+    if let Some((original, applied, block_id_opt, _)) = sub_bullet_retype {
         sub_bullet_task_theme = Some(applied.summary.clone());
         sub_bullet_previous = Some(original);
-        if let Some(relocation) = task_theme_context.relocate_for_retype(
-            planner,
-            &block_id_owned,
-            &applied.type_key,
-            &applied.type_name,
-            &mut note_plan.pomodoro_refs,
-            warnings,
-        )? {
+        if let Some(block_id_owned) = block_id_opt
+            && let Some(relocation) = task_theme_context.relocate_for_retype(
+                planner,
+                &block_id_owned,
+                &applied.type_key,
+                &applied.type_name,
+                &mut note_plan.pomodoro_refs,
+                warnings,
+            )?
+        {
             sub_bullet_type_relocation = Some(relocation.json);
         }
     }

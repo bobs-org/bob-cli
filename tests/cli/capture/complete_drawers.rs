@@ -240,7 +240,7 @@ fn refused_rows_name_the_commits_reason() {
     let near = complete(&temp, &vault, "note @foo+bar#req");
     assert_eq!(
         row(&near, "new", "REQ")["refused"],
-        "did you mean `#requirements`? write `#\"REQUIREMENTS\"` to create REQUIREMENTS"
+        "did you mean `#requirements`? write `#\"REQ\"` to create REQ"
     );
 
     let ambiguous = complete(&temp, &vault, "note @foo+bar#notes");

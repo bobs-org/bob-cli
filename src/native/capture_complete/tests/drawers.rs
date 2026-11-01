@@ -353,9 +353,7 @@ fn refused_rows_carry_the_commit_resolvers_reason() {
     let req = row(&near, "new", "REQ");
     assert_eq!(
         req.refused.as_deref(),
-        Some(
-            "did you mean `#requirements`? write `#\"REQUIREMENTS\"` to create REQUIREMENTS"
-        )
+        Some("did you mean `#requirements`? write `#\"REQ\"` to create REQ")
     );
 
     // Ambiguous: duplicate drawers are both listed, both refused.

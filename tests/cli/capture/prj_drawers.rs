@@ -512,7 +512,7 @@ fn capture_complete_prj_drawer_menu_lists_h2_sections() {
     assert_eq!(candidates[1]["title"], "REQ");
     assert_eq!(
         candidates[1]["refused"],
-        "did you mean `#requirements`? write `#\"Requirements\"` to create Requirements"
+        "did you mean `#requirements`? write `#\"Req\"` to create Req"
     );
     assert!(json.get("initial_selection").is_none());
 }

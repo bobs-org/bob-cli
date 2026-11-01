@@ -1082,12 +1082,24 @@ pub(crate) fn resolve_drawer_for_write(
         }
     }
     // Near-duplicate guard (slug only): strict prefix or edit distance 1.
+    // The suggestion names the existing drawer, but the quoted creation
+    // override teaches the requested selector's intended new title with the
+    // same casing and key rules as the actual writer below.
     if let Some(near) = find_near_duplicate_drawer(drawers, &slug) {
+        let intended = drawer_spelling_for_slug(catalog, &slug);
+        let intended = cased_creation_title(
+            if is_drawer_title(&intended) {
+                &intended
+            } else {
+                &key_spaced
+            },
+            scope,
+        );
         return Err(DrawerResolveError::new(
             "drawer_near_duplicate",
             format!(
                 "did you mean `#{}`? write `#\"{}\"` to create {}",
-                near.slug, near.title, near.title
+                near.slug, intended, intended
             ),
         ));
     }

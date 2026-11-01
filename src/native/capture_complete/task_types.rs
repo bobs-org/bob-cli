@@ -114,12 +114,37 @@ fn build_inner(
             .any(|span| span.kind == SpanKind::TaskToggleBlockId)
     });
     let sub_bullet_existing = editor_item.is_some_and(|item| {
-        matches!(
+        let has_target = item.route.is_some()
+            && item.block_id.is_some()
+            && !item.body.trim().is_empty();
+        if !has_target {
+            return false;
+        }
+        if matches!(
             item.mode,
             crate::native::capture_language::EditorMode::SubBullet
-        ) && item.route.is_some()
-            && item.block_id.is_some()
-            && !item.body.trim().is_empty()
+        ) {
+            return true;
+        }
+        // A bare `#` flips the editor mode to Incomplete but leaves the
+        // parsed ownership and spans intact. Derive the existing child target
+        // from the SubBullet spans so an empty query reports the same
+        // subject as its typed form. A new `@route^id` task carries
+        // TaskBlockId spans instead and stays `new`.
+        if matches!(
+            item.mode,
+            crate::native::capture_language::EditorMode::Incomplete
+        ) {
+            return item
+                .spans
+                .iter()
+                .any(|span| span.kind == SpanKind::SubBulletRoute)
+                && item
+                    .spans
+                    .iter()
+                    .any(|span| span.kind == SpanKind::SubBulletBlockId);
+        }
+        false
     });
     let subject = if !has_new_task_id
         && (existing.is_some()

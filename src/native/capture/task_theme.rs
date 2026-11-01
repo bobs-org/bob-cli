@@ -482,6 +482,174 @@ impl CaptureTaskThemeContext {
         })
     }
 
+    /// Explicit `#<type>` retype of an existing task selected by a stale-safe
+    /// picker ref that carries no block ID. Mirrors
+    /// [`Self::apply_type_marker_to_existing`] but addresses the staged task
+    /// by its line index, so no ID is minted and no Task Link is touched.
+    /// Closed targets refuse without a write.
+    pub(super) fn apply_type_marker_to_existing_line(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        target: &Path,
+        route: &str,
+        line_index: usize,
+        marker: &TypeMarker,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Result<ExistingTypeMarkerApplication, CaptureError> {
+        self.refresh_residence_snapshot(planner);
+        let current_contents = planner.read_existing(target)?;
+        let settings = note_tasks::read_settings(&self.root);
+        let scan = note_tasks::scan(&current_contents, &settings);
+        let task = match scan.task_at(line_index) {
+            Some(task) => task,
+            None => {
+                return Err(CaptureError::io(
+                    "task theme capture invariant failed: existing task disappeared before retype",
+                ));
+            }
+        };
+        if !crate::native::capture_link_tasks::is_linkable_status(
+            task.status_symbol,
+        ) {
+            return Err(CaptureError::usage(format!(
+                "`{}` needs an open task: the selected task in {route}.md is {}; closed tasks keep their fields as history",
+                marker.authored,
+                task.status_name
+            )));
+        }
+        let source_line =
+            line_text_at(&current_contents, task.line_index)?.to_string();
+        if !self.load_catalog(warnings) {
+            return Err(CaptureError::io(
+                "could not load the task-type catalog to validate `#<type>`",
+            ));
+        }
+        let found = {
+            let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+            let Some(found) = resolve_accepted_type_name(
+                catalog,
+                &marker.name,
+                marker.literal,
+            ) else {
+                return Err(self.type_not_configured_error(marker, catalog));
+            };
+            found
+        };
+        if !self.load_config(warnings) {
+            return Err(CaptureError::io(format!(
+                "read plan config {} to apply task type",
+                self.config_path.display()
+            )));
+        }
+        let cfg = self.cfg.as_ref().expect("loaded plan config");
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        let (x_key, x_name) = (found.key, found.name);
+        let residence_path = relative_target(Some(route));
+        let residence = Path::new(&residence_path);
+        let suggested = suggest::suggest_for_task(
+            &mut self.resolver,
+            catalog,
+            cfg,
+            residence,
+            &source_line,
+        );
+        for warning in suggested.warnings {
+            let identity = (warning.code.clone(), warning.path.clone());
+            if self.warned_suggestions.insert(identity) {
+                warnings.push(CaptureWarning::Suggestion(warning));
+            }
+        }
+        let inherited = suggestion_inherited(suggested.suggestion.as_ref());
+        let inherited_key =
+            inherited.as_ref().map(|item| item.theme.key.as_str());
+        let field = parse_task_theme(&source_line);
+        let x_eq_i = inherited_key == Some(x_key.as_str());
+        let (action, theme, edited_line) = if x_eq_i {
+            match field {
+                TaskThemeState::None => {
+                    let display = catalog.display_name(&x_key, &x_name);
+                    let theme_ref = catalog.theme_ref(&x_key, &display);
+                    ("kept", Some(theme_ref), source_line.clone())
+                }
+                _ => {
+                    let cleared = clear_task_theme(&source_line);
+                    ("cleared", None, cleared)
+                }
+            }
+        } else {
+            let field_is_x = match &field {
+                TaskThemeState::Set { key, .. } => key == &x_key,
+                _ => false,
+            };
+            if field_is_x {
+                let display = catalog.display_name(&x_key, &x_name);
+                let theme_ref = catalog.theme_ref(&x_key, &display);
+                ("kept", Some(theme_ref), source_line.clone())
+            } else {
+                let display = catalog.display_name(&x_key, &x_name);
+                let theme_ref = catalog.theme_ref(&x_key, &display);
+                let edited = set_task_theme(&source_line, &display);
+                ("set", Some(theme_ref), edited)
+            }
+        };
+        let previous = valid_previous_theme(&field, catalog);
+        let summary = CaptureTaskThemeChange {
+            action,
+            theme,
+            previous,
+            inherited,
+        };
+        if edited_line != source_line {
+            let line_index = task.line_index;
+            self.write_task_field_at_line(planner, target, line_index, |_| {
+                edited_line.clone()
+            })?;
+        }
+        Ok(ExistingTypeMarkerApplication {
+            summary,
+            type_key: x_key,
+            type_name: x_name,
+        })
+    }
+
+    fn write_task_field_at_line(
+        &self,
+        planner: &mut CaptureBatchPlanner,
+        target: &Path,
+        line_index: usize,
+        update: impl FnOnce(&str) -> String,
+    ) -> Result<String, CaptureError> {
+        let current = planner.read_existing(target)?;
+        let spans = line_spans(&current);
+        let span = spans.get(line_index).ok_or_else(|| {
+            CaptureError::io(
+                "task theme capture invariant failed: task line is out of range",
+            )
+        })?;
+        let start = line_index
+            .checked_sub(1)
+            .map_or(0, |previous| spans[previous].end);
+        let segment = &current[start..span.end];
+        let updated_segment = update(segment);
+        let (_, line_ending) =
+            crate::native::markdown::split_line_ending(segment);
+        let updated_segment = if line_ending.is_empty() {
+            updated_segment
+        } else {
+            let (body, _) =
+                crate::native::markdown::split_line_ending(&updated_segment);
+            format!("{body}{line_ending}")
+        };
+        let mut updated = String::with_capacity(
+            current.len() + updated_segment.len().saturating_sub(segment.len()),
+        );
+        updated.push_str(&current[..start]);
+        updated.push_str(&updated_segment);
+        updated.push_str(&current[span.end..]);
+        planner.stage(target, updated.clone())?;
+        line_text_at(&updated, line_index).map(str::to_string)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
