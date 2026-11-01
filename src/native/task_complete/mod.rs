@@ -16,6 +16,7 @@ pub(crate) mod tree;
 #[allow(dead_code)]
 pub(crate) mod verdicts;
 
+pub(crate) use keep_moving::KeepMovingFold;
 pub(crate) use project_pull_in::{
     closed_prj_may_have_parent, inspect_pull_ins, PROJECT_CREATED_TRIGGER,
 };
@@ -26,6 +27,7 @@ pub(crate) use successors::{
     is_inbox_note, live_link_keys, plan_successors, ClosingContext,
     ClosingContinuation, CompletedTask, OfferGroup, OfferOrderKey, OfferReport,
     ProjectFold, SuccessorInput, SuccessorPlan, SuccessorSelection,
+    UnblockedRow,
 };
 pub(crate) use tree::{
     complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,

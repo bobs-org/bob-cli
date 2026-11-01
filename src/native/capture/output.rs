@@ -220,16 +220,25 @@ pub(super) struct PomodoroCloseSummaryJson {
     /// (`docs/task-dependencies.md` §12.5). Empty when the close
     /// completed nothing with an `[id::]` identity.
     pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
+    /// Keep-moving offers (`docs/task-dependencies.md` §12.15), always
+    /// present and possibly empty, in schema version 1.
+    pub(super) keep_moving: Vec<TaskCompleteUnblockedJson>,
     /// Open dependents of the completed tasks that stay blocked.
     pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
     /// `"checked"` when the dependents lookup ran or the `[id::]` gate
     /// proved it unnecessary; `"unavailable"` when the snapshot could
-    /// not be built and the close succeeded without linking.
+    /// not be built and the close succeeded without linking. Keep-moving
+    /// safe rows still offer under `"unavailable"` (§12.15 KM31).
     pub(super) unblocked_check: &'static str,
     /// Project-group folded counts from this close's successor plan.
     /// Never serialized.
     #[serde(skip)]
     pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
+    /// Keep-moving folded counts from this close's successor plan.
+    /// Never serialized.
+    #[serde(skip)]
+    pub(super) keep_moving_folds:
+        Vec<crate::native::task_complete::KeepMovingFold>,
 }
 
 /// One note-free `x0` reset: the current Pomodoro returned to the
@@ -767,12 +776,18 @@ pub(super) struct TaskCompleteSummaryJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) ledger: Option<TaskCompleteLedgerJson>,
     pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
+    pub(super) keep_moving: Vec<TaskCompleteUnblockedJson>,
     pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
     pub(super) unblocked_check: &'static str,
     /// Project-group folded counts from this item's successor plan.
     /// Never serialized.
     #[serde(skip)]
     pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
+    /// Keep-moving folded counts from this item's successor plan.
+    /// Never serialized.
+    #[serde(skip)]
+    pub(super) keep_moving_folds:
+        Vec<crate::native::task_complete::KeepMovingFold>,
 }
 
 /// One embedded subtask closed by a `task_complete` item.
@@ -961,6 +976,10 @@ pub(super) struct PullInFoldedJson {
     pub(super) hidden: usize,
     pub(super) already_planned: usize,
     pub(super) sub_projects: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) blocked: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) scheduled: usize,
 }
 
 /// One open dependent of the completed tasks that stays blocked
@@ -1768,7 +1787,7 @@ fn print_pull_in_hint(result: &CaptureResult) {
             result.captures.as_slice()
         };
         for item in items {
-            for row in all_unblocked(item) {
+            for row in all_offer_rows(item) {
                 if let Some(offer) = row.offer.as_ref() {
                     numbers.push(offer.n);
                 }
@@ -1887,6 +1906,75 @@ pub(super) fn unblocked_vecs_mut(
         vecs.push(successors);
     }
     vecs
+}
+
+/// Every keep-moving row an item reports: whole-item `task_complete`,
+/// every nested `relation_completes` summary, then `pomodoro_close`.
+/// Used for draft-level numbering, probes, selection validation,
+/// pull-in, and net filtering so nested completions share one number
+/// space with unblocked rows.
+pub(super) fn all_keep_moving(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &TaskCompleteUnblockedJson> {
+    item.task_complete
+        .iter()
+        .flat_map(|summary| summary.keep_moving.iter())
+        .chain(
+            item.relation_completes
+                .iter()
+                .flat_map(|complete| complete.task_complete.keep_moving.iter()),
+        )
+        .chain(
+            item.pomodoro_close
+                .iter()
+                .flat_map(|summary| summary.keep_moving.iter()),
+        )
+}
+
+/// Every successor offer row an item reports, unblocked then keep-moving,
+/// in the same per-summary order as [`all_unblocked`]. Used for
+/// draft-level numbering, probes, selection validation, pull-in counts,
+/// and refusal payloads (`docs/task-dependencies.md` §12.5, §12.15).
+pub(super) fn all_offer_rows(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &TaskCompleteUnblockedJson> {
+    all_unblocked(item).chain(all_keep_moving(item))
+}
+
+/// Mutable access to every keep-moving vec an item reports, in the same
+/// order as [`all_keep_moving`].
+pub(super) fn keep_moving_vecs_mut(
+    item: &mut CaptureItemResult,
+) -> Vec<&mut Vec<TaskCompleteUnblockedJson>> {
+    let mut vecs = Vec::new();
+    if let Some(summary) = item.task_complete.as_mut() {
+        vecs.push(&mut summary.keep_moving);
+    }
+    for complete in &mut item.relation_completes {
+        vecs.push(&mut complete.task_complete.keep_moving);
+    }
+    if let Some(summary) = item.pomodoro_close.as_mut() {
+        vecs.push(&mut summary.keep_moving);
+    }
+    vecs
+}
+
+/// Every keep-moving fold an item reports, in the same order as
+/// [`all_keep_moving`].
+pub(super) fn all_keep_moving_folds(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &crate::native::task_complete::KeepMovingFold> {
+    item.task_complete
+        .iter()
+        .flat_map(|summary| summary.keep_moving_folds.iter())
+        .chain(item.relation_completes.iter().flat_map(|complete| {
+            complete.task_complete.keep_moving_folds.iter()
+        }))
+        .chain(
+            item.pomodoro_close
+                .iter()
+                .flat_map(|summary| summary.keep_moving_folds.iter()),
+        )
 }
 
 /// Shared `!` detail rows for reuse by relation rows: closed subtasks,
@@ -4622,9 +4710,11 @@ mod tests {
             subtasks_left_open: Vec::new(),
             ledger: None,
             unblocked: Vec::new(),
+            keep_moving: Vec::new(),
             still_blocked: Vec::new(),
             unblocked_check: "checked",
             project_folds: Vec::new(),
+            keep_moving_folds: Vec::new(),
         }
     }
 

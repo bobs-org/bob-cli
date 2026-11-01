@@ -414,14 +414,15 @@ impl PomodoroBlockTracker {
 
     /// Re-extract every tracked block from the final staged day text,
     /// diff it against its pre-batch bytes, and mark added lines that
-    /// equal a surviving successor bullet with `reason: "unblocked"`
-    /// (`docs/task-dependencies.md` §12.5). The caller passes only
-    /// surviving links (net of the batch post-pass), so dropped
-    /// successors lose their marker here.
-    pub(super) fn finish_with_unblocked(
+    /// equal a surviving successor bullet with its surviving reason:
+    /// `"unblocked"` or `"keep_moving"` (`docs/task-dependencies.md`
+    /// §12.5, §12.15). The caller passes only surviving links (net of
+    /// the batch post-pass), so dropped successors lose their marker
+    /// here.
+    pub(super) fn finish_with_successor_reasons(
         self,
         final_contents: Option<&str>,
-        successor_links: &std::collections::BTreeSet<String>,
+        successor_reasons: &std::collections::BTreeMap<String, &'static str>,
     ) -> Vec<PomodoroBlockJson> {
         let Some(final_contents) = final_contents else {
             return Vec::new();
@@ -499,11 +500,14 @@ impl PomodoroBlockTracker {
             for line in lines.iter_mut() {
                 if line.change == PomodoroBlockChange::Added
                     && line.reason.is_none()
-                    && successor_links.iter().any(|link| {
-                        line.text.trim_start() == format!("- {link}").as_str()
-                    })
                 {
-                    line.reason = Some("unblocked");
+                    let trimmed = line.text.trim_start();
+                    for (link, reason) in successor_reasons.iter() {
+                        if trimmed == format!("- {link}").as_str() {
+                            line.reason = Some(reason);
+                            break;
+                        }
+                    }
                 }
             }
             blocks.push(PomodoroBlockJson {
@@ -1100,9 +1104,9 @@ mod tests {
         for (pre, post, refs) in items {
             tracker.track_item(Some(pre), Some(post), refs.clone());
         }
-        tracker.finish_with_unblocked(
+        tracker.finish_with_successor_reasons(
             Some(final_contents),
-            &std::collections::BTreeSet::new(),
+            &std::collections::BTreeMap::new(),
         )
     }
 

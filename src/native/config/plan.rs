@@ -12,6 +12,7 @@ pub(crate) struct PlanConfig {
     pub(crate) max_ready: u32,
     pub(crate) max_ready_per_note: u32,
     pub(crate) link_unblocked: bool,
+    pub(crate) keep_moving: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
     /// Canonical reading-task type, or `None` when the rule is `off`.
@@ -29,6 +30,7 @@ impl Default for PlanConfig {
             max_ready: 100,
             max_ready_per_note: 5,
             link_unblocked: true,
+            keep_moving: true,
             exempt: vec!["PLAN".to_string()],
             inventory_labels: vec![
                 "LATER".to_string(),
@@ -65,6 +67,10 @@ impl PlanConfig {
 
     pub(crate) fn link_unblocked(&self) -> bool {
         self.link_unblocked
+    }
+
+    pub(crate) fn keep_moving(&self) -> bool {
+        self.keep_moving
     }
 
     pub(crate) fn exempt(&self) -> &[String] {
@@ -231,6 +237,19 @@ pub(crate) fn parse_plan_config(
             )));
         }
     };
+    // Keep-moving kill switch (`docs/task-dependencies.md` §12.15):
+    // boolean only; an invalid value fails the load and the caller falls
+    // back to `true` through the existing warning paths.
+    let keep_moving_value = match get("keep_moving") {
+        None | Some(serde_yaml::Value::Null) => defaults.keep_moving,
+        Some(serde_yaml::Value::Bool(flag)) => flag,
+        Some(other) => {
+            return Err(ConfigError::Invalid(format!(
+                "plan.keep_moving in {path_display} must be a boolean; got {}",
+                render_scalar(&other)
+            )));
+        }
+    };
 
     let strings = |name: &str, value: Option<serde_yaml::Value>| {
         let Some(value) = value else {
@@ -296,6 +315,7 @@ pub(crate) fn parse_plan_config(
             defaults.max_ready_per_note,
         )?,
         link_unblocked: link_unblocked_value,
+        keep_moving: keep_moving_value,
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
         reading_theme,
@@ -470,6 +490,8 @@ mod tests {
             "plan:\n  max_ready_per_note: 4294967296\n",
             "plan:\n  link_unblocked: \"yes\"\n",
             "plan:\n  link_unblocked: 1\n",
+            "plan:\n  keep_moving: \"yes\"\n",
+            "plan:\n  keep_moving: 1\n",
             "plan:\n  exempt: GTD\n",
             "plan:\n  exempt: [GTD, '']\n",
             "plan:\n  exempt: [GTD, 7]\n",
@@ -511,6 +533,34 @@ mod tests {
         )
         .expect("explicit false");
         assert!(!disabled.link_unblocked());
+    }
+
+    #[test]
+    fn keep_moving_defaults_true_and_parses_values() {
+        let defaulted = parse_plan_config(
+            "plan:\n  max_links: 12\n",
+            Path::new("/config.yml"),
+        )
+        .expect("absent keep_moving");
+        assert!(defaulted.keep_moving());
+        let nulled = parse_plan_config(
+            "plan:\n  keep_moving: null\n",
+            Path::new("/config.yml"),
+        )
+        .expect("null keep_moving");
+        assert!(nulled.keep_moving());
+        let enabled = parse_plan_config(
+            "plan:\n  keep_moving: true\n",
+            Path::new("/config.yml"),
+        )
+        .expect("explicit true");
+        assert!(enabled.keep_moving());
+        let disabled = parse_plan_config(
+            "plan:\n  keep_moving: false\n",
+            Path::new("/config.yml"),
+        )
+        .expect("explicit false");
+        assert!(!disabled.keep_moving());
     }
 
     #[test]

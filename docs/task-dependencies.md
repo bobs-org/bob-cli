@@ -1454,7 +1454,8 @@ See §12.15 for the trigger, the offer set, and the copy.
 
 - `"checked"`: the lookup ran, or the gate proved it unnecessary.
 - `"unavailable"`: the dependents snapshot could not be built. The close
-  still succeeds and nothing is offered or linked.
+  still succeeds with legacy recovery suppressed, but KM31's independently
+  safe keep-moving rows still offer (§12.15).
 - A missing key means an older `bob`.
 
 **Top-level `pull_in`**

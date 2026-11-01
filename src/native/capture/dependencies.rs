@@ -52,6 +52,7 @@ pub(super) struct DependencyContext {
     previous_daily: OnceLock<Option<PathBuf>>,
     dependents: OnceLock<DependentsSnapshot>,
     link_unblocked: OnceLock<bool>,
+    keep_moving: OnceLock<bool>,
     blocks_lines: OnceLock<(bool, Option<String>)>,
     linked_from_lines: OnceLock<(bool, Option<String>)>,
     linked_from_mentions: OnceLock<(bool, Option<String>)>,
@@ -83,6 +84,7 @@ impl DependencyContext {
             previous_daily: OnceLock::new(),
             dependents: OnceLock::new(),
             link_unblocked: OnceLock::new(),
+            keep_moving: OnceLock::new(),
             blocks_lines: OnceLock::new(),
             linked_from_lines: OnceLock::new(),
             linked_from_mentions: OnceLock::new(),
@@ -145,6 +147,18 @@ impl DependencyContext {
         *self.link_unblocked.get_or_init(|| {
             config::load_plan_config(&config::config_path())
                 .map(|loaded| loaded.link_unblocked())
+                .unwrap_or(true)
+        })
+    }
+
+    /// Keep-moving kill switch (`docs/task-dependencies.md` §12.15), read
+    /// once per batch: `plan.keep_moving`, defaulting to `true`. An
+    /// invalid plan config falls back to `true` through the existing
+    /// plan-budget warning paths.
+    pub(super) fn keep_moving(&self) -> bool {
+        *self.keep_moving.get_or_init(|| {
+            config::load_plan_config(&config::config_path())
+                .map(|loaded| loaded.keep_moving())
                 .unwrap_or(true)
         })
     }

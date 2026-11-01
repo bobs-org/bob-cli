@@ -216,9 +216,11 @@ pub(super) fn plan_capture_batch_with_config_path(
         &mut warnings,
     )?;
     let final_day = planner.peek_text(&day_file);
-    let successor_links = surviving_successor_links(&items);
-    let pomodoro_blocks = block_tracker
-        .finish_with_unblocked(final_day.as_deref(), &successor_links);
+    let successor_reasons = surviving_successor_link_reasons(&items);
+    let pomodoro_blocks = block_tracker.finish_with_successor_reasons(
+        final_day.as_deref(),
+        &successor_reasons,
+    );
     let task_blocks = task_tracker.finish(&planner);
     // The BLOCKS kill-switch warning surfaces once per batch, and only
     // when a dependency write consulted the switch (§14.10). Plain

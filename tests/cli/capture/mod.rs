@@ -27,6 +27,7 @@ mod event_task_close;
 mod flag_guard;
 mod freshness_stamps;
 mod inbox_route;
+mod keep_moving;
 mod link_guard;
 mod meet_event_run;
 mod mentions;

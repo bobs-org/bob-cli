@@ -98,7 +98,7 @@ fn number_draft_offers(
     }
     let mut rows = Vec::new();
     for (item_index, item) in items.iter().enumerate() {
-        for row in super::output::all_unblocked(&item.result) {
+        for row in super::output::all_offer_rows(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 rows.push(RowRef {
                     item: item_index,
@@ -150,7 +150,16 @@ fn number_draft_offers(
     };
     for item in items.iter_mut() {
         for vec in super::output::unblocked_vecs_mut(&mut item.result) {
-            for row in vec {
+            for row in vec.iter_mut() {
+                if let Some(offer) = row.offer.as_mut()
+                    && let Some(&n) = n_map.get(&offer.key)
+                {
+                    offer.n = n;
+                }
+            }
+        }
+        for vec in super::output::keep_moving_vecs_mut(&mut item.result) {
+            for row in vec.iter_mut() {
                 if let Some(offer) = row.offer.as_mut()
                     && let Some(&n) = n_map.get(&offer.key)
                 {
@@ -191,7 +200,7 @@ fn completion_summary_count(
 fn offer_n_map(items: &[PlannedCaptureItem]) -> BTreeMap<String, usize> {
     let mut map = BTreeMap::new();
     for item in items {
-        for row in super::output::all_unblocked(&item.result) {
+        for row in super::output::all_offer_rows(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 map.insert(offer.key.clone(), offer.n);
             }
@@ -205,7 +214,7 @@ fn key_for_number(
     number: usize,
 ) -> Option<String> {
     for item in items {
-        for row in super::output::all_unblocked(&item.result) {
+        for row in super::output::all_offer_rows(&item.result) {
             if let Some(offer) = row.offer.as_ref()
                 && offer.n == number
             {
@@ -219,7 +228,7 @@ fn key_for_number(
 fn surviving_keys(items: &[PlannedCaptureItem]) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
     for item in items {
-        for row in super::output::all_unblocked(&item.result) {
+        for row in super::output::all_offer_rows(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 keys.insert(offer.key.clone());
             }
@@ -255,7 +264,7 @@ fn unknown_pick_error(
     )];
     let mut offers: Vec<(usize, String, String)> = Vec::new();
     for item in items {
-        for row in super::output::all_unblocked(&item.result) {
+        for row in super::output::all_offer_rows(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 offers.push((offer.n, offer.key.clone(), row.text.clone()));
             }
@@ -274,7 +283,7 @@ fn choice_required_error(
 ) -> CaptureError {
     let offers: Vec<TaskCompleteUnblockedJson> = items
         .iter()
-        .flat_map(|item| super::output::all_unblocked(&item.result))
+        .flat_map(|item| super::output::all_offer_rows(&item.result))
         .filter(|row| row.offer.is_some())
         .cloned()
         .collect();
@@ -296,10 +305,10 @@ pub(super) fn assemble_pull_in(
 ) -> PullInJson {
     let mut offer_count = 0;
     let mut picked_count = 0;
-    let mut folds: BTreeMap<String, crate::native::task_complete::ProjectFold> =
+    let mut folds: BTreeMap<(&'static str, String), PullInFoldedJson> =
         BTreeMap::new();
     for item in items {
-        for row in super::output::all_unblocked(&item.result) {
+        for row in super::output::all_offer_rows(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 offer_count += 1;
                 if offer.selected {
@@ -308,21 +317,56 @@ pub(super) fn assemble_pull_in(
             }
         }
         for fold in super::output::all_project_folds(&item.result) {
-            folds.insert(display_relative(&fold.project), fold.clone());
+            folds.insert(
+                ("project", display_relative(&fold.project)),
+                PullInFoldedJson {
+                    hidden: fold.hidden,
+                    already_planned: fold.already_planned,
+                    sub_projects: fold.sub_projects,
+                    blocked: 0,
+                    scheduled: 0,
+                },
+            );
+        }
+        for fold in super::output::all_keep_moving_folds(&item.result) {
+            // Project folds cannot overwrite keep-moving folds: key by
+            // group and project.
+            folds.insert(
+                ("keep_moving", display_relative(&fold.project)),
+                PullInFoldedJson {
+                    hidden: fold.hidden,
+                    already_planned: 0,
+                    sub_projects: 0,
+                    blocked: fold.blocked,
+                    scheduled: fold.scheduled,
+                },
+            );
         }
     }
-    let groups = folds
+    let mut groups: Vec<PullInGroupJson> = folds
         .into_iter()
-        .map(|(project, fold)| PullInGroupJson {
-            group: "project",
+        .map(|((group, project), folded)| PullInGroupJson {
+            group,
             project,
-            folded: PullInFoldedJson {
-                hidden: fold.hidden,
-                already_planned: fold.already_planned,
-                sub_projects: fold.sub_projects,
-            },
+            folded,
         })
         .collect();
+    // Omit groups with no surviving selectable rows is handled by the
+    // engine (folds only exist for offered projects). Keep the group
+    // order stable: project groups first, then keep-moving by path.
+    groups.sort_by(|left, right| {
+        (match left.group {
+            "project" => 0,
+            _ => 1,
+        })
+        .cmp(
+            &(match right.group {
+                "project" => 0,
+                _ => 1,
+            }),
+        )
+        .then(left.project.cmp(&right.project))
+    });
     PullInJson {
         supported: true,
         offer_count,
@@ -342,9 +386,12 @@ pub(super) fn offer_json(
         group: offer.group.as_str(),
         selected: offer.selected,
         block_id_needed: offer.block_id_needed,
-        project: (offer.group == OfferGroup::Project)
-            .then(|| offer.project.as_ref().map(|path| display_relative(path)))
-            .flatten(),
+        project: matches!(
+            offer.group,
+            OfferGroup::Project | OfferGroup::KeepMoving
+        )
+        .then(|| offer.project.as_ref().map(|path| display_relative(path)))
+        .flatten(),
         destination: TaskCompleteOfferDestinationJson {
             day_file: display_relative(&offer.destination.day_file),
             entry_name: offer.destination.entry_name.clone(),

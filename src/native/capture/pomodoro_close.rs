@@ -500,9 +500,11 @@ pub(super) fn build_close_summary_json(
         notes: ledger.notes.clone(),
         next_pomodoro,
         unblocked: Vec::new(),
+        keep_moving: Vec::new(),
         still_blocked: Vec::new(),
         unblocked_check: "checked",
         project_folds: Vec::new(),
+        keep_moving_folds: Vec::new(),
     };
     refresh_close_headline(&ledger.contents, &mut summary);
     (summary, extra_warnings)
@@ -566,9 +568,11 @@ pub(super) fn stage_close_plan(
 /// Outcome of the close successor pass, ready for the summary JSON.
 struct CloseSuccessorOutcome {
     unblocked: Vec<TaskCompleteUnblockedJson>,
+    keep_moving: Vec<TaskCompleteUnblockedJson>,
     still_blocked: Vec<TaskCompleteStillBlockedJson>,
     unblocked_check: &'static str,
     project_folds: Vec<crate::native::task_complete::ProjectFold>,
+    keep_moving_folds: Vec<crate::native::task_complete::KeepMovingFold>,
 }
 
 /// 0-based line of the closed entry in the post-close day text: the
@@ -606,6 +610,7 @@ fn name_successor_continuation(
     let Some(link) = outcome
         .unblocked
         .iter()
+        .chain(outcome.keep_moving.iter())
         .filter_map(|row| row.link.as_ref())
         .find(|link| link.entry_created)
     else {
@@ -647,9 +652,11 @@ fn plan_close_successors(
     use crate::native::task_complete as engine;
     let empty = |check: &'static str| CloseSuccessorOutcome {
         unblocked: Vec::new(),
+        keep_moving: Vec::new(),
         still_blocked: Vec::new(),
         unblocked_check: check,
         project_folds: Vec::new(),
+        keep_moving_folds: Vec::new(),
     };
     let bob_dir = &request.bob_dir;
     let settings = note_tasks::read_settings(bob_dir);
@@ -751,10 +758,24 @@ fn plan_close_successors(
         today,
         note_index.as_ref(),
     );
-    if !gate.has_candidates && !gate.needs_dependents {
+    // Keep-moving G1-G3 pre-gate: no I/O, so a non-leaf close adds no
+    // reads. Preserve `pre_day` versus `post_day` for Pomodoro closes.
+    let held_notes: Vec<(PathBuf, String)> = note_texts.clone();
+    let keep_moving_candidate =
+        crate::native::task_complete::keep_moving::keep_moving_pre_gate(
+            &predecessors,
+            &held_notes,
+            pre_day.as_deref(),
+            today,
+            &tasks_settings,
+        );
+    if !gate.has_candidates && !gate.needs_dependents && !keep_moving_candidate
+    {
         return Ok(empty("checked"));
     }
-    let snapshot = if gate.needs_dependents {
+    let needs_snapshot = gate.needs_dependents || keep_moving_candidate;
+    let mut unblocked_check = "checked";
+    let snapshot = if needs_snapshot {
         let overlay =
             super::task_complete::staged_overlay_map(bob_dir, planner);
         if !dependency_ctx
@@ -762,10 +783,13 @@ fn plan_close_successors(
             .snapshot_complete(&overlay)
         {
             // An incomplete snapshot is non-fatal: the close still
-            // succeeds and nothing is linked or pulled in.
-            return Ok(empty("unavailable"));
+            // succeeds with legacy recovery suppressed, but KM31's
+            // independently safe keep-moving rows still offer.
+            unblocked_check = "unavailable";
+            Vec::new()
+        } else {
+            staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx)
         }
-        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx)
     } else {
         // Trigger (a) with no dependency fields needs only C's staged
         // project text, so skip the dependents snapshot entirely.
@@ -797,7 +821,7 @@ fn plan_close_successors(
         ));
     }
     let index = note_index.as_ref().expect("index built above");
-    let successor_plan = engine::plan_successors(engine::SuccessorInput {
+    let mut successor_plan = engine::plan_successors(engine::SuccessorInput {
         bob_dir: Some(bob_dir),
         completed: predecessors,
         snapshot,
@@ -814,11 +838,18 @@ fn plan_close_successors(
         tasks_settings: &tasks_settings,
         note_settings: &settings,
         link_unblocked: dependency_ctx.link_unblocked(),
-        keep_moving: false,
-        snapshot_complete: true,
+        keep_moving: dependency_ctx.keep_moving(),
+        snapshot_complete: unblocked_check != "unavailable",
         selection: request.selection.clone(),
         index,
     });
+    if unblocked_check == "unavailable" {
+        // KM31: suppress legacy recovery against incomplete data while
+        // keeping independently safe keep-moving rows.
+        successor_plan.unblocked.clear();
+        successor_plan.still_blocked.clear();
+        successor_plan.project_folds.clear();
+    }
     for (relative_path, text) in &successor_plan.changed_files {
         planner.stage(&bob_dir.join(relative_path), text.clone())?;
     }
@@ -836,10 +867,8 @@ fn plan_close_successors(
             },
         )
     };
-    let unblocked = successor_plan
-        .unblocked
-        .iter()
-        .map(|dependent| TaskCompleteUnblockedJson {
+    let map_row =
+        |dependent: &engine::UnblockedRow| TaskCompleteUnblockedJson {
             note_path: display_relative(&dependent.note_path),
             block_id: dependent.block_id.clone(),
             line: dependent.line,
@@ -877,7 +906,16 @@ fn plan_close_successors(
             trigger: dependent.trigger,
             hide_removed: dependent.hide_removed,
             offer: dependent.offer.as_ref().map(offer_json),
-        })
+        };
+    let unblocked = successor_plan
+        .unblocked
+        .iter()
+        .map(&map_row)
+        .collect::<Vec<_>>();
+    let keep_moving = successor_plan
+        .keep_moving
+        .iter()
+        .map(&map_row)
         .collect::<Vec<_>>();
     let still_blocked = successor_plan
         .still_blocked
@@ -899,7 +937,8 @@ fn plan_close_successors(
             trigger: blocked.trigger,
         })
         .collect::<Vec<_>>();
-    // Task blocks: successors keep the unblocked role, as for `!`.
+    // Task blocks: successors keep the unblocked role, as for `!`;
+    // keep-moving picks keep the keep-moving role.
     for dependent in &successor_plan.unblocked {
         let absolute_path = bob_dir.join(&dependent.note_path);
         let rel = display_relative(&dependent.note_path);
@@ -918,13 +957,34 @@ fn plan_close_successors(
             },
         );
     }
+    for dependent in &successor_plan.keep_moving {
+        if dependent.link.is_none() {
+            continue;
+        }
+        let absolute_path = bob_dir.join(&dependent.note_path);
+        let rel = display_relative(&dependent.note_path);
+        let mut stem = dependent.note_path.clone();
+        stem.set_extension("");
+        super::task_complete::push_keep_moving_ref(
+            task_block_refs,
+            absolute_path,
+            rel,
+            display_relative(&stem),
+            dependent.line.saturating_sub(1),
+            if dependent.block_id.is_empty() {
+                None
+            } else {
+                Some(dependent.block_id.clone())
+            },
+        );
+    }
     Ok(CloseSuccessorOutcome {
         unblocked,
+        keep_moving,
         still_blocked,
-        // The lookup ran here, or the empty-C gate above proved it
-        // unnecessary: either way the check reads "checked".
-        unblocked_check: "checked",
+        unblocked_check,
         project_folds: successor_plan.project_folds.clone(),
+        keep_moving_folds: successor_plan.keep_moving_folds.clone(),
     })
 }
 
@@ -1531,9 +1591,11 @@ pub(super) fn plan_pomodoro_close_item(
     )?;
     name_successor_continuation(&mut summary, &successors);
     summary.unblocked = successors.unblocked;
+    summary.keep_moving = successors.keep_moving;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
     summary.project_folds = successors.project_folds;
+    summary.keep_moving_folds = successors.keep_moving_folds;
     let post_day = planner.read_existing(&day_file)?;
     let closed_line = refresh_close_headline(&post_day, &mut summary);
     let mut pomodoro_refs = vec![PomodoroBlockRef::at(
@@ -2255,9 +2317,11 @@ pub(super) fn plan_pomodoro_close_link_item(
     )?;
     name_successor_continuation(&mut summary, &successors);
     summary.unblocked = successors.unblocked;
+    summary.keep_moving = successors.keep_moving;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
     summary.project_folds = successors.project_folds;
+    summary.keep_moving_folds = successors.keep_moving_folds;
     task_block_refs.extend(close_task_block_ref);
     // Block refs: the closed entry was the pre-link running entry
     // (`destination` still carries its pre-link line); a moved source
@@ -2550,9 +2614,11 @@ pub(super) fn plan_pomodoro_close_task_item(
     )?;
     name_successor_continuation(&mut summary, &successors);
     summary.unblocked = successors.unblocked;
+    summary.keep_moving = successors.keep_moving;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
     summary.project_folds = successors.project_folds;
+    summary.keep_moving_folds = successors.keep_moving_folds;
     // Block refs: the closed entry was the pre-link running entry; a
     // moved source resolves through the item's line map; the next entry
     // is named by the close card, so it shows even when byte-identical.

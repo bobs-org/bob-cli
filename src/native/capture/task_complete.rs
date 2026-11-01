@@ -194,9 +194,11 @@ pub(super) fn complete_existing_task(
             subtasks_left_open: Vec::new(),
             ledger: None,
             unblocked: Vec::new(),
+            keep_moving: Vec::new(),
             still_blocked: Vec::new(),
             unblocked_check: "checked",
             project_folds: Vec::new(),
+            keep_moving_folds: Vec::new(),
         };
         return Ok(CompleteExistingTaskOutcome {
             summary,
@@ -383,15 +385,31 @@ pub(super) fn complete_existing_task(
     };
     let mut successor_plan = engine::SuccessorPlan::default();
     let mut unblocked_check = "checked";
-    if gate.has_candidates || gate.needs_dependents {
-        let snapshot = if gate.needs_dependents {
+    // Keep-moving G1-G3 pre-gate over held completed-note and baseline day
+    // text: no I/O, so a non-leaf close adds no reads.
+    let held_notes: Vec<(PathBuf, String)> = note_texts.clone();
+    let keep_moving_candidate =
+        crate::native::task_complete::keep_moving::keep_moving_pre_gate(
+            &predecessors,
+            &held_notes,
+            pre_day_text.as_deref(),
+            today,
+            &tasks_settings,
+        );
+    if gate.has_candidates || gate.needs_dependents || keep_moving_candidate {
+        // Build the vault-wide snapshot only when legacy gates need it
+        // or an eligible keep-moving candidate/project safety needs
+        // dependency proof. Otherwise only staged project text is needed.
+        let needs_snapshot = gate.needs_dependents || keep_moving_candidate;
+        let snapshot = if needs_snapshot {
             let overlay = staged_overlay_map(bob_dir, planner);
             let snapshot_ready = dependency_ctx
                 .dependents_snapshot()
                 .snapshot_complete(&overlay);
             if !snapshot_ready {
                 // An incomplete snapshot is non-fatal: the close still
-                // succeeds and nothing is linked or pulled in.
+                // succeeds with legacy recovery suppressed, but KM31's
+                // independently safe keep-moving rows still offer.
                 unblocked_check = "unavailable";
                 Vec::new()
             } else {
@@ -402,10 +420,7 @@ pub(super) fn complete_existing_task(
             // project text, so do not build the vault-wide snapshot.
             Vec::new()
         };
-        if unblocked_check == "unavailable" {
-            // The project rule explicitly suppresses all writes when the
-            // required dependents snapshot is incomplete.
-        } else {
+        {
             if note_index.is_none() {
                 note_index =
                     Some(staged_note_index(bob_dir, planner, dependency_ctx));
@@ -424,11 +439,18 @@ pub(super) fn complete_existing_task(
                 tasks_settings: &tasks_settings,
                 note_settings: &settings,
                 link_unblocked: dependency_ctx.link_unblocked(),
-                keep_moving: false,
+                keep_moving: dependency_ctx.keep_moving(),
                 snapshot_complete: unblocked_check != "unavailable",
                 selection: request.selection.clone(),
                 index,
             });
+            if unblocked_check == "unavailable" {
+                // KM31: suppress legacy recovery against incomplete data
+                // while keeping independently safe keep-moving rows.
+                successor_plan.unblocked.clear();
+                successor_plan.still_blocked.clear();
+                successor_plan.project_folds.clear();
+            }
             for (relative_path, text) in &successor_plan.changed_files {
                 let absolute_path = bob_dir.join(relative_path);
                 planner.stage(&absolute_path, text.clone())?;
@@ -592,6 +614,51 @@ pub(super) fn complete_existing_task(
             offer: dependent.offer.as_ref().map(offer_json),
         })
         .collect::<Vec<_>>();
+    let map_row =
+        |dependent: &engine::UnblockedRow| TaskCompleteUnblockedJson {
+            note_path: display_relative(&dependent.note_path),
+            block_id: dependent.block_id.clone(),
+            line: dependent.line,
+            text: clean_row_text(&dependent.text, &dependent.block_id),
+            previous_status_symbol: dependent.previous_status_symbol,
+            previous_status_name: status_name_for(
+                bob_dir,
+                dependent.previous_status_symbol,
+            ),
+            status_symbol: dependent.status_symbol,
+            status_name: status_name_for(bob_dir, dependent.status_symbol),
+            inbox: dependent.inbox,
+            unblocked_by: dependent
+                .unblocked_by
+                .iter()
+                .map(|cause| TaskCompleteUnblockedCauseJson {
+                    note_path: display_relative(&cause.note_path),
+                    block_id: cause.block_id.clone(),
+                    text: cause.text.clone(),
+                })
+                .collect(),
+            link: dependent.link.as_ref().map(|link| {
+                TaskCompleteSuccessorLinkJson {
+                    day_file: day_relative.clone(),
+                    entry_name: link.entry_name.clone(),
+                    entry_line: link.entry_line,
+                    entry_created: link.entry_created,
+                    next_up: link.next_up,
+                    line: link.line,
+                    block_link: link.block_link.clone(),
+                    block_id_created: link.block_id_created,
+                }
+            }),
+            not_linked: dependent.not_linked.map(str::to_string),
+            trigger: dependent.trigger,
+            hide_removed: dependent.hide_removed,
+            offer: dependent.offer.as_ref().map(offer_json),
+        };
+    let keep_moving = successor_plan
+        .keep_moving
+        .iter()
+        .map(&map_row)
+        .collect::<Vec<_>>();
     let still_blocked = successor_plan
         .still_blocked
         .iter()
@@ -622,9 +689,14 @@ pub(super) fn complete_existing_task(
     );
     // The top-level day file is set whenever the gesture changed the
     // day file, so Open Note(s) can include the daily note (§12.5).
+    // Keep-moving picks write the day too.
     let day_changed = ledger_json.is_some()
         || successor_plan
             .unblocked
+            .iter()
+            .any(|row| row.link.is_some())
+        || successor_plan
+            .keep_moving
             .iter()
             .any(|row| row.link.is_some());
     let top_day_file = day_changed.then(|| day_file.display().to_string());
@@ -640,11 +712,14 @@ pub(super) fn complete_existing_task(
         subtasks_left_open: left_open,
         ledger: ledger_json,
         unblocked: unblocked.clone(),
+        keep_moving: keep_moving.clone(),
         still_blocked,
         unblocked_check,
         project_folds: successor_plan.project_folds.clone(),
+        keep_moving_folds: successor_plan.keep_moving_folds.clone(),
     };
-    // Task blocks: completed (root + closed subtasks) + unblocked.
+    // Task blocks: completed (root + closed subtasks) + unblocked +
+    // keep-moving.
     let mut task_block_refs = Vec::new();
     push_completed_ref(
         &mut task_block_refs,
@@ -670,6 +745,30 @@ pub(super) fn complete_existing_task(
         let mut stem = dependent.note_path.clone();
         stem.set_extension("");
         push_unblocked_ref(
+            &mut task_block_refs,
+            absolute_path,
+            rel,
+            display_relative(&stem),
+            dependent.line.saturating_sub(1),
+            if dependent.block_id.is_empty() {
+                None
+            } else {
+                Some(dependent.block_id.clone())
+            },
+        );
+    }
+    for dependent in &successor_plan.keep_moving {
+        // Only selected keep-moving rows write task lines; unpicked rows
+        // write nothing. The tracker still records the touch so the block
+        // renders; the role preserves the keep-moving class.
+        if dependent.link.is_none() {
+            continue;
+        }
+        let absolute_path = bob_dir.join(&dependent.note_path);
+        let rel = display_relative(&dependent.note_path);
+        let mut stem = dependent.note_path.clone();
+        stem.set_extension("");
+        push_keep_moving_ref(
             &mut task_block_refs,
             absolute_path,
             rel,
@@ -834,6 +933,24 @@ pub(super) fn push_unblocked_ref(
         line,
         block_id,
         role: TaskBlockRole::Unblocked,
+    });
+}
+
+pub(super) fn push_keep_moving_ref(
+    refs: &mut Vec<TaskBlockRef>,
+    absolute: PathBuf,
+    relative_target: String,
+    route: String,
+    line: usize,
+    block_id: Option<String>,
+) {
+    refs.push(TaskBlockRef {
+        target: absolute,
+        relative_target,
+        route,
+        line,
+        block_id,
+        role: TaskBlockRole::KeepMoving,
     });
 }
 
@@ -1007,16 +1124,19 @@ pub(super) fn apply_successor_net_post_pass(
 ) {
     // Traverse whole-item `task_complete`, nested `relation_completes`,
     // and `pomodoro_close` rows together so nested completions share the
-    // final net filtering with `!` closes.
+    // final net filtering with `!` closes. Both `unblocked[]` and
+    // `keep_moving[]` share the per-row net checks; full later-item group
+    // invalidation (KM21) is owned by the finish phase.
     let any_linked = items.iter().any(|item| {
-        super::output::all_unblocked(&item.result).any(|row| row.link.is_some())
+        super::output::all_offer_rows(&item.result)
+            .any(|row| row.link.is_some())
     });
     let any_pull_in = items.iter().any(|item| {
-        super::output::all_unblocked(&item.result)
+        super::output::all_offer_rows(&item.result)
             .any(|row| row.trigger == "project_empty")
     });
     let any_offer = items.iter().any(|item| {
-        super::output::all_unblocked(&item.result)
+        super::output::all_offer_rows(&item.result)
             .any(|row| row.offer.is_some())
     });
     if !any_linked && !any_pull_in && !any_offer {
@@ -1060,6 +1180,17 @@ pub(super) fn apply_successor_net_post_pass(
                     &tasks_settings,
                 );
             }
+        }
+        for vec in super::output::keep_moving_vecs_mut(&mut item.result) {
+            vec.retain(|row| {
+                keep_unblocked_row(
+                    row,
+                    &live,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                )
+            });
         }
     }
 }
@@ -1283,18 +1414,29 @@ fn project_has_open_work(
         })
 }
 
-/// Block links of every linked row left after the net post-pass: the
-/// set Pomodoro-block diffs mark with `reason: "unblocked"`. Includes
-/// nested `relation_completes` rows so relation closes share the
-/// surviving-link set with `!` closes.
-pub(super) fn surviving_successor_links(
+/// Block links of every linked row left after the net post-pass, with
+/// the surviving link's class: keep-moving picks report
+/// `reason: "keep_moving"` and dependency picks keep `"unblocked"`.
+/// Includes nested `relation_completes` rows so relation closes share
+/// the surviving-link set with `!` closes.
+pub(super) fn surviving_successor_link_reasons(
     items: &[PlannedCaptureItem],
-) -> BTreeSet<String> {
-    let mut links = BTreeSet::new();
+) -> BTreeMap<String, &'static str> {
+    let mut links = BTreeMap::new();
     for item in items {
-        for row in super::output::all_unblocked(&item.result) {
+        for row in super::output::all_offer_rows(&item.result) {
             if let Some(link) = row.link.as_ref() {
-                links.insert(link.block_link.clone());
+                let reason = if row.trigger == "last_planned"
+                    || row
+                        .offer
+                        .as_ref()
+                        .is_some_and(|offer| offer.group == "keep_moving")
+                {
+                    "keep_moving"
+                } else {
+                    "unblocked"
+                };
+                links.insert(link.block_link.clone(), reason);
             }
         }
     }

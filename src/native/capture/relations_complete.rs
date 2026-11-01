@@ -386,9 +386,11 @@ fn empty_complete_summary() -> TaskCompleteSummaryJson {
         subtasks_left_open: Vec::new(),
         ledger: None,
         unblocked: Vec::new(),
+        keep_moving: Vec::new(),
         still_blocked: Vec::new(),
         unblocked_check: "checked",
         project_folds: Vec::new(),
+        keep_moving_folds: Vec::new(),
     }
 }
 
