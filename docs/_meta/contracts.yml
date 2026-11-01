@@ -10,7 +10,7 @@ groups:
         reader: guides/add-prerequisites.md
       - stem: command-catalog
         summary: "Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage"
-        order: 31
+        order: 32
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3
@@ -88,12 +88,15 @@ groups:
         summary: "`bob task reconcile` Pomodoro-driven task status"
         order: 27
         reader: concepts/tasks-and-lanes.md
+      - stem: task-link-marks
+        summary: "Task link marks: status rings on links that point to tasks, in Live Preview and Reading view"
+        order: 28
       - stem: task-tag-marks
         summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`"
-        order: 28
+        order: 29
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
-        order: 29
+        order: 30
         reader: concepts/today-and-the-pomodoro-ledger.md
   - title: "References"
     entries:
@@ -116,5 +119,5 @@ groups:
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 30
+        order: 31
         reader: guides/sync-vault-across-machines.md

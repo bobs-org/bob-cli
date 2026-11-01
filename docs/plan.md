@@ -289,7 +289,9 @@ with a 160 ms entrance and 120 ms hover transitions; hovering sets
 full opacity with a 12% tint capsule. With
 `prefers-reduced-motion: reduce` the animation and transitions are
 off. The `Toggle Task Link In Progress marks` command flips a
-session toggle (default on).
+session toggle (default on). That ◐ is the In Progress glyph of the
+[task link marks](task-link-marks.md) ring family, which wears one ring per
+prose link by target status.
 
 ### Toggle scope
 

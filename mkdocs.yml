@@ -110,6 +110,7 @@ plugins:
           - task-relations.md
           - task-move.md
           - task-status-hooks.md
+          - task-link-marks.md
           - task-tag-marks.md
           - today-marks.md
           - dataview.md
@@ -301,6 +302,7 @@ nav:
               - "Task relations": task-relations.md
               - "Move open tasks between notes": task-move.md
               - "Task Status Hooks": task-status-hooks.md
+              - "Task link marks": task-link-marks.md
               - "Task tag marks": task-tag-marks.md
               - "Today marks": today-marks.md
           - "References":

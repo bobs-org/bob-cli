@@ -58,6 +58,7 @@ Contract: [Task type suggestions](../task-types.md#pt13-task-type-suggestions),
 [Task freshness fields](../freshness.md#2-fields-overrides-and-config),
 [Task date marks](../date-marks.md),
 [Task tag marks](../task-tag-marks.md),
+[Task link marks](../task-link-marks.md),
 [Today marks](../today-marks.md).
 
 ## Checkboxes and lanes
@@ -505,6 +506,7 @@ Contract: [Reference library default paths](../highlights-ref-sync.md#default-pa
 - [Task Status Hooks](../task-status-hooks.md)
 - [Project Task Sync](../projects.md)
 - [Today marks](../today-marks.md)
+- [Task link marks](../task-link-marks.md)
 - [Date marks](../date-marks.md)
 - [Pomodoro homes](../pomodoro-homes.md)
 - [Reference library](../ref.md)

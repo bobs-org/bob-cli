@@ -17,8 +17,8 @@ For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md),
 [Freshness review](freshness.md), and [Daily Stats](stats.md). For the
 Obsidian interface, read [Dashboard navigation](dashboard.md) (including
 the STATS page), the [Task Card](projects.md#task-card),
-[task date marks](date-marks.md), [task tag marks](task-tag-marks.md), and
-[Today marks](today-marks.md).
+[task date marks](date-marks.md), [task tag marks](task-tag-marks.md),
+[task link marks](task-link-marks.md), and [Today marks](today-marks.md).
 
 For reading, start with the [reference-library guide](ref.md). Import material
 with [`bob ref create`](highlights-create.md), or save bare links with
@@ -58,6 +58,7 @@ queued intake; full scans also synchronize annotations. The
 | [task-relations.md](task-relations.md) | Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture |
 | [task-move.md](task-move.md) | `bob task move` selection, preservation, link repair, guarded writes, and sync behavior |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |
+| [task-link-marks.md](task-link-marks.md) | Task link marks: status rings on links that point to tasks, in Live Preview and Reading view |
 | [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE` |
 | [today-marks.md](today-marks.md) | Today marks: a display-only tomato on task lines linked under today's open Pomodoros |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal |
