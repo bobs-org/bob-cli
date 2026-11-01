@@ -105,7 +105,7 @@ fn worked_example_day() -> String {
 }
 
 #[test]
-fn worked_example_updates_tasks_and_writes_dated_work_logs() {
+fn worked_example_updates_tasks_and_writes_stamped_work_logs() {
     let mut vault = MemoryVault::new();
     vault.insert(
         "bob.md",
@@ -132,9 +132,9 @@ fn worked_example_updates_tasks_and_writes_dated_work_logs() {
         Some(concat!(
             "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- 🛠️ **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
+            "\t\t- *2026-09-28 09:37* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
-            "\t\t- *2026-09-28* — Wrote the plan\n",
+            "\t\t- *2026-09-28 09:37* — Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         ))
@@ -144,7 +144,7 @@ fn worked_example_updates_tasks_and_writes_dated_work_logs() {
         Some(concat!(
             "- [x] #task Restart axe [created::2026-09-27] [completion:: 2026-09-28] ^axe-restart\n",
             "\t- 🛠️ **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Restarted axe\n",
+            "\t\t- *2026-09-28 09:37* — Restarted axe\n",
             "\t\t- _2026-09-27_ — Diagnosed the hang\n",
             "- [ ] #task Recovery panel [created::2026-09-25] ^recovery-panel\n",
         ))
@@ -355,7 +355,7 @@ fn day_file_can_also_be_a_task_note_and_receives_its_work_log() {
     assert!(post.contains(
         "- [/] #task Same daily note [fresh:: 2026-09-28] [created:: 2026-09-20] ^self"
     ));
-    assert!(post.contains("*2026-09-28* — Drafted this task's notes"));
+    assert!(post.contains("*2026-09-28 09:37* — Drafted this task's notes"));
     assert_eq!(plan.changed_files.len(), 1);
 }
 
@@ -490,9 +490,9 @@ fn selection_complete_writes_done_task_with_completion_date() {
         Some(concat!(
             "- [x] #task Add support for `x` syntax! [created::2026-09-26]  [completion:: 2026-09-28] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* \u{2014} Designed the `x` grammar\n",
+            "\t\t- *2026-09-28 09:37* \u{2014} Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
-            "\t\t- *2026-09-28* \u{2014} Wrote the plan\n",
+            "\t\t- *2026-09-28 09:37* \u{2014} Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         ))
@@ -516,9 +516,9 @@ fn selection_in_progress_and_complete_updates_both_tasks() {
         Some(concat!(
             "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* \u{2014} Designed the `x` grammar\n",
+            "\t\t- *2026-09-28 09:37* \u{2014} Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
-            "\t\t- *2026-09-28* \u{2014} Wrote the plan\n",
+            "\t\t- *2026-09-28 09:37* \u{2014} Wrote the plan\n",
             "- [x] #task Add capture support for web URLs! [created::2026-09-21]  [completion:: 2026-09-28] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         ))
@@ -651,10 +651,10 @@ fn typed_entry_lands_in_task_work_log_as_typed_subset() {
         Some(concat!(
             "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
+            "\t\t- *2026-09-28 09:37* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
-            "\t\t- *2026-09-28* — Wrote the plan\n",
-            "\t\t- *2026-09-28* — wired the lexer\n",
+            "\t\t- *2026-09-28 09:37* — Wrote the plan\n",
+            "\t\t- *2026-09-28 09:37* — wired the lexer\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         ))
@@ -662,7 +662,7 @@ fn typed_entry_lands_in_task_work_log_as_typed_subset() {
     assert_eq!(plan.summary.tasks[0].work_log.len(), 3);
     assert_eq!(
         plan.summary.tasks[0].typed_work_log,
-        vec!["*2026-09-28* — wired the lexer".to_string()]
+        vec!["*2026-09-28 09:37* — wired the lexer".to_string()]
     );
     assert!(plan.summary.tasks[1].typed_work_log.is_empty());
     // The inserted sub-bullet stays in the closed session, and the lineup
@@ -693,10 +693,10 @@ fn typed_entry_on_complete_target_lands_in_completed_task() {
     );
     let bob = &plan.changed_files[Path::new("bob.md")];
     assert!(bob.starts_with("- [x] #task Add support for `x` syntax!"));
-    assert!(bob.contains("*2026-09-28* — shipped it"));
+    assert!(bob.contains("*2026-09-28 09:37* — shipped it"));
     assert_eq!(
         plan.summary.tasks[0].typed_work_log,
-        vec!["*2026-09-28* — shipped it".to_string()]
+        vec!["*2026-09-28 09:37* — shipped it".to_string()]
     );
 }
 
@@ -777,10 +777,10 @@ fn typed_details_nest_undated_in_task_work_log() {
         Some(concat!(
             "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
+            "\t\t- *2026-09-28 09:37* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
-            "\t\t- *2026-09-28* — Wrote the plan\n",
-            "\t\t- *2026-09-28* — wired the lexer\n",
+            "\t\t- *2026-09-28 09:37* — Wrote the plan\n",
+            "\t\t- *2026-09-28 09:37* — wired the lexer\n",
             "\t\t\t- chose a hand-rolled lexer\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
@@ -790,7 +790,7 @@ fn typed_details_nest_undated_in_task_work_log() {
     assert_eq!(plan.summary.tasks[0].work_log.len(), 3);
     assert_eq!(
         plan.summary.tasks[0].typed_work_log,
-        vec!["*2026-09-28* — wired the lexer".to_string()]
+        vec!["*2026-09-28 09:37* — wired the lexer".to_string()]
     );
     assert_eq!(
         plan.summary.tasks[0].typed_work_log_details,
@@ -854,11 +854,11 @@ fn typed_details_on_complete_target_land_in_completed_task() {
     );
     let bob = &plan.changed_files[Path::new("bob.md")];
     assert!(bob.starts_with("- [x] #task Add support for `x` syntax!"));
-    assert!(bob.contains("*2026-09-28* — shipped it"));
+    assert!(bob.contains("*2026-09-28 09:37* — shipped it"));
     assert!(bob.contains("polished the edges"));
     assert_eq!(
         plan.summary.tasks[0].typed_work_log,
-        vec!["*2026-09-28* — shipped it".to_string()]
+        vec!["*2026-09-28 09:37* — shipped it".to_string()]
     );
     assert_eq!(
         plan.summary.tasks[0].typed_work_log_details,

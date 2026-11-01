@@ -433,7 +433,7 @@ Going from In Progress back to Next first opens a small **Move to
 Next** prompt: the task (or `N tasks` with up to three names and
 `The same entry is logged on each task` for a batch), an optional
 `Work summary (optional)` field, and a live preview of the Work
-Log entry (`🛠️ **WORK LOG**` / `*YYYY-MM-DD* — summary`, or `No
+Log entry (`🛠️ **WORK LOG**` / `*YYYY-MM-DD HH:MM* — summary`, or `No
 work-log entry will be added.` when blank). Enter commits — a
 blank summary moves the task without logging — and Esc cancels the
 whole gesture with nothing written and no Notice. The entry is
@@ -512,7 +512,7 @@ holding `- [s] #task Fix ^fix`.
 | --- | --- | --- |
 | L1 | Alt+] on a Next link | `[*]→[/]`, `[fresh:: today]` stamped, no prompt, Notice `◐ In Progress · Fix …`, mark appears |
 | L2 | Alt+[ on an In Progress link, blank summary | prompt, `[/]→[*]`, no Work Log entry, Notice `→ Next · Fix …` |
-| L3 | as L2 with `Finished the API review` | entry `*YYYY-MM-DD* — Finished the API review` prepended under the existing 🛠️ WORK LOG (or a new marker), Notice ends `· logged` |
+| L3 | as L2 with `Finished the API review` | entry `*YYYY-MM-DD HH:MM* — Finished the API review` prepended under the existing 🛠️ WORK LOG (or a new marker), Notice ends `· logged` |
 | L4 | as L2, Esc | nothing written, no Notice |
 | L5 | Alt+[ vs Alt+] | identical results |
 | L6 | Ready / Blocked / done / cancelled / struck-done target | refusal Notices from the scope table, nothing written |

@@ -163,6 +163,14 @@ Other machine-owned direct children (closed registry): `❌ **CANCEL LOG**`,
 `**ROTTEN LOG**`, and the legacy `**Rotten log**`, each with an optional colon
 and only trailing spaces or tabs. None of these is a Pomodoro Task Link.
 
+Work Log entries are newest first. Writers emit
+`*YYYY-MM-DD HH:MM* — <summary>`; readers also accept the legacy
+`*YYYY-MM-DD* — <summary>` form. The stamp is the wall-clock minute when the
+entry is written, and one gesture uses one identical stamp for all entries it
+writes. bob-cli uses its resolved `now` (`BOB_NOW`, then `DATE`, then the
+configured timezone, then the host zone); plugin writers use the host's local
+time. Existing date-only entries are never backfilled.
+
 Contract: [Task dependency links](../task-dependencies.md).
 
 ## Lane, freshness, and Today

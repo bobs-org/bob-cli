@@ -45,7 +45,7 @@ fn capture_pomodoro_close_log_worked_table() {
     assert!(day_after.contains("\t\t- wired the lexer\n"), "{day_after}");
     let bob_after = fs::read_to_string(vault.join("bob.md")).expect("read bob");
     assert!(
-        bob_after.contains("*2026-09-28* — wired the lexer"),
+        bob_after.contains("*2026-09-28 09:37* — wired the lexer"),
         "{bob_after}"
     );
     let tasks = close["tasks"].as_array().expect("tasks");
@@ -111,19 +111,20 @@ fn capture_pomodoro_close_log_worked_table() {
     let bob_after = fs::read_to_string(vault.join("bob.md")).expect("read bob");
     assert!(
         bob_after.contains(
-            "\t\t- *2026-09-28* — wired the lexer\n\t\t\t- chose a hand-rolled lexer\n"
+            "\t\t- *2026-09-28 09:37* — wired the lexer\n\t\t\t- chose a hand-rolled lexer\n"
         ),
         "{bob_after}"
     );
     assert!(
-        bob_after.contains("\t\t- *2026-09-28* — sketched the URL parser\n"),
+        bob_after
+            .contains("\t\t- *2026-09-28 09:37* — sketched the URL parser\n"),
         "{bob_after}"
     );
     let tasks = json["pomodoro_close"]["tasks"].as_array().expect("tasks");
     let row1 = tasks.iter().find(|task| task["index"] == 1).expect("row 1");
     assert_eq!(
         row1["typed_work_log"],
-        serde_json::json!(["*2026-09-28* — wired the lexer"]),
+        serde_json::json!(["*2026-09-28 09:37* — wired the lexer"]),
         "{row1}"
     );
     assert_eq!(
@@ -135,7 +136,7 @@ fn capture_pomodoro_close_log_worked_table() {
     let row2 = tasks.iter().find(|task| task["index"] == 2).expect("row 2");
     assert_eq!(
         row2["typed_work_log"],
-        serde_json::json!(["*2026-09-28* — sketched the URL parser"]),
+        serde_json::json!(["*2026-09-28 09:37* — sketched the URL parser"]),
         "{row2}"
     );
     assert!(row2.get("typed_work_log_details").is_none(), "{row2}");
@@ -1134,11 +1135,13 @@ fn capture_pomodoro_close_log_star_bullet() {
     );
     let bob_after = fs::read_to_string(vault.join("bob.md")).expect("read bob");
     assert!(
-        bob_after.contains("*2026-09-28* — wired the lexer"),
+        bob_after.contains("*2026-09-28 09:37* — wired the lexer"),
         "{bob_after}"
     );
     assert_eq!(
-        bob_after.matches("*2026-09-28* — code review").count(),
+        bob_after
+            .matches("*2026-09-28 09:37* — code review")
+            .count(),
         3,
         "{bob_after}"
     );
@@ -1146,7 +1149,7 @@ fn capture_pomodoro_close_log_star_bullet() {
     let row1 = tasks.iter().find(|task| task["index"] == 1).expect("row 1");
     assert_eq!(
         row1["typed_work_log"],
-        serde_json::json!(["*2026-09-28* — wired the lexer"]),
+        serde_json::json!(["*2026-09-28 09:37* — wired the lexer"]),
         "{row1}"
     );
     for index in [2, 3, 4] {
@@ -1156,7 +1159,7 @@ fn capture_pomodoro_close_log_star_bullet() {
             .unwrap_or_else(|| panic!("row {index}"));
         assert_eq!(
             row["typed_work_log"],
-            serde_json::json!(["*2026-09-28* — code review"]),
+            serde_json::json!(["*2026-09-28 09:37* — code review"]),
             "{row}"
         );
         assert_eq!(

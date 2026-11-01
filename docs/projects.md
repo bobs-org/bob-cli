@@ -1117,7 +1117,7 @@ roll/decay targets receive entries; cancel and skip targets never do.
 ```markdown
 - [/] #task Ship the thing [scheduled:: 2026-10-05] ^ship
   - 🛠️ **WORK LOG**
-    - *2026-10-02* — Finished the API review
+    - *2026-10-02 14:32* — Finished the API review
 ```
 
 The entry uses the same shape as lane-release Work Logs, newest first under

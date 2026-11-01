@@ -24,12 +24,12 @@ fn worked_suffix() -> &'static str {
     concat!("- [ ] () — SASE\n", "\t- [[sase#^recovery-panel]]\n",)
 }
 
-fn plain_bob_work_log() -> &'static str {
+fn stamped_bob_work_log() -> &'static str {
     concat!(
         "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-        "\t\t- *2026-09-28* — Designed the `x` grammar\n",
+        "\t\t- *2026-09-28 09:37* — Designed the `x` grammar\n",
         "\t\t\t- chose `x` for done\n",
-        "\t\t- *2026-09-28* — Wrote the plan\n",
+        "\t\t- *2026-09-28 09:37* — Wrote the plan\n",
     )
 }
 
@@ -39,7 +39,7 @@ fn plain_sase_after() -> String {
         "\n",
         "- [x] #task Restart axe [created::2026-09-27] [completion:: 2026-09-28] ^axe-restart\n",
         "  - \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-        "    - *2026-09-28* — Restarted axe\n",
+        "    - *2026-09-28 09:37* — Restarted axe\n",
         "    - _2026-09-27_ — Diagnosed the hang\n",
         "- [ ] #task Recovery panel [created::2026-09-25] ^recovery-panel\n",
     )
@@ -134,7 +134,7 @@ fn capture_pomodoro_close_selection_defer_rest() {
                 "- [/] #task Add capture support for web URLs! [fresh:: 2026-09-28] [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
-            plain_bob_work_log(),
+            stamped_bob_work_log(),
         )
     );
     assert_eq!(
@@ -229,7 +229,7 @@ fn capture_pomodoro_close_selection_in_progress_and_complete() {
                 "- [x] #task Add capture support for web URLs! [created::2026-09-21]  [completion:: 2026-09-28] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
-            plain_bob_work_log(),
+            stamped_bob_work_log(),
         )
     );
     assert_eq!(
@@ -320,7 +320,7 @@ fn capture_pomodoro_close_selection_complete_listed() {
                 "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
-            plain_bob_work_log(),
+            stamped_bob_work_log(),
         )
     );
     assert_eq!(
@@ -409,7 +409,7 @@ fn capture_pomodoro_close_selection_defer_all() {
                 "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
-            plain_bob_work_log(),
+            stamped_bob_work_log(),
         )
     );
     assert_eq!(
@@ -527,7 +527,7 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
                 "- [/] #task Add capture support for web URLs! [fresh:: 2026-09-28] [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
-            plain_bob_work_log(),
+            stamped_bob_work_log(),
         )
     );
     assert_eq!(
@@ -580,11 +580,11 @@ fn capture_pomodoro_close_selection_human_output() {
         vec![
             "\u{2713} closed CAPTURE 0920-0950 \u{2192} 0920-0940 (20m, \u{2212}10m) · 2026/20260928.md line 5",
             "  1 [*] \u{2192} [/] Add support for `x` syntax! bob.md ^capture-stop +2 Work Log",
-            "      *2026-09-28* — Designed the `x` grammar",
-            "      *2026-09-28* — Wrote the plan",
+            "      *2026-09-28 09:37* — Designed the `x` grammar",
+            "      *2026-09-28 09:37* — Wrote the plan",
             "  2 [*] \u{2192} [x] Add capture support for web URLs! bob.md ^web-capture",
             "    [x] Restart axe sase.md ^axe-restart +1 Work Log",
-            "      *2026-09-28* — Restarted axe",
+            "      *2026-09-28 09:37* — Restarted axe",
             "  next: CAPTURE (created) at line 14 · carries 1 link",
             "plan 2/10 links",
         ]

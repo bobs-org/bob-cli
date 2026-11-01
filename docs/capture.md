@@ -3811,10 +3811,12 @@ Carried lines (worked-on then deferred, in source order, at original
 indentation) move into a new `- [ ] ()` (or `- [ ] () — NAME`) placeholder
 inserted after the session's sub-bullet range, created iff something is
 carried or no later entry follows; with nothing carried the placeholder gets
-a `\t- ` stub. Direct-child qualifying links with descendants write dated
+a `\t- ` stub. Direct-child qualifying links with descendants write stamped
 Work Log entries under a `🛠️ **WORK LOG**` marker (newest on top) or append
-one after the task's child block. Notes stay in the ledger (copied, not
-moved). Close-time recovery plus successor **offers** run on every close
+one after the task's child block. All entries from the close use one stamp
+from its write-time `now`; the day-file date remains the completion date.
+Notes stay in the ledger (copied, not moved). Close-time recovery plus
+successor **offers** run on every close
 that completes tasks, per
 [task-dependencies.md §12](task-dependencies.md#12-successor-offers)
 and [§12.15](task-dependencies.md#1215-keep-moving-offers-leaf-projects):
@@ -3856,12 +3858,12 @@ Field notes:
   Each entry carries `details`, the nested detail lines typed under it
   (`[{ "index": 2, "text": "wired the lexer", "details": ["chose a hand-rolled lexer"] }]`),
   omitted when the entry has none.
-- `pomodoro_close.tasks[].typed_work_log` holds the dated entries
-  (`*YYYY-MM-DD* — text`, a subset of `work_log`) that this capture's typed
+- `pomodoro_close.tasks[].typed_work_log` holds the stamped entries
+  (`*YYYY-MM-DD HH:MM* — text`, a subset of `work_log`) that this capture's typed
   entries produced, in typed order, omitted when empty.
   `pomodoro_close.tasks[].typed_work_log_details` is aligned 1:1 with it:
   element _i_ lists the detail lines written under typed entry _i_ (undated
-  sub-bullets of the dated entry, never counted in `+N Work Log`), with an
+  sub-bullets of the stamped entry, never counted in `+N Work Log`), with an
   empty list for entries without details; omitted when no typed entry on
   the row has details.
 - `pomodoro_close.task_links` is the numbered lineup, always present and
@@ -3987,8 +3989,8 @@ Worked example (`BOB_NOW=2026-09-28 09:37:00`, day file
 ```
 
 `bob.md` starts `^capture-stop` (`[*]` → `[/]`) with a `🛠️ **WORK LOG**`
-of the two dated design notes; `^web-capture` was deferred so it stays
-`[*]`. `sase.md` prepends `*2026-09-28* — Restarted axe` under the
+of the two stamped design notes; `^web-capture` was deferred so it stays
+`[*]`. `sase.md` prepends `*2026-09-28 09:37* — Restarted axe` under the
 existing Work Log marker.
 
 Other rows on the same fixture: `x` at 09:49 keeps `0920-0950 [t::
@@ -4172,11 +4174,11 @@ Human output (`NO_COLOR`):
 ```text
 ✓ closed CAPTURE 0920-0950 → 0920-0940 (20m, −10m) · 2026/20260928.md line 5
   1 [*] → [/] Add support for `x` syntax! bob.md ^capture-stop +2 Work Log
-      *2026-09-28* — Designed the `x` grammar
-      *2026-09-28* — Wrote the plan
+      *2026-09-28 09:37* — Designed the `x` grammar
+      *2026-09-28 09:37* — Wrote the plan
   2 [*] → [x] Add capture support for web URLs! bob.md ^web-capture
     [x] Restart axe sase.md ^axe-restart +1 Work Log
-      *2026-09-28* — Restarted axe
+      *2026-09-28 09:37* — Restarted axe
   next: CAPTURE (created) at line 14 · carries 1 link
 ```
 
@@ -4326,7 +4328,7 @@ with no escape, and every backslash is literal. Entries keep typed order,
 and the same number may appear on several numbered bullets, each a separate
 entry. A two-space nested bullet is a detail of the nearest preceding
 entry, numbered or not: it has no task number, so its text is entirely
-literal, and it becomes an undated sub-bullet under its dated entry in the
+literal, and it becomes an undated sub-bullet under its stamped entry in the
 task's Work Log (never counted in `+N Work Log`).
 
 Unnumbered bullets log in order to the close's worked tasks `W`. In
@@ -4390,7 +4392,7 @@ printf 'x1,2\n- 1 wired the lexer\n  - chose a hand-rolled lexer\n- 2 sketched t
 
 `- wired the lexer` (with `- chose a hand-rolled lexer` under it) is
 appended under link 1 after `Wrote the plan`, `- sketched the URL parser`
-under link 2, and `^capture-stop`'s Work Log ends with the dated entry plus
+under link 2, and `^capture-stop`'s Work Log ends with the stamped entry plus
 its undated detail. Human output prints typed entries first, all of them,
 not dimmed, each followed by its details indented two more spaces; JSON
 reports `pomodoro_close.log`

@@ -89,7 +89,7 @@ pub(crate) struct PomodoroCloseTask {
     pub carried: bool,
     pub work_log: Vec<String>,
     pub work_log_created: bool,
-    /// Dated entries this close's typed Work Log entries produced, in typed
+    /// Stamped entries this close's typed Work Log entries produced, in typed
     /// order (a subset of `work_log`).
     pub typed_work_log: Vec<String>,
     /// Detail lines written under each typed entry, aligned 1:1 with
@@ -192,6 +192,7 @@ struct ClosePlanner<'a, V> {
     settings: NoteTaskSettings,
     all_task_settings: NoteTaskSettings,
     date: String,
+    work_log_stamp: String,
     staged: BTreeMap<PathBuf, String>,
     originals: BTreeMap<PathBuf, String>,
     task_indices: BTreeMap<TaskKey, usize>,
@@ -222,12 +223,14 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             .unwrap_or_else(|| now.date())
             .format("%Y-%m-%d")
             .to_string();
+        let work_log_stamp = capture_work_log::work_log_stamp(now);
         Self {
             vault,
             day_path,
             settings,
             all_task_settings,
             date,
+            work_log_stamp,
             staged,
             originals,
             task_indices: BTreeMap::new(),
@@ -739,7 +742,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     &contents,
                     task.line_index,
                     &note_roots,
-                    &self.date,
+                    &self.work_log_stamp,
                     cursor.as_ref(),
                 ) else {
                     continue;
@@ -748,17 +751,17 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                 if let Some(index) = self.task_indices.get(&key).copied()
                     && let Some(row) = self.tasks.get_mut(index)
                 {
-                    for (dated, source) in
+                    for (stamped, source) in
                         write.entries.iter().zip(write.entry_sources.iter())
                     {
-                        row.work_log.push(dated.clone());
+                        row.work_log.push(stamped.clone());
                         if let Some(source) = source
                             && let Some(ordinal) = log_lines.get(source)
                         {
                             typed_by_row
                                 .entry(index)
                                 .or_default()
-                                .push((*ordinal, dated.clone()));
+                                .push((*ordinal, stamped.clone()));
                             landed.insert(*ordinal);
                         }
                     }
@@ -783,7 +786,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
                     })
                     .collect();
                 row.typed_work_log =
-                    pairs.into_iter().map(|(_, dated)| dated).collect();
+                    pairs.into_iter().map(|(_, stamped)| stamped).collect();
             }
         }
         Ok(landed)

@@ -193,8 +193,8 @@ fn capture_pomodoro_close_worked_example() {
                     "status_changed": true,
                     "carried": true,
                     "work_log": [
-                        "*2026-09-28* — Designed the `x` grammar",
-                        "*2026-09-28* — Wrote the plan"
+                        "*2026-09-28 09:37* — Designed the `x` grammar",
+                        "*2026-09-28 09:37* — Wrote the plan"
                     ],
                     "work_log_created": true,
                     "warning": null
@@ -233,7 +233,7 @@ fn capture_pomodoro_close_worked_example() {
                     "status_name": "Done",
                     "status_changed": false,
                     "carried": false,
-                    "work_log": ["*2026-09-28* — Restarted axe"],
+                    "work_log": ["*2026-09-28 09:37* — Restarted axe"],
                     "work_log_created": true,
                     "warning": null
                 }
@@ -286,9 +286,9 @@ fn capture_pomodoro_close_worked_example() {
             "\n",
             "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
+            "\t\t- *2026-09-28 09:37* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
-            "\t\t- *2026-09-28* — Wrote the plan\n",
+            "\t\t- *2026-09-28 09:37* — Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         )
@@ -301,7 +301,7 @@ fn capture_pomodoro_close_worked_example() {
             "\n",
             "- [x] #task Restart axe [created::2026-09-27] [completion:: 2026-09-28] ^axe-restart\n",
             "  - \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "    - *2026-09-28* — Restarted axe\n",
+            "    - *2026-09-28 09:37* — Restarted axe\n",
             "    - _2026-09-27_ — Diagnosed the hang\n",
             "- [ ] #task Recovery panel [created::2026-09-25] ^recovery-panel\n",
         )
@@ -405,6 +405,29 @@ fn capture_pomodoro_close_worked_example() {
     assert!(!out.contains("bob.md line 5"), "{out}");
     assert!(out.contains("bob.md ^ready"), "{out}");
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_pomodoro_close_work_log_uses_close_write_instant() {
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-write-instant");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("x\n- 1 wired the lexer")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-29 00:10:00")
+        .output()
+        .expect("close across midnight");
+    assert_success(&output);
+
+    let expected = "*2026-09-29 00:10* — wired the lexer";
+    let human = stdout(&output);
+    assert!(human.contains(expected), "{human}");
+    let bob_after = fs::read_to_string(vault.join("bob.md")).expect("bob");
+    assert!(bob_after.contains(expected), "{bob_after}");
 }
 
 #[test]
@@ -1053,9 +1076,9 @@ fn capture_pomodoro_close_links_batches_and_files() {
             "\n",
             "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
+            "\t\t- *2026-09-28 09:37* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
-            "\t\t- *2026-09-28* — Wrote the plan\n",
+            "\t\t- *2026-09-28 09:37* — Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             "- [/] #task Draft docs [fresh:: 2026-09-28] [created::2026-09-28] ^draft-docs\n",

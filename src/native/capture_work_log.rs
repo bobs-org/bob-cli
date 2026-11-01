@@ -1,4 +1,6 @@
-//! Pure writer for dated Pomodoro Work Log groups.
+//! Pure writer for stamped Pomodoro Work Log groups.
+
+use chrono::NaiveDateTime;
 
 use super::capture::{
     leading_spaces_or_tabs_len, line_spans, list_marker_len,
@@ -15,7 +17,7 @@ pub(crate) struct WorkLogNode {
     pub(crate) body_text: String,
     pub(crate) children: Vec<WorkLogNode>,
     /// 1-based day-note line this root was collected from, when known.
-    /// Typed close entries use it to claim the dated strings they produced.
+    /// Typed close entries use it to claim the stamped strings they produced.
     pub(crate) source_line: Option<usize>,
 }
 
@@ -29,18 +31,22 @@ pub(crate) struct WorkLogCursor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkLogWrite {
     pub(crate) contents: String,
-    /// Dated depth-one entry bodies, without their list prefix.
+    /// Stamped depth-one entry bodies, without their list prefix.
     pub(crate) entries: Vec<String>,
     /// Source line per entry, parallel to `entries`.
     pub(crate) entry_sources: Vec<Option<usize>>,
     pub(crate) next_cursor: WorkLogCursor,
 }
 
+pub(crate) fn work_log_stamp(now: NaiveDateTime) -> String {
+    now.format("%Y-%m-%d %H:%M").to_string()
+}
+
 pub(crate) fn write_work_log_group(
     contents: &str,
     task_line: usize,
     note_roots: &[WorkLogNode],
-    date: &str,
+    stamp: &str,
     prior: Option<&WorkLogCursor>,
 ) -> Option<WorkLogWrite> {
     let spans = line_spans(contents);
@@ -114,7 +120,7 @@ pub(crate) fn write_work_log_group(
             node,
             &entry_indent,
             &entry_marker,
-            date,
+            stamp,
             &mut entries,
             &mut entry_sources,
             &mut inserted,
@@ -141,7 +147,7 @@ fn append_entry_node(
     node: &WorkLogNode,
     entry_indent: &str,
     entry_marker: &str,
-    date: &str,
+    stamp: &str,
     entries: &mut Vec<String>,
     entry_sources: &mut Vec<Option<usize>>,
     output: &mut Vec<String>,
@@ -150,9 +156,9 @@ fn append_entry_node(
     if body.is_empty() {
         return;
     }
-    let dated = format!("*{date}* — {body}");
-    output.push(format!("{entry_indent}{entry_marker} {dated}"));
-    entries.push(dated);
+    let stamped = format!("*{stamp}* — {body}");
+    output.push(format!("{entry_indent}{entry_marker} {stamped}"));
+    entries.push(stamped);
     entry_sources.push(node.source_line);
     append_descendants(&node.children, entry_indent, output);
 }
@@ -307,6 +313,24 @@ fn split_lines(contents: &str) -> Vec<(String, String)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn work_log_stamp_uses_iso_minute_precision() {
+        let cases = [
+            ((2026, 11, 1, 14, 32, 59), "2026-11-01 14:32"),
+            ((2026, 11, 1, 9, 5, 0), "2026-11-01 09:05"),
+            ((2026, 12, 31, 23, 59, 59), "2026-12-31 23:59"),
+            ((2027, 1, 1, 0, 0, 0), "2027-01-01 00:00"),
+        ];
+
+        for ((year, month, day, hour, minute, second), expected) in cases {
+            let now = chrono::NaiveDate::from_ymd_opt(year, month, day)
+                .expect("valid date")
+                .and_hms_opt(hour, minute, second)
+                .expect("valid time");
+            assert_eq!(work_log_stamp(now), expected);
+        }
+    }
+
     fn node(body: &str) -> WorkLogNode {
         WorkLogNode {
             marker: "-".to_string(),
@@ -327,7 +351,7 @@ mod tests {
             source,
             0,
             &[node("Did work")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             None,
         )
         .expect("log write");
@@ -338,7 +362,7 @@ mod tests {
                 "  * 🗓️ **SCHEDULE LOG**\n",
                 "    * scheduled note\n",
                 "  * 🛠️ **WORK LOG**\n",
-                "    - *2026-09-28* — Did work\n",
+                "    - *2026-09-28 09:37* — Did work\n",
             )
         );
     }
@@ -354,7 +378,7 @@ mod tests {
             source,
             0,
             &[node("Did work")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             None,
         )
         .expect("log write");
@@ -365,7 +389,7 @@ mod tests {
                 "\t- 🥀 **ROTTEN LOG**\n",
                 "\t\t- *2026-10-16* — old reason · kept 2×\n",
                 "\t- 🛠️ **WORK LOG**\n",
-                "\t\t- *2026-09-28* — Did work\n",
+                "\t\t- *2026-09-28 09:37* — Did work\n",
             )
         );
     }
@@ -381,7 +405,7 @@ mod tests {
             source,
             0,
             &[node("Current")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             None,
         )
         .expect("log write");
@@ -390,7 +414,7 @@ mod tests {
             concat!(
                 "- [/] #task Work ^work\n",
                 "\t- 🛠️ **WORK LOG**\n",
-                "\t\t* *2026-09-28* — Current\n",
+                "\t\t* *2026-09-28 09:37* — Current\n",
                 "\t\t* _2026-09-27_ — Previous\n",
             )
         );
@@ -403,13 +427,13 @@ mod tests {
             source,
             0,
             &[node("Current")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             None,
         )
         .expect("log write");
-        assert!(result
-            .contents
-            .ends_with("\t- **WORK LOG:**\n\t\t- *2026-09-28* — Current\n"));
+        assert!(result.contents.ends_with(
+            "\t- **WORK LOG:**\n\t\t- *2026-09-28 09:37* — Current\n"
+        ));
     }
 
     #[test]
@@ -419,7 +443,7 @@ mod tests {
             source,
             0,
             &[node("First")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             None,
         )
         .expect("first group");
@@ -427,7 +451,7 @@ mod tests {
             &first.contents,
             0,
             &[node("Second")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             Some(&first.next_cursor),
         )
         .expect("second group");
@@ -444,19 +468,21 @@ mod tests {
             source,
             0,
             &[node("Did work")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             None,
         )
         .expect("log write");
         assert!(result.contents.contains("\r\n\t- 🛠️ **WORK LOG**\r\n"));
-        assert!(result.contents.ends_with("*2026-09-28* — Did work\r\n"));
+        assert!(result
+            .contents
+            .ends_with("*2026-09-28 09:37* — Did work\r\n"));
 
         let source = "- [ ] #task Work ^work";
         let result = write_work_log_group(
             source,
             0,
             &[node("Did work")],
-            "2026-09-28",
+            "2026-09-28 09:37",
             None,
         )
         .expect("log write");
