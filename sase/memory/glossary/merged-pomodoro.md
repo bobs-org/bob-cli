@@ -18,7 +18,7 @@ of another type, the destination gains ` + TYPE` and no task field is written. T
 Obsidian link, move, and successor pickers merge on Enter and retype only on
 Alt+Enter; naming an entry still retypes its linked tasks.
 
-`bob [[capture]] =*` merges planned entries into a survivor, `=/` splits merged-in
+[[capture]] `=*` merges planned entries into a survivor, `=/` splits merged-in
 types out into new planned entries below the source, and Obsidian Ctrl+S splits the
 selected entry the same way: two types split immediately, three or more prompt for
 the types to move.

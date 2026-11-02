@@ -158,23 +158,31 @@ fn first_type_selector(
         })
 }
 
+/// The merged-in component of `src_name` that `dest_selector` names, in
+/// the name's own spelling (whole key first, then key prefix).
 fn dest_already_part_of_src(
     src_name: &str,
     dest_selector: &str,
     sources: &crate::native::config::themes::ThemeSources,
-) -> bool {
+) -> Option<String> {
     let types: Vec<_> = routing::type_components(Some(src_name), sources)
         .into_iter()
         .filter(|item| item.is_type)
         .collect();
     if types.len() < 2 {
-        return false;
+        return None;
     }
     let parsed = routing::parse_type_selector(dest_selector);
-    types
+    let merged_in = &types[1..];
+    merged_in
         .iter()
-        .skip(1)
-        .any(|item| item.key == parsed.key || item.key.starts_with(&parsed.key))
+        .find(|item| item.key == parsed.key)
+        .or_else(|| {
+            merged_in
+                .iter()
+                .find(|item| item.key.starts_with(&parsed.key))
+        })
+        .map(|item| item.name.clone())
 }
 
 fn top_level_trimmed(
@@ -551,11 +559,12 @@ fn resolve_merge(
             ));
         };
         if dest_index == src_index {
-            if dest_already_part_of_src(src_name, &dest.text, sources) {
+            if let Some(part) =
+                dest_already_part_of_src(src_name, &dest.text, sources)
+            {
                 return Err(CaptureError::usage_code(
                     format!(
-                        "{src_name} already includes {}; nothing to merge",
-                        dest.text
+                        "{part} is already part of {src_name}; nothing to merge"
                     ),
                     "merge_already_part",
                 ));

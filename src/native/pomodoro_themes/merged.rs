@@ -2,9 +2,8 @@
 //! and shed (R3–R7).
 //!
 //! Landing lives in [`super::routing::land`]. These helpers are plain
-//! data in, plain data out so later capture and Obsidian phases share
-//! one contract with the vector file.
-#![allow(dead_code)]
+//! data in, plain data out so capture and the Obsidian mirror share one
+//! contract with the vector file.
 
 use std::collections::BTreeSet;
 

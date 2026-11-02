@@ -164,6 +164,55 @@ fn capture_merge_guards_teach_precisely() {
 }
 
 #[test]
+fn capture_merge_already_part_repeated_and_meet_guards_teach() {
+    let temp = TempDir::new("bob-cli-capture-merge-more-guards");
+    let vault = temp.path().join("vault");
+    let day_rel = "2026/20261101.md";
+    write_vault(
+        &vault,
+        "20261101.md",
+        concat!(
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] (**0900-1000**) — BUILD + FIX\n",
+            "  - [[tasks#^a1]]\n",
+            "  - [[tasks#^a2]]\n",
+            "- [ ] () — READ\n",
+            "  - [[tasks#^a3]]\n",
+            "- [ ] () — MEET\n",
+        ),
+    );
+    let before = fs::read_to_string(vault.join(day_rel)).expect("day");
+    let refusal = |token: &str, code: &str, teaches: &str| {
+        for dry_run in [true, false] {
+            let output = merge_capture(&vault, token, dry_run);
+            assert!(!output.status.success(), "{token} should refuse");
+            let json: serde_json::Value =
+                serde_json::from_str(stdout(&output).trim()).expect("json");
+            assert_eq!(json["code"], code, "{token}: {json}");
+            let error = json["error"].as_str().unwrap_or_default();
+            assert!(error.contains(teaches), "{token}: {error}");
+        }
+    };
+
+    refusal(
+        "=*build#fix",
+        "merge_already_part",
+        "FIX is already part of BUILD + FIX",
+    );
+    refusal(
+        "=*build#read#read",
+        "merge_dest_repeated",
+        "READ is named twice",
+    );
+    refusal("=*build#meet", "merge_meet", "MEET entries never merge");
+    refusal("=*meet#read", "merge_meet", "MEET entries never merge");
+
+    let after = fs::read_to_string(vault.join(day_rel)).expect("day");
+    assert_eq!(after, before, "refused merges must leave the ledger");
+}
+
+#[test]
 fn capture_merge_human_output_names_absorbed() {
     let temp = TempDir::new("bob-cli-capture-merge-human");
     let vault = temp.path().join("vault");

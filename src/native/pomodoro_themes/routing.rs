@@ -4,10 +4,9 @@
 //! These are the shared contract behind capture, move, link, ref-today,
 //! successor, and Task Card gestures. Every function is pure over plain
 //! data so the Ledger Tools JS mirror can consume the same vectors.
-//! Capture named `#NAME` / `=name` forms still pass `retype: true` until
-//! their own phases; `place` and `relocate` wait for later phases.
-//! Merge, split, narrow, shed, and type-select live in [`super::merged`].
-#![allow(dead_code)]
+//! Capture links land by merging (R2); only Pomodoro rename (D6) passes
+//! `retype: true`. Merge, split, narrow, shed, and type-select live in
+//! [`super::merged`].
 
 use std::collections::BTreeSet;
 
@@ -107,9 +106,8 @@ pub(crate) struct LandInput<'a> {
     pub(crate) inherited_key: Option<&'a str>,
     pub(crate) destination: &'a str,
     pub(crate) selector: Option<&'a str>,
-    /// When true, take today's Set/Clear path (Obsidian Alt+Enter,
-    /// capture named `#NAME` until the capture-link-merge phase, and
-    /// Pomodoro rename). False is the default merge.
+    /// When true, take the explicit Set/Clear retype path (Obsidian
+    /// Alt+Enter and Pomodoro rename). False is the default merge.
     pub(crate) retype: bool,
     pub(crate) tab_pick: Option<&'a str>,
 }
