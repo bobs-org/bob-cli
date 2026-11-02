@@ -537,7 +537,11 @@ pub(crate) struct DayView {
 }
 
 impl DayView {
-    fn parse(text: &str, day_relative: &Path, index: &NoteIndex) -> Self {
+    pub(crate) fn parse(
+        text: &str,
+        day_relative: &Path,
+        index: &NoteIndex,
+    ) -> Self {
         let lines = logical_lines(text);
         let Some(section) = pomodoros_section_range(&lines) else {
             return Self {

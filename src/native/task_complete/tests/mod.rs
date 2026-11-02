@@ -14,6 +14,7 @@ mod keep_moving_tests;
 mod project_pull_in_tests;
 mod recovery_tests;
 mod relation_complete_vectors;
+mod relation_successor_tests;
 mod relation_successor_vectors;
 mod retirement_tests;
 mod successor_tests;

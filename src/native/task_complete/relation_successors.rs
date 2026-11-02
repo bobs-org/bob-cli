@@ -5,9 +5,12 @@
 
 use std::path::PathBuf;
 
+pub(crate) mod classify;
 pub(crate) mod copy;
 
 // Public to the remaining relation-successor phases through this module.
+#[allow(unused_imports)]
+pub(crate) use classify::*;
 #[allow(unused_imports)]
 pub(crate) use copy::*;
 
@@ -20,8 +23,6 @@ pub(crate) use copy::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-// Consumed by the classifier phase.
-#[allow(dead_code)]
 pub(crate) struct RelationTarget {
     pub(crate) note_path: PathBuf,
     pub(crate) block_id: String,
@@ -29,14 +30,12 @@ pub(crate) struct RelationTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct RelationSlotAnchor {
     pub(crate) note_path: PathBuf,
     pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct RelationEvent {
     pub(crate) target: RelationTarget,
     pub(crate) kind: RelationEventKind,
@@ -46,7 +45,6 @@ pub(crate) struct RelationEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // Produced by the classifier and rendered through copy builders.
 pub(crate) enum RelationHeldReason {
     AlreadyPlanned,
     AlreadyStarted,
@@ -54,15 +52,16 @@ pub(crate) enum RelationHeldReason {
     Blocked {
         waits_on: Vec<RelationTarget>,
         scheduled: Option<String>,
-        project: bool,
+        project: Option<PathBuf>,
     },
+    #[allow(dead_code)] // Copy builders still match these held reasons.
     Scheduled(String),
+    #[allow(dead_code)] // Copy builders still match these held reasons.
     Project,
     Hidden,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct RelationHeldRow {
     pub(crate) source: RelationTarget,
     pub(crate) reason: RelationHeldReason,

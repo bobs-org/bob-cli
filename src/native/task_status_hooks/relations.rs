@@ -14,7 +14,6 @@ use super::super::task_dependencies::blocks::{BlocksEdit, BlocksLinePlan};
 use super::super::task_dependencies::format::{
     canonical_link, has_final_newline, note_line_ending,
 };
-use super::super::task_dependencies::is_archive_path;
 use super::super::task_dependencies::parse::{
     dependency_child_of, DependencyLine,
 };
@@ -25,10 +24,14 @@ use super::super::task_relations::parse::{
     linked_from_children_of, links_children_of,
 };
 use super::super::task_relations::plan::plan_linked_from_line;
+use super::super::task_relations::resolve::{
+    resolve_relation_entry, resolve_relation_target_path, RelationResolveError,
+    RelationResolveIndex, RelationTargetKind,
+};
 use super::super::task_relations::{
     LinkedFromLine, LinksLine, RelationEntry, RelationEntryKind, MENTION_LABEL,
 };
-use super::super::vault_links::{target_to_markdown_path, NoteIndex};
+use super::super::vault_links::NoteIndex;
 use super::*;
 
 /// Outcome of one LINKED FROM projection pass: content edits already
@@ -515,22 +518,13 @@ impl RelationsPass<'_> {
         source: &TaskLine,
         entry: &RelationEntry,
     ) -> Result<(PathBuf, String), &'static str> {
-        let Some(path) = self.resolve_target_path(source_path, &entry.target)
-        else {
-            return Err("unresolved_relation_link");
-        };
-        if source.block_id.as_deref() == Some(entry.block_id.as_str())
-            && path == source_path
-        {
-            return Err("self_relation");
-        }
-        if self.lookup_task(&path, &entry.block_id).is_some() {
-            return Ok((path, entry.block_id.clone()));
-        }
-        if self.id_exists(&path, &entry.block_id) {
-            return Err("relation_target_not_task");
-        }
-        Err("unresolved_relation_link")
+        resolve_relation_entry(
+            source_path,
+            source.block_id.as_deref(),
+            entry,
+            self,
+        )
+        .map_err(RelationResolveError::as_str)
     }
 
     fn resolve_target_path(
@@ -538,21 +532,7 @@ impl RelationsPass<'_> {
         source_path: &Path,
         target: &str,
     ) -> Option<PathBuf> {
-        if target.is_empty() {
-            return Some(source_path.to_path_buf());
-        }
-        let candidate = target_to_markdown_path(target)?;
-        if is_archive_path(&candidate) {
-            if self
-                .archives
-                .iter()
-                .any(|file| file.relative_path == candidate)
-            {
-                return Some(candidate);
-            }
-            return None;
-        }
-        self.note_index.resolve(Some(source_path), target)
+        self.resolve_note_path(source_path, target)
     }
 
     fn lookup_task(&self, path: &Path, block_id: &str) -> Option<TaskRef> {
@@ -1164,6 +1144,31 @@ impl RelationsPass<'_> {
             self.outcome
                 .original_contents
                 .insert(file_index, self.files[file_index].contents.clone());
+        }
+    }
+}
+
+impl RelationResolveIndex for RelationsPass<'_> {
+    fn resolve_note_path(
+        &self,
+        source_path: &Path,
+        target: &str,
+    ) -> Option<PathBuf> {
+        resolve_relation_target_path(
+            source_path,
+            target,
+            self.note_index,
+            |path| self.archives.iter().any(|file| file.relative_path == path),
+        )
+    }
+
+    fn target_kind(&self, path: &Path, block_id: &str) -> RelationTargetKind {
+        if self.lookup_task(path, block_id).is_some() {
+            RelationTargetKind::Task
+        } else if self.id_exists(path, block_id) {
+            RelationTargetKind::NonTask
+        } else {
+            RelationTargetKind::Missing
         }
     }
 }
