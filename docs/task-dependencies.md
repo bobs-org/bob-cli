@@ -862,7 +862,7 @@ filter — then through `mint_block_id` with the note's used IDs
 | --- | --- | --- | --- |
 | SB1 | `- [?] #task Renew the library books` | — | `renew-library-books` |
 | SB2 | `- [?] #task Fix apollo machine` | — | `fix-apollo-machine` |
-| SB3 | ``- [?] #task Add support for new `%hold` directive`` | — | `hold` |
+| SB3 | ``- [?] #task Add support for new `%hold` directive`` | — | `hold-directive` |
 | SB4 | `- [?] #task Review [[sase#^fix-apollo\|apollo fix]] notes` | — | `apollo-fix` |
 | SB5 | `- [?] #task Book flights [scheduled:: 2026-10-13] #task` | — | `book-flights` |
 | SB6 | `- [?] #task Book flights [scheduled:: 2026-10-13] #task` | `book-flights` | `book-flights-2` |
@@ -870,9 +870,12 @@ filter — then through `mint_block_id` with the note's used IDs
 | SB8 | `- [?] #task é🚀` | — | `task` |
 | SB9 | `- [?] #task é🚀` | `task`, `task-2` | `task-3` |
 
-SB1 is plain prose. SB2 drops the leading verb into the second
-suggestion (`apollo-machine`) and mints the first. SB3 mints the
-backticked phrase. SB4 mints the wikilink alias, not the target. SB5
+SB1 is plain prose. SB2 keeps the content verb `fix` in the first
+suggestion. SB3 drops the `add support for` lead-in and filler `new`,
+then mints the first two content words; the backticked phrase is a later
+suggestion. SB4 reduces the wikilink to its alias, drops the leading
+`review` verb (four-plus content words) and trailing `notes`, and mints
+`apollo-fix`. SB5
 strips the inline field and both `#task` tags. SB6 takes the `-2`
 suffix on collision. SB7 falls back to `task` when every suggestion and
 every `-2`…`-9` suffix is taken. SB8 falls back on non-ASCII text with

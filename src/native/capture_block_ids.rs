@@ -440,8 +440,30 @@ const STOPWORDS: &[&str] = &[
     "their", "this", "to", "via", "with", "your",
 ];
 
-const LEADING_VERBS: &[&str] = &[
-    "add",
+/// Words authored IDs almost never keep. Content verbs such as `fix`,
+/// `apply`, `research`, and `read` stay.
+const FILLER_WORDS: &[&str] = &[
+    "ability", "add", "all", "get", "make", "new", "should", "start",
+    "support", "use",
+];
+
+/// Low-content lead-in phrases, longest first so a longer match wins.
+const FILLER_LEADINS: &[&[&str]] = &[
+    &["make", "it", "possible", "to"],
+    &["figure", "out", "how", "to"],
+    &["add", "support", "for"],
+    &["add", "ability", "to"],
+    &["make", "sure", "that"],
+    &["figure", "out", "how"],
+    &["make", "sure"],
+    &["figure", "out"],
+];
+
+/// Leading verbs authored IDs drop when the remaining text still has 4+
+/// content words. `fix`, `apply`, `research`, and `read` stay.
+const SKIP_LEADING_VERBS: &[&str] = &[
+    "allow",
+    "ask",
     "build",
     "check",
     "clean",
@@ -451,52 +473,119 @@ const LEADING_VERBS: &[&str] = &[
     "enable",
     "ensure",
     "finish",
-    "fix",
     "implement",
     "improve",
     "investigate",
-    "make",
+    "let",
     "migrate",
     "move",
+    "need",
     "plan",
-    "read",
+    "please",
     "refactor",
     "remove",
     "rename",
-    "research",
     "review",
     "run",
-    "start",
     "stop",
-    "support",
-    "test",
     "try",
     "update",
-    "use",
+    "want",
     "write",
 ];
+
+/// Trailing words authored IDs almost never keep.
+const WEAK_TRAILING: &[&str] = &[
+    "bug",
+    "code",
+    "docs",
+    "documentation",
+    "file",
+    "issue",
+    "item",
+    "items",
+    "note",
+    "notes",
+    "stuff",
+    "support",
+    "task",
+    "tasks",
+    "test",
+    "tests",
+    "testing",
+    "thing",
+    "things",
+    "today",
+    "tonight",
+    "work",
+];
+
+/// First suggestion uses 3 content words when that join fits in this many
+/// bytes; otherwise the first 2. Vault calibration keeps mean first length
+/// ≤ 17; a higher cap trades length for Jaccard.
+const FIRST_SUGGESTION_MAX_BYTES: usize = 24;
 
 fn is_stopword(word: &str) -> bool {
     STOPWORDS.contains(&word)
 }
 
+fn is_filler_word(word: &str) -> bool {
+    FILLER_WORDS.contains(&word)
+}
+
 /// ASCII alphanumeric runs, lowercased. Non-ASCII characters are separators.
-fn words_in(text: &str) -> Vec<String> {
+fn raw_words(text: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut current = String::new();
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() {
             current.push(byte.to_ascii_lowercase() as char);
         } else if !current.is_empty() {
-            if !is_stopword(&current) {
-                words.push(std::mem::take(&mut current));
-            } else {
-                current.clear();
-            }
+            words.push(std::mem::take(&mut current));
         }
     }
-    if !current.is_empty() && !is_stopword(&current) {
+    if !current.is_empty() {
         words.push(current);
+    }
+    words
+}
+
+fn words_in(text: &str) -> Vec<String> {
+    raw_words(text)
+        .into_iter()
+        .filter(|word| !is_stopword(word))
+        .collect()
+}
+
+/// Task-text content words: drop filler lead-ins, stopwords, and filler
+/// words, keep content verbs that authored IDs keep.
+fn content_words(text: &str) -> Vec<String> {
+    let mut words = raw_words(text);
+    for leadin in FILLER_LEADINS {
+        if words.len() >= leadin.len()
+            && words
+                .iter()
+                .zip(leadin.iter())
+                .all(|(word, lead)| word == lead)
+        {
+            words.drain(..leadin.len());
+            break;
+        }
+    }
+    words.retain(|word| !is_stopword(word) && !is_filler_word(word));
+    while words.len() >= 4
+        && words
+            .first()
+            .is_some_and(|word| SKIP_LEADING_VERBS.contains(&word.as_str()))
+    {
+        words.remove(0);
+    }
+    while words.len() >= 2
+        && words
+            .last()
+            .is_some_and(|word| WEAK_TRAILING.contains(&word.as_str()))
+    {
+        words.pop();
     }
     words
 }
@@ -776,8 +865,37 @@ pub(crate) fn suggest_ids_with_used(
 ) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
 
-    let prose = words_in(&prose_text(body));
-    // Candidate 1: the first phrase with at least one word, as its first 4.
+    let prose = content_words(&prose_text(&reduce_wikilinks(body)));
+    let three = if prose.is_empty() {
+        None
+    } else {
+        join_truncated(&prose[..prose.len().min(3)], marker)
+    };
+    let two = if prose.len() >= 2 {
+        join_truncated(&prose[..2], marker)
+    } else {
+        None
+    };
+    let prefer_three = three
+        .as_ref()
+        .is_some_and(|id| id.len() <= FIRST_SUGGESTION_MAX_BYTES);
+    if prefer_three {
+        if let Some(id) = three.clone() {
+            candidates.push(id);
+        }
+        if let Some(id) = two {
+            candidates.push(id);
+        }
+    } else {
+        if let Some(id) = two {
+            candidates.push(id);
+        }
+        if let Some(id) = three {
+            candidates.push(id);
+        }
+    }
+    // Then the first phrase (code span, quoted phrase, link label, …)
+    // when it is distinct.
     for phrase in phrase_spans(body) {
         let words = words_in(&phrase);
         if words.is_empty() {
@@ -788,21 +906,6 @@ pub(crate) fn suggest_ids_with_used(
             candidates.push(joined);
         }
         break;
-    }
-    // Candidate 2: the first 3 prose words.
-    if !prose.is_empty() {
-        let take = prose.len().min(3);
-        if let Some(joined) = join_truncated(&prose[..take], marker) {
-            candidates.push(joined);
-        }
-        // Candidate 3: when the first prose word is a leading verb, the
-        // next 3 words.
-        if LEADING_VERBS.contains(&prose[0].as_str()) && prose.len() > 1 {
-            let end = (1 + 3).min(prose.len());
-            if let Some(joined) = join_truncated(&prose[1..end], marker) {
-                candidates.push(joined);
-            }
-        }
     }
 
     // Deduplicate, preserving order.
@@ -888,33 +991,37 @@ mod tests {
             (
                 "Fix flaky gkeep test",
                 '^',
-                vec!["fix-flaky-gkeep", "flaky-gkeep-test"],
+                vec!["fix-flaky-gkeep", "fix-flaky"],
             ),
             (
                 "Add concept of \"agent data panels”!",
                 '^',
                 vec![
-                    "agent-data-panels",
-                    "add-concept-agent",
                     "concept-agent-data",
+                    "concept-agent",
+                    "agent-data-panels",
                 ],
             ),
             (
                 "Add support for new `%hold` directive!",
                 '^',
-                vec!["hold", "add-support-new", "support-new-hold"],
+                vec!["hold-directive", "hold"],
             ),
-            ("Release v0.18.0!", '^', vec!["release-v0-18"]),
+            (
+                "Release v0.18.0!",
+                '^',
+                vec!["release-v0-18", "release-v0"],
+            ),
             ("Tool", '^', vec!["tool-2"]),
             (
                 "Try Opus with Blender. [💡](https://keep.google.com/u/0/#NOTE/x)",
                 '^',
-                vec!["try-opus-blender", "opus-blender"],
+                vec!["try-opus-blender", "try-opus"],
             ),
             (
                 "Try Opus with Blender. [💡](https://keep.google.com/u/0/#NOTE/x \"Open in Google Keep\")",
                 '^',
-                vec!["try-opus-blender", "opus-blender"],
+                vec!["try-opus-blender", "try-opus"],
             ),
             (
                 "See https://example.com/docs for details",
@@ -929,12 +1036,12 @@ mod tests {
             (
                 "Fix (gkeep) flaky test",
                 '^',
-                vec!["gkeep", "fix-gkeep-flaky", "gkeep-flaky-test"],
+                vec!["fix-gkeep-flaky", "fix-gkeep", "gkeep"],
             ),
             (
                 "Read [the handbook](https://example.com/guide) tonight",
                 '^',
-                vec!["handbook", "read-handbook-tonight", "handbook-tonight"],
+                vec!["read-handbook", "handbook"],
             ),
         ];
         for (body, marker, expected) in cases {
@@ -950,6 +1057,59 @@ mod tests {
             );
         }
         assert!(suggest_ids("é🚀", '^', &[]).is_empty());
+    }
+
+    #[test]
+    fn suggestions_drop_filler_leadins_and_keep_content_verbs() {
+        let hermes =
+            suggest_ids("Add support for hermes LLM provider", '^', &[]);
+        assert_eq!(
+            hermes.first().map(String::as_str),
+            Some("hermes-llm-provider")
+        );
+        assert!(hermes.iter().any(|id| id == "hermes-llm"), "{hermes:?}");
+        assert_eq!(
+            suggest_ids("Add ability to parse YAML files", '^', &[]),
+            vec!["parse-yaml-files", "parse-yaml"]
+        );
+        assert_eq!(
+            suggest_ids("Make sure that vault sync works", '^', &[]),
+            vec!["vault-sync-works", "vault-sync"]
+        );
+        assert_eq!(
+            suggest_ids("Make it possible to retry failed jobs", '^', &[]),
+            vec!["retry-failed-jobs", "retry-failed"]
+        );
+        assert_eq!(
+            suggest_ids("Figure out how to ship this", '^', &[]),
+            vec!["ship"]
+        );
+        let flaky = suggest_ids("Fix flaky gkeep test", '^', &[]);
+        assert!(
+            flaky.first().is_some_and(|id| id.starts_with("fix-")),
+            "{flaky:?}"
+        );
+    }
+
+    #[test]
+    fn suggestions_offer_code_span_phrase_and_honor_length_cap() {
+        assert_eq!(
+            suggest_ids("Enable the `%hold` directive today", '^', &[]),
+            vec!["hold-directive", "hold"]
+        );
+        let long =
+            suggest_ids("Fix authentication middleware timeout", '^', &[]);
+        assert_eq!(
+            long.first().map(String::as_str),
+            Some("fix-authentication")
+        );
+        assert!(
+            long.iter().any(|id| id == "fix-authentication-middleware"),
+            "{long:?}"
+        );
+        assert!(
+            "fix-authentication-middleware".len() > FIRST_SUGGESTION_MAX_BYTES
+        );
     }
 
     /// Successor block-ID vectors (`docs/task-dependencies.md` §11.7). Each
@@ -988,7 +1148,7 @@ mod tests {
                 "SB3",
                 "- [?] #task Add support for new `%hold` directive",
                 &[],
-                "hold",
+                "hold-directive",
             ),
             (
                 "SB4",
@@ -1043,5 +1203,168 @@ mod tests {
         assert_eq!(used[2].line, 4);
         assert!(!used[2].task);
         assert_eq!(used[2].text, "para");
+    }
+
+    /// Vault calibration for the shared block-ID suggester. Prints aggregate
+    /// metrics only: no vault text, IDs, or paths enter the output.
+    #[test]
+    #[ignore = "set BOB_ID_CALIBRATION_VAULT to a vault of Markdown notes"]
+    fn block_id_calibration() {
+        let Some(root) = std::env::var_os("BOB_ID_CALIBRATION_VAULT") else {
+            return;
+        };
+        let root = Path::new(&root);
+        let pairs = collect_calibration_pairs(root);
+        let mut top1 = 0usize;
+        let mut top3 = 0usize;
+        let mut jaccard_first = 0.0;
+        let mut jaccard_best = 0.0;
+        let mut first_len = 0.0;
+        let mut authored_len = 0.0;
+        let mut first_len_n = 0usize;
+        let n = pairs.len();
+        for (text, authored) in &pairs {
+            let suggestions = suggest_ids(text, '^', &[]);
+            authored_len += authored.len() as f64;
+            if let Some(first) = suggestions.first() {
+                first_len += first.len() as f64;
+                first_len_n += 1;
+                if first == authored {
+                    top1 += 1;
+                }
+            }
+            if suggestions.iter().any(|id| id == authored) {
+                top3 += 1;
+            }
+            jaccard_first += suggestions
+                .first()
+                .map(|id| word_set_jaccard(id, authored))
+                .unwrap_or(0.0);
+            jaccard_best += suggestions
+                .iter()
+                .map(|id| word_set_jaccard(id, authored))
+                .fold(0.0, f64::max);
+        }
+        let n_f = n as f64;
+        println!("block_id_calibration n={n}");
+        if n == 0 {
+            return;
+        }
+        println!(
+            "top1_exact={:.3} ({:.6})",
+            top1 as f64 / n_f,
+            top1 as f64 / n_f
+        );
+        println!(
+            "top3_exact={:.3} ({:.6})",
+            top3 as f64 / n_f,
+            top3 as f64 / n_f
+        );
+        println!(
+            "mean_jaccard_first={:.3} ({:.6})",
+            jaccard_first / n_f,
+            jaccard_first / n_f
+        );
+        println!(
+            "mean_jaccard_best3={:.3} ({:.6})",
+            jaccard_best / n_f,
+            jaccard_best / n_f
+        );
+        println!(
+            "mean_first_len={:.1}",
+            if first_len_n == 0 {
+                0.0
+            } else {
+                first_len / first_len_n as f64
+            }
+        );
+        println!("mean_authored_len={:.1}", authored_len / n_f);
+    }
+
+    fn collect_calibration_pairs(root: &Path) -> Vec<(String, String)> {
+        let settings = note_tasks::read_settings(root);
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return Vec::new();
+        };
+        let mut files: Vec<_> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path.extension().is_some_and(|ext| ext == "md")
+            })
+            .collect();
+        files.sort();
+        let mut pairs = Vec::new();
+        for path in files {
+            let Ok(contents) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let scan = note_tasks::scan(&contents, &settings);
+            for task in scan.tasks() {
+                let Some(id) = task.block_id.as_deref() else {
+                    continue;
+                };
+                if id == "prj" || id.is_empty() {
+                    continue;
+                }
+                let line = contents
+                    .lines()
+                    .nth(task.line_index)
+                    .unwrap_or(task.description.as_str());
+                if task.task_kind == Some("ref")
+                    || has_ref_token(line)
+                    || line.contains("[[ref/")
+                {
+                    continue;
+                }
+                let text = strip_hash_tags(&task.description);
+                if text.is_empty() {
+                    continue;
+                }
+                pairs.push((text, id.to_string()));
+            }
+        }
+        pairs
+    }
+
+    fn has_ref_token(line: &str) -> bool {
+        line.split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("#ref"))
+    }
+
+    fn strip_hash_tags(text: &str) -> String {
+        text.split_whitespace()
+            .filter(|token| {
+                let Some(rest) = token.strip_prefix('#') else {
+                    return true;
+                };
+                rest.is_empty()
+                    || !rest.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric()
+                            || matches!(byte, b'_' | b'/' | b'-')
+                    })
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn word_set_jaccard(left: &str, right: &str) -> f64 {
+        let left_words = hyphen_words(left);
+        let right_words = hyphen_words(right);
+        if left_words.is_empty() && right_words.is_empty() {
+            return 1.0;
+        }
+        let intersection = left_words.intersection(&right_words).count() as f64;
+        let union = left_words.union(&right_words).count() as f64;
+        if union == 0.0 {
+            0.0
+        } else {
+            intersection / union
+        }
+    }
+
+    fn hyphen_words(id: &str) -> HashSet<&str> {
+        id.split('-').filter(|word| !word.is_empty()).collect()
     }
 }

@@ -154,7 +154,7 @@ fn task_link_completion_pins_json_shape_and_omissions() {
     assert_eq!(missing["requires_block_id"], true);
     assert_eq!(
         missing["block_id_suggestions"],
-        serde_json::json!(["fix-flaky-gkeep", "flaky-gkeep-test"])
+        serde_json::json!(["fix-flaky-gkeep", "fix-flaky"])
     );
     assert_eq!(missing["status_symbol"], " ");
     assert_eq!(missing["text"], "Fix flaky gkeep test");

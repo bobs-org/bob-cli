@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(nested.block_id, None);
         assert_eq!(
             nested.block_id_suggestions,
-            vec!["tune-fuzzy-weights".to_string()]
+            vec!["tune-fuzzy-weights".to_string(), "tune-fuzzy".to_string()]
         );
         assert_eq!(nested.text, "Tune fuzzy weights");
         assert_eq!(nested.depth, 1);
@@ -635,10 +635,7 @@ mod tests {
         assert_eq!(flaky.block_id, None);
         assert_eq!(
             flaky.block_id_suggestions,
-            vec![
-                "fix-flaky-gkeep".to_string(),
-                "flaky-gkeep-test".to_string()
-            ]
+            vec!["fix-flaky-gkeep".to_string(), "fix-flaky".to_string()]
         );
         assert_eq!(flaky.text, "Fix flaky gkeep test");
         assert_eq!(flaky.section.as_deref(), Some("Bugs"));

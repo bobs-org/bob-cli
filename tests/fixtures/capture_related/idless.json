@@ -21,7 +21,8 @@
           "band": "same_title",
           "block_id": null,
           "block_id_suggestions": [
-            "replace-server-ups"
+            "replace-server-ups",
+            "replace-server"
           ],
           "closed": null,
           "default_action": "discard",

@@ -244,7 +244,7 @@ fn block_id_suggestions_follow_body_examples() {
         .iter()
         .map(|item| item.as_str().expect("suggestion"))
         .collect();
-    assert_eq!(suggestions, vec!["fix-flaky-gkeep", "flaky-gkeep-test"]);
+    assert_eq!(suggestions, vec!["fix-flaky-gkeep", "fix-flaky"]);
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn project_task_block_id_reports_stem_body_used_and_suggestions() {
     assert_eq!(second_block["body"], "Call about the 401k");
     assert_eq!(
         second_block["suggestions"],
-        serde_json::json!(["call-about-401k"])
+        serde_json::json!(["call-about-401k", "call-about"])
     );
     let ids: Vec<&str> = second_block["used"]
         .as_array()

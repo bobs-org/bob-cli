@@ -7654,20 +7654,28 @@ bullet's project body as `text`) plus every other task ID already typed in
 the item. A `used` entry carries `line` (1-based physical draft line),
 `task: true`, null `status_symbol` / `status_name`, and `text`. The object
 reads no routed note except to set `note_exists` for the project note.
-Suggestions derive from the task text: the first phrase with a word (code
-spans, quoted phrases with mixed `"`/`“` quotes, parentheticals, Markdown
-`[label](destination)` labels that contain a word — never the destination; a
-`(` that directly follows `]` is a link destination, not a parenthetical —
-and `[[wikilink]]` alias-or-target, in text order) as its first 4 words, then
-the first 3 prose words, then — when the first prose word is a leading verb —
-the next 3 words; words are ASCII alphanumeric runs, lowercased, minus
-stopwords; prose drops bare URLs (`scheme://…` runs and `www.` runs) and
-link destinations before splitting; joined with `-`, truncated at a word
-boundary to at most 32 bytes, validated, deduplicated, and suffixed with the
-first free `-2`…`-9` when taken (dropped when none is free). For example
-`Fix flaky gkeep test` suggests `fix-flaky-gkeep` and `flaky-gkeep-test`, and
+Suggestions derive from the task text: the first 3 content words when they
+fit in 24 bytes, else the first 2; then the other word-form when distinct; then
+the first phrase with a word (code spans, quoted phrases with mixed `"`/`“`
+quotes, parentheticals, Markdown `[label](destination)` labels that contain a
+word — never the destination; a `(` that directly follows `]` is a link
+destination, not a parenthetical — and `[[wikilink]]` alias-or-target, in
+text order) as its first 4 words. Words are ASCII alphanumeric runs,
+lowercased, minus stopwords, filler words (`add`, `support`, `make`, `new`,
+and the rest of that closed list), and filler lead-ins (`add support for`,
+`add ability to`, `make sure (that)`, `make it possible to`, `figure out (how
+to)`); content verbs that authored IDs keep (`fix`, `apply`, `research`,
+`read`) stay. Other leading verbs (`try`, `review`, `enable`, …) drop when
+four or more content words remain. Weak trailing words (`test`, `notes`,
+`tonight`, …) drop from the end. Prose reduces wikilinks to their display text, then drops bare
+URLs (`scheme://…` runs and `www.` runs) and link destinations before
+splitting; joined with `-`, truncated at a word boundary to at most 32 bytes,
+validated, deduplicated, and suffixed with the first free `-2`…`-9` when
+taken (dropped when none is free). For example `Fix flaky gkeep test`
+suggests `fix-flaky-gkeep` and `fix-flaky`, `Add support for hermes LLM
+provider` suggests `hermes-llm-provider` then `hermes-llm`, and
 `Try Opus with Blender. [💡](https://keep.google.com/u/0/#NOTE/x)` suggests
-`try-opus-blender` and `opus-blender`. Older clients without the
+`try-opus-blender` and `try-opus`. Older clients without the
 `block_id` object treat `pomodoro_block_id` as a link list and see no picker
 for `task_block_id`; the app never falls back to the inline list for these
 three contexts. Older clients route the unknown `project_task_block_id`
