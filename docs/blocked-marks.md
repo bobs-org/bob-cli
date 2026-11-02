@@ -378,21 +378,50 @@ ready and holds open `[id:: x]`, open `[id:: y]`, and done
 
 ## Live verification (real-Obsidian e2e, bob-plugins `scripts/obsidian-block-marks-e2e.cjs`)
 
-Verified in an isolated scratch vault (light and dark, Live Preview and
-reading view) with screenshots reviewed against the accepted mockup:
+The offline self-test plus the node reading/editor suites cover the
+landing repairs: recycled fallback rows drop a stale scheduled reason,
+off-state sweeps leave a later external tooltip alone, Tasks/`code`/`pre`
+processor roots stay excluded, and Dataview rows without a proven origin
+stay unmarked. Live Preview tooltip attachment has a `requestMeasure`
+write-pass after rebuild; an unscanned collect does not restore
+mouseover bindings.
 
-- every applicable BM row renders its mark in both views and both themes
+Verified 114/114 in an isolated scratch vault (light and dark, Live
+Preview and reading view) with screenshots reviewed against the
+accepted mockup. Quoted Live Preview and quoted reading source forms
+that the host does not render as a checkbox still carry the `p4` row
+mark; reading view paints a `4` on the quoted task when a checkbox
+exists.
+
+- every applicable BM row renders its mark in both views and both themes,
+  including a standalone P3 row, with owned checkbox paint per key except
+  quoted BM20, which has no owned checkbox in Live Preview
 - `dep` rows read `&`, `prj` rows read the chevron, digit rows read hollow `1`–`4`
 - waiting rows are quieter than held rows (5.5% tint vs 13%)
-- hovering a marked checkbox shows its tooltip text; clicking the box
-  stores exactly the same status with the gate on and off
-- the toggle removes all marks and restores the prior appearance, then
-  turns the marks back on, without changing row height
+- a CDP hover plus two mouse `pointermove` events shows the visible
+  `.tooltip` text, matching the classifier tooltip independently of
+  `aria-label`
+- clicking the box stores exactly the same status with the gate on and off
+- the toggle removes all marks, restores owned tooltip metadata and
+  computed appearance, then turns the marks back on, without changing
+  row height
 - nested child items never inherit a mark
-- embeds, hover previews, and Dataview TASK rows carry marks where their
-  origin is provable; unprovable origins stay neutral; Tasks query rows
-  stay unmarked by JS (their CSS marks belong to a later phase)
+- a named row inside the embed and hover-preview popover carries its own
+  checkbox mark; this Dataview build does not emit a file path or file
+  link, so the harness injects a proven origin on BM4 and the adapter
+  recovers canonical text from the Tasks cache; unprovable Dataview rows
+  stay neutral; Tasks query rows stay unmarked by JS (their CSS marks
+  belong to a later phase)
 - fenced code stays neutral; quoted tasks mark in both views
+- a targeted BMClick edit that adds an open `dependsOn` changes that
+  row's key; BM6 empties then restores the Tasks cache through
+  `metadataCache` `resolved`; BM22 remaps medium to P3 through
+  `refreshBlockMarksLadder(true)`; BM23 seeds `dateMarksDay` /
+  `blockMarksDay`, patches `dateMarksToday`, and calls
+  `refreshDateMarksForRollover` so BM3 becomes `stale` (controlled
+  clock, not a midnight observation)
+- family paint remains after the scratch snippet is disabled through
+  `app.customCss.setCssEnabledStatus` and the style node is absent
 
 Still pending for the parent visual-review phase: a real reconcile
 turning a row `stale` and then clear, iOS glyph rendering, third-party
