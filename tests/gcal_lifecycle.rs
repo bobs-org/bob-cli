@@ -1133,6 +1133,259 @@ fn preexisting_off_clock_title_migrates_both_spans_in_place() {
     assert!(row.contains("**1200-1300** Lunch "), "{row}");
     assert!(!row.contains("Lunch #untracked"), "{row}");
     assert!(row.contains(" #offclock [root:: meet]"), "{row}");
+    assert!(
+        row.contains(&format!(" [📅]({html})")),
+        "badges migrate title-free: {row}"
+    );
+    assert!(!row.contains("\"Open in Google Calendar\""), "{row}");
+}
+
+#[test]
+fn preexisting_titled_badges_migrate_in_place() {
+    use sha2::{Digest, Sha256};
+    fn span_hash(text: &str) -> String {
+        hex::encode(Sha256::digest(text.as_bytes()))[..16].to_string()
+    }
+
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-titled-migrate");
+    prepare(&env);
+
+    let migrate_html = "https://calendar.google.com/event?eid=migrate";
+    let migrate_join = "https://meet.google.com/abc";
+    let migrate_maps =
+        "https://www.google.com/maps/search/?api=1&query=Main%20St%20Dental";
+    let migrate_legacy = format!(
+        " [📅]({migrate_html} \"Open in Google Calendar\") \
+         [📹]({migrate_join} \"Join call\") [📍]({migrate_maps} \"Main St Dental\")"
+    );
+    let migrate_fresh = format!(
+        " [📅]({migrate_html}) [📹]({migrate_join}) [📍]({migrate_maps})"
+    );
+
+    let hand_html = "https://calendar.google.com/event?eid=hand";
+    let hand_join = "https://meet.google.com/hand";
+    let hand_maps =
+        "https://www.google.com/maps/search/?api=1&query=Hand%20Place";
+    let hand_legacy = format!(
+        " [📅]({hand_html} \"Open in Google Calendar\") \
+         [📹]({hand_join} \"Join call\") [📍]({hand_maps} \"Hand Place\")"
+    );
+    let hand_fresh =
+        format!(" [📅]({hand_html}) [📹]({hand_join}) [📍]({hand_maps})");
+    // Bryan removed the 📍 badge by hand: badges no longer match the journal.
+    let hand_edited = format!(
+        " [📅]({hand_html} \"Open in Google Calendar\") \
+         [📹]({hand_join} \"Join call\")"
+    );
+
+    let done_html = "https://calendar.google.com/event?eid=done";
+    let done_join = "https://meet.google.com/done";
+    let done_maps =
+        "https://www.google.com/maps/search/?api=1&query=Done%20Place";
+    let done_legacy = format!(
+        " [📅]({done_html} \"Open in Google Calendar\") \
+         [📹]({done_join} \"Join call\") [📍]({done_maps} \"Done Place\")"
+    );
+    let done_fresh =
+        format!(" [📅]({done_html}) [📹]({done_join}) [📍]({done_maps})");
+
+    let migrate_row = format!(
+        "- [*] #task **1830-1900** Migrate{migrate_legacy} [root:: meet] ^migrate"
+    );
+    let hand_row = format!(
+        "- [*] #task **1900-1930** Hand{hand_edited} [root:: meet] ^hand"
+    );
+    let done_row = format!(
+        "- [x] #task **2000-2030** Done{done_legacy} [root:: meet] ^done"
+    );
+    let note = format!(
+        "# Friday 2026-10-30\n\n## Events\n\n\
+         *↻ synced 11:00 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*\n\
+         {migrate_row}\n{hand_row}\n{done_row}\n\n## Pomodoros\n"
+    );
+    fs::write(env.vault().join("2026/20261030.md"), &note).expect("write note");
+
+    let journal_entry = |event_id: &str,
+                         block_id: &str,
+                         url: &str,
+                         time: &str,
+                         title: &str,
+                         badges: &str| {
+        serde_json::json!({
+            "v": 1,
+            "ts": "2026-10-30T11:00:00-04:00",
+            "host": "test-host",
+            "kind": "gcal.row",
+            "key": {"calendar_id": "primary", "event_id": event_id},
+            "day": "2026-10-30",
+            "path": "2026/20261030.md",
+            "block_id": block_id,
+            "url": url,
+            "row": "task",
+            "spans": {
+                "time": span_hash(time),
+                "title": span_hash(title),
+                "badges": span_hash(badges),
+            },
+            "root": {"value": "meet", "source": "default"},
+        })
+    };
+    let journal = vec![
+        journal_entry(
+            "migrate",
+            "migrate",
+            migrate_html,
+            "1830-1900",
+            "Migrate",
+            &migrate_legacy,
+        ),
+        journal_entry(
+            "hand",
+            "hand",
+            hand_html,
+            "1900-1930",
+            "Hand",
+            &hand_legacy,
+        ),
+        journal_entry(
+            "done",
+            "done",
+            done_html,
+            "2000-2030",
+            "Done",
+            &done_legacy,
+        ),
+    ];
+    let journal_dir = env.vault().join(".bob/gcal");
+    fs::create_dir_all(&journal_dir).expect("journal dir");
+    let journal_text = journal
+        .iter()
+        .map(|line| serde_json::to_string(line).expect("journal"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(journal_dir.join("test-host.jsonl"), journal_text)
+        .expect("write journal");
+
+    let event = |id: &str,
+                 summary: &str,
+                 html: &str,
+                 join: &str,
+                 location: &str,
+                 start: &str,
+                 end: &str| {
+        serde_json::json!({
+            "id": id,
+            "summary": summary,
+            "status": "confirmed",
+            "location": location,
+            "htmlLink": html,
+            "hangoutLink": join,
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "attendees": [{"self": true, "responseStatus": "accepted"}]
+        })
+    };
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        &serde_json::to_string(&serde_json::json!({
+            "events": [
+                event(
+                    "migrate",
+                    "Migrate",
+                    migrate_html,
+                    migrate_join,
+                    "Main St Dental",
+                    "2026-10-30T18:30:00-04:00",
+                    "2026-10-30T19:00:00-04:00"
+                ),
+                event(
+                    "hand",
+                    "Hand",
+                    hand_html,
+                    hand_join,
+                    "Hand Place",
+                    "2026-10-30T19:00:00-04:00",
+                    "2026-10-30T19:30:00-04:00"
+                ),
+                event(
+                    "done",
+                    "Done",
+                    done_html,
+                    done_join,
+                    "Done Place",
+                    "2026-10-30T20:00:00-04:00",
+                    "2026-10-30T20:30:00-04:00"
+                ),
+            ],
+            "nextPageToken": serde_json::Value::Null,
+        }))
+        .expect("events"),
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let migrated = note
+        .lines()
+        .find(|line| line.contains("^migrate"))
+        .expect("migrate row")
+        .to_string();
+    assert!(migrated.contains(&migrate_fresh), "{migrated}");
+    assert!(!migrated.contains('"'), "{migrated}");
+    assert!(
+        migrated.starts_with("- [*] #task **1830-1900** Migrate "),
+        "{migrated}"
+    );
+    assert!(migrated.contains("[root:: meet]"), "{migrated}");
+
+    let done = note
+        .lines()
+        .find(|line| line.contains("^done"))
+        .expect("done row")
+        .to_string();
+    assert!(done.contains(&done_fresh), "{done}");
+    assert!(!done.contains('"'), "{done}");
+    assert!(
+        done.starts_with("- [x] #task **2000-2030** Done "),
+        "{done}"
+    );
+
+    let hand = note
+        .lines()
+        .find(|line| line.contains("^hand"))
+        .expect("hand row")
+        .to_string();
+    assert!(!hand.contains(&hand_fresh), "hand edit kept: {hand}");
+    assert!(hand.contains(&hand_edited), "hand edit kept: {hand}");
+    assert!(!hand.contains("[📍]("), "hand edit kept: {hand}");
+
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("kept your edit"),
+        "hand kept once: {combined}"
+    );
+
+    let journal = journal_lines(&env);
+    assert_eq!(
+        last_row_for(&journal, "migrate")["spans"]["badges"],
+        serde_json::Value::String(span_hash(&migrate_fresh)),
+        "journal records title-free badges"
+    );
+    assert_eq!(
+        last_row_for(&journal, "done")["spans"]["badges"],
+        serde_json::Value::String(span_hash(&done_fresh)),
+        "done row also migrates"
+    );
+
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert_eq!(today_note(&env), note, "rerun is a no-op");
+    let combined_again = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(
+        !combined_again.contains("kept your edit"),
+        "reported once: {combined_again}"
+    );
 }
 
 fn dentist_with_description(description: &str) -> Value {

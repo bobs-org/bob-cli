@@ -347,6 +347,43 @@ fn crash_recovery_adopts_unjournaled_rows() {
 }
 
 #[test]
+fn title_free_row_is_adopted_without_duplicate() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-adopt-title-free");
+    prepare(&env);
+    // Title-free hand row (new Bob format) with the same block id sync would
+    // mint, plus its MEET link: adoption keys on the bare URL.
+    let hand = "# Friday 2026-10-30\n\n## Events\n\n- [*] #task **1830-1900** Dentist [📅](https://calendar.google.com/event?eid=dentist) [📍](https://www.google.com/maps/search/?api=1&query=Main%20St%20Dental) [root:: body] [type:: MEET] ^dentist\n\n## Pomodoros\n\n- [ ] () — MEET\n\t- [[#^dentist]]\n";
+    fs::write(env.vault().join("2026/20261030.md"), hand).expect("hand row");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert_eq!(
+        note.matches("^dentist").count(),
+        2,
+        "one adopted row plus one link, no duplicate:\n{note}"
+    );
+    assert!(!note.contains("\"Open in Google Calendar\""), "{note}");
+
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let list = command.output().expect("list");
+    assert_eq!(list.status.code(), Some(0), "{}", stderr(&list));
+    let report: Value =
+        serde_json::from_str(&stdout(&list)).expect("JSON report");
+    let dentist = report["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Dentist")
+        .expect("dentist");
+    assert_eq!(dentist["vault"], "task · MEET", "{dentist}");
+}
+
+#[test]
 fn meet_placeholder_follows_the_last_open_entry() {
     let env = GcalEnv::new("bob-cli-gcal-sync-placement");
     prepare(&env);

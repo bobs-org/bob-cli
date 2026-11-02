@@ -286,9 +286,9 @@ fn new_section_has_gap_below_heading_only() {
                 "\n",
                 "{stamp}\n",
                 "- **all day** School holiday ",
-                "[📅](https://calendar.google.com/event?eid=holiday \"Open in Google Calendar\")\n",
+                "[📅](https://calendar.google.com/event?eid=holiday)\n",
                 "- [ ] #task **0900-0930** Product interview ",
-                "[📅](https://calendar.google.com/event?eid=interview \"Open in Google Calendar\") ^product-interview\n",
+                "[📅](https://calendar.google.com/event?eid=interview) ^product-interview\n",
                 "\n",
                 "## Pomodoros\n",
             ),
@@ -1101,7 +1101,7 @@ fn upgraded_ended_maybe_gets_closed_meet() {
     );
     let input = concat!(
         "## Events\n\n",
-        "- **0800-0830** Standup · *maybe* [📅](https://calendar.google.com/event?eid=past \"Open in Google Calendar\")\n",
+        "- **0800-0830** Standup · *maybe* [📅](https://calendar.google.com/event?eid=past)\n",
         "\n## Pomodoros\n",
     );
     let ts = FixedOffset::east_opt(0)

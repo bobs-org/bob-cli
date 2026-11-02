@@ -2,8 +2,8 @@
 //!
 //! Titles pass through the shared escaper plus a gcal pass that
 //! neutralizes `🔁`, Tasks emoji signifiers, and priority emojis, and
-//! escapes a leading `#` or list marker. Badges carry URL-encoded links
-//! with quoted titles; `[type:: MEET]` is added only when the PT13
+//! escapes a leading `#` or list marker. Badges are title-free
+//! URL-encoded links; `[type:: MEET]` is added only when the PT13
 //! suggestion for the rooted line is not MEET.
 
 use std::path::Path;
@@ -213,6 +213,9 @@ pub(crate) fn badge_text(
     out
 }
 
+/// Badge links are deliberately title-free, because Obsidian's Jump to
+/// link plugin (Ctrl+L) and other naive Markdown parsers fold a `"title"`
+/// into the opened URL. Google then 400s on the corrupted `eid`.
 fn badges(
     html_link: Option<&str>,
     join_link: Option<&str>,
@@ -223,10 +226,7 @@ fn badges(
         out.push_str(&calendar_badge(link));
     }
     if let Some(link) = join_link {
-        out.push_str(&format!(
-            " [📹]({} \"Join call\")",
-            escape_badge_url(link),
-        ));
+        out.push_str(&format!(" [📹]({})", escape_badge_url(link),));
     }
     // 📍 is for a non-URL location only: a URL location already feeds
     // the 📹 join link. `&` would split the Maps query, so it is encoded.
@@ -234,11 +234,7 @@ fn badges(
         && !place.trim().is_empty()
         && !is_url(place)
     {
-        out.push_str(&format!(
-            " [📍]({} \"{}\")",
-            maps_url(place),
-            escape_link_title(place),
-        ));
+        out.push_str(&format!(" [📍]({})", maps_url(place),));
     }
     out
 }
@@ -249,10 +245,7 @@ fn is_url(value: &str) -> bool {
 }
 
 fn calendar_badge(html_link: &str) -> String {
-    format!(
-        " [📅]({} \"Open in Google Calendar\")",
-        escape_badge_url(html_link),
-    )
+    format!(" [📅]({})", escape_badge_url(html_link),)
 }
 
 /// Keep an already-encoded Google URL intact while protecting the
@@ -264,11 +257,6 @@ pub(super) fn escape_badge_url(url: &str) -> String {
         .replace('<', "%3C")
         .replace('>', "%3E")
         .replace('`', "%60")
-}
-
-/// Escape a Markdown link title: `"` would end the quoted title.
-fn escape_link_title(title: &str) -> String {
-    escape_title(title).replace('"', "&quot;")
 }
 
 fn maps_url(location: &str) -> String {
@@ -355,9 +343,8 @@ mod tests {
         assert_eq!(
             row,
             "- [*] #task **0800-0830** Product interview \
-             [📅](https://www.google.com/calendar/event?eid=1 \
-             \"Open in Google Calendar\") [root:: job] [type:: MEET] \
-             ^product-interview",
+             [📅](https://www.google.com/calendar/event?eid=1) \
+             [root:: job] [type:: MEET] ^product-interview",
         );
         let row = render_task_row(
             &task_input("Standup", Some("meet"), false, ' '),
@@ -398,8 +385,7 @@ mod tests {
         assert_eq!(
             row,
             "- **all day** School holiday \
-             [📅](https://www.google.com/calendar/event?eid=2 \
-             \"Open in Google Calendar\")",
+             [📅](https://www.google.com/calendar/event?eid=2)",
         );
         let row = render_context_row(&ContextRowInput {
             time_label: "0915-1000",
@@ -487,6 +473,42 @@ mod tests {
     }
 
     #[test]
+    fn badges_render_title_free() {
+        let html = "https://www.google.com/calendar/event?eid=1";
+        let join = "https://meet.google.com/abc";
+        let maps =
+            "https://www.google.com/maps/search/?api=1&query=Main%20St%20Dental";
+        let row = render_task_row(
+            &TaskRowInput {
+                html_link: Some(html),
+                join_link: Some(join),
+                location: Some("Main St Dental"),
+                root: Some("body"),
+                needs_type: false,
+                buffer: EventBuffer::default(),
+                off_clock: false,
+                time_label: "0800-0830",
+                title: "Dentist",
+                status: '*',
+            },
+            "dentist",
+        );
+        assert!(
+            row.contains(&format!("[📅]({html}) [📹]({join}) [📍]({maps})")),
+            "{row}",
+        );
+        assert!(!row.contains('"'), "{row}");
+        let context = render_context_row(&ContextRowInput {
+            time_label: "all day",
+            title: "Holiday",
+            html_link: Some(html),
+            qualifier: None,
+        });
+        assert_eq!(context, format!("- **all day** Holiday [📅]({html})"));
+        assert!(!context.contains('"'), "{context}");
+    }
+
+    #[test]
     fn buffered_row_renders_buffer_between_badges_and_root() {
         let buffer = EventBuffer::parse("-30m +15m").expect("buffer");
         let row = render_task_row(
@@ -500,9 +522,9 @@ mod tests {
         assert_eq!(
             row,
             "- [*] #task **0800-0830** Lunch with Kelly \
-             [📅](https://www.google.com/calendar/event?eid=1 \
-             \"Open in Google Calendar\") #offclock [buffer:: -30m +15m] \
-             [root:: love] [type:: MEET] ^lunch-with-kelly",
+             [📅](https://www.google.com/calendar/event?eid=1) #offclock \
+             [buffer:: -30m +15m] [root:: love] [type:: MEET] \
+             ^lunch-with-kelly",
             "{row}"
         );
         // The rendered badges span matches badge_text, so the journal

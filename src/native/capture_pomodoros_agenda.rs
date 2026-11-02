@@ -926,7 +926,7 @@ pub(crate) fn agenda_events_payload(
             home,
             join_url: markdown_link_target(raw_line, "📹"),
             calendar_url: markdown_link_target(raw_line, "📅"),
-            location: markdown_link_title(raw_line, "📍"),
+            location: event_location(raw_line),
             pomodoro: None,
         });
     }
@@ -1061,6 +1061,54 @@ fn markdown_link_title(line: &str, icon: &str) -> Option<String> {
     let title_start = rest.find(" \"")? + 2;
     let title = rest.get(title_start..)?.split_once("\")")?.0;
     (!title.is_empty()).then(|| title.replace("&quot;", "\""))
+}
+
+fn event_location(line: &str) -> Option<String> {
+    markdown_link_title(line, "📍").or_else(|| {
+        markdown_link_target(line, "📍")
+            .and_then(|target| decode_maps_query(&target))
+    })
+}
+
+/// Decode the `query=` value of a Maps badge URL back to the place name.
+/// `render::maps_url` writes `percent_encode_query(location.trim())`, so
+/// this decodes `%XX` as UTF-8 bytes, treats `+` as a space, stops at the
+/// next `&`, and returns `None` for an empty result.
+fn decode_maps_query(target: &str) -> Option<String> {
+    let encoded = target.split_once("query=")?.1.split('&').next()?;
+    if encoded.is_empty() {
+        return None;
+    }
+    let raw = encoded.as_bytes();
+    let mut bytes = Vec::with_capacity(raw.len());
+    let mut index = 0;
+    while index < raw.len() {
+        if raw[index] == b'+' {
+            bytes.push(b' ');
+            index += 1;
+        } else if raw[index] == b'%'
+            && index + 2 < raw.len()
+            && let (Some(high), Some(low)) =
+                (hex_value(raw[index + 1]), hex_value(raw[index + 2]))
+        {
+            bytes.push(high * 16 + low);
+            index += 3;
+        } else {
+            bytes.push(raw[index]);
+            index += 1;
+        }
+    }
+    let decoded = String::from_utf8(bytes).ok()?;
+    (!decoded.is_empty()).then_some(decoded)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn linked_pomodoro(
@@ -2338,6 +2386,28 @@ mod tests {
             elapsed.as_millis() < 250,
             "September-shaped agenda took {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn agenda_location_reads_title_then_maps_url() {
+        let legacy = "- [*] #task **1830-1900** Dentist [📅](https://cal.example/e) [📍](https://www.google.com/maps/search/?api=1&query=Old%20Place \"Old Place\") ^dentist";
+        assert_eq!(event_location(legacy).as_deref(), Some("Old Place"));
+        let untitled = "- [*] #task **1830-1900** Dentist [📅](https://cal.example/e) [📍](https://www.google.com/maps/search/?api=1&query=Main%20St%20Dental%2C%20Suite%202%20%26%203) ^dentist";
+        assert_eq!(
+            event_location(untitled).as_deref(),
+            Some("Main St Dental, Suite 2 & 3")
+        );
+        let utf8 = "- [*] #task **1830-1900** Lunch [📍](https://www.google.com/maps/search/?api=1&query=Caf%C3%A9%20Zo%C3%AB) ^lunch";
+        assert_eq!(event_location(utf8).as_deref(), Some("Café Zoë"));
+        let plus = "- [*] #task **1830-1900** Lunch [📍](https://www.google.com/maps/search/?api=1&query=Hand+Place) ^lunch";
+        assert_eq!(event_location(plus).as_deref(), Some("Hand Place"));
+        let trailing = "- [*] #task **1830-1900** Lunch [📍](https://www.google.com/maps/search/?api=1&query=Office&zoom=15) ^lunch";
+        assert_eq!(event_location(trailing).as_deref(), Some("Office"));
+        let missing =
+            "- [*] #task **1830-1900** Lunch [📅](https://cal.example/e) ^lunch";
+        assert_eq!(event_location(missing), None);
+        let empty = "- [*] #task **1830-1900** Lunch [📍](https://www.google.com/maps/search/?api=1&query=) ^lunch";
+        assert_eq!(event_location(empty), None);
     }
 
     fn write_file(path: &Path, contents: &str) {

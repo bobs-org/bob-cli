@@ -510,6 +510,8 @@ account, or set `gcal.account` to the stamp's account.
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
 | Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
 
+Badges are plain title-free links (`[📅](url)`), so link-hint plugins such as Jump to link open them correctly, and rows written by older Bob versions migrate on that day's next sync while untouched.
+
 "Untouched" means not done, not In Progress, never linked under a closed
 Pomodoro, and with no 🍅 history. A worked task is never cancelled; it is
 left alone and reported once. A Past row is worked from birth (`[/]` and a
@@ -557,7 +559,7 @@ On the Event Task, sync writes ` #offclock` at the end of the badge run,
 before `[root::]`:
 
 ```markdown
-- [*] #task **1200-1300** Lunch with Kelly [📅](… "Open in Google Calendar")
+- [*] #task **1200-1300** Lunch with Kelly [📅](…)
   #offclock [root:: love] [type:: MEET] ^lunch-with-kelly
 ```
 
@@ -604,7 +606,7 @@ Sync writes one Google-owned field at the end of the badge run, after
 `#offclock` and before `[root::]`:
 
 ```markdown
-- [*] #task **1200-1300** Lunch with Kelly [📅](… "Open in Google Calendar") #offclock
+- [*] #task **1200-1300** Lunch with Kelly [📅](…) #offclock
   [buffer:: -30m +15m] [root:: love] [type:: MEET] ^lunch-with-kelly
 ```
 
@@ -683,7 +685,8 @@ render of its event:
 
 - A span (time, title, badges) whose current text still matches what Bob
   last wrote is replaced in place. A span that differs from both is your
-  edit: it is kept and reported once as a `kept_edit` warning. A time
+  edit: it is kept and reported once as a `kept_edit` warning. A badge-format
+  change rides the same in-place span update. A time
   change re-slots the row together with its child block to keep time
   order. The checkbox and block ID are never rewritten. An unedited
   `[root::]` follows Google's chosen root (never series memory) and

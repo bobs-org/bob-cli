@@ -385,7 +385,8 @@ calendar](../capture.md#meet-starts-follow-the-calendar).
 `## Events` heading and the section's first line. That first line is Bob's
 Events stamp: which Google account last synced the section, and when. A written Event Task carries a
 `📅` identity badge (Google's event link, also the adoption key), an optional
-`📹` join badge, and an optional `📍` maps badge for a non-URL location, then
+`📹` join badge, and an optional `📍` maps badge for a non-URL location (the
+`📅`/`📹`/`📍` badges are plain `[emoji](url)` links with no link title), then
 ` #offclock` for Google off-clock events (Google also accepts `#off-clock` and
 legacy `#untracked`), then `[buffer:: -30m +15m]` for buffered events (each
 side omitted when zero; no field without buffers), then `[root::]`, then
