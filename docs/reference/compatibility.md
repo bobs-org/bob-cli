@@ -68,7 +68,7 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 2` revision. Clients can use it to distinguish
+additive top-level `grammar: 5` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
 envelope.
 
@@ -134,6 +134,8 @@ The documented workflows use these external-tool integrations:
   `perl`
 - `uv` for `bob gkeep`: it fetches Python ≥3.10 and the pinned `gkeepapi`
   on first run (override the whole spawn with `BOB_GKEEP_ADAPTER`)
+- `gog` ≥0.44.0 for `bob gcal`, with a Google Desktop-app OAuth client and
+  a read-only Calendar grant established through `bob gcal login`
 - `pass` for the default `bob gkeep` token store (`token_command` and
   `token_store_command` in the `gkeep:` config section)
 

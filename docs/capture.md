@@ -148,7 +148,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id` + bullets, no note text | File each first-level bullet as its own note, drawer bullets into that task's drawers |
 | `@route+block-id#drawer` + bullets, no note text | File each first-level bullet as its own note inside that drawer |
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
-| `@route+block-id#<type>` with no other text | Ensure Next and retype that existing task; this attached marker applies only when the whole item has no body or authored children |
+| `@route+block-id #<type>` with no other text | Retype that existing task, then Ensure Next using its existing Task Link |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | `%n` | Plain-text note on a Pomodoro; `%n` does not open task-type completion |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
@@ -312,8 +312,8 @@ anything is written, and any failure rolls the whole batch back.
 | `Fix it #now @sase` | Refused with `type_not_configured` unless `NOW` is configured; the bare `@sase` route adds the heading hint |
 | `@sase:deep-fix #now` | Refused with `type_not_configured` unless `NOW` is configured |
 | `Fix it @sase #n` | Refused with `type_not_configured` unless `N` is configured; the bare `@sase` route adds the heading hint |
-| `Fix it @sase^parser#fxi` | Refused with the project-note hint for `@sase^parser@#fxi` |
-| `@sase+parser#fxi` | Refused with the Pomodoro-link hint for `^sase:parser#fxi` |
+| `Fix it @sase^parser#fxi` | Refused: type a new task with a separate marker, such as `@sase^parser #fix` |
+| `@sase+parser#fxi` | Incomplete drawer capture: add note text or child bullets |
 
 A separate `#<type>` token after `@route^id` types the new task. After
 `@route+id`, it retypes the existing task in the same transaction; a glued
@@ -542,19 +542,18 @@ whole-item link or a relationship-only owner also retypes its existing
 subject task. Each item accepts one marker, and a marker alone still needs a
 task.
 
-Attached forms work at either item edge, including a leading route such as
-`@sase^parser#fix Fix the parser`. Attached literals may contain spaces, for
-example `@sase^parser#"DEEP WORK"`. An unconfigured name refuses with
+Separate markers work at either item edge, including a leading route such as
+`@sase^parser #fix Fix the parser`. Literals may contain spaces, for
+example `@sase^parser #"DEEP WORK"`. A glued `#` after `^id` is refused;
+after `+id` it names a drawer. An unconfigured name refuses with
 `type_not_configured`: Bob may suggest up to two marker spellings with
-`did you mean`, then explains how to add the type or escape the marker. An
-attached project-task marker adds a project-note hint; a marker on a bare
-`@route` adds a heading hint; a marker-only `@route+id` adds a Pomodoro-link
-hint.
+`did you mean`, then explains how to add the type or escape the marker. A
+marker on a bare `@route` adds a heading hint.
 
 Exactly one marker per item. A second marker fails with the duplicate
 `type marker (#<type>)` error. The marker types the item's subject task; it
 never types prerequisites, blocked tasks, or relation targets. A marker on a
-bullet, a sub-bullet with text, project note, reference, Pomodoro note, or
+note-heading bullet, project note, reference, Pomodoro note, or
 completion/close/start/adjust/shift gesture is refused with a teaching error.
 A link-close suffix (`@route:id=x`) also refuses: remove the close gesture
 to capture a task.
@@ -575,8 +574,9 @@ spaces for hyphens. Unknown names fail transactionally with code
 `type_not_configured`, including in dry-run mode. Bob suggests a nearby
 configured type when available and explains how to add a type or keep the
 text as an escaped tag. When the item also names a Pomodoro (`#NAME` in a
-Pomodoro-link position), the marker must agree with it: a container accepts
-any type, while a type component must match.
+Pomodoro-link position), the marker sets the task's type before landing:
+the destination gains that type if missing. Containers keep the task's type
+with a warning; MEET destinations retype to MEET.
 
 ### Multi-item capture
 
@@ -3089,8 +3089,8 @@ counted token are shape errors by construction.
 The started session reports its queued Task Links (direct-child Task Links
 of the started entry, resolved read-only). The lineup is numbered 1..N in
 ledger order on the staged pre-image, so every whole-item start shows which
-number a queued link holds: JSON kind `pomodoro_start` keeps
-schema version 1 with `text` = the raw token, `task_line` = the started
+number a queued link holds: unversioned JSON kind `pomodoro_start` reports
+`text` = the raw token, `task_line` = the started
 ledger line, `placement: "started"`, and the existing `pomodoro_start`
 object with `created_pomodoro: false` plus an additive `tasks` array where
 each row carries its `index` (its lineup number). The
@@ -3148,7 +3148,8 @@ Closing a session that has not started yet records a zero-length session at
 its own start (the end never moves before the start) and warns that `x0`
 resets it instead.
 
-JSON stays schema 1 and additive. `pomodoro_start.tracked` is `false` for an
+Capture JSON is unversioned; these fields are additive.
+`pomodoro_start.tracked` is `false` for an
 untracked session and omitted otherwise, and `pomodoro_blocks[].tracked`
 mirrors it for the final block. `pomodoro_start.event_run` appears when a MEET
 has a non-empty run:
@@ -3200,7 +3201,7 @@ close, which keeps notes as history). No task note is written and no lane
 changes: a dropped task keeps its status. Dry-run computes
 without writing, and any failure rolls the whole batch back.
 
-JSON kind `pomodoro_start` keeps schema version 1: `text` is the raw token,
+JSON kind `pomodoro_start` is unversioned: `text` is the raw token,
 `pomodoro_start.drop` is the typed list (omitted when empty),
 `pomodoro_start.tasks[]` are the rows still queued (each with `index`),
 and `pomodoro_start.dropped[]` are the removed rows (with `index`,
@@ -3331,7 +3332,7 @@ open `BUGS` (with `[[sase#^deep-fix]]`), open `DEEP WORK` (with
 The bytes contract matches the unnamed start: checkbox, name, children,
 CRLF, and a missing final newline are preserved. Dry-run computes the same
 result without writing, and any failure rolls the whole batch back. JSON
-kind `pomodoro_start` keeps schema version 1 with `text` = the raw token,
+kind `pomodoro_start` is unversioned, with `text` = the raw token,
 `task_line`, `placement: "started"`, the existing `pomodoro_start` object
 plus `pomodoro_name`, `created_pomodoro`, and the additive `tasks` array.
 The started session also appears in the batch-level `pomodoro_blocks`
@@ -3362,7 +3363,7 @@ bob capture '=/#fix'
 
 Inputs are the target entry (an open merged Pomodoro) and the split set (non-empty, a subset of the merged-in types). Each top-level child whose body is exactly a Task Link (`[[T]]`, `[[T]]#`, `![[T]]`, `![[T]]#`, including same-note `[[#^id]]`) moves with its whole subtree to its type's new entry; prose, notes, mentions, and every other link stay. The source keeps its checkbox, timespan, and position; new entries are untimed `- [ ] () — T` directly below the source block, in source-name order, even when a type has no links. Guards (closed history, MEET, single-type, base, unknown, repeated, two-type explicit) each produce a precise teaching refusal with stable codes (`split_not_merged`, `split_base_type`, `split_type_unknown`, `split_type_repeated`, `split_type_not_needed`, `split_meet`, `split_target_missing`). A missing explicit base never falls back to current, and closed entries never participate.
 
-The bytes contract matches the start family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. JSON kind `pomodoro_split` keeps schema version 1 with `pomodoro_split: {path, entry_line, before, after, base, created: [{type, line, name, moved_links}], stayed_links}` and `pomodoro_blocks` refs for the source and every created entry (including zero-link entries). Human output prints `split BEFORE → AFTER · path line N` plus `↓ TYPE new Pomodoro · N links` rows (`no links` when empty).
+The bytes contract matches the start family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_split` reports `pomodoro_split: {path, entry_line, before, after, base, created: [{type, line, name, moved_links}], stayed_links}` and `pomodoro_blocks` refs for the source and every created entry (including zero-link entries). Human output prints `split BEFORE → AFTER · path line N` plus `↓ TYPE new Pomodoro · N links` rows (`no links` when empty).
 
 ### Merging Pomodoros
 
@@ -3378,7 +3379,7 @@ bob capture '=*build#fix#read'
 
 Each dest must be an untimed planned entry other than the source. Children of each dest append under the source; a dest Task Link whose trimmed line already sits as a top-level child of the source (or of an earlier dest) is dropped as a duplicate. The source keeps its checkbox, timespan, and position; dest entries are removed. The survivor's name is the R5 join (`BUILD + FIX + READ`). Guards (timed dest, MEET, same Pomodoro, dest already part of the source, repeated dest, missing target) each produce a precise teaching refusal with stable codes (`merge_timed_pomodoro`, `merge_meet`, `merge_same_pomodoro`, `merge_already_part`, `merge_dest_repeated`, `merge_target_missing`). A timed dest teaches the swap (`=*fix#build` when FIX is running).
 
-The bytes contract matches the split family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. JSON kind `pomodoro_merge` keeps schema version 1 with `pomodoro_merge: {path, entry_line, before, after, absorbed: [{name, from_line, moved_lines, dropped_duplicates}]}` and `pomodoro_blocks` refs for the survivor and every removed dest. Human output prints `merged FIX, READ → BUILD + FIX + READ · path line N · N links moved`.
+The bytes contract matches the split family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_merge` reports `pomodoro_merge: {path, entry_line, before, after, absorbed: [{name, from_line, moved_lines, dropped_duplicates}]}` and `pomodoro_blocks` refs for the survivor and every removed dest. Human output prints `merged FIX, READ → BUILD + FIX + READ · path line N · N links moved`.
 
 ### Overriding the running Pomodoro
 
@@ -3610,7 +3611,7 @@ in the draft; dry-run computes the same result without committing, and a
 later invalid item rolls back all earlier staged changes. The same holds on
 one line: `+2 x` extends then closes atomically.
 
-JSON keeps every existing key and schema version 1 stable and reports a
+Capture JSON is unversioned and reports a
 distinct `pomodoro_adjust` kind with an additive `pomodoro_adjust` object
 (direction/requested units, actual delta minutes, before/after
 start/end/duration, resolved line/name, rendered new range). The adjusted
@@ -3670,7 +3671,7 @@ The shell sees a leading `-` as a flag: spell an earlier shift as
 the end-of-options marker and carries no text; pipe the draft
 (`printf -- '--\n' | bob capture`) when that reads better.
 
-JSON keeps every existing key and schema version 1 stable and reports a
+Capture JSON is unversioned and reports a
 distinct `pomodoro_shift` kind with an additive `pomodoro_shift` object
 (direction, requested units, signed delta minutes, before/after
 start/end/duration, resolved line/name, rendered new range). The shifted
@@ -3707,7 +3708,8 @@ count that ends at or before that event's start (`=2`, `=2#bugs`,
 omitted. Chains warn per item and only for new crossings, so `= +2`
 warns once on the start.
 
-JSON stays schema 1 and additive. `pomodoro_start`, `pomodoro_adjust`, and
+Capture JSON is unversioned; these fields are additive.
+`pomodoro_start`, `pomodoro_adjust`, and
 `pomodoro_shift` gain `event_conflict` when a warning fires:
 
 ```json
@@ -3941,7 +3943,7 @@ section, no open timed entry (`` no running Pomodoro to close ``, plus
 open timed entries, and an unparseable-range warning that still closes
 without decrementing. The start guards now append ``(close it with `x`)``.
 
-JSON keeps schema version 1 and reports kind `"pomodoro_close"` (link and
+Unversioned capture JSON reports kind `"pomodoro_close"` (link and
 task forms keep their kind) with an additive `pomodoro_close` object
 (timing, per-target transitions, carried links, notes, next session). A
 whole-item `x` close also reports the closed session — and the next
@@ -4668,8 +4670,8 @@ Pomodoro, in source order — creating the future placeholder
   - [[cash_goog_exit#^call-ms]]
 ```
 
-A named `#admin` also retypes each linked ` :` task to agree with that
-Pomodoro, the same rule as `#NAME` on a new or existing-task capture. Without
+A named `#admin` keeps each linked ` :` task's type and adds missing types to
+the destination name, using the same landing rule as other named captures. Without
 `#admin`, each linked ` :` task places by its own effective type — a created
 `— T` placeholder when the ledger holds no entry for it — the same
 selection rule `@route:id` uses.
@@ -4789,8 +4791,8 @@ name) ``. Text after the seal is refused the same way (`@cash:goog-exit@x`,
 `` the project-note `@` ends the marker: write `@cash:goog-exit@` or
 `@cash:goog-exit@#<pomodoro>` ``), and `@cash+goog-exit@` explains that `+`
 adds a sub-bullet while a new project note is `@cash^goog-exit@` (or
-`@cash:goog-exit@`). `@cash^goog-exit#bugs` parses as a typed task with type
-`bugs`, not a project note; to link a task under a Pomodoro, use
+`@cash:goog-exit@`). `@cash^goog-exit#bugs` is refused; a task type needs a
+separate `#bugs` token. To link a task under a Pomodoro, use
 `@cash:goog-exit#bugs`. A leading `^cash:goog-exit@` is not a capture form
 (`` `^route:block-id@` is not a capture form; create a project note with
 `@route^block-id@` ``).
@@ -5246,8 +5248,8 @@ Human output says `would ensure` / `ensured` rather than `would toggle` /
 Progress", and prints either
 the source-to-destination Pomodoro move (naming both Pomodoros, and naming a
 created destination) or `Task Link already in <name>; no ledger change.` /
-`Task Link already in current/next Pomodoro; no ledger change.` JSON stays
-schema version 1 and kind `"task_toggle"` with `toggle_direction: "next"`.
+`Task Link already in current/next Pomodoro; no ledger change.` JSON is
+unversioned, with kind `"task_toggle"` and `toggle_direction: "next"`.
 Additive fields let new clients render the outcome precisely while old
 clients ignore them:
 
@@ -5280,7 +5282,7 @@ Human output says `would toggle` / `toggled` and prints a link summary:
 `unlinked ^id from N open Pomodoros · stays <Status>`, followed by the day
 file and ledger lines. A successful dependency drop adds a dim
 `⛓️ dropped dependency on [[route#^id]]` line after the status line (or
-`⛓️ dropped N dependencies: …` for several). JSON stays schema version 1 and kind `"task_toggle"`.
+`⛓️ dropped N dependencies: …` for several). JSON is unversioned with kind `"task_toggle"`.
 Successful link and unlink actions include `toggle_direction: "link"` or
 `"unlink"`, `status_changed`, `removed_pomodoro_links` for unlink, and the
 existing insertion fields for link. A consumed `@route+block-id!` keeps kind
@@ -6091,7 +6093,7 @@ Field rules:
 
 #### Dependency updates and consumed links
 
-Per-item additive fields on `bob capture -f json` (schema version 1).
+Per-item additive fields on `bob capture -f json` (unversioned).
 Omitted when empty. Dry-run JSON equals live JSON apart from `dry_run`.
 
 - `dependency_updates[]`: every dependency update the item made. The
@@ -6231,7 +6233,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 4` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 5` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -6456,7 +6458,7 @@ JSON output is a single versioned object:
 {
   "ok": true,
   "schema_version": 1,
-  "grammar": 4,
+  "grammar": 5,
   "input": "Call bank @Cash+",
   "body": "Call bank",
   "mode": "incomplete",
@@ -6478,7 +6480,8 @@ the normalized capture body after terminal `s:<N>`, `$<N>`, and applicable
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
 `pomodoro_project_note`, `pomodoro_adjust`, `pomodoro_shift`,
-`pomodoro_link`, `pomodoro_close`, `pomodoro_start`, `task_dependency`, `task_complete`, `ref`, or `incomplete`, describing whichever line resolved a marker
+`pomodoro_link`, `pomodoro_close`, `pomodoro_start`, `pomodoro_split`,
+`pomodoro_merge`, `task_dependency`, `task_complete`, `ref`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. A whole-item bare link reports mode `ref` with one
 `ref_url` span covering the whole token, `<>` included. In an eligible URL
@@ -7101,8 +7104,9 @@ null context, and a nested `  - #` still completes task types.
 Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
 `@route:#prefix`, and `@route:id=name` (e.g. `@work:outline=bu|`); only the route
 must already resolve because the Pomodoro list does not depend on the block
-ID. A marker-only `@route+id#` (no body text, no authored children) and
-`@route^id#`, including the empty `#`, complete `task_type` instead. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` suffix is never
+ID. `@route+id#` opens drawer completion; `@route^id#` is refused. A separate
+`#type` token opens `task_type` completion. On a
+`@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` suffix is never
 a completion field when it is timing/close: block and name replacement ranges end before the `=`, a
 cursor inside a timing suffix returns an empty success, and accepting a candidate
 preserves the typed suffix. A cursor inside a suffix name (`=name`) is the `pomodoro_name` field described above. The `=x[<N>][!<M>][~<K>]` close suffix behaves the same way: it
@@ -7336,7 +7340,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 4`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 5`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

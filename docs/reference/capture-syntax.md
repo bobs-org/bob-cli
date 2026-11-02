@@ -74,6 +74,8 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `--[N]` | Shift the running session earlier | [`--[N]`](#minus-minus-shift) |
 | `=` / `=<X>` | Start the next future Pomodoro, or restart | [`=`](#equals-start) |
 | `=name` | Start a named Pomodoro (`=bugs`, same token as `=#bugs`) | [`=name`](#equals-named) |
+| `=/[base][#type…]` | Split types into separate planned Pomodoros | [`=/`](#equals-split) |
+| `=*[source]#destination[#destination…]` | Merge planned Pomodoros into one open session | [`=*`](#equals-merge) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
 | `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
 | `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
@@ -87,7 +89,8 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `:id` | Project-note child: name, Next, and link | [`:id` child](#project-colon-child) |
 | `^id` | Project-note child: name only | [`^id` child](#project-caret-child) |
 | `@route+block-id` | Child bullet under an existing task | [`@route+block-id`](#plus-child) |
-| `@route+block-id#section` | Child under that task's ALL-CAPS section | [`@route+block-id#section`](#plus-child-section) |
+| `@route+block-id#drawer` | Child inside a task drawer | [`@route+block-id#drawer`](#plus-child-section) |
+| `- #drawer` with nested notes | First-level drawer bullet | [Drawer bullets](#drawer-bullets) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
 | `@route+block-id!` | Toggle that task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
 | `%n` | Plain-text note on the current Pomodoro | [`%n`](#trailing-hash) |
@@ -115,7 +118,8 @@ what they attach to, not as one global operator.
 | `#` | free-standing `#<type>` at an item edge | Type the new task or retype its selected task; unconfigured names refuse |
 | `#` | `@route^id #<type>` (separate token) | Type the new task with that block ID |
 | `#` | `@route+id #<type>` (separate token) | Retype the target in the same transaction; marker-only also ensures Next |
-| `#` | `@route+id#drawer` (glued, with body text) | ALL-CAPS task drawer, created on demand |
+| `#` | `@route+id#drawer` (glued) | Task drawer; requires note text or child bullets |
+| `#` | First-level `- #drawer` | Drawer shortcut; requires nested notes |
 | `#` | `@route:id#pomodoro` / `=name` | Named Pomodoro (`=bugs` and `=#bugs` are one token) |
 | `@` | `@route…` | Route / destination token |
 | `@` | `@@route` | Draft-wide destination |
@@ -125,6 +129,8 @@ what they attach to, not as one global operator.
 | `@` | right after `@route^block-id` / `@route:block-id` | Project-note seal: `^…@` creates the note, `:…@` also offers its tasks |
 | `*` | `*note:block-id` | Blocked-task (star) link |
 | `*` | `x*` | Park Task Links on close |
+| `*` | `=*source#destination` | Merge planned destination into source |
+| `/` | `=/base#type` | Split a type out of a merged Pomodoro |
 | `*` | line-initial bare `*` | Never a blocked-task marker |
 | `~` | `~note:block-id[\|"label"]`, `~note:block-id\|\|"label"` | Relation link ([`~`](#tilde-link)); `||` hides the label from suggestions once the capture succeeds |
 | `~` | `x~` / `=~` | Drop Task Links on close / drop on start |
@@ -908,6 +914,39 @@ or select a different name.
 Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro)
 and [Lossless acceptance](../task-types.md#pt8-lossless-acceptance).
 
+### `=/[base][#type…]` {#equals-split}
+
+`=/` splits all merged-in types out of the current Pomodoro: the running
+entry, else the next planned entry. `=/build` selects an open merged entry
+by its base type. The base stays; each split type gets an untimed placeholder
+immediately below it, with that type's Task Links and their nested notes.
+The source keeps its timing and other notes.
+
+For three or more types, `=/build#fix` splits only FIX and
+`=/build#fix#read` selects both. With exactly two types, omit `#type`.
+MEET and single-type entries cannot split. Selectors accept quoted literals.
+
+```bash
+bob capture --dry-run '=/build'
+```
+
+Contract: [Splitting a merged Pomodoro](../capture.md#splitting-a-merged-pomodoro).
+
+### `=*[source]#destination[#destination…]` {#equals-merge}
+
+`=*build#fix` absorbs planned FIX into open BUILD; `=*#fix` uses the current
+Pomodoro as source. `=*build#fix#read` absorbs both in typed order. The
+source keeps its timing and position, gains the destination names and
+children, and replaces the absorbed entries. Duplicate Task Link lines are
+removed. Destinations must be untimed planned entries; MEET cannot merge.
+Bare `=*` or `=*build` is incomplete: add a destination after `#`.
+
+```bash
+bob capture --dry-run '=*build#fix'
+```
+
+Contract: [Merging Pomodoros](../capture.md#merging-pomodoros).
+
 ### `~<K>` {#tilde-drop}
 
 On a start token, drop the queued Task Links in `<K>` (`=~2`, `=3~2,4`,
@@ -1023,8 +1062,10 @@ Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-l
 One entry may sit on the close line; several use child bullets. With no
 number, the line logs to the first task the close works. A leading number
 names the task (`x 1 3 bugs fixed` logs `3 bugs fixed` to task 1). `x 1`
-without text is incomplete (`pomodoro_close_log_text`). Bullets are numbered
-all or none. A two-space bullet nests an undated detail.
+without text is incomplete (`pomodoro_close_log_text`). Entries receive
+`*YYYY-MM-DD HH:MM* —` timestamps. Bullets are numbered all or none;
+`- * summary` copies a summary to every remaining worked task. A two-space
+bullet nests an undated detail.
 
 ```bash
 bob capture --dry-run 'x wired the lexer'
@@ -1041,7 +1082,7 @@ Contract: [Logging work while closing](../capture.md#logging-work-while-closing)
 ### `+2 x` / `x =` {#operator-chain}
 
 Whitespace-separated session tokens on one line run left to right exactly
-like blank-line items (`+2 x`, `x =`, `x =bugs`, `=bugs +2`). An inline
+like blank-line items (`+2 x`, `x =`, `x =bugs`, `=/ =`). An inline
 Work Log entry sits right after its close, with operators trailing
 (`x wired the lexer =`). Child bullets attach to that line's `x`.
 
@@ -1186,10 +1227,14 @@ bob capture 'Check the parser @work+prep'
 
 Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
 
-### `@route+block-id#section` {#plus-child-section}
+### `@route+block-id#drawer` {#plus-child-section}
 
-Child bullet under an ALL-CAPS section of that task. With no other text or
-children, the suffix is a task type ([`#<type>`](#hash-type)).
+Child bullet inside the task's ALL-CAPS drawer: `@route+block-id#section`
+targets `SECTION`. A glued `#drawer` always
+names a drawer and requires note text or child bullets. Matching is exact;
+a missing drawer is created on demand. A quoted `#"FUTURE WORK"` permits
+deliberate creation near an existing name. On a project's `^prj`, drawers
+are eligible `##` sections. Managed logs and structural headings are reserved.
 
 ```bash
 bob capture 'Need a parser @work+prep#requirements'
@@ -1203,22 +1248,30 @@ bob capture 'Need a parser @work+prep#requirements'
 
 Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
 
+### Drawer bullets and several notes {#drawer-bullets}
+
+A first-level `- #requirements` with nested notes names a drawer. Completion
+inserts the ALL-CAPS title; an ALL-CAPS bullet with nested notes has the same
+meaning. Empty drawer bullets refuse.
+
+A note-less `@route+id` files each first-level bullet as a separate note;
+drawer bullets append inside their drawers. With `@route+id#drawer`, every
+bullet files inside that drawer. Same-line note text keeps its children
+nested under that one note.
+
+Contract: [Several notes at once](../capture.md#several-notes-at-once).
+
 ### `@route+block-id` with no other text {#plus-ensure-next}
 
-`@route+block-id` with no other text ensures the task is Next and relocates
-its existing open-Pomodoro Task Link to today's implicit current/next
-Pomodoro. `@route+block-id#<type>` retypes the task first, so the link lands
-by its new type. Use `^route:block-id#NAME` to link under a named Pomodoro.
+`@route+block-id` ensures Next or preserves In Progress and relocates the
+task's existing open-Pomodoro Task Link by its effective type. With no type,
+it uses today's current/next Pomodoro. A separate `#type` retypes first:
+`@work+outline #fix`. Without an existing link it refuses; `@work+outline!`
+adds one. Use `^route:block-id#NAME` for a named destination.
 Own-prerequisite Blocked targets drop those links first.
 
 ```bash
 bob capture '@work+outline'
-```
-
-```text { .no-copy title="Output" }
-✓ ensure-next  work.md
-  [ ] → [*]  Write an outline  ^outline
-  moved Task Link under WORK
 ```
 
 ```bob-task
@@ -1371,10 +1424,12 @@ token) types the new task with that explicit block ID. Named Pomodoro owners suc
 `^route:block-id#NAME`, `=#NAME`, and project-note `@route^block-id@#NAME` /
 `@route:block-id@#NAME` keep their existing meanings.
 
-When the item also names a Pomodoro, the type marker must agree with the
-Pomodoro's type component; a container accepts any type. Retyping an existing
-task stages the `[type::]` edit with the gesture and relocates its live Task
-Link to the type's placement. Closed targets are refused.
+When the item also names a Pomodoro, the task keeps its effective type
+(including a separate `#type` choice), and the destination gains that type
+if missing: BUILD landing in FIX makes `FIX + BUILD`. A container accepts
+any type with a warning; MEET destinations retype to MEET. Explicit retyping
+stages the `[type::]` edit with the gesture and relocates the live Task Link.
+Closed targets are refused.
 
 ```bash
 bob capture --no-clip 'Fix the parser #fix @sase'

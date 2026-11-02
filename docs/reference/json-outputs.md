@@ -49,7 +49,7 @@ bob capture-parse -f json -- 'Buy milk @dev'
 ```
 
 ```text { .no-copy title="Output" }
-{"ok":true,"schema_version":1,"grammar":3,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
+{"ok":true,"schema_version":1,"grammar":5,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
 ```
 
 ```bash
@@ -107,6 +107,28 @@ the visible rows, but an exact typed hidden label remains available with `hidden
 The response includes `hidden_count` for this context. Rows also carry
 `hide_replacement` for the `||` spelling; a `||` probe preserves both pipes
 in each row's `replacement` and adds `one_off: true` to the response.
+
+### Session edits and successor offers
+
+Capture results are unversioned, including these per-item session payloads:
+
+| Operation | Payload |
+| --- | --- |
+| Named task landing | Destination endpoint `merged: {before, after, added}` when the destination gains the task's type; `task_theme` is omitted unless an explicit type marker reports its result or a MEET landing changes the task's type |
+| `=/` split | `kind: "pomodoro_split"`, with `pomodoro_split: {path, entry_line, before, after, base, created, stayed_links}`; `created[]` contains `type`, `line`, `name`, and `moved_links` |
+| `=*` merge | `kind: "pomodoro_merge"`, with `pomodoro_merge: {path, entry_line, before, after, absorbed}`; `absorbed[]` contains `name`, `from_line`, `moved_lines`, and `dropped_duplicates` |
+
+Both split and merge also return final `pomodoro_blocks` for affected entries,
+including entries removed by a merge. Parse reports modes `pomodoro_split`
+and `pomodoro_merge`; incomplete merge input needs `pomodoro_merge_dest`.
+See [split](../capture.md#splitting-a-merged-pomodoro) and
+[merge](../capture.md#merging-pomodoros) for selection and refusal rules.
+
+Managed Done results can carry `keep_moving` offers beside `unblocked`, with
+`keep_moving_folds` for excluded candidates. These offers are ready tasks
+from a leaf project whose last task planned today was closed; they are not
+dependents. They join the batch's `pull_in` choices and link only when picked.
+See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
 ### Inbox-routing results
 
@@ -166,7 +188,7 @@ candidate eligibility, and error behavior.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob plan` | `-f json` | Date, status, caps, Today entries, lane counts, and `warnings` | `schema_version: 2` | [Plan](../plan.md) |
+| `bob plan` | `-f json` | Date, status, caps, Today tasks and root counts, lane counts, and `warnings` | `schema_version: 3` | [Plan](../plan.md) |
 | `bob ready` | `-f json` | Per-note Ready lane against `max_ready_per_note` | `schema_version: 1` | [Plan](../plan.md) |
 | `bob freshness` and `bob freshness list` | `-f json` | Review queue report | `schema_version: 14` | [Freshness](../freshness.md) |
 | `bob freshness seed` | `-f json` | Seed dry-run report: stamped counts, buckets, skipped | `schema_version: 14` | [Freshness](../freshness.md) |
@@ -217,7 +239,7 @@ objects: `themes` on Pomodoro-name parse spans, completion rows, and ledger
 entries; `theme_refs` beside plan `theme_names`; and `added_theme_refs` in
 capture's `plan_budget`. Stats supplies `theme_hues` keyed by normalized
 theme key. These additions retain each command's existing envelope version;
-`bob plan` remains schema 2 and capture remains unversioned.
+`bob plan` uses schema 3 and capture remains unversioned.
 
 ## Tasks, reconciliation, and queries
 
