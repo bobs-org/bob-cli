@@ -44,13 +44,12 @@ impl MirrorSkipReason {
     }
 }
 
-/// Load the shared close policy (`relations.cancel_labels` and
-/// `relations.complete_labels`), failing toward fewer closes and
-/// warning through the capture warning string on invalid values. A
-/// missing key, `null`, or `[]` is a valid empty policy; overlap and
-/// anything else invalid yields the valid entries (possibly none) plus
-/// one warning. The cancel-only substring filter is not used, so a
-/// both-lists overlap still surfaces.
+/// Load the shared relation-effect policy (`relations.cancel_labels`,
+/// `relations.complete_labels`, and `relations.successor_labels`),
+/// failing toward fewer effects and warning through the existing capture
+/// warning path on invalid values. A missing key, `null`, or `[]` is a
+/// valid empty policy; overlap and anything else invalid yields the valid
+/// entries (possibly none) plus one warning.
 pub(super) fn load_close_policy() -> (
     Vec<config::relations::CancelLabel>,
     Vec<config::relations::CompleteLabel>,
@@ -69,7 +68,9 @@ pub(super) fn load_close_policy() -> (
                         || warning.contains(
                             "is in both cancel_labels and complete_labels",
                         )
-                        || warning.contains("in more than one of cancel_labels")
+                        || warning.contains(
+                            "is in more than one of cancel_labels, complete_labels, successor_labels",
+                        )
                 })
                 .map(|warning| format!("invalid relations config: {warning}"));
             (

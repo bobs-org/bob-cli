@@ -90,6 +90,10 @@ pub(crate) struct RelationSuccessorInput {
     pub(crate) labels: Vec<CancelLabel>,
     pub(crate) parked: Vec<RelationEvent>,
     pub(crate) relation_snapshot_complete: bool,
+    /// Completeness of the dependency proof included for relation-source
+    /// R4. It remains independent of `SuccessorInput.snapshot_complete`,
+    /// which controls normal recovery and pull-ins.
+    pub(crate) dependency_snapshot_complete: bool,
     pub(crate) previous_daily: Option<PathBuf>,
     pub(crate) unavailable_targets: BTreeSet<PathBuf>,
 }

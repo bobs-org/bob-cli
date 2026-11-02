@@ -84,6 +84,34 @@ impl CaptureBatchPlanner {
             .then(|| self.files[index].current.clone()))
     }
 
+    /// Read from the batch byte snapshot through the planner's overlay.
+    /// Existing staged content wins; otherwise the captured disk text becomes
+    /// the exact preimage for any later staged write, avoiding a second disk
+    /// read while preserving the commit-time drift check.
+    pub(super) fn current_contents_from_snapshot(
+        &mut self,
+        path: &Path,
+        snapshot: Option<String>,
+    ) -> Result<Option<String>, CaptureError> {
+        if let Some(index) = self.by_path.get(path).copied() {
+            let file = &self.files[index];
+            return Ok(file.present.then(|| file.current.clone()));
+        }
+        let Some(contents) = snapshot else {
+            return Ok(None);
+        };
+        let index = self.files.len();
+        self.by_path.insert(path.to_path_buf(), index);
+        self.files.push(BatchTextFile {
+            path: path.to_path_buf(),
+            existed: true,
+            present: true,
+            original: contents.clone(),
+            current: contents.clone(),
+        });
+        Ok(Some(contents))
+    }
+
     /// Non-loading peek at a file's staged text: `None` when the file
     /// was never touched (so batches that never touch the day file gain
     /// no new error path) or does not exist.

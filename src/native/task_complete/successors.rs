@@ -1310,12 +1310,17 @@ fn integrate_relation_offers(
         .cloned()
         .collect();
     let day_after = post_day.or(pre_day);
+    // Relation R4 can use a dependency proof carried solely for matched
+    // relation sources. This proof does not turn on the normal recovery
+    // pass when the caller's main snapshot is incomplete.
+    let relation_dependency_complete =
+        snapshot_complete || relation_input.dependency_snapshot_complete;
     let recovered = effective_relation_state_map(
         verdicts,
         files,
         states,
         project_states,
-        snapshot_complete,
+        relation_dependency_complete,
         day_after.unwrap_or_default(),
         day_relative,
         index,
@@ -1338,7 +1343,7 @@ fn integrate_relation_offers(
         today,
         link_unblocked,
         snapshot_complete: relation_input.relation_snapshot_complete,
-        dependency_snapshot_complete: snapshot_complete,
+        dependency_snapshot_complete: relation_dependency_complete,
         recovered: &recovered,
         tasks_settings,
     };

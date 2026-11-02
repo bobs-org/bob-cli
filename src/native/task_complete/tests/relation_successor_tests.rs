@@ -1573,6 +1573,7 @@ fn run_planner_with_options<'a>(
         labels: world.labels.clone(),
         parked,
         relation_snapshot_complete,
+        dependency_snapshot_complete: false,
         previous_daily,
         unavailable_targets: BTreeSet::new(),
     };
@@ -2206,6 +2207,7 @@ fn integrate_sa15_relation_wins_but_project_recovery_remains() {
         labels,
         parked,
         relation_snapshot_complete: true,
+        dependency_snapshot_complete: false,
         previous_daily: None,
         unavailable_targets: BTreeSet::new(),
     };
@@ -2803,6 +2805,7 @@ fn integrate_snapshots_keep_legacy_recovery_safe() {
         labels: blocked_world.labels.clone(),
         parked,
         relation_snapshot_complete: true,
+        dependency_snapshot_complete: false,
         previous_daily: None,
         unavailable_targets: BTreeSet::new(),
     };

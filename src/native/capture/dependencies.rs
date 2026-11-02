@@ -9,11 +9,13 @@
 //! staged. Commit keeps the existing temporary-file/rollback contract;
 //! a failed item aborts planning before anything is written.
 
+#[cfg(test)]
+use std::sync::Mutex;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     ffi::OsStr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         OnceLock,
     },
 };
@@ -50,7 +52,7 @@ pub(super) struct DependencyContext {
     discovered: OnceLock<DependencyTaskResult>,
     catalog: OnceLock<NoteCatalog>,
     previous_daily: OnceLock<Option<PathBuf>>,
-    dependents: OnceLock<DependentsSnapshot>,
+    note_bytes: OnceLock<SharedNoteBytes>,
     link_unblocked: OnceLock<bool>,
     keep_moving: OnceLock<bool>,
     blocks_lines: OnceLock<(bool, Option<String>)>,
@@ -62,10 +64,14 @@ pub(super) struct DependencyContext {
         Vec<config::relations::CancelLabel>,
         Option<String>,
     )>,
+    close_policy_consulted: AtomicBool,
     closing_intents: HashMap<(String, String), config::relations::CloseEffect>,
     block_reservations: BTreeMap<PathBuf, BTreeSet<String>>,
     #[cfg(test)]
     graph_builds: AtomicUsize,
+    #[cfg(test)]
+    catalog_walks: AtomicUsize,
+    snapshot_reads: SnapshotReadCounts,
 }
 
 impl DependencyContext {
@@ -83,7 +89,7 @@ impl DependencyContext {
             discovered: OnceLock::new(),
             catalog: OnceLock::new(),
             previous_daily: OnceLock::new(),
-            dependents: OnceLock::new(),
+            note_bytes: OnceLock::new(),
             link_unblocked: OnceLock::new(),
             keep_moving: OnceLock::new(),
             blocks_lines: OnceLock::new(),
@@ -91,9 +97,13 @@ impl DependencyContext {
             linked_from_mentions: OnceLock::new(),
             block_reservations: BTreeMap::new(),
             close_policy: OnceLock::new(),
+            close_policy_consulted: AtomicBool::new(false),
             closing_intents: HashMap::new(),
             #[cfg(test)]
             graph_builds: AtomicUsize::new(0),
+            #[cfg(test)]
+            catalog_walks: AtomicUsize::new(0),
+            snapshot_reads: SnapshotReadCounts::default(),
         }
     }
 
@@ -113,8 +123,11 @@ impl DependencyContext {
     /// Walk-only note catalog for `!`/`&` resolution: no note contents
     /// are read.
     pub(super) fn catalog(&self) -> &NoteCatalog {
-        self.catalog
-            .get_or_init(|| NoteCatalog::walk(&self.bob_dir))
+        self.catalog.get_or_init(|| {
+            #[cfg(test)]
+            self.catalog_walks.fetch_add(1, Ordering::Relaxed);
+            NoteCatalog::walk(&self.bob_dir)
+        })
     }
 
     /// The latest daily note before `anchor`, resolved lazily on first
@@ -122,21 +135,64 @@ impl DependencyContext {
     pub(super) fn previous_daily(&self) -> Option<&Path> {
         self.previous_daily
             .get_or_init(|| {
-                // A missing or unreadable vault root lists no daily
-                // notes; the requested read or write still fails
-                // decisively downstream.
-                previous_daily_absolute(&self.bob_dir, self.anchor)
-                    .ok()
-                    .flatten()
+                let catalog = self.catalog();
+                if !catalog.complete() {
+                    return None;
+                }
+                catalog
+                    .index
+                    .relative_paths()
+                    .filter(|relative| !under_archive_dir(relative))
+                    .filter_map(|relative| {
+                        let date =
+                            task_status_hooks::canonical_daily_date(relative)?;
+                        (date < self.anchor)
+                            .then_some((date, self.bob_dir.join(relative)))
+                    })
+                    .max_by_key(|(date, _)| *date)
+                    .map(|(_, path)| path)
             })
             .as_deref()
     }
 
     /// Batch-scoped prefiltered dependents snapshot for `!` recovery,
-    /// built once per batch and borrowed afterwards.
+    /// derived from the shared byte pass and borrowed afterwards.
     pub(super) fn dependents_snapshot(&self) -> &DependentsSnapshot {
-        self.dependents.get_or_init(|| {
-            DependentsSnapshot::build(&self.bob_dir, self.catalog())
+        self.note_bytes().dependency_snapshot()
+    }
+
+    /// Batch-local relation source candidates, derived only after the
+    /// caller passes the relation gate. When successor labels are enabled,
+    /// the shared byte pass retains its results so dependency and relation
+    /// consumers in either order do not read a note twice.
+    #[allow(dead_code)] // The capture integration phase wires this reader.
+    pub(super) fn relation_sources_snapshot(&self) -> &DependentsSnapshot {
+        self.note_bytes().relation_snapshot()
+    }
+
+    /// Valid UTF-8 text from the retained batch read. Relation targets use
+    /// this as the planner preimage instead of reading an already-scanned
+    /// catalog path a second time.
+    #[allow(dead_code)] // Used by the capture relation adapter.
+    pub(super) fn cached_note_text(&self, relative: &Path) -> Option<String> {
+        self.note_bytes().cached_text(relative)
+    }
+
+    fn note_bytes(&self) -> &SharedNoteBytes {
+        self.note_bytes.get_or_init(|| {
+            // Loading the shared close policy here exposes the effective
+            // successor labels alongside cancel/complete labels. Keeping
+            // raw bytes is batch-scoped and only needed when relations are
+            // configured; ordinary dependency-only batches keep the old
+            // prefiltered-memory fast path.
+            let retain_raw =
+                !self.close_policy().2.is_empty() && self.link_unblocked();
+            SharedNoteBytes::build(
+                &self.bob_dir,
+                self.catalog(),
+                retain_raw,
+                &self.snapshot_reads,
+            )
         })
     }
 
@@ -236,6 +292,7 @@ impl DependencyContext {
     /// warning; a non-list value cancels nothing. The warning surfaces once
     /// per batch through [`Self::cancel_labels_warning`].
     pub(super) fn cancel_labels(&self) -> &[config::relations::CancelLabel] {
+        self.close_policy_consulted.store(true, Ordering::Relaxed);
         self.close_policy().0.as_slice()
     }
 
@@ -244,12 +301,15 @@ impl DependencyContext {
     pub(super) fn complete_labels(
         &self,
     ) -> &[config::relations::CompleteLabel] {
+        self.close_policy_consulted.store(true, Ordering::Relaxed);
         self.close_policy().1.as_slice()
     }
 
-    /// Successor labels (`docs/task-relations.md` §20 SU2), read with the
-    /// shared effect policy once per capture batch.
+    /// Effective successor labels (`docs/task-relations.md` §20 SU2) from
+    /// the shared config parse, read once per capture batch. Overlapping or
+    /// invalid entries have already been removed by the relations parser.
     pub(super) fn successor_labels(&self) -> &[config::relations::CancelLabel] {
+        self.close_policy_consulted.store(true, Ordering::Relaxed);
         self.close_policy().2.as_slice()
     }
 
@@ -257,6 +317,9 @@ impl DependencyContext {
     /// complete labels, and both-lists overlap), when the batch planned
     /// relations and the value was invalid.
     pub(super) fn cancel_labels_warning(&self) -> Option<String> {
+        if !self.close_policy_consulted.load(Ordering::Relaxed) {
+            return None;
+        }
         self.close_policy
             .get()
             .and_then(|(_, _, _, warning)| warning.clone())
@@ -302,6 +365,48 @@ impl DependencyContext {
     #[cfg(test)]
     pub(super) fn graph_build_count(&self) -> usize {
         self.graph_builds.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(super) fn catalog_walk_count(&self) -> usize {
+        self.catalog_walks.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(super) fn snapshot_read_counts(&self) -> BTreeMap<PathBuf, usize> {
+        self.snapshot_reads
+            .reads
+            .lock()
+            .expect("snapshot read counter poisoned")
+            .clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_successor_labels_for_test(
+        &self,
+        labels: Vec<config::relations::CancelLabel>,
+    ) {
+        let _ = self
+            .close_policy
+            .set((Vec::new(), Vec::new(), labels, None));
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_close_policy_warning_for_test(&self) {
+        let _ = self.close_policy.set((
+            Vec::new(),
+            Vec::new(),
+            vec![config::relations::CancelLabel {
+                key: "starts-after".to_string(),
+                name: "starts after".to_string(),
+            }],
+            Some("invalid relations config".to_string()),
+        ));
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_link_unblocked_for_test(&self, enabled: bool) {
+        let _ = self.link_unblocked.set(enabled);
     }
 }
 
@@ -353,11 +458,9 @@ impl NoteCatalog {
     }
 }
 
-/// Batch-scoped dependents snapshot for `!` recovery: the prefiltered
-/// on-disk contents built once per batch and borrowed afterwards. Only
-/// notes whose bytes contain `dependsOn` or `id::` are kept; a note is
-/// excluded only when it contributes no dependency edge and no task
-/// identity to `task_dependency_states`.
+/// Filtered view of one batch-scoped byte pass. Dependency and relation
+/// predicates own independent failure sets, so invalid UTF-8 in a note
+/// unrelated to one predicate cannot make that snapshot unavailable.
 pub(super) struct DependentsSnapshot {
     base: BTreeMap<PathBuf, String>,
     /// Vault-relative paths whose on-disk image could not be used despite
@@ -369,6 +472,13 @@ pub(super) struct DependentsSnapshot {
     /// False when the vault walk itself failed. Recovery then finds
     /// nothing; `capture_complete` reports the lookup as unavailable.
     pub(super) available: bool,
+    kind: SnapshotKind,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum SnapshotKind {
+    Dependencies,
+    Relations,
 }
 
 /// Whether a vault-relative note sits under an archive directory:
@@ -376,7 +486,7 @@ pub(super) struct DependentsSnapshot {
 /// directory at any level, while the catalog covers it (needed for `&`
 /// links), so dependents scanning re-applies that exclusion to the
 /// shared path list. A note merely *named* `done.md` still counts.
-fn under_archive_dir(relative: &Path) -> bool {
+pub(super) fn under_archive_dir(relative: &Path) -> bool {
     let mut current = relative.parent();
     while let Some(directory) = current {
         if directory.file_name().is_some_and(|name| name == "done") {
@@ -388,34 +498,44 @@ fn under_archive_dir(relative: &Path) -> bool {
 }
 
 impl DependentsSnapshot {
-    fn build(bob_dir: &Path, catalog: &NoteCatalog) -> Self {
-        // One shared vault walk: the catalog's path list feeds the
-        // prefiltered readers instead of walking twice. An incomplete
-        // walk reports unavailable, exactly like a failed walk, and
-        // archived notes stay out, exactly like `markdown_files`.
-        // Every env-dependent path is resolved here, before fanning out:
-        // `bob_env` overrides are thread-local, so nothing env-dependent
-        // may resolve inside the scoped workers below (they only read
-        // bytes and match substrings).
-        if !catalog.complete() {
-            return Self {
-                base: BTreeMap::new(),
-                failed: Vec::new(),
-                available: false,
-            };
+    fn unavailable(kind: SnapshotKind) -> Self {
+        Self {
+            base: BTreeMap::new(),
+            failed: Vec::new(),
+            available: false,
+            kind,
         }
-        let mut pairs = Vec::new();
-        for relative in catalog.index.relative_paths() {
-            if under_archive_dir(relative) {
+    }
+
+    pub(super) fn from_raw(
+        available: bool,
+        raw: &BTreeMap<PathBuf, Vec<u8>>,
+        read_failed: &[PathBuf],
+        kind: SnapshotKind,
+    ) -> Self {
+        if !available {
+            return Self::unavailable(kind);
+        }
+        let mut base = BTreeMap::new();
+        let mut failed = read_failed.to_vec();
+        for (relative, bytes) in raw {
+            if !kind.contains(bytes) {
                 continue;
             }
-            pairs.push((bob_dir.join(relative), relative.to_path_buf()));
+            match String::from_utf8(bytes.clone()) {
+                Ok(text) => {
+                    base.insert(relative.clone(), text);
+                }
+                Err(_) => failed.push(relative.clone()),
+            }
         }
-        let (base, failed) = read_prefiltered_parallel(&pairs);
+        failed.sort();
+        failed.dedup();
         Self {
             base,
             failed,
             available: true,
+            kind,
         }
     }
 
@@ -458,12 +578,23 @@ impl DependentsSnapshot {
             let Some(text) = contents else {
                 continue;
             };
-            if contains_dependency_markers(text.as_bytes()) {
+            if !under_archive_dir(&relative)
+                && self.kind.contains(text.as_bytes())
+            {
                 snapshot.push((relative, text));
             }
         }
         snapshot.sort_by(|left, right| left.0.cmp(&right.0));
         snapshot
+    }
+}
+
+impl SnapshotKind {
+    fn contains(self, bytes: &[u8]) -> bool {
+        match self {
+            Self::Dependencies => contains_dependency_markers(bytes),
+            Self::Relations => contains_relation_markers(bytes),
+        }
     }
 }
 
@@ -478,46 +609,87 @@ fn contains_dependency_markers(bytes: &[u8]) -> bool {
         || memchr::memmem::find(bytes, b"id::").is_some()
 }
 
-/// One walked note read through the prefilter: raw bytes first, then
-/// kept only when marker-positive and valid UTF-8. Marker-negative bytes
-/// are safe to omit; a read failure or marker-positive invalid UTF-8
-/// means a prerequisite could be missed, so the caller records the
-/// relative path as failed.
-enum PrefilteredRead {
-    Kept((PathBuf, String)),
+/// LINKS sources are byte-prefiltered on the managed label token. Direct
+/// child parsing and event target matching happen only after the relation
+/// gate, using the shared relation parser in `relation_sources`.
+fn contains_relation_markers(bytes: &[u8]) -> bool {
+    memchr::memmem::find(bytes, b"LINKS").is_some()
+}
+
+/// Per-context instrumentation keeps concurrent vault tests isolated.
+/// Production builds carry an empty counter with no shared/global state.
+#[derive(Default)]
+struct SnapshotReadCounts {
+    #[cfg(test)]
+    reads: Mutex<BTreeMap<PathBuf, usize>>,
+}
+
+impl SnapshotReadCounts {
+    fn record(&self, relative: &Path) {
+        #[cfg(test)]
+        {
+            *self
+                .reads
+                .lock()
+                .expect("snapshot read counter poisoned")
+                .entry(relative.to_path_buf())
+                .or_default() += 1;
+        }
+        #[cfg(not(test))]
+        let _ = relative;
+    }
+}
+
+/// One note read from the shared catalog. When successor labels are
+/// enabled the batch retains each raw result so either consumer order can
+/// derive its predicate without another read; otherwise only the existing
+/// dependency prefilter is retained.
+enum SnapshotRead {
+    Raw((PathBuf, Vec<u8>)),
+    Dependency((PathBuf, String)),
     Skipped,
     Failed(PathBuf),
 }
 
-fn read_prefiltered_one(pair: &(PathBuf, PathBuf)) -> PrefilteredRead {
+fn read_snapshot_one(
+    pair: &(PathBuf, PathBuf),
+    retain_raw: bool,
+    reads: &SnapshotReadCounts,
+) -> SnapshotRead {
+    reads.record(&pair.1);
     let bytes = match std::fs::read(&pair.0) {
         Ok(bytes) => bytes,
-        Err(_) => return PrefilteredRead::Failed(pair.1.clone()),
+        Err(_) => return SnapshotRead::Failed(pair.1.clone()),
     };
+    if retain_raw {
+        return SnapshotRead::Raw((pair.1.clone(), bytes));
+    }
     if !contains_dependency_markers(&bytes) {
-        return PrefilteredRead::Skipped;
+        return SnapshotRead::Skipped;
     }
     match String::from_utf8(bytes) {
-        Ok(text) => PrefilteredRead::Kept((pair.1.clone(), text)),
-        Err(_) => PrefilteredRead::Failed(pair.1.clone()),
+        Ok(text) => SnapshotRead::Dependency((pair.1.clone(), text)),
+        Err(_) => SnapshotRead::Failed(pair.1.clone()),
     }
 }
 
-/// Kept prefiltered notes plus the relative paths that failed, per
-/// snapshot worker: the merge shape of [`read_prefiltered_parallel`].
-type PrefilteredWorkerOutput = (Vec<(PathBuf, String)>, Vec<PathBuf>);
+#[derive(Default)]
+struct SnapshotWorkerOutput {
+    raw: Vec<(PathBuf, Vec<u8>)>,
+    dependencies: Vec<(PathBuf, String)>,
+    failed: Vec<PathBuf>,
+}
 
-/// Read every walked note on scoped worker threads, keeping only
-/// marker-positive notes. Mirrors the atomic work-queue shape of
-/// `highlights_ref::sync::plan_pdfs`: workers pull indices off a shared
-/// counter and the merge restores vault order, so output is
-/// deterministic. Returns the kept notes plus the relative paths that
-/// failed (read errors and marker-positive invalid UTF-8).
-fn read_prefiltered_parallel(
+/// Read the shared catalog once using scoped workers. Paths are resolved
+/// before fanning out so thread-local environment overrides cannot change
+/// the vault root. The merge is deterministic by relative path.
+fn read_snapshot_parallel(
     pairs: &[(PathBuf, PathBuf)],
-) -> (BTreeMap<PathBuf, String>, Vec<PathBuf>) {
+    retain_raw: bool,
+    reads: &SnapshotReadCounts,
+) -> SnapshotWorkerOutput {
     if pairs.is_empty() {
-        return (BTreeMap::new(), Vec::new());
+        return SnapshotWorkerOutput::default();
     }
     let worker_count = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get())
@@ -525,43 +697,43 @@ fn read_prefiltered_parallel(
         .min(pairs.len())
         .max(1);
     if worker_count <= 1 {
-        let mut kept = BTreeMap::new();
-        let mut failed = Vec::new();
+        let mut output = SnapshotWorkerOutput::default();
         for pair in pairs {
-            match read_prefiltered_one(pair) {
-                PrefilteredRead::Kept(entry) => {
-                    kept.insert(entry.0, entry.1);
+            match read_snapshot_one(pair, retain_raw, reads) {
+                SnapshotRead::Raw(entry) => output.raw.push(entry),
+                SnapshotRead::Dependency(entry) => {
+                    output.dependencies.push(entry);
                 }
-                PrefilteredRead::Skipped => {}
-                PrefilteredRead::Failed(relative) => failed.push(relative),
+                SnapshotRead::Skipped => {}
+                SnapshotRead::Failed(relative) => output.failed.push(relative),
             }
         }
-        failed.sort();
-        return (kept, failed);
+        output.failed.sort();
+        return output;
     }
     let next = AtomicUsize::new(0);
-    let collected: Vec<PrefilteredWorkerOutput> = std::thread::scope(|scope| {
+    let collected: Vec<SnapshotWorkerOutput> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..worker_count)
             .map(|_| {
                 scope.spawn(|| {
-                    let mut local_kept = Vec::new();
-                    let mut local_failed = Vec::new();
+                    let mut local = SnapshotWorkerOutput::default();
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(pair) = pairs.get(index) else {
                             break;
                         };
-                        match read_prefiltered_one(pair) {
-                            PrefilteredRead::Kept(entry) => {
-                                local_kept.push(entry);
+                        match read_snapshot_one(pair, retain_raw, reads) {
+                            SnapshotRead::Raw(entry) => local.raw.push(entry),
+                            SnapshotRead::Dependency(entry) => {
+                                local.dependencies.push(entry);
                             }
-                            PrefilteredRead::Skipped => {}
-                            PrefilteredRead::Failed(relative) => {
-                                local_failed.push(relative);
+                            SnapshotRead::Skipped => {}
+                            SnapshotRead::Failed(relative) => {
+                                local.failed.push(relative);
                             }
                         }
                     }
-                    (local_kept, local_failed)
+                    local
                 })
             })
             .collect();
@@ -570,36 +742,118 @@ fn read_prefiltered_parallel(
             .map(|handle| handle.join().expect("snapshot worker panicked"))
             .collect()
     });
-    let mut kept = BTreeMap::new();
-    let mut failed = Vec::new();
-    for (local_kept, local_failed) in collected {
-        for (relative, text) in local_kept {
-            kept.insert(relative, text);
-        }
-        failed.extend(local_failed);
+    let mut merged = SnapshotWorkerOutput::default();
+    for mut local in collected {
+        merged.raw.append(&mut local.raw);
+        merged.dependencies.append(&mut local.dependencies);
+        merged.failed.append(&mut local.failed);
     }
-    failed.sort();
-    failed.dedup();
-    (kept, failed)
+    merged.raw.sort_by(|left, right| left.0.cmp(&right.0));
+    merged
+        .dependencies
+        .sort_by(|left, right| left.0.cmp(&right.0));
+    merged.failed.sort();
+    merged.failed.dedup();
+    merged
 }
 
-/// The latest daily note before `anchor`, mirroring the hooks' previous
-/// daily snapshot without requiring it to exist.
-fn previous_daily_absolute(
-    bob_dir: &Path,
-    anchor: NaiveDate,
-) -> Result<Option<PathBuf>, String> {
-    let files = task_status_hooks::markdown_files(bob_dir)
-        .map_err(|error| format!("list vault notes: {error}"))?;
-    Ok(files
-        .iter()
-        .filter_map(|path| {
-            let relative = path.strip_prefix(bob_dir).ok()?;
-            let date = task_status_hooks::canonical_daily_date(relative)?;
-            (date < anchor).then_some((date, path.clone()))
+/// Shared batch-local bytes and lazily derived consumer views.
+struct SharedNoteBytes {
+    available: bool,
+    raw: Option<BTreeMap<PathBuf, Vec<u8>>>,
+    read_failed: Vec<PathBuf>,
+    dependency: OnceLock<DependentsSnapshot>,
+    relation: OnceLock<DependentsSnapshot>,
+}
+
+impl SharedNoteBytes {
+    fn build(
+        bob_dir: &Path,
+        catalog: &NoteCatalog,
+        retain_raw: bool,
+        reads: &SnapshotReadCounts,
+    ) -> Self {
+        if !catalog.complete() {
+            let dependency = OnceLock::new();
+            let relation = OnceLock::new();
+            let _ = dependency.set(DependentsSnapshot::unavailable(
+                SnapshotKind::Dependencies,
+            ));
+            let _ = relation
+                .set(DependentsSnapshot::unavailable(SnapshotKind::Relations));
+            return Self {
+                available: false,
+                raw: None,
+                read_failed: Vec::new(),
+                dependency,
+                relation,
+            };
+        }
+        let pairs: Vec<_> = catalog
+            .index
+            .relative_paths()
+            .filter(|relative| !under_archive_dir(relative))
+            .map(|relative| (bob_dir.join(relative), relative.to_path_buf()))
+            .collect();
+        let mut output = read_snapshot_parallel(&pairs, retain_raw, reads);
+        let dependency = OnceLock::new();
+        if !retain_raw {
+            let base = output.dependencies.drain(..).collect();
+            let mut failed = output.failed.clone();
+            failed.sort();
+            failed.dedup();
+            let _ = dependency.set(DependentsSnapshot {
+                base,
+                failed,
+                available: true,
+                kind: SnapshotKind::Dependencies,
+            });
+        }
+        Self {
+            available: true,
+            raw: retain_raw.then(|| output.raw.into_iter().collect()),
+            read_failed: output.failed,
+            dependency,
+            relation: OnceLock::new(),
+        }
+    }
+
+    fn dependency_snapshot(&self) -> &DependentsSnapshot {
+        self.dependency.get_or_init(|| {
+            self.raw.as_ref().map_or_else(
+                || DependentsSnapshot::unavailable(SnapshotKind::Dependencies),
+                |raw| {
+                    DependentsSnapshot::from_raw(
+                        self.available,
+                        raw,
+                        &self.read_failed,
+                        SnapshotKind::Dependencies,
+                    )
+                },
+            )
         })
-        .max_by_key(|(date, _)| *date)
-        .map(|(_, path)| path))
+    }
+
+    fn relation_snapshot(&self) -> &DependentsSnapshot {
+        self.relation.get_or_init(|| {
+            self.raw.as_ref().map_or_else(
+                || DependentsSnapshot::unavailable(SnapshotKind::Relations),
+                |raw| {
+                    DependentsSnapshot::from_raw(
+                        self.available,
+                        raw,
+                        &self.read_failed,
+                        SnapshotKind::Relations,
+                    )
+                },
+            )
+        })
+    }
+
+    fn cached_text(&self, relative: &Path) -> Option<String> {
+        let bytes = self.raw.as_ref()?.get(relative)?;
+        String::from_utf8(bytes.clone()).ok()
+    }
 }
 
 /// Vault-relative display path (`a/b.md`) for diagnostics and JSON.
@@ -3438,7 +3692,13 @@ mod tests {
         // New path: parallel prefiltered base plus staged overlay.
         let catalog = NoteCatalog::walk(root);
         assert!(catalog.complete());
-        let base = DependentsSnapshot::build(root, &catalog);
+        let shared = SharedNoteBytes::build(
+            root,
+            &catalog,
+            false,
+            &SnapshotReadCounts::default(),
+        );
+        let base = shared.dependency_snapshot();
         assert!(base.available);
         assert!(
             !base.base.contains_key(Path::new("prose.md")),
