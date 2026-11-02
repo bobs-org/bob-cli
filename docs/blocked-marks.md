@@ -284,6 +284,12 @@ results.
 - **Truthful or neutral.** The cache is cold, an id is unresolved, or
   the line is non-canonical: show plain `?`. `stale` appears only
   when every input is known.
+- **Fence guard.** Live Preview excludes fenced and inline code through
+  the shared syntax-tree helper, which matches the live tree's
+  `hmd-codeblock` node name (measured in the real-Obsidian e2e) alongside
+  the legacy `HyperMD-codeblock` name and the standard Lezer code names.
+  A fenced `?` task stays neutral even though the pure model classifies
+  the same text.
 
 ## Session toggle
 
@@ -370,15 +376,25 @@ ready and holds open `[id:: x]`, open `[id:: y]`, and done
 | BM26 | `- [ ] #task T [priority:: high] [scheduled:: 2026-11-20]`                                  | no mark (not a Blocked box)                                                                                       |
 | BM27 | `- [?] #task U [scheduled:: 2026-10-22]`                                                    | `stale` (past date blocks nothing; no priority, no tag, no ids)                                                   |
 
-## Live verification (Bryan, in Obsidian) — still pending
+## Live verification (real-Obsidian e2e, bob-plugins `scripts/obsidian-block-marks-e2e.cjs`)
 
-- every BM row renders its mark in Live Preview and reading view, in light and dark
+Verified in an isolated scratch vault (light and dark, Live Preview and
+reading view) with screenshots reviewed against the accepted mockup:
+
+- every applicable BM row renders its mark in both views and both themes
 - `dep` rows read `&`, `prj` rows read the chevron, digit rows read hollow `1`–`4`
 - waiting rows are quieter than held rows (5.5% tint vs 13%)
-- hovering a mark shows its tooltip; clicking the box cycles exactly as before
-- the toggle restores today's look and then turns the marks back on
+- hovering a marked checkbox shows its tooltip text; clicking the box
+  stores exactly the same status with the gate on and off
+- the toggle removes all marks and restores the prior appearance, then
+  turns the marks back on, without changing row height
 - nested child items never inherit a mark
-- Tasks query results show the CSS marks
-- a real reconcile turns a row `stale` and then clear
-- iOS renders the glyphs
-- a 100-task project note scrolls smoothly
+- embeds, hover previews, and Dataview TASK rows carry marks where their
+  origin is provable; unprovable origins stay neutral; Tasks query rows
+  stay unmarked by JS (their CSS marks belong to a later phase)
+- fenced code stays neutral; quoted tasks mark in both views
+
+Still pending for the parent visual-review phase: a real reconcile
+turning a row `stale` and then clear, iOS glyph rendering, third-party
+checkbox packs, human scrolling checks, a 100-task project note scroll,
+and the Tasks-results CSS marks (BM24).
