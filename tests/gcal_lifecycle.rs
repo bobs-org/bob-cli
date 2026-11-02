@@ -242,6 +242,12 @@ fn declined_event_cancels_untouched_task() {
         .find("*2026-10-30* — Declined in Google Calendar")
         .expect("cancel entry");
     assert!(entry_at > cancel_at, "{note}");
+    assert!(
+        note.contains(
+            "\t- ❌ **CANCEL LOG**\n\t\t- *2026-10-30* — Declined in Google Calendar\n"
+        ),
+        "childless cancel log uses TAB indent:\n{note}"
+    );
     // Sibling meetings keep their links and the MEET entry.
     assert!(note.contains("[[#^late-meeting]]"), "{note}");
     assert!(note.contains("— MEET"), "{note}");
@@ -259,6 +265,37 @@ fn declined_event_cancels_untouched_task() {
         "cancel is stable: {}",
         stdout(&again)
     );
+}
+
+#[test]
+fn declined_event_nests_cancel_log_above_tab_indented_child() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-cancel-tab-child");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let note = today_note(&env);
+    let row = dentist_row(&note);
+    let with_child =
+        note.replacen(&row, &format!("{row}\n\t- And retainers!"), 1);
+    write_today(&env, &with_child);
+
+    fake.events_json(&decline_dentist_fixture());
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let after = today_note(&env);
+    assert!(
+        after.contains(concat!(
+            "\t- ❌ **CANCEL LOG**\n",
+            "\t\t- *2026-10-30* — Declined in Google Calendar\n",
+            "\t- And retainers!\n",
+        )),
+        "cancel log lands first at the tab child indent:\n{after}"
+    );
+    let cancel_at = after.find("❌ **CANCEL LOG**").expect("cancel log");
+    let child_at = after.find("And retainers!").expect("child");
+    assert!(cancel_at < child_at, "{after}");
 }
 
 #[test]

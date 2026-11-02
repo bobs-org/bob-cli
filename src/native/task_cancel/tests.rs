@@ -534,6 +534,38 @@ fn source_cancel_preserves_authored_root_field_bytes() {
 }
 
 #[test]
+fn create_log_uses_tab_when_the_task_has_no_children() {
+    let source = "- [ ] #task T ^t\n";
+    let edit = line::edit_source_create_log(
+        source,
+        0,
+        date("2026-10-22"),
+        &["Declined in Google Calendar".into()],
+    );
+    assert_eq!(
+        edit.content,
+        "- [-] #task T [cancelled:: 2026-10-22] ^t\n\t- ❌ **CANCEL LOG**\n\t\t- *2026-10-22* — Declined in Google Calendar\n"
+    );
+    assert_eq!(edit.log, CancelLogOutcome::Prepended);
+}
+
+#[test]
+fn create_log_reuses_tab_child_indent_and_lands_first() {
+    let source = "- [ ] #task T ^t\n\t- And retainers!\n";
+    let edit = line::edit_source_create_log(
+        source,
+        0,
+        date("2026-10-22"),
+        &["Declined in Google Calendar".into()],
+    );
+    assert_eq!(
+        edit.content,
+        "- [-] #task T [cancelled:: 2026-10-22] ^t\n\t- ❌ **CANCEL LOG**\n\t\t- *2026-10-22* — Declined in Google Calendar\n\t- And retainers!\n"
+    );
+    assert_eq!(edit.log, CancelLogOutcome::Prepended);
+}
+
+#[test]
 fn source_cancel_log_preserves_crlf_and_final_newline_state() {
     let source = "- [ ] #task T ^t\r\n  - ❌ **CANCEL LOG**\r\n    - *2026-10-01* — older";
     let edit = line::edit_source(

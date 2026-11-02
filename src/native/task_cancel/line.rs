@@ -3,7 +3,10 @@
 use chrono::NaiveDate;
 
 use crate::native::{
-    capture_task_toggle::set_task_line_status,
+    capture::{
+        first_child_indentation, leading_spaces_or_tabs_len, line_spans,
+    },
+    capture_task_toggle::{child_block_end_line, set_task_line_status},
     task_dependencies::blocks::{
         direct_child_lines, is_cancel_log, leading_whitespace,
     },
@@ -119,13 +122,25 @@ pub(crate) fn edit_source_create_log(
     if segments.get(task_line_index).is_none() {
         return edited;
     }
-    let logical = logical_lines(&edited.content);
-    let task_indent = logical
-        .get(task_line_index)
-        .map(|line| leading_whitespace(line).to_string())
-        .unwrap_or_default();
-    let header_indent = format!("{task_indent}  ");
-    let entry_indent = format!("{header_indent}  ");
+    let lines = line_spans(&edited.content);
+    let Some(task_line) = lines.get(task_line_index) else {
+        return edited;
+    };
+    let task_indent_len = leading_spaces_or_tabs_len(task_line.text);
+    let task_indent = task_line.text[..task_indent_len].to_string();
+    let task_end_offset =
+        lines[child_block_end_line(&lines, task_line_index)].end;
+    // Match bob-navigation-hotkeys' Task Card cancel writer: reuse the
+    // first direct child's indent, else TAB (`getDependencyChildIndent`
+    // plus `MANAGED_TASK_LOG_INDENT_UNIT`).
+    let header_indent = first_child_indentation(
+        &lines,
+        task_line_index,
+        task_end_offset,
+        &task_indent,
+    )
+    .unwrap_or_else(|| format!("{task_indent}\t"));
+    let entry_indent = format!("{header_indent}\t");
     let header = format!("{header_indent}- ❌ **CANCEL LOG**");
     let entry = format!("{entry_indent}- *{date}* — {reason}");
     let newline = predominant_line_ending(&edited.content);

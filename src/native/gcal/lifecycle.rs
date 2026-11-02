@@ -556,10 +556,38 @@ mod tests {
             "Declined in Google Calendar",
         )
         .expect("cancel applies");
-        assert!(cancelled.contains("- [-] #task **0900-1000** New"));
-        assert!(cancelled.contains("❌ **CANCEL LOG**"));
-        assert!(
-            cancelled.contains("*2026-10-30* — Declined in Google Calendar")
+        assert_eq!(
+            cancelled,
+            concat!(
+                "- [-] #task **0800-0830** Old [root:: meet] ^old\n",
+                "- [-] #task **0900-1000** New [root:: meet] [cancelled:: 2026-10-30] ^new\n",
+                "\t- ❌ **CANCEL LOG**\n",
+                "\t\t- *2026-10-30* — Declined in Google Calendar\n",
+            )
+        );
+    }
+
+    #[test]
+    fn cancel_log_reuses_tab_child_indent_and_lands_first() {
+        let note = concat!(
+            "- [ ] #task **0900-1000** New [root:: meet] ^new\n",
+            "\t- And retainers!\n",
+        );
+        let cancelled = cancel_task_row(
+            note,
+            0,
+            NaiveDate::from_ymd_opt(2026, 10, 30).expect("date"),
+            "Declined in Google Calendar",
+        )
+        .expect("cancel applies");
+        assert_eq!(
+            cancelled,
+            concat!(
+                "- [-] #task **0900-1000** New [root:: meet] [cancelled:: 2026-10-30] ^new\n",
+                "\t- ❌ **CANCEL LOG**\n",
+                "\t\t- *2026-10-30* — Declined in Google Calendar\n",
+                "\t- And retainers!\n",
+            )
         );
     }
 }
