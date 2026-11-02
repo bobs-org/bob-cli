@@ -115,12 +115,10 @@ impl EventBuffer {
     }
 
     /// Human label with a typographic minus, `None` when empty.
-    #[allow(dead_code)] // gcal-sync-buffers and capture-buffers render this.
     pub(crate) fn label(self) -> Option<String> {
         self.body("\u{2212}")
     }
 
-    #[allow(dead_code)]
     fn body(self, minus: &str) -> Option<String> {
         match (self.before_min, self.after_min) {
             (0, 0) => None,
@@ -158,21 +156,13 @@ fn strip_minus_prefix(token: &str) -> Option<&str> {
         .or_else(|| token.strip_prefix('\u{2013}'))
 }
 
-/// Where a session overlap sits relative to the meeting clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where a session overlap sits relative to the meeting clock. Serializes
+/// as `before` / `after` in payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum BufferPart {
     Before,
     After,
-}
-
-impl BufferPart {
-    #[allow(dead_code)] // capture-buffers JSON and messages spell this.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Before => "before",
-            Self::After => "after",
-        }
-    }
 }
 
 /// One conflict between a session span and an open Event Task.
@@ -207,7 +197,6 @@ impl EventTask {
         is_open_status(self.status)
     }
 
-    #[allow(dead_code)] // capture-buffers and agenda-buffers consume this.
     pub(crate) fn buffered_span(&self) -> EventSpan {
         self.span.buffered(self.buffer)
     }
@@ -1363,8 +1352,9 @@ mod tests {
                         case["id"]
                     );
                     assert_eq!(
-                        conflict.buffer_part.map(BufferPart::as_str),
-                        case["buffer_part"].as_str(),
+                        serde_json::to_value(conflict.buffer_part)
+                            .expect("buffer part"),
+                        case["buffer_part"],
                         "{}",
                         case["id"]
                     );

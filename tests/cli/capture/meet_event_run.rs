@@ -288,3 +288,151 @@ fn closing_a_session_before_its_start_warns_about_x0() {
         "{warnings}"
     );
 }
+
+// --- Event buffers: the run follows what each event occupies. ---
+
+const BUFFERED_LUNCH_DAY: &str = concat!(
+    "## Events\n",
+    "- [ ] #task **1200-1300** Lunch with Kelly #untracked [buffer:: -30m +15m] [root:: love] ^lunch\n",
+    "- [ ] #task **1330-1400** Standup ^standup\n",
+    "\n",
+    "## Pomodoros\n",
+    "- [ ] () — MEET\n",
+    "  - [[#^lunch]]\n",
+    "  - [[#^standup]]\n",
+);
+
+#[test]
+fn start_json_reports_the_buffered_run_and_each_events_buffer() {
+    let temp = TempDir::new("bob-cli-meet-run-buffer-json");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(&day_file, BUFFERED_LUNCH_DAY);
+    let json = run_start(&vault, &day_file, "2026-11-01 11:25:00", "=");
+    let start = &json["pomodoro_start"];
+    assert_eq!(start["time_range"], "(**1130-1315**)");
+    assert_eq!(start["duration_minutes"], 105);
+    assert_eq!(start["tracked"], false);
+    assert_eq!(
+        start["event_run"],
+        serde_json::json!({
+            "time_range": "1130-1315",
+            "start": "1130",
+            "end": "1315",
+            "untracked": true,
+            "source": "calendar",
+            "events": [{
+                "index": 1,
+                "title": "Lunch with Kelly",
+                "time_range": "1200-1300",
+                "line": 2,
+                "block_id": "lunch",
+                "untracked": true,
+                "buffer": {
+                    "before_minutes": 30,
+                    "after_minutes": 15,
+                    "time_range": "1130-1315"
+                }
+            }]
+        })
+    );
+    assert!(json["warnings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .all(|warning| warning["code"] != "pomodoro_event_run_later"));
+}
+
+#[test]
+fn human_start_labels_a_buffered_event_with_its_span_and_buffer() {
+    let temp = TempDir::new("bob-cli-meet-run-buffer-human");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(&day_file, BUFFERED_LUNCH_DAY);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-11-01 11:25:00")
+        .output()
+        .expect("run human start");
+    assert_success(&output);
+    let rendered = stdout(&output);
+    assert!(
+        rendered.contains(
+            "MEET 1130-1315 (105m · untracked) at line 6 · from your calendar: Lunch with Kelly (1200-1300 −30m +15m)"
+        ),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn far_run_warning_measures_from_the_buffered_start() {
+    let temp = TempDir::new("bob-cli-meet-run-buffer-far");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(&day_file, BUFFERED_LUNCH_DAY);
+    let json = run_start(&vault, &day_file, "2026-11-01 09:20:00", "=");
+    let warning = json["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .find(|warning| warning["code"] == "pomodoro_event_run_later")
+        .expect("far-run warning");
+    assert_eq!(
+        warning["message"],
+        "MEET's next event, Lunch with Kelly (1200-1300 −30m +15m), starts at 1130 (2h 10m from now) · capture `=5#meet` to start 25 minutes now"
+    );
+}
+
+#[test]
+fn a_lead_out_in_progress_is_still_a_run_and_a_counted_start_keeps_its_span() {
+    let temp = TempDir::new("bob-cli-meet-run-buffer-explicit");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(&day_file, BUFFERED_LUNCH_DAY);
+    // 13:10 is lead-out: the meeting ended at 1300, the run lasts to 1315.
+    let json = run_start(&vault, &day_file, "2026-11-01 13:10:00", "=5#meet");
+    let start = &json["pomodoro_start"];
+    assert_eq!(start["tracked"], false, "{start}");
+    assert_eq!(start["event_run"]["source"], "explicit", "{start}");
+    assert_eq!(start["event_run"]["end"], "1315", "{start}");
+}
+
+#[test]
+fn dry_run_reports_the_buffered_span_and_writes_nothing() {
+    let temp = TempDir::new("bob-cli-meet-run-buffer-dry");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(&day_file, BUFFERED_LUNCH_DAY);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("--")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-11-01 11:25:00")
+        .output()
+        .expect("run dry start");
+    assert_success(&output);
+    let json: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dry JSON");
+    assert_eq!(json["pomodoro_start"]["time_range"], "(**1130-1315**)");
+    assert_eq!(
+        json["pomodoro_start"]["event_run"]["events"][0]["buffer"]
+            ["before_minutes"],
+        30
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("day"),
+        BUFFERED_LUNCH_DAY
+    );
+}

@@ -257,7 +257,8 @@ pub(super) fn untracked_label(start: &PomodoroStartSummary) -> &'static str {
     }
 }
 
-/// ` · from your calendar: A, B` when the span follows an event run.
+/// ` · from your calendar: A, B` when the span follows an event run; a
+/// buffered event adds its meeting span and label, `A (1200-1300 −30m +15m)`.
 pub(super) fn calendar_label(start: &PomodoroStartSummary) -> String {
     let Some(run) = start
         .event_run
@@ -269,7 +270,14 @@ pub(super) fn calendar_label(start: &PomodoroStartSummary) -> String {
     let titles = run
         .events
         .iter()
-        .map(|event| event.title.as_str())
+        .map(|event| match event.buffer.as_ref() {
+            Some(buffer) => event_with_buffer_label(
+                &event.title,
+                &event.time_range,
+                Some(buffer),
+            ),
+            None => event.title.clone(),
+        })
         .collect::<Vec<_>>()
         .join(", ");
     format!(" · from your calendar: {titles}")

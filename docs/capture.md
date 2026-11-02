@@ -3026,7 +3026,7 @@ Pomodoro sessions form a lifecycle, taught in this order:
 
 | Item | Operator | Effect | Obsidian |
 | --- | --- | --- | --- |
-| `=` / `=<X>` | start / restart | Start the next future Pomodoro, or restart today's running Pomodoro with fresh `se<X>` timing (`=` is 25 minutes, except a MEET, which follows its [event run](#meet-starts-follow-the-calendar)); an override shows a warning before the write | `se<X>` + Tab inside `()` or on the running line |
+| `=` / `=<X>` | start / restart | Start the next future Pomodoro, or restart today's running Pomodoro with fresh `se<X>` timing (`=` is 25 minutes, except a MEET, which follows its [event run](#meet-starts-follow-the-calendar), buffers included); an override shows a warning before the write | `se<X>` + Tab inside `()` or on the running line |
 | `=<X>#<pomodoro>` | start named / swap | Start that named Pomodoro (open match in place, completed match again, else created); while another session runs, swap in a different name, keeping its clock with an empty `<X>` or using fresh timing when `<X>` is given | `se<X>` + Tab inside `() — NAME` or on the running line after picking the name |
 | `+[N]` / `-[N]` | resize | Move the running session's end N × 5 min later / earlier | `N\p` / `N\P` |
 | `++[N]` / `--[N]` | shift | Move the running session's start and end N × 5 min later / earlier | `N\o` / `N\O` |
@@ -3112,7 +3112,12 @@ A session named `MEET` (the type [Google Calendar sync](gcal.md) files meetings
 under) takes its span from the Event Tasks in its lineup instead of the
 25-minute default. The **event run** of a MEET is its earliest open Event Task
 that has not ended, plus every following lineup Event Task that touches or
-overlaps it (`next.start ≤ run.end`) and shares its trackedness. Bob computes
+overlaps it (`next.start ≤ run.end`) and shares its trackedness. Every span
+here is what the event _occupies_: an Event Task's `[buffer:: -30m +15m]`
+field (from a `-30 +15` [directive line](gcal.md#untracked-events) in its
+Google description) widens the meeting by a lead-in and a lead-out, so
+an event has not ended until its buffered end passes, runs sort and cluster by
+buffered span, and the run's start and end are the buffered ones. Bob computes
 it on the staged daily note at the moment of the start, so a `~<K>` drop and
 earlier items of the same draft already apply. Only plain same-note links
 (`[[#^id]]`) to Event Tasks count; other links, done or cancelled Event Tasks,
@@ -3132,7 +3137,16 @@ as on the calendar and off the clock (see [Untracked
 sessions](reference/vault-format.md)). A tracked event and an untracked one
 never share a run, so lunch at 1200-1300 followed by a 1300-1330 standup
 starts a 1200-1300 untracked MEET; capture `=` again after it closes to run
-the standup.
+the standup. A buffer inherits its event's trackedness, so it never bridges
+the two: a `+15` on the lunch does not pull the tracked standup into its run.
+
+A buffer widens a run without moving the meeting. Take lunch at 1200-1300
+with `[buffer:: -30m +15m]`: `=` at 1125 writes `(**1130-1315**)`, and
+lunch's meeting span stays `1200-1300`. A `+15` on a 1000-1030 standup
+bridges it to a 1045-1115 1:1, because the standup now occupies until 1045
+(`next.buffered_start ≤ run.end`), so the run is `1000-1115`. While you are
+still inside a lead-out the event still counts: at 1035 the standup's run
+continues to 1045.
 
 Two rules keep the ledger truthful:
 
@@ -3143,7 +3157,10 @@ Two rules keep the ledger truthful:
   is written with its future start (`1300-1330` at 1250). A run more than 25
   minutes away raises the structured warning `pomodoro_event_run_later`:
   `MEET's next event, Lunch, starts at 1400 (2h 10m from now) · capture
-  `=5#meet` to start 25 minutes now`. The start still happens.
+  `=5#meet` to start 25 minutes now`. The start still happens. The distance
+  is measured to the run's buffered start, and a buffered first event names
+  its buffer so the time makes sense: `MEET's next event, Lunch (1200-1300
+  −30m), starts at 1130 (2h 10m from now) · …`.
 
 Closing a session that has not started yet records a zero-length session at
 its own start (the end never moves before the start) and warns that `x0`
@@ -3165,13 +3182,26 @@ has a non-empty run:
 }
 ```
 
-`time_range`, `start`, and `end` are the run's span after the late-join clamp.
+`time_range`, `start`, and `end` are the run's span after the late-join clamp,
+and they are the buffered span: the span the session is written with. Each
+event's own `time_range` stays the meeting span, and an event with a buffer
+gains an additive `buffer` object (omitted when there is none):
+
+```json
+"events": [{"index": 1, "title": "Lunch with Kelly",
+            "time_range": "1200-1300", "line": 2,
+            "block_id": "lunch", "untracked": true,
+            "buffer": {"before_minutes": 30, "after_minutes": 15,
+                       "time_range": "1130-1315"}}]
+```
+
 `source` is `calendar` when the written session follows that span and
 `explicit` when a counted suffix or a kept ledger set its own. Each event's
 `index` is its lineup number on the pre-drop lineup, so a drop leaves gaps. Human
 output appends the same facts: `MEET 1200-1300 (60m · untracked) at line 7 ·
-from your calendar: Lunch with Kelly`. Obsidian's `se<X>` + Tab mirrors the
-rule through the shared
+from your calendar: Lunch with Kelly`; a buffered event adds its meeting
+span and buffer, `from your calendar: Lunch with Kelly (1200-1300 −30m +15m)`.
+Obsidian's `se<X>` + Tab mirrors the rule through the shared
 [`meet_event_run` vectors](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/meet_event_run/vectors.json).
 
 #### Dropping queued Task Links as a session starts
@@ -3687,12 +3717,24 @@ warning; see [Running into an event](#running-into-an-event).
 
 Starting, restarting, swapping in, link-starting, extending (`+N`), or
 shifting (`++N`/`--N`) a **non-MEET** session warns when its new span newly
-crosses the start of an open Event Task on today's note. The warning never
-blocks the write. `-N` and closes never warn.
+conflicts with an open Event Task on today's note. The warning never blocks
+the write. `-N` and closes never warn.
 
-"Newly crossed" means the event's start lies in the new `[S, E)` and did
-not lie in the previous span (a fresh start has no previous span). Events
-already in that session's own lineup are skipped. Done (`[x]`) and
+A new span `[S, E)` **conflicts** with an open Event Task when two things
+hold:
+
+1. It overlaps the event's _occupied_ span: the meeting plus its
+   `[buffer::]` lead-in and lead-out (for an event without a buffer, the
+   event's start lies in `[S, E)`, as it always has).
+2. The meeting is not already in progress at `S` (`start < S < end`).
+   Starting mid-meeting stays quiet, because a meeting you walked out of
+   early stays open after a timed close.
+
+It warns when the new span conflicts and the previous span did not (a fresh
+start has no previous span). With a buffer this covers four shapes: running
+into a lead-in, starting inside a lead-in and running into the meeting,
+starting inside a lead-out, and running from before the event through all of
+it. Events already in that session's own lineup are skipped. Done (`[x]`) and
 cancelled (`[-]`) rows never warn. Untracked Event Tasks (`#untracked`)
 warn like any other open Event Task: untracked means off the clock, not
 optional.
@@ -3702,12 +3744,28 @@ run](#meet-starts-follow-the-calendar), so running through those events is
 the point.
 
 Bob emits one structured warning `pomodoro_runs_past_event` naming the
-earliest crossed event, the overlap in minutes, `and N more` when later
-events are also newly crossed, and a fit draft: the largest same-operator
-count that ends at or before that event's start (`=2`, `=2#bugs`,
-`=2-1`, `+K`, `++K`, `--K`). When no positive count fits, the fit is
-omitted. Chains warn per item and only for new crossings, so `= +2`
-warns once on the start.
+earliest conflicting event (by buffered start), the overlap in minutes
+(the new span against the occupied span), `and N more` when later events
+also newly conflict, and a fit draft: the largest same-operator count that
+ends at or before the event's occupied start (`=2`, `=2#bugs`, `=2-1`, `+K`,
+`++K`, `--K`). A fit is offered only when `S` is before that start, so
+starting inside a lead-in has none, and when no positive count fits it is
+omitted. `--K` instead keeps the session inside the meeting, so it measures
+from the meeting start. Chains warn per item and only for new conflicts, so
+`= +2` warns once on the start.
+
+The message names where the overlap sits. When it lies wholly inside one
+buffer it says so, with that buffer's size; when it runs into the meeting the
+event carries its whole buffer after the meeting span:
+
+```text
+⚠ BOB 1110-1135 runs 5m into Lunch's −30m buffer (1200-1300) · =4 ends at 1130
+⚠ BOB 1110-1215 runs 45m into Lunch (1200-1300 −30m) · =4 ends at 1130
+⚠ BOB 1305-1330 runs 10m into Lunch's +15m buffer (1200-1300)
+⚠ BOB 1150-1215 runs 15m into Standup (1200-1230) · =2 ends at 1200
+```
+
+The last line is an event without a buffer: its message is unchanged.
 
 Capture JSON is unversioned; these fields are additive.
 `pomodoro_start`, `pomodoro_adjust`, and
@@ -3724,8 +3782,13 @@ Capture JSON is unversioned; these fields are additive.
 ```
 
 `more` is omitted when 0; `fit` is omitted when no positive count fits.
-`--dry-run` reports the same warning and object without writing. Human
-output:
+An event with a buffer adds two additive keys. `event.buffer` is
+`{"before_minutes": 30, "after_minutes": 15, "time_range": "1130-1315"}`
+(`time_range` is the buffered span; `event.time_range` stays the meeting
+span), and `event_conflict.buffer_part` is `before` or `after` when the
+overlap lies wholly inside one buffer. Both are omitted when they do not
+apply, so unbuffered payloads are byte-identical. `--dry-run` reports the
+same warning and object without writing. Human output:
 
 `⚠ BOB 1150-1215 runs 15m into Standup (1200-1230) · =2 ends at 1200`
 
@@ -3777,6 +3840,13 @@ Task; it stays deferred. Wildcards otherwise keep their normal meaning, and
 unlisted Event Tasks use the clock defaults above. Ordinary Task Links are
 unchanged. Embedded links and authored `#` deferrals also keep their current
 meaning.
+
+The clock test uses the bare meeting span, never the buffered one: a MEET
+closed at 1300 completes the 1200-1300 lunch even though its `+15` buffer runs
+to 1315, and a `-30` lead-in never starts a meeting early. Widening the close
+would carry a finished meeting through its travel time. (The
+[shared close vectors](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/event_task_close/vectors.json)
+pin this.)
 
 JSON adds `pomodoro_close.task_links[].clock` for Event Task links, with
 `class` and the original `span` (for example

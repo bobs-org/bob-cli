@@ -60,6 +60,14 @@
       "expected_clock": ["ended_inside", "running", "not_started", "ended_before"]
     },
     {
+      "id": "buffered-event-classifies-by-its-meeting-span",
+      "close_token": "x",
+      "now": "2026-10-29 10:00:00",
+      "day": "## Events\n- [ ] #task **0900-1000** Ended inside [buffer:: +15m] ^ended-inside\n- [ ] #task **1000-1030** Not started [buffer:: -30m] ^not-started\n- [ ] #task **0700-0730** Ended before [buffer:: +45m] ^ended-before\n\n## Pomodoros\n- [ ] (**0800-1000** [t:: 120m]) — MEET\n  - [[#^ended-inside]]\n  - [[#^not-started]]\n  - [[#^ended-before]]\n- [ ] () — PLAN\n",
+      "expected_outcomes": ["complete", "deferred", "deferred"],
+      "expected_clock": ["ended_inside", "not_started", "ended_before"]
+    },
+    {
       "id": "all-deferred-meetings-pin-rust-output",
       "close_token": "x",
       "now": "2026-10-29 09:00:00",

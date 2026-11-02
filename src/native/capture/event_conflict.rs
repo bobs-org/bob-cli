@@ -1,18 +1,22 @@
 //! Run-past-event warnings for non-MEET starts, extends, and shifts.
 //!
 //! After an operator writes a new session span, open Event Tasks whose
-//! start is in the new `[S, E)` but not the previous one raise one
-//! structured `pomodoro_runs_past_event` warning naming the earliest
-//! crossing, plus an additive `event_conflict` object on the start,
-//! adjust, or shift JSON. MEET sessions and events already in the
-//! session's own lineup are exempt. `-N` and closes never warn.
-//! Untracked Event Tasks warn like any other open Event Task.
+//! occupied span (the meeting plus its `[buffer::]` lead-in and lead-out)
+//! newly conflicts with the new `[S, E)` raise one structured
+//! `pomodoro_runs_past_event` warning naming the earliest conflict, plus an
+//! additive `event_conflict` object on the start, adjust, or shift JSON. A
+//! session starting mid-meeting stays quiet. MEET sessions and events
+//! already in the session's own lineup are exempt. `-N` and closes never
+//! warn. Untracked Event Tasks warn like any other open Event Task.
+//! Detection, overlap, and fit all come from the shared
+//! [`event_span_conflicts`] predicate.
 
 use std::collections::HashSet;
 
 use super::*;
 use crate::native::event_task::{
-    event_starts_crossed, events_in_note, EventNoteRow, EventSpan,
+    event_span_conflicts, events_in_note, BufferPart, EventBuffer,
+    EventNoteRow, EventSpan, EventSpanConflict,
 };
 
 /// How to spell the largest same-operator count that still ends at or
@@ -35,18 +39,90 @@ pub(super) enum FitKind {
     },
 }
 
+/// `buffer` object on capture payloads: an Event Task's pre/post-event
+/// reserve and the buffered span it occupies. Absent when the event has no
+/// buffer, so unbuffered payloads stay byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct EventBufferJson {
+    pub(super) before_minutes: u16,
+    pub(super) after_minutes: u16,
+    pub(super) time_range: String,
+}
+
+impl EventBufferJson {
+    pub(super) fn new(span: EventSpan, buffer: EventBuffer) -> Option<Self> {
+        if buffer.is_empty() {
+            return None;
+        }
+        Some(Self {
+            before_minutes: buffer.before_min,
+            after_minutes: buffer.after_min,
+            time_range: span.buffered(buffer).text(),
+        })
+    }
+
+    pub(super) fn buffer(&self) -> EventBuffer {
+        EventBuffer {
+            before_min: self.before_minutes,
+            after_min: self.after_minutes,
+        }
+    }
+
+    /// Human label, `−30m +15m`, with a typographic minus.
+    pub(super) fn label(&self) -> String {
+        self.buffer().label().unwrap_or_default()
+    }
+
+    /// Label of just one side, `−30m` or `+15m`.
+    fn part_label(&self, part: BufferPart) -> String {
+        let buffer = self.buffer();
+        match part {
+            BufferPart::Before => EventBuffer {
+                after_min: 0,
+                ..buffer
+            },
+            BufferPart::After => EventBuffer {
+                before_min: 0,
+                ..buffer
+            },
+        }
+        .label()
+        .unwrap_or_default()
+    }
+}
+
+/// The human spelling of an event inside a message: the title, then its
+/// meeting span, then the buffer label when it has one.
+/// `Lunch (1200-1300 −30m +15m)`.
+pub(super) fn event_with_buffer_label(
+    title: &str,
+    time_range: &str,
+    buffer: Option<&EventBufferJson>,
+) -> String {
+    match buffer {
+        Some(buffer) => format!("{title} ({time_range} {})", buffer.label()),
+        None => format!("{title} ({time_range})"),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct EventConflictEventJson {
     pub(super) title: String,
     pub(super) time_range: String,
     pub(super) line: usize,
     pub(super) untracked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) buffer: Option<EventBufferJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct EventConflictJson {
     pub(super) event: EventConflictEventJson,
     pub(super) overlap_minutes: u64,
+    /// `before` or `after` when the overlap lies wholly inside one buffer
+    /// of the event; omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) buffer_part: Option<BufferPart>,
     #[serde(skip_serializing_if = "is_zero_more")]
     pub(super) more: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,29 +153,6 @@ fn minutes_ahead(from: u16, to: u16) -> i32 {
         delta += 24 * 60;
     }
     delta
-}
-
-fn overlap_minutes(
-    session_start: u16,
-    session_end: u16,
-    event: EventSpan,
-) -> u64 {
-    let start = i32::from(session_start);
-    let mut end = i32::from(session_end);
-    if end <= start {
-        end += 24 * 60;
-    }
-    let mut event_start = i32::from(event.start_min);
-    if event_start < start {
-        event_start += 24 * 60;
-    }
-    let mut event_end = event.end_on_timeline();
-    if event_end <= event_start {
-        event_end += 24 * 60;
-    }
-    let overlap_start = event_start.max(start);
-    let overlap_end = event_end.min(end);
-    u64::try_from((overlap_end - overlap_start).max(0)).unwrap_or(0)
 }
 
 fn fit_token(
@@ -167,45 +220,28 @@ fn lineup_exclude_ids(contents: &str, entry_index: usize) -> HashSet<String> {
         .collect()
 }
 
-fn newly_crossed_from<'a>(
-    events: &'a [EventNoteRow],
-    entry_index: usize,
-    contents: &str,
-    new_start: u16,
-    new_end: u16,
-    old: Option<(u16, u16)>,
-) -> Vec<&'a EventNoteRow> {
-    let exclude = lineup_exclude_ids(contents, entry_index);
-    event_starts_crossed(new_start, new_end, events, &exclude)
-        .into_iter()
-        .filter(|event| {
-            let Some(span) = event.span else {
-                return false;
-            };
-            match old {
-                Some((old_start, old_end)) => {
-                    !start_in_old(span.start_min, old_start, old_end)
-                }
-                None => true,
-            }
-        })
-        .collect()
+/// The start of the span a fit draft must end at, as an `HHMM` clock
+/// minute. Unbuffered events fit against the meeting start, as always. A
+/// buffered event fits against its buffered start, and only when the
+/// session starts before it; the predicate withholds the target otherwise.
+/// `--N` is the exception: it keeps the session's start mid-meeting
+/// (`start < S < end`, which never warns), so it measures from the meeting
+/// start.
+fn fit_target(
+    kind: &FitKind,
+    event: &EventNoteRow,
+    conflict: &EventSpanConflict,
+) -> Option<u16> {
+    let span = event.span?;
+    if event.buffer.is_empty() || matches!(kind, FitKind::ShiftEarlier { .. }) {
+        return Some(span.start_min);
+    }
+    conflict.fit_start_min
 }
 
-fn start_in_old(event_start: u16, old_start: u16, old_end: u16) -> bool {
-    if old_start == old_end {
-        return false;
-    }
-    if old_end > old_start {
-        event_start >= old_start && event_start < old_end
-    } else {
-        event_start >= old_start || event_start < old_end
-    }
-}
-
-/// Conflict for a non-MEET session whose new span newly crosses an
-/// open Event Task. `None` when the session is MEET or nothing new
-/// is crossed.
+/// Conflict for a non-MEET session whose new span newly conflicts with an
+/// open Event Task's occupied span. `None` when the session is MEET or
+/// nothing new conflicts.
 pub(super) fn detect_event_conflict(
     contents: &str,
     date: NaiveDate,
@@ -220,15 +256,10 @@ pub(super) fn detect_event_conflict(
         return None;
     }
     let events = events_in_note(contents, date);
-    let crossed = newly_crossed_from(
-        &events,
-        entry_index,
-        contents,
-        new_start,
-        new_end,
-        old,
-    );
-    let first = *crossed.first()?;
+    let exclude = lineup_exclude_ids(contents, entry_index);
+    let crossed =
+        event_span_conflicts(new_start, new_end, old, &events, &exclude);
+    let &(first, conflict) = crossed.first()?;
     let span = first.span?;
     let more = u64::try_from(crossed.len().saturating_sub(1)).unwrap_or(0);
     Some(EventConflictJson {
@@ -237,10 +268,13 @@ pub(super) fn detect_event_conflict(
             time_range: span.text(),
             line: first.line_index + 1,
             untracked: first.untracked,
+            buffer: EventBufferJson::new(span, first.buffer),
         },
-        overlap_minutes: overlap_minutes(new_start, new_end, span),
+        overlap_minutes: conflict.overlap_minutes,
+        buffer_part: conflict.buffer_part,
         more,
-        fit: fit_token(fit, new_start, span.start_min),
+        fit: fit_target(fit, first, &conflict)
+            .and_then(|target| fit_token(fit, new_start, target)),
     })
 }
 
@@ -292,22 +326,43 @@ pub(super) fn event_conflict_message(
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .unwrap_or("session");
+    let event = &conflict.event;
+    let buffer = event.buffer.as_ref();
+    // The overlap sits wholly inside one buffer: name that buffer. Any
+    // other overlap on a buffered event runs into the meeting, so the
+    // event carries its whole buffer label.
+    let target = match (buffer, conflict.buffer_part) {
+        (Some(buffer), Some(part)) => {
+            format!(
+                "{}'s {} buffer ({})",
+                event.title,
+                buffer.part_label(part),
+                event.time_range
+            )
+        }
+        _ => event_with_buffer_label(&event.title, &event.time_range, buffer),
+    };
     let mut message = format!(
-        "⚠ {name} {start}-{end} runs {}m into {} ({})",
+        "⚠ {name} {start}-{end} runs {}m into {target}",
         conflict.overlap_minutes,
-        conflict.event.title,
-        conflict.event.time_range,
     );
     if conflict.more > 0 {
         message.push_str(&format!(" and {} more", conflict.more));
     }
     if let Some(fit) = conflict.fit.as_ref() {
-        let ends = conflict
-            .event
-            .time_range
+        // A fit draft ends where the event starts occupying time. `--N`
+        // keeps the session inside the meeting instead (see
+        // [`fit_target`]), so it names the meeting start.
+        let occupied = match buffer {
+            Some(buffer) if !fit.starts_with("--") => {
+                buffer.time_range.as_str()
+            }
+            _ => event.time_range.as_str(),
+        };
+        let ends = occupied
             .split_once('-')
             .map(|(start, _)| start)
-            .unwrap_or(conflict.event.time_range.as_str());
+            .unwrap_or(occupied);
         message.push_str(&format!(" · {fit} ends at {ends}"));
     }
     message
@@ -624,5 +679,143 @@ mod tests {
             event_conflict_message(Some("BOB"), "1150", "1215", &conflict)
                 .contains(" and 1 more")
         );
+    }
+
+    fn lunch_buffer() -> EventBufferJson {
+        EventBufferJson {
+            before_minutes: 30,
+            after_minutes: 15,
+            time_range: "1130-1315".to_string(),
+        }
+    }
+
+    fn lunch_conflict(
+        buffer_part: Option<BufferPart>,
+        fit: Option<&str>,
+    ) -> EventConflictJson {
+        EventConflictJson {
+            event: EventConflictEventJson {
+                title: "Lunch".to_string(),
+                time_range: "1200-1300".to_string(),
+                line: 2,
+                untracked: false,
+                buffer: Some(lunch_buffer()),
+            },
+            overlap_minutes: 5,
+            buffer_part,
+            more: 0,
+            fit: fit.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn messages_name_the_buffer_the_overlap_sits_in() {
+        assert_eq!(
+            event_conflict_message(
+                Some("BOB"),
+                "1110",
+                "1135",
+                &lunch_conflict(Some(BufferPart::Before), Some("=4")),
+            ),
+            "⚠ BOB 1110-1135 runs 5m into Lunch's \u{2212}30m buffer (1200-1300) · =4 ends at 1130"
+        );
+        assert_eq!(
+            event_conflict_message(
+                Some("BOB"),
+                "1305",
+                "1330",
+                &lunch_conflict(Some(BufferPart::After), None),
+            ),
+            "⚠ BOB 1305-1330 runs 5m into Lunch's +15m buffer (1200-1300)"
+        );
+        assert_eq!(
+            event_conflict_message(
+                Some("BOB"),
+                "1110",
+                "1215",
+                &lunch_conflict(None, Some("=4")),
+            ),
+            "⚠ BOB 1110-1215 runs 5m into Lunch (1200-1300 \u{2212}30m +15m) · =4 ends at 1130"
+        );
+        // `--N` keeps the session inside the meeting, so it names the
+        // meeting start, as it does without a buffer.
+        assert_eq!(
+            event_conflict_message(
+                Some("BOB"),
+                "1155",
+                "1220",
+                &lunch_conflict(None, Some("--1")),
+            ),
+            "⚠ BOB 1155-1220 runs 5m into Lunch (1200-1300 \u{2212}30m +15m) · --1 ends at 1200"
+        );
+    }
+
+    #[test]
+    fn buffered_fit_ends_at_the_buffered_start_and_only_before_it() {
+        let contents = note(
+            "- [ ] #task **1200-1300** Lunch [buffer:: -30m +15m] ^lunch\n",
+            "- [ ] (**1110-1135** [t:: 25m]) — BOB\n",
+        );
+        let conflict = detect_event_conflict(
+            &contents,
+            date(),
+            Some("BOB"),
+            session_index(&contents),
+            11 * 60 + 10,
+            11 * 60 + 35,
+            None,
+            &FitKind::Start {
+                spec: empty_start(),
+                name: None,
+            },
+        )
+        .expect("conflict");
+        assert_eq!(conflict.fit.as_deref(), Some("=4"));
+        assert_eq!(conflict.buffer_part, Some(BufferPart::Before));
+        assert_eq!(conflict.overlap_minutes, 5);
+        assert_eq!(conflict.event.buffer, Some(lunch_buffer()));
+        // Starting inside the lead-in offers no fit: there is no room
+        // before the buffered start.
+        let inside = detect_event_conflict(
+            &contents,
+            date(),
+            Some("BOB"),
+            session_index(&contents),
+            11 * 60 + 40,
+            12 * 60 + 5,
+            None,
+            &FitKind::Start {
+                spec: empty_start(),
+                name: None,
+            },
+        )
+        .expect("inside");
+        assert!(inside.fit.is_none(), "{inside:?}");
+        assert!(inside.buffer_part.is_none());
+    }
+
+    #[test]
+    fn unbuffered_payloads_omit_the_buffer_keys() {
+        let contents = note(
+            "- [ ] #task **1200-1230** Standup ^standup\n",
+            "- [ ] (**1150-1215** [t:: 25m]) — BOB\n",
+        );
+        let conflict = detect_event_conflict(
+            &contents,
+            date(),
+            Some("BOB"),
+            session_index(&contents),
+            11 * 60 + 50,
+            12 * 60 + 15,
+            None,
+            &FitKind::Start {
+                spec: empty_start(),
+                name: None,
+            },
+        )
+        .expect("conflict");
+        let json = serde_json::to_value(&conflict).unwrap();
+        assert!(json.get("buffer_part").is_none(), "{json}");
+        assert!(json["event"].get("buffer").is_none(), "{json}");
     }
 }

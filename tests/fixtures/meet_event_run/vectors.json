@@ -178,6 +178,57 @@
       "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1105-1130** [t:: 25m]) — BOB\n  - [[#^lunch]]\n",
       "expected_tracked": true,
       "expected_span": "1105-1130"
+    },
+    {
+      "id": "pre-buffer-starts-the-run-early",
+      "now": "2026-11-01 11:25:00",
+      "token": "=",
+      "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked [buffer:: -30m +15m] [root:: love] ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n",
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked [buffer:: -30m +15m] [root:: love] ^lunch\n\n## Pomodoros\n- [ ] (**1130-1315**) — MEET\n  - [[#^lunch]]\n",
+      "expected_tracked": false,
+      "expected_span": "1130-1315",
+      "expected_source": "calendar"
+    },
+    {
+      "id": "post-buffer-bridges-to-the-next-event",
+      "now": "2026-11-01 09:55:00",
+      "token": "=",
+      "day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** One on one ^one\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n  - [[#^one]]\n",
+      "expected_day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** One on one ^one\n\n## Pomodoros\n- [ ] (**1000-1115** [t:: 75m]) — MEET\n  - [[#^standup]]\n  - [[#^one]]\n",
+      "expected_tracked": true,
+      "expected_span": "1000-1115",
+      "expected_source": "calendar"
+    },
+    {
+      "id": "buffer-never-bridges-trackedness",
+      "now": "2026-11-01 09:55:00",
+      "token": "=",
+      "day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n  - [[#^lunch]]\n",
+      "expected_day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1000-1045** [t:: 45m]) — MEET\n  - [[#^standup]]\n  - [[#^lunch]]\n",
+      "expected_tracked": true,
+      "expected_span": "1000-1045",
+      "expected_source": "calendar"
+    },
+    {
+      "id": "now-inside-a-lead-out-keeps-the-run",
+      "now": "2026-11-01 10:35:00",
+      "token": "=",
+      "day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n",
+      "expected_day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n\n## Pomodoros\n- [ ] (**1000-1045** [t:: 45m]) — MEET\n  - [[#^standup]]\n",
+      "expected_tracked": true,
+      "expected_span": "1000-1045",
+      "expected_source": "calendar"
+    },
+    {
+      "id": "buffered-far-run-warns-from-the-buffered-start",
+      "now": "2026-11-01 09:20:00",
+      "token": "=",
+      "day": "## Events\n- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n",
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n\n## Pomodoros\n- [ ] (**1130-1300** [t:: 90m]) — MEET\n  - [[#^lunch]]\n",
+      "expected_tracked": true,
+      "expected_span": "1130-1300",
+      "expected_source": "calendar",
+      "expected_warning": "pomodoro_event_run_later"
     }
   ]
 }

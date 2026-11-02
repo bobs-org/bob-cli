@@ -4,16 +4,20 @@
 //! A MEET session's lineup holds same-note links to Event Tasks. The **event
 //! run** is the earliest open Event Task that has not ended plus every
 //! following one that touches or overlaps it (`next.start <= run.end`, the
-//! `cluster_by_trackedness` rule) and shares its trackedness. An empty-suffix
-//! start writes the run's real span; every MEET start (counted, kept-ledger,
-//! link) omits `[t::]` exactly when the run is non-empty and untracked. Every
-//! other session is tracked. The run is computed on the staged daily note, so
-//! drops (`~K`) and earlier items of the same draft are already applied.
+//! `cluster_by_trackedness` rule) and shares its trackedness. Every span here
+//! is the event's **buffered** span (`[buffer:: -30m +15m]` widens the
+//! meeting by its lead-in and lead-out): candidates end after now, sort,
+//! cluster, and the run's written span all use what the event occupies. An
+//! empty-suffix start writes the run's span; every MEET start (counted,
+//! kept-ledger, link) omits `[t::]` exactly when the run is non-empty and
+//! untracked. Every other session is tracked. The run is computed on the
+//! staged daily note, so drops (`~K`) and earlier items of the same draft are
+//! already applied.
 
 use std::collections::HashSet;
 
 use super::*;
-use crate::native::event_task::{event_task_by_id, EventTask};
+use crate::native::event_task::{event_task_by_id, EventSpan, EventTask};
 
 /// A run starting further than this from now adds a `pomodoro_event_run_later`
 /// warning: a default Pomodoro would fit before it.
@@ -32,8 +36,15 @@ pub(super) struct RunEvent {
     pub(super) event: EventTask,
 }
 
+impl RunEvent {
+    /// The span the event occupies: the meeting plus its buffers.
+    fn buffered_span(&self) -> EventSpan {
+        self.event.buffered_span()
+    }
+}
+
 /// The computed run, in minutes on the day's timeline (`end_min` may pass
-/// 1440 for a midnight-crossing event).
+/// 1440 for a midnight-crossing event). The span is the buffered one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EventRun {
     pub(super) start_min: i32,
@@ -66,8 +77,9 @@ pub(super) fn compute_event_run(
         else {
             continue;
         };
-        let start = i32::from(event.span.start_min);
-        let end = event.span.end_on_timeline();
+        let buffered = event.buffered_span();
+        let start = i32::from(buffered.start_min);
+        let end = buffered.end_on_timeline();
         if !event.is_open() || end <= now_min || end <= start {
             continue;
         }
@@ -81,25 +93,23 @@ pub(super) fn compute_event_run(
         candidates.push((position, RunEvent { number, event }));
     }
     candidates.sort_by_key(|(position, item)| {
-        (
-            item.event.span.start_min,
-            item.event.span.end_on_timeline(),
-            *position,
-        )
+        let buffered = item.buffered_span();
+        (buffered.start_min, buffered.end_on_timeline(), *position)
     });
     let mut ordered = candidates.into_iter().map(|(_, item)| item);
     let first = ordered.next()?;
     let untracked = first.event.untracked;
-    let start_min = i32::from(first.event.span.start_min);
-    let mut end_min = first.event.span.end_on_timeline();
+    let start_min = i32::from(first.buffered_span().start_min);
+    let mut end_min = first.buffered_span().end_on_timeline();
     let mut events = vec![first];
     for next in ordered {
-        if i32::from(next.event.span.start_min) > end_min
+        let buffered = next.buffered_span();
+        if i32::from(buffered.start_min) > end_min
             || next.event.untracked != untracked
         {
             break;
         }
-        end_min = end_min.max(next.event.span.end_on_timeline());
+        end_min = end_min.max(buffered.end_on_timeline());
         events.push(next);
     }
     Some(EventRun {
@@ -132,6 +142,20 @@ fn latest_closed_end(contents: &str) -> Option<i32> {
         .max()
 }
 
+/// How the far-run warning names the run's first event: its title, plus the
+/// meeting span and buffer label when it has a buffer, so "starts at 1130"
+/// is explained by `Lunch (1200-1300 −30m)`.
+fn far_run_event_label(event: &EventTask) -> String {
+    match EventBufferJson::new(event.span, event.buffer) {
+        Some(buffer) => event_with_buffer_label(
+            &event.title,
+            &event.span.text(),
+            Some(&buffer),
+        ),
+        None => event.title.clone(),
+    }
+}
+
 fn hhmm(minute_of_timeline: i32) -> String {
     let minute = minute_of_timeline.rem_euclid(24 * 60);
     format!("{:02}{:02}", minute / 60, minute % 60)
@@ -154,12 +178,16 @@ pub(super) struct EventRunEventJson {
     pub(super) line: usize,
     pub(super) block_id: Option<String>,
     pub(super) untracked: bool,
+    /// The event's pre/post-event buffer; omitted when it has none.
+    /// `time_range` above stays the meeting span.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) buffer: Option<EventBufferJson>,
 }
 
 /// `pomodoro_start.event_run`: the run a MEET start followed or overrode.
 ///
-/// `time_range`/`start`/`end` are the run's span as the calendar gives it
-/// (after the late-join clamp), plain `HHMM-HHMM`; `source` says whether
+/// `time_range`/`start`/`end` are the run's span as the calendar occupies
+/// it (buffered, after the late-join clamp), plain `HHMM-HHMM`; `source` says whether
 /// the written session follows it (`calendar`) or a counted suffix or kept
 /// ledger set its own span (`explicit`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -195,6 +223,10 @@ impl EventRunJson {
                     line: item.event.line_index + 1,
                     block_id: item.event.block_id.clone(),
                     untracked: item.event.untracked,
+                    buffer: EventBufferJson::new(
+                        item.event.span,
+                        item.event.buffer,
+                    ),
                 })
                 .collect(),
         }
@@ -375,7 +407,7 @@ pub(super) fn finalize_meet_start(
             let title = run
                 .events
                 .first()
-                .map(|item| item.event.title.as_str())
+                .map(|item| far_run_event_label(&item.event))
                 .unwrap_or_default();
             warnings.push(CaptureWarning::Structured(
                 StructuredCaptureWarning {
@@ -584,5 +616,73 @@ mod tests {
         let run = finish.event_run.unwrap();
         assert_eq!(run.time_range, "1310-1400");
         assert_eq!(run.source, "calendar");
+    }
+
+    #[test]
+    fn buffered_spans_drive_candidates_sort_and_clustering() {
+        let note = day(
+            concat!(
+                "- [ ] #task **1045-1115** One on one ^one\n",
+                "- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n",
+                "- [ ] #task **1200-1230** Lunch [buffer:: -30m] #untracked ^lunch\n",
+            ),
+            concat!(
+                "- [ ] () — MEET\n",
+                "  - [[#^one]]\n",
+                "  - [[#^standup]]\n",
+                "  - [[#^lunch]]\n",
+            ),
+        );
+        // The +15 lead-out bridges Standup to the 1:1; the untracked lunch
+        // (buffered 1130-1230) never joins a tracked run.
+        let run =
+            compute_event_run(rel(), &note, meet_index(&note), None, 9 * 60)
+                .unwrap();
+        assert_eq!((run.start_min, run.end_min), (10 * 60, 11 * 60 + 15));
+        let numbers: Vec<u32> =
+            run.events.iter().map(|item| item.number).collect();
+        assert_eq!(numbers, vec![2, 1]);
+        // 10:35 is inside Standup's lead-out: it still counts as the run.
+        let in_lead_out = compute_event_run(
+            rel(),
+            &note,
+            meet_index(&note),
+            None,
+            10 * 60 + 35,
+        )
+        .unwrap();
+        assert_eq!(in_lead_out.start_min, 10 * 60);
+        // 11:20 is past the 1:1 (1115): the run moves to the lunch lead-in.
+        let later = compute_event_run(
+            rel(),
+            &note,
+            meet_index(&note),
+            None,
+            11 * 60 + 20,
+        )
+        .unwrap();
+        assert_eq!(
+            (later.start_min, later.end_min),
+            (11 * 60 + 30, 12 * 60 + 30)
+        );
+        assert!(later.untracked);
+    }
+
+    #[test]
+    fn far_run_label_adds_the_span_and_buffer_only_when_buffered() {
+        let note = day(
+            concat!(
+                "- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n",
+                "- [ ] #task **1400-1430** Plain ^plain\n",
+            ),
+            "- [ ] () — MEET\n  - [[#^lunch]]\n  - [[#^plain]]\n",
+        );
+        let buffered = event_task_by_id(rel(), &note, "lunch").unwrap();
+        assert_eq!(
+            far_run_event_label(&buffered),
+            "Lunch (1200-1300 \u{2212}30m)"
+        );
+        let plain = event_task_by_id(rel(), &note, "plain").unwrap();
+        assert_eq!(far_run_event_label(&plain), "Plain");
     }
 }

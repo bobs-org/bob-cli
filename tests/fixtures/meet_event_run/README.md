@@ -19,5 +19,13 @@ false means the ledger has no `[t::]`), and the written span (`expected_span`).
 kept ledger set it, absent when the MEET has no run). `expected_warning` is a
 structured warning `code` the start raises.
 
+Pin: the buffered cases (ids containing `buffer` or `lead-out`) were added with
+the `[buffer::]` field in bob-cli (`event_buffer/vectors.json` is the field and
+conflict contract). A bob-plugins copy that predates them is stale: re-copy this
+file from the bob-cli commit that adds those cases. A buffered event runs on
+its buffered span (`start - before` through `end + after`): candidates,
+sorting, clustering, the written span, the early start, and the far-run
+warning all use it, while a run never bridges trackedness.
+
 The vectors use only hand-written Event Tasks; no Google Calendar account or
 generated sync state is needed.
