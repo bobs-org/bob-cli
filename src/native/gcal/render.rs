@@ -257,10 +257,13 @@ fn calendar_badge(html_link: &str) -> String {
 
 /// Keep an already-encoded Google URL intact while protecting the
 /// Markdown link: encode spaces and parentheses.
-fn escape_badge_url(url: &str) -> String {
+pub(super) fn escape_badge_url(url: &str) -> String {
     url.replace(' ', "%20")
         .replace('(', "%28")
         .replace(')', "%29")
+        .replace('<', "%3C")
+        .replace('>', "%3E")
+        .replace('`', "%60")
 }
 
 /// Escape a Markdown link title: `"` would end the quoted title.

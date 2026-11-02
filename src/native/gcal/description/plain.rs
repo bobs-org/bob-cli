@@ -142,9 +142,26 @@ fn find_next_potential(input: &str) -> Option<usize> {
 
 fn take_special(input: &str) -> Option<(Inline, &str)> {
     take_image(input)
+        .or_else(|| take_wikilink(input))
         .or_else(|| take_markdown_link(input))
         .or_else(|| take_bracket_url(input))
         .or_else(|| take_bare_url(input))
+}
+
+/// Keep a wikilink as text so a later Markdown image/link cannot absorb
+/// it as part of a larger `[label](url)` token. The renderer escapes its
+/// brackets before writing it into the vault.
+fn take_wikilink(input: &str) -> Option<(Inline, &str)> {
+    let rest = input.strip_prefix("[[")?;
+    let end = rest.find("]]")? + 2;
+    Some((
+        Inline::Text {
+            text: format!("[[{}", &rest[..end]),
+            bold: false,
+            italic: false,
+        },
+        &rest[end..],
+    ))
 }
 
 fn take_image(input: &str) -> Option<(Inline, &str)> {

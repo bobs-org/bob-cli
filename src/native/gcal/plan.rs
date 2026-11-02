@@ -1346,7 +1346,7 @@ impl WorkingNote {
     }
 }
 
-fn collect_block_ids(lines: &[String]) -> HashSet<String> {
+pub(super) fn collect_block_ids(lines: &[String]) -> HashSet<String> {
     let mut used = HashSet::new();
     for line in lines {
         if let Some(id) = parse_trailing_block_id(line) {

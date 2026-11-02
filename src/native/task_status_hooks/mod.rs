@@ -309,6 +309,44 @@ pub(crate) use model::{
     TaskLine,
 };
 pub(crate) use parse::parse_tasks;
+#[cfg(test)]
+pub(crate) fn reconcile_for_scanner_isolation(contents: &str) -> String {
+    let settings = tests::test_settings();
+    let relative_path = PathBuf::from("daily/2026-11-02.md");
+    let mut files = vec![FileScan {
+        path: PathBuf::from("scanner-isolation-vault/daily/2026-11-02.md"),
+        relative_path: relative_path.clone(),
+        contents: contents.to_string(),
+        tasks: parse_tasks(contents, &settings),
+    }];
+    let note_index = NoteIndex::from_paths([relative_path]);
+    let contexts = files
+        .iter()
+        .map(super::project_dependencies::ProjectContext::for_note)
+        .collect::<Vec<_>>();
+    let reasons = vec![
+        super::project_dependencies::ProjectBlockReasons::default(
+        );
+        files.len()
+    ];
+    let project_tree = super::project_dependencies::ProjectTree::build(
+        &files,
+        &contexts,
+        &reasons,
+        &note_index,
+    );
+    let mut inputs = Vec::new();
+    reconcile::reconcile_dependencies(
+        Path::new("scanner-isolation-vault"),
+        &mut files,
+        &note_index,
+        &project_tree,
+        &settings,
+        None,
+        &mut inputs,
+    );
+    files.remove(0).contents
+}
 pub(crate) use pomodoro::{
     apply_empty_pomodoro_plan, plan_empty_pomodoro_removals,
     plan_empty_pomodoro_removals_with_options, scan_pomodoros,

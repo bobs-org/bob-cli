@@ -20,7 +20,9 @@ line, an Outlook-style `text<https://…>` autolink, a directive inside
 - `boilerplate.json` — boilerplate-filter: separator, badge-duplicate,
   and vendor-block drops on top of the description-parser behavior, plus
   the one kept join-link bullet. No escaping, no rendering.
-- `bullets.json` — reserved for the bullet-renderer phase.
+- `bullets.json` — bullet-renderer: parsed input rendered to the exact
+  sanitized, capped list-item bodies. `depth` is the outlined nesting
+  level and `body` includes Bob's marker but no indentation.
 
 ## `outline.json` notation
 

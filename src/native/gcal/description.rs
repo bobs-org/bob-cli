@@ -12,6 +12,10 @@ use crate::native::event_task::{parse_buffer_token, BufferPart, EventBuffer};
 use super::model::{is_off_clock_token, parse_route_token};
 
 mod boilerplate;
+// The next phase wires this renderer into sync; compile it now for its unit
+// and scanner-isolation tests without shipping an unused production module.
+#[cfg(test)]
+pub(crate) mod bullets;
 mod html;
 mod plain;
 

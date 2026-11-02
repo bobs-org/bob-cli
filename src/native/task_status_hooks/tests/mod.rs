@@ -12,7 +12,7 @@ fn identity(block_id: &str) -> (PathBuf, String) {
     (PathBuf::from("tasks.md"), block_id.to_string())
 }
 
-fn test_settings() -> TasksSettings {
+pub(super) fn test_settings() -> TasksSettings {
     TasksSettings {
         global_filter: "#task".to_string(),
         done_statuses: BTreeSet::from(['x', 'X']),
