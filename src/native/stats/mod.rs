@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod cli;
+pub(crate) mod clock;
 pub(crate) mod compute;
 pub(crate) mod error;
 pub(crate) mod formula;
@@ -86,6 +87,7 @@ mod tests {
                 label: "today".to_string(),
                 prior: None,
             },
+            clock: report::ClockReport::default(),
             metrics: Vec::new(),
             health: report::HealthReport::default(),
             warnings: Vec::new(),
@@ -104,6 +106,8 @@ mod tests {
             parts: Default::default(),
             apportioned: Default::default(),
             checklist_state: None,
+            off_clock: None,
+            off_clock_parts: Default::default(),
         };
         let missing = load_stats_config(
             PathBuf::from("/definitely/missing.yml").as_path(),

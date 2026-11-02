@@ -9,6 +9,7 @@ use std::{
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime};
 use serde_yaml::Value as YamlValue;
 
+use super::clock::StatsClock;
 use super::error::StatsError;
 use crate::native::{
     capture_pomodoros, capture_pomodoros_agenda, collect_done, dataview,
@@ -210,6 +211,87 @@ impl StatsIndex {
             current = parent;
         }
         ancestors
+    }
+
+    /// First eligible closed off-clock session in indexed history, including
+    /// bare legacy spans. Independent of the requested window and filters.
+    pub(crate) fn off_clock_adoption(&self) -> Option<NaiveDate> {
+        self.daily_notes
+            .iter()
+            .filter(|(_, note)| {
+                note.closed_pomodoros.iter().any(|session| {
+                    matches!(
+                        session.clock,
+                        crate::native::capture::SessionClock::OffClock { .. }
+                    )
+                })
+            })
+            .map(|(date, _)| *date)
+            .min()
+    }
+
+    /// Closed-session minutes for one clock over an inclusive date window.
+    pub(crate) fn window_clock_minutes(
+        &self,
+        clock: StatsClock,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> i64 {
+        let mut total = 0_i64;
+        for (date, note) in &self.daily_notes {
+            if *date < start || *date > end {
+                continue;
+            }
+            for session in &note.closed_pomodoros {
+                let Some(session_clock) = session.stats_clock() else {
+                    continue;
+                };
+                let include = match clock {
+                    StatsClock::Worked => session_clock == StatsClock::Worked,
+                    StatsClock::OffClock => {
+                        session_clock == StatsClock::OffClock
+                    }
+                    StatsClock::Total => true,
+                };
+                if include && let Some(minutes) = session.counted_minutes() {
+                    total = total.saturating_add(i64::from(minutes));
+                }
+            }
+        }
+        total
+    }
+}
+
+impl PomodoroSession {
+    pub(crate) fn stats_clock(&self) -> Option<StatsClock> {
+        match self.clock {
+            crate::native::capture::SessionClock::Worked { .. } => {
+                Some(StatsClock::Worked)
+            }
+            crate::native::capture::SessionClock::OffClock { .. } => {
+                Some(StatsClock::OffClock)
+            }
+            crate::native::capture::SessionClock::Placeholder => None,
+        }
+    }
+
+    pub(crate) fn counted_minutes(&self) -> Option<u32> {
+        self.stats_clock()?;
+        if let Some(minutes) = self.recorded_minutes {
+            return Some(minutes);
+        }
+        match self.clock {
+            crate::native::capture::SessionClock::OffClock {
+                minutes, ..
+            } => u32::try_from(minutes)
+                .ok()
+                .filter(|&value| value > 0)
+                .or(self.range_minutes),
+            crate::native::capture::SessionClock::Worked { .. } => {
+                self.range_minutes
+            }
+            crate::native::capture::SessionClock::Placeholder => None,
+        }
     }
 }
 
@@ -590,10 +672,12 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 crate::native::capture::SessionClock::OffClock { .. }
             );
             let recorded = match clock {
-                crate::native::capture::SessionClock::Worked { minutes } => {
-                    u32::try_from(minutes).ok()
-                }
-                _ => None,
+                crate::native::capture::SessionClock::Worked { minutes }
+                | crate::native::capture::SessionClock::OffClock {
+                    minutes,
+                    ..
+                } => u32::try_from(minutes).ok(),
+                crate::native::capture::SessionClock::Placeholder => None,
             };
             let range = entry
                 .time_range
@@ -1320,8 +1404,22 @@ mod tests {
         assert_eq!(note.closed_pomodoros[0].range_minutes, Some(30));
         assert!(!note.closed_pomodoros[0].untracked);
         assert_eq!(note.closed_pomodoros[0].name.as_deref(), Some("GTD + BOB"));
-        assert_eq!(note.closed_pomodoros[1].recorded_minutes, None);
+        assert_eq!(note.closed_pomodoros[1].recorded_minutes, Some(30));
         assert!(note.closed_pomodoros[1].untracked);
+        assert_eq!(
+            note.closed_pomodoros[1].stats_clock(),
+            Some(StatsClock::OffClock)
+        );
+        assert_eq!(index.off_clock_adoption(), Some(day));
+        assert_eq!(
+            index.window_clock_minutes(StatsClock::Worked, day, day),
+            25
+        );
+        assert_eq!(
+            index.window_clock_minutes(StatsClock::OffClock, day, day),
+            30
+        );
+        assert_eq!(index.window_clock_minutes(StatsClock::Total, day, day), 55);
         assert_eq!(
             note.inline_fields.get("energy").map(String::as_str),
             Some("4")

@@ -20,6 +20,12 @@ pub(crate) struct DailyValue {
     pub(crate) apportioned: BTreeMap<String, BTreeMap<String, i64>>,
     /// Checklist calendar state, set only by checklist evaluators.
     pub(crate) checklist_state: Option<ChecklistState>,
+    /// Off-clock amount matching this metric's filters. Worked: minutes
+    /// (or counts) the clock excluded. Total: off-clock sub-share of
+    /// `value`. Off-clock view and non-Pomodoro metrics leave this empty.
+    pub(crate) off_clock: Option<i64>,
+    /// Per-dimension off-clock contributions for Total part summaries.
+    pub(crate) off_clock_parts: BTreeMap<String, BTreeMap<String, i64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -70,6 +76,8 @@ mod tests {
             parts,
             apportioned: BTreeMap::new(),
             checklist_state: None,
+            off_clock: None,
+            off_clock_parts: BTreeMap::new(),
         };
         assert!(value.provisional);
         assert_eq!(value.parts["theme"]["GTD"], 25);

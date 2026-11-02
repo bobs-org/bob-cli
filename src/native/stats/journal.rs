@@ -424,6 +424,8 @@ fn daily_value(
         parts,
         apportioned: BTreeMap::new(),
         checklist_state: None,
+        off_clock: None,
+        off_clock_parts: BTreeMap::new(),
     }
 }
 

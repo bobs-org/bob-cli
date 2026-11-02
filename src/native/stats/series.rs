@@ -458,6 +458,8 @@ fn normalize(
                 parts: BTreeMap::new(),
                 apportioned: BTreeMap::new(),
                 checklist_state: None,
+                off_clock: None,
+                off_clock_parts: BTreeMap::new(),
             });
         }
         if date == span.end {
@@ -540,6 +542,7 @@ fn daily_point(value: &DailyValue, unit: MetricUnit) -> SeriesPoint {
         parts_display: format_parts(&value.parts, unit),
         apportioned: value.apportioned.clone(),
         checklist_state: value.checklist_state,
+        off_clock: value.off_clock.filter(|minutes| *minutes > 0),
     }
 }
 
@@ -646,6 +649,11 @@ fn aggregate_bucket(
             }
         }
     }
+    let off_clock = valid
+        .iter()
+        .filter_map(|day| day.off_clock)
+        .fold(0_i64, i64::saturating_add);
+    let off_clock = (off_clock > 0).then_some(off_clock);
 
     let (value, num, den, bool_total) = if valid.is_empty() {
         (None, None, None, None)
@@ -700,6 +708,7 @@ fn aggregate_bucket(
         parts,
         apportioned,
         checklist_state: None,
+        off_clock,
     }
 }
 
@@ -1092,6 +1101,7 @@ fn summarize_parts(
     let mut totals = BTreeMap::<String, BTreeMap<String, i64>>::new();
     let mut apportioned_totals =
         BTreeMap::<String, BTreeMap<String, i64>>::new();
+    let mut off_clock_totals = BTreeMap::<String, BTreeMap<String, i64>>::new();
     for day in values.iter().filter(|day| !day.provisional) {
         for (dimension, entries) in &day.parts {
             let dimension_totals = totals.entry(dimension.clone()).or_default();
@@ -1103,6 +1113,14 @@ fn summarize_parts(
         for (dimension, entries) in &day.apportioned {
             let dimension_totals =
                 apportioned_totals.entry(dimension.clone()).or_default();
+            for (key, value) in entries {
+                let total = dimension_totals.entry(key.clone()).or_default();
+                *total = total.saturating_add(*value);
+            }
+        }
+        for (dimension, entries) in &day.off_clock_parts {
+            let dimension_totals =
+                off_clock_totals.entry(dimension.clone()).or_default();
             for (key, value) in entries {
                 let total = dimension_totals.entry(key.clone()).or_default();
                 *total = total.saturating_add(*value);
@@ -1147,6 +1165,10 @@ fn summarize_parts(
                 .get(&dimension)
                 .cloned()
                 .unwrap_or_default();
+            let dimension_off_clock = off_clock_totals
+                .get(&dimension)
+                .cloned()
+                .unwrap_or_default();
             Some((
                 dimension,
                 ranked
@@ -1165,6 +1187,10 @@ fn summarize_parts(
                             .copied()
                             .filter(|minutes| *minutes > 0);
                         let minutes_mode = unit == MetricUnit::Minutes;
+                        let off_clock = dimension_off_clock
+                            .get(&key)
+                            .copied()
+                            .filter(|minutes| *minutes > 0);
                         PartSummary {
                             key,
                             value,
@@ -1184,6 +1210,7 @@ fn summarize_parts(
                                 .map(|minutes| {
                                     format_value(Some(minutes), unit)
                                 }),
+                            off_clock,
                         }
                     })
                     .collect(),
@@ -1429,6 +1456,8 @@ mod tests {
             parts: BTreeMap::new(),
             apportioned: BTreeMap::new(),
             checklist_state: None,
+            off_clock: None,
+            off_clock_parts: BTreeMap::new(),
         }
     }
 
@@ -1806,6 +1835,57 @@ mod tests {
         assert_eq!(themes[0].key, "ALPHA");
         assert_eq!(themes[7].key, "HOTEL");
         assert_eq!(themes[0].display, "8m");
+    }
+
+    #[test]
+    fn off_clock_copies_into_points_buckets_and_part_summaries() {
+        let mut day = daily(date(2026, 10, 9), Some(92));
+        day.off_clock = Some(60);
+        day.parts.insert(
+            "theme".to_string(),
+            BTreeMap::from([
+                ("PLAN".to_string(), 32),
+                ("MEET".to_string(), 60),
+            ]),
+        );
+        day.off_clock_parts.insert(
+            "theme".to_string(),
+            BTreeMap::from([("MEET".to_string(), 60)]),
+        );
+        let mut later = daily(date(2026, 10, 10), Some(10));
+        later.off_clock = Some(0);
+        later.parts.insert(
+            "theme".to_string(),
+            BTreeMap::from([("SASE".to_string(), 10)]),
+        );
+
+        let point = daily_point(&day, MetricUnit::Minutes);
+        assert_eq!(point.off_clock, Some(60));
+        assert_eq!(daily_point(&later, MetricUnit::Minutes).off_clock, None);
+
+        let summary =
+            summarize_parts(&[day.clone(), later.clone()], MetricUnit::Minutes);
+        let themes = &summary["theme"];
+        let meet = themes.iter().find(|part| part.key == "MEET").unwrap();
+        assert_eq!(meet.value, 60);
+        assert_eq!(meet.off_clock, Some(60));
+        let plan = themes.iter().find(|part| part.key == "PLAN").unwrap();
+        assert_eq!(plan.off_clock, None);
+
+        let today = date(2026, 10, 11);
+        let range =
+            grouped_range("2026-10-08..2026-10-11", today, Grouping::Month);
+        let built = build_metric_series(
+            &[day, later],
+            "worked",
+            MetricUnit::Minutes,
+            &range,
+            false,
+        );
+        assert_eq!(built.points[0].off_clock, Some(60));
+        assert_eq!(built.points[0].value, Some(102));
+        assert_eq!(built.daily_points[1].off_clock, Some(60));
+        assert_eq!(built.daily_points[2].off_clock, None);
     }
 
     #[test]
@@ -2780,6 +2860,8 @@ mod tests {
             parts: BTreeMap::new(),
             apportioned: BTreeMap::new(),
             checklist_state: None,
+            off_clock: None,
+            off_clock_parts: BTreeMap::new(),
         }
     }
 
@@ -2795,6 +2877,8 @@ mod tests {
             parts: BTreeMap::new(),
             apportioned: BTreeMap::new(),
             checklist_state: None,
+            off_clock: None,
+            off_clock_parts: BTreeMap::new(),
         }
     }
 

@@ -410,6 +410,7 @@ fn collapse_points<'a>(
         parts_display: Default::default(),
         apportioned: Default::default(),
         checklist_state: None,
+        off_clock: None,
     }
 }
 
@@ -995,6 +996,7 @@ fn collapse_parts_cli(
             label: None,
             apportioned: (apportioned > 0).then_some(apportioned),
             apportioned_display: None,
+            off_clock: None,
         });
     }
     homes.extend(buckets);
@@ -1097,6 +1099,7 @@ mod tests {
             parts_display: BTreeMap::new(),
             apportioned: BTreeMap::new(),
             checklist_state: None,
+            off_clock: None,
         }
     }
 
@@ -1116,6 +1119,7 @@ mod tests {
                 label: "Oct 8 – Oct 10".to_string(),
                 prior: None,
             },
+            clock: crate::native::stats::report::ClockReport::default(),
             metrics: vec![MetricReport {
                 id: "worked".to_string(),
                 label: "Worked".to_string(),
@@ -1179,6 +1183,7 @@ mod tests {
             label: None,
             apportioned: None,
             apportioned_display: None,
+            off_clock: None,
         };
         let refs = BTreeMap::from([(
             "gtd".to_string(),
@@ -1280,6 +1285,7 @@ mod tests {
                 label: Some("gtd".to_string()),
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1292,6 +1298,7 @@ mod tests {
                 label: Some("sase".to_string()),
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1304,6 +1311,7 @@ mod tests {
                 label: Some("gtd_daily".to_string()),
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         report.homes.insert(
@@ -1342,6 +1350,7 @@ mod tests {
                 label: None,
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         let text = detail(&report, &Styler::plain());
@@ -1385,6 +1394,7 @@ mod tests {
             label: None,
             apportioned: None,
             apportioned_display: None,
+            off_clock: None,
         }
     }
 
@@ -1484,6 +1494,7 @@ mod tests {
                 label: None,
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1496,6 +1507,7 @@ mod tests {
                 label: Some("dev".to_string()),
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1508,6 +1520,7 @@ mod tests {
                 label: Some("sase".to_string()),
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1520,6 +1533,7 @@ mod tests {
                 label: Some("sase".to_string()),
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1532,6 +1546,7 @@ mod tests {
                 label: None,
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         let text = detail(&report, &Styler::plain());

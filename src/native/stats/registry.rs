@@ -3,6 +3,7 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 
+use super::clock::StatsClock;
 use super::error::StatsError;
 use super::formula::{parse_formula, FormulaExpr};
 use super::report::{JournalTiersJson, MetricParameters, StatsWarning};
@@ -41,6 +42,7 @@ pub(crate) enum MetricSpec {
         exclude_themes: Vec<String>,
         in_notes: Vec<String>,
         exclude_in: Vec<String>,
+        clock: Option<StatsClock>,
     },
     Tasks {
         event: TaskEvent,
@@ -180,6 +182,35 @@ impl MetricSpec {
             _ => &[],
         }
     }
+
+    pub(crate) fn pinned_clock(&self) -> Option<StatsClock> {
+        match self {
+            Self::Pomodoro { clock, .. } => *clock,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_pomodoro(&self) -> bool {
+        matches!(self, Self::Pomodoro { .. })
+    }
+}
+
+impl MetricDef {
+    /// Configured clock, else Worked. Non-Pomodoro metrics ignore the lens.
+    pub(crate) fn canonical_clock(&self) -> StatsClock {
+        self.spec.pinned_clock().unwrap_or(StatsClock::Worked)
+    }
+
+    /// Pinned clock wins over the request. `None` for non-Pomodoro kinds.
+    pub(crate) fn effective_clock(
+        &self,
+        request: StatsClock,
+    ) -> Option<StatsClock> {
+        if !self.spec.is_pomodoro() {
+            return None;
+        }
+        Some(self.spec.pinned_clock().unwrap_or(request))
+    }
 }
 
 impl MetricDef {
@@ -274,6 +305,7 @@ impl MetricDef {
             dependencies: Vec::new(),
             select: None,
             tiers: None,
+            clock: None,
         };
         match &self.spec {
             MetricSpec::Pomodoro {
@@ -282,6 +314,7 @@ impl MetricDef {
                 exclude_themes,
                 in_notes,
                 exclude_in,
+                clock,
             } => {
                 parameters.measure = Some(match measure {
                     PomodoroMeasure::Minutes => "minutes".to_string(),
@@ -291,6 +324,8 @@ impl MetricDef {
                 parameters.exclude_themes = exclude_themes.clone();
                 parameters.in_notes = in_notes.clone();
                 parameters.exclude_in = exclude_in.clone();
+                parameters.clock =
+                    clock.map(StatsClock::as_str).map(str::to_string);
             }
             MetricSpec::Tasks {
                 event,
@@ -895,6 +930,12 @@ fn parse_metric(
     let Some(spec) = spec else {
         return Err(errors);
     };
+    if mapping_get(mapping, "clock").is_some() && !spec.is_pomodoro() {
+        errors.push(format!(
+            "stats.metrics.{id}.clock in {} is only valid on pomodoro metrics",
+            path.display()
+        ));
+    }
 
     let unit = match optional_enum(
         mapping,
@@ -1051,6 +1092,15 @@ fn parse_pomodoro(
             errors,
         )
         .unwrap_or_default(),
+        clock: optional_enum(
+            mapping,
+            "clock",
+            id,
+            path,
+            errors,
+            StatsClock::parse_canonical,
+            "worked, off-clock, or total",
+        ),
     }
 }
 
@@ -1973,6 +2023,57 @@ stats:
         }
         assert!(registry.warnings.is_empty());
         assert!(registry.get("worked").is_some());
+    }
+
+    #[test]
+    fn pomodoro_clock_parses_and_invalid_or_wrong_kind_are_local() {
+        let registry = registry(
+            "
+stats:
+  metrics:
+    family_time:
+      label: Family time
+      kind: pomodoro
+      clock: off-clock
+      in: [love]
+    broken_clock:
+      label: Broken
+      kind: pomodoro
+      clock: untracked
+    done_clock:
+      label: Done clock
+      kind: tasks
+      event: done
+      clock: total
+",
+        );
+        match &registry.get("family_time").unwrap().spec {
+            MetricSpec::Pomodoro {
+                clock, in_notes, ..
+            } => {
+                assert_eq!(*clock, Some(StatsClock::OffClock));
+                assert_eq!(in_notes, &["love"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        let json = serde_json::to_value(
+            registry.get("family_time").unwrap().parameters(),
+        )
+        .unwrap();
+        assert_eq!(json["clock"], "off-clock");
+        assert!(registry.get("broken_clock").is_none());
+        assert!(registry.get("done_clock").is_none());
+        assert!(registry.get("worked").is_some());
+        assert!(registry.warnings.iter().any(|warning| {
+            warning.metric.as_deref() == Some("broken_clock")
+                && warning.code == "invalid_metric"
+                && warning.message.contains("clock")
+        }));
+        assert!(registry.warnings.iter().any(|warning| {
+            warning.metric.as_deref() == Some("done_clock")
+                && warning.code == "invalid_metric"
+                && warning.message.contains("only valid on pomodoro")
+        }));
     }
 
     #[test]

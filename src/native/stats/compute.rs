@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDate;
 
 use super::{
+    clock::StatsClock,
     error::StatsError,
     formula::evaluate_formula,
     homes::{label_parts, HomesEngine},
@@ -18,14 +19,18 @@ use super::{
     journal::evaluate_journal,
     metrics::{effective_since, evaluate_with_homes, MetricEvaluation},
     range::RangeSpec,
-    registry::{build_registry, MetricDef, MetricRegistry, MetricSpec},
+    registry::{
+        build_registry, Direction, MetricDef, MetricRegistry, MetricSpec,
+    },
     report::{
-        HealthReport, JournalHealthReport, JournalHostReport, MetricReport,
-        StatsReport, StatsWarning, TaskHealthReport, SCHEMA_VERSION,
+        ClockOption, ClockReport, HealthReport, JournalHealthReport,
+        JournalHostReport, MetricReport, StatsReport, StatsWarning,
+        TaskHealthReport, SCHEMA_VERSION,
     },
     request::StatsRequest,
     series::{
-        build_metric_series, lead_in_start, resolve_range, ResolvedRange,
+        build_metric_series, format_minutes, lead_in_start, resolve_range,
+        ResolvedRange,
     },
 };
 use crate::native::config::load_stats_config;
@@ -73,15 +78,36 @@ pub(crate) fn compute(
             None,
             &probe,
             &homes,
+            def.canonical_clock(),
         ) {
             probe.insert(def.id.clone(), evaluation);
+        }
+    }
+    let mut display_probe = probe.clone();
+    for def in &selected {
+        if let Some(effective) = def.effective_clock(request.clock)
+            && effective != def.canonical_clock()
+            && let Some(evaluation) = evaluate_one(
+                def,
+                &index,
+                &[],
+                today,
+                config.since,
+                None,
+                &probe,
+                &homes,
+                effective,
+            )
+        {
+            display_probe.insert(def.id.clone(), evaluation);
         }
     }
     let all_since = selected
         .iter()
         .filter_map(|def| {
-            let inferred =
-                probe.get(def.id.as_str()).and_then(|probe| probe.since);
+            let inferred = display_probe
+                .get(def.id.as_str())
+                .and_then(|probe| probe.since);
             effective_since(def, inferred, config.since)
         })
         .min();
@@ -111,8 +137,28 @@ pub(crate) fn compute(
             range_start,
             &evaluations,
             &homes,
+            def.canonical_clock(),
         ) {
             evaluations.insert(def.id.clone(), evaluation);
+        }
+    }
+    let mut display = evaluations.clone();
+    for def in &selected {
+        if let Some(effective) = def.effective_clock(request.clock)
+            && effective != def.canonical_clock()
+            && let Some(evaluation) = evaluate_one(
+                def,
+                &index,
+                &dates,
+                today,
+                config.since,
+                range_start,
+                &evaluations,
+                &homes,
+                effective,
+            )
+        {
+            display.insert(def.id.clone(), evaluation);
         }
     }
 
@@ -133,7 +179,7 @@ pub(crate) fn compute(
 
     let mut metrics = Vec::with_capacity(selected.len());
     for def in &selected {
-        let evaluation = evaluations
+        let evaluation = display
             .get(def.id.as_str())
             .expect("the dispatcher evaluates every selected metric kind");
         let series = build_metric_series(
@@ -145,19 +191,33 @@ pub(crate) fn compute(
         );
         let mut parts_summary = series.parts_summary;
         label_parts(&mut parts_summary, &catalog);
+        let effective = def.effective_clock(request.clock);
+        let label = match effective {
+            Some(clock) => clock.metric_label(&def.id, &def.label),
+            None => def.label.clone(),
+        };
+        let direction = if effective.is_some_and(StatsClock::is_neutral) {
+            Direction::Neutral.as_str()
+        } else {
+            def.direction.as_str()
+        };
+        let mut parameters = def.parameters();
+        if let Some(clock) = effective {
+            parameters.clock = Some(clock.as_str().to_string());
+        }
         metrics.push(MetricReport {
             id: def.id.clone(),
-            label: def.label.clone(),
+            label,
             kind: def.kind_name().to_string(),
             unit: def.unit.as_str().to_string(),
-            direction: def.direction.as_str().to_string(),
+            direction: direction.to_string(),
             color: def.color.as_str().to_string(),
             source: def.source.as_str().to_string(),
             origin: def.origin.as_str().to_string(),
             since: evaluation.since,
             definition: def.definition.clone(),
             limits: def.limits.clone(),
-            parameters: Some(def.parameters()),
+            parameters: Some(parameters),
             summary: series.summary,
             chart: series.chart,
             points: series.points,
@@ -178,11 +238,22 @@ pub(crate) fn compute(
 
     let mut health = index_health(&index);
     health.homes = homes_health;
+    let clock_end = if resolved.includes_today {
+        today
+    } else {
+        resolved.report.end
+    };
     Ok(StatsReport {
         ok: true,
         schema_version: SCHEMA_VERSION,
         today,
-        range: resolved.report,
+        range: resolved.report.clone(),
+        clock: clock_report(
+            &index,
+            request.clock,
+            resolved.report.start,
+            clock_end,
+        ),
         health,
         warnings: dedupe_warnings(
             registry
@@ -324,14 +395,21 @@ fn evaluate_one(
     range_start: Option<NaiveDate>,
     evaluations: &BTreeMap<String, MetricEvaluation>,
     homes: &HomesEngine<'_>,
+    clock: StatsClock,
 ) -> Option<MetricEvaluation> {
     match &def.spec {
         MetricSpec::Pomodoro { .. }
         | MetricSpec::Tasks { .. }
         | MetricSpec::Checklist { .. }
-        | MetricSpec::Field { .. } => {
-            evaluate_with_homes(def, index, dates, today, global_since, homes)
-        }
+        | MetricSpec::Field { .. } => evaluate_with_homes(
+            def,
+            index,
+            dates,
+            today,
+            global_since,
+            homes,
+            clock,
+        ),
         MetricSpec::Journal { .. } => evaluate_journal(
             def,
             index,
@@ -348,6 +426,32 @@ fn evaluate_one(
             global_since,
             range_start,
         ),
+    }
+}
+
+fn clock_report(
+    index: &StatsIndex,
+    clock: StatsClock,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> ClockReport {
+    ClockReport {
+        value: clock.as_str().to_string(),
+        label: clock.label().to_string(),
+        since: index.off_clock_adoption(),
+        options: StatsClock::ALL
+            .into_iter()
+            .map(|option| {
+                let minutes = index.window_clock_minutes(option, start, end);
+                ClockOption {
+                    value: option.as_str().to_string(),
+                    label: option.label().to_string(),
+                    description: option.description().to_string(),
+                    minutes,
+                    display: format_minutes(minutes),
+                }
+            })
+            .collect(),
     }
 }
 
@@ -437,6 +541,7 @@ mod tests {
 
     use super::compute;
     use crate::native::env::TestEnvGuard;
+    use crate::native::stats::clock::StatsClock;
     use crate::native::stats::report::SeriesPoint;
     use crate::native::stats::request::{
         Grouping, MetricSelection, StatsRequest,
@@ -1488,6 +1593,22 @@ mod tests {
         assert_eq!(worked["origin"], "builtin");
         assert_eq!(worked["since"], "2026-10-09");
         assert_eq!(worked["parameters"]["measure"], "minutes");
+        assert_eq!(worked["parameters"]["clock"], "worked");
+        assert_eq!(json["clock"]["value"], "worked");
+        assert_eq!(json["clock"]["label"], "Worked");
+        assert_eq!(json["clock"]["since"], "2026-10-09");
+        assert_eq!(json["clock"]["options"][0]["value"], "worked");
+        assert_eq!(json["clock"]["options"][0]["minutes"], 42);
+        assert_eq!(json["clock"]["options"][0]["display"], "42m");
+        assert_eq!(json["clock"]["options"][1]["value"], "off-clock");
+        assert_eq!(json["clock"]["options"][1]["minutes"], 60);
+        assert_eq!(json["clock"]["options"][1]["display"], "1h 00m");
+        assert_eq!(json["clock"]["options"][2]["value"], "total");
+        assert_eq!(json["clock"]["options"][2]["minutes"], 102);
+        assert_eq!(json["clock"]["options"][2]["display"], "1h 42m");
+        assert_eq!(worked["points"][1]["off_clock"], 60);
+        assert!(worked["points"][2].get("off_clock").is_none());
+        assert!(json["metrics"][1]["parameters"].get("clock").is_none());
         // Empty parts maps are omitted; nulls serialize as null.
         assert!(worked["points"][0].get("parts").is_none());
         assert_eq!(worked["points"][0]["value"], serde_json::Value::Null);
@@ -1552,6 +1673,204 @@ mod tests {
         assert_eq!(json["metrics"][1]["warnings"][0]["code"], "journal_gap");
         assert_eq!(json["metrics"][1]["warnings"][0]["date"], "2026-10-09");
         assert_eq!(json["warnings"][0]["code"], "journal_gap");
+    }
+
+    #[test]
+    fn clock_lenses_pin_formulas_adoption_and_grouped_off_clock() {
+        let dir = TempDir::new().unwrap();
+        let config = write_config(
+            &dir,
+            "
+stats:
+  hide: [hidden_worked]
+  metrics:
+    family_time:
+      label: Family time
+      kind: pomodoro
+      clock: off-clock
+    hidden_worked:
+      label: Hidden worked
+      kind: pomodoro
+    inner:
+      label: Inner
+      kind: formula
+      expr: worked
+      unit: minutes
+    outer:
+      label: Outer
+      kind: formula
+      expr: inner + hidden_worked
+      unit: minutes
+",
+        );
+        let mut request = golden_request(fixture_vault(), config.clone());
+        request.selection = MetricSelection::Explicit(
+            [
+                "worked",
+                "sessions",
+                "family_time",
+                "inner",
+                "outer",
+                "done",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        );
+        request.clock = StatsClock::OffClock;
+        let off = compute(&request).expect("off-clock compute");
+        assert_eq!(off.clock.value, "off-clock");
+        assert_eq!(off.clock.label, "Off-clock");
+        assert_eq!(off.clock.since, Some(day(9)));
+        assert_eq!(off.clock.options[0].minutes, 42);
+        assert_eq!(off.clock.options[1].minutes, 60);
+        assert_eq!(off.clock.options[2].minutes, 102);
+
+        let worked = metric(&off, "worked");
+        assert_eq!(worked.label, "Off-clock");
+        assert_eq!(worked.direction, "neutral");
+        assert_eq!(
+            worked.parameters.as_ref().unwrap().clock.as_deref(),
+            Some("off-clock")
+        );
+        expect_point(
+            &worked.points[0],
+            day(8),
+            None,
+            DataQuality::NotTracked,
+            false,
+        );
+        expect_point(
+            &worked.points[1],
+            day(9),
+            Some(60),
+            DataQuality::Ok,
+            false,
+        );
+        expect_point(
+            &worked.points[2],
+            day(10),
+            Some(0),
+            DataQuality::Ok,
+            false,
+        );
+        expect_point(
+            &worked.points[3],
+            day(11),
+            Some(0),
+            DataQuality::Ok,
+            true,
+        );
+        assert_eq!(worked.points[1].off_clock, None);
+        assert!(worked.parts_summary["theme"]
+            .iter()
+            .all(|part| part.off_clock.is_none()));
+
+        let sessions = metric(&off, "sessions");
+        assert_eq!(sessions.label, "Off-clock sessions");
+        expect_point(
+            &sessions.points[1],
+            day(9),
+            Some(1),
+            DataQuality::Ok,
+            false,
+        );
+
+        let family = metric(&off, "family_time");
+        assert_eq!(family.label, "Family time · off-clock");
+        expect_point(
+            &family.points[1],
+            day(9),
+            Some(60),
+            DataQuality::Ok,
+            false,
+        );
+
+        let inner = metric(&off, "inner");
+        assert_eq!(inner.label, "Inner");
+        assert_eq!(inner.direction, "up");
+        expect_point(
+            &inner.points[1],
+            day(9),
+            Some(32),
+            DataQuality::Ok,
+            false,
+        );
+        assert_eq!(inner.points[1].off_clock, None);
+        assert!(inner.parameters.as_ref().unwrap().clock.is_none());
+
+        let outer = metric(&off, "outer");
+        expect_point(
+            &outer.points[1],
+            day(9),
+            Some(64),
+            DataQuality::Ok,
+            false,
+        );
+
+        let done = metric(&off, "done");
+        assert_eq!(done.label, "Done");
+        expect_point(&done.points[1], day(9), Some(5), DataQuality::Ok, false);
+
+        request.clock = StatsClock::Total;
+        let total = compute(&request).expect("total compute");
+        let worked = metric(&total, "worked");
+        assert_eq!(worked.label, "Total");
+        assert_eq!(worked.direction, "neutral");
+        expect_point(
+            &worked.points[1],
+            day(9),
+            Some(92),
+            DataQuality::Ok,
+            false,
+        );
+        assert_eq!(worked.points[1].off_clock, Some(60));
+        let meet = worked.parts_summary["theme"]
+            .iter()
+            .find(|part| part.key == "MEET")
+            .expect("MEET part");
+        assert_eq!(meet.value, 60);
+        assert_eq!(meet.off_clock, Some(60));
+        let plan = worked.parts_summary["theme"]
+            .iter()
+            .find(|part| part.key == "PLAN")
+            .expect("PLAN part");
+        assert_eq!(plan.value, 29);
+        assert_eq!(plan.off_clock, None);
+        expect_point(
+            &metric(&total, "sessions").points[1],
+            day(9),
+            Some(3),
+            DataQuality::Ok,
+            false,
+        );
+        expect_point(
+            &metric(&total, "inner").points[1],
+            day(9),
+            Some(32),
+            DataQuality::Ok,
+            false,
+        );
+
+        request.clock = StatsClock::Worked;
+        request.grouping = Grouping::Month;
+        let pinned = compute(&request).expect("worked pin compute");
+        let worked = metric(&pinned, "worked");
+        assert_eq!(worked.label, "Worked");
+        assert_eq!(worked.direction, "up");
+        assert_eq!(worked.points[0].value, Some(32));
+        assert_eq!(worked.points[0].off_clock, Some(60));
+        assert_eq!(worked.daily_points[1].off_clock, Some(60));
+        let family = metric(&pinned, "family_time");
+        assert_eq!(
+            family.parameters.as_ref().unwrap().clock.as_deref(),
+            Some("off-clock")
+        );
+        assert_eq!(family.direction, "neutral");
+        assert_eq!(family.points[0].value, Some(60));
+        assert_eq!(family.points[0].off_clock, None);
+        assert_eq!(pinned.sessions[2].minutes, Some(0));
+        assert!(pinned.sessions[2].homes.untracked);
     }
 
     #[test]

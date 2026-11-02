@@ -72,7 +72,7 @@ fn overview_json_is_ok_schema_one() {
 }
 
 #[test]
-fn current_stats_contract_stays_worked_only() {
+fn current_stats_contract_adds_clock_json_and_keeps_worked_human() {
     let human = stats_command()
         .args(["stats", "-r", RANGE])
         .output()
@@ -87,10 +87,28 @@ fn current_stats_contract_stays_worked_only() {
     assert_success(&json);
     let value: Value =
         serde_json::from_str(stdout(&json).trim()).expect("stats JSON");
-    assert!(value.get("clock").is_none(), "{value}");
-    for metric in value["metrics"].as_array().expect("metrics") {
-        assert!(metric.get("off_clock").is_none(), "{metric}");
-    }
+    assert_eq!(value["clock"]["value"], "worked");
+    assert_eq!(value["clock"]["label"], "Worked");
+    assert_eq!(value["clock"]["since"], "2026-10-09");
+    assert_eq!(value["clock"]["options"][0]["value"], "worked");
+    assert_eq!(value["clock"]["options"][0]["minutes"], 42);
+    assert_eq!(value["clock"]["options"][1]["value"], "off-clock");
+    assert_eq!(value["clock"]["options"][1]["minutes"], 60);
+    assert_eq!(value["clock"]["options"][2]["value"], "total");
+    assert_eq!(value["clock"]["options"][2]["minutes"], 102);
+    let metrics = value["metrics"].as_array().expect("metrics");
+    let worked = metrics
+        .iter()
+        .find(|metric| metric["id"] == "worked")
+        .expect("worked");
+    assert_eq!(worked["parameters"]["clock"], "worked");
+    assert_eq!(worked["points"][1]["off_clock"], 60);
+    assert!(worked.get("off_clock").is_none(), "{worked}");
+    let reviewed = metrics
+        .iter()
+        .find(|metric| metric["id"] == "reviewed")
+        .expect("reviewed");
+    assert!(reviewed["parameters"].get("clock").is_none(), "{reviewed}");
 }
 
 #[test]

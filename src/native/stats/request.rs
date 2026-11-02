@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use chrono::NaiveDateTime;
 
+use super::clock::StatsClock;
 use crate::native::env as bob_env;
 
 /// Which metrics a report should include.
@@ -34,6 +35,7 @@ pub(crate) struct StatsRequest {
     pub(crate) offset: u32,
     pub(crate) compare: bool,
     pub(crate) now: NaiveDateTime,
+    pub(crate) clock: StatsClock,
 }
 
 impl StatsRequest {
@@ -56,6 +58,7 @@ impl StatsRequest {
             offset: 0,
             compare: false,
             now,
+            clock: StatsClock::Worked,
         }
     }
 
@@ -95,6 +98,7 @@ mod tests {
         assert_eq!(request.selection, MetricSelection::Overview);
         assert_eq!(request.grouping, Grouping::Auto);
         assert!(!request.compare);
+        assert_eq!(request.clock, StatsClock::Worked);
     }
 
     #[test]

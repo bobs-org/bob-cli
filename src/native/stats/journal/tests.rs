@@ -91,6 +91,8 @@ fn closed_on(
             parts: BTreeMap::new(),
             apportioned: BTreeMap::new(),
             checklist_state: None,
+            off_clock: None,
+            off_clock_parts: BTreeMap::new(),
         })
         .collect();
     BTreeMap::from([(

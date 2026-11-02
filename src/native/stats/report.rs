@@ -19,6 +19,7 @@ pub(crate) struct StatsReport {
     #[serde(serialize_with = "iso_date")]
     pub(crate) today: NaiveDate,
     pub(crate) range: RangeReport,
+    pub(crate) clock: ClockReport,
     pub(crate) metrics: Vec<MetricReport>,
     pub(crate) health: HealthReport,
     pub(crate) warnings: Vec<StatsWarning>,
@@ -154,6 +155,27 @@ pub(crate) struct MetricParameters {
     pub(crate) select: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tiers: Option<JournalTiersJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) clock: Option<String>,
+}
+
+/// Top-level clock object: the request lens, adoption date, and window totals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub(crate) struct ClockReport {
+    pub(crate) value: String,
+    pub(crate) label: String,
+    #[serde(serialize_with = "iso_date_opt")]
+    pub(crate) since: Option<NaiveDate>,
+    pub(crate) options: Vec<ClockOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ClockOption {
+    pub(crate) value: String,
+    pub(crate) label: String,
+    pub(crate) description: String,
+    pub(crate) minutes: i64,
+    pub(crate) display: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -259,6 +281,8 @@ pub(crate) struct SeriesPoint {
     pub(crate) apportioned: BTreeMap<String, BTreeMap<String, i64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) checklist_state: Option<ChecklistState>,
+    #[serde(skip_serializing_if = "is_none_or_zero_i64")]
+    pub(crate) off_clock: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -273,6 +297,8 @@ pub(crate) struct PartSummary {
     pub(crate) apportioned: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) apportioned_display: Option<String>,
+    #[serde(skip_serializing_if = "is_none_or_zero_i64")]
+    pub(crate) off_clock: Option<i64>,
 }
 
 /// One closed Pomodoro in the display window. Facts, not metric values.
@@ -315,6 +341,10 @@ pub(crate) struct HealthReport {
 
 fn is_zero_u32(value: &u32) -> bool {
     *value == 0
+}
+
+fn is_none_or_zero_i64(value: &Option<i64>) -> bool {
+    value.is_none_or(|minutes| minutes == 0)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -460,6 +490,7 @@ mod tests {
                 label: None,
                 apportioned: None,
                 apportioned_display: None,
+                off_clock: None,
             }],
         );
         let report = StatsReport {
@@ -481,6 +512,7 @@ mod tests {
                     label: "Aug 16 – Sep 12".to_string(),
                 }),
             },
+            clock: ClockReport::default(),
             metrics: vec![MetricReport {
                 id: "worked".to_string(),
                 label: "Worked".to_string(),
@@ -514,6 +546,7 @@ mod tests {
                     dependencies: Vec::new(),
                     select: None,
                     tiers: None,
+                    clock: None,
                 }),
                 summary: MetricSummary {
                     headline: Headline {
@@ -568,6 +601,7 @@ mod tests {
                         parts_display: BTreeMap::new(),
                         apportioned: BTreeMap::new(),
                         checklist_state: None,
+                        off_clock: None,
                     },
                     SeriesPoint {
                         date: date(2026, 10, 11),
@@ -592,6 +626,7 @@ mod tests {
                         )]),
                         apportioned: BTreeMap::new(),
                         checklist_state: None,
+                        off_clock: None,
                     },
                 ],
                 prior_points: Vec::new(),
@@ -690,6 +725,7 @@ mod tests {
             parts_display: BTreeMap::new(),
             apportioned: BTreeMap::new(),
             checklist_state: None,
+            off_clock: None,
         };
         let json = serde_json::to_value(&point).unwrap();
         assert_eq!(json["num"], 1);
