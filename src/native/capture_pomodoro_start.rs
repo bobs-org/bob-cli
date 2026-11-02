@@ -21,6 +21,7 @@ use super::{
         strip_pomodoro_markers, sub_bullet_range, wikilink_tokens, CloseVault,
     },
     capture_task_toggle::child_block_end_line,
+    event_task::{event_task_by_id, line_has_off_clock_tag, LinkFact},
     markdown, note_tasks,
     vault_links::LinkResolution,
 };
@@ -286,6 +287,135 @@ fn relative_name(bob_dir: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+/// Caller-resolved clock facts for the counted Task Links a session keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CountedLinkFact {
+    pub fact: LinkFact,
+    pub block_link: String,
+    pub text: Option<String>,
+}
+
+/// Resolve the counted Task Links under `entry_index` to clock facts.
+/// Same-note links read `contents` (the note being rewritten). Other-note
+/// links go through `vault` when one is present, and fail toward worked
+/// when it is not.
+pub(crate) fn resolve_session_clock_links<V: CloseVault + ?Sized>(
+    vault: Option<&V>,
+    day_relative: &Path,
+    contents: &str,
+    entry_index: usize,
+) -> Vec<CountedLinkFact> {
+    let links = session_links(contents, entry_index);
+    let settings = vault
+        .map(|vault| note_tasks::read_settings(vault.bob_dir()))
+        .unwrap_or_else(|| note_tasks::read_settings(Path::new("")));
+    let mut all_settings = settings.clone();
+    all_settings.global_filter.clear();
+    links
+        .iter()
+        .map(|link| {
+            resolve_clock_fact(
+                vault,
+                day_relative,
+                contents,
+                link,
+                &settings,
+                &all_settings,
+            )
+        })
+        .collect()
+}
+
+fn resolve_clock_fact<V: CloseVault + ?Sized>(
+    vault: Option<&V>,
+    day_relative: &Path,
+    contents: &str,
+    link: &StartLink,
+    settings: &note_tasks::NoteTaskSettings,
+    all_settings: &note_tasks::NoteTaskSettings,
+) -> CountedLinkFact {
+    let unresolved = CountedLinkFact {
+        fact: LinkFact { off_clock: None },
+        block_link: link.block_link.clone(),
+        text: None,
+    };
+    if link.path_part.is_empty() {
+        if let Some(event) =
+            event_task_by_id(day_relative, contents, &link.block_id)
+        {
+            return CountedLinkFact {
+                fact: LinkFact {
+                    off_clock: Some(event.off_clock),
+                },
+                block_link: link.block_link.clone(),
+                text: Some(event.title.clone()),
+            };
+        }
+        let lookup_settings = if link.embedded {
+            all_settings
+        } else {
+            settings
+        };
+        return match lookup_task(contents, lookup_settings, &link.block_id) {
+            Ok(task) => clock_fact_from_task(
+                contents,
+                task.line_index,
+                &task.description,
+                &link.block_link,
+            ),
+            Err(_) => unresolved,
+        };
+    }
+    let Some(vault) = vault else {
+        return unresolved;
+    };
+    let day_path = if day_relative.is_absolute() {
+        day_relative.to_path_buf()
+    } else {
+        vault.bob_dir().join(day_relative)
+    };
+    let path = match vault.resolve_target(&day_path, &link.path_part) {
+        LinkResolution::Found(path) => path,
+        LinkResolution::Ambiguous | LinkResolution::Missing => {
+            return unresolved;
+        }
+    };
+    let note = match vault.read_latest(&path) {
+        Ok(Some(note)) => note,
+        _ => return unresolved,
+    };
+    let lookup_settings = if link.embedded {
+        all_settings
+    } else {
+        settings
+    };
+    match lookup_task(&note, lookup_settings, &link.block_id) {
+        Ok(task) => clock_fact_from_task(
+            &note,
+            task.line_index,
+            &task.description,
+            &link.block_link,
+        ),
+        Err(_) => unresolved,
+    }
+}
+
+fn clock_fact_from_task(
+    contents: &str,
+    line_index: usize,
+    description: &str,
+    block_link: &str,
+) -> CountedLinkFact {
+    let line = contents.lines().nth(line_index).unwrap_or("");
+    CountedLinkFact {
+        fact: LinkFact {
+            off_clock: Some(line_has_off_clock_tag(line)),
+        },
+        block_link: block_link.to_string(),
+        text: Some(close_task_text(description)),
+    }
 }
 
 /// Who owns the started session, for drop diagnostics: the entry name when

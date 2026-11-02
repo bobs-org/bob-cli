@@ -286,13 +286,11 @@ pub(crate) enum ClockClass {
 /// Caller-resolved facts for the dedicated Task Links a session keeps.
 /// `None` means the link did not resolve to exactly one task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // The next phase wires caller-resolved facts into this core.
 pub(crate) struct LinkFact {
     pub off_clock: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum ClockReason {
     Unlinked,
     Mixed { first_on_clock: usize },
@@ -300,7 +298,6 @@ pub(crate) enum ClockReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum ClockVerdict {
     OffClock,
     Worked { reason: ClockReason },
@@ -309,7 +306,6 @@ pub(crate) enum ClockVerdict {
 /// Decide the session clock from caller-resolved Task Link facts. An empty
 /// lineup, an unresolved link, or any resolved on-clock task keeps the whole
 /// session on the worked clock.
-#[allow(dead_code)]
 pub(crate) fn clock_verdict(links: &[LinkFact]) -> ClockVerdict {
     if links.is_empty() {
         return ClockVerdict::Worked {

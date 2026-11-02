@@ -8,15 +8,22 @@
 //! the event's **buffered** span (`[buffer:: -30m +15m]` widens the meeting
 //! by its lead-in and lead-out): candidates end after now, sort, cluster, and
 //! the run's written span all use what the event occupies. An empty-suffix
-//! start writes the run's span; every MEET start records `[off::]` exactly
-//! when the non-empty run is off-clock. Every other session stays on the
-//! worked clock. The run is computed on the staged daily note, so drops
-//! (`~K`) and earlier items of the same draft are already applied.
+//! start writes the run's span; a MEET with a non-empty run records `[off::]`
+//! exactly when that run is off-clock. Every other session stamps the clock
+//! from the counted-links rule: off the clock iff it keeps at least one Task
+//! Link and every one resolves to a `#offclock` task. The run is computed on
+//! the staged daily note, so drops (`~K`) and earlier items of the same draft
+//! are already applied.
 
 use std::collections::HashSet;
 
 use super::*;
-use crate::native::event_task::{event_task_by_id, EventSpan, EventTask};
+use crate::native::capture_pomodoro_close::CloseVault;
+use crate::native::capture_pomodoro_start::CountedLinkFact;
+use crate::native::event_task::{
+    clock_verdict, event_task_by_id, ClockReason, ClockVerdict, EventSpan,
+    EventTask,
+};
 
 /// A run starting further than this from now adds a `pomodoro_event_run_later`
 /// warning: a default Pomodoro would fit before it.
@@ -255,6 +262,13 @@ pub(super) struct MeetStartInput<'a> {
     pub(super) span_rule: SpanRule,
     pub(super) numbers: Option<&'a [u32]>,
     pub(super) now: chrono::NaiveDateTime,
+    /// Staged vault view for other-note Task Links. Same-note Event Tasks
+    /// resolve from `contents` even when this is `None`.
+    pub(super) vault: Option<&'a dyn CloseVault>,
+    /// When true, a MEET with a non-empty event run uses the run's clock
+    /// instead of the full lineup (start-family writes). Running lineup
+    /// edits pass false so an added or dropped link can restamp the key.
+    pub(super) use_event_run: bool,
 }
 
 /// What a finished start looks like after the MEET rule.
@@ -302,13 +316,66 @@ impl MeetFinish {
     }
 }
 
-/// [`finalize_meet_start`] that hands back the final contents, taking them
-/// out of the finish so the caller keeps one owner.
+/// Re-stamp the running session's clock key from its current counted
+/// lineup. Used after a link is added to or dropped from an already-timed
+/// session so the Now card stays honest. Does not rewrite the span.
+pub(super) fn restamp_session_clock(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    entry_line: usize,
+    now: chrono::NaiveDateTime,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<(), CaptureError> {
+    let contents = planner.read_existing(day_file)?;
+    let entry_index = entry_line.saturating_sub(1);
+    let headline = line_spans(&contents)
+        .get(entry_index)
+        .map(|line| line.text)
+        .unwrap_or("");
+    if parse_adjustment_range(headline).is_none() {
+        return Ok(());
+    }
+    let spec = PomodoroStartSpec {
+        raw: String::new(),
+        duration_units: 5,
+        offset_units: 0,
+        drop: Vec::new(),
+    };
+    let (updated, finish) = {
+        let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
+        apply_meet_rule(
+            contents,
+            &MeetStartInput {
+                day_relative,
+                entry_index,
+                spec: &spec,
+                span_rule: SpanRule::Written,
+                numbers: None,
+                now,
+                vault: Some(&vault),
+                use_event_run: false,
+            },
+        )?
+    };
+    if let Some(finish) = finish {
+        let rewritten = finish.time_range.is_some();
+        warnings.extend(finish.warnings);
+        if rewritten {
+            planner.stage(day_file, updated)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`finalize_session_clock`] that hands back the final contents, taking
+/// them out of the finish so the caller keeps one owner.
 pub(super) fn apply_meet_rule(
     contents: String,
     input: &MeetStartInput<'_>,
 ) -> Result<(String, Option<MeetFinish>), CaptureError> {
-    match finalize_meet_start(&contents, input)? {
+    match finalize_session_clock(&contents, input)? {
         Some(mut finish) => {
             let updated = std::mem::take(&mut finish.contents);
             Ok((updated, Some(finish)))
@@ -317,11 +384,13 @@ pub(super) fn apply_meet_rule(
     }
 }
 
-/// Apply the MEET rule to the session just started at `input.entry_index`.
+/// Apply the session clock rule to the session at `input.entry_index`.
 ///
-/// Returns `Ok(None)` when the started session needs nothing: it is not a
-/// MEET, or it is a tracked MEET without a run, and its ledger is tracked.
-pub(super) fn finalize_meet_start(
+/// A MEET with a non-empty event run uses the run's clock (and may rewrite
+/// the calendar span). Every other session stamps `[t::]` / `[off::]` from
+/// the counted-links verdict. Returns `Ok(None)` when the ledger is already
+/// on the worked clock, needs no rewrite, and raises no mixed warning.
+pub(super) fn finalize_session_clock(
     contents: &str,
     input: &MeetStartInput<'_>,
 ) -> Result<Option<MeetFinish>, CaptureError> {
@@ -341,14 +410,10 @@ pub(super) fn finalize_meet_start(
     };
     let ledger_clock = session_clock(headline);
     let ledger_stamp = clock_stamp(headline);
-    let ledger_tracked = matches!(ledger_clock, SessionClock::Worked { .. });
     let meet = is_meet_name(entry.name.as_deref());
-    if !meet && ledger_tracked {
-        return Ok(None);
-    }
     let now_min = i32::try_from(input.now.hour() * 60 + input.now.minute())
         .unwrap_or_default();
-    let run = if meet {
+    let run = if meet && input.use_event_run {
         compute_event_run(
             input.day_relative,
             contents,
@@ -360,31 +425,14 @@ pub(super) fn finalize_meet_start(
         None
     };
     let Some(run) = run else {
-        if ledger_tracked && ledger_stamp != ClockStamp::Conflict {
-            return Ok(None);
-        }
-        // A kept off-clock ledger lands on a session with no off-clock run:
-        // restore the worked clock.
-        let ledger = read_session_ledger_bytes(headline).ok_or_else(|| {
-            CaptureError::io(
-                "running Pomodoro timing could not be safely identified",
-            )
-        })?;
-        let restored = set_ledger_clock(&ledger, ClockKind::Worked);
-        let updated =
-            splice_session_ledger(contents, input.entry_index, &restored)?;
-        return Ok(Some(MeetFinish {
-            contents: updated,
-            time_range: Some(restored),
-            start: None,
-            end: None,
-            duration_minutes: None,
-            offset_units: None,
-            tracked: true,
-            off_clock: false,
-            event_run: None,
-            warnings: Vec::new(),
-        }));
+        return finalize_lineup_clock(
+            contents,
+            input,
+            headline,
+            ledger_clock,
+            ledger_stamp,
+            entry,
+        );
     };
 
     let off_clock = run.off_clock;
@@ -490,6 +538,141 @@ pub(super) fn finalize_meet_start(
         event_run,
         warnings,
     }))
+}
+
+fn finalize_lineup_clock(
+    contents: &str,
+    input: &MeetStartInput<'_>,
+    headline: &str,
+    ledger_clock: SessionClock,
+    ledger_stamp: ClockStamp,
+    entry: &capture_pomodoros::PomodoroEntry,
+) -> Result<Option<MeetFinish>, CaptureError> {
+    let links = capture_pomodoro_start::resolve_session_clock_links(
+        input.vault,
+        input.day_relative,
+        contents,
+        input.entry_index,
+    );
+    let facts: Vec<_> = links.iter().map(|link| link.fact).collect();
+    let verdict = clock_verdict(&facts);
+    let off_clock = matches!(verdict, ClockVerdict::OffClock);
+    let warnings = mixed_clock_warning(entry.name.as_deref(), &links, verdict)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let already_on_requested_clock = match (ledger_clock, off_clock) {
+        (SessionClock::Worked { .. }, false) => {
+            ledger_stamp != ClockStamp::Conflict
+        }
+        (SessionClock::OffClock { stamped: true, .. }, true) => true,
+        _ => false,
+    };
+    if already_on_requested_clock && warnings.is_empty() && !off_clock {
+        return Ok(None);
+    }
+    if already_on_requested_clock {
+        return Ok(Some(MeetFinish {
+            contents: contents.to_string(),
+            time_range: None,
+            start: None,
+            end: None,
+            duration_minutes: None,
+            offset_units: None,
+            tracked: !off_clock,
+            off_clock,
+            event_run: None,
+            warnings,
+        }));
+    }
+    let ledger = read_session_ledger_bytes(headline).ok_or_else(|| {
+        CaptureError::io(
+            "running Pomodoro timing could not be safely identified",
+        )
+    })?;
+    let clock = if off_clock {
+        ClockKind::OffClock
+    } else {
+        ClockKind::Worked
+    };
+    let restamped = set_ledger_clock(&ledger, clock);
+    let updated =
+        splice_session_ledger(contents, input.entry_index, &restamped)?;
+    Ok(Some(MeetFinish {
+        contents: updated,
+        time_range: Some(restamped),
+        start: None,
+        end: None,
+        duration_minutes: None,
+        offset_units: None,
+        tracked: !off_clock,
+        off_clock,
+        event_run: None,
+        warnings,
+    }))
+}
+
+fn mixed_clock_warning(
+    session_name: Option<&str>,
+    links: &[CountedLinkFact],
+    verdict: ClockVerdict,
+) -> Option<CaptureWarning> {
+    let has_off_clock =
+        links.iter().any(|link| link.fact.off_clock == Some(true));
+    if !has_off_clock || matches!(verdict, ClockVerdict::OffClock) {
+        return None;
+    }
+    let name = session_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("the session");
+    let detail = match verdict {
+        ClockVerdict::Worked {
+            reason: ClockReason::Unresolved { first },
+        } => {
+            let link = links
+                .get(first)
+                .map(|link| link.block_link.as_str())
+                .unwrap_or("a Task Link");
+            format!("{link} does not resolve")
+        }
+        ClockVerdict::Worked {
+            reason: ClockReason::Mixed { first_on_clock },
+        } => {
+            let label = links
+                .get(first_on_clock)
+                .and_then(|link| link.text.as_deref())
+                .map(clock_link_label)
+                .filter(|label| !label.is_empty());
+            match label {
+                Some(label) => format!("it also links {label}"),
+                None => {
+                    let link = links
+                        .get(first_on_clock)
+                        .map(|link| link.block_link.as_str())
+                        .unwrap_or("another task");
+                    format!("it also links {link}")
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some(CaptureWarning::Structured(StructuredCaptureWarning {
+        code: "pomodoro_clock_mixed",
+        label: None,
+        count: None,
+        message: format!("◌ {name} stays on the clock: {detail}"),
+    }))
+}
+
+fn clock_link_label(text: &str) -> String {
+    text.split_whitespace()
+        .filter(|token| {
+            !token.starts_with('#')
+                && !token.starts_with('[')
+                && !token.starts_with('^')
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -617,7 +800,7 @@ mod tests {
             .unwrap()
             .and_hms_opt(13, 15, 0)
             .unwrap();
-        let finish = finalize_meet_start(
+        let finish = finalize_session_clock(
             &note,
             &MeetStartInput {
                 day_relative: rel(),
@@ -626,6 +809,8 @@ mod tests {
                 span_rule: SpanRule::Calendar,
                 numbers: None,
                 now,
+                vault: None,
+                use_event_run: true,
             },
         )
         .unwrap()

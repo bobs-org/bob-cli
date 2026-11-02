@@ -171,13 +171,13 @@
       "expected_off_clock": true
     },
     {
-      "id": "non-meet-sessions-stay-worked",
+      "id": "non-meet-lineup-follows-counted-links",
       "now": "2026-11-01 11:02:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — BOB\n  - [[#^lunch]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1105-1130** [t:: 25m]) — BOB\n  - [[#^lunch]]\n",
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1105-1130** [off:: 25m]) — BOB\n  - [[#^lunch]]\n",
       "expected_span": "1105-1130",
-      "expected_off_clock": false
+      "expected_off_clock": true
     },
     {
       "id": "pre-buffer-starts-the-run-early",

@@ -221,6 +221,9 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) closed_at: String,
     pub(super) remaining_minutes: i64,
     pub(super) decremented_minutes: u64,
+    /// Whether the closed session is off the work clock. Omitted when false.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) off_clock: bool,
     pub(super) tasks: Vec<PomodoroCloseTaskJson>,
     pub(super) carried: Vec<PomodoroCloseCarriedJson>,
     pub(super) notes: Vec<String>,
@@ -2739,20 +2742,25 @@ pub(super) fn print_human_pomodoro_close_success(
         _ => String::new(),
     };
     let decremented = close.decremented_minutes;
+    let off_clock = if close.off_clock { " · off-clock" } else { "" };
     let range_text = if decremented > 0 {
         format!(
-            "{}-{} → {}-{} ({}m, −{}m)",
+            "{}-{} → {}-{} ({}m{}, −{}m)",
             close.planned.start,
             close.planned.end,
             close.closed.start,
             close.closed.end,
             close.closed.duration_minutes,
+            off_clock,
             decremented
         )
     } else {
         format!(
-            "{}-{} ({}m)",
-            close.closed.start, close.closed.end, close.closed.duration_minutes
+            "{}-{} ({}m{})",
+            close.closed.start,
+            close.closed.end,
+            close.closed.duration_minutes,
+            off_clock
         )
     };
     let mut header = format!(

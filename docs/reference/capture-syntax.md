@@ -858,8 +858,10 @@ minutes, `=3` is 15, `=-2` is 25 minutes with a 10-minute offset), or
 restart the running session with that timing. A restart prints an override
 warning. The item must contain only the start token. An empty-suffix start of
 a `MEET` session takes the span of its next back-to-back Event Tasks instead
-and omits `[t::]` for an `#untracked` run: see [MEET starts follow the
-calendar](../capture.md#meet-starts-follow-the-calendar).
+and writes `[off:: Nm]` when that run is off-clock: see [MEET starts follow
+the calendar](../capture.md#meet-starts-follow-the-calendar). Every other
+start stamps `[t::]` or `[off::]` from the counted-links rule: see
+[Which clock a session is on](../capture.md#which-clock-a-session-is-on).
 
 ```bash
 bob capture '=3'

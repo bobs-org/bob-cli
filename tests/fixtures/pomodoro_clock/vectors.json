@@ -1,0 +1,140 @@
+{
+  "cases": [
+    {
+      "id": "unlinked-stays-on-the-clock",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "day": "## Pomodoros\n- [ ] () — BOB\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — BOB\n",
+      "expected_off_clock": false
+    },
+    {
+      "id": "all-off-clock-non-meet",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #offclock ^walk\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — WALK\n  - [[bob#^walk]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — WALK\n  - [[bob#^walk]]\n",
+      "expected_off_clock": true
+    },
+    {
+      "id": "mixed-stays-on-the-clock",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #offclock ^walk\n- [ ] #task Fix the parser ^parser\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — LUNCH\n  - [[bob#^walk]]\n  - [[bob#^parser]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — LUNCH\n  - [[bob#^walk]]\n  - [[bob#^parser]]\n",
+      "expected_off_clock": false,
+      "expected_warning": "pomodoro_clock_mixed"
+    },
+    {
+      "id": "unresolved-stays-on-the-clock",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #offclock ^walk\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — LUNCH\n  - [[bob#^walk]]\n  - [[bob#^gone]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — LUNCH\n  - [[bob#^walk]]\n  - [[bob#^gone]]\n",
+      "expected_off_clock": false,
+      "expected_warning": "pomodoro_clock_mixed"
+    },
+    {
+      "id": "alias-off-clock",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #off-clock ^walk\n- [ ] #task Cook dinner #untracked ^cook\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — HOME\n  - [[bob#^walk]]\n  - [[bob#^cook]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — HOME\n  - [[bob#^walk]]\n  - [[bob#^cook]]\n",
+      "expected_off_clock": true
+    },
+    {
+      "id": "nested-tag-rejected",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "bob.md": "## Tasks\n- [ ] #task Nested #offclock/nested ^nested\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — BOB\n  - [[bob#^nested]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — BOB\n  - [[bob#^nested]]\n",
+      "expected_off_clock": false
+    },
+    {
+      "id": "meet-run-ignores-future-off-clock-queue",
+      "now": "2026-11-01 10:55:00",
+      "token": "=",
+      "day": "## Events\n- [ ] #task **1100-1130** Sync ^sync\n- [ ] #task **1130-1230** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^sync]]\n  - [[#^lunch]]\n",
+      "expected_day": "## Events\n- [ ] #task **1100-1130** Sync ^sync\n- [ ] #task **1130-1230** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1100-1130** [t:: 30m]) — MEET\n  - [[#^sync]]\n  - [[#^lunch]]\n",
+      "expected_off_clock": false
+    },
+    {
+      "id": "close-defers-not-started-off-clock",
+      "now": "2026-11-01 09:00:00",
+      "token": "x",
+      "day": "## Events\n- [ ] #task **1000-1030** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**0800-0900** [t:: 60m]) — MEET\n  - [[#^lunch]]\n- [ ] () — PLAN\n",
+      "expected_day": "## Events\n- [ ] #task **1000-1030** Lunch #untracked ^lunch\n\n## Pomodoros\n- [x] (**0800-0900** [t:: 60m]) — MEET\n- [ ] () — MEET\n  - [[#^lunch]]\n- [ ] () — PLAN\n",
+      "expected_off_clock": false
+    },
+    {
+      "id": "close-mixed-after-dropping-on-clock",
+      "now": "2026-11-01 09:00:00",
+      "token": "x~2",
+      "notes": {
+        "bob.md": "## Tasks\n- [*] #task Walk the dog #offclock ^walk\n- [*] #task Fix the parser ^parser\n"
+      },
+      "day": "## Pomodoros\n- [ ] (**0800-0900** [t:: 60m]) — LUNCH\n  - [[bob#^walk]]\n  - [[bob#^parser]]\n- [ ] () — PLAN\n",
+      "expected_day": "## Pomodoros\n- [x] (**0800-0900** [off:: 60m]) — LUNCH\n  - 🍅 [[bob#^walk]]\n- [ ] () — LUNCH\n  - [[bob#^walk]]\n- [ ] () — PLAN\n",
+      "expected_off_clock": true
+    },
+    {
+      "id": "kept-ledger-swap-switches-key",
+      "now": "2026-11-01 09:02:00",
+      "token": "=walk",
+      "notes": {
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #offclock ^walk\n"
+      },
+      "day": "## Pomodoros\n- [ ] (**0800-0825** [t:: 25m]) — BOB\n- [ ] () — WALK\n  - [[bob#^walk]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0800-0825** [off:: 25m]) — WALK\n  - [[bob#^walk]]\n- [ ] () — BOB\n",
+      "expected_off_clock": true
+    },
+    {
+      "id": "bare-row-restamped-at-close",
+      "now": "2026-11-01 09:00:00",
+      "token": "x",
+      "notes": {
+        "bob.md": "## Tasks\n- [*] #task Walk the dog #offclock ^walk\n"
+      },
+      "day": "## Pomodoros\n- [ ] (**0800-0900**) — WALK\n  - [[bob#^walk]]\n- [ ] () — PLAN\n",
+      "expected_day": "## Pomodoros\n- [x] (**0800-0900** [off:: 60m]) — WALK\n  - 🍅 [[bob#^walk]]\n- [ ] () — WALK\n  - [[bob#^walk]]\n- [ ] () — PLAN\n",
+      "expected_off_clock": true
+    },
+    {
+      "id": "conflict-row-at-close",
+      "now": "2026-11-01 09:00:00",
+      "token": "x",
+      "notes": {
+        "bob.md": "## Tasks\n- [*] #task Walk the dog #offclock ^walk\n"
+      },
+      "day": "## Pomodoros\n- [ ] (**0800-0900** [t:: 60m] [off:: 60m]) — WALK\n  - [[bob#^walk]]\n- [ ] () — PLAN\n",
+      "expected_day": "## Pomodoros\n- [x] (**0800-0900** [off:: 60m]) — WALK\n  - 🍅 [[bob#^walk]]\n- [ ] () — WALK\n  - [[bob#^walk]]\n- [ ] () — PLAN\n",
+      "expected_off_clock": true
+    },
+    {
+      "id": "running-link-restamps",
+      "now": "2026-11-01 09:10:00",
+      "token": "^bob:walk",
+      "notes": {
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #offclock ^walk\n"
+      },
+      "day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — WALK\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — WALK\n\t- [[bob#^walk]]\n",
+      "expected_off_clock": true
+    }
+  ]
+}

@@ -44,6 +44,7 @@ workflow guide.
   - [Plan budget](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
+  - [Which clock a session is on](#which-clock-a-session-is-on)
   - [Adjusting the current Pomodoro](#adjusting-the-current-pomodoro)
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
   - [Running into an event](#running-into-an-event)
@@ -3034,6 +3035,9 @@ Pomodoro sessions form a lifecycle, taught in this order:
 
 Mnemonic: "`=` starts the next session — or restarts the running one; `=name` starts that one — or swaps it in; `x` stops the running one."
 
+Which clock the session is on — `[t::]` or `[off::]` — follows the
+counted-links rule in [Which clock a session is on](#which-clock-a-session-is-on).
+
 Recognition: let `t` be the item's first physical line trimmed of leading
 and trailing whitespace (the token after a chain split; see
 [Chaining session operators on one line](#chaining-session-operators-on-one-line)).
@@ -3594,6 +3598,51 @@ annotations; for a non-empty `<X>`, it receives fresh timing. A note-free
 restart leaves the day file byte-identical to `x0 =<X>`; a kept-ledger swap
 matches `x0 =#name` except that the target receives the old running ledger.
 
+A kept-ledger swap still restamps `[t::]` / `[off::]` from the incoming
+session's counted Task Links: see
+[Which clock a session is on](#which-clock-a-session-is-on).
+
+### Which clock a session is on
+
+A session is **off-clock** when the Task Links it keeps, **K**, are
+non-empty and every one of them resolves to a task whose own line has a
+standalone `#offclock` tag (`#off-clock` and `#untracked` are aliases).
+Anything else stays on the work clock: an unlinked session, a mixed
+lineup, or a link that does not resolve. Mixed never splits per link —
+one on-clock or unresolved neighbour keeps the whole session on the
+clock. Off-clock rows write `[off:: Nm]`; worked rows write `[t:: Nm]`.
+
+**K** is the counted lineup the write is looking at:
+
+| Write | What counts |
+| --- | --- |
+| Start of a `MEET` with a non-empty [event run](#meet-starts-follow-the-calendar) | The run's events. Later lineup events are queue and do not mix the run. |
+| Any other start (plain, named, created, restart, kept-ledger swap, link start) | The started entry's counted Task Links, resolved against the staged vault. Same-note Event Tasks read the note being rewritten. |
+| Close | The links the closed row keeps after by-the-clock classification and the selection. Deferred and dropped lines are gone; a worked link that is also carried still counts. The key switches even when remaining time is under five minutes and the span does not retime. |
+| Running lineup edit (`^route:id`, a new-task link, `~K` on a start) | The running entry's counted Task Links after the add or drop, so the Now card stays honest. Open rows never count toward stats. |
+
+Four edges:
+
+| Lineup | Clock | Notice |
+| --- | --- | --- |
+| No counted Task Links | Worked | None |
+| Every kept link is `#offclock` | Off-clock | None |
+| At least one off-clock link and one on-clock task | Worked | `pomodoro_clock_mixed` |
+| At least one off-clock link and one unresolved link | Worked | `pomodoro_clock_mixed` |
+
+The mixed notice is a structured warning, including in `--dry-run`:
+
+`◌ LUNCH stays on the clock: it also links Fix the parser`
+
+`◌ LUNCH stays on the clock: [[bob#^gone]] does not resolve`
+
+A nested or glued token (`#offclock/nested`, `lunch#untracked`) is not a
+standalone tag, so that task stays on the clock. An `#offclock` "Walk the
+dog" start writes `(**0905-0930** [off:: 25m])`. Capture JSON reports
+`pomodoro_start.off_clock` / `pomodoro_close.off_clock` as `true` for an
+off-clock session and omits the field otherwise; `pomodoro_blocks[].off_clock`
+mirrors it.
+
 ### Adjusting the current Pomodoro
 
 Capture a whole item `+[N]` or `-[N]` to adjust today's current timed
@@ -3812,8 +3861,10 @@ A MEET written with its event run's future start has not begun when `x` runs
 before that start. The close never moves the end before the start: it records
 a zero-length session (`1300-1300`, `0m`) and warns ``capture `x0` to reset it
 instead``. After the start, `x` shortens by whole five-minute units as always.
-A session's clock key is retained when it closes: an off-clock row stays
-`(**1200-1230** [off:: 30m])`, while a worked row keeps `[t::]`.
+Closing restamps the clock key from the Task Links the closed row keeps
+(see [Which clock a session is on](#which-clock-a-session-is-on)), even when
+the remaining time is under five minutes and the span itself does not
+retime. Human output names the clock: `(60m · off-clock)`.
 
 #### Event Task links close by the clock
 
@@ -4018,6 +4069,9 @@ session it names — in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).
 Field notes:
 
+- `pomodoro_close.off_clock` is `true` for an off-clock session and omitted
+  otherwise; the closed row's `[t::]` / `[off::]` key follows
+  [Which clock a session is on](#which-clock-a-session-is-on).
 - `pomodoro_close.raw` is the typed token exactly as typed: the bare token
   (`x`, `x1*2!3~4`) for whole-item closes, and the `=`-prefixed suffix
   (`=x!1`) for link and task closes.

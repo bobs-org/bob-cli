@@ -1,7 +1,9 @@
 # MEET event-run vectors
 
 `vectors.json` is the shared Rust/Obsidian contract for how a MEET start follows
-its event run and which sessions are off-clock. The Rust test
+its event run and which sessions are off-clock. A non-MEET start whose counted
+lineup is all `#offclock` (or an alias) writes `[off::]` too; only a MEET with
+a non-empty event run classifies from the run instead of the whole lineup. The Rust test
 (`tests/cli/capture/meet_event_run.rs`) runs every case through
 `bob capture -f json`. The Obsidian mirror lives at
 `plugins/bob-ledger-tools/scripts/fixtures/meet_event_run/vectors.json` in

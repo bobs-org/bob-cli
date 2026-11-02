@@ -46,6 +46,7 @@ mod parse_template;
 mod plan_budget;
 mod pomodoro_adjust;
 mod pomodoro_chain;
+mod pomodoro_clock;
 mod pomodoro_close;
 mod pomodoro_close_log;
 mod pomodoro_close_names;

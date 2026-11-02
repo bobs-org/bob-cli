@@ -65,7 +65,11 @@ pub(super) fn plan_capture_with_pomodoro_link(
     });
     let typed = placed_type.as_ref().map(|(typed, _)| typed);
     if let Some(spec) = start {
-        let (updated_day, pomodoro_link_placement, summary, start_before) =
+        planner.stage(target, updated_target)?;
+        let day_relative =
+            day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path());
+        let (updated_day, pomodoro_link_placement, summary, start_before) = {
+            let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
             plan_pomodoro_start(
                 &original_day,
                 &block_link,
@@ -74,9 +78,11 @@ pub(super) fn plan_capture_with_pomodoro_link(
                 spec,
                 now,
                 typed,
-                day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path()),
-            )?;
-        planner.stage(target, updated_target)?;
+                day_relative,
+                Some(&vault),
+                warnings,
+            )?
+        };
         planner.stage(&day_file, updated_day)?;
         // The start moves (or creates) the entry and appends the Task
         // Link beneath it, so the entry carries both roles.
@@ -131,20 +137,28 @@ pub(super) fn plan_capture_with_pomodoro_link(
     )?;
     planner.stage(target, updated_target)?;
     planner.stage(&day_file, insertion.updated)?;
-    // The destination endpoint is post-state (scanned from the updated
-    // note), so its headline needs only resolution — or `Created` — for
-    // `before`. A fresh task link never moves a source.
-    let pomodoro_refs = vec![if insertion.creates_pomodoro {
-        PomodoroBlockRef::created(
-            PomodoroBlockRole::Linked,
-            insertion.destination.line.saturating_sub(1),
-        )
-    } else {
-        PomodoroBlockRef::resolved(
-            PomodoroBlockRole::Linked,
-            insertion.destination.line.saturating_sub(1),
-        )
-    }];
+    let day_relative =
+        day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path());
+    restamp_session_clock(
+        planner,
+        bob_dir,
+        &day_file,
+        day_relative,
+        insertion.destination.line,
+        now,
+        warnings,
+    )?;
+    // Restamping `[t::]` / `[off::]` changes the headline bytes, so
+    // Resolve cannot recover the pre-image by text. Pin `before` from
+    // the pre-state scan; a fresh task link never moves a source.
+    let pomodoro_refs = vec![linked_destination_ref(
+        &original_day,
+        insertion.destination.line,
+        insertion.destination.name.as_deref(),
+        insertion.destination.time_range.as_deref(),
+        None,
+        insertion.creates_pomodoro,
+    )];
     let mut destination = insertion.destination;
     if let Some((_, placed)) = placed_type.as_ref() {
         destination.placed_type = Some(placed.clone());
@@ -511,6 +525,7 @@ pub(super) fn plan_pomodoro_link_capture(
     if let Some(spec) = start {
         let (mut plan, guard) = plan_pomodoro_link_with_start(
             planner,
+            bob_dir,
             &day_file,
             &day_file_label,
             &block_link,
@@ -534,6 +549,7 @@ pub(super) fn plan_pomodoro_link_capture(
             task_plan.schedule_log,
             typed,
             placed_type.as_ref().map(|(_, placed)| placed.clone()),
+            warnings,
         )
         .map(|plan| (plan, None))?;
         if let Some(details) = plan.pomodoro_link.as_mut() {
@@ -555,6 +571,39 @@ pub(super) fn plan_pomodoro_link_capture(
     })?;
     if relocation.has_changes {
         planner.stage(&day_file, relocation.content.clone())?;
+        let day_relative =
+            day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path());
+        restamp_session_clock(
+            planner,
+            bob_dir,
+            &day_file,
+            day_relative,
+            relocation.destination.line,
+            now,
+            warnings,
+        )?;
+        if relocation.action
+            == capture_task_toggle::PomodoroLinkLedgerAction::Moved
+            && let Some(source) = relocation.source.as_ref()
+        {
+            let staged = planner.read_existing(&day_file)?;
+            if let Some(source_line) = matching_post_entry_line(
+                &staged,
+                source.name.as_deref(),
+                source.time_range.as_deref(),
+                relocation.destination.line,
+            ) {
+                restamp_session_clock(
+                    planner,
+                    bob_dir,
+                    &day_file,
+                    day_relative,
+                    source_line,
+                    now,
+                    warnings,
+                )?;
+            }
+        }
     }
     let action = match relocation.action {
         capture_task_toggle::PomodoroLinkLedgerAction::Linked => "linked",
@@ -568,18 +617,16 @@ pub(super) fn plan_pomodoro_link_capture(
     // pre-state headline and resolves through the item's line map.
     // Mention-only destinations (`AlreadyCurrent`, an already-linked
     // entry) still push their ref so the block shows with every line
-    // unchanged.
-    let mut pomodoro_refs = vec![if relocation.creates_pomodoro {
-        PomodoroBlockRef::created(
-            PomodoroBlockRole::Linked,
-            relocation.destination.line.saturating_sub(1),
-        )
-    } else {
-        PomodoroBlockRef::resolved(
-            PomodoroBlockRole::Linked,
-            relocation.destination.line.saturating_sub(1),
-        )
-    }];
+    // unchanged. Restamping changes dest headline bytes, so pin
+    // `before` from the pre-state scan instead of Resolve.
+    let mut pomodoro_refs = vec![linked_destination_ref(
+        &day_contents,
+        relocation.destination.line,
+        relocation.destination.name.as_deref(),
+        relocation.destination.time_range.as_deref(),
+        relocation.source.as_ref().map(|source| source.line),
+        relocation.creates_pomodoro,
+    )];
     if relocation.action == capture_task_toggle::PomodoroLinkLedgerAction::Moved
         && let Some(source) = relocation.source.as_ref()
     {
@@ -840,9 +887,92 @@ fn planned_item_from_pomodoro_link_plan(
     })
 }
 
+/// Pin a Linked dest ref to the pre-state headline. Restamping `[t::]` /
+/// `[off::]` changes dest bytes, so Resolve cannot recover the pre-image;
+/// a move can also shift the dest line, so the post-state line is not
+/// `before`.
+fn linked_destination_ref(
+    pre_contents: &str,
+    after_line: usize,
+    name: Option<&str>,
+    time_range: Option<&str>,
+    source_line: Option<usize>,
+    creates_pomodoro: bool,
+) -> PomodoroBlockRef {
+    let after = after_line.saturating_sub(1);
+    if creates_pomodoro {
+        return PomodoroBlockRef::created(PomodoroBlockRole::Linked, after);
+    }
+    let before =
+        matching_pre_entry_index(pre_contents, name, time_range, source_line)
+            .unwrap_or(after);
+    PomodoroBlockRef::at(PomodoroBlockRole::Linked, before, after)
+}
+
+fn matching_pre_entry_index(
+    pre_contents: &str,
+    name: Option<&str>,
+    time_range: Option<&str>,
+    source_line: Option<usize>,
+) -> Option<usize> {
+    let scan = capture_pomodoros::scan(pre_contents);
+    let mut matches = scan.entries.iter().filter(|entry| {
+        Some(entry.line) != source_line
+            && entry.name.as_deref() == name
+            && entry.time_range.as_deref() == time_range
+    });
+    let first = matches.next()?;
+    matches
+        .next()
+        .is_none()
+        .then_some(first.line.saturating_sub(1))
+}
+
+fn matching_post_entry_line(
+    contents: &str,
+    name: Option<&str>,
+    time_range: Option<&str>,
+    exclude_line: usize,
+) -> Option<usize> {
+    let scan = capture_pomodoros::scan(contents);
+    let mut matches = scan.entries.iter().filter(|entry| {
+        entry.line != exclude_line
+            && entry.name.as_deref() == name
+            && entry.time_range.as_deref() == time_range
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first.line)
+}
+
+fn apply_link_start_clock(
+    planner: &CaptureBatchPlanner,
+    bob_dir: &Path,
+    contents: String,
+    day_relative: &Path,
+    entry_index: usize,
+    spec: &PomodoroStartSpec,
+    now: chrono::NaiveDateTime,
+) -> Result<(String, Option<MeetFinish>), CaptureError> {
+    let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
+    apply_meet_rule(
+        contents,
+        &MeetStartInput {
+            day_relative,
+            entry_index,
+            spec,
+            span_rule: SpanRule::Written,
+            numbers: None,
+            now,
+            vault: Some(&vault),
+            use_event_run: true,
+        },
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_pomodoro_link_with_start(
     planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
     day_file: &Path,
     day_file_label: &str,
     block_link: &str,
@@ -866,6 +996,7 @@ pub(super) fn plan_pomodoro_link_with_start(
     schedule_log: Option<capture_schedule_log::ScheduleLog>,
     typed: Option<&capture_task_toggle::TypedImplicit<'_>>,
     placed: Option<super::batch::PlacedType>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<CaptureWritePlan, CaptureError> {
     let (start_text, end_text, duration_minutes, time_range) =
         compute_pomodoro_start_range(now, spec)?;
@@ -945,7 +1076,8 @@ pub(super) fn plan_pomodoro_link_with_start(
     };
 
     if queue.is_none() {
-        let (updated_day, placement, summary, start_before) =
+        let (updated_day, placement, summary, start_before) = {
+            let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
             plan_pomodoro_start(
                 day_contents,
                 block_link,
@@ -955,7 +1087,10 @@ pub(super) fn plan_pomodoro_link_with_start(
                 now,
                 typed,
                 day_relative,
-            )?;
+                Some(&vault),
+                warnings,
+            )?
+        };
         planner.stage(day_file, updated_day)?;
         let pomodoro_refs = PomodoroBlockRef::started_and_linked(
             start_before,
@@ -1039,16 +1174,14 @@ pub(super) fn plan_pomodoro_link_with_start(
                             dest_index,
                             &time_range,
                         )?;
-                    let (started_day, meet_finish) = apply_meet_rule(
+                    let (started_day, meet_finish) = apply_link_start_clock(
+                        planner,
+                        bob_dir,
                         started_day,
-                        &MeetStartInput {
-                            day_relative,
-                            entry_index: moved_index,
-                            spec,
-                            span_rule: SpanRule::Written,
-                            numbers: None,
-                            now,
-                        },
+                        day_relative,
+                        moved_index,
+                        spec,
+                        now,
                     )?;
                     planner.stage(day_file, started_day.clone())?;
                     // The queued link's own entry started: it carries
@@ -1091,7 +1224,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         event_conflict: None,
                     };
                     if let Some(finish) = meet_finish {
-                        finish.apply(&mut summary);
+                        warnings.extend(finish.apply(&mut summary));
                     }
                     attach_start_event_conflict(
                         &mut summary,
@@ -1203,16 +1336,14 @@ pub(super) fn plan_pomodoro_link_with_start(
                     });
                 let dest_json =
                     destination_json(&dest_entry, false, pomodoro_name);
-                let (moved_day, meet_finish) = apply_meet_rule(
+                let (moved_day, meet_finish) = apply_link_start_clock(
+                    planner,
+                    bob_dir,
                     moved_day,
-                    &MeetStartInput {
-                        day_relative,
-                        entry_index: dest_json.line.saturating_sub(1),
-                        spec,
-                        span_rule: SpanRule::Written,
-                        numbers: None,
-                        now,
-                    },
+                    day_relative,
+                    dest_json.line.saturating_sub(1),
+                    spec,
+                    now,
                 )?;
                 planner.stage(day_file, moved_day.clone())?;
                 // The named entry started and moved, and the queued link
@@ -1246,7 +1377,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     event_conflict: None,
                 };
                 if let Some(finish) = meet_finish {
-                    finish.apply(&mut summary);
+                    warnings.extend(finish.apply(&mut summary));
                 }
                 attach_start_event_conflict(
                     &mut summary,
@@ -1372,16 +1503,14 @@ pub(super) fn plan_pomodoro_link_with_start(
                     });
                 let dest_json =
                     destination_json(&dest_entry, true, pomodoro_name);
-                let (moved_day, meet_finish) = apply_meet_rule(
+                let (moved_day, meet_finish) = apply_link_start_clock(
+                    planner,
+                    bob_dir,
                     moved_day,
-                    &MeetStartInput {
-                        day_relative,
-                        entry_index: dest_json.line.saturating_sub(1),
-                        spec,
-                        span_rule: SpanRule::Written,
-                        numbers: None,
-                        now,
-                    },
+                    day_relative,
+                    dest_json.line.saturating_sub(1),
+                    spec,
+                    now,
                 )?;
                 planner.stage(day_file, moved_day.clone())?;
                 // The named entry was created and started, and the queued
@@ -1414,7 +1543,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     event_conflict: None,
                 };
                 if let Some(finish) = meet_finish {
-                    finish.apply(&mut summary);
+                    warnings.extend(finish.apply(&mut summary));
                 }
                 attach_start_event_conflict(
                     &mut summary,
@@ -1493,16 +1622,14 @@ pub(super) fn plan_pomodoro_link_with_start(
         q_entry_index,
         &time_range,
     )?;
-    let (started_day, meet_finish) = apply_meet_rule(
+    let (started_day, meet_finish) = apply_link_start_clock(
+        planner,
+        bob_dir,
         started_day,
-        &MeetStartInput {
-            day_relative,
-            entry_index: moved_index,
-            spec,
-            span_rule: SpanRule::Written,
-            numbers: None,
-            now,
-        },
+        day_relative,
+        moved_index,
+        spec,
+        now,
     )?;
     planner.stage(day_file, started_day.clone())?;
     let after_scan = capture_pomodoros::scan(&started_day);
@@ -1536,7 +1663,7 @@ pub(super) fn plan_pomodoro_link_with_start(
         event_conflict: None,
     };
     if let Some(finish) = meet_finish {
-        finish.apply(&mut summary);
+        warnings.extend(finish.apply(&mut summary));
     }
     attach_start_event_conflict(
         &mut summary,

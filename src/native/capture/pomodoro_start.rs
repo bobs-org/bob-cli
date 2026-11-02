@@ -69,6 +69,8 @@ pub(super) fn plan_pomodoro_start(
     now: chrono::NaiveDateTime,
     typed: Option<&crate::native::capture_task_toggle::TypedImplicit<'_>>,
     day_relative: &Path,
+    vault: Option<&dyn capture_pomodoro_close::CloseVault>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<
     (String, Placement, PomodoroStartSummary, PomodoroBlockBefore),
     CaptureError,
@@ -94,10 +96,12 @@ pub(super) fn plan_pomodoro_start(
             span_rule: SpanRule::Written,
             numbers: None,
             now,
+            vault,
+            use_event_run: true,
         },
     )?;
     if let Some(finish) = finish {
-        finish.apply(&mut summary);
+        warnings.extend(finish.apply(&mut summary));
     }
     attach_start_event_conflict(
         &mut summary,
@@ -981,17 +985,22 @@ pub(super) fn plan_pomodoro_start_item(
     .map_err(|error| CaptureError::io(error.to_string()))?;
     let (updated, moved_index) =
         start_existing_pomodoro_entry(&drop_plan.contents, index, &time_range)?;
-    let (updated, meet_finish) = apply_meet_rule(
-        updated,
-        &MeetStartInput {
-            day_relative: Path::new(&rel),
-            entry_index: moved_index,
-            spec: &spec,
-            span_rule: SpanRule::Calendar,
-            numbers: Some(&drop_plan.kept),
-            now,
-        },
-    )?;
+    let (updated, meet_finish) = {
+        let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+        apply_meet_rule(
+            updated,
+            &MeetStartInput {
+                day_relative: Path::new(&rel),
+                entry_index: moved_index,
+                spec: &spec,
+                span_rule: SpanRule::Calendar,
+                numbers: Some(&drop_plan.kept),
+                now,
+                vault: Some(&vault),
+                use_event_run: true,
+            },
+        )?
+    };
     let task_line = line_spans(&updated)
         .get(moved_index)
         .map(|line| line.text.to_string())
@@ -1208,17 +1217,22 @@ fn plan_override_restart_item(
     let (moved_contents, moved_index) =
         move_started_pomodoro_to_current_slot(&restarted, running_index)?;
     let rel = close_day_relative(&request.bob_dir, day_file);
-    let (moved_contents, meet_finish) = apply_meet_rule(
-        moved_contents,
-        &MeetStartInput {
-            day_relative: Path::new(&rel),
-            entry_index: moved_index,
-            spec,
-            span_rule: SpanRule::Calendar,
-            numbers: Some(&drop_plan.kept),
-            now,
-        },
-    )?;
+    let (moved_contents, meet_finish) = {
+        let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+        apply_meet_rule(
+            moved_contents,
+            &MeetStartInput {
+                day_relative: Path::new(&rel),
+                entry_index: moved_index,
+                spec,
+                span_rule: SpanRule::Calendar,
+                numbers: Some(&drop_plan.kept),
+                now,
+                vault: Some(&vault),
+                use_event_run: true,
+            },
+        )?
+    };
     let task_line = line_spans(&moved_contents)
         .get(moved_index)
         .map(|line| line.text.to_string())
@@ -1722,21 +1736,26 @@ fn plan_override_swap_item(
         }
     };
     let swap_rel = close_day_relative(&request.bob_dir, day_file);
-    let (contents, meet_finish) = apply_meet_rule(
-        contents,
-        &MeetStartInput {
-            day_relative: Path::new(&swap_rel),
-            entry_index: target_final,
-            spec,
-            span_rule: if keeps_ledger {
-                SpanRule::Written
-            } else {
-                SpanRule::Calendar
+    let (contents, meet_finish) = {
+        let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+        apply_meet_rule(
+            contents,
+            &MeetStartInput {
+                day_relative: Path::new(&swap_rel),
+                entry_index: target_final,
+                spec,
+                span_rule: if keeps_ledger {
+                    SpanRule::Written
+                } else {
+                    SpanRule::Calendar
+                },
+                numbers: drop_plan.as_ref().map(|plan| plan.kept.as_slice()),
+                now,
+                vault: Some(&vault),
+                use_event_run: true,
             },
-            numbers: drop_plan.as_ref().map(|plan| plan.kept.as_slice()),
-            now,
-        },
-    )?;
+        )?
+    };
     planner.stage(day_file, contents.clone())?;
     if let Some(warning) = suggestion_warning {
         warnings.push(warning.into());
@@ -2543,17 +2562,22 @@ fn plan_named_pomodoro_start_item(
                 (updated, moved_index, true, warning, None)
             }
         };
-    let (updated, meet_finish) = apply_meet_rule(
-        updated,
-        &MeetStartInput {
-            day_relative: Path::new(rel),
-            entry_index: moved_index,
-            spec,
-            span_rule: SpanRule::Calendar,
-            numbers: drop_plan.as_ref().map(|plan| plan.kept.as_slice()),
-            now,
-        },
-    )?;
+    let (updated, meet_finish) = {
+        let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+        apply_meet_rule(
+            updated,
+            &MeetStartInput {
+                day_relative: Path::new(rel),
+                entry_index: moved_index,
+                spec,
+                span_rule: SpanRule::Calendar,
+                numbers: drop_plan.as_ref().map(|plan| plan.kept.as_slice()),
+                now,
+                vault: Some(&vault),
+                use_event_run: true,
+            },
+        )?
+    };
     planner.stage(day_file, updated)?;
     if let Some(warning) = suggestion_warning {
         warnings.push(warning.into());

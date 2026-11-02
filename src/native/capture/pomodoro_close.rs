@@ -498,6 +498,7 @@ pub(super) fn build_close_summary_json(
         closed_at,
         remaining_minutes,
         decremented_minutes,
+        off_clock: plan.off_clock,
         tasks,
         carried,
         notes: ledger.notes.clone(),
@@ -511,6 +512,30 @@ pub(super) fn build_close_summary_json(
     };
     refresh_close_headline(&ledger.contents, &mut summary);
     (summary, extra_warnings)
+}
+
+fn emit_close_clock_warning(
+    plan: &capture_pomodoro_close::PomodoroClosePlan,
+    warnings: &mut Vec<CaptureWarning>,
+) {
+    let Some(message) = plan.clock_warning.as_ref() else {
+        return;
+    };
+    if warnings.iter().any(|warning| {
+        matches!(
+            warning,
+            CaptureWarning::Structured(structured)
+                if structured.code == "pomodoro_clock_mixed"
+        )
+    }) {
+        return;
+    }
+    warnings.push(CaptureWarning::Structured(StructuredCaptureWarning {
+        code: "pomodoro_clock_mixed",
+        label: None,
+        count: None,
+        message: message.clone(),
+    }));
 }
 
 /// Refs for the types a created continuation shed, in name order. Refs
@@ -1617,6 +1642,7 @@ pub(super) fn plan_pomodoro_close_item(
     };
     let (mut summary, extra_warnings) =
         build_close_summary_json(&spec, &rel, &plan, now, types.as_ref());
+    emit_close_clock_warning(&plan, warnings);
     warnings.extend(plan.warnings.iter().cloned().map(CaptureWarning::from));
     warnings.extend(extra_warnings.iter().cloned().map(CaptureWarning::from));
     // Surface close warnings at the top level as well.
@@ -2365,6 +2391,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     };
     let (mut summary, extra_warnings) =
         build_close_summary_json(&close_spec, &rel, &plan, now, types.as_ref());
+    emit_close_clock_warning(&plan, warnings);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings
             .iter()
@@ -2675,6 +2702,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     };
     let (mut summary, extra_warnings) =
         build_close_summary_json(close_spec, &rel, &plan, now, types.as_ref());
+    emit_close_clock_warning(&plan, warnings);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings
             .iter()

@@ -468,7 +468,7 @@ fn pomodoro_ref_targets_an_unnamed_entry() {
     assert_success(&output);
     assert_eq!(json["capture"]["pomodoro_link_action"], "linked");
     let day_after = fs::read_to_string(&vault.day_file).expect("day");
-    let unnamed_pos = day_after.find("(**0900-0930**)").expect("unnamed");
+    let unnamed_pos = day_after.find("(**0900-0930**").expect("unnamed");
     let link_pos = day_after.find("[[sase#^ref-attention]]").expect("link");
     let reading_pos = day_after.find("— READING").expect("reading");
     assert!(
