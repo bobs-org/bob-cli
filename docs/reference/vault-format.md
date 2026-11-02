@@ -251,8 +251,44 @@ parent: "[[area]]"
 Optional `ready_cap: N` or `ready_cap: off` overrides
 `plan.max_ready_per_note` (default 5) for that note's whole Ready lane.
 Optional `task_refresh: N` overrides the Ready freshness interval for tasks
-that live here. Optional `project_name_aliases` lists extra capture/ref
-names for the stem.
+that live here. Optional scalar `offclock: true` or `offclock: false` sets the
+clock default for tasks whose root walk reaches this note. A nearer area or
+project value wins; `false` ends inheritance and a deeper `true` can turn it
+back on. Blank or absent values inherit. Other values are invalid, resolve
+on-clock, and are reported as `note_offclock_invalid`. On other note kinds the
+key is ignored and reported as `note_offclock_ignored`. Optional
+`project_name_aliases` lists extra capture/ref names for the stem.
+
+### Task clock tags and note defaults
+
+| Spelling | Meaning |
+| --- | --- |
+| `#off` | Canonical explicit off-clock task tag; writers emit this spelling. |
+| `#on` | Explicit on-clock override; it wins if an off spelling is also present, with a `clock_tag_conflict` diagnostic. |
+| `#offclock`, `#off-clock`, `#untracked` | Deprecated aliases that remain readable. |
+| `offclock: true` / `offclock: false` | Area or project default inherited on the task's root walk. |
+
+On vault lines, clock tags are standalone ASCII-case-insensitive tokens,
+outside code spans and Markdown links. A tag starts at the line or after
+whitespace and ends at whitespace, the line end, or `] ) } : . , ; ! ?`.
+Thus `#off/x`, `#office`, `#offclock` as a prefix of another token, `#one`,
+and `#online` do not match. The aliases match as whole tokens too.
+
+The first matching rule decides a task's clock:
+
+1. `#on` on the task line means on-clock and wins a same-line conflict.
+2. `#off` or a deprecated alias means off-clock, including under
+   `offclock: false`.
+3. Otherwise, the nearest area or project `offclock:` value on the root walk
+   decides. `false` stops the walk; an invalid nearer value resolves on-clock
+   instead of inheriting a parent value.
+4. With no value, the task is on-clock.
+
+The root walk starts at a valid task `[root:: NOTE]` target, otherwise at the
+residence note, and follows the same 16-note, cycle-safe parent chain as task
+type defaults. A canonical daily note contributes no default unless `[root::]`
+retargets the walk. Other note kinds are traversed but do not declare a clock
+default. Inherited tags are never written onto task lines.
 
 Inbox files are area notes whose `parent` resolves to `inbox.md`
 (`mac_inbox.md`, `gkeep_inbox.md` today), plus `inbox.md` itself.
@@ -369,11 +405,12 @@ qualify too; Google Calendar is not required.
 The span is local to the daily note's `timezone:` (or the host timezone).
 Hours are `00`–`23` and minutes are `00`–`59`; when the end is earlier than
 the start, the event crosses midnight. Context rows have no checkbox, so they
-are not Event Tasks. A standalone `#offclock` tag (aliases `#off-clock` and
-`#untracked`, case-insensitive, not inside a Markdown link or code span)
-marks an off-clock Event Task. A session is off-clock only when it links at
-least one task and every link resolves to an Event Task with this tag;
-unresolved, unlinked, or mixed links stay worked. An Event Task may carry
+are not Event Tasks. A standalone `#off` tag (deprecated aliases `#offclock`,
+`#off-clock`, and `#untracked`) marks an Event Task off-clock; `#on` is an
+on-clock override. Untagged Event Tasks inherit the area or project
+`offclock:` default through their `[root::]` walk. A session is off-clock only
+when it links at least one task and every link resolves off-clock; unresolved,
+unlinked, or mixed links stay worked. An Event Task may carry
 `[root:: NOTE]` to attribute its Pomodoro time to that area or project;
 `[type:: MEET]` is needed only when the root's suggested task type is not
 already `MEET`. Link an Event Task with its local block link under a Pomodoro.
@@ -387,8 +424,9 @@ Events stamp: which Google account last synced the section, and when. A written 
 `📅` identity badge (Google's event link, also the adoption key), an optional
 `📹` join badge, and an optional `📍` maps badge for a non-URL location (the
 `📅`/`📹`/`📍` badges are plain `[emoji](url)` links with no link title), then
-` #offclock` for Google off-clock events (Google also accepts `#off-clock` and
-legacy `#untracked`), then `[buffer:: -30m +15m]` for buffered events (each
+` #off` for Google off-clock events (`#on` is the on-clock override; Google
+also accepts deprecated `#offclock`, `#off-clock`, and `#untracked`), then
+`[buffer:: -30m +15m]` for buffered events (each
 side omitted when zero; no field without buffers), then `[root::]`, then
 `[type:: MEET]` only when needed, then a `^block-id` minted from the bare
 title and unique within the note. When the Google event has a human

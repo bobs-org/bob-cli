@@ -160,38 +160,6 @@ impl<'a> HomesEngine<'a> {
         }
 
         let mut health = HomesHealthReport::default();
-        {
-            let resolver = self.resolver.borrow();
-            let resolver_health: ResolverHealth = resolver.health().clone();
-            health.area_color_invalid = resolver_health
-                .area_color_invalid
-                .iter()
-                .map(|lint| HomeLintReport {
-                    path: lint.path.clone(),
-                    raw: lint.raw.clone(),
-                })
-                .collect();
-            health.root_field_invalid = resolver_health
-                .root_field_invalid
-                .iter()
-                .map(|lint| RootFieldInvalidReport {
-                    path: lint.path.clone(),
-                    line: lint.line,
-                    raw: lint.raw.clone(),
-                    reason: lint.reason.clone(),
-                })
-                .collect();
-            health.root_field_not_root = resolver_health
-                .root_field_not_root
-                .iter()
-                .map(|lint| RootFieldNotRootReport {
-                    path: lint.path.clone(),
-                    line: lint.line,
-                    raw: lint.raw.clone(),
-                    root: lint.root.clone(),
-                })
-                .collect();
-        }
 
         let mut collisions = Vec::new();
         for (hue, mut areas) in top_areas {
@@ -334,6 +302,57 @@ impl<'a> HomesEngine<'a> {
                 let home = resolver.resolve_note(Path::new(&area));
                 self.remember(&home);
             }
+        }
+
+        // Clock and root-field lookups can add resolver lints while sessions
+        // are evaluated, so snapshot health after the final resolver use.
+        {
+            let resolver = self.resolver.borrow();
+            let resolver_health: ResolverHealth = resolver.health().clone();
+            health.area_color_invalid = resolver_health
+                .area_color_invalid
+                .iter()
+                .map(|lint| HomeLintReport {
+                    path: lint.path.clone(),
+                    raw: lint.raw.clone(),
+                })
+                .collect();
+            health.note_offclock_invalid = resolver_health
+                .note_offclock_invalid
+                .iter()
+                .map(|lint| HomeLintReport {
+                    path: lint.path.clone(),
+                    raw: lint.raw.clone(),
+                })
+                .collect();
+            health.note_offclock_ignored = resolver_health
+                .note_offclock_ignored
+                .iter()
+                .map(|lint| HomeLintReport {
+                    path: lint.path.clone(),
+                    raw: lint.raw.clone(),
+                })
+                .collect();
+            health.root_field_invalid = resolver_health
+                .root_field_invalid
+                .iter()
+                .map(|lint| RootFieldInvalidReport {
+                    path: lint.path.clone(),
+                    line: lint.line,
+                    raw: lint.raw.clone(),
+                    reason: lint.reason.clone(),
+                })
+                .collect();
+            health.root_field_not_root = resolver_health
+                .root_field_not_root
+                .iter()
+                .map(|lint| RootFieldNotRootReport {
+                    path: lint.path.clone(),
+                    line: lint.line,
+                    raw: lint.raw.clone(),
+                    root: lint.root.clone(),
+                })
+                .collect();
         }
 
         let mut catalog = BTreeMap::new();
@@ -1100,6 +1119,28 @@ fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
             date: None,
             message: format!(
                 "{}: invalid color {:?}; using fallback. Set color: to a palette slot",
+                lint.path, lint.raw
+            ),
+        });
+    }
+    for lint in &health.note_offclock_invalid {
+        warnings.push(StatsWarning {
+            code: "note_offclock_invalid".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{}: invalid offclock value {:?}; using on-clock. Use true or false",
+                lint.path, lint.raw
+            ),
+        });
+    }
+    for lint in &health.note_offclock_ignored {
+        warnings.push(StatsWarning {
+            code: "note_offclock_ignored".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{}: offclock value {:?} ignored; only area and project notes set clock defaults",
                 lint.path, lint.raw
             ),
         });

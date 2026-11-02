@@ -29,6 +29,15 @@ pub(crate) enum NoteTheme {
     Invalid(String),
 }
 
+/// An area's or project's `offclock:` default. Absent and blank values
+/// inherit; invalid values stop the walk and resolve on-clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NoteOffClock {
+    True,
+    False,
+    Invalid(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskRootFact {
     pub(crate) line_number: usize,
@@ -43,6 +52,7 @@ pub(crate) struct NoteFacts {
     pub(crate) root: bool,
     pub(crate) theme: Option<NoteTheme>,
     pub(crate) theme_conflict: bool,
+    pub(crate) offclock: Option<NoteOffClock>,
     /// Unique trailing block id → root field on that task line.
     /// Duplicate block ids are omitted, matching `note_tasks::by_block_id`.
     pub(crate) task_roots: HashMap<String, TaskRootFact>,
@@ -79,6 +89,9 @@ impl NoteFacts {
             .as_ref()
             .map(parse_note_theme)
             .unwrap_or((None, false));
+        let offclock = frontmatter
+            .as_ref()
+            .and_then(|frontmatter| parse_note_offclock(frontmatter));
         Self {
             kind,
             parent,
@@ -86,7 +99,25 @@ impl NoteFacts {
             root,
             theme,
             theme_conflict,
+            offclock,
             task_roots: collect_task_roots(contents),
+        }
+    }
+}
+
+fn parse_note_offclock(
+    frontmatter: &super::super::projects::Frontmatter<'_>,
+) -> Option<NoteOffClock> {
+    match frontmatter_scalar(frontmatter, "offclock") {
+        FrontmatterScalar::Absent | FrontmatterScalar::Blank => None,
+        FrontmatterScalar::NonScalar(raw) => Some(NoteOffClock::Invalid(raw)),
+        FrontmatterScalar::Value(raw) => {
+            let value = raw.to_ascii_lowercase();
+            Some(match value.as_str() {
+                "true" => NoteOffClock::True,
+                "false" => NoteOffClock::False,
+                _ => NoteOffClock::Invalid(raw),
+            })
         }
     }
 }

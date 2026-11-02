@@ -523,6 +523,10 @@ Daily notes have no default walk. The walk reuses the R1 residence chain
 with its 16-note and cycle limits. A set `[root:: X]` field starts that
 walk at X, including when the task lives in a daily note.
 
+Clock inheritance uses the same root start and note chain, with the separate
+`offclock: true|false` frontmatter key and `#off` / `#on` task tags. See the
+[vault clock contract](reference/vault-format.md#task-clock-tags-and-note-defaults).
+
 ### Task fields
 
 A task line carries none, one set field, or repair state:

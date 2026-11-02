@@ -142,6 +142,8 @@ pub(crate) struct ResolverHealth {
     pub(crate) ambiguous_links: u32,
     pub(crate) unresolved_links: u32,
     pub(crate) area_color_invalid: Vec<NoteLint>,
+    pub(crate) note_offclock_invalid: Vec<NoteLint>,
+    pub(crate) note_offclock_ignored: Vec<NoteLint>,
     pub(crate) root_field_invalid: Vec<RootFieldInvalidLint>,
     pub(crate) root_field_not_root: Vec<RootFieldNotRootLint>,
 }
@@ -151,6 +153,8 @@ pub(crate) struct HomeResolver<S> {
     homes: HashMap<PathBuf, Home>,
     facts: HashMap<PathBuf, Option<NoteFacts>>,
     color_linted: BTreeSet<PathBuf>,
+    offclock_invalid_linted: BTreeSet<PathBuf>,
+    offclock_ignored_linted: BTreeSet<PathBuf>,
     root_invalid_linted: BTreeSet<(String, usize)>,
     root_not_root_linted: BTreeSet<(String, usize)>,
     health: ResolverHealth,
@@ -163,6 +167,8 @@ impl<S: HomeSource> HomeResolver<S> {
             homes: HashMap::new(),
             facts: HashMap::new(),
             color_linted: BTreeSet::new(),
+            offclock_invalid_linted: BTreeSet::new(),
+            offclock_ignored_linted: BTreeSet::new(),
             root_invalid_linted: BTreeSet::new(),
             root_not_root_linted: BTreeSet::new(),
             health: ResolverHealth::default(),
@@ -180,6 +186,8 @@ impl<S: HomeSource> HomeResolver<S> {
         self.homes.clear();
         self.facts.clear();
         self.color_linted.clear();
+        self.offclock_invalid_linted.clear();
+        self.offclock_ignored_linted.clear();
         self.root_invalid_linted.clear();
         self.root_not_root_linted.clear();
         self.health = ResolverHealth::default();
@@ -199,6 +207,51 @@ impl<S: HomeSource> HomeResolver<S> {
         target: &str,
     ) -> LinkResolution {
         self.source.resolve(current, target)
+    }
+
+    /// The PT13 note walk start: use a resolvable task `[root::]` target
+    /// with a home, otherwise fall back to the task's residence note.
+    pub(crate) fn root_walk_start(
+        &mut self,
+        residence_path: &Path,
+        line: &str,
+    ) -> Option<PathBuf> {
+        let TaskRootState::Set { raw } = parse_task_root(line) else {
+            return None;
+        };
+        match self.source.resolve(residence_path, &raw) {
+            LinkResolution::Found(path) => {
+                let home = self.resolve_note(&path);
+                (home.key != "@unfiled").then_some(path)
+            }
+            LinkResolution::Ambiguous | LinkResolution::Missing => None,
+        }
+    }
+
+    pub(crate) fn lint_note_offclock_invalid(
+        &mut self,
+        path: &Path,
+        raw: &str,
+    ) {
+        if self.offclock_invalid_linted.insert(path.to_path_buf()) {
+            self.health.note_offclock_invalid.push(NoteLint {
+                path: path_string(path),
+                raw: raw.to_string(),
+            });
+        }
+    }
+
+    pub(crate) fn lint_note_offclock_ignored(
+        &mut self,
+        path: &Path,
+        raw: &str,
+    ) {
+        if self.offclock_ignored_linted.insert(path.to_path_buf()) {
+            self.health.note_offclock_ignored.push(NoteLint {
+                path: path_string(path),
+                raw: raw.to_string(),
+            });
+        }
     }
 
     pub(crate) fn home_for_link(

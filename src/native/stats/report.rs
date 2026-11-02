@@ -420,6 +420,10 @@ pub(crate) struct HomesHealthReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) area_color_invalid: Vec<HomeLintReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) note_offclock_invalid: Vec<HomeLintReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) note_offclock_ignored: Vec<HomeLintReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) hue_collisions: Vec<HueCollisionReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) root_field_invalid: Vec<RootFieldInvalidReport>,

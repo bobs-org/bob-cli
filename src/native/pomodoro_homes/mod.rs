@@ -1,5 +1,6 @@
 //! Derived Pomodoro homes shared by the CLI, stats, and ledger integrations.
 //!
+mod clock;
 mod facts;
 mod json;
 mod label;
@@ -10,7 +11,8 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use facts::{NoteFacts, NoteKind, NoteTheme};
+pub(crate) use clock::{effective_clock, ClockResolution, ClockSource};
+pub(crate) use facts::{NoteFacts, NoteKind, NoteOffClock, NoteTheme};
 pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};
 pub(crate) use palette::{fallback_hue, Hue};
 pub(crate) use resolve::{

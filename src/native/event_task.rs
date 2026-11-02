@@ -9,7 +9,12 @@ use std::{
 use chrono::NaiveDate;
 
 use super::{
-    collect_done, markdown, task_fields,
+    clock_tags::{line_clock_tag, strip_trailing_clock_tag, ClockTag},
+    collect_done, markdown,
+    pomodoro_homes::{
+        effective_clock, ClockResolution, ClockSource, HomeResolver, HomeSource,
+    },
+    task_fields,
     task_status_hooks::canonical_daily_date,
 };
 
@@ -208,6 +213,9 @@ pub(crate) struct EventTask {
     pub buffer: EventBuffer,
     pub untracked: bool,
     pub off_clock: bool,
+    pub clock_tag: ClockTag,
+    pub clock_source: ClockSource,
+    pub clock_note: Option<String>,
     pub status: char,
     pub block_id: Option<String>,
     pub title: String,
@@ -233,6 +241,9 @@ pub(crate) struct EventNoteRow {
     pub buffer: EventBuffer,
     pub untracked: bool,
     pub off_clock: bool,
+    pub clock_tag: ClockTag,
+    pub clock_source: ClockSource,
+    pub clock_note: Option<String>,
     pub status: Option<char>,
     pub block_id: Option<String>,
     pub title: String,
@@ -254,6 +265,9 @@ impl EventNoteRow {
             buffer: self.buffer,
             untracked: self.untracked,
             off_clock: self.off_clock,
+            clock_tag: self.clock_tag.clone(),
+            clock_source: self.clock_source,
+            clock_note: self.clock_note.clone(),
             status: self.status?,
             block_id: self.block_id.clone(),
             title: self.title.clone(),
@@ -555,12 +569,17 @@ pub(crate) fn event_task_at(
 
 fn event_task_from_line(line_index: usize, line: &str) -> Option<EventTask> {
     let parsed = parse_event_task_line(line)?;
+    let clock_tag = line_clock_tag(line);
+    let clock = ClockResolution::tag_only(&clock_tag);
     Some(EventTask {
         line_index,
         span: parsed.span,
         buffer: parse_event_buffer(line),
-        untracked: line_has_off_clock_tag(line),
-        off_clock: line_has_off_clock_tag(line),
+        untracked: clock.off_clock,
+        off_clock: clock.off_clock,
+        clock_tag,
+        clock_source: clock.source,
+        clock_note: clock.note,
         status: parsed.status,
         block_id: collect_done::trailing_block_id_in_line(line),
         title: clean_event_title(parsed.after),
@@ -572,13 +591,18 @@ fn context_row_from_line(
     line: &str,
 ) -> Option<EventNoteRow> {
     let parsed = parse_context_row(line)?;
+    let clock_tag = line_clock_tag(line);
+    let clock = ClockResolution::tag_only(&clock_tag);
     Some(EventNoteRow {
         line_index,
         kind: parsed.kind,
         span: parsed.span,
         buffer: parse_event_buffer(line),
-        untracked: line_has_off_clock_tag(line),
-        off_clock: line_has_off_clock_tag(line),
+        untracked: clock.off_clock,
+        off_clock: clock.off_clock,
+        clock_tag,
+        clock_source: clock.source,
+        clock_note: clock.note,
         status: None,
         block_id: collect_done::trailing_block_id_in_line(line),
         title: clean_event_title(parsed.after),
@@ -655,6 +679,9 @@ pub(crate) fn events_in_note(
                 buffer: task.buffer,
                 untracked: task.untracked,
                 off_clock: task.off_clock,
+                clock_tag: task.clock_tag,
+                clock_source: task.clock_source,
+                clock_note: task.clock_note,
                 status: Some(task.status),
                 block_id: task.block_id,
                 title: task.title,
@@ -680,6 +707,32 @@ pub(crate) fn events_in_note(
             .then(left.line_index.cmp(&right.line_index)),
     });
     events
+}
+
+/// Resolve every Event Task row in a daily note against the same effective
+/// clock rule used for ordinary tasks. Context rows remain tag-only.
+#[allow(dead_code)]
+pub(crate) fn enrich_event_clocks<S: HomeSource>(
+    daily_path: &Path,
+    contents: &str,
+    events: &mut [EventNoteRow],
+    resolver: &mut HomeResolver<S>,
+) {
+    let lines: Vec<&str> = contents.lines().collect();
+    for event in events {
+        if event.kind != EventKind::Task {
+            continue;
+        }
+        let Some(line) = lines.get(event.line_index).copied() else {
+            continue;
+        };
+        event.clock_tag = line_clock_tag(line);
+        let resolution = effective_clock(resolver, daily_path, line);
+        event.off_clock = resolution.off_clock;
+        event.untracked = resolution.off_clock;
+        event.clock_source = resolution.source;
+        event.clock_note = resolution.note;
+    }
 }
 
 /// Newly conflicting open Event Tasks: `conflicts(new) && !conflicts(old)`,
@@ -939,30 +992,7 @@ pub(crate) fn cluster_by_off_clock<T>(
 }
 
 pub(crate) fn line_has_off_clock_tag(line: &str) -> bool {
-    let masked = mask_code_and_markdown_links(line);
-    let lower = masked.to_ascii_lowercase();
-    for needle in ["#offclock", "#off-clock", "#untracked"] {
-        let mut search = 0;
-        while let Some(relative) = lower[search..].find(needle) {
-            let start = search + relative;
-            let end = start + needle.len();
-            let before = masked[..start].chars().next_back();
-            let after = masked.get(end..).and_then(|rest| rest.chars().next());
-            let left_ok = before.is_none_or(char::is_whitespace);
-            let right_ok = after.is_none_or(|ch| {
-                ch.is_whitespace()
-                    || matches!(
-                        ch,
-                        ']' | ')' | '}' | ':' | '.' | ',' | ';' | '!' | '?'
-                    )
-            });
-            if left_ok && right_ok {
-                return true;
-            }
-            search = start + 1;
-        }
-    }
-    false
+    line_clock_tag(line).explicit_off()
 }
 
 fn mask_code_and_markdown_links(line: &str) -> String {
@@ -1067,23 +1097,14 @@ fn strip_trailing_inline_field(title: &str) -> String {
 }
 
 fn strip_trailing_off_clock(title: &str) -> String {
-    let trimmed = title.trim_end();
-    let candidate = trimmed.trim_end_matches(['.', ',', ';', ':', '!', '?']);
-    let lower = candidate.to_ascii_lowercase();
-    for tag in ["#offclock", "#off-clock", "#untracked"] {
-        let Some(start) = lower.rfind(tag) else {
-            continue;
-        };
-        if start + tag.len() == candidate.len()
-            && candidate[..start]
-                .chars()
-                .next_back()
-                .is_none_or(char::is_whitespace)
-        {
-            return candidate[..start].trim_end().to_string();
+    let mut stripped = title.trim_end();
+    while let Some(next) = strip_trailing_clock_tag(stripped) {
+        if next.len() == stripped.len() {
+            break;
         }
+        stripped = next;
     }
-    trimmed.to_string()
+    stripped.to_string()
 }
 
 fn strip_trailing_markdown_link(title: &str) -> String {
@@ -1230,6 +1251,8 @@ mod tests {
         assert_eq!(events[1].kind, EventKind::Task);
         assert_eq!(events[1].title, "1:1");
         assert!(events[1].off_clock);
+        assert_eq!(events[1].clock_tag.deprecated(), &["#untracked"]);
+        assert_eq!(events[1].clock_source, ClockSource::OffTag);
         assert_eq!(events[1].status, Some('*'));
         assert_eq!(events[1].block_id.as_deref(), Some("one-on-one"));
         assert!(events[1].is_open_task());
@@ -1265,13 +1288,17 @@ mod tests {
         assert!(!line_has_off_clock_tag(
             "- [*] #task **1200-1300** Lunch #offclock/nested"
         ));
+        assert!(!line_has_off_clock_tag(
+            "- [*] #task **1200-1300** Lunch #off #on"
+        ));
     }
 
     #[test]
     fn clean_event_title_removes_each_off_clock_alias() {
-        for tag in ["#offclock", "#OFF-CLOCK.", "#untracked!"] {
+        for tag in ["#off", "#on", "#offclock", "#OFF-CLOCK.", "#untracked!"] {
             assert_eq!(clean_event_title(&format!("Lunch {tag}")), "Lunch");
         }
+        assert_eq!(clean_event_title("Lunch #off #on"), "Lunch");
     }
 
     #[test]

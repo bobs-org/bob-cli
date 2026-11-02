@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -13,10 +14,11 @@ use crate::native::{
     vault_links::NoteIndex,
 };
 
-use super::facts::{NoteFacts, NoteTheme};
+use super::facts::{NoteFacts, NoteOffClock, NoteTheme};
 use super::{
-    attribute_session, fallback_hue, session_links, split_minutes,
-    DiskHomeSource, HomeResolver, HomeSource, Hue, IndexedHomeSource,
+    attribute_session, effective_clock, fallback_hue, session_links,
+    split_minutes, ClockSource, DiskHomeSource, HomeResolver, HomeSource, Hue,
+    IndexedHomeSource,
 };
 
 #[derive(Debug, Deserialize)]
@@ -200,6 +202,169 @@ fn note_facts_parse_canonical_task_type_and_conflict() {
     );
     assert_eq!(off_conflict.theme, Some(NoteTheme::Off));
     assert!(off_conflict.theme_conflict);
+}
+
+#[test]
+fn note_facts_parse_offclock_as_a_strict_tristate() {
+    for (value, expected) in [
+        ("true", Some(NoteOffClock::True)),
+        ("TRUE", Some(NoteOffClock::True)),
+        ("\"TrUe\"", Some(NoteOffClock::True)),
+        ("false", Some(NoteOffClock::False)),
+        ("'FALSE'", Some(NoteOffClock::False)),
+        ("", None),
+    ] {
+        let contents = format!("---\ntype: [[area]]\noffclock: {value}\n---\n");
+        assert_eq!(NoteFacts::parse(&contents).offclock, expected, "{value}");
+    }
+    for value in ["yes", "no", "on", "off", "1", "0", "[true]"] {
+        let contents = format!("---\ntype: [[area]]\noffclock: {value}\n---\n");
+        assert!(
+            matches!(
+                NoteFacts::parse(&contents).offclock,
+                Some(NoteOffClock::Invalid(_))
+            ),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        NoteFacts::parse("---\ntype: [[area]]\noffclock:\n---\n").offclock,
+        None
+    );
+    assert!(matches!(
+        NoteFacts::parse("---\ntype: [[area]]\noffclock:\n  - true\n---\n")
+            .offclock,
+        Some(NoteOffClock::Invalid(_))
+    ));
+}
+
+#[test]
+fn effective_clock_uses_tags_and_the_shared_root_note_walk() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock: true\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("abby.md"),
+        "---\ntype: [[area]]\nparent: [[love]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("fun.md"),
+        "---\ntype: [[area]]\nparent: [[love]]\noffclock: false\n---\n"
+            .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("surf.md"),
+        "---\ntype: [[area]]\nparent: [[fun]]\noffclock: true\n---\n"
+            .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("dog.md"),
+        "---\ntype: [[article]]\nparent: [[love]]\noffclock: false\n---\n"
+            .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("lenard.md"),
+        "---\ntype: [[article]]\nparent: [[dog]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("invalid.md"),
+        "---\ntype: [[project]]\nparent: [[love]]\noffclock: maybe\n---\n"
+            .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("cycle.md"),
+        "---\ntype: [[area]]\nparent: [[cycle]]\noffclock: true\n---\n"
+            .to_string(),
+    );
+    let daily = concat!(
+        "## Events\n",
+        "- [ ] #task **0800-0900** Event [root:: abby] ^event\n",
+        "- [ ] #task **0830-0900** Override #on [root:: abby] ^override\n",
+        "- [ ] #task **0900-1000** Bad root [root:: missing] ^bad\n",
+        "## Pomodoros\n",
+    );
+    notes.insert(PathBuf::from("2026/20261102.md"), daily.to_string());
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
+
+    let inherited_event = effective_clock(
+        &mut resolver,
+        Path::new("2026/20261102.md"),
+        "- [ ] #task **0800-0900** Event [root:: abby] ^event",
+    );
+    assert!(inherited_event.off_clock);
+    assert_eq!(inherited_event.source, ClockSource::Note);
+    assert_eq!(inherited_event.note.as_deref(), Some("love.md"));
+    let mut event_rows = crate::native::event_task::events_in_note(
+        daily,
+        NaiveDate::from_ymd_opt(2026, 11, 2).expect("date"),
+    );
+    crate::native::event_task::enrich_event_clocks(
+        Path::new("2026/20261102.md"),
+        daily,
+        &mut event_rows,
+        &mut resolver,
+    );
+    assert!(event_rows[0].off_clock);
+    assert_eq!(event_rows[0].clock_source, ClockSource::Note);
+    assert_eq!(event_rows[0].clock_note.as_deref(), Some("love.md"));
+    assert!(!event_rows[1].off_clock);
+    assert_eq!(event_rows[1].clock_source, ClockSource::OnTag);
+    let fun = effective_clock(&mut resolver, Path::new("fun.md"), "- [ ] Surf");
+    assert!(!fun.off_clock);
+    assert_eq!(fun.source, ClockSource::Note);
+    let surf =
+        effective_clock(&mut resolver, Path::new("surf.md"), "- [ ] Surf");
+    assert!(surf.off_clock);
+    assert_eq!(surf.note.as_deref(), Some("surf.md"));
+    let passed_through =
+        effective_clock(&mut resolver, Path::new("lenard.md"), "- [ ] Lenard");
+    assert!(passed_through.off_clock);
+    assert_eq!(passed_through.note.as_deref(), Some("love.md"));
+    effective_clock(&mut resolver, Path::new("lenard.md"), "- [ ] Again");
+    let invalid =
+        effective_clock(&mut resolver, Path::new("invalid.md"), "- [ ] Task");
+    assert!(!invalid.off_clock);
+    assert_eq!(invalid.source, ClockSource::InvalidNote);
+    assert_eq!(invalid.note.as_deref(), Some("invalid.md"));
+    effective_clock(&mut resolver, Path::new("invalid.md"), "- [ ] Again");
+    assert_eq!(
+        effective_clock(&mut resolver, Path::new("love.md"), "- [ ] Task #on")
+            .source,
+        ClockSource::OnTag
+    );
+    let conflict = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Task #off #on",
+    );
+    assert!(!conflict.off_clock);
+    assert_eq!(conflict.source, ClockSource::OnTag);
+    assert!(
+        effective_clock(&mut resolver, Path::new("fun.md"), "- [ ] Task #off")
+            .off_clock
+    );
+    let daily_default = effective_clock(
+        &mut resolver,
+        Path::new("2026/20261102.md"),
+        "- [ ] #task **0700-0730** Untagged ^unrooted",
+    );
+    assert_eq!(daily_default.source, ClockSource::Default);
+    let invalid_root = effective_clock(
+        &mut resolver,
+        Path::new("2026/20261102.md"),
+        "- [ ] #task **0900-1000** Bad root [root:: missing] ^bad",
+    );
+    assert_eq!(invalid_root.source, ClockSource::Default);
+    assert_eq!(resolver.health().root_field_invalid.len(), 1);
+    let cycle =
+        effective_clock(&mut resolver, Path::new("cycle.md"), "- [ ] Cycle");
+    assert!(cycle.off_clock);
+    assert_eq!(resolver.health().note_offclock_invalid.len(), 1);
+    assert_eq!(resolver.health().note_offclock_ignored.len(), 1);
 }
 
 #[test]

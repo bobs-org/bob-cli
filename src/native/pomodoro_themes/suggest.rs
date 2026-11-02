@@ -12,10 +12,8 @@ use crate::native::{
     plan_budget::normalize_component,
     pomodoro_homes::{HomeResolver, HomeSource, Hue, NoteKind, NoteTheme},
     ref_tasks::{has_ref_token, strip_blockquote_prefix, task_mark},
-    task_root::{parse_task_root, TaskRootState},
     task_status_hooks::canonical_daily_date,
     task_theme::{parse_task_theme, RepairKind, TaskThemeState},
-    vault_links::LinkResolution,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -164,7 +162,7 @@ fn resolve_without_task_field<S: HomeSource>(
             warnings: Vec::new(),
         };
     }
-    if let Some(root_path) = set_root_walk_start(source, residence_path, line) {
+    if let Some(root_path) = source.root_walk_start(residence_path, line) {
         return with_global_default(
             note_default(source, catalog, &root_path, true),
             catalog,
@@ -198,23 +196,6 @@ fn with_global_default(
         });
     }
     result
-}
-
-fn set_root_walk_start<S: HomeSource>(
-    source: &mut HomeResolver<S>,
-    residence_path: &Path,
-    line: &str,
-) -> Option<std::path::PathBuf> {
-    let TaskRootState::Set { raw } = parse_task_root(line) else {
-        return None;
-    };
-    match source.resolve_target(residence_path, &raw) {
-        LinkResolution::Found(path) => {
-            let home = source.resolve_note(&path);
-            (home.key != "@unfiled").then_some(path)
-        }
-        LinkResolution::Ambiguous | LinkResolution::Missing => None,
-    }
 }
 
 fn note_default<S: HomeSource>(
