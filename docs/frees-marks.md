@@ -348,3 +348,38 @@ open, has an `[id::]`, and frees 1 unless stated otherwise.
 | FP3 | Reading view, no 🔓                      | host directly after `a.internal-link`                    |
 | FP4 | Reading view with 🔓                     | host directly after `span.bob-unblocked-glyph`           |
 | FP5 | cursor on the row (raw `[[…]]` revealed) | mark still at the link end                               |
+
+## Live verification (real-Obsidian e2e, bob-plugins `scripts/obsidian-frees-marks-e2e.cjs`)
+
+The offline `--self-test` plus `scripts/test-ledger-tools-frees-marks.cjs` cover the
+FL/FC/FT/FP vectors, compact pill text (`🔑N`, never `frees`), BLOCKS last-blocker
+parity, and Reading insertion beside a `bob-task-link-mark` sibling and through one
+wrapping `<p>`.
+
+Verified 49/49 in an isolated scratch vault (light and dark, Live Preview and
+Reading) with screenshots reviewed against Anatomy and look. Compact pill, quiet
+muted rest color, baseline-aligned key, 🔓 then 🔑 on the both-marks row, and a CDP
+hover whose visible `.tooltip` matches the aria-label. CSS metrics from the live
+pass: mark 36.1×13.2px, `gap: 0.22em` (2.82px), `margin-inline-start: 0.4em`
+(5.12px), `font-size: 0.8em` (12.8px), `vertical-align: baseline`; row height 26.375px
+with the gate on and off. No CSS values changed.
+
+Environment: Obsidian 1.15.0 (`/snap/bin/obsidian`), `xvfb-run -a`, never the live
+vault. Tasks plugin `taskFormat: dataview` so `[id::]` / `[dependsOn::]` parse.
+
+- FC1, FC7, FC8, FC13, FC14, same-note `[[#^same-1]]`, and the 🔓+🔑 row render the
+  compact pill in both views and both themes; FC2 stays bare
+- closed-entry, struck, embed, mixed-prose, deeper, and Events links stay bare
+- Reading FP3 places the host after `a.internal-link`; FP4 places it after
+  `span.bob-unblocked-glyph`
+- a CDP hover plus `Input.dispatchMouseEvent` shows the visible `.tooltip` text for
+  FC1: `Closing this frees 1 task` / `• Launch another epic chain for sase task beads! · sase`
+- plain click places the caret at the link end and writes nothing; Mod+click opens
+  the owner note in a tab
+- an edit that adds a second FC1 dependent changes the pill from 1 to 2 within about
+  a second and fires `bob-frees-mark-tick` once on Live Preview
+- the session toggle removes every mark, leaves row height unchanged, then restores
+  the marks
+
+Still pending: iOS glyph rendering, human scrolling checks, and a 100-link ledger
+scroll. Joint unlocks and a 🪢 segment stay deferred per this contract.
