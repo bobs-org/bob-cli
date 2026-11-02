@@ -8,7 +8,11 @@ use std::path::Path;
 
 use super::*;
 use crate::native::{
-    config::relations::CloseEffect, relation_labels::relation_label_key,
+    capture_active_tasks,
+    config::relations::CloseEffect,
+    relation_labels::relation_label_key,
+    task_complete::relation_successors::copy::{self, ReleaseState},
+    task_dependencies,
 };
 
 /// One closing-label edge that names a configured cancel or complete
@@ -300,6 +304,13 @@ pub(super) fn plan_relation_close_effects(
         existing_owner,
         warnings,
     )?;
+    plan_relation_successor_indications(
+        ctx,
+        planner,
+        &request.bob_dir,
+        updates,
+        warnings,
+    );
     Ok(RelationCloseReports {
         cancels,
         completes: complete.completes,
@@ -307,6 +318,116 @@ pub(super) fn plan_relation_close_effects(
         task_block_refs: complete.task_block_refs,
         day_file: complete.day_file,
     })
+}
+
+/// Attach the configured successor-label consequence to each newly written
+/// edge. This read-only indication follows staged task and ledger text and
+/// never refuses an otherwise valid capture.
+fn plan_relation_successor_indications(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    updates: &mut [RelationUpdateJson],
+    warnings: &mut Vec<CaptureWarning>,
+) {
+    let configured: Vec<String> = ctx
+        .successor_labels()
+        .iter()
+        .map(|label| label.key.clone())
+        .collect();
+    if configured.is_empty() {
+        return;
+    }
+    for update in updates.iter_mut() {
+        if !matches!(
+            update.action,
+            RelationAction::Added | RelationAction::Relabeled
+        ) {
+            continue;
+        }
+        let Some(label) = update.label.as_deref() else {
+            continue;
+        };
+        if !configured
+            .iter()
+            .any(|key| *key == relation_label_key(label))
+        {
+            continue;
+        }
+        let Some(effect) =
+            relation_target_offer_effect(ctx, planner, bob_dir, update)
+        else {
+            continue;
+        };
+        update.offer_effect = Some(effect);
+        let message = match effect {
+            RelationOfferEffect::Offers => continue,
+            RelationOfferEffect::AlreadyParked => {
+                copy::already_released_warning(
+                    label,
+                    &update.source.text,
+                    &update.target.text,
+                )
+                .message
+            }
+            RelationOfferEffect::AlreadyClosed => copy::release_caveat(
+                ReleaseState::Closed,
+                &update.target.text,
+                None,
+            ),
+        };
+        warnings.push(CaptureWarning::Structured(StructuredCaptureWarning {
+            code: "relation_successor_already_released",
+            label: Some(label.to_string()),
+            count: None,
+            message,
+        }));
+    }
+}
+
+fn relation_target_offer_effect(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    update: &RelationUpdateJson,
+) -> Option<RelationOfferEffect> {
+    let relative = PathBuf::from(&update.target.path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let block_id = update.target.block_id.as_str();
+    if block_id.is_empty() {
+        return None;
+    }
+    if task_dependencies::is_archive_path(&relative) {
+        return Some(RelationOfferEffect::AlreadyClosed);
+    }
+    let target_contents =
+        current_note_text(planner, &bob_dir.join(&relative)).ok()?;
+    let scan = note_tasks::scan(&target_contents, ctx.settings());
+    let target =
+        lookup_staged_task(&scan, &update.target.path, block_id).ok()?;
+    if target.status_type.is_terminal() {
+        return Some(RelationOfferEffect::AlreadyClosed);
+    }
+    if target.status_symbol != '/' {
+        return Some(RelationOfferEffect::Offers);
+    }
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let day_contents = current_note_text(planner, &day_file).ok()?;
+    let ledger = capture_active_tasks::ledger_from_contents(&day_contents);
+    let mut route = relative;
+    route.set_extension("");
+    let route = route.to_string_lossy().replace('\\', "/");
+    ledger
+        .position(&(route, block_id.to_string()))
+        .is_none()
+        .then_some(RelationOfferEffect::AlreadyParked)
+        .or(Some(RelationOfferEffect::Offers))
 }
 
 fn refuse_opposite_close_effects(

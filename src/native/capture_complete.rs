@@ -11,6 +11,7 @@ mod model;
 mod pomodoros;
 mod render;
 mod shell;
+mod successor;
 mod support;
 mod task_types;
 #[cfg(test)]

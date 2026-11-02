@@ -63,10 +63,10 @@ and references. The catalog is read-only: it never writes the vault. \
 Bare `bob relations` runs this command.\n\n\
 By default the list shows visible labels, most-used first. Hidden \
 labels stay out of the default list; they still label their links. \
-Use --all to include every known label and zero-use configured closing \
+Use --all to include every known label and zero-use configured effect \
 labels, --hidden to show only hidden \
 labels, --query to rank exact/prefix matches before substring matches. \
-Configured cancel and complete labels are marked on their rows; the header \
+Configured cancel, complete, and successor labels are marked on their rows; the header \
 counts each configured effect.",
         )
         .after_help(
@@ -217,6 +217,8 @@ struct ListLabel {
     #[serde(skip_serializing_if = "is_false")]
     completes_source: bool,
     #[serde(skip_serializing_if = "is_false")]
+    offers_source: bool,
+    #[serde(skip_serializing_if = "is_false")]
     configured: bool,
 }
 
@@ -243,6 +245,8 @@ struct ListReport {
     cancel_labels: usize,
     #[serde(skip_serializing_if = "is_zero")]
     complete_labels: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    successor_labels: usize,
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -276,7 +280,7 @@ fn load_close_policy() -> bob_config::RelationsConfig {
             complete_labels: Vec::new(),
             successor_labels: Vec::new(),
             warnings: vec![format!(
-                "invalid relations config: {error}; closing nothing"
+                "invalid relations config: {error}; no relation effects apply"
             )],
         },
     }
@@ -317,6 +321,7 @@ fn build_report(
                 cancels_source: cancels,
                 completes_source: policy.is_complete_label(&record.key),
                 configured: false,
+                offers_source: policy.is_successor_label(&record.key),
             }
         })
         .collect::<Vec<_>>();
@@ -336,6 +341,7 @@ fn build_report(
         },
         cancel_labels: policy.cancel_labels.len(),
         complete_labels: policy.complete_labels.len(),
+        successor_labels: policy.successor_labels.len(),
         labels,
         renamed_reappeared: super::rename::renamed_reappeared(
             &request.bob_dir,
@@ -345,9 +351,9 @@ fn build_report(
     }
 }
 
-/// Zero-use configured cancel labels, in config order, ranked last.
-/// They appear only with `--all` (or `--hidden` when hidden), respect
-/// the query, and never boost above used rows. Hidden still wins.
+/// Zero-use configured effect labels, in config order by effect, ranked last.
+/// They appear only with `--all` (or `--hidden` when hidden), respect the
+/// query, and never boost above used rows. Hidden still wins.
 fn append_configured_overlay(
     labels: &mut Vec<ListLabel>,
     catalog: &Catalog,
@@ -355,7 +361,10 @@ fn append_configured_overlay(
     request: &ListRequest,
     query: &str,
 ) {
-    if policy.cancel_labels.is_empty() {
+    if policy.cancel_labels.is_empty()
+        && policy.complete_labels.is_empty()
+        && policy.successor_labels.is_empty()
+    {
         return;
     }
     if !request.all && !request.hidden_only {
@@ -411,6 +420,7 @@ fn append_configured_overlay(
             cancels_source: true,
             completes_source: false,
             configured: true,
+            offers_source: false,
         });
     }
     let selected_keys: std::collections::BTreeSet<String> =
@@ -460,6 +470,56 @@ fn append_configured_overlay(
             cancels_source: false,
             completes_source: true,
             configured: true,
+            offers_source: false,
+        });
+    }
+    let selected_keys: std::collections::BTreeSet<String> =
+        labels.iter().map(|label| label.key.clone()).collect();
+    for successor in &policy.successor_labels {
+        if selected_keys.contains(&successor.key)
+            || catalog.get(&successor.key).is_some()
+        {
+            continue;
+        }
+        let hidden = catalog.is_hidden(&successor.key);
+        if request.hidden_only && !hidden {
+            continue;
+        }
+        if !request.all && hidden {
+            continue;
+        }
+        if !query_key.is_empty()
+            && !crate::native::task_relations::label::collapse_label_text(
+                &successor.name,
+            )
+            .to_lowercase()
+            .contains(&query_key)
+        {
+            continue;
+        }
+        let replacement =
+            crate::native::task_relations::label::relation_label_quoted_form(
+                &successor.name,
+            );
+        let hide_replacement =
+            crate::native::task_relations::label::relation_label_hide_form(
+                &successor.name,
+            );
+        labels.push(ListLabel {
+            key: successor.key.clone(),
+            name: successor.name.clone(),
+            count: 0,
+            hidden,
+            inverse: crate::native::task_relations::label::inverse_phrase(
+                &successor.name,
+            ),
+            spellings: Vec::new(),
+            replacement,
+            hide_replacement,
+            cancels_source: false,
+            completes_source: false,
+            configured: true,
+            offers_source: true,
         });
     }
 }
@@ -506,6 +566,13 @@ fn print_human(report: &ListReport) {
             report.complete_labels,
         ));
     }
+    if report.successor_labels > 0 {
+        counts.push_str(&format!(
+            " {} {} offer",
+            styler.separator(),
+            report.successor_labels,
+        ));
+    }
     println!("{heading}  {counts}");
     if report.labels.is_empty() {
         println!("  (no relation labels)");
@@ -529,6 +596,12 @@ fn print_human(report: &ListReport) {
             }
             if label.completes_source {
                 meta.push_str("     ✓ completes source");
+            }
+            if label.offers_source {
+                meta.push_str("     🪢 offers source");
+            }
+            if label.configured {
+                meta.push_str("     configured");
             }
             if let Some(inverse) = label.inverse.as_deref() {
                 meta.push_str(&format!("     ⇄ {inverse}"));

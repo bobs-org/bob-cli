@@ -491,3 +491,44 @@ fn relations_rename_into_and_out_of_complete_labels_warns_without_completing() {
     git_in(&vault, ["revert", "--no-edit", "HEAD"]);
     assert_eq!(note_snapshot(&vault), before);
 }
+
+#[test]
+fn relations_rename_warns_when_leaving_or_entering_successor_labels() {
+    let temp = TempDir::new("bob-cli-relations-rename-successor");
+    let (vault, cache) = seed_vault(temp.path());
+    let config = cache.join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  successor_labels:\n    - old\n    - starts after\n",
+    );
+    let rename = |new_name: &str| {
+        relation_command(&vault, &cache)
+            .env("BOB_CONFIG_FILE", &config)
+            .args(["relations", "rename", "old", new_name, "-d", "-f", "json"])
+            .output()
+            .expect("bob relations rename")
+    };
+
+    for (new_name, expected) in [
+        (
+            "prompted by",
+            "“old” is a successor label in config.yml — update relations.successor_labels",
+        ),
+        (
+            "starts after",
+            "“starts after” is a successor label in config.yml — update relations.successor_labels",
+        ),
+    ] {
+        let output = rename(new_name);
+        assert_success(&output);
+        let value: Value =
+            serde_json::from_str(stdout(&output).trim()).expect("rename preview");
+        let warnings = value["warnings"].as_array().expect("warnings");
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.as_str() == Some(expected)),
+            "expected {expected:?} in {warnings:?}"
+        );
+    }
+}

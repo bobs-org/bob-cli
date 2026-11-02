@@ -12,7 +12,7 @@ use std::path::Path;
 use super::model::{RelationCancel, RelationCancelSource};
 use crate::native::{
     capture, capture_language, config,
-    note_tasks::{self, NoteTask},
+    note_tasks::{self, NoteTask, TaskStatusType},
     relation_labels::relation_label_key,
     task_cancel::verdicts::{cancel_verdict, CancelSourceVerdict},
     task_relations::label as relation_label,
@@ -171,6 +171,7 @@ pub(super) struct ResolvedSource {
     pub(super) text: String,
     pub(super) status_symbol: char,
     pub(super) status_name: String,
+    pub(super) status_type: TaskStatusType,
     pub(super) project_open_tasks: Option<usize>,
     pub(super) raw_line: String,
     pub(super) is_new: bool,
@@ -181,7 +182,7 @@ pub(super) struct ResolvedSource {
 /// already classified complete and partial labels alike, so this
 /// parses the token slice itself instead of relying on the item's
 /// relation rows (partial labels have none).
-fn token_target(
+pub(super) fn token_target(
     raw_text: &str,
     separator: usize,
 ) -> Option<(capture_language::RelationDirection, String, String)> {
@@ -244,6 +245,7 @@ pub(super) fn resolve_source(
                         text: item.body.clone(),
                         status_symbol: ' ',
                         status_name: status_name_for(bob_dir, ' '),
+                        status_type: TaskStatusType::Todo,
                         project_open_tasks: None,
                         raw_line: String::new(),
                         is_new: true,
@@ -293,7 +295,7 @@ pub(super) fn resolve_target_text(
     }
 }
 
-fn read_task_source(
+pub(super) fn read_task_source(
     bob_dir: &Path,
     route_or_note: &str,
     block_id: &str,
@@ -318,6 +320,7 @@ fn read_task_source(
         text: task.description.clone(),
         status_symbol: task.status_symbol,
         status_name: task.status_name.clone(),
+        status_type: task.status_type,
         project_open_tasks,
         raw_line,
         is_new,

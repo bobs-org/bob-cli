@@ -1536,6 +1536,7 @@ pub(super) fn relation_label_suggestions(
             cancels_source: policy.is_cancel_label(&record.key),
             completes_source: policy.is_complete_label(&record.key),
             configured: false,
+            offers_source: policy.is_successor_label(&record.key),
         })
         .collect::<Vec<_>>();
     append_cancel_overlay(
@@ -1546,6 +1547,13 @@ pub(super) fn relation_label_suggestions(
         policy,
     );
     append_complete_overlay(
+        &mut suggestions,
+        &catalog,
+        &normalized_query,
+        one_off,
+        policy,
+    );
+    append_successor_overlay(
         &mut suggestions,
         &catalog,
         &normalized_query,
@@ -1618,6 +1626,7 @@ pub(super) fn relation_label_suggestions(
                 cancels_source: policy.is_cancel_label(&key),
                 completes_source: policy.is_complete_label(&key),
                 configured: false,
+                offers_source: policy.is_successor_label(&key),
             },
         );
     }
@@ -1694,6 +1703,7 @@ fn append_cancel_overlay(
             cancels_source: true,
             completes_source: false,
             configured: true,
+            offers_source: false,
         });
     }
 }
@@ -1759,6 +1769,72 @@ fn append_complete_overlay(
             cancels_source: false,
             completes_source: true,
             configured: true,
+            offers_source: false,
+        });
+    }
+}
+
+/// Zero-use configured successor labels, in config order, ranked last.
+/// Hidden labels stay out; a typed query still matches through the typed row.
+fn append_successor_overlay(
+    suggestions: &mut Vec<RelationLabelSuggestion>,
+    catalog: &crate::native::relation_labels::Catalog,
+    normalized_query: &str,
+    one_off: bool,
+    policy: &config::RelationsConfig,
+) {
+    if policy.successor_labels.is_empty() {
+        return;
+    }
+    let query_key = crate::native::task_relations::label::collapse_label_text(
+        normalized_query,
+    )
+    .to_lowercase();
+    for successor in &policy.successor_labels {
+        if suggestions.iter().any(|item| item.key == successor.key)
+            || catalog.get(&successor.key).is_some()
+            || catalog.is_hidden(&successor.key)
+        {
+            continue;
+        }
+        if !query_key.is_empty()
+            && !crate::native::task_relations::label::collapse_label_text(
+                &successor.name,
+            )
+            .to_lowercase()
+            .contains(&query_key)
+        {
+            continue;
+        }
+        suggestions.push(RelationLabelSuggestion {
+            replacement: if one_off {
+                crate::native::task_relations::label::relation_label_hide_form(
+                    &successor.name,
+                )
+            } else {
+                crate::native::task_relations::label::relation_label_quoted_form(
+                    &successor.name,
+                )
+            },
+            hide_replacement:
+                crate::native::task_relations::label::relation_label_hide_form(
+                    &successor.name,
+                ),
+            label: successor.name.clone(),
+            key: successor.key.clone(),
+            inverse:
+                crate::native::task_relations::label::inverse_phrase(
+                    &successor.name,
+                ),
+            count: None,
+            typed: false,
+            disabled_reason: None,
+            existing: None,
+            hidden: None,
+            cancels_source: false,
+            completes_source: false,
+            configured: true,
+            offers_source: true,
         });
     }
 }

@@ -377,7 +377,7 @@ fn load_close_policy() -> bob_config::RelationsConfig {
             complete_labels: Vec::new(),
             successor_labels: Vec::new(),
             warnings: vec![format!(
-                "invalid relations config: {error}; closing nothing"
+                "invalid relations config: {error}; no relation effects apply"
             )],
         },
     }
@@ -553,6 +553,20 @@ fn plan_rename(
         warnings.push(format!(
             "“{new_name}” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels"
         ));
+    }
+    if close_policy.is_successor_label(&old_key) {
+        warnings.push(
+            crate::native::task_complete::relation_successors::copy::rename_warning(
+                &old_display,
+            ),
+        );
+    }
+    if new_key != old_key && close_policy.is_successor_label(&new_key) {
+        warnings.push(
+            crate::native::task_complete::relation_successors::copy::rename_warning(
+                new_name,
+            ),
+        );
     }
     let report = RenameReport {
         schema_version: SCHEMA_VERSION,

@@ -148,6 +148,7 @@ fn build_result_inner(
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_successor: None,
             picker: None,
             hidden_count: None,
             one_off: None,
@@ -195,6 +196,7 @@ fn build_result_inner(
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_successor: None,
             picker: Some(PickerDescriptor {
                 kind: PickerKind::WikilinkTask,
                 scope: PickerScope::Vault,
@@ -287,6 +289,7 @@ fn build_result_inner(
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_successor: None,
             picker: None,
             hidden_count: None,
             one_off: None,
@@ -304,6 +307,7 @@ fn build_result_inner(
     let mut hidden_count = None;
     let mut relation_cancel = None;
     let mut relation_complete = None;
+    let mut relation_successor = None;
     let mut subject = None;
     // A `||` probe is the `relation_label` context with `one_off`: the
     // scan behind the field already classified the separator, so this
@@ -574,6 +578,18 @@ fn build_result_inner(
                 }
                 relation_complete = Some(plan.response);
             }
+            if !policy.successor_labels.is_empty()
+                && let Some(plan) = super::successor::plan_relation_successor(
+                    bob_dir,
+                    raw_text,
+                    field.replacement.0,
+                    editor_item.as_ref(),
+                    &field.query,
+                    &policy,
+                )
+            {
+                relation_successor = Some(plan);
+            }
             (candidates, warnings)
         }
         CompletionContext::PomodoroSplitBase => {
@@ -745,6 +761,7 @@ fn build_result_inner(
         relation,
         relation_cancel,
         relation_complete,
+        relation_successor,
         picker,
         hidden_count,
         one_off: one_off.then_some(true),

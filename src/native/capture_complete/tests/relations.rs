@@ -583,6 +583,87 @@ fn complete_json(value: &CaptureCompleteResult) -> serde_json::Value {
 }
 
 #[test]
+fn successor_labels_offer_and_explain_inverse_and_released_targets() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  successor_labels:\n    - starts after\n",
+    );
+
+    let raw = "Use this @cash+sell ~invest:now|\"starts after\"";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    assert_eq!(json["relation_successor"]["verdict"], "offers", "{json}");
+    assert_eq!(
+        json["relation_successor"]["message"],
+        "🪢 Offers “Sell stocks!” when “Sell stocks now!” is parked or done · never blocks"
+    );
+    let row = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "starts after")
+        .expect("configured successor-label row");
+    assert_eq!(row["offers_source"], true);
+    assert!(row.get("configured").is_none());
+    assert!(candidate_lines(&value.candidates, value.context)
+        .iter()
+        .any(|(_, detail)| detail.contains("🪢 offers")));
+
+    let empty_query = "Use this @cash+sell ~invest:now|";
+    let empty_query =
+        complete_result(temp.path(), &config, cache_home.path(), empty_query);
+    let empty_query = complete_json(&empty_query);
+    let overlay = empty_query["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "starts after")
+        .expect("zero-use configured successor-label overlay");
+    assert_eq!(overlay["offers_source"], true);
+    assert_eq!(overlay["configured"], true);
+
+    let inverse = "Use this @cash+sell ~invest:old|\"starts before\"";
+    let inverse =
+        complete_result(temp.path(), &config, cache_home.path(), inverse);
+    let inverse = complete_json(&inverse);
+    assert_eq!(
+        inverse["relation_successor"]["hint"],
+        "“starts before” never offers anything · to offer “Sell stocks!” after this task, use ~~ with “starts after”"
+    );
+
+    let closed = "Use this @cash+sell ~invest:old|\"starts after\"";
+    let closed =
+        complete_result(temp.path(), &config, cache_home.path(), closed);
+    let closed = complete_json(&closed);
+    assert_eq!(closed["relation_successor"]["verdict"], "already_closed");
+    assert_eq!(
+        closed["relation_successor"]["message"],
+        "“Old idea” is already closed — nothing left to wait for"
+    );
+
+    write_file(
+        &temp.path().join("invest.md"),
+        "- [/] #task Sell stocks now! ^now\n",
+    );
+    let day = temp.path().join("today.md");
+    write_file(&day, "## Pomodoros\n- [ ] Unrelated placeholder\n");
+    let raw = "Use this @cash+sell ~invest:now|\"starts after\"";
+    let parked =
+        crate::native::env::with_var("BOB_DAY_FILE", day.as_os_str(), || {
+            complete_result(temp.path(), &config, cache_home.path(), raw)
+        });
+    let parked = complete_json(&parked);
+    assert_eq!(parked["relation_successor"]["verdict"], "already_parked");
+    assert_eq!(
+        parked["relation_successor"]["message"],
+        "“Sell stocks now!” is already parked — “Sell stocks!” will be offered when it is done"
+    );
+}
+
+#[test]
 fn complete_overlay_marks_rows_and_reports_source_consequence() {
     let cache_home = tempfile::tempdir().expect("cache home");
     let temp = cancel_fixture();

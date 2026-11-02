@@ -59,6 +59,7 @@ pub(super) struct DependencyContext {
     close_policy: OnceLock<(
         Vec<config::relations::CancelLabel>,
         Vec<config::relations::CompleteLabel>,
+        Vec<config::relations::CancelLabel>,
         Option<String>,
     )>,
     closing_intents: HashMap<(String, String), config::relations::CloseEffect>,
@@ -223,6 +224,7 @@ impl DependencyContext {
     ) -> &(
         Vec<config::relations::CancelLabel>,
         Vec<config::relations::CompleteLabel>,
+        Vec<config::relations::CancelLabel>,
         Option<String>,
     ) {
         self.close_policy.get_or_init(load_close_policy)
@@ -245,13 +247,19 @@ impl DependencyContext {
         self.close_policy().1.as_slice()
     }
 
+    /// Successor labels (`docs/task-relations.md` §20 SU2), read with the
+    /// shared effect policy once per capture batch.
+    pub(super) fn successor_labels(&self) -> &[config::relations::CancelLabel] {
+        self.close_policy().2.as_slice()
+    }
+
     /// The invalid-config warning for the close policy (cancel labels,
     /// complete labels, and both-lists overlap), when the batch planned
     /// relations and the value was invalid.
     pub(super) fn cancel_labels_warning(&self) -> Option<String> {
         self.close_policy
             .get()
-            .and_then(|(_, _, warning)| warning.clone())
+            .and_then(|(_, _, _, warning)| warning.clone())
     }
 
     /// The close-effect already recorded for this source in the current

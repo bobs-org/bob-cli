@@ -631,6 +631,7 @@ fn apply_linked_from(
         action,
         cancel_effect: None,
         complete_effect: None,
+        offer_effect: None,
     });
     if action == RelationAction::Unchanged {
         return Ok(());
@@ -936,6 +937,7 @@ fn relation_update_json(
         action,
         cancel_effect: None,
         complete_effect: None,
+        offer_effect: None,
     }
 }
 

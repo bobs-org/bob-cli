@@ -1084,3 +1084,49 @@ fn dry_run_human_says_would() {
     assert!(text.contains("🪢 would link to"), "{text}");
     assert!(!vault.join("mac_inbox.md").exists());
 }
+
+#[test]
+fn successor_relation_commits_report_offer_effect_and_release_warning() {
+    let (_temp, vault, day) = setup("bob-cli-rel-successor-authoring");
+    write_file(
+        &vault.join("work.md"),
+        concat!(
+            "- [ ] #task Ready ^ready\n",
+            "- [/] #task Parked ^parked\n",
+            "- [x] #task Done ^done\n",
+        ),
+    );
+    let config_path = vault.join("config.yml");
+    write_file(
+        &config_path,
+        "relations:\n  successor_labels:\n    - starts after\n",
+    );
+    let config = config_path.to_str().expect("config path");
+    for (target, expected) in [
+        ("ready", "offers"),
+        ("parked", "already_parked"),
+        ("done", "already_closed"),
+    ] {
+        let draft = format!("Prepare {target} ~work:{target}|\"starts after\"");
+        let json = capture_json_env(
+            &vault,
+            &day,
+            &draft,
+            &[("BOB_CONFIG_FILE", config)],
+        );
+        assert_eq!(
+            json["relation_updates"][0]["offer_effect"], expected,
+            "{json}"
+        );
+        if expected == "offers" {
+            assert!(json.get("warnings").is_none(), "{json}");
+        } else {
+            assert!(
+                json["warnings"].as_array().unwrap().iter().any(|warning| {
+                    warning["code"] == "relation_successor_already_released"
+                }),
+                "{json}"
+            );
+        }
+    }
+}

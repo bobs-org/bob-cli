@@ -506,3 +506,50 @@ fn relation_label_spans_flag_configured_complete_labels() {
         .iter()
         .all(|span| { span.get("completes_source").is_none() }));
 }
+
+#[test]
+fn relation_label_spans_flag_configured_successor_labels() {
+    let temp = TempDir::new("bob-cli-capture-parse-successor-spans");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  successor_labels:\n    - starts after\n",
+    );
+    let parsed = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Fix trip ~work:foo|\"starts after\" ~work:bar|\"starts before\" ~work:baz|see")
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run capture-parse successor spans");
+    assert_success(&parsed);
+    assert!(stderr(&parsed).is_empty());
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
+    let spans = json["spans"].as_array().expect("spans");
+    let label_flag = |label: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                span["kind"] == "relation_label"
+                    && json["input"].as_str().unwrap().get(
+                        span["start"].as_u64().unwrap() as usize
+                            ..span["end"].as_u64().unwrap() as usize,
+                    ) == Some(label)
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {label:?} span: {spans:?}"))
+    };
+    assert_eq!(label_flag("starts after")["offers_source"], true);
+    assert!(label_flag("starts before").get("offers_source").is_none());
+    assert!(label_flag("see").get("offers_source").is_none());
+
+    let bare = parse_json("Fix trip ~work:foo|\"starts after\"");
+    assert!(bare["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|span| { span.get("offers_source").is_none() }));
+}

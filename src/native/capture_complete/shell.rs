@@ -617,6 +617,9 @@ pub(crate) fn shell_completion(
                 if item.completes_source {
                     description.push_str(" · completes source");
                 }
+                if item.offers_source {
+                    description.push_str(" · 🪢 offers");
+                }
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),
                     full,

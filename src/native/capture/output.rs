@@ -1198,6 +1198,18 @@ pub(super) struct RelationUpdateJson {
     /// unchanged edges and labels that complete nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) complete_effect: Option<RelationCompleteEffect>,
+    /// Successor-label consequence at authoring time. Omitted when the
+    /// label is not configured or the target state could not be resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) offer_effect: Option<RelationOfferEffect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RelationOfferEffect {
+    Offers,
+    AlreadyParked,
+    AlreadyClosed,
 }
 
 /// What a cancel-label edge did to its source
@@ -3580,6 +3592,10 @@ fn human_relation_line(dry_run: bool, update: &RelationUpdateJson) -> String {
         .as_deref()
         .map(|label| format!(" · {label}"))
         .unwrap_or_default();
+    let offer = update
+        .offer_effect
+        .map(|_| " · 🪢 offers source")
+        .unwrap_or_default();
     let archived = if update.target.archived == Some(true) {
         " · archived"
     } else {
@@ -3593,28 +3609,28 @@ fn human_relation_line(dry_run: bool, update: &RelationUpdateJson) -> String {
 
     match (update.direction, update.action, dry_run) {
         (RelationDirection::To, RelationAction::Added, false) => {
-            format!("🪢 links to {quoted}{label}{locator}")
+            format!("🪢 links to {quoted}{label}{offer}{locator}")
         }
         (RelationDirection::To, RelationAction::Added, true) => {
-            format!("🪢 would link to {quoted}{label}{locator}")
+            format!("🪢 would link to {quoted}{label}{offer}{locator}")
         }
         (RelationDirection::From, RelationAction::Added, false) => {
             format!(
-                "🪢 {quoted} now links here{label}   {} ^{}",
+                "🪢 {quoted} now links here{label}{offer}   {} ^{}",
                 update.source.path, update.source.block_id
             )
         }
         (RelationDirection::From, RelationAction::Added, true) => {
             format!(
-                "🪢 {quoted} would now link here{label}   {} ^{}",
+                "🪢 {quoted} would now link here{label}{offer}   {} ^{}",
                 update.source.path, update.source.block_id
             )
         }
         (_, RelationAction::Relabeled, false) => {
-            format!("🪢 relabeled {quoted}{label}{locator}")
+            format!("🪢 relabeled {quoted}{label}{offer}{locator}")
         }
         (_, RelationAction::Relabeled, true) => {
-            format!("🪢 would relabel {quoted}{label}{locator}")
+            format!("🪢 would relabel {quoted}{label}{offer}{locator}")
         }
         (_, RelationAction::Unchanged, _) => {
             format!("🪢 unchanged {quoted}{locator}")
@@ -5639,6 +5655,7 @@ mod tests {
             action: RelationAction::Added,
             cancel_effect: None,
             complete_effect: None,
+            offer_effect: None,
         };
         let value = to_value(&update).expect("serialize");
         assert!(value.get("complete_effect").is_none(), "{value}");

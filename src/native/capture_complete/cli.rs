@@ -202,8 +202,11 @@ or `|\"multi word\"` replacements. A `||label` probe keeps the `||` spelling \
 in `replacement`, gains `one_off: true`, and every row also carries \
 `hide_replacement` (always the `||` form). A typed invalid label stays first with a \
 `disabled_reason` and an empty replacement. \
-Configured cancel and complete labels mark rows with `cancels_source` and \
-`completes_source`; zero-use configured labels are overlaid unless hidden. \
+Configured cancel, complete, and successor labels mark rows with \
+`cancels_source`, `completes_source`, and `offers_source`; zero-use configured \
+labels are overlaid unless hidden. A configured successor label or its \
+inverse spelling adds `relation_successor` with the offer verdict, an already- \
+released caveat, or a `starts before` hint. \
 When configured, the response includes `relation_cancel` and/or \
 `relation_complete` with the source task, verdict, and consequence message. \
 A solo leading '^' token completes active tasks instead: the \

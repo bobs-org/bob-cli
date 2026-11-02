@@ -274,6 +274,10 @@ pub(super) struct RelationLabelSuggestion {
     /// vault use). Omitted when false.
     #[serde(skip_serializing_if = "is_false")]
     pub(super) configured: bool,
+    /// True when this label offers the source task after its target is
+    /// parked or done (`relations.successor_labels`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) offers_source: bool,
 }
 
 /// The cancel consequence of the `relation_label` token under the
@@ -314,6 +318,31 @@ pub(super) struct RelationCompleteSource {
     pub(super) status_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) project_open_tasks: Option<usize>,
+}
+
+/// Authoring indication for a configured successor label or its display
+/// inverse. An inverse spelling has only `hint`; a configured label has
+/// `verdict` and `message`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationSuccessor {
+    pub(super) source: RelationSuccessorTask,
+    pub(super) target: RelationSuccessorTask,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) verdict: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationSuccessorTask {
+    pub(super) path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id: Option<String>,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
 }
 
 /// The relation source a cancel label would cancel: vault-relative
@@ -811,6 +840,9 @@ pub(super) struct CaptureCompleteResult {
     /// Present only when complete labels are configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) relation_complete: Option<RelationComplete>,
+    /// Successor-label authoring consequence or inverse spelling hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation_successor: Option<RelationSuccessor>,
     /// True when the `relation_label` probe sits in a `||` label.
     /// Omitted from every other context and from `|` probes, so older
     /// responses stay byte-identical.
@@ -850,6 +882,7 @@ impl CaptureCompleteResult {
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_successor: None,
             picker: None,
             hidden_count: None,
             one_off: None,

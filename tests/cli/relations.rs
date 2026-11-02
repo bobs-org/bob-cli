@@ -342,7 +342,7 @@ fn relations_hide_lock_busy_when_maintenance_lock_held() {
 }
 
 #[test]
-fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
+fn relations_list_marks_effect_labels_and_zero_use_configured_successors() {
     let temp = TempDir::new("bob-cli-relations-list-cancel");
     let vault = temp.path().join("vault");
     let cache = temp.path().join("cache");
@@ -355,7 +355,7 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     let config = cache.join("config.yml");
     write_file(
         &config,
-        "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n  complete_labels:\n    - implemented by\n    - verified by\n",
+        "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n  complete_labels:\n    - implemented by\n    - verified by\n  successor_labels:\n    - starts after\n",
     );
     let mut json_command = relations_command(&vault, &cache);
     json_command.env("BOB_CONFIG_FILE", &config).args([
@@ -369,6 +369,7 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
     assert_eq!(value["cancel_labels"], 2);
     assert_eq!(value["complete_labels"], 2);
+    assert_eq!(value["successor_labels"], 1);
     let labels = value["labels"].as_array().expect("labels");
     // The used cancel label carries the flag without `configured`.
     let used = labels
@@ -385,6 +386,7 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     assert!(used_complete.get("configured").is_none());
     // The default list excludes the zero-use configured label.
     assert!(!labels.iter().any(|row| row["key"] == "superseded by"));
+    assert!(!labels.iter().any(|row| row["key"] == "starts after"));
 
     // `-a` includes the zero-use configured label as an overlay.
     let output = relations_command(&vault, &cache)
@@ -413,6 +415,15 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     assert_eq!(complete_overlay["completes_source"], true);
     assert_eq!(complete_overlay["configured"], true);
     assert_eq!(complete_overlay["count"], 0);
+    let successor_overlay = value["labels"]
+        .as_array()
+        .expect("labels")
+        .iter()
+        .find(|row| row["key"] == "starts after")
+        .expect("successor overlay row");
+    assert_eq!(successor_overlay["offers_source"], true);
+    assert_eq!(successor_overlay["configured"], true);
+    assert_eq!(successor_overlay["count"], 0);
 
     // The human header counts cancel labels and rows name the cue.
     let human = relations_command(&vault, &cache)
@@ -424,8 +435,10 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     let text = stdout(&human);
     assert!(text.contains("2 cancel"), "header:\n{text}");
     assert!(text.contains("2 complete"), "header:\n{text}");
+    assert!(text.contains("1 offer"), "header:\n{text}");
     assert!(text.contains("⊘ cancels source"), "row cue:\n{text}");
     assert!(text.contains("✓ completes source"), "row cue:\n{text}");
+    assert!(text.contains("🪢 offers source"), "row cue:\n{text}");
 }
 
 #[test]

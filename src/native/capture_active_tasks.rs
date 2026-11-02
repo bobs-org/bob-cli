@@ -278,9 +278,19 @@ pub(crate) fn read_ledger(
         )));
         return Ledger::default();
     }
+    ledger_from_contents(&contents)
+}
+
+/// Build the open-entry ledger from a daily-note snapshot. Capture uses this
+/// for the current staged day text so authoring indications match earlier
+/// edits in the same batch.
+pub(crate) fn ledger_from_contents(contents: &str) -> Ledger {
+    if !capture_pomodoros::scan(contents).has_section {
+        return Ledger::default();
+    }
     let mut ledger = Ledger::default();
     for (entry_index, entry) in
-        capture_task_toggle::list_open_entry_links(&contents)
+        capture_task_toggle::list_open_entry_links(contents)
             .iter()
             .enumerate()
     {

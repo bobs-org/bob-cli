@@ -54,6 +54,7 @@ impl MirrorSkipReason {
 pub(super) fn load_close_policy() -> (
     Vec<config::relations::CancelLabel>,
     Vec<config::relations::CompleteLabel>,
+    Vec<config::relations::CancelLabel>,
     Option<String>,
 ) {
     match config::load_relations_config(&config::config_path()) {
@@ -64,18 +65,26 @@ pub(super) fn load_close_policy() -> (
                 .find(|warning| {
                     warning.contains("relations.cancel_labels")
                         || warning.contains("relations.complete_labels")
+                        || warning.contains("relations.successor_labels")
                         || warning.contains(
                             "is in both cancel_labels and complete_labels",
                         )
+                        || warning.contains("in more than one of cancel_labels")
                 })
                 .map(|warning| format!("invalid relations config: {warning}"));
-            (loaded.cancel_labels, loaded.complete_labels, warning)
+            (
+                loaded.cancel_labels,
+                loaded.complete_labels,
+                loaded.successor_labels,
+                warning,
+            )
         }
         Err(error) => (
             Vec::new(),
             Vec::new(),
+            Vec::new(),
             Some(format!(
-                "invalid relations config: {error}; cancelling nothing"
+                "invalid relations config: {error}; no relation effects apply"
             )),
         ),
     }

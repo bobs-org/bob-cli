@@ -57,6 +57,13 @@ pub(super) fn print_human_success_with_styler(
     if let Some(query) = &result.query {
         println!("  {}  {:?}", styler.dim("query"), query);
     }
+    if let Some(successor) = &result.relation_successor {
+        if let Some(message) = successor.message.as_deref() {
+            println!("  {}", styler.yellow(message));
+        } else if let Some(hint) = successor.hint.as_deref() {
+            println!("  {}", styler.yellow(hint));
+        }
+    }
 
     if result.candidates.is_empty() {
         println!();
@@ -385,13 +392,18 @@ pub(super) fn relation_label_line(
     } else {
         ""
     };
+    let offers_suffix = if item.offers_source {
+        " · 🪢 offers"
+    } else {
+        ""
+    };
     let detail = if let Some(reason) = &item.disabled_reason {
-        format!("typed label · {reason}{cancels_suffix}{completes_suffix}")
+        format!("typed label · {reason}{cancels_suffix}{completes_suffix}{offers_suffix}")
     } else if item.typed {
-        format!("typed label · canonical spelling{cancels_suffix}{completes_suffix}")
+        format!("typed label · canonical spelling{cancels_suffix}{completes_suffix}{offers_suffix}")
     } else {
         format!(
-            "{} use{}{cancels_suffix}{completes_suffix}",
+            "{} use{}{cancels_suffix}{completes_suffix}{offers_suffix}",
             item.count.unwrap_or_default(),
             if item.count == Some(1) { "" } else { "s" }
         )
