@@ -44,3 +44,10 @@ Evidence: `plan:202610/bob_gcal_daily_events.md`,
 Superseded in part: the `[root::]` ownership clause is retired; an Event
 Task's `[root::]` follows Google's chosen root until you edit it. See
 [[decisions:gcal-root-follows-google-until-edited]].
+
+Superseded in part: the `children` ownership clause is retired for imported
+description bullets. They follow Google while they match what Bob last wrote;
+your edit, nested note, or deletion makes them yours, with one notice only if
+Google later changes them. Other child notes remain yours. Evidence:
+`plan:202611/gcal_description_bullets.md`, `docs/gcal.md` § Description bullets
+and § Who owns each part of a row, and `tests/gcal_lifecycle.rs`.

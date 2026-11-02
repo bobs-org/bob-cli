@@ -636,9 +636,11 @@ lines](#off-clock-events) (they drive `@route`, `#offclock`, and buffers
 instead), recognized conferencing blocks (Meet, Zoom, Teams, Webex),
 separators, blank lines, and lines that only repeat the `📹` or `📍` target.
 A Teams or Zoom invite whose description is only vendor boilerplate writes
-nothing: the row looks exactly as it does today. `Bring shoes #offclock`
-stays prose: the directive grammar does not change, so a line with any
-non-directive token is never a directive.
+no bullets when its join link is already on the row's `📹` badge. Without
+that badge, Bob keeps one linked `Join … meeting` bullet so the invite's
+join URL remains available. `Bring shoes #offclock` stays prose: the
+directive grammar does not change, so a line with any non-directive token
+is never a directive.
 
 The shape is flat: first children of the Event Task, with one nesting level
 for a list under its lead-in (`Agenda:`) and native `1.` items for ordered
@@ -647,7 +649,7 @@ Work logs) stay above the bullets; your own notes go below them. Every
 bullet shares the row's existing child indentation.
 
 Description text is inert data: organizer prose can never mint a tag, task,
-drawer, checkbox, embed, link, or managed log. A few examples:
+drawer, checkbox, embed, task link, or managed log. A few examples:
 
 | Description line | Bullet written |
 | --- | --- |

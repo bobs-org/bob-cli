@@ -202,6 +202,13 @@ Superseded in part: the `[root::]` ownership clause is retired; an Event
 Task's `[root::]` follows Google's chosen root until you edit it. See
 [Gcal Root Follows Google Until Edited](#gcal-root-follows-google-until-edited).
 
+Superseded in part: the `children` ownership clause is retired for imported
+description bullets. They follow Google while they match what Bob last wrote;
+your edit, nested note, or deletion makes them yours, with one notice only if
+Google later changes them. Other child notes remain yours. Evidence:
+`plan:202611/gcal_description_bullets.md`, `docs/gcal.md` § Description bullets
+and § Who owns each part of a row, and `tests/gcal_lifecycle.rs`.
+
 ## Calendar Events Are Daily-Note Event Tasks {#calendar-events-are-daily-note-event-tasks}
 
 **Status:** Superseded in part by [Synced Meetings Are Linked By Phase At Birth](#synced-meetings-link-by-phase)
