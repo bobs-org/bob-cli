@@ -730,6 +730,43 @@ pub(crate) fn event_span_conflicts<'a>(
     crossed
 }
 
+/// Open Event Tasks whose meeting is in progress at `start`
+/// (`start_min < S < end_min`, overnight-aware). Events whose block id
+/// is in `exclude_ids` are skipped. Sorted by meeting start, then line.
+pub(crate) fn events_in_progress_at<'a>(
+    start: u16,
+    events: &'a [EventNoteRow],
+    exclude_ids: &HashSet<String>,
+) -> Vec<&'a EventNoteRow> {
+    let mut in_progress = Vec::new();
+    for event in events {
+        if !event.is_open_task() {
+            continue;
+        }
+        if event
+            .block_id
+            .as_ref()
+            .is_some_and(|id| exclude_ids.contains(id))
+        {
+            continue;
+        }
+        let Some(span) = event.span else {
+            continue;
+        };
+        if !meeting_in_progress_at(span, start) {
+            continue;
+        }
+        in_progress.push(event);
+    }
+    in_progress.sort_by(|left, right| {
+        let left_span = left.span.expect("open task has a span");
+        let right_span = right.span.expect("open task has a span");
+        (left_span.start_min, left.line_index)
+            .cmp(&(right_span.start_min, right.line_index))
+    });
+    in_progress
+}
+
 /// A non-MEET session `[S, E)` conflicts with an open Event Task when it
 /// overlaps the occupied (buffered) span and the meeting is not already
 /// in progress at `S` (`start < S < end`). Unbuffered events keep
@@ -1313,6 +1350,44 @@ mod tests {
         .into_iter()
         .next()
         .is_none());
+    }
+
+    #[test]
+    fn events_in_progress_at_uses_the_meeting_span_and_exclude_set() {
+        let contents = events_note(concat!(
+            "- [ ] #task **0800-0815** Swings! ^swings\n",
+            "- [ ] #task **2330-0030** Late ^late\n",
+            "- [x] #task **0800-0900** Done ^done\n",
+            "- [-] #task **0800-0900** Cancelled ^cancelled\n",
+            "- [ ] #task **0700-0830** Overlap ^overlap\n",
+        ));
+        let date = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
+        let events = events_in_note(&contents, date);
+        let empty = HashSet::new();
+        let mid = events_in_progress_at(8 * 60 + 5, &events, &empty);
+        assert_eq!(
+            mid.iter()
+                .map(|event| event.block_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("overlap"), Some("swings")]
+        );
+        let mut skip_overlap = HashSet::new();
+        skip_overlap.insert("overlap".to_string());
+        let skipped = events_in_progress_at(8 * 60 + 5, &events, &skip_overlap);
+        assert_eq!(skipped[0].block_id.as_deref(), Some("swings"));
+        assert_eq!(skipped.len(), 1);
+        let at_swings_start = events_in_progress_at(8 * 60, &events, &empty);
+        assert_eq!(
+            at_swings_start
+                .iter()
+                .map(|event| event.block_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("overlap")]
+        );
+        let overnight = events_in_progress_at(23 * 60 + 45, &events, &empty);
+        assert_eq!(overnight[0].block_id.as_deref(), Some("late"));
+        let after_midnight = events_in_progress_at(15, &events, &empty);
+        assert_eq!(after_midnight[0].block_id.as_deref(), Some("late"));
     }
 
     #[test]

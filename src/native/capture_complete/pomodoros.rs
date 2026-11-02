@@ -1,4 +1,7 @@
-use std::{fs, io, path::Path};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use super::theme_menu;
 
@@ -70,7 +73,7 @@ fn pomodoro_candidates_inner(
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| canonical.clone());
-    let (scan, _contents, mut warnings) = read_daily(&day_file)?;
+    let (scan, contents, mut warnings) = read_daily(&day_file)?;
     let hint = plan_creation_hint(&scan);
     let keys = scan
         .entries
@@ -112,6 +115,15 @@ fn pomodoro_candidates_inner(
     } else {
         None
     };
+    let next_up_line = start
+        .then(|| {
+            unnamed_start_next_up_line(
+                &scan,
+                &contents,
+                &day_relative_for(bob_dir, &day_file),
+            )
+        })
+        .flatten();
     let (candidates, menu_suggestion) = if let Some(suggestion) = suggestion {
         let choice = menu_choice(&suggestion, &scan, hint.as_ref());
         let candidates = theme_menu::compose_task_aware(
@@ -122,6 +134,7 @@ fn pomodoro_candidates_inner(
             literal,
             &suggestion,
             choice,
+            next_up_line,
         );
         let output_choice = if matches!(choice, MenuChoice::Create)
             && !query.is_empty()
@@ -137,7 +150,14 @@ fn pomodoro_candidates_inner(
         )
     } else {
         (
-            theme_menu::compose(&scan, query, catalog.as_ref(), start, literal),
+            theme_menu::compose(
+                &scan,
+                query,
+                catalog.as_ref(),
+                start,
+                literal,
+                next_up_line,
+            ),
             None,
         )
     };
@@ -306,10 +326,25 @@ fn candidates_at(
     query: &str,
     start: bool,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
-    let (scan, _contents, warnings) = read_daily(day_file)?;
+    let (scan, contents, warnings) = read_daily(day_file)?;
+    let relative = day_file
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|year| {
+            Path::new(year).join(day_file.file_name().unwrap_or_default())
+        })
+        .unwrap_or_else(|| day_file.to_path_buf());
+    let next_up_line = start
+        .then(|| unnamed_start_next_up_line(&scan, &contents, &relative))
+        .flatten();
     Ok((
         Candidates::PomodoroName(theme_menu::compose(
-            &scan, query, None, start, false,
+            &scan,
+            query,
+            None,
+            start,
+            false,
+            next_up_line,
         )),
         warnings,
     ))
@@ -377,19 +412,53 @@ pub(super) fn pomodoro_start_name_candidates_from_scan(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
 ) -> Vec<PomodoroNameCandidate> {
-    theme_menu::compose(scan, query, None, true, false)
+    theme_menu::compose(scan, query, None, true, false, None)
 }
 
 fn entry_key(entry: &PomodoroEntry) -> String {
     plan_budget::normalize_component(entry.name.as_deref().unwrap_or_default())
 }
 
+fn day_relative_for(bob_dir: &Path, day_file: &Path) -> PathBuf {
+    PathBuf::from(capture_pomodoros::relative_day_file(day_file, bob_dir))
+}
+
+fn unnamed_start_next_up_line(
+    scan: &capture_pomodoros::PomodoroScan,
+    contents: &str,
+    day_relative: &Path,
+) -> Option<usize> {
+    let has_running = scan.entries.iter().any(|entry| {
+        entry.state == PomodoroState::Open && entry.time_range.is_some()
+    });
+    if has_running {
+        return capture_pomodoros::next_future_pomodoro(scan)
+            .map(|entry| entry.line);
+    }
+    let spec = capture_language::PomodoroStartSpec {
+        raw: String::new(),
+        duration_units: 5,
+        offset_units: 0,
+        drop: Vec::new(),
+    };
+    capture::unnamed_start_target(
+        day_relative,
+        contents,
+        scan,
+        crate::native::env::current_datetime(),
+        &spec,
+    )
+    .map(|entry| entry.line)
+}
+
 pub(super) fn today_start_rows(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
+    next_up_line: Option<usize>,
 ) -> Vec<PomodoroNameCandidate> {
-    let next_up_line =
-        capture_pomodoros::next_future_pomodoro(scan).map(|entry| entry.line);
+    let next_up_line = next_up_line.or_else(|| {
+        capture_pomodoros::next_future_pomodoro(scan).map(|entry| entry.line)
+    });
 
     let mut seen_keys = Vec::<String>::new();
     let mut start = Vec::new();
@@ -556,7 +625,7 @@ pub(super) fn pomodoro_name_candidates_from_scan(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
 ) -> Vec<PomodoroNameCandidate> {
-    theme_menu::compose(scan, query, None, false, false)
+    theme_menu::compose(scan, query, None, false, false, None)
 }
 
 pub(super) fn creation_candidate(

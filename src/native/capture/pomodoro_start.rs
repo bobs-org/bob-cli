@@ -15,35 +15,13 @@ pub(super) fn compute_pomodoro_start_range(
     now: chrono::NaiveDateTime,
     spec: &PomodoroStartSpec,
 ) -> Result<(String, String, u64, String), CaptureError> {
-    use chrono::Timelike;
     let duration_minutes = spec.duration_units.checked_mul(5).ok_or_else(|| {
-        CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
-    })?;
-    let offset_minutes = spec.offset_units.checked_mul(5).ok_or_else(|| {
-        CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
-    })?;
-    let offset_i64: i64 = offset_minutes.try_into().map_err(|_| {
         CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
     })?;
     let duration_i64: i64 = duration_minutes.try_into().map_err(|_| {
         CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
     })?;
-    let now_minutes = (now.time().hour() * 60 + now.time().minute()) as i64;
-    let numerator = now_minutes.checked_sub(offset_i64).ok_or_else(|| {
-        CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
-    })?;
-    let quot = if numerator >= 0 {
-        numerator.checked_add(4).ok_or_else(|| {
-            CaptureError::usage(
-                "Pomodoro start suffix is too large; use a smaller duration or offset",
-            )
-        })? / 5
-    } else {
-        numerator / 5
-    };
-    let start_raw = quot.checked_mul(5).ok_or_else(|| {
-        CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
-    })?;
+    let start_raw = start_block_minute(now, spec)?;
     let end_raw = start_raw.checked_add(duration_i64).ok_or_else(|| {
         CaptureError::usage("Pomodoro start suffix is too large; use a smaller duration or offset")
     })?;
@@ -214,6 +192,7 @@ fn plan_pomodoro_start_unruled(
                         off_clock: false,
                         event_run: None,
                         event_conflict: None,
+                        event_in_progress: None,
                     },
                     PomodoroBlockBefore::At(index),
                 ));
@@ -261,6 +240,7 @@ fn plan_pomodoro_start_unruled(
                         off_clock: false,
                         event_run: None,
                         event_conflict: None,
+                        event_in_progress: None,
                     },
                     PomodoroBlockBefore::Created,
                 ));
@@ -303,6 +283,7 @@ fn plan_pomodoro_start_unruled(
                         off_clock: false,
                         event_run: None,
                         event_conflict: None,
+                        event_in_progress: None,
                     },
                     PomodoroBlockBefore::Created,
                 ));
@@ -375,6 +356,7 @@ fn plan_pomodoro_start_unruled(
                 off_clock: false,
                 event_run: None,
                 event_conflict: None,
+                event_in_progress: None,
             },
             PomodoroBlockBefore::At(index),
         ));
@@ -407,6 +389,7 @@ fn plan_pomodoro_start_unruled(
             off_clock: false,
             event_run: None,
             event_conflict: None,
+            event_in_progress: None,
         },
         PomodoroBlockBefore::Created,
     ))
@@ -474,6 +457,7 @@ fn plan_typed_pomodoro_start(
                     off_clock: false,
                     event_run: None,
                     event_conflict: None,
+                    event_in_progress: None,
                 },
                 PomodoroBlockBefore::At(index),
             ))
@@ -508,6 +492,7 @@ fn plan_typed_pomodoro_start(
                     off_clock: false,
                     event_run: None,
                     event_conflict: None,
+                    event_in_progress: None,
                 },
                 PomodoroBlockBefore::Created,
             ))
@@ -958,7 +943,9 @@ pub(super) fn plan_pomodoro_start_item(
             "cannot start the next Pomodoro: today's ledger has multiple open timed Pomodoros; finish all but one first",
         ));
     }
-    let Some(entry) = capture_pomodoros::next_future_pomodoro(&scan) else {
+    let Some(entry) =
+        unnamed_start_target(Path::new(&rel), &staged, &scan, now, &spec)
+    else {
         return Err(CaptureError::io(format!(
             "no future Pomodoro to start: today's ledger (`{rel}`) has no open `- [ ] ()` placeholder (start a new named session with `=<name>`, or a task's session with `^route:block-id=`)"
         )));
@@ -1048,6 +1035,7 @@ pub(super) fn plan_pomodoro_start_item(
         off_clock: false,
         event_run: None,
         event_conflict: None,
+        event_in_progress: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
@@ -1283,6 +1271,7 @@ fn plan_override_restart_item(
         off_clock: false,
         event_run: None,
         event_conflict: None,
+        event_in_progress: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
@@ -1861,6 +1850,7 @@ fn plan_override_swap_item(
         off_clock: false,
         event_run: None,
         event_conflict: None,
+        event_in_progress: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
@@ -2651,6 +2641,7 @@ fn plan_named_pomodoro_start_item(
         off_clock: false,
         event_run: None,
         event_conflict: None,
+        event_in_progress: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));

@@ -1,22 +1,25 @@
-//! Run-past-event warnings for non-MEET starts, extends, and shifts.
+//! Run-past-event and mid-meeting warnings for non-MEET starts, extends,
+//! and shifts.
 //!
 //! After an operator writes a new session span, open Event Tasks whose
 //! occupied span (the meeting plus its `[buffer::]` lead-in and lead-out)
 //! newly conflicts with the new `[S, E)` raise one structured
 //! `pomodoro_runs_past_event` warning naming the earliest conflict, plus an
 //! additive `event_conflict` object on the start, adjust, or shift JSON. A
-//! session starting mid-meeting stays quiet. MEET sessions and events
-//! already in the session's own lineup are exempt. `-N` and closes never
-//! warn. Untracked Event Tasks warn like any other open Event Task.
-//! Detection, overlap, and fit all come from the shared
-//! [`event_span_conflicts`] predicate.
+//! start-family write whose written start is strictly inside an open Event
+//! Task's meeting span raises `pomodoro_starts_during_event` plus an
+//! additive `event_in_progress` object. MEET sessions and events already
+//! in the session's own lineup are exempt. `-N` and closes never warn.
+//! Untracked Event Tasks warn like any other open Event Task. Detection,
+//! overlap, and fit all come from the shared [`event_span_conflicts`]
+//! predicate; mid-meeting uses [`events_in_progress_at`].
 
 use std::collections::HashSet;
 
 use super::*;
 use crate::native::event_task::{
-    event_span_conflicts, events_in_note, BufferPart, EventBuffer,
-    EventNoteRow, EventSpan, EventSpanConflict,
+    event_span_conflicts, events_in_note, events_in_progress_at, BufferPart,
+    EventBuffer, EventNoteRow, EventSpan, EventSpanConflict,
 };
 
 /// How to spell the largest same-operator count that still ends at or
@@ -133,6 +136,26 @@ pub(super) struct EventConflictJson {
 
 fn is_zero_more(value: &u64) -> bool {
     *value == 0
+}
+
+/// One open Event Task whose meeting is in progress at the written start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct EventInProgressEventJson {
+    pub(super) title: String,
+    pub(super) time_range: String,
+    pub(super) line: usize,
+    pub(super) off_clock: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) buffer: Option<EventBufferJson>,
+}
+
+/// `pomodoro_start.event_in_progress`: a non-MEET session whose written
+/// start sits strictly inside an open Event Task's meeting span.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct EventInProgressJson {
+    pub(super) event: EventInProgressEventJson,
+    #[serde(skip_serializing_if = "is_zero_more")]
+    pub(super) more: u64,
 }
 
 /// Parse an `HHMM` clock into minutes past midnight.
@@ -281,9 +304,41 @@ pub(super) fn detect_event_conflict(
     })
 }
 
+/// A non-MEET start whose written start sits strictly inside an open
+/// Event Task's meeting span. `None` when the session is MEET or no
+/// open meeting contains `S`. Does not apply an "only new" rule.
+pub(super) fn detect_event_in_progress(
+    contents: &str,
+    date: NaiveDate,
+    session_name: Option<&str>,
+    entry_index: usize,
+    start: u16,
+) -> Option<EventInProgressJson> {
+    if is_meet_name(session_name) {
+        return None;
+    }
+    let events = events_in_note(contents, date);
+    let exclude = lineup_exclude_ids(contents, entry_index);
+    let in_progress = events_in_progress_at(start, &events, &exclude);
+    let first = in_progress.first().copied()?;
+    let span = first.span?;
+    let more = u64::try_from(in_progress.len().saturating_sub(1)).unwrap_or(0);
+    Some(EventInProgressJson {
+        event: EventInProgressEventJson {
+            title: first.title.clone(),
+            time_range: span.text(),
+            line: first.line_index + 1,
+            off_clock: first.off_clock,
+            buffer: EventBufferJson::new(span, first.buffer),
+        },
+        more,
+    })
+}
+
 /// Attach a start-family conflict after the MEET rule has written the
 /// final span. Restart and swap reuse the previous session's clock as
-/// the old span so already-crossed events are not re-warned.
+/// the old span so already-crossed events are not re-warned. Mid-meeting
+/// starts attach `event_in_progress` without that "only new" filter.
 pub(super) fn attach_start_event_conflict(
     summary: &mut PomodoroStartSummary,
     contents: &str,
@@ -316,6 +371,13 @@ pub(super) fn attach_start_event_conflict(
             spec: spec.clone(),
             name,
         },
+    );
+    summary.event_in_progress = detect_event_in_progress(
+        contents,
+        date,
+        summary.pomodoro_name.as_deref(),
+        summary.pomodoro_line.saturating_sub(1),
+        new_start,
     );
 }
 
@@ -385,9 +447,51 @@ pub(super) fn event_conflict_warning(
     })
 }
 
-/// Harvest the structured warning from a planned item's start, adjust,
-/// or shift JSON. One warning per item, so `= +2` warns once on the
-/// start when the adjust does not newly cross anything.
+pub(super) fn event_in_progress_message(
+    session_name: Option<&str>,
+    start: &str,
+    end: &str,
+    in_progress: &EventInProgressJson,
+) -> String {
+    let name = session_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("session");
+    let event = &in_progress.event;
+    let target = event_with_buffer_label(
+        &event.title,
+        &event.time_range,
+        event.buffer.as_ref(),
+    );
+    let mut message = format!("⚠ {name} {start}-{end} starts during {target}");
+    if in_progress.more > 0 {
+        message.push_str(&format!(" and {} more", in_progress.more));
+    }
+    message
+}
+
+pub(super) fn event_in_progress_warning(
+    session_name: Option<&str>,
+    start: &str,
+    end: &str,
+    in_progress: &EventInProgressJson,
+) -> CaptureWarning {
+    CaptureWarning::Structured(StructuredCaptureWarning {
+        code: "pomodoro_starts_during_event",
+        label: None,
+        count: None,
+        message: event_in_progress_message(
+            session_name,
+            start,
+            end,
+            in_progress,
+        ),
+    })
+}
+
+/// Harvest the run-past-event warning from a planned item's start,
+/// adjust, or shift JSON. One warning of this kind per item, so `= +2`
+/// warns once on the start when the adjust does not newly cross anything.
 pub(super) fn warning_from_item(
     item: &CaptureItemResult,
 ) -> Option<CaptureWarning> {
@@ -422,6 +526,22 @@ pub(super) fn warning_from_item(
         ));
     }
     None
+}
+
+/// Harvest the mid-meeting start warning. Sibling of [`warning_from_item`]
+/// so one item can report both `pomodoro_runs_past_event` and
+/// `pomodoro_starts_during_event` when they name different events.
+pub(super) fn in_progress_warning_from_item(
+    item: &CaptureItemResult,
+) -> Option<CaptureWarning> {
+    let start = item.pomodoro_start.as_ref()?;
+    let in_progress = start.event_in_progress.as_ref()?;
+    Some(event_in_progress_warning(
+        start.pomodoro_name.as_deref(),
+        &start.start,
+        &start.end,
+        in_progress,
+    ))
 }
 
 #[cfg(test)]
@@ -821,5 +941,62 @@ mod tests {
         let json = serde_json::to_value(&conflict).unwrap();
         assert!(json.get("buffer_part").is_none(), "{json}");
         assert!(json["event"].get("buffer").is_none(), "{json}");
+    }
+
+    #[test]
+    fn mid_meeting_start_reports_event_in_progress_without_untracked() {
+        let contents = note(
+            concat!(
+                "- [ ] #task **0800-0815** Swings! #offclock ^swings\n",
+                "- [ ] #task **0700-0900** Overlap ^overlap\n",
+            ),
+            "- [ ] (**0805-0830** [t:: 25m]) — BUILD\n",
+        );
+        let in_progress = detect_event_in_progress(
+            &contents,
+            date(),
+            Some("BUILD"),
+            session_index(&contents),
+            8 * 60 + 5,
+        )
+        .expect("in progress");
+        assert_eq!(in_progress.event.title, "Overlap");
+        assert_eq!(in_progress.event.time_range, "0700-0900");
+        assert!(!in_progress.event.off_clock);
+        assert_eq!(in_progress.more, 1);
+        let json = serde_json::to_value(&in_progress).unwrap();
+        assert!(json["event"].get("untracked").is_none(), "{json}");
+        assert_eq!(
+            event_in_progress_message(
+                Some("BUILD"),
+                "0805",
+                "0830",
+                &in_progress,
+            ),
+            "⚠ BUILD 0805-0830 starts during Overlap (0700-0900) and 1 more"
+        );
+        assert!(detect_event_in_progress(
+            &contents,
+            date(),
+            Some("MEET"),
+            session_index(&contents),
+            8 * 60 + 5,
+        )
+        .is_none());
+        let own = note(
+            "- [ ] #task **0800-0815** Swings! ^swings\n",
+            concat!(
+                "- [ ] (**0805-0830** [t:: 25m]) — BUILD\n",
+                "  - [[#^swings]]\n",
+            ),
+        );
+        assert!(detect_event_in_progress(
+            &own,
+            date(),
+            Some("BUILD"),
+            session_index(&own),
+            8 * 60 + 5,
+        )
+        .is_none());
     }
 }

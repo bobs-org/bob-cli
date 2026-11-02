@@ -476,6 +476,11 @@ pub(super) struct PomodoroStartSummary {
     /// the session is MEET or the span does not newly cross an event.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) event_conflict: Option<EventConflictJson>,
+    /// Non-MEET start whose written start sits strictly inside an open
+    /// Event Task's meeting. Omitted when the session is MEET or S is
+    /// not inside a meeting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) event_in_progress: Option<EventInProgressJson>,
 }
 
 fn is_true(value: &bool) -> bool {

@@ -455,7 +455,7 @@ fn start_inside_a_lead_in_runs_into_the_meeting_without_a_fit() {
 }
 
 #[test]
-fn start_in_a_lead_out_warns_and_a_mid_meeting_start_stays_quiet() {
+fn start_in_a_lead_out_warns_and_a_mid_meeting_start_warns_during() {
     let (_temp, vault, day_file) =
         write_day("bob-cli-event-buffer-lead-out", BUFFERED_LUNCH_DAY);
     let json = capture_json(&vault, &day_file, "2026-11-01 13:05:00", &["="]);
@@ -467,15 +467,42 @@ fn start_in_a_lead_out_warns_and_a_mid_meeting_start_stays_quiet() {
         past_event_warning(&json)["message"],
         "⚠ BOB 1305-1330 runs 10m into Lunch's +15m buffer (1200-1300)"
     );
+    assert!(
+        json["pomodoro_start"].get("event_in_progress").is_none(),
+        "{json}"
+    );
 
-    // Starting mid-meeting is quiet, as it is without a buffer: the meeting
-    // you walked into stays open after a timed close.
+    // Starting mid-meeting is not a run-past conflict: the meeting you
+    // walked into stays open after a timed close. It does warn that the
+    // session starts during the meeting.
     let (_temp, vault, day_file) =
         write_day("bob-cli-event-buffer-mid-meeting", BUFFERED_LUNCH_DAY);
-    let quiet = capture_json(&vault, &day_file, "2026-11-01 12:10:00", &["="]);
+    let mid = capture_json(&vault, &day_file, "2026-11-01 12:10:00", &["="]);
     assert!(
-        quiet["pomodoro_start"].get("event_conflict").is_none(),
-        "{quiet}"
+        mid["pomodoro_start"].get("event_conflict").is_none(),
+        "{mid}"
+    );
+    assert_eq!(
+        mid["pomodoro_start"]["event_in_progress"],
+        serde_json::json!({
+            "event": {
+                "title": "Lunch",
+                "time_range": "1200-1300",
+                "line": 2,
+                "off_clock": false,
+                "buffer": lunch_buffer_json()
+            }
+        })
+    );
+    let warning = mid["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .find(|warning| warning["code"] == "pomodoro_starts_during_event")
+        .expect("starts-during-event warning");
+    assert_eq!(
+        warning["message"],
+        "⚠ BOB 1210-1235 starts during Lunch (1200-1300 \u{2212}30m +15m)"
     );
 }
 

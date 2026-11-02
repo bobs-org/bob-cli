@@ -31,6 +31,7 @@ mod inbox_route;
 mod keep_moving;
 mod link_guard;
 mod lists;
+mod meet_event_default;
 mod meet_event_run;
 mod mentions;
 mod note_bullets;

@@ -1223,6 +1223,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         off_clock: false,
                         event_run: None,
                         event_conflict: None,
+                        event_in_progress: None,
                     };
                     if let Some(finish) = meet_finish {
                         warnings.extend(finish.apply(&mut summary));
@@ -1376,6 +1377,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     off_clock: false,
                     event_run: None,
                     event_conflict: None,
+                    event_in_progress: None,
                 };
                 if let Some(finish) = meet_finish {
                     warnings.extend(finish.apply(&mut summary));
@@ -1542,6 +1544,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     off_clock: false,
                     event_run: None,
                     event_conflict: None,
+                    event_in_progress: None,
                 };
                 if let Some(finish) = meet_finish {
                     warnings.extend(finish.apply(&mut summary));
@@ -1662,6 +1665,7 @@ pub(super) fn plan_pomodoro_link_with_start(
         off_clock: false,
         event_run: None,
         event_conflict: None,
+        event_in_progress: None,
     };
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));

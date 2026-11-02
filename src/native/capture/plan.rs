@@ -181,6 +181,9 @@ pub(super) fn plan_capture_batch_with_config_path(
         if let Some(warning) = warning_from_item(&planned.result) {
             warnings.push(warning);
         }
+        if let Some(warning) = in_progress_warning_from_item(&planned.result) {
+            warnings.push(warning);
+        }
         let refs = std::mem::take(&mut planned.pomodoro_refs);
         match planner.loaded_texts(&day_file) {
             Some((original, current)) => {

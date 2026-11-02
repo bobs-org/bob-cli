@@ -844,9 +844,10 @@ pub(crate) fn scan(contents: &str) -> PomodoroScan {
 }
 
 /// The next future Pomodoro in document order: the first entry the scan
-/// reports as open, a placeholder, and untimed. This single rule selects
-/// the unnamed link start's target, the whole-item `=` start's target, and
-/// the `x` diagnostic's "next up" entry, so the three can never drift.
+/// reports as open, a placeholder, and untimed. This rule selects the
+/// unnamed link start's target and the `x` diagnostic's "next up" entry.
+/// Whole-item unnamed `=` starts use [`crate::native::capture::unnamed_start_target`],
+/// which prefers a MEET whose event run occupies the start block.
 pub(crate) fn next_future_pomodoro(
     scan: &PomodoroScan,
 ) -> Option<&PomodoroEntry> {

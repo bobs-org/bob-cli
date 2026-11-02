@@ -1104,6 +1104,69 @@ fn capture_complete_pomodoro_start_name_json_covers_empty_and_new_queries() {
 }
 
 #[test]
+fn capture_complete_start_name_marks_meet_next_up_during_the_event() {
+    let temp = TempDir::new("bob-cli-capture-complete-meet-next-up");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
+    let day_file = vault.join("2026/20261102.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Events\n",
+            "- [*] #task **0800-0815** Swings! #offclock ^swings\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [x] (**0755-0800** [t:: 5m]) — BUILD\n",
+            "- [ ] () — BUILD\n",
+            "  - [[dev#^build]]\n",
+            "- [ ] () — MEET\n",
+            "  - [[#^swings]]\n",
+            "- [ ] () — PLAN\n",
+        ),
+    );
+
+    let complete = |now: &str| {
+        bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-c")
+            .arg("2")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg("=#")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run start-name completion")
+    };
+
+    let during = complete("2026-11-02 08:04:00");
+    assert_success(&during);
+    let during_json: serde_json::Value =
+        serde_json::from_str(stdout(&during).trim()).expect("json");
+    let during_rows = during_json["candidates"].as_array().expect("candidates");
+    let next_up = during_rows
+        .iter()
+        .find(|row| row["next_up"] == true)
+        .expect("next_up row");
+    assert_eq!(next_up["name"], "MEET", "{during_json}");
+
+    let morning = complete("2026-11-02 07:30:00");
+    assert_success(&morning);
+    let morning_json: serde_json::Value =
+        serde_json::from_str(stdout(&morning).trim()).expect("json");
+    let morning_rows =
+        morning_json["candidates"].as_array().expect("candidates");
+    let next_up = morning_rows
+        .iter()
+        .find(|row| row["next_up"] == true)
+        .expect("next_up row");
+    assert_eq!(next_up["name"], "BUILD", "{morning_json}");
+}
+
+#[test]
 fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
     let temp = TempDir::new("bob-cli-capture-complete-override-name");
     let vault = temp.path().join("vault");

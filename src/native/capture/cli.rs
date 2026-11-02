@@ -261,7 +261,9 @@ See `docs/capture.md` (`Plan budget`) and `docs/plan.md`.\n\n\
 Capture a whole item `=`/`=<X>` (for example `=`, `=3`, `=-2`, `=2-1`) to \
 start today's next future Pomodoro now with the same timing as the `se<X>` \
 snippet: empty is 25 minutes, `3` is 15 minutes, `-` is 25 minutes with a \
-5-minute offset, `2-1` is 10 minutes with a 5-minute offset. Write \
+5-minute offset, `2-1` is 10 minutes with a 5-minute offset. While an open \
+MEET's event run occupies the start block, an unnamed start takes that MEET \
+instead (an empty suffix writes the run's span). Write \
 `=name` (for example `=bugs`, `=3#bugs`, `=bugs@3`) to start the \
 named Pomodoro now with `se<X>` timing: `=bugs` and `=#bugs` are one token; write `#` only when a number comes first (`=3#bugs`) or the name starts with a digit or reads as a close (`=#2fa`, `=#x2`). An open match (whole slug, else \
 prefix) starts in place, a completed match starts a new session with that \

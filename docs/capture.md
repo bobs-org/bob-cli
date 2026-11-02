@@ -3114,7 +3114,11 @@ by type and ` · merged T` appended when the landing merged.
 
 ### Starting the next Pomodoro
 
-Capture a whole item `=`/`=<X>` to start today's next future Pomodoro now:
+Capture a whole item `=`/`=<X>` to start today's next future Pomodoro now.
+While an open MEET's event run occupies the start block (`[S, S + 5)`),
+an unnamed start joins that meeting instead of the first future
+placeholder; see [An unnamed start joins the meeting in
+progress](#an-unnamed-start-joins-the-meeting-in-progress).
 
 ```bash
 bob capture '='
@@ -3127,13 +3131,13 @@ Pomodoro sessions form a lifecycle, taught in this order:
 
 | Item | Operator | Effect | Obsidian |
 | --- | --- | --- | --- |
-| `=` / `=<X>` | start / restart | Start the next future Pomodoro, or restart today's running Pomodoro with fresh `se<X>` timing (`=` is 25 minutes, except a MEET, which follows its [event run](#meet-starts-follow-the-calendar), buffers included); an override shows a warning before the write | `se<X>` + Tab inside `()` or on the running line |
+| `=` / `=<X>` | start / restart | Start the next future Pomodoro, or restart today's running Pomodoro with fresh `se<X>` timing (`=` is 25 minutes, except a MEET, which follows its [event run](#meet-starts-follow-the-calendar), buffers included). While an open MEET's event run occupies the start block, an unnamed start [joins that meeting](#an-unnamed-start-joins-the-meeting-in-progress). An override shows a warning before the write | `se<X>` + Tab inside `()` or on the running line |
 | `=<X>#<pomodoro>` | start named / swap | Start that named Pomodoro (open match in place, completed match again, else created); while another session runs, swap in a different name, keeping its clock with an empty `<X>` or using fresh timing when `<X>` is given | `se<X>` + Tab inside `() — NAME` or on the running line after picking the name |
 | `+[N]` / `-[N]` | resize | Move the running session's end N × 5 min later / earlier | `N\p` / `N\P` |
 | `++[N]` / `--[N]` | shift | Move the running session's start and end N × 5 min later / earlier | `N\o` / `N\O` |
 | `x` | close | Close the running session | Ctrl+Enter |
 
-Mnemonic: "`=` starts the next session — or restarts the running one; `=name` starts that one — or swaps it in; `x` stops the running one."
+Mnemonic: "`=` starts the next session — or the meeting in progress, or restarts the running one; `=name` starts that one — or swaps it in; `x` stops the running one."
 
 Which clock the session is on — `[t::]` or `[off::]` — follows the
 counted-links rule in [Which clock a session is on](#which-clock-a-session-is-on).
@@ -3229,7 +3233,7 @@ and Event Tasks that already ended are skipped.
 
 | Start | Span written | Clock key |
 | --- | --- | --- |
-| `=` or `=meet` (empty suffix) on a MEET, or `=` restarting a running MEET | The run's real span, for example `(**1100-1200** [t:: 60m])` | `[off:: Nm]` when the run is off-clock |
+| `=` or `=meet` (empty suffix) on a MEET, including an unnamed `=` that [joins the meeting in progress](#an-unnamed-start-joins-the-meeting-in-progress), or `=` restarting a running MEET | The run's real span, for example `(**1100-1200** [t:: 60m])` | `[off:: Nm]` when the run is off-clock |
 | `=5#meet`, `=3`, or any counted suffix | The explicit span | `[off:: Nm]` when the run is off-clock |
 | Kept-ledger swap (`=meet` while another session runs) | The running session's span bytes | Dropped or restored to match the run |
 | Link start (`@route:id#meet=`) | The written span | `[off:: Nm]` when the run is off-clock |
@@ -3307,6 +3311,34 @@ from your calendar: Lunch with Kelly`; a buffered event adds its meeting span
 and buffer, `from your calendar: Lunch with Kelly (1200-1300 −30m +15m)`.
 Obsidian's `se<X>` + Tab mirrors the rule through the shared
 [`meet_event_run` vectors](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/meet_event_run/vectors.json).
+
+#### An unnamed start joins the meeting in progress
+
+An unnamed whole-item start (`=`, `=3`, `=-2`, `=~2`, and the `=` after `x`
+in an `x =` chain) that finds no running session prefers an open untimed
+MEET whose event run overlaps the **start block**. `S` is the start minute
+the typed start would write: now minus `5·offset`, rounded up to 5 minutes,
+on today's unwrapped timeline. The start block is `[S, S + 5)`. A MEET
+qualifies when its event run (buffered, the same run `=meet` follows)
+satisfies `run.start < S + 5` and `run.end > S`. Several qualifying MEETs
+take the earliest run start, then ledger line. After that, the drop plan,
+the start rewrite, and the calendar span rule are the same as `=meet`: an
+empty suffix writes the run's span (late-join clamp included); a counted
+suffix keeps its explicit span and takes the run's clock key. When no MEET
+qualifies, the first future placeholder starts as before. Named starts
+(`=build`) always start what they name; a bare `=` while a session runs
+still restarts that session.
+
+Worked examples, with Swings! at 0800-0815 `#offclock` in MEET's lineup and
+a closed BUILD ending at 0800:
+
+- At 08:04 (`S` = 0805) `=` writes `(**0800-0815** [off:: 15m]) — MEET`.
+- At 07:57 (`S` = 0800) the start block is the event's first block, so MEET
+  starts at 0800.
+- At 07:54 (`S` = 0755) MEET does not qualify. BUILD starts 0755-0820, and
+  `pomodoro_runs_past_event` fires as before.
+- At 08:12 (`S` = 0815) the run ends at `S`. MEET does not qualify, and
+  BUILD starts with no warning.
 
 #### Dropping queued Task Links as a session starts
 
@@ -3872,16 +3904,23 @@ the write. `-N` and closes never warn.
 An open Event Task conflicts with a new span `[S, E)` when it overlaps the
 event's _occupied_ span (the meeting plus its `[buffer::]` lead-in and
 lead-out) and the meeting is not already in progress at `S` (`start < S <
-end`). Starting mid-meeting stays quiet, because a meeting you walked out of
-early stays open after a timed close. A conflict is new when the previous
-span did not conflict (a fresh start has no previous span). With a buffer
-this covers running into a lead-in, starting inside a lead-in and running
-into the meeting, starting inside a lead-out, and running through the whole
-event. Events already in that session's own lineup are skipped. Done (`[x]`)
+end`). Starting at the meeting start, or inside a lead-in or lead-out, is
+that conflict. A start-family write whose written start is strictly inside
+an open Event Task's meeting span raises a separate structured warning
+`pomodoro_starts_during_event` (JSON `pomodoro_start.event_in_progress`):
+the meeting you walked into stays open after a timed close, and a non-MEET
+session that starts there is named. A conflict is new when the previous
+span did not conflict (a fresh start has no previous span); mid-meeting
+does not apply that "only new" rule, so a restart of a running BUILD
+mid-meeting warns too. With a buffer the run-past warning covers running
+into a lead-in, starting inside a lead-in and running into the meeting,
+starting inside a lead-out, and running through the whole event. Both
+warnings can fire for one start only when they name different events.
+Events already in that session's own lineup are skipped. Done (`[x]`)
 and cancelled (`[-]`) rows never warn. Off-clock Event Tasks (`#offclock`;
 Google also accepts `#off-clock` and `#untracked`) warn like any other open
 Event Task: off-clock means off the clock, not
-optional.
+optional. MEET sessions never raise `pomodoro_starts_during_event`.
 
 MEET sessions are exempt: their span follows the [event
 run](#meet-starts-follow-the-calendar), so running through those events is
@@ -3931,7 +3970,29 @@ An event with a buffer adds two additive keys. `event.buffer` is
 (`time_range` is the buffered span; `event.time_range` stays the meeting
 span), and `event_conflict.buffer_part` is `before` or `after` when the
 overlap lies wholly inside one buffer. Both are omitted when they do not
-apply, so unbuffered payloads are byte-identical. `--dry-run` reports the
+apply, so unbuffered payloads are byte-identical.
+
+A mid-meeting start adds `pomodoro_start.event_in_progress` when
+`pomodoro_starts_during_event` fires. The message is
+`⚠ BUILD 0805-0830 starts during Swings! (0800-0815)`; a buffered event
+uses the same `event_with_buffer_label` as the run-past warning
+(`Lunch (1200-1300 −30m +15m)`), and ` and N more` appends when later
+meetings also contain `S`. The name falls back to `session`.
+
+```json
+"event_in_progress": {
+  "event": {"title": "Swings!", "time_range": "0800-0815", "line": 27,
+            "off_clock": true},
+  "more": 1
+}
+```
+
+`event` is the earliest qualifying event by meeting start, then line.
+`time_range` is the meeting span. `buffer` (`EventBufferJson`) is present
+only when the event has one. `more` is omitted when 0. This object does
+not carry the deprecated `untracked` key.
+
+`--dry-run` reports the
 same warning and object without writing. Human output:
 
 `⚠ BOB 1150-1215 runs 15m into Standup (1200-1230) · =2 ends at 1200`
@@ -7422,7 +7483,7 @@ follow [PT7 menu composition](task-types.md#pt7-menu-composition):
 matching Today rows first, Recent exact/prefix matches, a create row when no
 Today or Recent name matches exactly, Recent substring matches, then utility
 rows. Today rows keep their existing order: planned placeholders (with
-`next_up` on today's next future entry), then `again` rows for completed
+`next_up` on the placeholder a bare `=` would start), then `again` rows for completed
 sessions, most recent first. Utility rows are the unnamed “Name it” entries
 (`requires_name: true`) followed by the running session. They are never
 filtered out, so `=#zzz` still offers creation before those utilities.

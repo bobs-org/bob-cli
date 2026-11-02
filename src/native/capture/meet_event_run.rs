@@ -126,6 +126,105 @@ pub(super) fn compute_event_run(
     })
 }
 
+fn start_suffix_too_large() -> CaptureError {
+    CaptureError::usage(
+        "Pomodoro start suffix is too large; use a smaller duration or offset",
+    )
+}
+
+/// The unwrapped start minute a typed start writes: now minus `5·offset`,
+/// rounded up to 5 minutes. Not the `HHMM` modulo 1440.
+pub(crate) fn start_block_minute(
+    now: chrono::NaiveDateTime,
+    spec: &PomodoroStartSpec,
+) -> Result<i64, CaptureError> {
+    use chrono::Timelike;
+    let offset_minutes = spec
+        .offset_units
+        .checked_mul(5)
+        .ok_or_else(start_suffix_too_large)?;
+    let offset_i64: i64 = offset_minutes
+        .try_into()
+        .map_err(|_| start_suffix_too_large())?;
+    let now_minutes = (now.time().hour() * 60 + now.time().minute()) as i64;
+    let numerator = now_minutes
+        .checked_sub(offset_i64)
+        .ok_or_else(start_suffix_too_large)?;
+    let quot = if numerator >= 0 {
+        numerator
+            .checked_add(4)
+            .ok_or_else(start_suffix_too_large)?
+            / 5
+    } else {
+        numerator / 5
+    };
+    quot.checked_mul(5).ok_or_else(start_suffix_too_large)
+}
+
+/// Open untimed MEET placeholder whose event run overlaps `[S, S + 5)`.
+/// Several matches take the earliest `run.start_min`, then ledger line.
+pub(crate) fn meet_overlapping_start_block<'a>(
+    day_relative: &Path,
+    contents: &str,
+    scan: &'a capture_pomodoros::PomodoroScan,
+    start_min: i64,
+    now: chrono::NaiveDateTime,
+) -> Option<&'a capture_pomodoros::PomodoroEntry> {
+    use chrono::Timelike;
+    let start = i32::try_from(start_min).ok()?;
+    let block_end = start.checked_add(5)?;
+    let now_min =
+        i32::try_from(now.hour() * 60 + now.minute()).unwrap_or_default();
+    scan.entries
+        .iter()
+        .filter(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Open
+                && entry.placeholder
+                && entry.time_range.is_none()
+                && is_meet_name(entry.name.as_deref())
+        })
+        .filter_map(|entry| {
+            let index = entry.line.checked_sub(1)?;
+            let run = compute_event_run(
+                day_relative,
+                contents,
+                index,
+                None,
+                now_min,
+            )?;
+            (run.start_min < block_end && run.end_min > start).then_some((
+                run.start_min,
+                entry.line,
+                entry,
+            ))
+        })
+        .min_by_key(|(run_start, line, _)| (*run_start, *line))
+        .map(|(_, _, entry)| entry)
+}
+
+/// Placeholder a bare unnamed start would take: a MEET whose event run
+/// occupies the start block, else [`next_future_pomodoro`].
+pub(crate) fn unnamed_start_target<'a>(
+    day_relative: &Path,
+    contents: &str,
+    scan: &'a capture_pomodoros::PomodoroScan,
+    now: chrono::NaiveDateTime,
+    spec: &PomodoroStartSpec,
+) -> Option<&'a capture_pomodoros::PomodoroEntry> {
+    if let Ok(start_min) = start_block_minute(now, spec)
+        && let Some(entry) = meet_overlapping_start_block(
+            day_relative,
+            contents,
+            scan,
+            start_min,
+            now,
+        )
+    {
+        return Some(entry);
+    }
+    capture_pomodoros::next_future_pomodoro(scan)
+}
+
 /// End, on the day's timeline, of today's latest closed timed session.
 fn latest_closed_end(contents: &str) -> Option<i32> {
     let scan = capture_pomodoros::scan(contents);
@@ -678,6 +777,7 @@ fn clock_link_label(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDateTime;
 
     fn rel() -> &'static Path {
         Path::new("2026/20261101.md")
@@ -892,5 +992,146 @@ mod tests {
         );
         let plain = event_task_by_id(rel(), &note, "plain").unwrap();
         assert_eq!(far_run_event_label(&plain), "Plain");
+    }
+
+    fn at(hour: u32, minute: u32) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 11, 1)
+            .unwrap()
+            .and_hms_opt(hour, minute, 0)
+            .unwrap()
+    }
+
+    fn bare_spec() -> PomodoroStartSpec {
+        PomodoroStartSpec {
+            raw: String::new(),
+            duration_units: 5,
+            offset_units: 0,
+            drop: Vec::new(),
+        }
+    }
+
+    fn target_name(note: &str, hour: u32, minute: u32) -> Option<String> {
+        let scan = capture_pomodoros::scan(note);
+        unnamed_start_target(rel(), note, &scan, at(hour, minute), &bare_spec())
+            .and_then(|entry| entry.name.clone())
+    }
+
+    fn swings_day() -> String {
+        day(
+            "- [ ] #task **0800-0815** Swings! #offclock ^swings\n",
+            concat!(
+                "- [x] (**0755-0800** [t:: 5m]) — BUILD\n",
+                "- [ ] () — BUILD\n",
+                "- [ ] () — MEET\n",
+                "  - [[#^swings]]\n",
+                "- [ ] () — PLAN\n",
+            ),
+        )
+    }
+
+    #[test]
+    fn unnamed_start_picks_meet_when_the_start_block_overlaps_the_run() {
+        let note = swings_day();
+        assert_eq!(
+            start_block_minute(at(7, 54), &bare_spec()).unwrap(),
+            7 * 60 + 55
+        );
+        assert_eq!(
+            start_block_minute(at(7, 57), &bare_spec()).unwrap(),
+            8 * 60
+        );
+        assert_eq!(
+            start_block_minute(at(8, 4), &bare_spec()).unwrap(),
+            8 * 60 + 5
+        );
+        assert_eq!(
+            start_block_minute(at(8, 12), &bare_spec()).unwrap(),
+            8 * 60 + 15
+        );
+        assert_eq!(target_name(&note, 7, 54).as_deref(), Some("BUILD"));
+        assert_eq!(target_name(&note, 7, 57).as_deref(), Some("MEET"));
+        assert_eq!(target_name(&note, 8, 4).as_deref(), Some("MEET"));
+        assert_eq!(target_name(&note, 8, 12).as_deref(), Some("BUILD"));
+    }
+
+    #[test]
+    fn unnamed_start_uses_buffered_lead_in_and_lead_out() {
+        let note = day(
+            "- [ ] #task **1200-1300** Lunch [buffer:: -30m +15m] ^lunch\n",
+            concat!(
+                "- [ ] () — BUILD\n",
+                "- [ ] () — MEET\n",
+                "  - [[#^lunch]]\n",
+            ),
+        );
+        assert_eq!(target_name(&note, 11, 24).as_deref(), Some("BUILD"));
+        assert_eq!(target_name(&note, 11, 27).as_deref(), Some("MEET"));
+        assert_eq!(target_name(&note, 13, 10).as_deref(), Some("MEET"));
+        assert_eq!(target_name(&note, 13, 14).as_deref(), Some("BUILD"));
+    }
+
+    #[test]
+    fn unnamed_start_skips_ended_and_done_events() {
+        let ended = day(
+            "- [ ] #task **0800-0815** Swings! ^swings\n",
+            concat!(
+                "- [ ] () — BUILD\n",
+                "- [ ] () — MEET\n",
+                "  - [[#^swings]]\n",
+            ),
+        );
+        assert_eq!(target_name(&ended, 8, 20).as_deref(), Some("BUILD"));
+        let done = day(
+            "- [x] #task **0800-0815** Swings! ^swings\n",
+            concat!(
+                "- [ ] () — BUILD\n",
+                "- [ ] () — MEET\n",
+                "  - [[#^swings]]\n",
+            ),
+        );
+        assert_eq!(target_name(&done, 8, 4).as_deref(), Some("BUILD"));
+    }
+
+    #[test]
+    fn unnamed_start_picks_the_earliest_overlapping_meet() {
+        let note = day(
+            concat!(
+                "- [ ] #task **0805-0900** Later ^later\n",
+                "- [ ] #task **0800-0815** Swings! ^swings\n",
+            ),
+            concat!(
+                "- [ ] () — BUILD\n",
+                "- [ ] () — MEET\n",
+                "  - [[#^later]]\n",
+                "- [ ] () — MEET\n",
+                "  - [[#^swings]]\n",
+            ),
+        );
+        let scan = capture_pomodoros::scan(&note);
+        let meet_lines: Vec<usize> = note
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("— MEET"))
+            .map(|(index, _)| index + 1)
+            .collect();
+        assert_eq!(meet_lines.len(), 2);
+        let at_0804 =
+            unnamed_start_target(rel(), &note, &scan, at(8, 4), &bare_spec())
+                .expect("MEET");
+        // Both runs overlap [0805, 0810); the 0800 run wins over 0805.
+        assert_eq!(at_0804.line, meet_lines[1]);
+        let at_0820 =
+            unnamed_start_target(rel(), &note, &scan, at(8, 20), &bare_spec())
+                .expect("later MEET");
+        assert_eq!(at_0820.line, meet_lines[0]);
+    }
+
+    #[test]
+    fn unnamed_start_without_a_meet_keeps_the_first_future() {
+        let note = day(
+            "- [ ] #task **0800-0815** Swings! ^swings\n",
+            "- [ ] () — BUILD\n- [ ] () — PLAN\n",
+        );
+        assert_eq!(target_name(&note, 8, 4).as_deref(), Some("BUILD"));
     }
 }

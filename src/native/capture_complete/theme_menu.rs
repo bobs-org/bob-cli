@@ -64,9 +64,10 @@ pub(super) fn compose(
     catalog: Option<&Catalog>,
     start: bool,
     literal: bool,
+    next_up_line: Option<usize>,
 ) -> Vec<PomodoroNameCandidate> {
     let today = if start {
-        today_start_rows(scan, "")
+        today_start_rows(scan, "", next_up_line)
     } else {
         pomodoro_name_candidates_from_entries(&scan.entries, "")
     };
@@ -190,8 +191,9 @@ pub(super) fn compose_task_aware(
     literal: bool,
     suggestion: &ThemeSuggestion,
     choice: MenuChoice,
+    next_up_line: Option<usize>,
 ) -> Vec<PomodoroNameCandidate> {
-    let mut rows = compose(scan, query, catalog, start, literal);
+    let mut rows = compose(scan, query, catalog, start, literal, next_up_line);
     let selected_line = match choice {
         MenuChoice::Entry(index) => {
             scan.entries.get(index).map(|entry| entry.line)
