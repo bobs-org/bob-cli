@@ -1089,3 +1089,164 @@ fn preexisting_untracked_title_migrates_both_spans_in_place() {
     assert!(!row.contains("Lunch #untracked"), "{row}");
     assert!(row.contains(" #untracked [root:: meet]"), "{row}");
 }
+
+fn dentist_with_description(description: &str) -> Value {
+    let mut patch = serde_json::Map::new();
+    patch.insert(
+        "description".to_string(),
+        Value::String(description.to_string()),
+    );
+    patch.insert(
+        "start".to_string(),
+        serde_json::json!({"dateTime": "2026-10-30T18:30:00-04:00"}),
+    );
+    patch.insert(
+        "end".to_string(),
+        serde_json::json!({"dateTime": "2026-10-30T19:00:00-04:00"}),
+    );
+    dentist_event(&patch)
+}
+
+#[test]
+fn buffer_change_updates_untouched_row_in_place_and_keeps_edits() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-buffer-update");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    // Future dentist stays untouched (open placeholder link, no closed work).
+    fake.events_json(&events_envelope(vec![dentist_event(
+        &serde_json::Map::new(),
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(!dentist_row(&today_note(&env)).contains("[buffer::"));
+
+    // Google adds a buffer: the untouched row gains the field in place.
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card\n@job -30 +15",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let row = dentist_row(&today_note(&env));
+    assert!(
+        row.contains(" [buffer:: -30m +15m] [root:: body]"),
+        "buffer updates in place: {row}"
+    );
+    assert!(stdout(&output).contains("~ task"), "{}", stdout(&output));
+    let journal_count = journal_lines(&env).len();
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(stdout(&again).contains("unchanged"), "{}", stdout(&again));
+    assert_eq!(journal_lines(&env).len(), journal_count);
+
+    // A hand-removed field wins over a later Google change, reported once.
+    let edited = today_note(&env).replacen(" [buffer:: -30m +15m]", "", 1);
+    assert_ne!(edited, today_note(&env), "field present to remove");
+    write_today(&env, &edited);
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card\n@job -45 +15",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(combined.contains("kept your edit"), "kept once: {combined}");
+    assert!(
+        !dentist_row(&today_note(&env)).contains("[buffer::"),
+        "hand edit kept"
+    );
+    let again = sync_output(&env, &fake, &[]);
+    let combined = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(
+        !combined.contains("kept your edit"),
+        "reported once: {combined}"
+    );
+}
+
+#[test]
+fn root_reroute_keeps_buffered_google_run() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-buffer-reroute");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut patch = serde_json::Map::new();
+    patch.insert("summary".to_string(), "Dentist @body #untracked".into());
+    patch.insert(
+        "description".to_string(),
+        "Bring insurance card\n-30 +15".into(),
+    );
+    patch.insert(
+        "start".to_string(),
+        serde_json::json!({"dateTime": "2026-10-30T18:30:00-04:00"}),
+    );
+    patch.insert(
+        "end".to_string(),
+        serde_json::json!({"dateTime": "2026-10-30T19:00:00-04:00"}),
+    );
+    fake.events_json(&events_envelope(vec![dentist_event(&patch)]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let before = dentist_row(&today_note(&env));
+    assert!(
+        before.contains(" #untracked [buffer:: -30m +15m] [root:: body]"),
+        "{before}"
+    );
+
+    // Google reroutes to @job: the root swaps in place and the badges
+    // span (tag plus buffer) is untouched.
+    patch.insert("summary".to_string(), "Dentist @job #untracked".into());
+    fake.events_json(&events_envelope(vec![dentist_event(&patch)]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("~ task"), "{}", stdout(&output));
+    let row = dentist_row(&today_note(&env));
+    assert!(
+        row.contains(" #untracked [buffer:: -30m +15m] [root:: job]"),
+        "reroute keeps the Google run: {row}"
+    );
+
+    // The badges span still matches the journal, so the next sync settles
+    // instead of reporting a phantom badges edit.
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(stdout(&again).contains("unchanged"), "{}", stdout(&again));
+}
+
+#[test]
+fn maybe_upgrade_gains_buffer_field() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-buffer-upgrade");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut tentative = evening_class("tentative");
+    tentative["description"] = "Stretch\n-15".into();
+    fake.events_json(&events_envelope(vec![tentative]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let first = today_note(&env);
+    assert!(
+        first.contains("- **2000-2100** Evening class · *maybe*"),
+        "{first}"
+    );
+    assert!(!first.contains("[buffer::"), "context rows carry no buffer");
+
+    // Maybe goes Yes: the upgrade renders the buffer field.
+    let mut accepted = evening_class("accepted");
+    accepted["description"] = "Stretch\n-15".into();
+    fake.events_json(&events_envelope(vec![accepted]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("^evening-class"))
+        .unwrap_or_else(|| panic!("no upgraded row:\n{note}"))
+        .to_string();
+    assert!(
+        row.starts_with("- [*] #task **2000-2100** Evening class"),
+        "{row}"
+    );
+    assert!(row.contains(" [buffer:: -15m] [root:: meet]"), "{row}");
+    assert!(note.contains("[[#^evening-class]]"), "{note}");
+
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(
+        stdout(&again).contains("unchanged"),
+        "upgrade is stable: {}",
+        stdout(&again)
+    );
+}

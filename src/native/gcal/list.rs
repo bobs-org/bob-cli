@@ -278,6 +278,32 @@ fn meet_link_present(lines: &[&str], block_id: &str) -> bool {
         .any(|line| line.contains(link.as_str()))
 }
 
+/// `{"before_minutes", "after_minutes"}` for a buffered task, else
+/// `null`: context rows never carry a buffer, matching gcal's null style.
+fn buffer_json(event: &ListedEvent) -> Value {
+    let buffer = if event.inclusion == Inclusion::Task {
+        event.event.buffer
+    } else {
+        event_task::EventBuffer::default()
+    };
+    if buffer.is_empty() {
+        Value::Null
+    } else {
+        json!({
+            "before_minutes": buffer.before_min,
+            "after_minutes": buffer.after_min,
+        })
+    }
+}
+
+/// Human buffer label for a task row's TIME cell, if it carries one.
+fn buffer_label(event: &ListedEvent) -> Option<String> {
+    if event.inclusion != Inclusion::Task {
+        return None;
+    }
+    event.event.buffer.label()
+}
+
 /// Header freshness: the host-local status file, else the newest
 /// journal record's host and time, else never synced.
 fn last_sync_human(
@@ -372,6 +398,7 @@ fn print_json(
                 "inclusion": event.inclusion.name(),
                 "reason": event.inclusion.reason(),
                 "untracked": event.event.untracked,
+                "buffer": buffer_json(event),
                 "root": {
                     "value": root.and_then(|root| root.value.as_deref()),
                     "source": root.and_then(|root| root.source.as_deref()),
@@ -443,8 +470,12 @@ fn print_table(
             .map(|root| format!("● {root}"))
             .unwrap_or_else(|| "—".to_string());
         let vault = vault_status(event, journal, day_string, note);
+        let time = match buffer_label(event) {
+            Some(label) => format!("{} {label}", event.time),
+            None => event.time.clone(),
+        };
         rows.push([
-            event.time.clone(),
+            time,
             event.event.title.clone(),
             answer_label(
                 event.event.my_answer,
@@ -475,6 +506,9 @@ fn print_table(
         .zip(rows.iter())
     {
         let mut cells = row.clone();
+        if let Some(label) = buffer_label(event) {
+            cells[0] = format!("{} {}", event.time, styler.dim(&label));
+        }
         if let Some(root) = event.root.as_ref()
             && let Some(value) = root.value.as_deref()
         {

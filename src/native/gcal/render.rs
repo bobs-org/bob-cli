@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::native::{
     config as bob_config, env as bob_env,
+    event_task::EventBuffer,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
     pomodoro_themes, task_text_escape,
 };
@@ -25,6 +26,7 @@ pub(crate) struct TaskRowInput<'a> {
     pub root: Option<&'a str>,
     pub needs_type: bool,
     pub untracked: bool,
+    pub buffer: EventBuffer,
     /// Task checkbox: `*` (Next), `/` (In Progress), or ` ` (Ready).
     pub status: char,
 }
@@ -37,7 +39,10 @@ pub(crate) struct ContextRowInput<'a> {
     pub qualifier: Option<&'a str>,
 }
 
-/// Render `- [status] #task **HHMM-HHMM** title badges [#untracked] [root::] [type::] ^id`.
+/// Render `- [status] #task **HHMM-HHMM** title badges [#untracked]
+/// [buffer::] [root::] [type::] ^id`. The Google-owned badge run (badges,
+/// `#untracked`, `[buffer::]`) always precedes Bryan's `[root::]` /
+/// `[type::]`, so reroutes never split it.
 pub(crate) fn render_task_row(
     input: &TaskRowInput<'_>,
     block_id: &str,
@@ -49,39 +54,91 @@ pub(crate) fn render_task_row(
         escape_title(input.title),
     );
     row.push_str(&badges(input.html_link, input.join_link, input.location));
-    if input.needs_type {
-        // Theme first, then root: each setter inserts at the start of
-        // the trailing metadata run, so the root lands left of the
-        // type field (`… [root:: job] [type:: MEET] ^id`).
-        row = crate::native::task_theme::set_task_theme(&row, "MEET");
-    }
-    if let Some(root) = input.root {
-        row = crate::native::task_root::set_task_root(&row, root);
-    }
     if input.untracked {
-        // `#untracked` lives at the end of the badge run, before
-        // `[root::]` / `[type::]`, so the tag is Google-owned like the
-        // badges. The setters above insert before a trailing `#tag`,
-        // so place the tag here, ahead of any root/type fields.
-        if let Some(at) = earliest_metadata_field(&row) {
-            row.insert_str(at, " #untracked");
-        } else {
-            row.push_str(" #untracked");
-        }
+        row.push_str(" #untracked");
     }
+    if let Some(field) = input.buffer.field() {
+        row.push_str(&format!(" {field}"));
+    }
+    row = set_row_metadata(&row, input.root, input.needs_type);
     format!("{row} ^{block_id}")
 }
 
-/// Byte offset of the first trailing `[root::]` / `[type::]` / `(root::)` /
-/// `(type::)` field in `row`, when one is present.
-fn earliest_metadata_field(row: &str) -> Option<usize> {
-    let mut earliest: Option<usize> = None;
-    for marker in [" [root::", " [type::", " (root::", " (type::"] {
-        if let Some(at) = row.find(marker) {
-            earliest = Some(earliest.map_or(at, |best| best.min(at)));
-        }
+/// Set `[root::]` (and add `[type:: MEET]` when asked) on a gcal Event
+/// Task row without disturbing the Google-owned run: an existing
+/// `[root::]` is replaced in place, otherwise the root is inserted after
+/// the badge run (`badges`, `#untracked`, `[buffer::]`) and before
+/// `[type::]` / `^id`; `[type:: MEET]` goes after the root. Tokens Bryan
+/// placed (his own fields, tags, and the block id) keep their text and
+/// order. Falls back to the shared setters when the row does not parse.
+pub(crate) fn set_row_metadata(
+    line: &str,
+    root: Option<&str>,
+    needs_type: bool,
+) -> String {
+    let Some(mut spans) = super::lifecycle::split_row_spans(line) else {
+        return legacy_set_metadata(line, root, needs_type);
+    };
+    if !spans.task {
+        return legacy_set_metadata(line, root, needs_type);
     }
-    earliest
+    let mut suffix = std::mem::replace(&mut spans.suffix, String::new());
+    strip_bracket_field(&mut suffix, "root");
+    let has_type = suffix.contains("[type::") || suffix.contains("(type::");
+    let mut middle = String::new();
+    if let Some(name) = root {
+        middle.push_str(&format!(" [root:: {name}]"));
+    }
+    if needs_type && !has_type {
+        middle.push_str(" [type:: MEET]");
+    }
+    spans.suffix = if suffix.is_empty() || suffix.starts_with([' ', '\t']) {
+        format!("{middle}{suffix}")
+    } else {
+        format!("{middle} {suffix}")
+    };
+    spans.rebuild()
+}
+
+fn legacy_set_metadata(
+    line: &str,
+    root: Option<&str>,
+    needs_type: bool,
+) -> String {
+    let mut out = line.to_string();
+    if needs_type
+        && matches!(
+            crate::native::task_theme::parse_task_theme(&out),
+            crate::native::task_theme::TaskThemeState::None
+        )
+    {
+        out = crate::native::task_theme::set_task_theme(&out, "MEET");
+    }
+    if let Some(name) = root {
+        out = crate::native::task_root::set_task_root(&out, name);
+    }
+    out
+}
+
+/// Remove one `[key:: …]` field (plus one adjacent space) from `suffix`.
+fn strip_bracket_field(suffix: &mut String, key: &str) {
+    let open = format!("[{key}::");
+    let Some(start) = suffix.find(open.as_str()) else {
+        return;
+    };
+    let Some(close) = suffix[start..].find(']') else {
+        return;
+    };
+    let end = start + close + 1;
+    // Drop one adjacent space so no double space (or glued token) is left.
+    let (drop_start, drop_end) = if suffix[..start].ends_with([' ', '\t']) {
+        (start - 1, end)
+    } else if suffix[end..].starts_with([' ', '\t']) {
+        (start, end + 1)
+    } else {
+        (start, end)
+    };
+    suffix.replace_range(drop_start..drop_end, "");
 }
 
 /// Render `- **all day** title [· qualifier] [📅](…)` (or the timed span
@@ -138,19 +195,24 @@ pub(crate) fn needs_meet_type(
 }
 
 /// The badge suffix for one row (` 📅 …`, ` 📹 …`, ` 📍 …`, plus
-/// ` #untracked` for untracked tasks), shared by the row renderer and
-/// the journal span hashes. Tracked rows hash exactly as before, so
-/// existing journals stay valid; a newly tagged untouched row updates
-/// its badges span in place.
+/// ` #untracked` for untracked tasks and ` [buffer:: …]` for buffered
+/// ones), shared by the row renderer and the journal span hashes.
+/// Unbuffered rows hash exactly as before, so existing journals stay
+/// valid; a newly tagged or buffered untouched row updates its badges
+/// span in place.
 pub(crate) fn badge_text(
     html_link: Option<&str>,
     join_link: Option<&str>,
     location: Option<&str>,
     untracked: bool,
+    buffer: EventBuffer,
 ) -> String {
     let mut out = badges(html_link, join_link, location);
     if untracked {
         out.push_str(" #untracked");
+    }
+    if let Some(field) = buffer.field() {
+        out.push_str(&format!(" {field}"));
     }
     out
 }
@@ -280,6 +342,7 @@ mod tests {
             root,
             needs_type,
             untracked: false,
+            buffer: EventBuffer::default(),
             status,
         }
     }
@@ -365,6 +428,7 @@ mod tests {
                 root: Some("body"),
                 needs_type: true,
                 untracked: false,
+                buffer: EventBuffer::default(),
                 status: '*',
             },
             "party",
@@ -405,5 +469,89 @@ mod tests {
             ),
             "{row}",
         );
+    }
+
+    #[test]
+    fn buffered_row_renders_buffer_between_badges_and_root() {
+        let buffer = EventBuffer::parse("-30m +15m").expect("buffer");
+        let row = render_task_row(
+            &TaskRowInput {
+                untracked: true,
+                buffer,
+                ..task_input("Lunch with Kelly", Some("love"), true, '*')
+            },
+            "lunch-with-kelly",
+        );
+        assert_eq!(
+            row,
+            "- [*] #task **0800-0830** Lunch with Kelly \
+             [📅](https://www.google.com/calendar/event?eid=1 \
+             \"Open in Google Calendar\") #untracked [buffer:: -30m +15m] \
+             [root:: love] [type:: MEET] ^lunch-with-kelly",
+            "{row}"
+        );
+        // The rendered badges span matches badge_text, so the journal
+        // hashes agree with the note.
+        let spans = crate::native::gcal::lifecycle::split_row_spans(&row)
+            .expect("row parses");
+        assert_eq!(
+            spans.badges,
+            badge_text(
+                Some("https://www.google.com/calendar/event?eid=1"),
+                None,
+                None,
+                true,
+                buffer
+            ),
+            "{row}"
+        );
+    }
+
+    #[test]
+    fn buffer_sides_render_only_when_set() {
+        let lead_in = EventBuffer::parse("-30").expect("lead-in");
+        let row = render_task_row(
+            &TaskRowInput {
+                buffer: lead_in,
+                ..task_input("Standup", Some("meet"), false, ' ')
+            },
+            "standup",
+        );
+        assert!(row.contains(" [buffer:: -30m] [root:: meet]"), "{row}");
+        assert!(!row.contains("+"), "{row}");
+
+        let plain = render_task_row(
+            &task_input("Standup", Some("meet"), false, ' '),
+            "standup",
+        );
+        assert!(!plain.contains("[buffer::"), "{plain}");
+    }
+
+    #[test]
+    fn row_metadata_reroute_keeps_the_google_run_intact() {
+        let buffer = EventBuffer::parse("-30m +15m").expect("buffer");
+        let before = render_task_row(
+            &TaskRowInput {
+                untracked: true,
+                buffer,
+                ..task_input("Lunch", Some("love"), false, '*')
+            },
+            "lunch",
+        );
+        let rerouted = set_row_metadata(&before, Some("job"), false);
+        assert!(
+            rerouted.contains(
+                " #untracked [buffer:: -30m +15m] [root:: job] ^lunch"
+            ),
+            "{rerouted}"
+        );
+        // The badges span (what the journal hashes) is unchanged, so the
+        // next sync reports no badges edit.
+        let badges_of = |line: &str| {
+            crate::native::gcal::lifecycle::split_row_spans(line)
+                .expect("row parses")
+                .badges
+        };
+        assert_eq!(badges_of(&rerouted), badges_of(&before));
     }
 }

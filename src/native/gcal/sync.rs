@@ -83,6 +83,7 @@ struct ReportRow {
     root: Option<String>,
     source: Option<String>,
     untracked: bool,
+    buffer: crate::native::event_task::EventBuffer,
 }
 
 struct SyncReport {
@@ -414,11 +415,13 @@ fn build_occurrences(
             false
         };
         let untracked = event.event.untracked;
+        let buffer = task_buffer(&event.event, task);
         let badges = render::badge_text(
             event.event.html_link.as_deref(),
             event.event.join_link.as_deref(),
             event.event.location.as_deref(),
             untracked && task,
+            buffer,
         );
         let mut spans = BTreeMap::new();
         spans.insert("time".to_string(), journal::span_hash(&time_label));
@@ -488,6 +491,7 @@ fn build_occurrences(
                 spans,
                 needs_type,
                 untracked,
+                buffer,
                 link_phase,
                 all_day,
                 start_min,
@@ -497,6 +501,19 @@ fn build_occurrences(
         ));
     }
     out
+}
+
+/// The buffer one snapshot event syncs: task rows carry Google's buffer,
+/// context rows never do.
+fn task_buffer(
+    event: &super::model::GcalEvent,
+    task: bool,
+) -> crate::native::event_task::EventBuffer {
+    if task {
+        event.buffer
+    } else {
+        crate::native::event_task::EventBuffer::default()
+    }
 }
 
 /// `(all_day, start_min, end_min, time_label)` for one event in vault-local time.
@@ -531,6 +548,9 @@ fn minutes_from_midnight(day: NaiveDate, local: chrono::NaiveDateTime) -> i32 {
     (local - midnight).num_minutes() as i32
 }
 
+/// Phase at sync time on the buffered span: past means the buffered
+/// end passed, current means the buffered span covers now (today only).
+/// Timed close classification still uses the bare meeting span.
 fn link_phase_for(
     event: &super::model::GcalEvent,
     window: &classify::DayWindow,
@@ -541,9 +561,13 @@ fn link_phase_for(
         (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
             let local_start = window.local(start);
             let local_end = window.local(end);
-            if local_end <= *now {
+            let buffered_start = local_start
+                - chrono::Duration::minutes(i64::from(event.buffer.before_min));
+            let buffered_end = local_end
+                + chrono::Duration::minutes(i64::from(event.buffer.after_min));
+            if buffered_end <= *now {
                 LinkPhase::Past
-            } else if local_start <= *now && is_today {
+            } else if buffered_start <= *now && is_today {
                 LinkPhase::Current
             } else {
                 LinkPhase::Future
@@ -724,6 +748,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: added.root.clone(),
             source: added.source.clone(),
             untracked: added.untracked,
+            buffer: added.buffer,
         });
     }
     for adopted in &plan.rows_adopted {
@@ -739,6 +764,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: adopted.root.clone(),
             source: adopted.source.clone(),
             untracked: adopted.untracked,
+            buffer: adopted.buffer,
         });
     }
     for _ in &plan.rows_gone {
@@ -750,6 +776,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: None,
             source: None,
             untracked: false,
+            buffer: crate::native::event_task::EventBuffer::default(),
         });
     }
     for updated in &plan.rows_updated {
@@ -765,6 +792,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: updated.root.clone(),
             source: updated.source.clone(),
             untracked: updated.untracked,
+            buffer: updated.buffer,
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -776,6 +804,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: None,
             source: None,
             untracked: false,
+            buffer: crate::native::event_task::EventBuffer::default(),
         });
     }
     for removed in &plan.rows_removed {
@@ -787,6 +816,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: None,
             source: None,
             untracked: false,
+            buffer: crate::native::event_task::EventBuffer::default(),
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -798,6 +828,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: upgraded.root.clone(),
             source: upgraded.source.clone(),
             untracked: upgraded.untracked,
+            buffer: upgraded.buffer,
         });
     }
     for learned in &plan.learned {
@@ -809,6 +840,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             root: Some(learned.root.clone()),
             source: Some(format!("learned from your {} edit", learned.day)),
             untracked: false,
+            buffer: crate::native::event_task::EventBuffer::default(),
         });
     }
     rows
@@ -1101,6 +1133,19 @@ fn print_report(report: &SyncReport, _args: &SyncArgs) {
     }
 }
 
+/// `{"before_minutes", "after_minutes"}` for a buffered row, else
+/// `null`, matching gcal's null style for absent values.
+fn buffer_json(buffer: crate::native::event_task::EventBuffer) -> Value {
+    if buffer.is_empty() {
+        Value::Null
+    } else {
+        json!({
+            "before_minutes": buffer.before_min,
+            "after_minutes": buffer.after_min,
+        })
+    }
+}
+
 fn print_json(report: &SyncReport) {
     let rows: Vec<Value> = report
         .rows
@@ -1114,6 +1159,7 @@ fn print_json(report: &SyncReport) {
                 "root": row.root,
                 "source": row.source,
                 "untracked": row.untracked,
+                "buffer": buffer_json(row.buffer),
             })
         })
         .collect();
@@ -1182,7 +1228,10 @@ fn print_human(report: &SyncReport) {
             "learned" => "*",
             _ => "-",
         };
-        let time = human_time(&row.time);
+        let time = match row.buffer.label() {
+            Some(label) => format!("{} {label}", human_time(&row.time)),
+            None => human_time(&row.time),
+        };
         let root = row
             .root
             .as_deref()

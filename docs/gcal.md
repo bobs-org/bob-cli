@@ -24,6 +24,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [List](#list)
 - [Sync](#sync)
 - [Untracked events](#untracked-events)
+- [Buffers](#buffers)
 - [Reconciling Google-side changes](#reconciling-google-side-changes)
 - [Where it runs](#where-it-runs)
 - [Event inclusion](#event-inclusion)
@@ -320,7 +321,9 @@ The table shows local time, title, RSVP, selected root, and the VAULT column:
 what sync did, or would do, with the event — `task · MEET`, `task`,
 `context`, `waiting for note`, or `removed by you`, each with
 ` · untracked` appended for Google-untracked tasks
-(`task · MEET · untracked`). Omitted events keep their
+(`task · MEET · untracked`). The TIME column appends the buffer label for
+buffered tasks (`12:00-13:00 −30m +15m`, dimmed on a TTY); see
+[Buffers](#buffers). Omitted events keep their
 omission reason. `-a` also shows omitted events. Counts include omitted events
 even when their rows are hidden. The header carries the last sync: `synced
 3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
@@ -328,7 +331,9 @@ else `never synced`.
 
 JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
 `last_sync`, and `past_open` fields. Each event reports `time`, `title`,
-`answer`, `inclusion`, `reason`, `untracked`, `vault`, and `root.value`, `root.source`,
+`answer`, `inclusion`, `reason`, `untracked`, `buffer`
+(`{"before_minutes", "after_minutes"}`, or `null` when the row carries no
+buffer), `vault`, and `root.value`, `root.source`,
 and `root.warnings`. Descriptions and attendee details are omitted. A root
 may be null when no candidate is valid; warnings explain each rejected
 candidate and its fix. `past_open` lists the open Event Tasks still sitting
@@ -370,12 +375,16 @@ upgraded in place) is linked by phase, on any day:
 
 | Phase at sync time | Pomodoro | Link line | Row checkbox |
 | --- | --- | --- | --- |
-| Past: the event ended (`end ≤ now`) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry, or `(**SSSS-EEEE**)` without `[t::]` for an untracked cluster | `🍅 [[#^id]]` | `[/]` |
-| Current: `start ≤ now < end`, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
-| Future: the event has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
+| Past: the buffered span ended (buffered end ≤ now) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry, or `(**SSSS-EEEE**)` without `[t::]` for an untracked cluster | `🍅 [[#^id]]` | `[/]` |
+| Current: buffered start ≤ now < buffered end, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
+| Future: the buffered span has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
 
-Back-to-back or overlapping past meetings share one closed MEET whose span is
-the cluster (next start ≤ cluster end), split by trackedness: a mixed
+Phases use the buffered span — what the event [occupies](#buffers) — while
+each row keeps its meeting span: the bold `**HHMM-HHMM**`, its journal
+hash, and Google ownership of the time never widen. Back-to-back or
+overlapping past meetings share one closed MEET whose span is
+the cluster (next buffered start ≤ cluster end; a `+15` lead-out bridges a
+gap to the next meeting), split by trackedness: a mixed
 trackedness run becomes two closed MEETs that may overlap — one with
 `[t::]`, one without. All current meetings share one
 running MEET, and all future meetings share one placeholder. A created
@@ -407,10 +416,13 @@ success, no-op, or waiting.
 
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
-(`action`, `kind`, `time`, `title`, `root`, `source`, `untracked`), `pomodoro`
+(`action`, `kind`, `time`, `title`, `root`, `source`, `untracked`, `buffer`
+as `{"before_minutes", "after_minutes"}` or `null`), `pomodoro`
 (`entry_line`, `created`, `links_added`, `entries`), `warnings`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
-section and for `waiting`). `pomodoro.entries` lists each MEET this run
+section and for `waiting`). Human rows append the buffer label to the time
+(`~ task 12:00–13:00 −30m +15m  Lunch …`), and MEET lines show buffered
+spans. `pomodoro.entries` lists each MEET this run
 created or appended links into (`state` `closed`/`running`/`planned`,
 1-based `line`, `time` as `HHMM-HHMM` or null, `created`, `links`) in
 ledger order. `entry_line` and `created` describe the first open entry in
@@ -459,6 +471,7 @@ account, or set `gcal.account` to the stamp's account.
 | Checkbox | You | Never changed, except cancelling an untouched task (see below) |
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
 | `#untracked` | Google until you edit it | Follows Google's token while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_untracked` |
+| `[buffer::]` | Google until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Child bullets (meeting notes) | You | Never touched |
@@ -517,6 +530,48 @@ and badge spans both still match Bob's last write, so both update in place.
 
 `list` shows `task · MEET · untracked` in VAULT and `untracked` in JSON;
 `sync -f json` rows carry `untracked`.
+
+## Buffers
+
+Write `-30` and/or `+15` as [directive lines](#untracked-events) in a
+Google Calendar event's description to reserve 30 minutes before and 15
+minutes after the event (travel, prep, wind-down). Each side takes 1–3
+digits with an optional `m` suffix and an ASCII or typographic minus, is
+capped at 720 (12h), and the first value per side wins. The tokens combine
+with `@route` and `#untracked` on one line or spread over several, so
+`@love #untracked -30` routes, untracks, and buffers at once. Numbers in
+titles are never buffers: `Q4 +1` and `Room -2` stay titles. Bob reads
+buffers from the description only.
+
+Bob treats the event as occupying the **buffered span** — `start − before`
+to `end + after`, with a pre-buffer stopping at midnight — while the
+meeting keeps its real time:
+
+| Uses the buffered span | Keeps the meeting span |
+| --- | --- |
+| Sync phases (past/current/future) | Timed close classification (`ended_inside`/`running`/…) |
+| The MEET clusters and spans sync writes | The bold span text, its journal hash, and Google ownership of the time |
+| The TIME label and `buffer` JSON in `list` and `sync` output | Row titles, `#untracked`, roots |
+
+Sync writes one Google-owned field at the end of the badge run, after
+`#untracked` and before `[root::]`:
+
+```markdown
+- [*] #task **1200-1300** Lunch with Kelly [📅](… "Open in Google Calendar") #untracked
+  [buffer:: -30m +15m] [root:: love] [type:: MEET] ^lunch-with-kelly
+```
+
+A side that is zero is omitted (`[buffer:: -30m]`, `[buffer:: +15m]`),
+and an event without buffers has no field. `list` shows
+`12:00-13:00 −30m +15m`, and JSON events carry
+`buffer: {"before_minutes": 30, "after_minutes": 15}`. Hand-written Event
+Tasks may carry the field too; sync reads it from the vault, never from
+Google.
+
+The field is Google-owned exactly like the badges: it updates in place
+while the row is untouched, and a vault edit wins and is reported once.
+Rows synced before this feature migrate on the next sync. Context rows
+(Maybe/free) carry no buffer; a Maybe row upgraded to a task renders it.
 
 ## Reconciling Google-side changes
 
@@ -699,5 +754,9 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
   tracked.
 - A `#untracked` flip after the session closed is left for a hand edit and
   reported once.
+- Buffers stop at midnight: a pre-buffer never crosses into the previous
+  day, and the total stays below 24h. The first value per side wins. A
+  description you cannot edit cannot take a Google-owned buffer: a
+  hand-added `[buffer::]` is your edit — kept and reported once.
 - R9 may clear `[*]` Event Tasks on a future day's note until that day is
   today.

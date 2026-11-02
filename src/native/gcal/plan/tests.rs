@@ -43,12 +43,19 @@ fn occurrence_untracked(
 ) -> PlannedOccurrence {
     let html_link =
         Some(format!("https://calendar.google.com/event?eid={event_id}"));
-    let badges =
-        render::badge_text(html_link.as_deref(), None, None, untracked && task);
+    let buffer = crate::native::event_task::EventBuffer::default();
+    let badges = render::badge_text(
+        html_link.as_deref(),
+        None,
+        None,
+        untracked && task,
+        buffer,
+    );
     let mut spans = BTreeMap::new();
     spans.insert("time".to_string(), span_hash(time_label));
     spans.insert("title".to_string(), span_hash(title));
     spans.insert("badges".to_string(), span_hash(&badges));
+    let end_min = end_min_from_label(time_label, start_min);
     PlannedOccurrence {
         calendar_id: "primary".to_string(),
         event_id: event_id.to_string(),
@@ -68,10 +75,11 @@ fn occurrence_untracked(
         spans,
         needs_type: false,
         untracked,
+        buffer,
         link_phase: None,
         all_day: time_label == "all day",
         start_min,
-        end_min: end_min_from_label(time_label, start_min),
+        end_min,
     }
 }
 

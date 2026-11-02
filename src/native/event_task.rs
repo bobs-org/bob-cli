@@ -15,6 +15,27 @@ use super::{
 
 const MINUTES_PER_DAY: i32 = 24 * 60;
 
+/// Buffered `(start, end)` for a meeting that runs `start_min..end_min`
+/// minutes from the day's midnight (`end_min` may exceed 1440 for an
+/// overnight end). Mirrors [`EventSpan::buffered`] on the day's timeline:
+/// `max(0, start − before)` through `end + after`, clamped so the total
+/// stays below 24h.
+pub(crate) fn buffered_timeline_range(
+    start_min: i32,
+    end_min: i32,
+    buffer: EventBuffer,
+) -> (i32, i32) {
+    if buffer.is_empty() {
+        return (start_min, end_min);
+    }
+    let start = (start_min - i32::from(buffer.before_min)).max(0);
+    let mut end = end_min + i32::from(buffer.after_min);
+    if end - start >= MINUTES_PER_DAY {
+        end = start + MINUTES_PER_DAY - 1;
+    }
+    (start, end)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EventSpan {
     pub start_min: u16,

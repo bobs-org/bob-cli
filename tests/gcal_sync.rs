@@ -1395,3 +1395,362 @@ fn untracked_token_splits_clusters_and_reports() {
         .expect("standup list");
     assert_eq!(standup_list["untracked"], false);
 }
+
+fn buffer_event(
+    id: &str,
+    summary: &str,
+    description: Option<&str>,
+    start: &str,
+    end: &str,
+) -> Value {
+    let mut event = serde_json::json!({
+        "id": id,
+        "summary": summary,
+        "status": "confirmed",
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+        "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+        "attendees": [{"self": true, "responseStatus": "accepted"}],
+    });
+    if let Some(description) = description {
+        event["description"] = Value::String(description.to_string());
+    }
+    event
+}
+
+fn buffer_envelope(events: Vec<Value>) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "events": events,
+        "nextPageToken": serde_json::Value::Null,
+    }))
+    .expect("envelope")
+}
+
+fn event_row(note: &str, span: &str) -> String {
+    note.lines()
+        .find(|line| line.contains(span))
+        .unwrap_or_else(|| panic!("no {span} row:\n{note}"))
+        .to_string()
+}
+
+fn journal_spans(journal: &[Value], event_id: &str) -> Value {
+    journal
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.row" && line["key"]["event_id"] == event_id
+        })
+        .last()
+        .unwrap_or_else(|| panic!("no journal row for {event_id}"))
+        .get("row")
+        .and_then(|row| row.get("spans"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[test]
+fn buffered_rows_render_update_and_report() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-buffers");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    // HTML description form: `<br>` splits lines, and the directive line
+    // routes, untracks, and buffers at once.
+    fake.events_json(&buffer_envelope(vec![
+        buffer_event(
+            "lunch",
+            "Lunch with Kelly",
+            Some("Fuel<br>@job #untracked -30 +15"),
+            "2026-10-30T12:00:00-04:00",
+            "2026-10-30T13:00:00-04:00",
+        ),
+        buffer_event(
+            "standup",
+            "Standup",
+            Some("+15"),
+            "2026-10-30T14:00:00-04:00",
+            "2026-10-30T14:30:00-04:00",
+        ),
+        buffer_event(
+            "dentist",
+            "Dentist @body",
+            None,
+            "2026-10-30T18:30:00-04:00",
+            "2026-10-30T19:00:00-04:00",
+        ),
+    ]));
+
+    // The first sync writes; parse its JSON report for the row payloads.
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    let note = today_note(&env);
+
+    // New rows render the field at the end of the badge run.
+    let lunch = event_row(&note, "**1200-1300**");
+    assert!(lunch.starts_with("- [*] #task"), "{lunch}");
+    assert!(lunch.contains("Lunch with Kelly "), "{lunch}");
+    assert!(
+        lunch.contains(" #untracked [buffer:: -30m +15m] [root:: job]"),
+        "{lunch}"
+    );
+    assert!(lunch.ends_with("^lunch-kelly"), "{lunch}");
+    let standup = event_row(&note, "**1400-1430**");
+    assert!(standup.contains(" [buffer:: +15m]"), "{standup}");
+    assert!(!standup.contains("#untracked"), "{standup}");
+    let dentist = event_row(&note, "**1830-1900**");
+    assert!(!dentist.contains("[buffer::"), "{dentist}");
+    assert!(!dentist.contains("#untracked"), "{dentist}");
+
+    // Lunch is current on its buffered span (1130 ≤ now < 1315), so the
+    // running MEET it opens carries the buffered span, untracked.
+    let pomodoros = &note[note.find("## Pomodoros").expect("Pomodoros")..];
+    assert!(
+        pomodoros.contains("- [ ] (**1130-1315**) — MEET"),
+        "running lead-in MEET:\n{pomodoros}"
+    );
+    assert!(
+        !pomodoros.contains("(**1130-1315** [t::"),
+        "untracked run omits [t::]:\n{pomodoros}"
+    );
+
+    // Sync JSON rows carry the buffer object; unbuffered rows carry null.
+    let rows = report["rows"].as_array().expect("rows");
+    let lunch_json = rows
+        .iter()
+        .find(|row| row["title"] == "Lunch with Kelly")
+        .expect("lunch json");
+    assert_eq!(
+        lunch_json["buffer"],
+        serde_json::json!({"before_minutes": 30, "after_minutes": 15}),
+    );
+    let dentist_json = rows
+        .iter()
+        .find(|row| row["title"] == "Dentist")
+        .expect("dentist json");
+    assert_eq!(dentist_json["buffer"], Value::Null);
+
+    // List JSON and the table show the buffer.
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let list_out = command.output().expect("run list");
+    assert_eq!(list_out.status.code(), Some(0), "{}", stderr(&list_out));
+    let list: Value =
+        serde_json::from_str(&stdout(&list_out)).expect("list JSON");
+    let lunch_list = list["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Lunch with Kelly")
+        .expect("lunch list");
+    assert_eq!(
+        lunch_list["buffer"],
+        serde_json::json!({"before_minutes": 30, "after_minutes": 15}),
+    );
+    let mut command = env.command();
+    fake.install(&mut command).args(["gcal", "list"]);
+    let table_out = command.output().expect("run list table");
+    assert!(
+        stdout(&table_out).contains("12:00-13:00 −30m +15m"),
+        "{}",
+        stdout(&table_out)
+    );
+
+    let dentist_spans_before = journal_spans(&journal_lines(&env), "dentist");
+    assert!(
+        stdout(&sync_output(&env, &fake, &[])).contains("unchanged"),
+        "buffered sync settles"
+    );
+
+    // A buffer added in Google on an untouched row updates in place.
+    fake.events_json(&buffer_envelope(vec![
+        buffer_event(
+            "lunch",
+            "Lunch with Kelly",
+            Some("Fuel<br>@job #untracked -45 +15"),
+            "2026-10-30T12:00:00-04:00",
+            "2026-10-30T13:00:00-04:00",
+        ),
+        buffer_event(
+            "standup",
+            "Standup",
+            Some("+15"),
+            "2026-10-30T14:00:00-04:00",
+            "2026-10-30T14:30:00-04:00",
+        ),
+        buffer_event(
+            "dentist",
+            "Dentist @body",
+            None,
+            "2026-10-30T18:30:00-04:00",
+            "2026-10-30T19:00:00-04:00",
+        ),
+    ]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("~ task"), "{}", stdout(&output));
+    let lunch = event_row(&today_note(&env), "**1200-1300**");
+    assert!(
+        lunch.contains(" [buffer:: -45m +15m] [root:: job]"),
+        "{lunch}"
+    );
+    assert!(
+        stdout(&sync_output(&env, &fake, &[])).contains("unchanged"),
+        "buffer change settles"
+    );
+    // The unbuffered row's journal spans never changed.
+    assert_eq!(
+        journal_spans(&journal_lines(&env), "dentist"),
+        dentist_spans_before
+    );
+
+    // A hand-removed field wins over a later Google change, reported once.
+    let edited = today_note(&env).replacen(" [buffer:: -45m +15m]", "", 1);
+    assert_ne!(edited, today_note(&env), "field present to remove");
+    fs::write(env.vault().join("2026/20261030.md"), edited)
+        .expect("remove buffer field");
+    fake.events_json(&buffer_envelope(vec![
+        buffer_event(
+            "lunch",
+            "Lunch with Kelly",
+            Some("Fuel<br>@job #untracked -45 +30"),
+            "2026-10-30T12:00:00-04:00",
+            "2026-10-30T13:00:00-04:00",
+        ),
+        buffer_event(
+            "standup",
+            "Standup",
+            Some("+15"),
+            "2026-10-30T14:00:00-04:00",
+            "2026-10-30T14:30:00-04:00",
+        ),
+        buffer_event(
+            "dentist",
+            "Dentist @body",
+            None,
+            "2026-10-30T18:30:00-04:00",
+            "2026-10-30T19:00:00-04:00",
+        ),
+    ]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(combined.contains("kept your edit"), "kept once: {combined}");
+    let lunch = event_row(&today_note(&env), "**1200-1300**");
+    assert!(!lunch.contains("[buffer::"), "hand edit kept:\n{lunch}");
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let combined = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(
+        !combined.contains("kept your edit"),
+        "reported once: {combined}"
+    );
+    assert!(
+        !event_row(&today_note(&env), "**1200-1300**").contains("[buffer::")
+    );
+}
+
+#[test]
+fn buffered_spans_drive_meet_phases_and_clusters() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-buffer-phases");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    // NOW is 12:00. Standup's +15 bridges it to Planning in one past
+    // cluster; the mixed-trackedness morning pair splits; the current
+    // pair shares one buffered running MEET.
+    fake.events_json(&buffer_envelope(vec![
+        buffer_event(
+            "gym",
+            "Gym",
+            Some("+15"),
+            "2026-10-30T08:00:00-04:00",
+            "2026-10-30T08:30:00-04:00",
+        ),
+        buffer_event(
+            "yoga",
+            "Yoga",
+            Some("#untracked"),
+            "2026-10-30T08:30:00-04:00",
+            "2026-10-30T09:00:00-04:00",
+        ),
+        buffer_event(
+            "standup",
+            "Standup",
+            Some("+15"),
+            "2026-10-30T10:00:00-04:00",
+            "2026-10-30T10:30:00-04:00",
+        ),
+        buffer_event(
+            "planning",
+            "Planning",
+            None,
+            "2026-10-30T10:45:00-04:00",
+            "2026-10-30T11:15:00-04:00",
+        ),
+        buffer_event(
+            "review",
+            "Review",
+            None,
+            "2026-10-30T11:00:00-04:00",
+            "2026-10-30T12:30:00-04:00",
+        ),
+        buffer_event(
+            "lunch",
+            "Lunch",
+            Some("#untracked -30 +15"),
+            "2026-10-30T12:00:00-04:00",
+            "2026-10-30T13:00:00-04:00",
+        ),
+    ]));
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+
+    // Past rows work from birth; the rows keep their meeting spans.
+    let gym = event_row(&note, "**0800-0830**");
+    assert!(gym.starts_with("- [/] #task"), "{gym}");
+    assert!(gym.contains(" [buffer:: +15m]"), "{gym}");
+    let lunch = event_row(&note, "**1200-1300**");
+    assert!(lunch.starts_with("- [*] #task"), "{lunch}");
+    assert!(
+        lunch.contains(" #untracked [buffer:: -30m +15m] [root:: meet]"),
+        "{lunch}"
+    );
+
+    let pomodoros = &note[note.find("## Pomodoros").expect("Pomodoros")..];
+    // The +15 bridges standup to planning in one closed 75-minute MEET.
+    assert!(
+        pomodoros.contains("- [x] (**1000-1115** [t:: 75m]) — MEET"),
+        "bridged past cluster:\n{pomodoros}"
+    );
+    assert!(pomodoros.contains("\t- 🍅 [[#^standup]]"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- 🍅 [[#^planning]]"), "{pomodoros}");
+    // Mixed trackedness splits the morning pair despite the overlap.
+    assert!(
+        pomodoros.contains("- [x] (**0800-0845** [t:: 45m]) — MEET"),
+        "tracked lead-out cluster:\n{pomodoros}"
+    );
+    assert!(
+        pomodoros.contains("- [x] (**0830-0900**) — MEET"),
+        "untracked cluster omits [t::]:\n{pomodoros}"
+    );
+    // The current pair shares one buffered running MEET, tracked.
+    assert!(
+        pomodoros.contains("- [ ] (**1100-1315** [t:: 135m]) — MEET"),
+        "buffered running MEET:\n{pomodoros}"
+    );
+    assert!(pomodoros.contains("\t- [[#^review]]"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- [[#^lunch]]"), "{pomodoros}");
+
+    let out = stdout(&output);
+    assert!(out.contains("closed 10:00–11:15 — MEET"), "{out}");
+    assert!(out.contains("running 11:00–13:15 — MEET"), "{out}");
+
+    // The buffered run settles: a rerun writes nothing.
+    let again = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let report: Value =
+        serde_json::from_str(&stdout(&again)).expect("JSON report");
+    assert_eq!(report["status"], "unchanged");
+}

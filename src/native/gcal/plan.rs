@@ -68,9 +68,15 @@ pub(crate) struct PlannedOccurrence {
     /// Google `#untracked` token (title or description). Context rows strip
     /// it; task rows render ` #untracked` at the end of the badge run.
     pub untracked: bool,
+    /// Google `[buffer::]` field (description directives). Context rows
+    /// never carry it; task rows render it at the end of the badge run.
+    pub buffer: crate::native::event_task::EventBuffer,
     /// Phase at sync time; `None` for context rows.
     pub link_phase: Option<LinkPhase>,
     pub all_day: bool,
+    /// Meeting span in minutes from the note day's midnight (the end may
+    /// exceed 1440). The bold time label and its journal hash keep this
+    /// span; MEET filing derives the buffered span from it plus `buffer`.
     pub start_min: i32,
     /// End in minutes from the note day's midnight (may exceed 1440).
     pub end_min: i32,
@@ -156,6 +162,7 @@ pub(crate) struct PlannedRow {
     pub time_label: String,
     pub title: String,
     pub untracked: bool,
+    pub buffer: crate::native::event_task::EventBuffer,
 }
 
 /// One adopted crash-recovery row, for the journal and the report.
@@ -175,6 +182,7 @@ pub(crate) struct AdoptedRow {
     pub time_label: String,
     pub title: String,
     pub untracked: bool,
+    pub buffer: crate::native::event_task::EventBuffer,
 }
 
 /// One tombstoned journal row, for the journal and the report.
@@ -386,6 +394,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         time_label: occurrence.time_label.clone(),
                         title: occurrence.title.clone(),
                         untracked: occurrence.untracked,
+                        buffer: buffer_for_row(occurrence),
                     });
                     continue;
                 }
@@ -422,6 +431,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                     time_label: occurrence.time_label.clone(),
                     title: occurrence.title.clone(),
                     untracked: occurrence.untracked,
+                    buffer: buffer_for_row(occurrence),
                 });
             }
         }
@@ -503,11 +513,14 @@ fn apply_span_updates(
     }
     let current = spans.hashes();
     // Context rows strip the token, so only task rows hash the tag.
+    // The badges span covers `#untracked` and `[buffer::]`, so flips
+    // and buffer changes update in place while untouched.
     let fresh_badges = super::render::badge_text(
         occurrence.html_link.as_deref(),
         occurrence.join_link.as_deref(),
         occurrence.location.as_deref(),
         occurrence.untracked && occurrence.task,
+        buffer_for_row(occurrence),
     );
     // A tag flip on a worked row is reported once and left for a hand
     // edit: sync never retimes existing entries, and the ledger row keeps
@@ -624,15 +637,14 @@ fn apply_span_updates(
     };
     let (root, source) =
         if let RootAction::Reroute { value, source } = &root_action {
-            if occurrence.needs_type
-                && matches!(
-                    crate::native::task_theme::parse_task_theme(&line),
-                    crate::native::task_theme::TaskThemeState::None
-                )
-            {
-                line = crate::native::task_theme::set_task_theme(&line, "MEET");
-            }
-            line = crate::native::task_root::set_task_root(&line, value);
+            // The gcal setter replaces `[root::]` in place (adding
+            // `[type:: MEET]` after it when needed) without moving the
+            // Google run, so the next sync reports no badges edit.
+            line = super::render::set_row_metadata(
+                &line,
+                Some(value),
+                occurrence.needs_type,
+            );
             (Some(value.clone()), source.clone())
         } else {
             (journaled.root.clone(), journaled.source.clone())
@@ -665,6 +677,7 @@ fn apply_span_updates(
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
         untracked: occurrence.untracked,
+        buffer: buffer_for_row(occurrence),
     });
 }
 
@@ -873,6 +886,7 @@ fn upgrade_context_row(
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
         untracked: occurrence.untracked,
+        buffer: buffer_for_row(occurrence),
     });
     plan.extra_link_wants.push((
         occurrence.calendar_id.clone(),
@@ -1163,6 +1177,7 @@ fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
                 root: occurrence.root.as_deref(),
                 needs_type: occurrence.needs_type,
                 untracked: occurrence.untracked,
+                buffer: buffer_for_row(occurrence),
                 status: status_for_phase(occurrence.link_phase),
             },
             block_id,
@@ -1174,6 +1189,18 @@ fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
             html_link: occurrence.html_link.as_deref(),
             qualifier: occurrence.qualifier.as_deref(),
         })
+    }
+}
+
+/// The buffer one occurrence renders: task rows carry Google's buffer,
+/// context rows never do.
+fn buffer_for_row(
+    occurrence: &PlannedOccurrence,
+) -> crate::native::event_task::EventBuffer {
+    if occurrence.task {
+        occurrence.buffer
+    } else {
+        crate::native::event_task::EventBuffer::default()
     }
 }
 
@@ -1853,16 +1880,7 @@ fn collect_wanted_links(
         {
             continue;
         }
-        wanted.push(WantedLink {
-            calendar_id: occurrence.calendar_id.clone(),
-            event_id: occurrence.event_id.clone(),
-            block_id,
-            phase,
-            start_min: occurrence.start_min,
-            end_min: occurrence.end_min,
-            title: occurrence.title.clone(),
-            untracked: occurrence.untracked,
-        });
+        wanted.push(wanted_link(occurrence, block_id, phase));
     }
     for (calendar_id, event_id, block_id) in &plan.extra_link_wants {
         if wanted.iter().any(|link| link.block_id == *block_id) {
@@ -1896,18 +1914,34 @@ fn collect_wanted_links(
         let Some(phase) = occurrence.link_phase else {
             continue;
         };
-        wanted.push(WantedLink {
-            calendar_id: calendar_id.clone(),
-            event_id: event_id.clone(),
-            block_id: block_id.clone(),
-            phase,
-            start_min: occurrence.start_min,
-            end_min: occurrence.end_min,
-            title: occurrence.title.clone(),
-            untracked: occurrence.untracked,
-        });
+        wanted.push(wanted_link(occurrence, block_id.clone(), phase));
     }
     wanted
+}
+
+/// One MEET filing link: the buffered span is what the event occupies,
+/// so clusters, running entries, and MEET spans use it while the bold
+/// row label keeps the meeting span.
+fn wanted_link(
+    occurrence: &PlannedOccurrence,
+    block_id: String,
+    phase: LinkPhase,
+) -> WantedLink {
+    let (start_min, end_min) = event_task::buffered_timeline_range(
+        occurrence.start_min,
+        occurrence.end_min,
+        occurrence.buffer,
+    );
+    WantedLink {
+        calendar_id: occurrence.calendar_id.clone(),
+        event_id: occurrence.event_id.clone(),
+        block_id,
+        phase,
+        start_min,
+        end_min,
+        title: occurrence.title.clone(),
+        untracked: occurrence.untracked,
+    }
 }
 
 fn row_was_created(plan: &SyncPlan, occurrence: &PlannedOccurrence) -> bool {
