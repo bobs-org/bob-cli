@@ -256,7 +256,7 @@ pub(crate) struct AgendaEventConflict {
     pub(crate) event: usize,
     pub(crate) overlap_minutes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) buffer_part: Option<String>,
+    pub(crate) buffer_part: Option<event_task::BufferPart>,
 }
 
 /// Calendar facts and timing hints for the Mac Capture idle agenda.
@@ -1215,7 +1215,7 @@ fn event_conflict(
         pomodoro_line: current.line,
         event: focus_index,
         overlap_minutes: conflict.overlap_minutes,
-        buffer_part: conflict.buffer_part.map(|part| part.as_str().to_string()),
+        buffer_part: conflict.buffer_part,
     })
 }
 

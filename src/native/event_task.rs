@@ -130,7 +130,6 @@ impl EventBuffer {
     }
 
     /// Canonical field, `None` when both sides are zero.
-    #[allow(dead_code)] // gcal-sync-buffers and capture-buffers render this.
     pub(crate) fn field(self) -> Option<String> {
         self.body("-").map(|body| format!("[buffer:: {body}]"))
     }
@@ -184,15 +183,6 @@ fn strip_minus_prefix(token: &str) -> Option<&str> {
 pub(crate) enum BufferPart {
     Before,
     After,
-}
-
-impl BufferPart {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Before => "before",
-            Self::After => "after",
-        }
-    }
 }
 
 /// One conflict between a session span and an open Event Task.
@@ -249,7 +239,6 @@ pub(crate) struct EventNoteRow {
 }
 
 impl EventNoteRow {
-    #[allow(dead_code)]
     pub(crate) fn is_open_task(&self) -> bool {
         self.kind == EventKind::Task && self.status.is_some_and(is_open_status)
     }
@@ -695,46 +684,6 @@ pub(crate) fn events_in_note(
             .then(left.line_index.cmp(&right.line_index)),
     });
     events
-}
-
-/// Open Event Tasks whose occupied span conflicts with
-/// `[session_start, session_end)`. Unbuffered events keep today's
-/// start-in-session rule. Earliest buffered start first.
-pub(crate) fn event_starts_crossed<'a>(
-    session_start_min: u16,
-    session_end_min: u16,
-    events: &'a [EventNoteRow],
-    exclude_ids: &HashSet<String>,
-) -> Vec<&'a EventNoteRow> {
-    event_span_conflicts(
-        session_start_min,
-        session_end_min,
-        None,
-        events,
-        exclude_ids,
-    )
-    .into_iter()
-    .map(|(event, _)| event)
-    .collect()
-}
-
-/// Earliest open Event Task whose start lies in `[session_start, session_end)`,
-/// wrapping overnight when the session end is earlier than its start.
-#[allow(dead_code)] // Retained for direct overnight behavior regression tests.
-pub(crate) fn first_event_start_crossed<'a>(
-    session_start_min: u16,
-    session_end_min: u16,
-    events: &'a [EventNoteRow],
-    exclude_ids: &HashSet<String>,
-) -> Option<&'a EventNoteRow> {
-    event_starts_crossed(
-        session_start_min,
-        session_end_min,
-        events,
-        exclude_ids,
-    )
-    .into_iter()
-    .next()
 }
 
 /// Newly conflicting open Event Tasks: `conflicts(new) && !conflicts(old)`,
@@ -1333,7 +1282,7 @@ mod tests {
     }
 
     #[test]
-    fn first_event_start_crossed_wraps_overnight_and_skips_exclusions() {
+    fn event_span_conflicts_wraps_overnight_and_skips_exclusions() {
         let contents = events_note(concat!(
             "- [ ] #task **2330-0030** Late ^late\n",
             "- [ ] #task **0030-0100** After midnight ^after\n",
@@ -1343,18 +1292,31 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 10, 29).unwrap();
         let events = events_in_note(&contents, date);
         let exclude = HashSet::new();
-        let crossed = first_event_start_crossed(23 * 60, 60, &events, &exclude)
-            .expect("crossed");
+        let crossed =
+            event_span_conflicts(23 * 60, 60, None, &events, &exclude)
+                .into_iter()
+                .next()
+                .map(|(event, _)| event)
+                .expect("crossed");
         assert_eq!(crossed.block_id.as_deref(), Some("late"));
         let mut skip_late = HashSet::new();
         skip_late.insert("late".to_string());
-        let next = first_event_start_crossed(23 * 60, 60, &events, &skip_late)
+        let next = event_span_conflicts(23 * 60, 60, None, &events, &skip_late)
+            .into_iter()
+            .next()
+            .map(|(event, _)| event)
             .expect("after midnight");
         assert_eq!(next.block_id.as_deref(), Some("after"));
-        assert!(
-            first_event_start_crossed(12 * 60, 12 * 60, &events, &exclude)
-                .is_none()
-        );
+        assert!(event_span_conflicts(
+            12 * 60,
+            12 * 60,
+            None,
+            &events,
+            &exclude
+        )
+        .into_iter()
+        .next()
+        .is_none());
     }
 
     #[test]

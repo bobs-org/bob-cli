@@ -577,8 +577,9 @@ A side that is zero is omitted (`[buffer:: -30m]`, `[buffer:: +15m]`),
 and an event without buffers has no field. `list` shows
 `12:00-13:00 −30m +15m`, and JSON events carry
 `buffer: {"before_minutes": 30, "after_minutes": 15}`. Hand-written Event
-Tasks may carry the field too; sync reads it from the vault, never from
-Google.
+Tasks may carry the field too: capture and the `capture-pomodoros --tasks`
+agenda read the buffer from the vault field, while sync reads it from the
+Google description.
 
 The field is Google-owned exactly like the badges: it updates in place
 while the row is untouched, and a vault edit wins and is reported once.
