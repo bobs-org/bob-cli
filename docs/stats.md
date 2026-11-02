@@ -1206,6 +1206,16 @@ On desktop the block finds `bob` by checking `stats.bob_path` in
 inherit the shell PATH, which is why the fixed locations are tried first.
 The error card lists exactly the paths that were tried.
 
+The header carries a report-driven Worked, Off-clock, and Total clock chooser under the range chips: one
+checked native radio per `report.clock.options` (`●` Worked, `◌` Off-clock, `◐` Total), with arrows wrapping
+and selecting, `Space` activating, and focus surviving fetch and repaint. `c` cycles the supported clocks from
+the dash surface (ignored while a native radio owns focus). The choice is remembered per device and restored
+after the Worked bootstrap; clockless or no-adoption reports hide the control and stay on Worked without erasing
+the saved preference. Switching keeps range, offset, compare, focus, and a still-valid pin, fetches with `-k`
+only for Off-clock or Total, and prefetches the other two lenses when idle. Off-clock and Total use the report's
+neutral direction and words, Total sums session minutes so overlapping sessions count twice and is never occupied
+or free time, and pinned days and buckets keep their span with Roots selected.
+
 The focus chart groups its bars by the report's selected day, week, or month bucket.
 Its legend names that grouping and, when supplied, the 25th–75th percentile range for
 those displayed buckets. The rolling-median line uses Bob's supplied daily rolling
@@ -1444,7 +1454,11 @@ types legend sits over the types bar. The types legend has no meta, so it gets t
 when both lanes show; in types-only view the types row takes the top-row
 position with the meta and the switch. There are no history marks, and no separate Stats
 link: every fact is itself the link to Stats, and each bar is a second
-mouse-only target for its legend's action. A metric hidden by
+mouse-only target for its legend's action. When the day's valid Worked point carries positive off-clock time,
+a quiet `◌ +<Bob's off-clock display> off-clock` hint renders below WORKED beside the typical line (raw `Nm`
+when only the numeric share survives; missing, zero, invalid, and older reports show no hint). The hint is its
+own keyboard stop and opens Stats with D pinned and the Off-clock lens selected; ordinary WORKED facts and lane
+actions explicitly open Worked so a remembered Off-clock choice never changes their meaning. A metric hidden by
 `stats.hide` is omitted from the strip, not faked.
 
 A quiet switch at the right of the top lane cycles both bars → root
