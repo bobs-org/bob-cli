@@ -790,7 +790,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     );
                     continue;
                 }
-                if !is_relation_winner && verdict.pull_in {
+                if verdict.pull_in {
                     emit_pull_in_recover(
                         plan,
                         completed,
@@ -888,7 +888,16 @@ fn successor_row_fields(
     if verdict.offer.as_ref().is_some_and(|offer| {
         offer.group == super::successors::OfferGroup::Relation
     }) {
-        (RELATION_TRIGGER, false, task.description.clone())
+        let raw = raw_task_line(&file.contents, task.line_index);
+        (
+            RELATION_TRIGGER,
+            verdict.pull_in && pull_in_hide_removed(&raw),
+            if verdict.pull_in {
+                pull_in_display_text(&task.description)
+            } else {
+                task.description.clone()
+            },
+        )
     } else if verdict.pull_in {
         let raw = raw_task_line(&file.contents, task.line_index);
         (
@@ -1042,7 +1051,7 @@ fn emit_pull_in_recover(
         &block_id,
         task.line_index + 1,
     );
-    plan.unblocked.push(UnblockedRow {
+    let row = UnblockedRow {
         note_path: file.relative_path.clone(),
         block_id,
         line,
@@ -1050,7 +1059,13 @@ fn emit_pull_in_recover(
         previous_status_symbol: task.status,
         status_symbol,
         inbox: is_inbox_note(&file.relative_path, &file.contents, index),
-        unblocked_by: predecessor_refs(completed, &verdict.preds),
+        unblocked_by: if verdict.offer.as_ref().is_some_and(|offer| {
+            offer.group == super::successors::OfferGroup::Relation
+        }) {
+            relation_unblocked_by(verdict)
+        } else {
+            predecessor_refs(completed, &verdict.preds)
+        },
         link: None,
         not_linked: Some(reason),
         trigger: PULL_IN_TRIGGER,
@@ -1059,5 +1074,12 @@ fn emit_pull_in_recover(
             super::successors::offer_report(offer, verdict.relation.as_ref())
         }),
         relation: verdict.relation.clone(),
-    });
+    };
+    if row.offer.as_ref().is_some_and(|offer| {
+        offer.group == super::successors::OfferGroup::Relation
+    }) {
+        plan.relation_successors.push(row);
+    } else {
+        plan.unblocked.push(row);
+    }
 }

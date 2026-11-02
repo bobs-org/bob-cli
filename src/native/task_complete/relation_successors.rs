@@ -33,6 +33,10 @@ pub(crate) struct RelationTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A successor insertion coordinate in the post-gesture day text.
+/// `line` is a 0-based logical line, normally the position where the
+/// parked target's first removed Task Link bullet stood. `note_path`
+/// identifies that day note and is checked against the planner's day.
 pub(crate) struct RelationSlotAnchor {
     pub(crate) note_path: PathBuf,
     pub(crate) line: usize,
@@ -167,16 +171,19 @@ pub(crate) fn relation_offer_survives_final_state(
 /// `Missing` so dangling edges are ignored.
 pub(crate) struct MapTargetReader {
     staged: BTreeMap<PathBuf, String>,
+    known: BTreeSet<PathBuf>,
     unavailable: BTreeSet<PathBuf>,
 }
 
 impl MapTargetReader {
     pub(crate) fn new(
         staged: BTreeMap<PathBuf, String>,
+        known: BTreeSet<PathBuf>,
         unavailable: BTreeSet<PathBuf>,
     ) -> Self {
         Self {
             staged,
+            known,
             unavailable,
         }
     }
@@ -190,6 +197,10 @@ impl classify::TargetNoteReader for MapTargetReader {
         if self.unavailable.contains(path) {
             return classify::TargetNoteRead::Unavailable;
         }
-        classify::TargetNoteRead::Missing
+        if self.known.contains(path) {
+            classify::TargetNoteRead::Unavailable
+        } else {
+            classify::TargetNoteRead::Missing
+        }
     }
 }

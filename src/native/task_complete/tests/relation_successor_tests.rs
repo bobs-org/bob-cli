@@ -12,6 +12,7 @@ use super::super::relation_successors::classify::{
     RelationClassifyInput, RelationClassifyResult, SourceRecovery,
     TargetNoteRead, TargetNoteReader,
 };
+use super::super::relation_successors::copy;
 use super::super::relation_successors::{
     edge_added_after_release_warning, relation_offer_survives_final_state,
     RelationEvent, RelationEventKind, RelationHeldReason, RelationSlotAnchor,
@@ -23,6 +24,7 @@ use super::super::successors::{
 };
 use super::test_settings;
 use crate::native::config::relations::CancelLabel;
+use crate::native::env::TestEnvGuard;
 use crate::native::task_status_hooks::parse_tasks;
 use crate::native::vault_links::NoteIndex;
 
@@ -33,15 +35,39 @@ fn vectors() -> Value {
     .expect("typed relation-successor vectors parse")
 }
 
-const INTEGRATION_CASES: &[(&str, &str)] = &[
-    ("SA14", "DEDUP into hand_off is owned by integrate"),
-    ("SA15", "project recovery writes are owned by integrate"),
+#[derive(Clone, Copy)]
+enum IntegrationOwner {
+    Planner,
+    EventWarning,
+    FinalState,
+}
+
+const INTEGRATION_CASES: &[(&str, &str, IntegrationOwner)] = &[
+    (
+        "SA14",
+        "DEDUP into hand_off is owned by integrate",
+        IntegrationOwner::Planner,
+    ),
+    (
+        "SA15",
+        "project recovery writes are owned by integrate",
+        IntegrationOwner::Planner,
+    ),
     (
         "SA18",
         "mixed group order with other offers is owned by integrate",
+        IntegrationOwner::Planner,
     ),
-    ("SA20", "post-event edge replay is owned by integrate"),
-    ("SA21", "later-item invalidation is owned by integrate"),
+    (
+        "SA20",
+        "late-edge warning is owned by the event-time helper",
+        IntegrationOwner::EventWarning,
+    ),
+    (
+        "SA21",
+        "final-state revalidation is owned by the pure helper",
+        IntegrationOwner::FinalState,
+    ),
 ];
 
 const RULE_OBJECT_KEYS: &[&str] = &["id", "name", "input", "cases", "expected"];
@@ -105,11 +131,11 @@ const HELD_KEYS: &[&str] = &[
     "display",
 ];
 
-fn integration_reason(id: &str) -> Option<&'static str> {
+fn integration_case(id: &str) -> Option<(&'static str, IntegrationOwner)> {
     INTEGRATION_CASES
         .iter()
-        .find(|(case, _)| *case == id)
-        .map(|(_, reason)| *reason)
+        .find(|(case, _, _)| *case == id)
+        .map(|(_, reason, owner)| (*reason, *owner))
 }
 
 #[test]
@@ -120,7 +146,8 @@ fn classifier_rule_vectors_call_production_code() {
         let id = vector["id"].as_str().expect("rule id");
         seen.insert(id.to_string());
         assert_known_keys(id, vector, RULE_OBJECT_KEYS);
-        if let Some(_reason) = integration_reason(id) {
+        if let Some((_reason, owner)) = integration_case(id) {
+            run_integration_vector(vector, owner);
             continue;
         }
         if let Some(cases) = vector.get("cases").and_then(Value::as_array) {
@@ -448,6 +475,13 @@ fn apply_source(
         .and_then(Value::as_u64)
         .is_some_and(|count| count > 0)
     {
+        add_open_prerequisite(notes, &path, source_id);
+    } else if overlay.get("status").and_then(Value::as_str) == Some("Blocked")
+        && overlay.get("depends_on").is_none()
+    {
+        // A fixture-level Blocked source with no more specific reason is
+        // materialized as a real open prerequisite, so waits_on assertions
+        // exercise resolved task data rather than placeholder rows.
         add_open_prerequisite(notes, &path, source_id);
     }
     if let Some(depends) = overlay.get("depends_on").and_then(Value::as_array) {
@@ -958,6 +992,14 @@ fn add_depends_on(
     source_id: &str,
     target: &str,
 ) {
+    let dependency_id =
+        target.split_once("#^").map(|(_, id)| id).unwrap_or(target);
+    insert_token(
+        notes,
+        path,
+        source_id,
+        &format!("[dependsOn:: {dependency_id}]"),
+    );
     let contents = notes.get(path).cloned().unwrap_or_default();
     let Some(line_index) = task_line_index(&contents, source_id) else {
         return;
@@ -1465,19 +1507,60 @@ fn run_planner(
     relation_snapshot_complete: bool,
     previous_daily: Option<PathBuf>,
 ) -> super::super::successors::SuccessorPlan {
+    run_planner_with_options(
+        world,
+        completed,
+        parked,
+        selection,
+        closing,
+        link_unblocked,
+        snapshot_complete,
+        relation_snapshot_complete,
+        previous_daily,
+        PlannerOptions::default(),
+    )
+}
+
+#[derive(Default)]
+struct PlannerOptions<'a> {
+    keep_moving: bool,
+    bob_dir: Option<&'a Path>,
+    omit_snapshot_paths: BTreeSet<PathBuf>,
+    closing_context: Option<super::super::successors::ClosingContext>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_planner_with_options<'a>(
+    world: &World,
+    completed: Vec<CompletedTask>,
+    parked: Vec<RelationEvent>,
+    selection: SuccessorSelection,
+    closing: bool,
+    link_unblocked: bool,
+    snapshot_complete: bool,
+    relation_snapshot_complete: bool,
+    previous_daily: Option<PathBuf>,
+    options: PlannerOptions<'a>,
+) -> super::super::successors::SuccessorPlan {
     let settings = test_settings();
     let snapshot: Vec<(PathBuf, String)> = world
         .notes
         .iter()
+        .filter(|(path, _)| !options.omit_snapshot_paths.contains(*path))
         .map(|(path, contents)| (path.clone(), contents.clone()))
         .collect();
     let index = planner_index(&world.notes);
-    let closing_ctx =
-        closing.then(|| super::super::successors::ClosingContext {
-            continuation_name: String::new(),
-            closed_line: 0,
-            continuation: None,
-        });
+    let closing_ctx = if closing {
+        Some(options.closing_context.clone().unwrap_or_else(|| {
+            super::super::successors::ClosingContext {
+                continuation_name: String::new(),
+                closed_line: 0,
+                continuation: None,
+            }
+        }))
+    } else {
+        None
+    };
     // Leak the index and settings for the planner's borrowed lifetime in
     // tests; the process exits after the suite so this is contained.
     let index_static: &'static NoteIndex = Box::leak(Box::new(index));
@@ -1494,7 +1577,7 @@ fn run_planner(
         unavailable_targets: BTreeSet::new(),
     };
     plan_successors(SuccessorInput {
-        bob_dir: None,
+        bob_dir: options.bob_dir,
         completed,
         snapshot: snapshot.clone(),
         note_texts: snapshot,
@@ -1506,12 +1589,349 @@ fn run_planner(
         tasks_settings: settings_static,
         note_settings: note_settings_static,
         link_unblocked,
-        keep_moving: false,
+        keep_moving: options.keep_moving,
         snapshot_complete,
         selection,
         index: index_static,
         relation: Some(relation),
     })
+}
+
+fn planner_world_from_notes(
+    notes: BTreeMap<PathBuf, String>,
+    day_before: &str,
+    day_after: &str,
+) -> World {
+    World {
+        notes,
+        day_before: day_before.to_string(),
+        day_after: day_after.to_string(),
+        day_path: PathBuf::from("2026/20261102.md"),
+        events: Vec::new(),
+        labels: labels_from(&[Value::String("starts after".to_string())]),
+        link_unblocked: true,
+        snapshot_complete: true,
+        dependency_snapshot_complete: true,
+        previous_daily: None,
+        today: NaiveDate::from_ymd_opt(2026, 11, 2).expect("today"),
+        recovered: BTreeMap::new(),
+        expect_scan: None,
+    }
+}
+
+fn completed_task(path: &str, id: &str, text: &str) -> CompletedTask {
+    CompletedTask {
+        relative_path: PathBuf::from(path),
+        block_id: id.to_string(),
+        task_id: id.to_string(),
+        text: text.to_string(),
+        is_root: true,
+    }
+}
+
+fn recovery_world() -> (World, CompletedTask) {
+    let notes = BTreeMap::from([
+        (
+            PathBuf::from("source.md"),
+            concat!(
+                "- [ ] #task Source [dependsOn:: closed] [id:: source] ^source\n",
+                "  - 🪢 **LINKS:** starts after [[area/target#^event]]\n",
+            )
+            .to_string(),
+        ),
+        (
+            PathBuf::from("prereq.md"),
+            "- [x] #task Closed prerequisite [id:: closed] ^closed\n"
+                .to_string(),
+        ),
+        (
+            PathBuf::from("target.md"),
+            "- [x] #task Event target [id:: event] ^event\n".to_string(),
+        ),
+    ]);
+    let before = concat!(
+        "## Pomodoros\n",
+        "- [ ] () — EVENT\n",
+        "  - [[target#^event]]\n",
+        "- [ ] () — OTHER\n",
+    );
+    let after = concat!(
+        "## Pomodoros\n",
+        "- [ ] () — EVENT\n",
+        "  - ~~[[target#^event]]~~\n",
+        "- [ ] () — OTHER\n",
+    );
+    (
+        planner_world_from_notes(notes, before, after),
+        completed_task("target.md", "event", "Event target"),
+    )
+}
+
+fn run_integration_vector(vector: &Value, owner: IntegrationOwner) {
+    let id = vector["id"].as_str().expect("integration vector id");
+    match owner {
+        IntegrationOwner::Planner => {
+            let (world, completed, parked) = planner_world(id);
+            let selection = match vector
+                .pointer("/input/selection")
+                .and_then(Value::as_str)
+            {
+                Some("all") => SuccessorSelection::All,
+                Some("none") | None => SuccessorSelection::None,
+                Some(other) => panic!("{id}: unknown selection {other}"),
+            };
+            let plan = run_planner(
+                &world, completed, parked, selection, false, true, true, true,
+                None,
+            );
+            assert_planner_result(id, &plan, &vector["expected"]);
+        }
+        IntegrationOwner::EventWarning => {
+            let (mut world, _, _) = planner_world(id);
+            let expected = &vector["expected"];
+            let source_path = PathBuf::from("agents.md");
+            if let Some(source) = world.notes.get_mut(&source_path) {
+                *source = source
+                    .lines()
+                    .filter(|line| !line.contains("🪢 **LINKS:**"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n";
+            }
+            let no_edge = world.classify();
+            assert_result(id, &no_edge, expected, &world);
+            let source = world
+                .notes
+                .get(&source_path)
+                .and_then(|text| {
+                    parse_tasks(text, &test_settings()).into_iter().next()
+                })
+                .expect("source task");
+            let target = world.events.first().expect("released event");
+            let label = world.labels.first().expect("configured label");
+            let warning = edge_added_after_release_warning(
+                &label.name,
+                &source.description,
+                &target.target.text,
+            );
+            assert_eq!(
+                Some(warning.code),
+                expected.get("warning").and_then(Value::as_str),
+                "{id} warning code"
+            );
+        }
+        IntegrationOwner::FinalState => {
+            let cases = vector["cases"].as_array().expect("SA21 cases");
+            for case in cases {
+                let action =
+                    case["later_action"].as_str().expect("later action");
+                let (world, _, _) = planner_world(id);
+                let source_status = world
+                    .notes
+                    .get(&PathBuf::from("agents.md"))
+                    .and_then(|text| {
+                        parse_tasks(text, &test_settings()).into_iter().next()
+                    })
+                    .map(|task| task.status)
+                    .unwrap_or(' ');
+                let target_status = world
+                    .events
+                    .first()
+                    .map(|event| {
+                        if event.kind == RelationEventKind::Parked {
+                            '/'
+                        } else {
+                            'x'
+                        }
+                    })
+                    .unwrap_or('/');
+                let survives = relation_offer_survives_final_state(
+                    source_status,
+                    action == "link source",
+                    false,
+                    false,
+                    RelationEventKind::Parked,
+                    target_status,
+                    action == "relink target",
+                );
+                assert_eq!(
+                    survives,
+                    !case["expected"]["groups"]
+                        .as_array()
+                        .expect("expected groups")
+                        .is_empty(),
+                    "{id} {action} group survival"
+                );
+                assert!(case["expected"]["held"]
+                    .as_array()
+                    .expect("expected held")
+                    .is_empty());
+            }
+        }
+    }
+}
+
+fn assert_planner_result(
+    id: &str,
+    plan: &super::super::successors::SuccessorPlan,
+    expected: &Value,
+) {
+    let mut rows = plan
+        .unblocked
+        .iter()
+        .chain(plan.relation_successors.iter())
+        .chain(plan.keep_moving.iter())
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|row| {
+        row.offer
+            .as_ref()
+            .map(|offer| offer.n)
+            .unwrap_or(usize::MAX)
+    });
+    if let Some(group_order) =
+        expected.get("group_order").and_then(Value::as_array)
+    {
+        let actual = rows
+            .iter()
+            .filter_map(|row| row.offer.as_ref())
+            .map(|offer| offer.group.as_str())
+            .collect::<Vec<_>>();
+        let expected = group_order
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{id} offer group order");
+    }
+    if let Some(groups) = expected.get("groups").and_then(Value::as_array) {
+        let expected_offer_count = groups
+            .iter()
+            .map(|group| group["rows"].as_array().expect("group rows").len())
+            .sum::<usize>();
+        let actual_offer_count =
+            rows.iter().filter(|row| row.offer.is_some()).count();
+        assert_eq!(
+            actual_offer_count, expected_offer_count,
+            "{id} offered rows"
+        );
+        for group in groups {
+            let group_name = group
+                .get("group")
+                .and_then(Value::as_str)
+                .expect("expected group");
+            let actual = rows
+                .iter()
+                .filter(|row| {
+                    row.offer
+                        .as_ref()
+                        .is_some_and(|offer| offer.group.as_str() == group_name)
+                })
+                .copied()
+                .collect::<Vec<_>>();
+            let expected_rows = group["rows"].as_array().expect("group rows");
+            assert_eq!(
+                actual.len(),
+                expected_rows.len(),
+                "{id} {group_name} rows"
+            );
+            if let Some(label) = group.get("label").and_then(Value::as_str) {
+                assert!(
+                    actual.iter().any(|row| {
+                        row.relation
+                            .as_ref()
+                            .is_some_and(|relation| relation.label == label)
+                    }),
+                    "{id} relation label"
+                );
+            }
+            if let Some(event) = group.get("event").and_then(Value::as_str) {
+                assert!(
+                    actual.iter().any(|row| {
+                        row.relation.as_ref().is_some_and(|relation| {
+                            match relation.event {
+                                RelationEventKind::Parked => event == "parked",
+                                RelationEventKind::Done => event == "done",
+                            }
+                        })
+                    }),
+                    "{id} relation event"
+                );
+            }
+            if let Some(after) = group.get("after").and_then(Value::as_str) {
+                assert!(
+                    actual.iter().any(|row| {
+                        row.relation.as_ref().is_some_and(|relation| {
+                            relation.after.first().is_some_and(|target| {
+                                format!(
+                                    "{}#^{}",
+                                    path_key(&target.note_path),
+                                    target.block_id
+                                ) == after
+                            })
+                        })
+                    }),
+                    "{id} relation target"
+                );
+            }
+            for (row, expected_row) in actual.iter().zip(expected_rows) {
+                if let Some(key) =
+                    expected_row.get("key").and_then(Value::as_str)
+                {
+                    assert_eq!(
+                        format!(
+                            "{}#^{}",
+                            path_key(&row.note_path),
+                            row.block_id
+                        ),
+                        key,
+                        "{id} row key"
+                    );
+                }
+                if let Some(lane) =
+                    expected_row.get("lane").and_then(Value::as_str)
+                {
+                    let actual_lane = if row.previous_status_symbol == '*'
+                        || row.status_symbol == '*'
+                    {
+                        "Next"
+                    } else if row.previous_status_symbol == '?'
+                        || row.status_symbol == ' '
+                    {
+                        "Ready"
+                    } else {
+                        "Other"
+                    };
+                    assert_eq!(actual_lane, lane, "{id} row lane");
+                }
+                if let Some(reason) =
+                    expected_row.get("reason").and_then(Value::as_str)
+                {
+                    let relation =
+                        row.relation.as_ref().expect("relation reason");
+                    let target =
+                        relation.after.first().expect("relation target");
+                    let actual = copy::secondary_reason(copy::GroupCopy {
+                        label: &relation.label,
+                        target: &target.text,
+                    });
+                    assert_eq!(actual, reason, "{id} secondary reason");
+                }
+                if expected_row.get("recovered").and_then(Value::as_bool)
+                    == Some(true)
+                {
+                    assert!(
+                        plan.changed_files.values().any(|text| text
+                            .contains("- [ ] #task Prepare evaluation prompt")
+                            && !text.contains("#prj_is_blocked")),
+                        "{id} project recovery write: {:?}",
+                        plan.changed_files
+                    );
+                }
+            }
+        }
+    }
+    if let Some(held) = expected.get("held").and_then(Value::as_array) {
+        assert_eq!(plan.relation_held.len(), held.len(), "{id} held rows");
+    }
 }
 
 fn planner_world(id: &str) -> (World, Vec<CompletedTask>, Vec<RelationEvent>) {
@@ -1530,7 +1950,39 @@ fn planner_world(id: &str) -> (World, Vec<CompletedTask>, Vec<RelationEvent>) {
         } else {
             (input.clone(), Value::Null)
         };
-    let world = World::materialize(&data["base"], &input_overlay, &case);
+    let mut world = World::materialize(&data["base"], &input_overlay, &case);
+    if let Some(other_offers) =
+        input_overlay.get("other_offers").and_then(Value::as_array)
+    {
+        for offer in other_offers {
+            if offer.get("group").and_then(Value::as_str) != Some("hand_off") {
+                continue;
+            }
+            let key =
+                offer.get("key").and_then(Value::as_str).expect("offer key");
+            let (path, block_id) = parse_ref(key);
+            let task_id = block_id.clone();
+            let target = world
+                .events
+                .iter()
+                .find(|event| event.kind == RelationEventKind::Done)
+                .map(|event| {
+                    format!(
+                        "{}#^{}",
+                        path_key(&event.target.note_path),
+                        event.target.block_id
+                    )
+                })
+                .expect("handoff event target");
+            let note = world.notes.entry(path.clone()).or_default();
+            if !note.contains(&format!("^{block_id}")) {
+                note.push_str(&format!(
+                    "- [?] #task Vector hand-off [dependsOn:: {}] [id:: {task_id}] ^{block_id}\n",
+                    target.split_once("#^").map(|(_, id)| id).unwrap_or_default()
+                ));
+            }
+        }
+    }
     // Apply case-level config overlays that World::materialize only reads
     // from input/case source/target/config events; SA24-style gates live
     // in expected, so handle the common parked/done split here.
@@ -1542,9 +1994,45 @@ fn planner_world(id: &str) -> (World, Vec<CompletedTask>, Vec<RelationEvent>) {
         completed = Vec::new();
         parked = Vec::new();
     }
-    // For SA14 the vector already carries a Done event; for SA15 the base
-    // parked event applies. Ensure the completed task_id is present for
-    // legacy hand_off detection.
+    // Materialize Done events in the staged notes as the close engine
+    // would. This lets the planner derive real dependency recovery.
+    for event in world
+        .events
+        .iter()
+        .filter(|event| event.kind == RelationEventKind::Done)
+    {
+        rewrite_status(
+            &mut world.notes,
+            &event.target.note_path,
+            &event.target.block_id,
+            'x',
+        );
+    }
+    // A vector project recovery becomes a real ^prj dependent of a closed
+    // gate task, with the relation source resident in that project note.
+    // The relation event remains the fixture's parked target.
+    if input
+        .pointer("/source/project_recovered")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        let path = PathBuf::from("agents.md");
+        let body = world.notes.get(&path).cloned().unwrap_or_default();
+        let projected = format!(
+            "---\ntype: [[project]]\n---\n- [x] #task Project gate [id:: project-close] ^project-close\n- [?] #task Project [dependsOn:: project-close] [id:: project] ^prj\n{body}"
+        );
+        world.notes.insert(path.clone(), projected);
+        insert_token(&mut world.notes, &path, "evaluate", "#prj_is_blocked");
+        rewrite_status(&mut world.notes, &path, "evaluate", '?');
+        completed.push(CompletedTask {
+            relative_path: path,
+            block_id: "project-close".to_string(),
+            task_id: "project-close".to_string(),
+            text: "Project gate".to_string(),
+            is_root: true,
+        });
+    }
+    // Ensure completed task ids are present for legacy hand-off detection.
     for task in &mut completed {
         if task.task_id.is_empty() {
             task.task_id = task.block_id.clone();
@@ -1660,11 +2148,27 @@ fn integrate_sa15_relation_wins_but_project_recovery_remains() {
         )
         .to_string(),
     );
-    let day_before =
-        "## Pomodoros\n- [ ] (**) — BUILD\n  - [[agents#^implement]]\n"
-            .to_string();
-    let day_after =
-        "## Pomodoros\n- [ ] (**) — BUILD\n- [ ] () — BUILD\n".to_string();
+    notes.insert(
+        PathBuf::from("other.md"),
+        "- [ ] #task Keep place [id:: keep] ^keep\n".to_string(),
+    );
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**) — BUILD\n",
+        "  - [[agents#^implement]]\n",
+        "- [ ] () — WRITE\n",
+        "  - [[other#^keep]]\n",
+    )
+    .to_string();
+    let day_after = concat!(
+        "## Pomodoros\n",
+        "- [x] (**) — BUILD\n",
+        "  - ~~[[agents#^implement]]~~\n",
+        "- [ ] () — BUILD\n",
+        "- [ ] () — WRITE\n",
+        "  - [[other#^keep]]\n",
+    )
+    .to_string();
     let labels = vec![CancelLabel {
         key: "starts after".to_string(),
         name: "starts after".to_string(),
@@ -1676,7 +2180,10 @@ fn integrate_sa15_relation_wins_but_project_recovery_remains() {
             text: "Send implementation prompt".to_string(),
         },
         kind: RelationEventKind::Parked,
-        slot: None,
+        slot: Some(RelationSlotAnchor {
+            note_path: day_path.clone(),
+            line: 5,
+        }),
     }];
     let completed = vec![CompletedTask {
         relative_path: PathBuf::from("proj.md"),
@@ -1710,9 +2217,12 @@ fn integrate_sa15_relation_wins_but_project_recovery_remains() {
         pre_day: Some(day_before),
         post_day: Some(day_after),
         closing: Some(super::super::successors::ClosingContext {
-            continuation_name: String::new(),
-            closed_line: 0,
-            continuation: None,
+            continuation_name: "BUILD".to_string(),
+            closed_line: 1,
+            continuation: Some(super::super::successors::ClosingContinuation {
+                line: 4,
+                created: true,
+            }),
         }),
         day_relative: day_path,
         today,
@@ -1737,6 +2247,21 @@ fn integrate_sa15_relation_wins_but_project_recovery_remains() {
         pitch_relation.offer.as_ref().expect("offer").group,
         OfferGroup::Relation
     );
+    let relation_offer = pitch_relation.offer.as_ref().expect("offer");
+    assert_eq!(relation_offer.destination.entry_name, "WRITE");
+    assert_eq!(
+        relation_offer.destination.entry_role,
+        super::super::successors::EntryRole::Slot
+    );
+    assert!(
+        plan.new_day_text
+            .as_deref()
+            .is_some_and(|text| text.contains(
+                "- [ ] () — WRITE\n  - [[agents#^evaluate]]\n  - [[proj#^pitch]]\n  - [[other#^keep]]\n"
+            )),
+        "relation trigger controls the placement: {:?}",
+        plan.new_day_text
+    );
     assert!(pitch_relation.relation.is_some());
     let updated = plan
         .changed_files
@@ -1747,6 +2272,208 @@ fn integrate_sa15_relation_wins_but_project_recovery_remains() {
         plan.unblocked.iter().any(|row| row.block_id == "other"),
         "project recovery still offers Other: {:?}",
         plan.unblocked
+    );
+}
+
+#[test]
+fn relation_wins_over_project_finished_and_keeps_hide_recovery() {
+    let notes = BTreeMap::from([
+        (
+            PathBuf::from("project.md"),
+            concat!(
+                "---\ntype: [[project]]\nstatus: wip\n---\n",
+                "- [x] #task Finish work [id:: done] ^done\n",
+                "- [ ] #task #prj Ship it! #hide [id:: prj] ^prj\n",
+                "  - 🪢 **LINKS:** starts after [[target#^event]]\n",
+            )
+            .to_string(),
+        ),
+        (
+            PathBuf::from("target.md"),
+            "- [/] #task Parked target [id:: event] ^event\n".to_string(),
+        ),
+        (
+            PathBuf::from("other.md"),
+            "- [ ] #task Keep place [id:: keep] ^keep\n".to_string(),
+        ),
+    ]);
+    let world = planner_world_from_notes(
+        notes,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**) — FIX\n",
+            "  - [[target#^event]]\n",
+            "- [ ] () — WRITE\n",
+            "  - [[other#^keep]]\n",
+        ),
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**) — FIX\n",
+            "  - ~~[[target#^event]]~~\n",
+            "- [ ] () — WRITE\n",
+            "  - [[other#^keep]]\n",
+        ),
+    );
+    let completed = vec![completed_task("project.md", "done", "Finish work")];
+    let parked = vec![RelationEvent {
+        target: RelationTarget {
+            note_path: PathBuf::from("target.md"),
+            block_id: "event".to_string(),
+            text: "Parked target".to_string(),
+        },
+        kind: RelationEventKind::Parked,
+        slot: Some(RelationSlotAnchor {
+            note_path: world.day_path.clone(),
+            line: 4,
+        }),
+    }];
+    let plan = run_planner(
+        &world,
+        completed,
+        parked,
+        SuccessorSelection::All,
+        false,
+        true,
+        true,
+        true,
+        None,
+    );
+    let row = plan
+        .relation_successors
+        .iter()
+        .find(|row| row.block_id == "prj")
+        .expect("the project-finished pull-in is relation-winning");
+    let offer = row.offer.as_ref().expect("relation offer");
+    assert_eq!(offer.group, OfferGroup::Relation);
+    assert_eq!(row.trigger, "relation");
+    assert!(row.hide_removed);
+    assert_eq!(offer.destination.entry_name, "WRITE");
+    assert_eq!(
+        offer.destination.entry_role,
+        super::super::successors::EntryRole::Slot
+    );
+    let updated = plan
+        .changed_files
+        .get(Path::new("project.md"))
+        .expect("project recovery write");
+    assert!(
+        updated.contains(
+            "- [*] #task #prj Ship it! [fresh:: 2026-11-02] [id:: prj] ^prj"
+        ),
+        "{updated}"
+    );
+    assert!(!updated.contains("#hide"), "{updated}");
+    assert!(
+        plan.new_day_text
+            .as_deref()
+            .is_some_and(|text| text.contains(
+                "- [ ] () — WRITE\n  - [[project#^prj]]\n  - [[other#^keep]]\n"
+            )),
+        "the relation slot overrides the project-finished destination: {:?}",
+        plan.new_day_text
+    );
+}
+
+#[test]
+fn relation_wins_over_keep_moving_and_reanchors_the_offer() {
+    let notes = BTreeMap::from([
+        (
+            PathBuf::from("dev.md"),
+            "---\ntype: [[area]]\n---\n".to_string(),
+        ),
+        (
+            PathBuf::from("parent.md"),
+            "---\ntype: [[project]]\nparent: [[dev]]\nstatus: wip\n---\n- [ ] #task Parent ^prj\n".to_string(),
+        ),
+        (
+            PathBuf::from("project.md"),
+            concat!(
+                "---\ntype: [[project]]\nparent: [[parent]]\nstatus: wip\n---\n",
+                "- [x] #task Completed spec [id:: done] ^done\n",
+                "- [ ] #task #prj Project anchor ^prj\n",
+                "- [ ] #task Follow-up [id:: follow] ^follow\n",
+                "  - 🪢 **LINKS:** starts after [[target#^event]]\n",
+            )
+            .to_string(),
+        ),
+        (
+            PathBuf::from("target.md"),
+            "- [/] #task Parked target [id:: event] ^event\n".to_string(),
+        ),
+        (
+            PathBuf::from("other.md"),
+            "- [ ] #task Keep place [id:: keep] ^keep\n".to_string(),
+        ),
+    ]);
+    let world = planner_world_from_notes(
+        notes,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — FIX\n",
+            "  - [[project#^done]]\n",
+            "  - [[target#^event]]\n",
+            "- [ ] () — WRITE\n",
+            "  - [[other#^keep]]\n",
+        ),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — FIX\n",
+            "  - ~~[[project#^done]]~~\n",
+            "  - ~~[[target#^event]]~~\n",
+            "- [ ] () — WRITE\n",
+            "  - [[other#^keep]]\n",
+        ),
+    );
+    let completed =
+        vec![completed_task("project.md", "done", "Completed spec")];
+    let parked = vec![RelationEvent {
+        target: RelationTarget {
+            note_path: PathBuf::from("target.md"),
+            block_id: "event".to_string(),
+            text: "Parked target".to_string(),
+        },
+        kind: RelationEventKind::Parked,
+        slot: Some(RelationSlotAnchor {
+            note_path: world.day_path.clone(),
+            line: 5,
+        }),
+    }];
+    let plan = run_planner_with_options(
+        &world,
+        completed,
+        parked,
+        SuccessorSelection::All,
+        false,
+        true,
+        true,
+        true,
+        None,
+        PlannerOptions {
+            keep_moving: true,
+            ..PlannerOptions::default()
+        },
+    );
+    let row = plan
+        .relation_successors
+        .iter()
+        .find(|row| row.block_id == "follow")
+        .expect("keep-moving resident is relation-winning");
+    let offer = row.offer.as_ref().expect("offer");
+    assert_eq!(offer.group, OfferGroup::Relation);
+    assert_eq!(row.trigger, "relation");
+    assert_eq!(offer.destination.entry_name, "WRITE");
+    assert_eq!(
+        offer.destination.entry_role,
+        super::super::successors::EntryRole::Slot
+    );
+    assert!(plan.keep_moving.iter().all(|row| row.block_id != "follow"));
+    assert!(plan.keep_moving_folds.is_empty());
+    assert!(
+        plan.new_day_text
+            .as_deref()
+            .is_some_and(|text| text.contains("- [ ] () — WRITE\n  - [[project#^follow]]\n  - [[other#^keep]]\n")),
+        "the relation trigger reanchors the former keep-moving row: {:?}",
+        plan.new_day_text
     );
 }
 
@@ -2249,128 +2976,502 @@ fn integrate_repeated_park_then_done_is_stateless() {
     assert_eq!(done_plan.relation_successors.len(), 1);
 }
 
-#[test]
-fn integrate_explicit_slots_and_closing_destinations() {
-    let data = vectors();
-    let world = World::materialize(&data["base"], &Value::Null, &Value::Null);
-    // Explicit unlink slot honored when the entry remains.
-    let mut slotted = parked_from_events(&world.events);
-    for event in &mut slotted {
-        event.slot = Some(RelationSlotAnchor {
+fn relation_slot_world() -> World {
+    let notes = BTreeMap::from([
+        (
+            PathBuf::from("target.md"),
+            "- [/] #task Parked target [id:: event] ^event\n".to_string(),
+        ),
+        (
+            PathBuf::from("sources.md"),
+            concat!(
+                "- [ ] #task Follow-up [id:: follow] ^follow\n",
+                "  - 🪢 **LINKS:** starts after [[target#^event]]\n",
+            )
+            .to_string(),
+        ),
+        (
+            PathBuf::from("other.md"),
+            "- [ ] #task First [id:: first] ^first\n- [ ] #task Second [id:: second] ^second\n".to_string(),
+        ),
+    ]);
+    planner_world_from_notes(
+        notes,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — CLOSED\n",
+            "  - [[target#^event]]\n",
+            "  - [[other#^first]]\n",
+            "- [ ] () — OTHER\n",
+            "  - [[other#^second]]\n",
+        ),
+        concat!(
+            "## Pomodoros\n",
+            "- [x] () — CLOSED\n",
+            "  - ~~[[target#^event]]~~\n",
+            "- [ ] () — OTHER\n",
+            "  - [[other#^first]]\n",
+            "- [ ] () — CONT\n",
+        ),
+    )
+}
+
+fn parked_slot_event(world: &World, line: Option<usize>) -> RelationEvent {
+    RelationEvent {
+        target: RelationTarget {
+            note_path: PathBuf::from("target.md"),
+            block_id: "event".to_string(),
+            text: "Parked target".to_string(),
+        },
+        kind: RelationEventKind::Parked,
+        slot: line.map(|line| RelationSlotAnchor {
             note_path: world.day_path.clone(),
-            line: 0,
-        });
+            line,
+        }),
     }
-    let plan = run_planner(
-        &world,
-        Vec::new(),
-        slotted,
-        SuccessorSelection::All,
-        false,
-        true,
-        true,
-        true,
-        None,
-    );
-    assert_eq!(plan.relation_successors.len(), 1);
-    // Closing destinations: parked closes use the closing target.
-    let parked = parked_from_events(&world.events);
-    let closing_plan = run_planner(
-        &world,
-        Vec::new(),
-        parked,
-        SuccessorSelection::All,
-        true,
-        true,
-        true,
-        true,
-        None,
-    );
-    let row = &closing_plan.relation_successors[0];
-    assert!(row.link.is_some());
-    // Deleted-slot fallback uses the implicit destination.
-    let mut implicit_world = world;
-    implicit_world.day_after = "## Pomodoros\n- [ ] () — KEEP\n".to_string();
-    let parked = parked_from_events(&implicit_world.events);
-    let plan = run_planner(
-        &implicit_world,
-        Vec::new(),
-        parked,
-        SuccessorSelection::All,
-        false,
-        true,
-        true,
-        true,
-        None,
-    );
-    assert_eq!(plan.relation_successors.len(), 1);
+}
+
+fn relation_close_context() -> super::super::successors::ClosingContext {
+    super::super::successors::ClosingContext {
+        continuation_name: "CONT".to_string(),
+        closed_line: 1,
+        continuation: Some(super::super::successors::ClosingContinuation {
+            line: 6,
+            created: true,
+        }),
+    }
 }
 
 #[test]
-fn integrate_capture_compatibility_stays_byte_identical_without_relation() {
-    // Representative legacy close: Done with a direct dependent. With
-    // relation None the planner output (legacy fields) must match
-    // regardless of successor_labels config absent/empty/populated.
-    let settings = test_settings();
-    let today = NaiveDate::from_ymd_opt(2026, 11, 2).expect("today");
-    let day_path = PathBuf::from("2026/20261102.md");
+fn explicit_relation_slot_precedes_close_and_unpicked_is_write_free() {
+    let world = relation_slot_world();
+    // Post-gesture line 4 is the surviving child in the open OTHER entry.
+    let event = parked_slot_event(&world, Some(4));
+    let unpicked = run_planner_with_options(
+        &world,
+        Vec::new(),
+        vec![event.clone()],
+        SuccessorSelection::None,
+        true,
+        true,
+        true,
+        true,
+        None,
+        PlannerOptions {
+            closing_context: Some(relation_close_context()),
+            ..PlannerOptions::default()
+        },
+    );
+    assert_eq!(unpicked.relation_successors.len(), 1);
+    assert_eq!(
+        unpicked.relation_successors[0].not_linked,
+        Some("not_selected")
+    );
+    let offer = unpicked.relation_successors[0]
+        .offer
+        .as_ref()
+        .expect("unpicked relation offer");
+    assert_eq!(offer.destination.entry_name, "OTHER");
+    assert_eq!(
+        offer.destination.entry_role,
+        super::super::successors::EntryRole::Slot
+    );
+    assert!(!offer.destination.fallback);
+    assert!(unpicked.changed_files.is_empty());
+    assert!(unpicked.new_day_text.is_none());
+
+    // The explicit slot points to OTHER; the close continuation is CONT.
+    // The slot wins, and its 0-based post-gesture line is used as the
+    // insertion anchor in the exact returned day bytes.
+    let picked = run_planner_with_options(
+        &world,
+        Vec::new(),
+        vec![event],
+        SuccessorSelection::All,
+        true,
+        true,
+        true,
+        true,
+        None,
+        PlannerOptions {
+            closing_context: Some(relation_close_context()),
+            ..PlannerOptions::default()
+        },
+    );
+    assert_eq!(picked.relation_successors.len(), 1);
+    assert_eq!(
+        picked.new_day_text.as_deref(),
+        Some(concat!(
+            "## Pomodoros\n",
+            "- [x] () — CLOSED\n",
+            "  - ~~[[target#^event]]~~\n",
+            "- [ ] () — OTHER\n",
+            "  - [[sources#^follow]]\n",
+            "  - [[other#^first]]\n",
+            "- [ ] () — CONT\n",
+        )),
+        "the relation successor is inserted at its explicit slot"
+    );
+    let row = &picked.relation_successors[0];
+    assert_eq!(row.link.as_ref().expect("link").entry_name, "OTHER");
+    assert_eq!(row.link.as_ref().expect("link").entry_line, 4);
+}
+
+#[test]
+fn invalid_deleted_slot_falls_back_to_implicit_even_during_close() {
+    let world = relation_slot_world();
+    for invalid_line in [2, 100] {
+        // Line 2 is inside the closed entry; line 100 no longer exists.
+        let event = parked_slot_event(&world, Some(invalid_line));
+        let plan = run_planner_with_options(
+            &world,
+            Vec::new(),
+            vec![event],
+            SuccessorSelection::None,
+            true,
+            true,
+            true,
+            true,
+            None,
+            PlannerOptions {
+                closing_context: Some(relation_close_context()),
+                ..PlannerOptions::default()
+            },
+        );
+        let row = plan.relation_successors.first().expect("held offer");
+        let offer = row.offer.as_ref().expect("offer");
+        assert_eq!(
+            offer.destination.entry_role,
+            super::super::successors::EntryRole::Implicit
+        );
+        assert!(offer.destination.fallback);
+        assert!(plan.changed_files.is_empty());
+        assert!(plan.new_day_text.is_none());
+    }
+}
+
+#[test]
+fn closing_continuation_last_is_used_when_there_is_no_slot() {
+    let world = relation_slot_world();
+    let event = parked_slot_event(&world, None);
+    let plan = run_planner_with_options(
+        &world,
+        Vec::new(),
+        vec![event],
+        SuccessorSelection::All,
+        true,
+        true,
+        true,
+        true,
+        None,
+        PlannerOptions {
+            closing_context: Some(relation_close_context()),
+            ..PlannerOptions::default()
+        },
+    );
+    let row = plan.relation_successors.first().expect("relation row");
+    let offer = row.offer.as_ref().expect("offer");
+    assert_eq!(offer.destination.entry_name, "CONT");
+    assert_eq!(
+        offer.destination.entry_role,
+        super::super::successors::EntryRole::Created
+    );
+    assert!(plan
+        .new_day_text
+        .as_deref()
+        .expect("inserted day")
+        .contains("- [ ] () — CONT\n\t- [[sources#^follow]]\n"));
+}
+
+#[test]
+fn relation_slot_routes_to_the_task_type_as_final_destination() {
+    let dir = tempfile::tempdir().expect("temporary routing home");
+    let root = dir.path();
+    let config = root.join("config.yml");
+    std::fs::write(
+        &config,
+        concat!(
+            "plan:\n  default_type: CHORE\n",
+            "types:\n  FIX: blue\n  WRITE: magenta\n  CHORE: yellow\n",
+        ),
+    )
+    .expect("write routing config");
+    let _env =
+        TestEnvGuard::set(&[("BOB_CONFIG_FILE", Some(config.as_os_str()))]);
+
     let notes = BTreeMap::from([
         (
-            PathBuf::from("agents.md"),
-            "- [x] #task Done [id:: done] ^done\n- [?] #task Follows [dependsOn:: done] [id:: follows] ^follows\n".to_string(),
+            PathBuf::from("target.md"),
+            "- [/] #task Parked target [id:: event] ^event\n".to_string(),
+        ),
+        (
+            PathBuf::from("sources.md"),
+            concat!(
+                "- [ ] #task Typed follow-up [type:: WRITE] [id:: follow] ^follow\n",
+                "  - 🪢 **LINKS:** starts after [[target#^event]]\n",
+            )
+            .to_string(),
+        ),
+        (
+            PathBuf::from("other.md"),
+            "- [ ] #task First [id:: first] ^first\n- [ ] #task Second [id:: second] ^second\n".to_string(),
         ),
     ]);
-    let day_before =
-        "## Pomodoros\n- [ ] (**) — BUILD\n  - [[agents#^done]]\n".to_string();
-    let snapshot: Vec<(PathBuf, String)> = notes
-        .iter()
-        .map(|(path, contents)| (path.clone(), contents.clone()))
-        .collect();
-    let index = planner_index(&notes);
-    let index_static: &'static NoteIndex = Box::leak(Box::new(index));
-    let settings_static: &'static crate::native::task_status_hooks::TasksSettings =
-        Box::leak(Box::new(settings));
-    let note_settings_static: &'static crate::native::note_tasks::NoteTaskSettings =
-        Box::leak(Box::new(test_settings()));
-    let completed = vec![CompletedTask {
-        relative_path: PathBuf::from("agents.md"),
-        block_id: "done".to_string(),
-        task_id: "done".to_string(),
-        text: "Done".to_string(),
-        is_root: true,
-    }];
-    let run_none = || {
-        plan_successors(SuccessorInput {
-            bob_dir: None,
-            completed: completed.clone(),
-            snapshot: snapshot.clone(),
-            note_texts: snapshot.clone(),
-            pre_day: Some(day_before.clone()),
-            post_day: None,
-            closing: None,
-            day_relative: day_path.clone(),
-            today,
-            tasks_settings: settings_static,
-            note_settings: note_settings_static,
-            link_unblocked: true,
-            keep_moving: false,
-            snapshot_complete: true,
-            selection: SuccessorSelection::All,
-            index: index_static,
-            relation: None,
-        })
+    for (path, contents) in &notes {
+        std::fs::write(root.join(path), contents).expect("write indexed note");
+    }
+    let world = planner_world_from_notes(
+        notes,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — FIX\n",
+            "  - [[target#^event]]\n",
+            "  - [[other#^first]]\n",
+            "- [ ] () — WRITE\n",
+            "  - [[other#^second]]\n",
+        ),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — FIX\n",
+            "  - [[other#^first]]\n",
+            "- [ ] () — WRITE\n",
+            "  - [[other#^second]]\n",
+        ),
+    );
+    let event = RelationEvent {
+        target: RelationTarget {
+            note_path: PathBuf::from("target.md"),
+            block_id: "event".to_string(),
+            text: "Parked target".to_string(),
+        },
+        kind: RelationEventKind::Parked,
+        // Slot line 2 is the surviving child under FIX in post text.
+        slot: Some(RelationSlotAnchor {
+            note_path: world.day_path.clone(),
+            line: 2,
+        }),
     };
-    let base = run_none();
-    assert!(!base.unblocked.is_empty());
-    assert!(base.relation_successors.is_empty());
-    assert_eq!(base.relation_check, None);
-    // Empty and populated (nonoverlapping) successor configs still pass
-    // relation None, so legacy bytes stay identical.
-    let again = run_none();
-    assert_eq!(base.unblocked, again.unblocked);
-    assert_eq!(base.still_blocked, again.still_blocked);
-    assert_eq!(base.changed_files, again.changed_files);
-    assert_eq!(base.new_day_text, again.new_day_text);
+    let plan = run_planner_with_options(
+        &world,
+        Vec::new(),
+        vec![event],
+        SuccessorSelection::All,
+        false,
+        true,
+        true,
+        true,
+        None,
+        PlannerOptions {
+            bob_dir: Some(root),
+            ..PlannerOptions::default()
+        },
+    );
+    let row = plan.relation_successors.first().expect("relation row");
+    let offer = row.offer.as_ref().expect("offer");
+    assert_eq!(offer.group, OfferGroup::Relation);
+    assert_eq!(offer.destination.entry_name, "WRITE");
+    assert_eq!(
+        offer.destination.entry_role,
+        super::super::successors::EntryRole::Typed
+    );
+    assert!(!offer.destination.fallback);
+    assert!(
+        plan.new_day_text
+            .as_deref()
+            .is_some_and(|text| text.contains("- [ ] () — WRITE\n  - [[other#^second]]\n\t- [[sources#^follow]]\n")),
+        "the typed destination is the final route: {:?}",
+        plan.new_day_text
+    );
+    assert_eq!(row.link.as_ref().expect("link").entry_name, "WRITE");
+}
+
+#[test]
+fn effective_dependencies_use_closed_prerequisites_and_hold_incomplete_data() {
+    let (world, event) = recovery_world();
+    let none = run_planner(
+        &world,
+        vec![event.clone()],
+        Vec::new(),
+        SuccessorSelection::None,
+        false,
+        true,
+        true,
+        true,
+        None,
+    );
+    assert_eq!(
+        none.relation_successors.len(),
+        1,
+        "closed prerequisite is ready"
+    );
+    assert_eq!(none.relation_successors[0].not_linked, Some("not_selected"));
+    assert!(none.changed_files.is_empty());
+    assert!(none.new_day_text.is_none());
+
+    let picked = run_planner(
+        &world,
+        vec![event.clone()],
+        Vec::new(),
+        SuccessorSelection::All,
+        false,
+        true,
+        true,
+        true,
+        None,
+    );
+    assert_eq!(picked.relation_successors.len(), 1);
+    assert!(picked.relation_successors[0].link.is_some());
+    assert!(picked.changed_files[Path::new("source.md")]
+        .contains("[fresh:: 2026-11-02]"));
+
+    for selection in [SuccessorSelection::None, SuccessorSelection::All] {
+        let held = run_planner(
+            &world,
+            vec![event.clone()],
+            Vec::new(),
+            selection,
+            false,
+            true,
+            false,
+            true,
+            None,
+        );
+        assert!(held.relation_successors.is_empty());
+        assert_eq!(held.relation_held.len(), 1);
+        assert!(matches!(
+            held.relation_held[0].reason,
+            RelationHeldReason::Blocked { .. }
+        ));
+        assert!(held.changed_files.is_empty());
+        assert!(held.new_day_text.is_none());
+    }
+}
+
+#[test]
+fn integration_holds_indexed_unread_targets_and_caches_their_note_read() {
+    let notes = BTreeMap::from([
+        (
+            PathBuf::from("area/target.md"),
+            "- [/] #task Event target [id:: event] ^event\n".to_string(),
+        ),
+        (
+            PathBuf::from("sources.md"),
+            concat!(
+                "- [ ] #task Follow-up [id:: follow] ^follow\n",
+                "  - 🪢 **LINKS:** starts after [[target#^event]]\n",
+                "  - 🪢 **LINKS:** starts after [[unheld#^one]]\n",
+                "  - 🪢 **LINKS:** starts after [[unheld#^two]]\n",
+            )
+            .to_string(),
+        ),
+        (
+            PathBuf::from("unheld.md"),
+            "- [ ] #task One [id:: one] ^one\n- [ ] #task Two [id:: two] ^two\n"
+                .to_string(),
+        ),
+    ]);
+    let world = planner_world_from_notes(
+        notes,
+        "## Pomodoros\n- [ ] () — EVENT\n  - [[area/target#^event]]\n",
+        "## Pomodoros\n- [ ] () — EVENT\n",
+    );
+    let event = RelationEvent {
+        target: RelationTarget {
+            note_path: PathBuf::from("area/target.md"),
+            block_id: "event".to_string(),
+            text: "Event target".to_string(),
+        },
+        kind: RelationEventKind::Parked,
+        slot: None,
+    };
+    let mut omit = BTreeSet::new();
+    omit.insert(PathBuf::from("unheld.md"));
+    let plan = run_planner_with_options(
+        &world,
+        Vec::new(),
+        vec![event],
+        SuccessorSelection::All,
+        false,
+        true,
+        true,
+        true,
+        None,
+        PlannerOptions {
+            omit_snapshot_paths: omit,
+            ..PlannerOptions::default()
+        },
+    );
+    assert_eq!(
+        plan.relation_target_reads, 1,
+        "one read per target note; groups={:?} held={:?}",
+        plan.relation_groups, plan.relation_held
+    );
+    assert!(plan.relation_successors.is_empty());
+    assert_eq!(plan.relation_held.len(), 1);
+    let RelationHeldReason::WaitsFor(waiting) = &plan.relation_held[0].reason
+    else {
+        panic!(
+            "indexed but unavailable prerequisites must hold: {:?}",
+            plan.relation_held
+        );
+    };
+    assert_eq!(waiting.len(), 2);
+    assert!(waiting
+        .iter()
+        .all(|target| target.note_path == Path::new("unheld.md")));
+    assert!(plan.changed_files.is_empty());
+    assert!(plan.new_day_text.is_none());
+}
+
+#[test]
+fn integration_ambiguous_indexed_basename_is_unresolved() {
+    let notes = BTreeMap::from([
+        (
+            PathBuf::from("area/target.md"),
+            "- [/] #task Event target [id:: event] ^event\n".to_string(),
+        ),
+        (
+            PathBuf::from("folder/target.md"),
+            "- [ ] #task Different target [id:: other] ^other\n".to_string(),
+        ),
+        (
+            PathBuf::from("sources.md"),
+            concat!(
+                "- [ ] #task Follow-up [id:: follow] ^follow\n",
+                "  - 🪢 **LINKS:** starts after [[target#^event]]\n",
+            )
+            .to_string(),
+        ),
+    ]);
+    let world = planner_world_from_notes(
+        notes,
+        "## Pomodoros\n- [ ] () — EVENT\n  - [[area/target#^event]]\n",
+        "## Pomodoros\n- [ ] () — EVENT\n",
+    );
+    let event = RelationEvent {
+        target: RelationTarget {
+            note_path: PathBuf::from("area/target.md"),
+            block_id: "event".to_string(),
+            text: "Event target".to_string(),
+        },
+        kind: RelationEventKind::Parked,
+        slot: None,
+    };
+    let plan = run_planner(
+        &world,
+        Vec::new(),
+        vec![event],
+        SuccessorSelection::All,
+        false,
+        true,
+        true,
+        true,
+        None,
+    );
+    assert!(plan.relation_successors.is_empty());
+    assert!(plan.relation_held.is_empty());
+    assert_eq!(plan.relation_target_reads, 0);
+    assert!(plan.changed_files.is_empty());
 }
 
 #[test]

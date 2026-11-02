@@ -86,6 +86,7 @@ mod rewrite;
 mod routing;
 mod sections;
 mod sub_bullet;
+mod successor_compatibility;
 mod successor_integration;
 mod successor_offers;
 mod targets;

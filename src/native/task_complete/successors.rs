@@ -57,7 +57,7 @@ use super::project_pull_in::{
 use super::relation_successors::{
     classify_relation_successors, MapTargetReader, RelationCheck,
     RelationClassifyInput, RelationEvent, RelationOfferGroup,
-    RelationSuccessorInput, SourceRecovery,
+    RelationSuccessorInput, RelationTarget, SourceRecovery,
 };
 use crate::native::capture_dependency_tasks::{
     has_hide_tag, has_prj_is_blocked_tag,
@@ -119,6 +119,7 @@ pub(crate) struct RelationRowInfo {
     pub(crate) event: super::relation_successors::RelationEventKind,
     pub(crate) after: Vec<super::relation_successors::RelationTarget>,
     pub(crate) group_order: usize,
+    pub(crate) slot: Option<super::relation_successors::RelationSlotAnchor>,
 }
 
 /// Where a picked offer's successor bullet lands.
@@ -377,6 +378,10 @@ pub(crate) struct SuccessorPlan {
     /// `Checked` or `Unavailable`. `None` when disabled, nontriggering,
     /// or recovery-only.
     pub relation_check: Option<super::relation_successors::RelationCheck>,
+    /// Number of narrow target-note reads made by the relation pass.
+    /// Kept on the planner result so integrated read-budget tests can
+    /// verify cache and cheap-gate behavior without a disk reader.
+    pub relation_target_reads: usize,
 }
 
 /// Whether a vault-relative note is an inbox note, mirroring nav's
@@ -825,44 +830,153 @@ fn relation_identity_key(
 /// verdicts planned by this same gesture: a task whose legacy verdict is
 /// Offer/Successor/Recover counts as recovered (prerequisites closed and
 /// project unblocked); StillBlocked rows keep their open counts.
-fn relation_recovered_map(
+fn effective_relation_state_map(
     verdicts: &[DependentVerdict],
     files: &[FileScan],
+    states: &BTreeMap<
+        (usize, usize),
+        super::super::task_status_hooks::TaskDependencyState,
+    >,
+    project_states: &super::project_close::ProjectCloseStates,
+    snapshot_complete: bool,
+    post_day: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
 ) -> BTreeMap<String, SourceRecovery> {
     let mut map = BTreeMap::new();
-    for verdict in verdicts {
-        let file = &files[verdict.file];
-        let task = &file.tasks[verdict.task];
-        let key = relation_identity_key(
-            &file.relative_path,
-            task.block_id.as_deref().unwrap_or(""),
-            Some(task.line_index),
-        );
-        let recovered = match verdict.kind {
-            VerdictKind::StillBlockedWaitsOn
-            | VerdictKind::StillBlockedScheduled
-            | VerdictKind::StillBlockedProject => SourceRecovery {
-                recovered_prerequisites: false,
-                recovered_project: false,
-                project_path: verdict
-                    .offer
-                    .as_ref()
-                    .and_then(|offer| offer.project.clone())
-                    .or_else(|| verdict.muted_project.clone()),
-                open_prerequisite_count: Some(verdict.open_count),
-            },
-            _ => SourceRecovery {
-                recovered_prerequisites: true,
-                recovered_project: true,
-                project_path: verdict
-                    .offer
-                    .as_ref()
-                    .and_then(|offer| offer.project.clone())
-                    .or_else(|| verdict.muted_project.clone()),
-                open_prerequisite_count: Some(verdict.open_count),
-            },
-        };
-        map.insert(key, recovered);
+    let recovered_project_files: BTreeSet<usize> =
+        recovered_unblocked_project_files(verdicts, files, project_states)
+            .into_iter()
+            .collect();
+    let post = DayView::parse(post_day, day_relative, index);
+    for (file_index, file) in files.iter().enumerate() {
+        for (task_index, task) in file.tasks.iter().enumerate() {
+            let raw = raw_task_line(&file.contents, task.line_index);
+            let verdict = verdicts.iter().find(|verdict| {
+                verdict.file == file_index && verdict.task == task_index
+            });
+            let state = states.get(&(file_index, task_index));
+            let open_ids = blocking_open_dependency_ids(
+                file,
+                task,
+                state
+                    .map(|state| state.open_dependency_ids.as_slice())
+                    .unwrap_or(&[]),
+            );
+            let remaining_open_prerequisites = open_ids
+                .iter()
+                .filter_map(|dependency_id| {
+                    files.iter().find_map(|note| {
+                        note.tasks
+                            .iter()
+                            .find(|candidate| {
+                                candidate.task_id.as_deref()
+                                    == Some(dependency_id.as_str())
+                                    && candidate.status_recognized
+                                    && candidate.status_type.is_open()
+                            })
+                            .map(|dependency| RelationTarget {
+                                note_path: note.relative_path.clone(),
+                                block_id: dependency
+                                    .block_id
+                                    .clone()
+                                    .or_else(|| dependency.task_id.clone())
+                                    .unwrap_or_default(),
+                                text: dependency.description.clone(),
+                            })
+                    })
+                })
+                .collect::<Vec<_>>();
+            let live = task.block_id.as_ref().is_some_and(|id| {
+                post.live
+                    .contains_key(&(file.relative_path.clone(), id.clone()))
+            });
+            let still_blocked = verdict.is_some_and(|verdict| {
+                matches!(
+                    verdict.kind,
+                    VerdictKind::StillBlockedWaitsOn
+                        | VerdictKind::StillBlockedScheduled
+                        | VerdictKind::StillBlockedProject
+                )
+            });
+            let recovery_planned = verdict.is_some_and(|verdict| {
+                !still_blocked
+                    && (matches!(verdict.kind, VerdictKind::Recover(_))
+                        || verdict.kind == VerdictKind::Offer)
+            });
+            let effective_status = if task.status == '?' && recovery_planned {
+                Some(if live { '*' } else { ' ' })
+            } else {
+                Some(task.status)
+            };
+            let hide_removed = verdict.is_some_and(|verdict| {
+                verdict.pull_in && pull_in_hide_removed(&raw)
+            });
+            let project_tag_removed = recovered_project_files
+                .contains(&file_index)
+                || verdict.is_some_and(|verdict| {
+                    verdict.pull_in
+                        && task
+                            .block_id
+                            .as_deref()
+                            .is_some_and(|id| is_project_task_id(Some(id)))
+                        && has_prj_is_blocked_tag(&raw)
+                });
+            let effective_project_block =
+                if recovered_project_files.contains(&file_index)
+                    || project_tag_removed
+                {
+                    None
+                } else {
+                    project_still_blocks(file_index, task, project_states)
+                        .or_else(|| {
+                            has_prj_is_blocked_tag(&raw)
+                                .then(|| file.relative_path.clone())
+                        })
+                };
+            let dependency_data_complete = snapshot_complete && state.is_some();
+            let recovered_prerequisites = dependency_data_complete
+                && remaining_open_prerequisites.is_empty()
+                && task.status == '?'
+                && effective_status != Some('?');
+            let status = effective_status.unwrap_or(task.status);
+            let effective_lane = Some(if status == '*' {
+                "Next"
+            } else if status == ' ' {
+                "Ready"
+            } else if status == '?' || status == '/' {
+                "Blocked"
+            } else {
+                "Other"
+            });
+            let project_path = effective_project_block.clone();
+            let key = relation_identity_key(
+                &file.relative_path,
+                task.block_id.as_deref().unwrap_or(""),
+                Some(task.line_index),
+            );
+            map.insert(
+                key,
+                SourceRecovery {
+                    recovered_prerequisites,
+                    recovered_project: project_path.is_none(),
+                    project_path,
+                    open_prerequisite_count: Some(
+                        remaining_open_prerequisites.len(),
+                    ),
+                    effective_status,
+                    effective_lane,
+                    remaining_open_prerequisites: Some(
+                        remaining_open_prerequisites,
+                    ),
+                    dependency_data_complete,
+                    effective_project_block,
+                    projection_available: true,
+                    hide_removed,
+                    project_tag_removed,
+                },
+            );
+        }
     }
     map
 }
@@ -920,6 +1034,214 @@ fn find_verdict_for_relation_source(
     )
 }
 
+struct RelationOfferPlacement {
+    target: SuccessorTarget,
+    destination: OfferDestination,
+}
+
+fn slot_for_day_link(
+    day: &DayView,
+    path: &Path,
+    block_id: &str,
+) -> Option<SlotAnchor> {
+    let (entry_index, _, bullet_end, indent) =
+        day.live.get(&(path.to_path_buf(), block_id.to_string()))?;
+    Some(SlotAnchor::at(*entry_index, *bullet_end, indent))
+}
+
+fn explicit_relation_slot(
+    slot: &super::relation_successors::RelationSlotAnchor,
+    day_text: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
+) -> Option<(SlotAnchor, String)> {
+    if slot.note_path != day_relative {
+        return None;
+    }
+    let day = DayView::parse(day_text, day_relative, index);
+    let lines = logical_lines(day_text);
+    let section_end = pomodoros_section_range(&lines)
+        .map(|range| range.end.min(lines.len()))
+        .unwrap_or(lines.len());
+    let entry = day.entries.iter().enumerate().rev().find(|(_, entry)| {
+        if !entry.open || slot.line < entry.line {
+            return false;
+        }
+        let block_end = capture_pomodoros::pomodoro_block_range(
+            &lines,
+            entry.line.min(section_end),
+            section_end,
+        )
+        .end;
+        slot.line <= block_end
+    })?;
+    let (entry_index, entry) = entry;
+    let indent = lines
+        .get(slot.line)
+        .map(|line| {
+            let prefix = &line[..line.len() - line.trim_start().len()];
+            if prefix.is_empty() {
+                "\t".to_string()
+            } else {
+                prefix.to_string()
+            }
+        })
+        .unwrap_or_else(|| "\t".to_string());
+    Some((
+        SlotAnchor::at(entry_index, slot.line, &indent),
+        entry.name.clone(),
+    ))
+}
+
+fn relation_offer_placement(
+    group: &RelationOfferGroup,
+    completed: &[CompletedTask],
+    baseline_day: &DayView,
+    placement_day_text: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
+    closing: Option<&ClosingContext>,
+    implicit: Option<&ImplicitDest>,
+) -> Option<RelationOfferPlacement> {
+    let closing_target = closing.map(|closing| {
+        resolve_closing_target(placement_day_text, day_relative, index, closing)
+    });
+    if let Some(slot) = group.slot.as_ref() {
+        if let Some((anchor, name)) = explicit_relation_slot(
+            slot,
+            placement_day_text,
+            day_relative,
+            index,
+        ) {
+            return Some(RelationOfferPlacement {
+                target: slot_target(&anchor),
+                destination: offer_destination(
+                    day_relative,
+                    name,
+                    EntryRole::Slot,
+                    false,
+                ),
+            });
+        }
+        // A supplied slot that no longer names a live open-entry region
+        // falls back to the ordinary implicit destination.
+        return implicit.map(|implicit| RelationOfferPlacement {
+            target: implicit.target.clone(),
+            destination: offer_destination(
+                day_relative,
+                implicit.entry_name.clone(),
+                EntryRole::Implicit,
+                true,
+            ),
+        });
+    }
+
+    if group.event == super::relation_successors::RelationEventKind::Done {
+        if let Some(anchor) = slot_for_day_link(
+            baseline_day,
+            &group.target.note_path,
+            &group.target.block_id,
+        ) {
+            return Some(RelationOfferPlacement {
+                target: slot_target(&anchor),
+                destination: offer_destination(
+                    day_relative,
+                    slot_entry_name(baseline_day, &anchor),
+                    EntryRole::Slot,
+                    false,
+                ),
+            });
+        }
+        if let Some(resolved) = closing_target.as_ref() {
+            return Some(RelationOfferPlacement {
+                target: resolved.target.clone(),
+                destination: offer_destination(
+                    day_relative,
+                    resolved.name.clone(),
+                    if resolved.entry_created {
+                        EntryRole::Created
+                    } else {
+                        EntryRole::Closing
+                    },
+                    false,
+                ),
+            });
+        }
+        let target = completed.iter().find(|task| {
+            task.relative_path == group.target.note_path
+                && task.block_id == group.target.block_id
+        });
+        if target.is_some_and(|task| !task.is_root)
+            && let Some(root) = completed.iter().find(|task| task.is_root)
+            && let Some(anchor) = slot_for_day_link(
+                baseline_day,
+                &root.relative_path,
+                &root.block_id,
+            )
+        {
+            return Some(RelationOfferPlacement {
+                target: slot_target(&anchor),
+                destination: offer_destination(
+                    day_relative,
+                    slot_entry_name(baseline_day, &anchor),
+                    EntryRole::Slot,
+                    false,
+                ),
+            });
+        }
+    } else if let Some(resolved) = closing_target.as_ref() {
+        return Some(RelationOfferPlacement {
+            target: resolved.target.clone(),
+            destination: offer_destination(
+                day_relative,
+                resolved.name.clone(),
+                if resolved.entry_created {
+                    EntryRole::Created
+                } else {
+                    EntryRole::Closing
+                },
+                false,
+            ),
+        });
+    }
+
+    implicit.map(|implicit| RelationOfferPlacement {
+        target: implicit.target.clone(),
+        destination: offer_destination(
+            day_relative,
+            implicit.entry_name.clone(),
+            EntryRole::Implicit,
+            true,
+        ),
+    })
+}
+
+fn attach_relation_offer(
+    verdict: &mut DependentVerdict,
+    files: &[FileScan],
+    placement: RelationOfferPlacement,
+) {
+    let task = &files[verdict.file].tasks[verdict.task];
+    let previous = verdict.offer.as_ref();
+    let group = OfferGroup::Relation;
+    let mut offer = make_offer(
+        group,
+        None,
+        placement.destination,
+        placement.target,
+        block_id_needed(task),
+    );
+    if let Some(previous) = previous {
+        offer.key = previous.key.clone();
+        offer.selected = previous.selected;
+        offer.n = previous.n;
+        offer.placement_refusal = previous.placement_refusal;
+        offer.placement_routed = previous.placement_routed;
+        offer.order_key = previous.order_key.clone();
+    }
+    verdict.offer = Some(offer);
+}
+
 /// Merge relation offers into the legacy verdicts after recovery.
 ///
 /// Precedence is `hand_off > relation > project > project_finished >
@@ -944,14 +1266,19 @@ fn integrate_relation_offers(
     index: &NoteIndex,
     today: NaiveDate,
     tasks_settings: &TasksSettings,
-    anchors: &[Option<SlotAnchor>],
+    states: &BTreeMap<
+        (usize, usize),
+        super::super::task_status_hooks::TaskDependencyState,
+    >,
+    project_states: &super::project_close::ProjectCloseStates,
     day: &DayView,
-    closing: bool,
+    closing: Option<&ClosingContext>,
     implicit: Option<&ImplicitDest>,
 ) -> (
     Vec<super::relation_successors::RelationHeldRow>,
     Vec<RelationOfferGroup>,
     Option<RelationCheck>,
+    usize,
 ) {
     if relation_input.labels.is_empty()
         || !link_unblocked
@@ -960,10 +1287,10 @@ fn integrate_relation_offers(
             .iter()
             .all(|event| event.target.block_id.is_empty())
     {
-        return (Vec::new(), Vec::new(), None);
+        return (Vec::new(), Vec::new(), None, 0);
     }
     if !relation_input.relation_snapshot_complete {
-        return (Vec::new(), Vec::new(), Some(RelationCheck::Unavailable));
+        return (Vec::new(), Vec::new(), Some(RelationCheck::Unavailable), 0);
     }
     let mut source_texts = BTreeMap::new();
     for file in files {
@@ -982,10 +1309,20 @@ fn integrate_relation_offers(
         .filter(|path| path.components().any(|part| part.as_os_str() == "done"))
         .cloned()
         .collect();
-    let recovered = relation_recovered_map(verdicts, files);
     let day_after = post_day.or(pre_day);
+    let recovered = effective_relation_state_map(
+        verdicts,
+        files,
+        states,
+        project_states,
+        snapshot_complete,
+        day_after.unwrap_or_default(),
+        day_relative,
+        index,
+    );
     let mut reader = MapTargetReader::new(
         source_texts.clone(),
+        known_paths.iter().cloned().collect(),
         relation_input.unavailable_targets.clone(),
     );
     let classify_input = RelationClassifyInput {
@@ -1007,20 +1344,13 @@ fn integrate_relation_offers(
     };
     let result = classify_relation_successors(&classify_input, &mut reader);
     let check = result.check;
+    let target_reads = result.target_reads;
     if check.is_none() {
-        return (Vec::new(), Vec::new(), None);
+        return (Vec::new(), Vec::new(), None, target_reads);
     }
     if check == Some(RelationCheck::Unavailable) {
-        return (Vec::new(), Vec::new(), check);
+        return (Vec::new(), Vec::new(), check, target_reads);
     }
-    let completed_keys: BTreeMap<(PathBuf, String), usize> = completed
-        .iter()
-        .enumerate()
-        .filter(|(_, task)| !task.block_id.is_empty())
-        .map(|(index, task)| {
-            ((task.relative_path.clone(), task.block_id.clone()), index)
-        })
-        .collect();
     for (group_order, group) in result.groups.iter().enumerate() {
         let label_key = group.label_key.clone();
         for row in &group.rows {
@@ -1030,6 +1360,7 @@ fn integrate_relation_offers(
                 event: group.event,
                 after: row.triggering_targets.clone(),
                 group_order,
+                slot: group.slot.clone(),
             };
             if let Some(position) = find_verdict_for_relation_source(
                 verdicts,
@@ -1049,9 +1380,21 @@ fn integrate_relation_offers(
                         | OfferGroup::KeepMoving,
                     ) => {
                         verdicts[position].relation = Some(info);
-                        if let Some(offer) = verdicts[position].offer.as_mut() {
-                            offer.group = OfferGroup::Relation;
-                            offer.project = None;
+                        if let Some(placement) = relation_offer_placement(
+                            group,
+                            completed,
+                            day,
+                            post_day.or(pre_day).unwrap_or_default(),
+                            day_relative,
+                            index,
+                            closing,
+                            implicit,
+                        ) {
+                            attach_relation_offer(
+                                &mut verdicts[position],
+                                files,
+                                placement,
+                            );
                         }
                     }
                     Some(OfferGroup::Relation) => {
@@ -1066,45 +1409,26 @@ fn integrate_relation_offers(
                     }
                     None => {
                         verdicts[position].relation = Some(info);
-                        let mut anchor = None;
-                        for target in &row.triggering_targets {
-                            if let Some(completed_index) =
-                                completed_keys.get(&(
-                                    target.note_path.clone(),
-                                    target.block_id.clone(),
-                                ))
-                                && let Some(candidate) = anchors
-                                    .get(*completed_index)
-                                    .and_then(|anchor| anchor.clone())
-                            {
-                                let better = anchor.as_ref().is_none_or(
-                                    |current: &SlotAnchor| {
-                                        (
-                                            candidate.entry_index,
-                                            candidate.bullet_end,
-                                        ) < (
-                                            current.entry_index,
-                                            current.bullet_end,
-                                        )
-                                    },
-                                );
-                                if better {
-                                    anchor = Some(candidate);
-                                }
-                            }
-                        }
-                        verdicts[position].anchor = anchor;
-                        verdicts[position].kind = VerdictKind::Offer;
-                        attach_offer(
-                            &mut verdicts[position],
-                            files,
+                        if let Some(placement) = relation_offer_placement(
+                            group,
+                            completed,
                             day,
+                            post_day.or(pre_day).unwrap_or_default(),
                             day_relative,
+                            index,
                             closing,
                             implicit,
-                            OfferGroup::Relation,
-                            None,
-                        );
+                        ) {
+                            verdicts[position].kind = VerdictKind::Offer;
+                            attach_relation_offer(
+                                &mut verdicts[position],
+                                files,
+                                placement,
+                            );
+                        } else {
+                            verdicts[position].kind =
+                                VerdictKind::Recover("no_destination");
+                        }
                     }
                 }
                 continue;
@@ -1118,29 +1442,11 @@ fn integrate_relation_offers(
             else {
                 continue;
             };
-            let mut anchor = None;
-            for target in &row.triggering_targets {
-                if let Some(completed_index) = completed_keys
-                    .get(&(target.note_path.clone(), target.block_id.clone()))
-                    && let Some(candidate) = anchors
-                        .get(*completed_index)
-                        .and_then(|anchor| anchor.clone())
-                {
-                    let better =
-                        anchor.as_ref().is_none_or(|current: &SlotAnchor| {
-                            (candidate.entry_index, candidate.bullet_end)
-                                < (current.entry_index, current.bullet_end)
-                        });
-                    if better {
-                        anchor = Some(candidate);
-                    }
-                }
-            }
             let mut verdict = DependentVerdict {
                 file: file_index,
                 task: task_index,
                 preds: Vec::new(),
-                anchor,
+                anchor: None,
                 kind: VerdictKind::Offer,
                 open_count: 0,
                 pull_in: false,
@@ -1150,16 +1456,17 @@ fn integrate_relation_offers(
                 relation: Some(info),
                 relation_only: true,
             };
-            if attach_offer(
-                &mut verdict,
-                files,
+            if let Some(placement) = relation_offer_placement(
+                group,
+                completed,
                 day,
+                post_day.or(pre_day).unwrap_or_default(),
                 day_relative,
+                index,
                 closing,
                 implicit,
-                OfferGroup::Relation,
-                None,
             ) {
+                attach_relation_offer(&mut verdict, files, placement);
                 verdicts.push(verdict);
             }
         }
@@ -1206,7 +1513,7 @@ fn integrate_relation_offers(
             groups.push(RelationOfferGroup { rows, ..group });
         }
     }
-    (result.held, groups, check)
+    (result.held, groups, check, target_reads)
 }
 
 /// Build a read-only project-context view for a just-cancelled `^prj`.
@@ -1744,9 +2051,9 @@ fn plan_successors_inner(
             .collect();
     }
 
-    let (relation_held, relation_groups, relation_check) =
+    let (relation_held, relation_groups, relation_check, relation_target_reads) =
         if mode.is_cancel_recovery() {
-            (Vec::new(), Vec::new(), None)
+            (Vec::new(), Vec::new(), None, 0)
         } else if let Some(relation_input) = input.relation.as_ref() {
             integrate_relation_offers(
                 &mut verdicts,
@@ -1762,14 +2069,35 @@ fn plan_successors_inner(
                 input.index,
                 input.today,
                 input.tasks_settings,
-                &anchors,
+                &states,
+                &project_states,
                 &day,
-                input.closing.is_some(),
+                input.closing.as_ref(),
                 implicit.as_ref(),
             )
         } else {
-            (Vec::new(), Vec::new(), None)
+            (Vec::new(), Vec::new(), None, 0)
         };
+
+    project_folds.retain(|fold| {
+        fold.hidden > 0
+            || fold.already_planned > 0
+            || fold.sub_projects > 0
+            || verdicts.iter().any(|verdict| {
+                verdict.offer.as_ref().is_some_and(|offer| {
+                    offer.group == OfferGroup::Project
+                        && offer.project.as_ref() == Some(&fold.project)
+                })
+            })
+    });
+    keep_moving_folds.retain(|fold| {
+        verdicts.iter().any(|verdict| {
+            verdict.offer.as_ref().is_some_and(|offer| {
+                offer.group == OfferGroup::KeepMoving
+                    && offer.project.as_ref() == Some(&fold.project)
+            })
+        })
+    });
 
     // Lazy routing: skip catalog/home setup when no verdict has an
     // offer. Nontriggering closes pay no routing cost; triggering closes
@@ -1837,6 +2165,7 @@ fn plan_successors_inner(
         relation_held,
         relation_groups,
         relation_check,
+        relation_target_reads,
     )
 }
 
@@ -2835,6 +3164,7 @@ fn apply_verdicts(
     relation_held: Vec<super::relation_successors::RelationHeldRow>,
     relation_groups: Vec<super::relation_successors::RelationOfferGroup>,
     relation_check: Option<super::relation_successors::RelationCheck>,
+    relation_target_reads: usize,
 ) -> SuccessorPlan {
     let mut plan = SuccessorPlan {
         ran_lookup: true,
@@ -2843,6 +3173,7 @@ fn apply_verdicts(
         relation_held,
         relation_groups,
         relation_check,
+        relation_target_reads,
         ..SuccessorPlan::default()
     };
     // Mint successor block IDs in placement order so the per-note used
@@ -2926,6 +3257,7 @@ fn apply_verdicts(
         for verdict in verdicts.iter_mut() {
             if let Some(offer) = verdict.offer.as_mut()
                 && !offer.placement_routed
+                && offer.group != OfferGroup::Relation
             {
                 offer.destination.entry_name = resolved.name.clone();
                 offer.destination.entry_role = role;

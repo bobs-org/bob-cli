@@ -51,6 +51,25 @@ pub(crate) struct SourceRecovery {
     pub recovered_project: bool,
     pub project_path: Option<PathBuf>,
     pub open_prerequisite_count: Option<usize>,
+    /// Effective post-gesture status when the planner has projected the
+    /// source through its ordinary recovery writes.
+    pub effective_status: Option<char>,
+    /// Effective lane (`Next`, `Ready`, `Blocked`, or `Other`).
+    pub effective_lane: Option<&'static str>,
+    /// Real remaining prerequisites from the staged dependency analysis.
+    /// `None` preserves the legacy classifier-only adapter behavior.
+    pub remaining_open_prerequisites: Option<Vec<RelationTarget>>,
+    /// True when dependency analysis was complete for this source.
+    pub dependency_data_complete: bool,
+    /// Block inherited from the source's project after planned recovery.
+    pub effective_project_block: Option<PathBuf>,
+    /// Distinguishes a complete planner projection from the default
+    /// adapter value used by pure classifier vectors.
+    pub projection_available: bool,
+    /// The planned gesture removes this row's `#hide` marker.
+    pub hide_removed: bool,
+    /// The planned gesture removes this row's `#prj_is_blocked` marker.
+    pub project_tag_removed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +94,7 @@ pub(crate) struct RelationOfferGroup {
     pub label: String,
     pub label_key: String,
     pub event: RelationEventKind,
+    pub slot: Option<super::RelationSlotAnchor>,
     pub rows: Vec<RelationOfferRow>,
     pub title: String,
     pub why: String,
@@ -589,18 +609,7 @@ fn classify_source<R: TargetNoteReader>(
         source.task.block_id.as_deref(),
         source.task.line_index,
     );
-    let recovery = input.recovered.get(&key).cloned().unwrap_or_else(|| {
-        // Legacy callers keyed missing-ID tasks by bare path; fall back
-        // so older overlays still apply.
-        input
-            .recovered
-            .get(&identity_key(
-                &source.path,
-                source.task.block_id.as_deref().unwrap_or(""),
-            ))
-            .cloned()
-            .unwrap_or_default()
-    });
+    let recovery = input.recovered.get(&key).cloned().unwrap_or_default();
 
     if is_archive_path(&source.path)
         || input
@@ -629,13 +638,14 @@ fn classify_source<R: TargetNoteReader>(
     if parked_here || baseline_live {
         return SourceClass::Held(RelationHeldReason::AlreadyPlanned);
     }
-    if source.task.status == '/' {
+    let status = recovery.effective_status.unwrap_or(source.task.status);
+    if status == '/' {
         return SourceClass::Held(RelationHeldReason::AlreadyStarted);
     }
     if let Some(reason) = blocked_reason(input, source, &recovery) {
         return SourceClass::Held(reason);
     }
-    if has_hide_tag(&source.raw) {
+    if has_hide_tag(&source.raw) && !recovery.hide_removed {
         return SourceClass::Held(RelationHeldReason::Hidden);
     }
     if let Some(waiting) =
@@ -643,12 +653,14 @@ fn classify_source<R: TargetNoteReader>(
     {
         return SourceClass::Held(RelationHeldReason::WaitsFor(waiting));
     }
-    match source.task.status {
-        '*' => SourceClass::Offer { lane: "Next" },
-        ' ' => SourceClass::Offer { lane: "Ready" },
-        '?' if recovery.recovered_prerequisites => {
-            SourceClass::Offer { lane: "Ready" }
-        }
+    match recovery.effective_lane.unwrap_or(match status {
+        '*' => "Next",
+        ' ' => "Ready",
+        '?' | '/' => "Blocked",
+        _ => "Other",
+    }) {
+        "Next" => SourceClass::Offer { lane: "Next" },
+        "Ready" => SourceClass::Offer { lane: "Ready" },
         _ => SourceClass::Skip,
     }
 }
@@ -658,40 +670,50 @@ fn blocked_reason(
     source: &SourceHit,
     recovery: &SourceRecovery,
 ) -> Option<RelationHeldReason> {
-    let mut waits_on = Vec::new();
+    let waits_on = recovery
+        .remaining_open_prerequisites
+        .clone()
+        .unwrap_or_else(|| source_open_prerequisites(input, source));
     let mut scheduled = None;
     let mut project = recovery.project_path.clone();
     let mut blocked = false;
 
-    let prereq_count = recovery
-        .open_prerequisite_count
-        .unwrap_or(source.task.depends_on.len());
+    let projected_waits = recovery.remaining_open_prerequisites.as_ref();
+    let prereq_count = projected_waits
+        .map(Vec::len)
+        .or(recovery.open_prerequisite_count)
+        .unwrap_or(waits_on.len());
     let deps_unknown = !source.task.depends_on.is_empty()
-        && !input.dependency_snapshot_complete
+        && (!input.dependency_snapshot_complete
+            || recovery.projection_available
+                && !recovery.dependency_data_complete)
         && !recovery.recovered_prerequisites;
-    let open_prereqs = !recovery.recovered_prerequisites
-        && (source.task.status == '?' || prereq_count > 0 || deps_unknown);
+    let open_prereqs = !waits_on.is_empty()
+        || !recovery.projection_available
+            && !recovery.recovered_prerequisites
+            && (source.task.status == '?' || prereq_count > 0 || deps_unknown)
+        || deps_unknown;
     if open_prereqs {
         blocked = true;
-        let count = prereq_count.max(1);
-        waits_on = (0..count)
-            .map(|_| RelationTarget {
-                note_path: PathBuf::new(),
-                block_id: String::new(),
-                text: String::new(),
-            })
-            .collect();
     }
     if source.task.scheduled.is_some_and(|date| date > input.today) {
         blocked = true;
         scheduled = source.task.scheduled.map(|date| date.to_string());
     }
-    let project_blocked =
-        has_prj_is_blocked_tag(&source.raw) && !recovery.recovered_project;
-    if project_blocked {
+    let project_blocked = if recovery.projection_available {
+        recovery.effective_project_block.clone()
+    } else if has_prj_is_blocked_tag(&source.raw)
+        && !recovery.recovered_project
+        && !recovery.project_tag_removed
+    {
+        Some(source.path.clone())
+    } else {
+        None
+    };
+    if project_blocked.is_some() {
         blocked = true;
         if project.is_none() {
-            project = Some(source.path.clone());
+            project = project_blocked;
         }
     }
     blocked.then_some(RelationHeldReason::Blocked {
@@ -699,6 +721,36 @@ fn blocked_reason(
         scheduled,
         project,
     })
+}
+
+fn source_open_prerequisites(
+    input: &RelationClassifyInput<'_>,
+    source: &SourceHit,
+) -> Vec<RelationTarget> {
+    let mut open = Vec::new();
+    for dependency_id in &source.task.depends_on {
+        let found = input.source_texts.iter().find_map(|(path, text)| {
+            parse_tasks(text, input.tasks_settings)
+                .into_iter()
+                .find(|task| {
+                    task.task_id.as_deref() == Some(dependency_id.as_str())
+                        && task.status_recognized
+                        && task.status_type.is_open()
+                })
+                .map(|task| RelationTarget {
+                    note_path: path.clone(),
+                    block_id: task
+                        .block_id
+                        .or(task.task_id)
+                        .unwrap_or_default(),
+                    text: task.description,
+                })
+        });
+        if let Some(target) = found {
+            open.push(target);
+        }
+    }
+    open
 }
 
 fn waits_for<R: TargetNoteReader>(
@@ -900,6 +952,7 @@ fn build_group(
         label: label.clone(),
         label_key: key.label_key.clone(),
         event: event.event.kind,
+        slot: event.event.slot.clone(),
         rows,
         title: copy::group_title(copy),
         why: copy::event_why(&event.event.target.text, event.event.kind),
