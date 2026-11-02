@@ -1,6 +1,8 @@
 //! Capture relation-successor offers for managed Done (`!` and nested
-//! complete-label commits). JSON shape, picks, refusal, omission, and
-//! dry-run parity (`docs/task-dependencies.md` §12.5; SA4, SA14, SA15).
+//! complete-label commits) and Pomodoro parked/close events (`x*`, `x!`,
+//! embeds, `=x*`). JSON shape, picks, refusal, omission, and dry-run
+//! parity (`docs/task-dependencies.md` §§12.1, 12.5, 12.18; SA1–SA6,
+//! SA11–SA18).
 
 use crate::support::*;
 use std::fs;
@@ -650,6 +652,492 @@ fn disabled_and_edge_free_omit_relation_fields() {
         json["task_complete"].get("relation_check").is_none(),
         "{json}"
     );
+}
+
+// Parks: `x*` and close completions offer relation successors for parked
+// and completed targets (`docs/task-dependencies.md` §12.18).
+
+fn park_agents() -> String {
+    concat!(
+        "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+        "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+        "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+    )
+    .to_string()
+}
+
+fn park_day() -> String {
+    "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BUILD\n  - [[agents#^implement]]\n"
+        .to_string()
+}
+
+fn park_vault(name: &str) -> (TempDir, PathBuf, PathBuf, PathBuf) {
+    let (temp, vault, day_file) = vault(name);
+    write_file(&vault.join("agents.md"), &park_agents());
+    write_file(&day_file, &park_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    (temp, vault, day_file, config)
+}
+
+fn close_json(
+    vault: &Path,
+    day_file: &Path,
+    config: &Path,
+    flags: &[&str],
+    text: &str,
+) -> serde_json::Value {
+    capture_json(vault, day_file, config, flags, text)["pomodoro_close"].clone()
+}
+
+fn assert_close_relation_silent(close: &serde_json::Value) {
+    assert!(close.get("relation_successors").is_none(), "{close}");
+    assert!(close.get("relation_held").is_none(), "{close}");
+    assert!(close.get("relation_check").is_none(), "{close}");
+}
+
+// SA1: `x*` parks T; S is offered with a parked event at the closing
+// anchor, and the park recovers none of T's dependents.
+#[test]
+fn sa1_park_reports_relation_successor_at_closing_anchor() {
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa1-park");
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x*");
+    assert_eq!(close["relation_check"], "checked");
+    assert_eq!(close["unblocked"], serde_json::json!([]));
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!(row["note_path"], "agents.md");
+    assert_eq!(row["block_id"], "evaluate");
+    assert_eq!(row["text"], "Prepare evaluation prompt");
+    assert_eq!(row["trigger"], "relation");
+    assert_eq!(row["offer"]["group"], "relation");
+    assert_eq!(row["offer"]["after"], "agents.md#^implement");
+    assert_eq!(row["offer"]["selected"], false);
+    assert_eq!(row["not_linked"], "not_selected");
+    assert_eq!(row["relation"]["label"], "starts after");
+    assert_eq!(row["relation"]["key"], "starts after");
+    assert_eq!(row["relation"]["event"], "parked");
+    assert_eq!(
+        row["relation"]["after"],
+        serde_json::json!([{
+            "note_path": "agents.md",
+            "block_id": "implement",
+            "text": "Send implementation prompt",
+        }])
+    );
+    // A parked event never uses the struck-bullet slot anchor.
+    assert_ne!(row["offer"]["destination"]["entry_role"], "slot");
+    // The parked task row itself moved to Pending.
+    let tasks = close["tasks"].as_array().expect("tasks");
+    assert!(
+        tasks.iter().any(|task| task["status_symbol"] == "/"
+            && task["block_id"] == "implement"),
+        "{tasks:?}"
+    );
+}
+
+// SA2: T keeps a live link in a later open entry, so the park raises no
+// event and the close stays relation-silent.
+#[test]
+fn sa2_second_live_link_voids_park_event() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa2-live");
+    write_file(&vault.join("agents.md"), &park_agents());
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BUILD\n  - [[agents#^implement]]\n- [ ] () \u{2014} LATER\n  - [[agents#^implement]]\n",
+    );
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x*");
+    assert_close_relation_silent(&close);
+    let tasks = close["tasks"].as_array().expect("tasks");
+    assert!(
+        tasks.iter().any(|task| task["status_symbol"] == "/"
+            && task["block_id"] == "implement"),
+        "{tasks:?}"
+    );
+}
+
+// SA3: T is already `[/]`; parking it again still raises the event.
+#[test]
+fn sa3_already_pending_target_parks_again() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa3-pending");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+            "- [/] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+    );
+    write_file(&day_file, &park_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x*");
+    assert_eq!(close["relation_check"], "checked");
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "parked");
+}
+
+// SA5: closing completions raise done events: `x!1` on a linked task and
+// plain `x` on an embedded task, both at the slot anchor.
+#[test]
+fn sa5_close_completion_reports_done_event() {
+    let (_temp, vault1, day_file, config) = park_vault("bob-cli-sa5-bang");
+    let close = close_json(&vault1, &day_file, &config, &["--dry-run"], "x!1");
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "done");
+    assert_eq!(rows[0]["offer"]["after"], "agents.md#^implement");
+    assert_eq!(rows[0]["offer"]["destination"]["entry_role"], "slot");
+
+    let (_temp, vault, day_file) = vault("bob-cli-sa5-embed");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+            "- [ ] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BUILD\n  - ![[agents#^implement]]\n",
+    );
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x");
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "done");
+}
+
+// SA6: drops, carries, and defers raise no event.
+#[test]
+fn sa6_drop_carry_and_defer_stay_silent() {
+    for text in ["x~1", "x"] {
+        let (_temp, vault, day_file, config) =
+            park_vault(&format!("bob-cli-sa6-{text}"));
+        let close =
+            close_json(&vault, &day_file, &config, &["--dry-run"], text);
+        assert_close_relation_silent(&close);
+    }
+}
+
+// SA11: S also starts after an unreleased T2, so it is held `waits_for`.
+#[test]
+fn sa11_unreleased_second_target_holds_source() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa11-waits");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]] • starts after [[agents#^deploy]]\n",
+            "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+            "- [ ] #task Deploy release [id:: deploy] ^deploy\n",
+        ),
+    );
+    write_file(&day_file, &park_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x*");
+    assert_eq!(close["relation_check"], "checked");
+    assert!(close.get("relation_successors").is_none(), "{close}");
+    let held = close["relation_held"].as_array().expect("relation_held");
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0]["block_id"], "evaluate");
+    assert_eq!(held[0]["reason"], "waits_for");
+    assert_eq!(held[0]["relation"]["event"], "parked");
+    let waits_for = held[0]["waits_for"].as_array().expect("waits_for");
+    assert_eq!(waits_for.len(), 1, "{waits_for:?}");
+    assert_eq!(waits_for[0]["block_id"], "deploy");
+}
+
+// SA12: one `x*` parks T and T2; S starts after both, so it appears once
+// under the earlier target group naming both.
+#[test]
+fn sa12_two_parks_share_one_row() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa12-two");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]] • starts after [[agents#^deploy]]\n",
+            "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+            "- [*] #task Deploy release [id:: deploy] ^deploy\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BUILD\n  - [[agents#^implement]]\n  - [[agents#^deploy]]\n",
+    );
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x*");
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    let after = rows[0]["relation"]["after"].as_array().expect("after");
+    assert_eq!(after.len(), 2, "{after:?}");
+    assert_eq!(after[0]["block_id"], "implement");
+    assert_eq!(after[1]["block_id"], "deploy");
+}
+
+// SA13: S's other target does not resolve, so it is ignored and S offers.
+#[test]
+fn sa13_unresolved_second_target_ignored() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa13-missing");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]] • starts after [[missing#^unknown]]\n",
+            "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+    );
+    write_file(&day_file, &park_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x*");
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "parked");
+}
+
+// A park never recovers T's dependents: S keeps its dependency hold and
+// stays out of `unblocked`.
+#[test]
+fn sa14park_parked_target_keeps_dependent_blocked() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa14park");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [?] #task Prepare evaluation prompt [dependsOn:: implement] [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+            "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+    );
+    write_file(&day_file, &park_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let close = close_json(&vault, &day_file, &config, &["--dry-run"], "x*");
+    assert_eq!(close["unblocked"], serde_json::json!([]));
+    assert!(close.get("relation_successors").is_none(), "{close}");
+    let held = close["relation_held"].as_array().expect("relation_held");
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0]["block_id"], "evaluate");
+    assert_eq!(held[0]["reason"], "blocked");
+}
+
+// SA16: skipping S at the park is stateless; completing T later offers S
+// again with a done event.
+#[test]
+fn sa16_skipped_park_offers_again_on_done() {
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa16-skip");
+    let before = fs::read_to_string(vault.join("agents.md")).expect("agents");
+    let first = close_json(&vault, &day_file, &config, &[], "x*");
+    let rows = first["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["offer"]["selected"], false);
+    let after_park =
+        fs::read_to_string(vault.join("agents.md")).expect("agents");
+    let evaluate_before = before
+        .lines()
+        .find(|line| line.contains("Prepare evaluation prompt"))
+        .expect("evaluate line");
+    let evaluate_after = after_park
+        .lines()
+        .find(|line| line.contains("Prepare evaluation prompt"))
+        .expect("evaluate line");
+    assert_eq!(evaluate_before, evaluate_after);
+    let second =
+        capture_json(&vault, &day_file, &config, &[], "!agents:implement");
+    let rows = second["task_complete"]["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "done");
+}
+
+// SA17: picking S at the park links it; completing T later holds S as
+// already planned.
+#[test]
+fn sa17_picked_park_holds_already_planned_on_done() {
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa17-pick");
+    let first = close_json(&vault, &day_file, &config, &["-p", "all"], "x*");
+    let rows = first["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["offer"]["selected"], true);
+    let note = fs::read_to_string(vault.join("agents.md")).expect("agents");
+    assert!(
+        note.contains("- [*] #task Prepare evaluation prompt"),
+        "{note}"
+    );
+    assert!(note.contains("[fresh:: 2026-11-02]"), "{note}");
+    let day = fs::read_to_string(&day_file).expect("day");
+    assert!(day.contains("[[agents#^evaluate]]"), "{day}");
+    let second =
+        capture_json(&vault, &day_file, &config, &[], "!agents:implement");
+    assert!(
+        second["task_complete"].get("relation_successors").is_none(),
+        "{}",
+        second["task_complete"]
+    );
+    let held = second["task_complete"]["relation_held"]
+        .as_array()
+        .expect("relation_held");
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0]["block_id"], "evaluate");
+    assert_eq!(held[0]["reason"], "already_planned");
+}
+
+// SA18: `x*!2` completes A (with dependents) and parks T in one picker:
+// Hand-offs first, then the parked relation group.
+#[test]
+fn sa18_mixed_done_and_park_share_one_picker() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa18-mixed");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+            "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+            "- [ ] #task Ship schema change [id:: schema] ^schema\n",
+            "- [?] #task Announce schema change [dependsOn:: schema] [id:: schema-change] ^schema-change\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BUILD\n  - [[agents#^implement]]\n  - [[agents#^schema]]\n",
+    );
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let json = capture_json(&vault, &day_file, &config, &["--dry-run"], "x*!2");
+    let close = &json["pomodoro_close"];
+    let unblocked = close["unblocked"].as_array().expect("unblocked");
+    assert_eq!(unblocked.len(), 1, "{unblocked:?}");
+    assert_eq!(unblocked[0]["block_id"], "schema-change");
+    assert_eq!(unblocked[0]["offer"]["group"], "hand_off");
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "parked");
+    // One shared number space: the relation row follows the hand-off.
+    let hand_off_n = unblocked[0]["offer"]["n"].as_u64().expect("n");
+    let relation_n = rows[0]["offer"]["n"].as_u64().expect("n");
+    assert!(relation_n > hand_off_n, "{hand_off_n} {relation_n}");
+    assert_eq!(json["pull_in"]["offer_count"], 2);
+}
+
+// A parked pick writes Next, freshness, and the continuation link; dry and
+// real JSON agree, and unpicked sources stay byte-identical.
+#[test]
+fn park_pick_links_into_continuation_with_parity() {
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa1-dry");
+    let dry = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run", "-p", "all"],
+        "x*",
+    );
+    let before = vault_bytes(&vault);
+    assert_eq!(dry["dry_run"], true);
+    let real = capture_json(&vault, &day_file, &config, &["-p", "all"], "x*");
+    assert_eq!(real["dry_run"], false);
+    assert_ne!(vault_bytes(&vault), before);
+    let mut masked = dry.clone();
+    masked["dry_run"] = serde_json::Value::Bool(false);
+    assert_eq!(
+        masked["pomodoro_close"]["relation_successors"],
+        real["pomodoro_close"]["relation_successors"]
+    );
+    assert_eq!(
+        masked["pull_in"]["picked_count"],
+        real["pull_in"]["picked_count"]
+    );
+    let row = &real["pomodoro_close"]["relation_successors"][0];
+    assert_eq!(row["offer"]["selected"], true);
+    let note = fs::read_to_string(vault.join("agents.md")).expect("agents");
+    assert!(
+        note.contains("- [*] #task Prepare evaluation prompt"),
+        "{note}"
+    );
+    let task_blocks = real["task_blocks"].as_array().expect("task_blocks");
+    assert!(
+        task_blocks
+            .iter()
+            .any(|block| block["block_id"] == "evaluate"
+                && block["roles"] == serde_json::json!(["relation_successor"])),
+        "{task_blocks:?}"
+    );
+
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa1-nopick");
+    let before_source =
+        fs::read_to_string(vault.join("agents.md")).expect("agents");
+    let json = capture_json(&vault, &day_file, &config, &[], "x*");
+    let row = &json["pomodoro_close"]["relation_successors"][0];
+    assert_eq!(row["offer"]["selected"], false);
+    let after = fs::read_to_string(vault.join("agents.md")).expect("agents");
+    let evaluate = after
+        .lines()
+        .find(|line| line.contains("Prepare evaluation prompt"))
+        .expect("evaluate line");
+    assert_eq!(
+        evaluate,
+        before_source
+            .lines()
+            .find(|line| line.contains("Prepare evaluation prompt"))
+            .expect("evaluate line")
+    );
+    assert!(
+        after.contains("- [/] #task Send implementation prompt"),
+        "{after}"
+    );
+}
+
+// The explicit-root `=x*` park form links T first, so the post-link day is
+// the event baseline and the park still offers S.
+#[test]
+fn explicit_root_park_form_offers_relation() {
+    let (_temp, vault, day_file) = vault("bob-cli-sa1-explicit");
+    write_file(&vault.join("agents.md"), &park_agents());
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BUILD\n",
+    );
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "@agents:implement=x*",
+    );
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["relation_check"], "checked");
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "parked");
 }
 
 // `plan.link_unblocked: false` is the other kill switch.

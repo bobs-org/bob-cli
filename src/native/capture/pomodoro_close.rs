@@ -1,5 +1,6 @@
 //! Pomodoro close planning, summaries, and link/task close items.
 use super::*;
+use crate::native::task_complete as engine;
 
 pub(super) struct SnapshotCloseVault {
     pub(super) bob_dir: PathBuf,
@@ -684,13 +685,99 @@ fn name_successor_continuation(
     });
 }
 
+/// Parked relation events for one close plan
+/// (`docs/task-dependencies.md` §12.18): every `parked` task-link outcome
+/// whose target resolves, was live-linked on the baseline day, is Pending
+/// `[/]` in staged text, and keeps no live link on the post-close day.
+/// An unresolved row or a target with another live link raises no event.
+/// A target already `[/]` parks again; a target the close completed
+/// instead is `[x]`, never `[/]`, so the staged-status check excludes it,
+/// and a park never enters C. `baseline` is the §12.2/§12.18 event
+/// baseline: the day text after any explicit link step in the same item,
+/// before the gesture strikes, moves, or drops links.
+fn parked_relation_events(
+    bob_dir: &Path,
+    planner: &mut CaptureBatchPlanner,
+    plan: &capture_pomodoro_close::PomodoroClosePlan,
+    baseline: Option<&str>,
+    post_day: Option<&str>,
+    day_relative: &Path,
+    index: &vault_links::NoteIndex,
+) -> Vec<engine::RelationEvent> {
+    let Some(baseline) = baseline else {
+        return Vec::new();
+    };
+    let Some(post_day) = post_day else {
+        return Vec::new();
+    };
+    let settings = note_tasks::read_settings(bob_dir);
+    let baseline_day = engine::DayView::parse(baseline, day_relative, index);
+    let post_close_day = engine::DayView::parse(post_day, day_relative, index);
+    let mut events = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for link in &plan.summary.task_links {
+        if link.outcome != capture_pomodoro_close::TaskLinkOutcome::Parked {
+            continue;
+        }
+        if link.block_id.is_empty() {
+            continue;
+        }
+        // Resolve through the staged note index, exactly as the day views
+        // do, so baseline and post-close membership compare identical keys.
+        let Some(relative) = index.resolve(Some(day_relative), &link.path_part)
+        else {
+            continue;
+        };
+        let key = (relative.clone(), link.block_id.clone());
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if !baseline_day.live.contains_key(&key) {
+            continue;
+        }
+        let absolute = bob_dir.join(&relative);
+        let Ok(Some(contents)) = planner.current_contents(&absolute) else {
+            continue;
+        };
+        let scan = note_tasks::scan(&contents, &settings);
+        let BlockIdLookup::Found(task) = scan.by_block_id(&link.block_id)
+        else {
+            continue;
+        };
+        if task.status_symbol != '/' {
+            continue;
+        }
+        if post_close_day.live.contains_key(&key) {
+            continue;
+        }
+        let staged_line =
+            contents.lines().nth(task.line_index).unwrap_or_default();
+        events.push(engine::RelationEvent {
+            target: engine::RelationTarget {
+                note_path: relative,
+                block_id: link.block_id.clone(),
+                text: task_complete_display_text(
+                    staged_line,
+                    &settings.global_filter,
+                    Some(&link.block_id),
+                ),
+            },
+            kind: engine::RelationEventKind::Parked,
+            slot: None,
+        });
+    }
+    events
+}
+
 /// Run recovery and successor linking for a Pomodoro close
 /// (`docs/task-dependencies.md` §12): derive C from the close plan's
-/// embedded/subtask rows that moved open → Done, run the shared planner
-/// with closing anchors on the post-close day text, stage the note edits
+/// embedded/subtask rows that moved open → Done, derive parked events from
+/// `parked` task-link outcomes, run the shared planner once for both with
+/// closing anchors on the post-close day text, stage the note edits
 /// and successor bullets, and report the rows for the summary JSON.
-/// `pre_day` is the day text before this item (pre-link for link forms):
-/// the already-planned baseline. A close that completed nothing stages
+/// `pre_day` is the §12.2/§12.18 baseline: the day text before this
+/// gesture's strikes, moves, or retirement, but after any explicit link
+/// step of the same item. A close that completed nothing stages
 /// nothing here, so `x` closes that complete nothing stay
 /// byte-identical.
 #[allow(clippy::too_many_arguments)]
@@ -705,7 +792,6 @@ fn plan_close_successors(
     day_relative: &str,
     task_block_refs: &mut Vec<TaskBlockRef>,
 ) -> Result<CloseSuccessorOutcome, CaptureError> {
-    use crate::native::task_complete as engine;
     let empty = |check: &'static str| CloseSuccessorOutcome {
         unblocked: Vec::new(),
         keep_moving: Vec::new(),
@@ -832,7 +918,22 @@ fn plan_close_successors(
             &tasks_settings,
         ) && dependency_ctx.keep_moving()
             && dependency_ctx.link_unblocked();
-    if !gate.has_candidates && !gate.needs_dependents && !keep_moving_candidate
+    // Cheap relation gate (G0-G3): nonempty successor labels,
+    // link_unblocked, and a Done block ID from C or a parked link block
+    // ID. No catalog walk or note reads before this gate, so a parked-only
+    // close bypasses the old no-successor early return while plain closes
+    // that parked and completed nothing still add no reads (SA36).
+    let relation_candidate = !dependency_ctx.successor_labels().is_empty()
+        && dependency_ctx.link_unblocked()
+        && (predecessors.iter().any(|task| !task.block_id.is_empty())
+            || plan.summary.task_links.iter().any(|link| {
+                link.outcome == capture_pomodoro_close::TaskLinkOutcome::Parked
+                    && !link.block_id.is_empty()
+            }));
+    if !gate.has_candidates
+        && !gate.needs_dependents
+        && !keep_moving_candidate
+        && !relation_candidate
     {
         return Ok(empty("checked"));
     }
@@ -898,6 +999,47 @@ fn plan_close_successors(
         ));
     }
     let index = note_index.as_ref().expect("index built above");
+    // Parked events (§12.18) derive from `parked` task-link outcomes,
+    // independently of C; Done events derive from C inside the engine.
+    // Done plus parked share exactly one engine invocation and selection
+    // space, with the closing continuation as the parked anchor.
+    let mut relation = None;
+    if relation_candidate {
+        let parked_events = parked_relation_events(
+            bob_dir,
+            planner,
+            plan,
+            pre_day.as_deref(),
+            post_day.as_deref(),
+            Path::new(day_relative),
+            index,
+        );
+        let done_events =
+            engine::relation_events_for_planner(&predecessors, &[]);
+        if let Some(read) = super::relation_sources::collect_relation_sources(
+            dependency_ctx,
+            planner,
+            bob_dir,
+            &done_events,
+            &parked_events,
+            &note_texts,
+            &tasks_settings,
+        )? {
+            super::task_complete::overlay_note_texts(
+                &mut note_texts,
+                read.source_notes,
+            );
+            super::task_complete::overlay_note_texts(
+                &mut note_texts,
+                read.target_notes,
+            );
+            super::task_complete::overlay_note_texts(
+                &mut note_texts,
+                read.dependency_notes,
+            );
+            relation = Some(read.input);
+        }
+    }
     let successor_plan = engine::plan_successors(engine::SuccessorInput {
         bob_dir: Some(bob_dir),
         completed: predecessors,
@@ -917,7 +1059,7 @@ fn plan_close_successors(
         link_unblocked: dependency_ctx.link_unblocked(),
         keep_moving: dependency_ctx.keep_moving(),
         snapshot_complete: unblocked_check != "unavailable",
-        relation: None,
+        relation,
         selection: request.selection.clone(),
         index,
     });
@@ -2324,12 +2466,9 @@ pub(super) fn plan_pomodoro_close_link_item(
         )));
     }
     let mut day_contents = planner.read_existing(&day_file)?;
-    // Already-planned baseline for successor linking (§12.2): the day
-    // text before this item, which means pre-link here because the
-    // explicit link step happens first.
-    let pre_day_baseline = Some(day_contents.clone());
     // Surface section, none-running, and multiple-entry diagnostics from
-    // pre-image lines before the link step shifts them.
+    // pre-image lines before the link step shifts them. The successor
+    // baseline is the post-link text, passed at the close call below.
     if let Some(error) = pre_link_running_error(&day_contents, &rel, &link_hint)
     {
         return Err(error);
@@ -2460,7 +2599,9 @@ pub(super) fn plan_pomodoro_close_link_item(
         planner,
         dependency_ctx,
         &plan,
-        pre_day_baseline,
+        // §12.2/§12.18 baseline: post-link (this is `linked_day`),
+        // pre-strike text.
+        Some(day_contents.clone()),
         &day_file,
         &rel,
         &mut task_block_refs,
@@ -2674,12 +2815,9 @@ pub(super) fn plan_pomodoro_close_task_item(
     };
     planner.stage(&target, updated_target)?;
     let day_contents = planner.read_existing(&day_file)?;
-    // Already-planned baseline for successor linking (§12.2): the day
-    // text before this item, which means pre-link here because the
-    // explicit link step happens first.
-    let pre_day_baseline = Some(day_contents.clone());
     // Surface section, none-running, and multiple-entry diagnostics from
-    // pre-image lines before the link step shifts them.
+    // pre-image lines before the link step shifts them. The successor
+    // baseline is the post-link text, passed at the close call below.
     if let Some(error) = pre_link_running_error(&day_contents, &rel, &link_hint)
     {
         return Err(error);
@@ -2780,7 +2918,8 @@ pub(super) fn plan_pomodoro_close_task_item(
         planner,
         dependency_ctx,
         &plan,
-        pre_day_baseline,
+        // §12.2/§12.18 baseline: post-link, pre-strike text.
+        Some(linked_day.clone()),
         &day_file,
         &rel,
         &mut task_block_refs,

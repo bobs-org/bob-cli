@@ -53,5 +53,5 @@ pub(crate) use reset::{
 };
 pub(crate) use selection::{
     join_numbers, number_task_links, number_task_links_in_range,
-    CloseSelection, NumberedTaskLink, TaskLinkMarker,
+    CloseSelection, NumberedTaskLink, TaskLinkMarker, TaskLinkOutcome,
 };

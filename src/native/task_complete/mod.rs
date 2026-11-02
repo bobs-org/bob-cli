@@ -39,9 +39,9 @@ pub(crate) use retirement::{
 };
 pub(crate) use successors::{
     is_inbox_note, live_link_keys, plan_successors, ClosingContext,
-    ClosingContinuation, CompletedTask, OfferGroup, OfferOrderKey, OfferReport,
-    ProjectFold, SuccessorInput, SuccessorPlan, SuccessorSelection,
-    UnblockedRow,
+    ClosingContinuation, CompletedTask, DayView, OfferGroup, OfferOrderKey,
+    OfferReport, ProjectFold, SuccessorInput, SuccessorPlan,
+    SuccessorSelection, UnblockedRow,
 };
 pub(crate) use tree::{
     complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,

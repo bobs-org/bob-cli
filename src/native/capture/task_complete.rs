@@ -1525,7 +1525,7 @@ pub(super) fn surviving_successor_link_reasons(
     links
 }
 
-fn overlay_note_texts(
+pub(super) fn overlay_note_texts(
     dest: &mut Vec<(PathBuf, String)>,
     extra: Vec<(PathBuf, String)>,
 ) {
