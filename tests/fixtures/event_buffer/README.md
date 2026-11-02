@@ -3,7 +3,7 @@
 `vectors.json` is the shared Rust/Obsidian contract for description
 directive lines, the `[buffer::]` vault field, buffered spans, and the
 conflict predicate. The Rust tests consume it in bob-cli
-(`src/native/gcal/model.rs` and `src/native/event_task.rs`). The
+(`src/native/gcal/description.rs` and `src/native/event_task.rs`). The
 Obsidian mirror lives at
 `plugins/bob-ledger-tools/scripts/fixtures/event_buffer/vectors.json`
 in bob-plugins and must copy this file from the bob-cli commit that

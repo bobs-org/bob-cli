@@ -1,15 +1,18 @@
-//! Normalized Google Calendar event data. Provider descriptions and attendee
-//! lists are parsed only long enough to derive Bob's route, RSVP, and
-//! occupied-time buffer.
+//! Normalized Google Calendar event data. Provider descriptions are parsed
+//! into structured lines (and directive verdicts) at event load; attendee
+//! lists yield RSVP. Occupied-time buffers come from those directives.
 
 use chrono::{
     DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, TimeZone,
 };
 use serde::Deserialize;
 
-use crate::native::event_task::{parse_buffer_token, BufferPart, EventBuffer};
+use crate::native::event_task::EventBuffer;
 
-use super::GcalError;
+use super::{
+    description::{parse_description, DescriptionContext, EventDescription},
+    GcalError,
+};
 
 #[allow(dead_code)] // Lifecycle and sync phases consume the preserved fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +38,7 @@ pub(crate) struct GcalEvent {
     pub color_id: Option<String>,
     pub my_answer: MyAnswer,
     pub organizer_or_no_guests: bool,
+    pub description: EventDescription,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,12 +121,14 @@ impl GcalEvent {
             .filter(|summary| !summary.trim().is_empty())
             .unwrap_or_else(|| "(untitled event)".to_string());
         let (title, title_off_clock) = strip_off_clock_tokens(&raw_title);
-        let directives = raw
-            .description
-            .as_deref()
-            .map(description_directives)
-            .unwrap_or_default();
-        let off_clock = title_off_clock || directives.untracked;
+        let description = parse_description(
+            raw.description.as_deref().unwrap_or(""),
+            &DescriptionContext {
+                join_link: join_link.as_deref(),
+                location: raw.location.as_deref(),
+            },
+        );
+        let off_clock = title_off_clock || description.directives.untracked;
         let title_route_hint =
             title.split_whitespace().last().and_then(parse_route_token);
         Ok(Self {
@@ -140,8 +146,8 @@ impl GcalEvent {
             title,
             title_route_hint,
             untracked: off_clock,
-            buffer: directives.buffer,
-            route_hint: directives.route,
+            buffer: description.directives.buffer,
+            route_hint: description.directives.route.clone(),
             off_clock,
             location: raw.location,
             html_link: raw.html_link,
@@ -155,6 +161,7 @@ impl GcalEvent {
             color_id: raw.color_id,
             my_answer,
             organizer_or_no_guests,
+            description,
         })
     }
 }
@@ -253,7 +260,7 @@ fn my_answer(
     (answer, false)
 }
 
-fn parse_route_token(token: &str) -> Option<String> {
+pub(super) fn parse_route_token(token: &str) -> Option<String> {
     let route = token.strip_prefix('@')?;
     if route.is_empty() || route.chars().any(char::is_whitespace) {
         return None;
@@ -261,158 +268,9 @@ fn parse_route_token(token: &str) -> Option<String> {
     Some(route.to_string())
 }
 
-/// Combined route, untracked, and buffer from HTML-normalized directive
-/// lines. The first route and the first value per buffer side win.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct DescriptionDirectives {
-    pub route: Option<String>,
-    pub untracked: bool,
-    pub buffer: EventBuffer,
-}
-
-pub(crate) fn description_directives(
-    description: &str,
-) -> DescriptionDirectives {
-    let normalized = normalize_description_html(description);
-    let mut out = DescriptionDirectives::default();
-    let mut before_set = false;
-    let mut after_set = false;
-    for line in normalized.lines() {
-        let tokens: Vec<&str> = line
-            .split(|ch: char| ch.is_whitespace() || ch == ',')
-            .filter(|token| !token.is_empty())
-            .collect();
-        if tokens.is_empty() || !tokens.iter().copied().all(is_directive_token)
-        {
-            continue;
-        }
-        for token in tokens {
-            if let Some(route) = parse_route_token(token) {
-                if out.route.is_none() {
-                    out.route = Some(route);
-                }
-                continue;
-            }
-            if is_off_clock_token(token) {
-                out.untracked = true;
-                continue;
-            }
-            let Some((part, minutes)) = parse_buffer_token(token) else {
-                continue;
-            };
-            match part {
-                BufferPart::Before if !before_set => {
-                    out.buffer.before_min = minutes;
-                    before_set = true;
-                }
-                BufferPart::After if !after_set => {
-                    out.buffer.after_min = minutes;
-                    after_set = true;
-                }
-                _ => {}
-            }
-        }
-    }
-    out
-}
-
-fn is_directive_token(token: &str) -> bool {
-    parse_route_token(token).is_some()
-        || is_off_clock_token(token)
-        || parse_buffer_token(token).is_some()
-}
-
-/// Turn Google HTML descriptions into plain directive text: `br`/`p`/
-/// `div`/`li` boundaries become line breaks, other tags are stripped,
-/// then common entities are decoded.
-fn normalize_description_html(input: &str) -> String {
-    decode_html_entities(&replace_html_tags(input))
-}
-
-fn replace_html_tags(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut rest = input;
-    while let Some(start) = rest.find('<') {
-        out.push_str(&rest[..start]);
-        rest = &rest[start..];
-        let Some(end) = rest.find('>') else {
-            out.push_str(rest);
-            return out;
-        };
-        let tag = &rest[1..end];
-        rest = &rest[end + 1..];
-        if is_break_tag(tag) {
-            out.push('\n');
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-fn is_break_tag(tag: &str) -> bool {
-    let tag = tag.trim();
-    let tag = tag.strip_prefix('/').unwrap_or(tag);
-    let name = tag
-        .split(|ch: char| ch.is_whitespace() || ch == '/')
-        .next()
-        .unwrap_or("");
-    name.eq_ignore_ascii_case("br")
-        || name.eq_ignore_ascii_case("p")
-        || name.eq_ignore_ascii_case("div")
-        || name.eq_ignore_ascii_case("li")
-}
-
-fn decode_html_entities(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find('&') {
-        out.push_str(&rest[..start]);
-        rest = &rest[start..];
-        let end = rest.find(';').unwrap_or(rest.len());
-        if end == rest.len() {
-            out.push_str(rest);
-            return out;
-        }
-        let entity = &rest[1..end];
-        let decoded = match entity {
-            "nbsp" => Some(' '),
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "#39" | "apos" => Some('\''),
-            _ => decode_numeric_entity(entity),
-        };
-        match decoded {
-            Some(ch) => {
-                out.push(ch);
-                rest = &rest[end + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-fn decode_numeric_entity(entity: &str) -> Option<char> {
-    let digits = if let Some(hex) = entity
-        .strip_prefix("#x")
-        .or_else(|| entity.strip_prefix("#X"))
-    {
-        u32::from_str_radix(hex, 16).ok()?
-    } else {
-        entity.strip_prefix('#')?.parse::<u32>().ok()?
-    };
-    char::from_u32(digits)
-}
-
 /// A standalone off-clock spelling in a Google title (case-insensitive,
 /// whitespace-bounded, trailing `.,;:!?` allowed).
-fn is_off_clock_token(token: &str) -> bool {
+pub(super) fn is_off_clock_token(token: &str) -> bool {
     let stripped = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
     ["#offclock", "#off-clock", "#untracked"]
         .iter()
@@ -522,7 +380,7 @@ struct RawEntryPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     fn event(title: &str, description: Option<&str>) -> GcalEvent {
         let mut value = json!({
@@ -540,41 +398,16 @@ mod tests {
     }
 
     #[test]
-    fn description_directive_vectors() {
-        let vectors: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/event_buffer/vectors.json"
-        ))
-        .expect("shared vectors JSON");
-        for case in vectors["description"].as_array().expect("description") {
-            let parsed =
-                description_directives(case["input"].as_str().expect("input"));
-            assert_eq!(
-                parsed.route.as_deref(),
-                case["route"].as_str(),
-                "{}",
-                case["id"]
-            );
-            assert_eq!(
-                parsed.untracked,
-                case["untracked"].as_bool().expect("untracked"),
-                "{}",
-                case["id"]
-            );
-            let before =
-                u16::try_from(case["before"].as_u64().expect("before"))
-                    .expect("before fits");
-            let after = u16::try_from(case["after"].as_u64().expect("after"))
-                .expect("after fits");
-            assert_eq!(
-                parsed.buffer,
-                EventBuffer {
-                    before_min: before,
-                    after_min: after,
-                },
-                "{}",
-                case["id"]
-            );
-        }
+    fn event_description_debug_redacts_text() {
+        let parsed = event(
+            "Lunch",
+            Some("SECRET_PHRASE https://secret.example/x\n@love"),
+        );
+        let debug = format!("{parsed:?}");
+        assert!(!debug.contains("SECRET_PHRASE"), "{debug}");
+        assert!(!debug.contains("secret.example"), "{debug}");
+        assert_eq!(parsed.route_hint.as_deref(), Some("love"));
+        assert_eq!(parsed.description.lines.len(), 1);
     }
 
     #[test]

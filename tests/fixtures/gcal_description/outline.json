@@ -1,0 +1,470 @@
+{
+  "cases": [
+    {
+      "id": "motivating-plain",
+      "input": "And retainers!\n\n@love #offclock",
+      "directives": {
+        "route": "love",
+        "untracked": true,
+        "before": 0,
+        "after": 0
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "And retainers!" }]
+        }
+      ]
+    },
+    {
+      "id": "html-blob-motivating",
+      "input": "<html-blob>And retainers!<br><br>@love #offclock</html-blob>",
+      "directives": {
+        "route": "love",
+        "untracked": true,
+        "before": 0,
+        "after": 0
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "And retainers!" }]
+        }
+      ]
+    },
+    {
+      "id": "html-agenda-lead-in-and-redirect",
+      "input": "<b>Agenda:</b><ul><li>Intros</li><li>System design – <a href=\"https://www.google.com/url?q=https://docs.google.com/document/d/1AbC/edit&amp;sa=D\">prep doc</a></li></ul>Bring laptop &amp; ID<br>@job -15",
+      "directives": {
+        "route": "job",
+        "untracked": false,
+        "before": 15,
+        "after": 0
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Agenda:", "bold": true }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "Intros" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [
+            { "text": "System design – " },
+            {
+              "text": "prep doc",
+              "url": "https://www.google.com/url?q=https://docs.google.com/document/d/1AbC/edit&sa=D"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Bring laptop & ID" }]
+        }
+      ]
+    },
+    {
+      "id": "html-ordered-list",
+      "input": "<ol><li>Intros</li><li>Next</li></ol>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "1.",
+          "inlines": [{ "text": "Intros" }]
+        },
+        {
+          "depth": 1,
+          "marker": "2.",
+          "inlines": [{ "text": "Next" }]
+        }
+      ]
+    },
+    {
+      "id": "plain-ordered-dot-and-paren",
+      "input": "1. Intros\n2) Next",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "1.",
+          "inlines": [{ "text": "Intros" }]
+        },
+        {
+          "depth": 1,
+          "marker": "2.",
+          "inlines": [{ "text": "Next" }]
+        }
+      ]
+    },
+    {
+      "id": "plain-nested-depth-cap",
+      "input": "- a\n  - b\n    - c",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "a" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "b" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "c" }]
+        }
+      ]
+    },
+    {
+      "id": "html-nested-depth-cap",
+      "input": "<ul><li>a<ul><li>b<ul><li>c</li></ul></li></ul></li></ul>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "a" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "b" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "c" }]
+        }
+      ]
+    },
+    {
+      "id": "heading-lead-in",
+      "input": "<h3>Agenda:</h3><ul><li>Intros</li></ul>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Agenda:", "bold": true }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "Intros" }]
+        }
+      ]
+    },
+    {
+      "id": "lead-in-nests-only-the-following-list",
+      "input": "Agenda:\n- a\n- b\nMore:\n- c",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Agenda:" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "a" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "b" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "More:" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "c" }]
+        }
+      ]
+    },
+    {
+      "id": "table-cells-joined",
+      "input": "<table><tr><td>A</td><td>B</td></tr><tr><th>C</th><td>D</td></tr></table>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "A · B" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "C · D" }]
+        }
+      ]
+    },
+    {
+      "id": "image-keeps-alt",
+      "input": "See <img alt=\"Secret Note\" src=\"https://t.example/p.png\"> here",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "See Secret Note here" }]
+        }
+      ]
+    },
+    {
+      "id": "image-without-alt-dropped",
+      "input": "Hello <img src=\"https://t.example/p.png\"> there",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Hello there" }]
+        }
+      ]
+    },
+    {
+      "id": "script-style-comment-dropped",
+      "input": "Hello<!-- secret --> world<script>alert(1)</script>!<style>.x{}</style>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Hello world!" }]
+        }
+      ]
+    },
+    {
+      "id": "plain-autolink",
+      "input": "See <https://x.test/path>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            { "text": "See " },
+            {
+              "text": "https://x.test/path",
+              "url": "https://x.test/path"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "outlook-style-link",
+      "input": "notes<https://x.test/doc>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "notes",
+              "url": "https://x.test/doc"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "outlook-not-read-as-tag",
+      "input": "text<https://x.test>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "text",
+              "url": "https://x.test"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "markdown-link-and-image",
+      "input": "See [prep doc](https://example.com/a) and ![Secret Note](https://t.example/p.png).",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            { "text": "See " },
+            {
+              "text": "prep doc",
+              "url": "https://example.com/a"
+            },
+            { "text": " and Secret Note." }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "checkbox-stripped-from-item",
+      "input": "- [ ] RSVP by Friday\n- [x] Done\n- ☐ Open",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "RSVP by Friday" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Done" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Open" }]
+        }
+      ]
+    },
+    {
+      "id": "heading-directive-ends-a-line",
+      "input": "<h3>@job</h3>",
+      "directives": {
+        "route": "job",
+        "untracked": false,
+        "before": 0,
+        "after": 0
+      },
+      "lines": []
+    },
+    {
+      "id": "directive-inside-li",
+      "input": "<ul><li>@love -30</li><li>Bring shoes</li></ul>",
+      "directives": {
+        "route": "love",
+        "untracked": false,
+        "before": 30,
+        "after": 0
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Bring shoes" }]
+        }
+      ]
+    },
+    {
+      "id": "mixed-html-plain-marker-is-text",
+      "input": "<div>Notes:</div>- leftover",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Notes:" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "- leftover" }]
+        }
+      ]
+    },
+    {
+      "id": "bold-and-italic",
+      "input": "<b>bold</b> and <i>italic</i> and <b><i>both</i></b>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            { "text": "bold", "bold": true },
+            { "text": " and " },
+            { "text": "italic", "italic": true },
+            { "text": " and " },
+            { "text": "both", "bold": true, "italic": true }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hr-is-not-content",
+      "input": "Before<hr>After",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Before" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "After" }]
+        }
+      ]
+    },
+    {
+      "id": "bare-url-drops-trailing-punct",
+      "input": "See https://x.test/path.",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            { "text": "See " },
+            {
+              "text": "https://x.test/path",
+              "url": "https://x.test/path"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "heading-breaks-surrounding-text",
+      "input": "foo<h3>bar</h3>baz",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "foo" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "bar", "bold": true }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "baz" }]
+        }
+      ]
+    },
+    {
+      "id": "lead-in-plus-nested-html-caps-at-two",
+      "input": "<b>Agenda:</b><ul><li>a<ul><li>b</li></ul></li></ul>",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Agenda:", "bold": true }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "a" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "b" }]
+        }
+      ]
+    }
+  ]
+}

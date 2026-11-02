@@ -517,8 +517,9 @@ Google accepts a standalone off-clock alias anywhere in the title, or a
 token (split on whitespace or commas) is a directive: `@route`, an off-clock
 alias, `-N`/`-Nm` (ASCII or typographic minus), or `+M`/`+Mm`. Directives
 combine on one line or spread across several; HTML from Google's editor is
-normalized first (`<br>`, `<p>`, `<div>`, `<li>` become line breaks, other
-tags are stripped, common entities are decoded). With a resolvable `love`
+normalized first (`<br>`, `<p>`, `<div>`, `<li>`, headings, list
+containers, table rows, and `<hr>` become line breaks, other tags are
+stripped, common entities are decoded). With a resolvable `love`
 root, `@love<br>#offclock -30` sets `[root:: love]`, marks the Event Task
 off-clock, and adds a 30-minute lead-in. A line with any other token — a
 phone number, a 4-digit value, a sentence — is ignored whole. Sync strips
