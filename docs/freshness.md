@@ -1415,18 +1415,23 @@ builder near the `Alt+F to decide` string (tests
 - Dot cap: 3 by default; the threshold itself for thresholds 1–2;
   overflow `+N`; the exact count in the accessible text.
 - The leaf replaces `⟳` with `data-decide="true"` only when the nav card
-  capability is present and decay is on.
+  capability is present and decay is on. Due lane rows (PENDING, NEXT)
+  show the leaf only with nav's rung-aware card (capability 3+); with
+  an older or missing card they keep counting pips and the lane hint,
+  never a decision promise.
 - Folding: exactly one valid square-bracket `[keeps:: N]` one space after
   the folded fresh/refresh run is folded. Noncanonical fields keep the
   dashed repair pill.
 - Selection or click reveals the whole raw span and never writes.
 - Ambiguous consensus stays neutral, and closed or out-of-scope tasks show
   dots quietly without a leaf.
-- Tooltip wording: `Kept N reviews in a row · Bob asks at L`, the
-  `Alt+F to decide` hint, and counting-only/off wording otherwise
+- Tooltip wording: `Kept N reviews in a row · Bob asks at L`, where L
+  is the row's rung allowance (`pending`/`next`/`ready` resolved
+  against the `keeps` fallback), the `Alt+F to decide` hint, and
+  counting-only/off wording otherwise
   (`Kept N reviews in a row` alone without the card capability,
-  `· decay off` with decay off, `· Bob asks every review` for a zero
-  threshold).
+  `· decay off` with decay off or a `false` rung, `· Bob asks every
+  review` for a zero threshold).
 - Rotten-log line (shipped ledger-tools 1.65.0, extended to count `kept in Next` entries in 1.81.0):
   `🥀 3 keeps logged · last Oct 16 — waiting for the weekend…` after
   the keeps line and before the action line (`🥀 1 keep logged · …`
@@ -1585,6 +1590,18 @@ these vectors verbatim.
 - **MK6 repair:** duplicate `[keeps:: 2] [keeps:: 3]` or paren
   `(keeps:: 2)` never folds (`keeps` null); the fields stay visible
   Dataview pills with the dashed repair styling.
+- **MK7 lane leaf:** `- [*] #task Ship it [fresh:: 2026-10-07]
+  [keeps:: 3]` is a due NEXT row at its rung limit: with nav's
+  rung-aware card (capability 3+) → tone `due`, glyph `leaf`,
+  `data-decide="true"`, dots `•••`, keeps line
+  `Kept 3 reviews in a row · Bob asks at 3`, line 3 the lane hint
+  `Alt+F keep · Alt+N release · Ctrl+Shift+Enter today`. The same row
+  with only the capability-2 card → glyph `refresh`,
+  `data-decide="false"`, keeps line `Kept 3 reviews in a row` alone.
+  The WIP mirror `- [/] #task Land it [fresh:: 2026-10-07]
+  [keeps:: 3]` behaves the same in PENDING.
+- **MK8 rung off:** MK7's line with `next_keeps: false` never decides:
+  glyph `refresh`, keeps line `Kept 3 reviews in a row · decay off`.
 
 ## 13. Rollout log
 
