@@ -3386,6 +3386,9 @@ sits, else the first open same-name entry after the closed one, else a new
 placeholder directly below the closed entry. That last placeholder holds
 follow-up work, not later meetings, so it stays where it is.
 
+In Obsidian, Ctrl+Enter places the MEET continuation the same way and moves
+the cursor to the first open Pomodoro below the closed entry.
+
 `pomodoro_close.next_pomodoro.placed_last` is `true` when the close moved
 the block below at least one open entry (omitted otherwise), and the human
 `next:` line appends ` · placed last` after the carry count: `next: MEET
