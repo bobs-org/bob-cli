@@ -5,11 +5,10 @@
 //! note is normalized and escaped before it reaches the vault. See the
 //! epic plan's Rendering section for the full contract.
 
-use std::sync::LazyLock;
-
 use regex::Regex;
 
 use super::model::{AttachmentKind, KeepNote};
+use crate::native::task_text_escape::escape_child_text;
 use crate::native::{capture, env as bob_env, task_text_escape};
 
 /// One rendered Keep note as a vault task block.
@@ -138,54 +137,6 @@ pub(super) fn display_title(note: &KeepNote) -> String {
 /// only the token, comment, field, and block-id hazards apply.
 pub(super) fn escape_task_text(text: &str) -> String {
     task_text_escape::escape_task_text(text)
-}
-
-/// Escape free text for a child bullet: the task-line escaping plus the
-/// leading-marker rule, since a child starts a fresh list item.
-pub(crate) fn escape_child_text(text: &str) -> String {
-    escape_leading_marker(&task_text_escape::escape_task_text(text))
-}
-
-static LEADING_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(#{1,6}(\s|$)|>|\d+[.)](\s|$)|\||[+*-](\s|$))")
-        .expect("valid leading-marker regex")
-});
-
-/// Backslash-escape a child-leading heading, quote, list, table
-/// marker, thematic break, or code fence.
-fn escape_leading_marker(text: &str) -> String {
-    if LEADING_MARKER_RE.is_match(text)
-        || is_thematic_break(text)
-        || is_code_fence(text)
-    {
-        format!("\\{text}")
-    } else {
-        text.to_string()
-    }
-}
-
-/// A thematic break: a line that is only `---`, `***`, or `___`,
-/// with spaces allowed between and around the markers.
-fn is_thematic_break(text: &str) -> bool {
-    let stripped: String =
-        text.chars().filter(|c| *c != ' ' && *c != '\t').collect();
-    if stripped.len() < 3 {
-        return false;
-    }
-    let mut chars = stripped.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !matches!(first, '-' | '*' | '_') {
-        return false;
-    }
-    stripped.chars().all(|c| c == first)
-        && text.chars().all(|c| c == first || c == ' ' || c == '\t')
-}
-
-/// A code fence: a leading ` ``` ` or `~~~`.
-fn is_code_fence(text: &str) -> bool {
-    text.starts_with("```") || text.starts_with("~~~")
 }
 
 /// Drop `\r`, turn tabs into a space, remove zero-width characters,

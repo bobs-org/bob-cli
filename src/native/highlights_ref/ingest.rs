@@ -230,7 +230,8 @@ pub(crate) fn fallback_note_for_with_listen(
     } else {
         collapsed
     };
-    let escaped = crate::native::gkeep::render::escape_child_text(&truncated);
+    let escaped =
+        crate::native::task_text_escape::escape_child_text(&truncated);
     let suffix = if listen { " -L" } else { "" };
     format!(
         "⚠️ Clip failed ({kind}): {escaped} · retry: bob ref create {} -P {parent}{suffix}",
