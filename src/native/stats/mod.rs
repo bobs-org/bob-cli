@@ -108,6 +108,7 @@ mod tests {
             checklist_state: None,
             off_clock: None,
             off_clock_parts: Default::default(),
+            clock: None,
         };
         let missing = load_stats_config(
             PathBuf::from("/definitely/missing.yml").as_path(),

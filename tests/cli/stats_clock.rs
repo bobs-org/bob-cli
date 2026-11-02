@@ -471,6 +471,172 @@ fn json_clock_object_and_session_filters_follow_the_lens() {
     }
 }
 
+fn split(value: &Value) -> (i64, i64) {
+    (
+        value["worked"]["value"].as_i64().expect("worked value"),
+        value["off_clock"]["value"]
+            .as_i64()
+            .expect("off-clock value"),
+    )
+}
+
+#[test]
+fn json_clock_breakdowns_split_total_points_parts_and_summary_totals() {
+    let (_temp, vault) = clock_vault();
+    let worked = run_json(&vault, &["stats", "-r", RANGE, "-k", "worked"]);
+    let off = run_json(&vault, &["stats", "-r", RANGE, "-k", "off-clock"]);
+    let total = run_json(&vault, &["stats", "-r", RANGE, "-k", "total"]);
+
+    // Oct 9: 97 worked + 110 off-clock = 207 total, with Bob's formatting.
+    let point = &metric(&total, "worked")["points"][1];
+    assert_eq!(point["value"], 207);
+    assert_eq!(
+        point["clock_breakdown"],
+        serde_json::json!({
+            "worked": {"value": 97, "display": "1h 37m"},
+            "off_clock": {"value": 110, "display": "1h 50m"},
+        })
+    );
+    // Oct 8 predates adoption: no value and no invented zero split.
+    let before = &metric(&total, "worked")["points"][0];
+    assert_eq!(before["quality"], "not_tracked");
+    assert!(before.get("clock_breakdown").is_none());
+    assert!(before.get("parts_clock_breakdown").is_none());
+
+    // Every Total part splits into the two other lenses' values.
+    let parts = point["parts"].as_object().expect("point parts");
+    let splits = point["parts_clock_breakdown"]
+        .as_object()
+        .expect("point part splits");
+    assert_eq!(
+        parts.keys().collect::<Vec<_>>(),
+        splits.keys().collect::<Vec<_>>()
+    );
+    for dimension in ["area", "root_parent", "project", "theme"] {
+        let mut sums = (0, 0);
+        for (key, whole) in parts[dimension].as_object().expect("parts") {
+            let pair = split(&splits[dimension][key]);
+            assert_eq!(pair.0 + pair.1, whole.as_i64().unwrap(), "{key}");
+            for (lens, side) in [(&worked, pair.0), (&off, pair.1)] {
+                let other = &metric(lens, "worked")["points"][1]["parts"];
+                let expect = other[dimension][key].as_i64().unwrap_or(0);
+                assert_eq!(side, expect, "{dimension}/{key}");
+            }
+            sums = (sums.0 + pair.0, sums.1 + pair.1);
+        }
+        assert_eq!(sums, (97, 110), "{dimension}");
+    }
+    assert_eq!(
+        split(&point["parts_clock_breakdown"]["theme"]["MEET"]),
+        (0, 60)
+    );
+
+    // Part summaries and the complete-day total split the same way.
+    let summary = &metric(&total, "worked")["summary"];
+    let breakdown = split(&summary["total_clock_breakdown"]);
+    let all = summary["total"]["value"].as_i64().expect("summary total");
+    assert_eq!(breakdown.0 + breakdown.1, all);
+    assert_eq!(breakdown.1, 110);
+    assert!(summary["headline"].get("worked").is_none());
+    assert!(summary["headline"].get("clock_breakdown").is_none());
+    for dimension in ["area", "root_parent", "project", "theme"] {
+        let rows = metric(&total, "worked")["parts_summary"][dimension]
+            .as_array()
+            .expect("part rows");
+        let mut sums = (0, 0);
+        for row in rows {
+            let pair = split(&row["clock_breakdown"]);
+            assert_eq!(pair.0 + pair.1, row["value"].as_i64().unwrap());
+            assert_eq!(pair.1, row["off_clock"].as_i64().unwrap_or(0));
+            sums = (sums.0 + pair.0, sums.1 + pair.1);
+        }
+        assert_eq!(sums, breakdown, "{dimension}");
+    }
+
+    // Worked splits only where off-clock time was left out; its summary
+    // total adds the same complete-day off-clock amount.
+    let hidden = &metric(&worked, "worked")["points"][1];
+    assert_eq!(
+        hidden["clock_breakdown"],
+        serde_json::json!({
+            "worked": {"value": 97, "display": "1h 37m"},
+            "off_clock": {"value": 110, "display": "1h 50m"},
+        })
+    );
+    assert!(hidden.get("parts_clock_breakdown").is_none());
+    assert_eq!(
+        split(&metric(&worked, "worked")["summary"]["total_clock_breakdown"]),
+        (97, 110)
+    );
+    // The window's quiet days have nothing excluded.
+    assert!(metric(&worked, "worked")["points"][2]
+        .get("clock_breakdown")
+        .is_none());
+
+    // The Off-clock lens never splits.
+    let text = serde_json::to_string(&off).expect("Off-clock JSON");
+    assert!(!text.contains("clock_breakdown"));
+
+    // Count metrics split in sessions.
+    let counts = run_json(
+        &vault,
+        &["stats", "show", "sessions", "-r", RANGE, "-k", "total"],
+    );
+    let sessions = &metric(&counts, "sessions")["points"][1];
+    let pair = split(&sessions["clock_breakdown"]);
+    assert_eq!(pair.0 + pair.1, sessions["value"].as_i64().unwrap());
+    assert_eq!(pair.1, 3);
+    assert_eq!(sessions["clock_breakdown"]["off_clock"]["display"], "3");
+
+    // Tasks, journals, and the other non-Pomodoro metrics stay plain.
+    let done = metric(&total, "done");
+    assert!(done["summary"].get("total_clock_breakdown").is_none());
+    assert!(done["points"][1].get("clock_breakdown").is_none());
+}
+
+#[test]
+fn json_breakdowns_follow_pins_and_stay_out_of_formulas_and_clean_vaults() {
+    let (temp, vault) = clock_vault();
+    let config = config_with_pins(&temp);
+    for flag in ["worked", "off-clock", "total"] {
+        let output = stats_in(&vault)
+            .env("BOB_CONFIG_FILE", &config)
+            .args([
+                "stats",
+                "show",
+                "family_time",
+                "inner",
+                "outer",
+                "-r",
+                RANGE,
+                "-k",
+                flag,
+                "-f",
+                "json",
+            ])
+            .output()
+            .expect("run bob stats show");
+        assert_success(&output);
+        let report: Value =
+            serde_json::from_str(stdout(&output).trim()).expect("JSON");
+        // Pinned Off-clock and formula metrics never split, in any lens.
+        for id in ["family_time", "inner", "outer"] {
+            let text = serde_json::to_string(metric(&report, id))
+                .expect("metric JSON");
+            assert!(!text.contains("clock_breakdown"), "{id} on {flag}");
+        }
+    }
+
+    let (_plain_temp, plain) = plain_vault();
+    for flag in ["worked", "off-clock", "total"] {
+        // With no off-clock time anywhere, Off-clock and Total are not
+        // tracked and Worked has nothing left out: nothing to split.
+        let text =
+            run(&plain, &["stats", "-r", RANGE, "-k", flag, "-f", "json"]);
+        assert!(!text.contains("clock_breakdown"), "{flag}");
+    }
+}
+
 #[test]
 fn human_output_surfaces_each_diagnostic_once_in_every_lens() {
     let (_temp, vault) = clock_vault();

@@ -261,7 +261,8 @@ off-clock contribution as `off_clock`; in the Worked lens a point's
 `off_clock` is the off-clock amount that lens left out under the metric's
 filters, and the Off-clock lens omits it. The key is omitted when zero and never appears on non-Pomodoro
 metrics. Contributions are carried through aggregation, never re-split from
-rounded totals.
+rounded totals. The same facts also arrive as ready-made worked and
+off-clock components; see [Clock breakdowns](#clock-breakdowns).
 
 **Quality of the ledger.** Every report counts, over the displayed window and
 whatever the active lens hides: closed off-clock sessions, rows without a
@@ -585,7 +586,9 @@ bare catalog label. Points add an optional `apportioned` map,
 when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
 `chores`, `parts_display`, `apportioned`, `label`, `project_label`,
-`health.homes` lint lists, `typical`, and `sessions`.
+`health.homes` lint lists, `typical`, `sessions`, and the
+[clock breakdowns](#clock-breakdowns) (`clock_breakdown`,
+`parts_clock_breakdown`, and `total_clock_breakdown`).
 
 The top-level `clock` object describes the request lens and the displayed
 window:
@@ -611,8 +614,9 @@ selected metrics, their filters, hiding, and grouping. They are window
 totals, distinct from the complete-day metric summaries. Pomodoro metrics add
 `parameters.clock`, and their `points`, `daily_points`, prior points, and
 `parts_summary` rows add a numeric `off_clock` sub-share as described under
-[Clocks](#clocks). The compatibility rules are additive: `schema_version`
-stays 1, and clients that ignore the new keys keep working.
+[Clocks](#clocks), and the clock breakdowns below. The compatibility rules
+are additive: `schema_version` stays 1, and clients that ignore the new keys
+keep working.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -696,6 +700,42 @@ short history leaves `value` and `relation` `null` with `display` `"–"`):
 CLI exit 1; configuration, request/unknown-metric, and non-Dataview
 format failures map to exit 2. JSON errors print that envelope on
 stdout; human and CSV errors print the message on stderr.
+
+### Clock breakdowns
+
+Bob also reports each Pomodoro value split into its worked and off-clock
+sides, formatted by Bob, so a client never subtracts clocks, re-splits parts,
+or formats a duration itself. Every split has one shape:
+
+```json
+"clock_breakdown": {
+  "worked": {"value": 97, "display": "1h 37m"},
+  "off_clock": {"value": 110, "display": "1h 50m"}
+}
+```
+
+Both components use the metric's own unit (minutes for time metrics,
+sessions for count metrics, with `display` formatted like the metric's other
+values) and add up to the whole they split. The numeric `off_clock` fields
+stay exactly as described under [Clocks](#clocks).
+
+| Where | Key | Present when |
+| --- | --- | --- |
+| `points`, `daily_points`, `prior_points` | `clock_breakdown` | A Total point has a value: worked is the point's value minus its `off_clock` sub-share, and a valid zero reports two explicit zero components. A Worked point whose lens left out positive off-clock time: worked is the point's value and off-clock is the excluded amount. |
+| Total points | `parts_clock_breakdown[dimension][key]` | The point has a value. It covers exactly the keys of `parts` (`theme`, `area`, `root_parent`, and `project`), and each pair adds up to that same part. |
+| `parts_summary` rows | `clock_breakdown` | The metric is on the Total clock. |
+| `summary` | `total_clock_breakdown` | Exactly the complete days behind `summary.total` (today's provisional day stays out). Total always reports it; Worked reports it only when off-clock time was left out. |
+
+Points that are `not_tracked` or missing, Off-clock metrics, and metrics that
+are not Pomodoro metrics (tasks, fields, checklists, journals, and formulas)
+omit every breakdown key; a missing value is never read as zero off-clock
+time. `summary.headline` is a median and is never decomposed. A metric pinned
+with `clock:` splits by its own clock and its own filters, whatever the
+request lens. Grouped buckets sum the breakdowns of their tracked days, so a
+week or month that crosses the Off-clock adoption date splits only the days
+Total tracks, and `daily_points` hold each day's own split. Total sums session
+minutes and overlapping sessions count twice, so the components describe
+recorded session time, never occupied or free time.
 
 ## `bob stats`
 
@@ -852,6 +892,7 @@ values are derived from the file contents and asserted in
 | C6 | Pinned metric | `family_time` (`clock: off-clock`) reads 110 with neutral direction in all three lenses; formulas `inner` (97) and `outer` stay put |
 | C7 | Clean overlay | Without the `MEET` row the Worked report is the pre-clock report, `clock.since` is `null`, and Off-clock says `No off-clock time in this window` |
 | C8 | Windows | Explicit ranges, presets, offsets, `all`, grouping, and `-c` keep Total = Worked + Off-clock everywhere Off-clock is tracked |
+| C9 | Breakdowns | Oct 9 Total point splits into 97 worked and 110 off-clock; every Total part, `parts_summary` row, and complete-day total splits into the Worked and Off-clock lens values; Worked splits only where time was left out; pins, formulas, and the Off-clock lens carry no split |
 
 ## Homes fixture and H-vector table
 

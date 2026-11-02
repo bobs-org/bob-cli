@@ -93,6 +93,7 @@ fn closed_on(
             checklist_state: None,
             off_clock: None,
             off_clock_parts: BTreeMap::new(),
+            clock: None,
         })
         .collect();
     BTreeMap::from([(

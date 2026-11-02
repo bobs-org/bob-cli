@@ -508,6 +508,7 @@ fn null_before_tracking(date: NaiveDate, provisional: bool) -> DailyValue {
         checklist_state: None,
         off_clock: None,
         off_clock_parts: std::collections::BTreeMap::new(),
+        clock: None,
     }
 }
 
@@ -530,6 +531,7 @@ fn null_value(
         checklist_state: None,
         off_clock: None,
         off_clock_parts: std::collections::BTreeMap::new(),
+        clock: None,
     }
 }
 
@@ -552,6 +554,7 @@ fn some_value(
         checklist_state: None,
         off_clock: None,
         off_clock_parts: std::collections::BTreeMap::new(),
+        clock: None,
     }
 }
 
@@ -651,6 +654,7 @@ mod tests {
                     checklist_state: None,
                     off_clock: None,
                     off_clock_parts: BTreeMap::new(),
+                    clock: None,
                 })
                 .collect(),
             warnings: Vec::new(),

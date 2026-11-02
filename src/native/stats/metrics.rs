@@ -443,6 +443,7 @@ fn evaluate_pomodoros(
                 parts,
             );
             value.apportioned = apportioned;
+            value.clock = Some(clock);
             if clock != StatsClock::OffClock {
                 let off = pair.map(|pair| match measure {
                     PomodoroMeasure::Minutes => pair.off_clock.total,
@@ -1414,6 +1415,7 @@ fn daily(
         checklist_state: None,
         off_clock: None,
         off_clock_parts: BTreeMap::new(),
+        clock: None,
     }
 }
 
@@ -2253,6 +2255,70 @@ mod tests {
         );
         assert_eq!(count_total.values[0].value, Some(2));
         assert_eq!(count_total.values[0].off_clock, Some(1));
+    }
+
+    #[test]
+    fn pomodoro_values_record_the_clock_they_were_measured_on() {
+        let index = pomodoro_index(&[(
+            10,
+            vec![
+                session(
+                    "MEET",
+                    Some(60),
+                    crate::native::capture::SessionClock::OffClock {
+                        minutes: 60,
+                        stamped: true,
+                    },
+                ),
+                session(
+                    "BOB",
+                    Some(25),
+                    crate::native::capture::SessionClock::Worked {
+                        minutes: 25,
+                    },
+                ),
+            ],
+        )]);
+        for id in ["worked", "sessions"] {
+            let metric = builtin(id);
+            for clock in StatsClock::ALL {
+                let evaluation =
+                    eval_clock(&metric, &index, &[date(10)], date(11), clock);
+                assert_eq!(
+                    evaluation.values[0].clock,
+                    Some(clock),
+                    "{id} on {clock:?}"
+                );
+            }
+        }
+        // Total pairs the value with exactly its off-clock side.
+        let total = eval_clock(
+            &builtin("worked"),
+            &index,
+            &[date(10)],
+            date(11),
+            StatsClock::Total,
+        );
+        let day = &total.values[0];
+        assert_eq!(day.value, Some(85));
+        assert_eq!(day.off_clock, Some(60));
+        for (dimension, entries) in &day.off_clock_parts {
+            for (key, off) in entries {
+                assert!(
+                    *off <= day.parts[dimension][key],
+                    "{dimension}/{key} off-clock stays within its part"
+                );
+            }
+        }
+        // Other metric kinds never claim a clock.
+        let done = eval_clock(
+            &builtin("done"),
+            &index,
+            &[date(10)],
+            date(11),
+            StatsClock::Total,
+        );
+        assert!(done.values.iter().all(|value| value.clock.is_none()));
     }
 
     #[test]

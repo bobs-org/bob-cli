@@ -426,6 +426,7 @@ fn daily_value(
         checklist_state: None,
         off_clock: None,
         off_clock_parts: BTreeMap::new(),
+        clock: None,
     }
 }
 

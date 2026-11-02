@@ -450,6 +450,8 @@ fn collapse_points<'a>(
         apportioned: Default::default(),
         checklist_state: None,
         off_clock: None,
+        clock_breakdown: None,
+        parts_clock_breakdown: Default::default(),
     }
 }
 
@@ -1129,6 +1131,7 @@ fn collapse_parts_cli(
                     .fold(0_i64, i64::saturating_add);
                 (off > 0).then_some(off)
             },
+            clock_breakdown: None,
         });
     }
     homes.extend(buckets);
@@ -1236,6 +1239,8 @@ mod tests {
             apportioned: BTreeMap::new(),
             checklist_state: None,
             off_clock: None,
+            clock_breakdown: None,
+            parts_clock_breakdown: Default::default(),
         }
     }
 
@@ -1284,6 +1289,7 @@ mod tests {
                     days_met: None,
                     prior: None,
                     delta: None,
+                    total_clock_breakdown: None,
                 },
                 chart: crate::native::stats::report::ChartBand {
                     group: GroupName::Day,
@@ -1320,6 +1326,7 @@ mod tests {
             apportioned: None,
             apportioned_display: None,
             off_clock: None,
+            clock_breakdown: None,
         };
         let refs = BTreeMap::from([(
             "gtd".to_string(),
@@ -1586,6 +1593,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1599,6 +1607,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1612,6 +1621,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         report.homes.insert(
@@ -1651,6 +1661,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         let text = detail(&report, &Styler::plain());
@@ -1695,6 +1706,7 @@ mod tests {
             apportioned: None,
             apportioned_display: None,
             off_clock: None,
+            clock_breakdown: None,
         }
     }
 
@@ -1795,6 +1807,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1808,6 +1821,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1821,6 +1835,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1834,6 +1849,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         report.metrics[0].parts_summary.insert(
@@ -1847,6 +1863,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         let text = detail(&report, &Styler::plain());

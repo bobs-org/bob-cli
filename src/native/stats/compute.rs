@@ -533,6 +533,9 @@ fn dedupe_warnings(warnings: Vec<StatsWarning>) -> Vec<StatsWarning> {
 }
 
 #[cfg(test)]
+mod clock_breakdown_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

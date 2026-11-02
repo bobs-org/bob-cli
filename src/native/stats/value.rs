@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
+use super::clock::StatsClock;
+
 /// Evaluator output for one calendar day. Formatting, grouping, and
 /// rolling medians are added later; evaluators never format UI text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +28,10 @@ pub(crate) struct DailyValue {
     pub(crate) off_clock: Option<i64>,
     /// Per-dimension off-clock contributions for Total part summaries.
     pub(crate) off_clock_parts: BTreeMap<String, BTreeMap<String, i64>>,
+    /// The clock a Pomodoro evaluator measured this value on. Series
+    /// builders use it to split values into worked and off-clock sides; every
+    /// other metric kind leaves it empty.
+    pub(crate) clock: Option<StatsClock>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -78,6 +84,7 @@ mod tests {
             checklist_state: None,
             off_clock: None,
             off_clock_parts: BTreeMap::new(),
+            clock: None,
         };
         assert!(value.provisional);
         assert_eq!(value.parts["theme"]["GTD"], 25);

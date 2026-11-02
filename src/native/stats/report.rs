@@ -185,10 +185,31 @@ pub(crate) enum JournalTiersJson {
     List(Vec<String>),
 }
 
+/// One side of a clock breakdown, in the metric's own unit (minutes or
+/// sessions) and formatted by Bob.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ClockComponent {
+    pub(crate) value: i64,
+    pub(crate) display: String,
+}
+
+/// A Pomodoro value split by session clock. The two components are the
+/// worked and off-clock sides of the same population, so for a Total value
+/// they add up to the value. Total sums session minutes and can overlap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ClockBreakdown {
+    pub(crate) worked: ClockComponent,
+    pub(crate) off_clock: ClockComponent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct MetricSummary {
     pub(crate) headline: Headline,
     pub(crate) total: Option<ValueDisplay>,
+    /// Worked and off-clock sides of exactly the complete-day population
+    /// behind `total`. The headline is a median and is never decomposed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) total_clock_breakdown: Option<ClockBreakdown>,
     pub(crate) mean: Option<i64>,
     pub(crate) p25: Option<i64>,
     pub(crate) p75: Option<i64>,
@@ -283,6 +304,14 @@ pub(crate) struct SeriesPoint {
     pub(crate) checklist_state: Option<ChecklistState>,
     #[serde(skip_serializing_if = "is_none_or_zero_i64")]
     pub(crate) off_clock: Option<i64>,
+    /// Present on valid Total points, and on Worked points with excluded
+    /// off-clock time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) clock_breakdown: Option<ClockBreakdown>,
+    /// Total points only: the same parts as `parts`, split by clock.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) parts_clock_breakdown:
+        BTreeMap<String, BTreeMap<String, ClockBreakdown>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -299,6 +328,9 @@ pub(crate) struct PartSummary {
     pub(crate) apportioned_display: Option<String>,
     #[serde(skip_serializing_if = "is_none_or_zero_i64")]
     pub(crate) off_clock: Option<i64>,
+    /// Total parts only: this part split into worked and off-clock sides.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) clock_breakdown: Option<ClockBreakdown>,
 }
 
 /// One closed Pomodoro in the display window. Facts, not metric values.
@@ -534,6 +566,7 @@ mod tests {
                 apportioned: None,
                 apportioned_display: None,
                 off_clock: None,
+                clock_breakdown: None,
             }],
         );
         let report = StatsReport {
@@ -620,6 +653,7 @@ mod tests {
                         words: "up 6% vs the prior 4 weeks".to_string(),
                         sign: 1,
                     }),
+                    total_clock_breakdown: None,
                 },
                 chart: ChartBand {
                     group: GroupName::Day,
@@ -645,6 +679,8 @@ mod tests {
                         apportioned: BTreeMap::new(),
                         checklist_state: None,
                         off_clock: None,
+                        clock_breakdown: None,
+                        parts_clock_breakdown: Default::default(),
                     },
                     SeriesPoint {
                         date: date(2026, 10, 11),
@@ -670,6 +706,8 @@ mod tests {
                         apportioned: BTreeMap::new(),
                         checklist_state: None,
                         off_clock: None,
+                        clock_breakdown: None,
+                        parts_clock_breakdown: Default::default(),
                     },
                 ],
                 prior_points: Vec::new(),
@@ -769,6 +807,8 @@ mod tests {
             apportioned: BTreeMap::new(),
             checklist_state: None,
             off_clock: None,
+            clock_breakdown: None,
+            parts_clock_breakdown: Default::default(),
         };
         let json = serde_json::to_value(&point).unwrap();
         assert_eq!(json["num"], 1);

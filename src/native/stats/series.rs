@@ -2,12 +2,13 @@ use std::collections::BTreeMap;
 
 use chrono::{Datelike, Days, NaiveDate, TimeDelta};
 
+use super::clock::StatsClock;
 use super::range::RangeSpec;
 use super::registry::MetricUnit;
 use super::report::{
-    ChartBand, ChoreSummary, Delta, GroupName, Headline, MetricSummary,
-    PartSummary, PriorHeadline, PriorRange, RangeReport, SeriesPoint,
-    ValueDisplay,
+    ChartBand, ChoreSummary, ClockBreakdown, ClockComponent, Delta, GroupName,
+    Headline, MetricSummary, PartSummary, PriorHeadline, PriorRange,
+    RangeReport, SeriesPoint, ValueDisplay,
 };
 use super::value::{DailyValue, DataQuality};
 
@@ -460,6 +461,7 @@ fn normalize(
                 checklist_state: None,
                 off_clock: None,
                 off_clock_parts: BTreeMap::new(),
+                clock: None,
             });
         }
         if date == span.end {
@@ -543,7 +545,123 @@ fn daily_point(value: &DailyValue, unit: MetricUnit) -> SeriesPoint {
         apportioned: value.apportioned.clone(),
         checklist_state: value.checklist_state,
         off_clock: value.off_clock.filter(|minutes| *minutes > 0),
+        clock_breakdown: value.value.and_then(|total| {
+            clock_breakdown(value.clock, total, value.off_clock, unit)
+        }),
+        parts_clock_breakdown: parts_clock_breakdown(
+            value.clock,
+            value.value.is_some(),
+            &value.parts,
+            &value.off_clock_parts,
+            unit,
+        ),
     }
+}
+
+fn clock_component(value: i64, unit: MetricUnit) -> ClockComponent {
+    ClockComponent {
+        value,
+        display: format_value(Some(value), unit),
+    }
+}
+
+/// Pair a worked amount with the off-clock amount of the same population.
+/// Negative sides are impossible for real sessions; refusing them keeps a
+/// corrupted split out of the report instead of inventing one.
+fn component_breakdown(
+    worked: i64,
+    off_clock: i64,
+    unit: MetricUnit,
+) -> Option<ClockBreakdown> {
+    if worked < 0
+        || off_clock < 0
+        || !matches!(unit, MetricUnit::Minutes | MetricUnit::Count)
+    {
+        return None;
+    }
+    Some(ClockBreakdown {
+        worked: clock_component(worked, unit),
+        off_clock: clock_component(off_clock, unit),
+    })
+}
+
+/// Split a value by clock. A Total value already holds its off-clock side,
+/// so the worked side is the complement. A Worked value excludes it, so the
+/// off-clock side is shown only when positive. Off-clock-only values and
+/// non-Pomodoro metrics carry no split.
+fn clock_breakdown(
+    clock: Option<StatsClock>,
+    value: i64,
+    off_clock: Option<i64>,
+    unit: MetricUnit,
+) -> Option<ClockBreakdown> {
+    let off = off_clock.unwrap_or(0).max(0);
+    match clock {
+        Some(StatsClock::Total) => {
+            component_breakdown(value.checked_sub(off)?, off, unit)
+        }
+        Some(StatsClock::Worked) if off > 0 => {
+            component_breakdown(value, off, unit)
+        }
+        _ => None,
+    }
+}
+
+/// Split every Total part by clock. The complement of each part is its own
+/// worked side, so each pair adds up to that same part.
+fn parts_clock_breakdown(
+    clock: Option<StatsClock>,
+    valid: bool,
+    parts: &BTreeMap<String, BTreeMap<String, i64>>,
+    off_clock_parts: &BTreeMap<String, BTreeMap<String, i64>>,
+    unit: MetricUnit,
+) -> BTreeMap<String, BTreeMap<String, ClockBreakdown>> {
+    if !valid || clock != Some(StatsClock::Total) {
+        return BTreeMap::new();
+    }
+    parts
+        .iter()
+        .filter_map(|(dimension, entries)| {
+            let off_entries = off_clock_parts.get(dimension);
+            let split: BTreeMap<_, _> = entries
+                .iter()
+                .filter_map(|(key, value)| {
+                    let off = off_entries
+                        .and_then(|off| off.get(key))
+                        .copied()
+                        .unwrap_or(0);
+                    let split = clock_breakdown(
+                        Some(StatsClock::Total),
+                        *value,
+                        Some(off),
+                        unit,
+                    )?;
+                    Some((key.clone(), split))
+                })
+                .collect();
+            (!split.is_empty()).then(|| (dimension.clone(), split))
+        })
+        .collect()
+}
+
+fn merge_parts(
+    into: &mut BTreeMap<String, BTreeMap<String, i64>>,
+    from: &BTreeMap<String, BTreeMap<String, i64>>,
+) {
+    for (dimension, entries) in from {
+        let grouped = into.entry(dimension.clone()).or_default();
+        for (key, value) in entries {
+            let total = grouped.entry(key.clone()).or_default();
+            *total = total.saturating_add(*value);
+        }
+    }
+}
+
+/// The clock shared by a series' valid days.
+fn series_clock<'a>(
+    days: impl IntoIterator<Item = &'a DailyValue>,
+) -> Option<StatsClock> {
+    days.into_iter().find_map(|day| day.value.and(day.clock))
 }
 
 fn grouped_points(
@@ -633,27 +751,18 @@ fn aggregate_bucket(
     let provisional = days.iter().any(|day| day.provisional);
     let mut parts = BTreeMap::<String, BTreeMap<String, i64>>::new();
     let mut apportioned = BTreeMap::<String, BTreeMap<String, i64>>::new();
+    let mut off_clock_parts = BTreeMap::<String, BTreeMap<String, i64>>::new();
     for day in days {
-        for (dimension, entries) in &day.parts {
-            let grouped = parts.entry(dimension.clone()).or_default();
-            for (key, value) in entries {
-                let total = grouped.entry(key.clone()).or_default();
-                *total = total.saturating_add(*value);
-            }
-        }
-        for (dimension, entries) in &day.apportioned {
-            let grouped = apportioned.entry(dimension.clone()).or_default();
-            for (key, value) in entries {
-                let total = grouped.entry(key.clone()).or_default();
-                *total = total.saturating_add(*value);
-            }
-        }
+        merge_parts(&mut parts, &day.parts);
+        merge_parts(&mut apportioned, &day.apportioned);
+        merge_parts(&mut off_clock_parts, &day.off_clock_parts);
     }
     let off_clock = valid
         .iter()
         .filter_map(|day| day.off_clock)
         .fold(0_i64, i64::saturating_add);
     let off_clock = (off_clock > 0).then_some(off_clock);
+    let clock = series_clock(days.iter().copied());
 
     let (value, num, den, bool_total) = if valid.is_empty() {
         (None, None, None, None)
@@ -705,10 +814,19 @@ fn aggregate_bucket(
         den,
         partial: partial_bucket.then_some(true),
         parts_display: format_parts(&parts, unit),
+        parts_clock_breakdown: parts_clock_breakdown(
+            clock,
+            value.is_some(),
+            &parts,
+            &off_clock_parts,
+            unit,
+        ),
         parts,
         apportioned,
         checklist_state: None,
         off_clock,
+        clock_breakdown: value
+            .and_then(|total| clock_breakdown(clock, total, off_clock, unit)),
     }
 }
 
@@ -910,9 +1028,23 @@ fn summarize(
             },
         })
     };
+    let total_clock_breakdown = if unit == MetricUnit::Ratio {
+        None
+    } else {
+        let off = values
+            .iter()
+            .filter_map(|(day, _)| day.off_clock)
+            .fold(0_i64, i64::saturating_add);
+        let clock = series_clock(values.iter().map(|(day, _)| *day));
+        total
+            .as_ref()
+            .and_then(|total| total.value)
+            .and_then(|total| clock_breakdown(clock, total, Some(off), unit))
+    };
     MetricSummary {
         headline,
         total,
+        total_clock_breakdown,
         mean: mean(&numbers),
         p25: percentile_quarters(&numbers, 1),
         p75: percentile_quarters(&numbers, 3),
@@ -1103,30 +1235,11 @@ fn summarize_parts(
         BTreeMap::<String, BTreeMap<String, i64>>::new();
     let mut off_clock_totals = BTreeMap::<String, BTreeMap<String, i64>>::new();
     for day in values.iter().filter(|day| !day.provisional) {
-        for (dimension, entries) in &day.parts {
-            let dimension_totals = totals.entry(dimension.clone()).or_default();
-            for (key, value) in entries {
-                let total = dimension_totals.entry(key.clone()).or_default();
-                *total = total.saturating_add(*value);
-            }
-        }
-        for (dimension, entries) in &day.apportioned {
-            let dimension_totals =
-                apportioned_totals.entry(dimension.clone()).or_default();
-            for (key, value) in entries {
-                let total = dimension_totals.entry(key.clone()).or_default();
-                *total = total.saturating_add(*value);
-            }
-        }
-        for (dimension, entries) in &day.off_clock_parts {
-            let dimension_totals =
-                off_clock_totals.entry(dimension.clone()).or_default();
-            for (key, value) in entries {
-                let total = dimension_totals.entry(key.clone()).or_default();
-                *total = total.saturating_add(*value);
-            }
-        }
+        merge_parts(&mut totals, &day.parts);
+        merge_parts(&mut apportioned_totals, &day.apportioned);
+        merge_parts(&mut off_clock_totals, &day.off_clock_parts);
     }
+    let clock = series_clock(values.iter().filter(|day| !day.provisional));
     totals
         .into_iter()
         .filter_map(|(dimension, entries)| {
@@ -1191,6 +1304,12 @@ fn summarize_parts(
                             .get(&key)
                             .copied()
                             .filter(|minutes| *minutes > 0);
+                        let clock_breakdown = clock_breakdown(
+                            clock,
+                            value,
+                            dimension_off_clock.get(&key).copied(),
+                            unit,
+                        );
                         PartSummary {
                             key,
                             value,
@@ -1211,6 +1330,7 @@ fn summarize_parts(
                                     format_value(Some(minutes), unit)
                                 }),
                             off_clock,
+                            clock_breakdown,
                         }
                     })
                     .collect(),
@@ -1458,6 +1578,7 @@ mod tests {
             checklist_state: None,
             off_clock: None,
             off_clock_parts: BTreeMap::new(),
+            clock: None,
         }
     }
 
@@ -2862,6 +2983,7 @@ mod tests {
             checklist_state: None,
             off_clock: None,
             off_clock_parts: BTreeMap::new(),
+            clock: None,
         }
     }
 
@@ -2879,6 +3001,7 @@ mod tests {
             checklist_state: None,
             off_clock: None,
             off_clock_parts: BTreeMap::new(),
+            clock: None,
         }
     }
 
@@ -3601,3 +3724,6 @@ mod tests {
         assert_eq!(tip.relation, Some(TypicalRelation::Equal));
     }
 }
+
+#[cfg(test)]
+mod clock_tests;
