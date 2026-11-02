@@ -1216,6 +1216,8 @@ only for Off-clock or Total, and prefetches the other two lenses when idle. Off-
 neutral direction and words, Total sums session minutes so overlapping sessions count twice and is never occupied
 or free time, and pinned days and buckets keep their span with Roots selected.
 
+Off-clock time renders as a dashed outline in the item's hue. Tiles, sparklines, focus-chart bars, root rows, type rows, mini bars, panel bars, and session rows all follow the same rule: Worked stays solid, Off-clock is dashed, and under Total a solid worked span ends in a dashed off-clock tail. The spoken Total sentence reads `<display> Total · <worked.display> worked · <off-clock.display> off-clock` (for example `1h 05m Total · 50m worked · 15m off-clock`), and a Worked window with off-clock time left out reads `<display> Worked · <off-clock.display> off-clock excluded`. An Off-clock window with no off-clock time in range shows `No off-clock time in this window` in place of the focus chart; this is distinct from pre-adoption `not_tracked`, which still reads `Not tracked yet` or `Tracking since <date>`.
+
 The focus chart groups its bars by the report's selected day, week, or month bucket.
 Its legend names that grouping and, when supplied, the 25th–75th percentile range for
 those displayed buckets. The rolling-median line uses Bob's supplied daily rolling
@@ -1349,9 +1351,9 @@ and the full label for case-insensitive collisions. Tooltips and accessible text
 labels. Item and segment titles read `<label> · <display> · <share>`.
 Unconfigured types append ` · not in your types`. Each legend item shows
 bob's `display` (window time). The right end of the first shown lane row
-holds `<summary.total.display> worked` in faint tabular text that never
-wraps. Its title is `Worked <range.label>`. When `range.includes_today`,
-the title adds `· complete days; today is not included`.
+holds the clock-aware meta text from `statsWindowLanesModel` and
+`statsPanelClockText` / `statsPanelClockName` in faint tabular text that wraps
+only at its `·` separators: Total reads `<display> Total · <worked.display> worked · <off-clock.display> off-clock`, Worked with off-clock time left out reads `<display> Worked · <off-clock.display> off-clock excluded`, and anything else reads `<display> <ClockName>` (for example `1h 05m Worked`). Its title is `<metricLabel> <range.label>`, and when `range.includes_today` the title adds `· complete days; today is not included`.
 
 Each lane's legend is a keyboard stop: `span role="button" tabindex="0"`,
 `data-stats-focus-key="lanes-roots"` / `"lanes-themes"`, activated by Enter
@@ -1367,7 +1369,9 @@ segment whose legend item is currently hidden. Leaving the lane clears the
 highlight. Delegated `pointerover`/`pointerleave` on the lane with a 120 ms
 opacity transition; nothing repaints and nothing is fetched.
 
-On a range change (`windowKey` = `range.start..range.end`), when the
+Total lanes split each segment from its `clock_breakdown`: a solid worked span plus a dashed off-clock tail (`bob-stats-lane-off-clock-tail` on the bar and matching legend tails). Off-clock lanes render dashed segments in the item's hue. The morph key carries the clock (`windowKey` = `range.start..range.end::<clock>`), so a clock switch re-morphs even on the same range.
+
+On a range change (`windowKey` = `range.start..range.end::<clock>`), when the
 document is laid out and `(prefers-reduced-motion: reduce)` does not match,
 each segment's `flexGrow` starts at its old value (or 0 for new keys),
 `.bob-stats-lanes-morph` carries `flex-grow 280ms cubic-bezier(.2,.8,.2,1)`,
@@ -1389,10 +1393,10 @@ The group has `role="group"` and
 `aria-label="Where the time went, <range.label>"`. Each legend
 `aria-label` reads
 `Time by root parent, <range.label>: bob 28h 36m (23%), … Show details below.`
-It lists every segment; the types lane says `Time by type` and the area
-fallback says `Time by area`. `:focus-visible` gets a 2 px
+It lists every segment; the types lane says `<ClockName> by type` and the area
+fallback says `<ClockName> by area` (for example `Total by type`). The group sentence is `Where the time went · <metricLabel>[, <range.label>]` and each lane reads `<sentence>, <span>: … Show details below.`. `:focus-visible` gets a 2 px
 `--interactive-accent` outline. Under `forced-colors`, segments are
-`CanvasText`, gray and hatch are `GrayText`, and gaps stay.
+`CanvasText`, gray and hatch are `GrayText`, gaps stay page background, and off-clock tails and dashed Off-clock segments stay dashed `CanvasText` on `Canvas`. The Day strip lanes are unchanged.
 
 ### Day strip
 
