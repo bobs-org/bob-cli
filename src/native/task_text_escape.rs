@@ -37,7 +37,6 @@ pub(crate) fn escape_child_text(text: &str) -> String {
 /// here. So this escapes the text-node hazards (`code`, `[refs]`,
 /// `<tags>`, `#tags`, `$math$`, 🍅) and leaves link URLs, which may
 /// legitimately contain `#fragments`, untouched.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn escape_note_inline(text: &str) -> String {
     // Organizer-written escapes first, so they cannot unescape what follows.
     let staged = escape_backslash_before_punct(text);
@@ -53,7 +52,6 @@ pub(crate) fn escape_note_inline(text: &str) -> String {
 /// Escape prose that begins a list item body: the inline escaper plus
 /// the line-start rules (headings, quotes, tables, lists, breaks, fences,
 /// ordered markers). Input is one body line.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn escape_note_text(text: &str) -> String {
     escape_note_leading(&escape_note_inline(text))
 }
@@ -61,7 +59,6 @@ pub(crate) fn escape_note_text(text: &str) -> String {
 /// A backslash before ASCII punctuation would form a CommonMark escape,
 /// so double it: organizer-typed `\[` stays literal instead of
 /// unescaping the `[` we are about to neutralize.
-#[cfg_attr(not(test), allow(dead_code))]
 fn escape_backslash_before_punct(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -81,7 +78,6 @@ fn escape_backslash_before_punct(text: &str) -> String {
 /// `\#` for a `#` that starts the node or follows whitespace, when a
 /// non-space, non-`#` character follows. That is the tag shape
 /// (`#offclock`, `#task`); `##`, `# `, and `/#frag` stay literal.
-#[cfg_attr(not(test), allow(dead_code))]
 fn escape_tag_hashes(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -101,7 +97,6 @@ fn escape_tag_hashes(text: &str) -> String {
 
 /// `\$` for every `$` on a line that holds two or more of them (inline
 /// math such as `$5-$10`). A lone `$` (`Q4: $5`) is literal and stays.
-#[cfg_attr(not(test), allow(dead_code))]
 fn escape_repeated_dollars(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for (line_number, line) in text.split('\n').enumerate() {
@@ -128,7 +123,6 @@ fn escape_repeated_dollars(text: &str) -> String {
 /// backslash, while `N.` / `N)` markers escape their punctuation (`N\.`
 /// / `N\)`) because a backslash before a digit is not a CommonMark
 /// escape and would show as a stray backslash in Source mode.
-#[cfg_attr(not(test), allow(dead_code))]
 fn escape_note_leading(text: &str) -> String {
     if text.starts_with('#') {
         return format!("\\{text}");
@@ -150,7 +144,6 @@ fn escape_note_leading(text: &str) -> String {
 
 /// Split a leading `N.` / `N)` ordered marker (digits, punctuation, then
 /// whitespace or end) into its parts.
-#[cfg_attr(not(test), allow(dead_code))]
 fn split_ordered_marker(text: &str) -> Option<(String, char, String)> {
     let digits: String =
         text.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -173,7 +166,6 @@ fn split_ordered_marker(text: &str) -> Option<(String, char, String)> {
 
 /// A leading `+`, `-`, or `*` followed by whitespace or end starts a
 /// list item (or is a bare marker).
-#[cfg_attr(not(test), allow(dead_code))]
 fn starts_with_bare_list_marker(text: &str) -> bool {
     let mut chars = text.chars();
     match chars.next() {

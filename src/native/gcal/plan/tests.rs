@@ -1729,6 +1729,36 @@ fn absent_matching_window_is_adopted_without_writing() {
 }
 
 #[test]
+fn unparseable_row_keeps_its_bullets_and_record() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    // Bryan drops the bold time: the block ID still finds the row, but
+    // it no longer parses, so no span update (and no `gcal.row` record)
+    // can follow a bullet rewrite.
+    let row = row_line(&first.contents, &block_id);
+    let mangled = first
+        .contents
+        .replace(&row, &row.replace("**0800-0815** ", ""));
+    let updated = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let plan = run_with_journal(&mangled, vec![updated], &journal);
+    assert!(plan.rows_updated.is_empty(), "{:?}", plan.rows_updated);
+    assert_eq!(
+        child_lines_under(&plan.contents, &block_id),
+        vec!["\t- And retainers!"],
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
 fn absent_empty_description_appends_no_record() {
     let seed = occurrence("swings", "Swings!", true, "0800-0815", 480);
     let first = run(empty_ledger(), vec![seed.clone()]);

@@ -601,6 +601,17 @@ fn apply_description_update(
     if matches!(journaled.description, DescriptionState::HandsOff) {
         return noop;
     }
+    // Bullets move only together with a `gcal.row` record. A row found
+    // by block ID whose line no longer parses as a task row gets no span
+    // update (so no record), so its bullets stay put too.
+    if !working
+        .lines
+        .get(line_index)
+        .and_then(|line| split_row_spans(line))
+        .is_some_and(|spans| spans.task)
+    {
+        return noop;
+    }
     let fresh_state = bullets_tracked(fresh);
     let (fresh_hash, fresh_lines) = match &fresh_state {
         DescriptionState::Tracked { hash, lines } => (hash.clone(), *lines),

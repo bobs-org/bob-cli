@@ -1,7 +1,7 @@
 //! Structured Google Calendar description parse.
 //!
 //! One linear HTML or plain-text tokenize feeds both directive verdicts
-//! and the future bullet renderer, so a line cannot count as both a
+//! and the bullet renderer, so a line cannot count as both a
 //! directive and a bullet, or as neither. `EventDescription` stores the
 //! outlined lines unescaped; its `Debug` impl prints counts only.
 
@@ -17,7 +17,6 @@ mod html;
 mod plain;
 
 /// Inputs later filter passes use to drop badge duplicates.
-#[allow(dead_code)] // boilerplate-filter reads these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DescriptionContext<'a> {
     pub join_link: Option<&'a str>,
@@ -36,10 +35,8 @@ pub(crate) struct DescriptionDirectives {
 /// Parsed description: outlined lines, directive verdicts, size flag.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct EventDescription {
-    #[allow(dead_code)] // bullet-renderer reads this.
     pub lines: Vec<DescriptionLine>,
     pub directives: DescriptionDirectives,
-    #[allow(dead_code)] // bullet-renderer reads this.
     pub oversized: bool,
 }
 
@@ -54,7 +51,6 @@ impl fmt::Debug for EventDescription {
 }
 
 /// One outlined description line, still unescaped.
-#[allow(dead_code)] // bullet-renderer reads these fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DescriptionLine {
     pub depth: u8,
@@ -62,14 +58,12 @@ pub(crate) struct DescriptionLine {
     pub inlines: Vec<Inline>,
 }
 
-#[allow(dead_code)] // bullet-renderer reads these variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LineMarker {
     Bullet,
     Ordered(u32),
 }
 
-#[allow(dead_code)] // bullet-renderer reads these variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Inline {
     Text {
@@ -84,7 +78,7 @@ pub(crate) enum Inline {
 }
 
 /// Tokenized line before filter and outline. Blank and separator lines
-/// stay until [`filter_source_lines`]; later phases add passes there.
+/// stay until [`filter_source_lines`], where the boilerplate passes run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SourceLine {
     kind: SourceKind,
@@ -121,7 +115,7 @@ pub(crate) fn parse_description(
 }
 
 /// Reimplement today's scanner on top of [`parse_description`].
-#[allow(dead_code)] // vector gate and unit tests call this wrapper.
+#[cfg(test)]
 pub(crate) fn description_directives(
     description: &str,
 ) -> DescriptionDirectives {
