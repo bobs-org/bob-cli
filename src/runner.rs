@@ -285,6 +285,7 @@ Bare `bob stats` runs the read-only overview glance.
 Examples:
   bob stats                    Weekly glance of the overview metrics
   bob stats -r 7d -c           Last 7 days, with the prior period
+  bob stats -k off-clock       The same glance on the off-clock Pomodoros
   bob stats show worked -c     Detail chart for Worked, with prior ticks
   bob stats show -a -f json    Every visible metric as one JSON object
   bob stats metrics            The metric catalog

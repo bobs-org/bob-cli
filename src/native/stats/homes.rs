@@ -1038,9 +1038,13 @@ fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
             metric: None,
             date: None,
             message: format!(
-                "{} closed {} disagree with the linked tasks' #offclock tags; closed rows keep their keys",
+                "{} closed {} with the linked tasks' #offclock tags; closed rows keep their keys",
                 health.clock_drift,
-                plural_session(health.clock_drift),
+                if health.clock_drift == 1 {
+                    "session disagrees"
+                } else {
+                    "sessions disagree"
+                },
             ),
         });
     }

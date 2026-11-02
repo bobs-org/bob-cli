@@ -717,6 +717,9 @@ pub(crate) fn choice_description(
         ("group", "day") => Some("One point per calendar day"),
         ("group", "week") => Some("One point per ISO week"),
         ("group", "month") => Some("One point per calendar month"),
+        ("clock", "worked") => Some("Pomodoros on the work clock"),
+        ("clock", "off-clock") => Some("Pomodoros kept off the clock"),
+        ("clock", "total") => Some("Both clocks together"),
         _ => None,
     }
 }

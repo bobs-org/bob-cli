@@ -1088,10 +1088,16 @@ fn stats_help_lists_options_alphabetically() {
             "-f, --format",
             "-g, --group",
             "-h, --help",
+            "-k, --clock",
             "-o, --offset",
             "-r, --range",
         ],
     );
+    assert!(
+        help.contains("[possible values: worked, off-clock, total]"),
+        "expected canonical clock values only:\n{help}"
+    );
+    assert!(!help.contains("untracked"), "aliases stay hidden:\n{help}");
     assert_stdout_has_no_ansi(&overview);
 
     let show = bob_command()
@@ -1109,11 +1115,16 @@ fn stats_help_lists_options_alphabetically() {
             "-f, --format",
             "-g, --group",
             "-h, --help",
+            "-k, --clock",
             "-o, --offset",
             "-r, --range",
         ],
     );
     assert!(show_help.contains("[METRIC]"));
+    assert!(
+        show_help.contains("[possible values: worked, off-clock, total]"),
+        "expected canonical clock values only:\n{show_help}"
+    );
 
     let metrics = bob_command()
         .args(["stats", "metrics", "--help"])

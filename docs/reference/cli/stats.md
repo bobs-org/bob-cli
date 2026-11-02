@@ -28,6 +28,7 @@ Bare `bob stats` runs the read-only overview glance.
 Examples:
   bob stats                    Weekly glance of the overview metrics
   bob stats -r 7d -c           Last 7 days, with the prior period
+  bob stats -k off-clock       The same glance on the off-clock Pomodoros
   bob stats show worked -c     Detail chart for Worked, with prior ticks
   bob stats show -a -f json    Every visible metric as one JSON object
   bob stats metrics            The metric catalog
@@ -107,6 +108,12 @@ Options:
   -h, --help
           Print help
 
+  -k, --clock <CLOCK>
+          Pomodoro clock: worked, off-clock, or total
+          
+          [default: worked]
+          [possible values: worked, off-clock, total]
+
   -o, --offset <N>
           Shift the window back this many ranges
 
@@ -116,7 +123,8 @@ Options:
 Examples:
   bob stats
   bob stats -r 7d -c
-  bob stats -f json
+  bob stats -k off-clock
+  bob stats -k total -f json
   bob stats -f csv
 
 Environment:
@@ -171,6 +179,12 @@ Options:
   -h, --help
           Print help
 
+  -k, --clock <CLOCK>
+          Pomodoro clock: worked, off-clock, or total
+          
+          [default: worked]
+          [possible values: worked, off-clock, total]
+
   -o, --offset <N>
           Shift the window back this many ranges
 
@@ -180,6 +194,7 @@ Options:
 Examples:
   bob stats show worked -c
   bob stats show worked reviewed
+  bob stats show worked -k total
   bob stats show -a -f json
   bob stats show -a -f csv
 

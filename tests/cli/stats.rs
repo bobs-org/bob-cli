@@ -120,10 +120,15 @@ fn overview_csv_has_tidy_header() {
     assert_success(&output);
     let text = stdout(&output);
     assert!(text.starts_with(
-        "date,end,metric,value,display,quality,provisional,num,den\n"
+        "date,end,metric,value,display,quality,provisional,num,den,clock\n"
     ));
     assert!(text.contains(",worked,"));
-    assert!(text.contains(",review_closed,0,not yet,ok,true,,"));
+    // Only Pomodoro rows carry a clock; every other metric leaves it empty.
+    assert!(
+        text.contains(",worked,32,32m,ok,false,,,worked\n"),
+        "{text}"
+    );
+    assert!(text.contains(",review_closed,0,not yet,ok,true,,,\n"));
 }
 
 #[test]

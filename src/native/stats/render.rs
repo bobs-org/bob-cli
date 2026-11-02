@@ -28,11 +28,12 @@ pub(crate) fn json_line(report: &StatsReport) -> String {
 
 pub(crate) fn csv(report: &StatsReport) -> String {
     let mut out = String::from(
-        "date,end,metric,value,display,quality,provisional,num,den\n",
+        "date,end,metric,value,display,quality,provisional,num,den,clock\n",
     );
     for metric in &report.metrics {
+        let clock = metric_clock(metric);
         for point in &metric.points {
-            out.push_str(&csv_row(&metric.id, point));
+            out.push_str(&csv_row(&metric.id, clock, point));
         }
     }
     out
@@ -43,9 +44,18 @@ pub(crate) fn overview(report: &StatsReport, styler: &Styler) -> String {
     out.push_str(&header(report, styler));
     out.push('\n');
     out.push_str(&overview_table(report, styler));
+    let mut spaced = false;
     if let Some(today) = today_line(report, styler) {
         out.push('\n');
         out.push_str(&today);
+        out.push('\n');
+        spaced = true;
+    }
+    if let Some(note) = clock_note(report, "bob stats", styler) {
+        if !spaced {
+            out.push('\n');
+        }
+        out.push_str(&note);
         out.push('\n');
     }
     if let Some(journal) = journal_line(&report.health, report.today, styler) {
@@ -63,6 +73,18 @@ pub(crate) fn detail(report: &StatsReport, styler: &Styler) -> String {
             out.push('\n');
         }
         out.push_str(&detail_metric(report, metric, styler));
+    }
+    let ids: Vec<&str> = report
+        .metrics
+        .iter()
+        .filter(|metric| metric.kind == "pomodoro")
+        .map(|metric| metric.id.as_str())
+        .collect();
+    let hint = format!("bob stats show {}", ids.join(" "));
+    if let Some(note) = clock_note(report, &hint, styler) {
+        out.push('\n');
+        out.push_str(&note);
+        out.push('\n');
     }
     out.push_str(&warning_lines(report, styler));
     out
@@ -153,7 +175,20 @@ fn col_width(
         .max(header)
 }
 
-fn csv_row(metric: &str, point: &SeriesPoint) -> String {
+/// The canonical clock a Pomodoro metric was evaluated on; other kinds
+/// carry none, so their CSV field stays empty.
+fn metric_clock(metric: &MetricReport) -> &str {
+    if metric.kind != "pomodoro" {
+        return "";
+    }
+    metric
+        .parameters
+        .as_ref()
+        .and_then(|parameters| parameters.clock.as_deref())
+        .unwrap_or("")
+}
+
+fn csv_row(metric: &str, clock: &str, point: &SeriesPoint) -> String {
     let value = point
         .value
         .map(|value| value.to_string())
@@ -162,13 +197,14 @@ fn csv_row(metric: &str, point: &SeriesPoint) -> String {
     let num = point.num.map(|n| n.to_string()).unwrap_or_default();
     let den = point.den.map(|n| n.to_string()).unwrap_or_default();
     format!(
-        "{},{},{},{},{},{quality},{},{num},{den}\n",
+        "{},{},{},{},{},{quality},{},{num},{den},{}\n",
         point.date,
         point.end,
         csv_field(metric),
         value,
         csv_field(&point.display),
         point.provisional,
+        csv_field(clock),
     )
 }
 
@@ -203,6 +239,9 @@ fn header(report: &StatsReport, styler: &Styler) -> String {
     parts.push(window);
     if let Some(prior) = &report.range.prior {
         parts.push(format!("vs {}", prior.label));
+    }
+    if report.clock.value == "off-clock" {
+        parts.push("off the clock".to_string());
     }
     format!("{}\n", parts.join(&format!(" {sep} ")))
 }
@@ -447,6 +486,58 @@ fn color_spark(spark: &str, color: &str, styler: &Styler) -> String {
             }
         })
         .collect()
+}
+
+/// The one dim line that explains what the selected clock hides or adds,
+/// built from the window totals in `report.clock`. `command` is the
+/// invocation, without options, that repeats the report on another clock.
+///
+/// - Worked: how much off-clock time the window holds, and how to see it.
+/// - Off-clock: that the window holds none (the table still shows zeros).
+/// - Total: the worked/off-clock breakdown of the total, same window and
+///   units.
+///
+/// Reports without a Pomodoro metric have no clock to explain.
+fn clock_note(
+    report: &StatsReport,
+    command: &str,
+    styler: &Styler,
+) -> Option<String> {
+    if !report
+        .metrics
+        .iter()
+        .any(|metric| metric.kind == "pomodoro")
+    {
+        return None;
+    }
+    let minutes = |value: &str| {
+        report
+            .clock
+            .options
+            .iter()
+            .find(|option| option.value == value)
+    };
+    let off = minutes("off-clock")?;
+    let sep = styler.separator();
+    let text = match report.clock.value.as_str() {
+        "worked" if off.minutes > 0 => format!(
+            "{BOOL_NOT_YET} {} off-clock {sep} {command} -k off-clock",
+            off.display
+        ),
+        "off-clock" if off.minutes == 0 => {
+            "No off-clock time in this window".to_string()
+        }
+        "total" => {
+            let worked = minutes("worked")?;
+            let total = minutes("total")?;
+            format!(
+                "{BOOL_NOT_YET} {} total {sep} {} worked + {} off-clock",
+                total.display, worked.display, off.display
+            )
+        }
+        _ => return None,
+    };
+    Some(styler.dim(&text))
 }
 
 fn today_line(report: &StatsReport, styler: &Styler) -> Option<String> {
@@ -811,16 +902,50 @@ fn detail_summary(
         ));
     }
     if let Some(total) = &metric.summary.total {
-        bits.push(format!(
-            "total {} over {} days",
-            total.display, report.range.days,
-        ));
+        let mut text =
+            format!("total {} over {} days", total.display, report.range.days);
+        if let (Some(all), Some(off)) =
+            (total.value, complete_day_off_clock(metric))
+        {
+            text.push_str(&format!(
+                " = {} worked + {} off-clock",
+                format_unit(all - off, &metric.unit),
+                format_unit(off, &metric.unit),
+            ));
+        }
+        bits.push(text);
     }
     bits.push(format!(
         "{} of {} days with data",
         metric.summary.days_with_data, report.range.days,
     ));
     format!(" {}\n", bits.join(&format!(" {sep} ")))
+}
+
+/// The off-clock sub-share of a Total metric over the same complete days its
+/// summary total covers. Daily points hold exact per-day shares when the
+/// chart is grouped; otherwise the points are the days. Other lenses and
+/// metrics carry no breakdown.
+fn complete_day_off_clock(metric: &MetricReport) -> Option<i64> {
+    let total = metric
+        .parameters
+        .as_ref()
+        .and_then(|parameters| parameters.clock.as_deref())
+        == Some("total");
+    if !total || !matches!(metric.unit.as_str(), "minutes" | "count") {
+        return None;
+    }
+    let days = if metric.daily_points.is_empty() {
+        &metric.points
+    } else {
+        &metric.daily_points
+    };
+    let off = days
+        .iter()
+        .filter(|point| !point.provisional)
+        .filter_map(|point| point.off_clock)
+        .fold(0_i64, i64::saturating_add);
+    (off > 0).then_some(off)
 }
 
 fn format_unit(value: i64, unit: &str) -> String {
@@ -869,6 +994,7 @@ fn parts_lines(
                 format_part_cell(
                     part,
                     name,
+                    &metric.unit,
                     &report.homes,
                     &report.theme_hues,
                     styler,
@@ -996,7 +1122,13 @@ fn collapse_parts_cli(
             label: None,
             apportioned: (apportioned > 0).then_some(apportioned),
             apportioned_display: None,
-            off_clock: None,
+            off_clock: {
+                let off = overflow
+                    .iter()
+                    .filter_map(|part| part.off_clock)
+                    .fold(0_i64, i64::saturating_add);
+                (off > 0).then_some(off)
+            },
         });
     }
     homes.extend(buckets);
@@ -1010,6 +1142,7 @@ fn is_bucket_key(key: &str) -> bool {
 fn format_part_cell(
     part: &PartSummary,
     dimension: &str,
+    unit: &str,
     catalog: &std::collections::BTreeMap<String, HomeCatalogEntry>,
     theme_hues: &std::collections::BTreeMap<
         String,
@@ -1018,7 +1151,10 @@ fn format_part_cell(
     styler: &Styler,
 ) -> String {
     let label = part.label.as_deref().unwrap_or(&part.key);
-    let body = format!("{label} {} {}", part.display, part.share);
+    let mut body = format!("{label} {} {}", part.display, part.share);
+    if let Some(off) = part.off_clock.filter(|off| *off > 0) {
+        body.push_str(&format!(" ({BOOL_NOT_YET} {})", format_unit(off, unit)));
+    }
     if dimension == "theme" {
         if !styler.is_color() {
             return body;
@@ -1200,12 +1336,33 @@ mod tests {
         )]);
         let homes = BTreeMap::new();
         assert_eq!(
-            format_part_cell(&part, "theme", &homes, &refs, &Styler::plain(),),
+            format_part_cell(
+                &part,
+                "theme",
+                "minutes",
+                &homes,
+                &refs,
+                &Styler::plain(),
+            ),
             "GTD 25m 100%"
+        );
+        let mut split = part.clone();
+        split.off_clock = Some(15);
+        assert_eq!(
+            format_part_cell(
+                &split,
+                "theme",
+                "minutes",
+                &homes,
+                &refs,
+                &Styler::plain(),
+            ),
+            "GTD 25m 100% (◌ 15m)"
         );
         assert!(format_part_cell(
             &part,
             "theme",
+            "minutes",
             &homes,
             &refs,
             &Styler::colored(),
@@ -1232,16 +1389,159 @@ mod tests {
 
     #[test]
     fn csv_has_tidy_header_and_empty_null_value() {
-        let report =
+        let mut report =
             report(vec![point(9, Some(32), "32m"), point(10, None, "–")]);
+        report.metrics[0].parameters = Some(clock_parameters("off-clock"));
         let text = csv(&report);
         assert!(text.starts_with(
-            "date,end,metric,value,display,quality,provisional,num,den\n"
+            "date,end,metric,value,display,quality,provisional,num,den,clock\n"
         ));
-        assert!(text.contains("2026-10-09,2026-10-09,worked,32,32m,ok,false,,"));
-        assert!(
-            text.contains("2026-10-10,2026-10-10,worked,,–,missing,false,,")
+        assert!(text.contains(
+            "2026-10-09,2026-10-09,worked,32,32m,ok,false,,,off-clock\n"
+        ));
+        assert!(text.contains(
+            "2026-10-10,2026-10-10,worked,,–,missing,false,,,off-clock\n"
+        ));
+    }
+
+    #[test]
+    fn csv_clock_is_empty_for_other_kinds_and_unparametrized_rows() {
+        let mut report = report(vec![point(9, Some(3), "3")]);
+        report.metrics[0].kind = "tasks".to_string();
+        report.metrics[0].parameters = Some(clock_parameters("total"));
+        assert!(csv(&report).ends_with("worked,3,3,ok,false,,,\n"));
+        report.metrics[0].kind = "pomodoro".to_string();
+        report.metrics[0].parameters = None;
+        assert!(csv(&report).ends_with("worked,3,3,ok,false,,,\n"));
+    }
+
+    fn clock_parameters(
+        clock: &str,
+    ) -> crate::native::stats::report::MetricParameters {
+        crate::native::stats::report::MetricParameters {
+            measure: None,
+            themes: Vec::new(),
+            exclude_themes: Vec::new(),
+            exclude_in: Vec::new(),
+            event: None,
+            tags_any: Vec::new(),
+            tags_all: Vec::new(),
+            in_notes: Vec::new(),
+            task_kind: None,
+            recurring: None,
+            tags: Vec::new(),
+            match_text: None,
+            field: None,
+            field_source: None,
+            expr: None,
+            dependencies: Vec::new(),
+            select: None,
+            tiers: None,
+            clock: Some(clock.to_string()),
+        }
+    }
+
+    fn with_clock(
+        mut report: StatsReport,
+        value: &str,
+        worked: i64,
+        off: i64,
+    ) -> StatsReport {
+        use crate::native::stats::report::{ClockOption, ClockReport};
+        let option = |value: &str, minutes: i64| ClockOption {
+            value: value.to_string(),
+            label: value.to_string(),
+            description: String::new(),
+            minutes,
+            display: format_unit(minutes, "minutes"),
+        };
+        report.clock = ClockReport {
+            value: value.to_string(),
+            label: value.to_string(),
+            since: None,
+            options: vec![
+                option("worked", worked),
+                option("off-clock", off),
+                option("total", worked + off),
+            ],
+        };
+        report
+    }
+
+    #[test]
+    fn clock_note_explains_each_lens_in_window_totals() {
+        let styler = Styler::plain();
+        let base = report(vec![point(9, Some(32), "32m")]);
+
+        let worked = with_clock(base.clone(), "worked", 120, 90);
+        assert_eq!(
+            clock_note(&worked, "bob stats", &styler).as_deref(),
+            Some("◌ 1h 30m off-clock - bob stats -k off-clock")
         );
+        let clean = with_clock(base.clone(), "worked", 120, 0);
+        assert_eq!(clock_note(&clean, "bob stats", &styler), None);
+
+        let off = with_clock(base.clone(), "off-clock", 120, 90);
+        assert_eq!(clock_note(&off, "bob stats", &styler), None);
+        let none = with_clock(base.clone(), "off-clock", 120, 0);
+        assert_eq!(
+            clock_note(&none, "bob stats", &styler).as_deref(),
+            Some("No off-clock time in this window")
+        );
+
+        let total = with_clock(base.clone(), "total", 120, 90);
+        assert_eq!(
+            clock_note(&total, "bob stats", &styler).as_deref(),
+            Some("◌ 3h 30m total - 2h 00m worked + 1h 30m off-clock")
+        );
+
+        // No Pomodoro metric, no clock to explain.
+        let mut tasks = with_clock(base, "worked", 120, 90);
+        tasks.metrics[0].kind = "tasks".to_string();
+        assert_eq!(clock_note(&tasks, "bob stats", &styler), None);
+    }
+
+    #[test]
+    fn off_clock_header_names_the_lens_and_others_do_not() {
+        let styler = Styler::plain();
+        let base = report(vec![point(9, Some(32), "32m")]);
+        let off = with_clock(base.clone(), "off-clock", 0, 0);
+        assert!(header(&off, &styler)
+            .trim_end()
+            .ends_with("- off the clock"));
+        for lens in ["worked", "total"] {
+            let other = with_clock(base.clone(), lens, 0, 0);
+            assert!(!header(&other, &styler).contains("off the clock"));
+        }
+    }
+
+    #[test]
+    fn total_detail_splits_the_summary_total_by_clock() {
+        let styler = Styler::plain();
+        let mut off_day = point(9, Some(100), "1h 40m");
+        off_day.off_clock = Some(60);
+        let mut today = point(11, Some(30), "30m");
+        today.provisional = true;
+        today.off_clock = Some(30);
+        let mut report =
+            with_clock(report(vec![off_day, today]), "total", 40, 90);
+        report.metrics[0].parameters = Some(clock_parameters("total"));
+        report.metrics[0].summary.total =
+            Some(crate::native::stats::report::ValueDisplay {
+                value: Some(100),
+                display: "1h 40m".to_string(),
+            });
+        let text = detail_summary(&report.metrics[0], &report, &styler);
+        assert!(
+            text.contains(
+                "total 1h 40m over 3 days = 40m worked + 1h 00m off-clock"
+            ),
+            "{text}"
+        );
+        // A worked-lens metric carries no breakdown, even with sub-shares.
+        report.metrics[0].parameters = Some(clock_parameters("worked"));
+        let text = detail_summary(&report.metrics[0], &report, &styler);
+        assert!(!text.contains("worked +"), "{text}");
     }
 
     #[test]

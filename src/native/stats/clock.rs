@@ -52,7 +52,6 @@ impl StatsClock {
     }
 
     /// CLI-only hidden aliases: `on`, `off`, `untracked`, `all`.
-    #[allow(dead_code)]
     pub(crate) fn parse_cli(text: &str) -> Option<Self> {
         match text.trim() {
             "on" => Some(Self::Worked),

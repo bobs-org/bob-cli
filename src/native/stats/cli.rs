@@ -3,11 +3,12 @@
 use std::{ffi::OsString, iter, path::PathBuf};
 
 use clap::{
-    builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
-    Command as ClapCommand,
+    builder::{OsStringValueParser, PossibleValue, PossibleValuesParser},
+    Arg, ArgAction, ArgMatches, Command as ClapCommand,
 };
 
 use super::{
+    clock::StatsClock,
     compute::compute,
     error::StatsError,
     render,
@@ -23,7 +24,8 @@ const OVERVIEW_AFTER_HELP: &str = "\
 Examples:
   bob stats
   bob stats -r 7d -c
-  bob stats -f json
+  bob stats -k off-clock
+  bob stats -k total -f json
   bob stats -f csv
 
 Environment:
@@ -43,6 +45,7 @@ const SHOW_AFTER_HELP: &str = "\
 Examples:
   bob stats show worked -c
   bob stats show worked reviewed
+  bob stats show worked -k total
   bob stats show -a -f json
   bob stats show -a -f csv
 
@@ -224,6 +227,7 @@ fn request_from_matches(
         .flatten()
         .cloned();
     request.grouping = grouping_from_matches(matches);
+    request.clock = clock_from_matches(matches);
     request.offset = matches
         .try_get_one::<u32>("offset")
         .ok()
@@ -260,6 +264,15 @@ fn selection_from_matches(
     }
 }
 
+fn clock_from_matches(matches: &ArgMatches) -> StatsClock {
+    matches
+        .try_get_one::<String>("clock")
+        .ok()
+        .flatten()
+        .and_then(|value| StatsClock::parse_cli(value))
+        .unwrap_or_default()
+}
+
 fn grouping_from_matches(matches: &ArgMatches) -> Grouping {
     match matches
         .try_get_one::<String>("group")
@@ -291,6 +304,7 @@ pub(crate) fn overview_command() -> ClapCommand {
         .arg(format_arg(true))
         .arg(group_arg())
         .arg(help_arg())
+        .arg(clock_arg())
         .arg(offset_arg())
         .arg(range_arg())
 }
@@ -313,6 +327,7 @@ pub(crate) fn show_command() -> ClapCommand {
         .arg(format_arg(true))
         .arg(group_arg())
         .arg(help_arg())
+        .arg(clock_arg())
         .arg(offset_arg())
         .arg(range_arg())
 }
@@ -356,6 +371,22 @@ fn bob_dir_arg() -> Arg {
         .value_name("DIR")
         .value_parser(OsStringValueParser::new())
         .help("Bob vault root; defaults to BOB_DIR or ~/bob")
+}
+
+fn clock_arg() -> Arg {
+    // The canonical values are the only ones help and completion list; the
+    // aliases parse but stay hidden, and clap hands back the canonical name.
+    Arg::new("clock")
+        .long("clock")
+        .short('k')
+        .value_name("CLOCK")
+        .value_parser(PossibleValuesParser::new([
+            PossibleValue::new("worked").alias("on"),
+            PossibleValue::new("off-clock").aliases(["off", "untracked"]),
+            PossibleValue::new("total").alias("all"),
+        ]))
+        .default_value("worked")
+        .help("Pomodoro clock: worked, off-clock, or total")
 }
 
 fn compare_arg() -> Arg {

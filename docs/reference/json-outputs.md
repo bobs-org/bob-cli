@@ -215,6 +215,12 @@ numerators and denominators, and booleans count met days over days with data.
 The envelope remains schema 1; see
 [Stats summaries](../stats.md#ranges-grouping-summaries-display).
 
+Stats reports add a top-level `clock` object (`value`, `label`, `since`, and
+the three `options` with window minutes) for the `-k worked|off-clock|total`
+lens, plus `off_clock` sub-shares on Pomodoro points and parts, `off_clock`
+on `sessions`, and clock diagnostics under `health.homes`; see
+[Clocks](../stats.md#clocks). The CSV form ends with a `clock` column.
+
 An unmet boolean for provisional today has `value: 0`, `display: "not yet"`,
 and `provisional: true`; a completed day can display `missed`. The Obsidian
 Day strip is a plugin view, not a `day_strip` field in CLI JSON. See

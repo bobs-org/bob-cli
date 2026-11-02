@@ -126,13 +126,15 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
 (`orange`, `violet`, `green`, `blue`, `gray`), never hex.
 
 - `pomodoro`: closed `[x]`/`[X]` ledger rows under `## Pomodoros`.
-  `measure: minutes` (default) uses each worked row's recorded `[t:: Nm]` or
-  legacy stopwatch. `[off:: Nm]` rows retain their recorded duration for
-  ledger attribution but stay out of Worked minutes, counts, homes aggregates,
-  and the Day strip. A bare historical timed row is treated as off-clock;
-  when both keys appear, `[t::]` wins.
-  Range-less rows stay `missing`. `measure: count` counts matching tracked
-  rows. `themes` / `exclude_themes` filter uppercase composite
+  `measure: minutes` (default) uses each row's recorded minutes on the
+  metric's [clock](#clocks): Worked (the default) reads `[t:: Nm]` or the
+  legacy stopwatch, Off-clock reads `[off:: Nm]` and bare closed timed rows
+  (counted by their span), and Total reads both. Off-clock rows stay out of
+  Worked minutes, counts, homes aggregates, and the Day strip. When both keys
+  appear, `[t::]` wins. An optional `clock: worked|off-clock|total` pins the
+  metric's clock.
+  Range-less rows stay `missing`. `measure: count` counts matching
+  rows on the clock. `themes` / `exclude_themes` filter uppercase composite
   components (`PLAN + SASE` splits its minutes across both parts, remainder to
   the first); unnamed rows are `(unnamed)`. Count mode attributes each row to
   its first matching component so parts add up to the total. `in:` /
@@ -200,6 +202,77 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `review_time` | pomodoro, minutes, `in: [gtd_daily]` | minutes / orange / neutral | Minutes attributed to tasks in, or rooted at, `gtd_daily`, the morning review's area; redefine `stats.metrics.review_time` if your review lives elsewhere. |
 | `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D. |
 
+## Clocks
+
+A closed Pomodoro sits on one of two clocks, and Stats reads three **lenses**
+over them. The lens is the `bob stats -k` clock; JSON and config spell it
+the same way.
+
+| Lens | Value | Counts |
+| --- | --- | --- |
+| Worked | `worked` | Rows with `[t:: Nm]` (or the legacy stopwatch), in recorded minutes. The default. |
+| Off-clock | `off-clock` | Rows with `[off:: Nm]`, plus bare closed timed rows counted by their span. |
+| Total | `total` | Both clocks. It sums session minutes (or session counts), so overlapping sessions count twice; it is neither occupied nor free time. |
+
+Each row has exactly one classification. A closed row with both keys is
+Worked using `[t::]` and raises a conflict diagnostic. A closed placeholder
+`()` counts on neither clock. Closed history is never reinterpreted from
+today's task tags: a later `#offclock` edit shows up as drift, not as a new
+total. Counts count the selected sessions, not minutes.
+
+**Selection.** `-k/--clock worked|off-clock|total` on `bob stats` and
+`bob stats show` sets the request lens (default Worked). The hidden aliases
+`on` (`worked`), `off` and `untracked` (`off-clock`), and `all` (`total`) parse
+to the same report; help, completion, and JSON only name the canonical values. The lens applies to every Pomodoro metric without a
+configured `clock:`; a configured clock always wins and appears in that
+metric's `parameters.clock`, which carries the effective clock for every
+Pomodoro metric, including Worked. A bad `clock:` value, or `clock:` on a
+non-Pomodoro kind, invalidates only that metric with an `invalid_metric`
+warning. Tasks, fields, checklists, journals, and formulas never follow the
+lens: a formula reads each Pomodoro dependency on its configured clock
+(Worked unless pinned), hidden inputs included, so a formula's value is
+the same in every report.
+
+**Labels and direction.** Pomodoro labels follow the effective clock, so
+a pinned metric stays honest in a report on another lens:
+
+| Id | Worked | Off-clock | Total |
+| --- | --- | --- | --- |
+| `worked` | Worked | Off-clock | Total |
+| `sessions` | Sessions | Off-clock sessions | Total sessions |
+| any other | configured label | label · off-clock | label · total |
+
+Off-clock and Total Pomodoro metrics have `direction: neutral`; Worked keeps
+its definition's direction. Definitions never describe off-clock values as
+worked minutes.
+
+**Coverage.** Worked keeps its inferred start. Off-clock adoption is the date
+of the first closed off-clock session in the indexed history (bare legacy
+spans included), regardless of the requested window or a metric's home
+filter. Off-clock and Total metrics are `not_tracked` before that date, in
+prior windows, grouped points, rolling medians, and typical days alike,
+rather than zero. A later metric `since:` or the global floor can move the
+start forward. With no adoption evidence, `clock.since` is `null` and no
+date is invented.
+
+**Filters and sub-shares.** A metric's theme and home filters apply to the
+chosen clock. Total points, buckets, and `parts_summary` rows carry the exact
+off-clock contribution as `off_clock`; in the Worked lens a point's
+`off_clock` is the off-clock amount that lens left out under the metric's
+filters, and the Off-clock lens omits it. The key is omitted when zero and never appears on non-Pomodoro
+metrics. Contributions are carried through aggregation, never re-split from
+rounded totals.
+
+**Quality of the ledger.** Every report counts, over the displayed window and
+whatever the active lens hides: closed off-clock sessions, rows without a
+duration key (`unstamped_sessions`), rows with both keys
+(`clock_conflicts`), keyed rows whose key disagrees with the verdict
+recomputed from their fully resolved counted Task Links (`clock_drift`),
+and minutes covered by two or more closed timed sessions
+(`overlap_minutes`, computed from the real time ranges, so a triple overlap
+never inflates it; clock totals never subtract it). Stats never rewrites a
+row. See [Health](#data-model-and-quality) for the keys and warning codes.
+
 ## `stats:` config
 
 ```yaml
@@ -215,6 +288,10 @@ stats:
       kind: pomodoro
       measure: minutes
       in: [sase]
+    family_time:      # pomodoro pinned to a clock
+      label: Family time
+      kind: pomodoro
+      clock: off-clock
     sase_blog_time:   # measures blog time on its own
       label: SASE blog time
       kind: pomodoro
@@ -271,6 +348,9 @@ definitions (plus downstream dependents) with local warnings.
 - Incompatible `unit` values for a kind drop that entry with a warning
   (`signed` is accepted for formulas, e.g. `net`; `unit: ratio` is rejected
   for formulas because they have no num/den). There is no unit fallback.
+- `clock` accepts only `worked`, `off-clock`, or `total`, and only on
+  `pomodoro`; anything else drops that entry with an `invalid_metric`
+  warning.
 - Missing required fields (`label`, `kind`, task `event`, field `field`,
   formula `expr`, journal `select`) invalidate that metric entry only.
 
@@ -347,10 +427,16 @@ counts with the latest timestamp and day), and `health.homes` (in-window
 `ambiguous_links` / `unresolved_links`, plus global
 `area_color_invalid` and hue-collision lists, and additive
 `root_field_invalid` / `root_field_not_root` lists keyed by
-`(path, line)`). Matching
+`(path, line)`). The clock diagnostics add `off_clock_sessions` (deprecated
+`untracked_sessions` stays equal to it during the compatibility window),
+`unstamped_sessions`, `clock_conflicts`, `clock_drift`, `overlap_minutes`, and
+an `overlaps` list of `{date, lines, minutes}` pairs (at most 50 entries;
+the aggregate stays exact when the list is capped); zero counts and empty
+lists are omitted. Matching
 `warning <message>  <code>` lines use `area_color_invalid`,
-`area_hue_collision`, `root_field_invalid`, and
-`root_field_not_root`. `invalid_dates` counts a task
+`area_hue_collision`, `root_field_invalid`,
+`root_field_not_root`, `clock_conflict`, `clock_drift`, `clock_unstamped`, and
+`clock_overlap`, once each. `invalid_dates` counts a task
 when created, done, or cancelled is malformed or future, or when scheduled
 is malformed. A future `scheduled` date is ordinary planning data and does
 not count. Daily-note field extraction skips task lines and ordered-list
@@ -456,7 +542,7 @@ yesterday, zero days) and still includes today as provisional.
 ## Schema-1 contract
 
 Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
-(with prior metadata), per-metric definitions/summaries/chart/points/parts/
+(with prior metadata), the `clock` object, per-metric definitions/summaries/chart/points/parts/
 warnings, health, global warnings, a top-level `homes` catalog keyed by
 every home used in the report (`label`, `kind` project|area|bucket, `area`,
 `subarea`, `path`, `hue`, `root_parent`; `project_label` on area-kind
@@ -467,8 +553,10 @@ report includes at least one pomodoro metric. The catalog and `sessions`
 are omitted when empty. `sessions` lists every closed Pomodoro in the
 display window (today included) in chronological order. Each element is
 `{date, path, line, time_range, minutes, minutes_display, quality, name,
-homes}`: facts, not metric values, so types and filters do not change
-them. `homes` is the shared R9 object; its keys are in the catalog. On
+off_clock, homes}`: facts, not metric values, so types and filters do not
+change them. They follow the request clock, carry real minutes, and add
+`off_clock: true` only on off-clock rows; `homes` keeps deprecated
+`untracked` beside `off_clock`. `homes` is the shared R9 object; its keys are in the catalog. On
 the 2026-10-18 live vault, `bob stats -f json -r all` is 1,945,299 bytes
 (1.90 MiB) with 1,093 session facts. Ratio points
 add `num`/`den`, grouped points add `partial`, and day-grouped
@@ -488,6 +576,33 @@ when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
 `chores`, `parts_display`, `apportioned`, `label`, `project_label`,
 `health.homes` lint lists, `typical`, and `sessions`.
+
+The top-level `clock` object describes the request lens and the displayed
+window:
+
+```json
+{
+  "value": "total",
+  "label": "Total",
+  "since": "2026-10-09",
+  "options": [
+    {"value": "worked", "label": "Worked", "description": "Closed Pomodoro minutes on the work clock.", "minutes": 42, "display": "42m"},
+    {"value": "off-clock", "label": "Off-clock", "description": "Closed Pomodoro minutes off the clock.", "minutes": 60, "display": "1h 00m"},
+    {"value": "total", "label": "Total", "description": "Closed session minutes on both clocks. The total sums session minutes and is not occupied or free time.", "minutes": 102, "display": "1h 42m"}
+  ]
+}
+```
+
+`value` and `label` name the lens; `since` is the Off-clock adoption date, or
+`null`. The three options always appear in Worked, Off-clock, Total order
+and give closed-session minutes for the displayed window (today's closed
+sessions included, lead-in and running rows excluded), independent of the
+selected metrics, their filters, hiding, and grouping. They are window
+totals, distinct from the complete-day metric summaries. Pomodoro metrics add
+`parameters.clock`, and their `points`, `daily_points`, prior points, and
+`parts_summary` rows add a numeric `off_clock` sub-share as described under
+[Clocks](#clocks). The compatibility rules are additive: `schema_version`
+stays 1, and clients that ignore the new keys keep working.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -578,7 +693,7 @@ Read-only Daily workflow command after `ready`. Bare `bob stats` runs
 the flag-only `overview` glance.
 
 ```text
-bob stats [overview] [-b DIR] [-c] [-f human|json|csv] [-g auto|day|week|month] [-o N] [-r RANGE]
+bob stats [overview] [-b DIR] [-c] [-f human|json|csv] [-g auto|day|week|month] [-k CLOCK] [-o N] [-r RANGE]
 bob stats show <METRIC>... | -a   [same options]
 bob stats metrics [-b DIR] [-f human|json]
 ```
@@ -586,7 +701,9 @@ bob stats metrics [-b DIR] [-f human|json]
 Options (alphabetical; every long option has a short alias):
 `-a/--all` (show: every visible metric), `-b/--bob-dir`, `-c/--compare`
 (include the prior period's points; human `show` draws its ticks),
-`-f/--format`, `-g/--group`, `-h/--help`, `-o/--offset`, `-r/--range`.
+`-f/--format`, `-g/--group`, `-h/--help`, `-k/--clock`
+(`worked`|`off-clock`|`total`, default `worked`; `overview` and `show` only),
+`-o/--offset`, `-r/--range`.
 
 Environment: `BOB_CONFIG_FILE`, `BOB_DIR`, `BOB_NOW`, `NO_COLOR`.
 
@@ -615,13 +732,33 @@ minutes that came from sessions with several homes. Buckets render dim:
 project parts add the dim line `grouped by today's note tree · from Task Links`.
 Metrics is a catalog table with a dim definition line per id.
 
+Clocks add one dim line under the table (overview) or after the last metric
+(show), built from the window totals in `clock.options`, and only when the
+report has a Pomodoro metric:
+
+- Worked: `◌ 1h 30m off-clock · bob stats -k off-clock`, only when the window
+  holds off-clock time. `show` names its Pomodoro metric ids in the command.
+- Off-clock: the overview header ends with `· off the clock`, labels read
+  Off-clock, and a window without off-clock time says `No off-clock time in
+  this window`.
+- Total: `◌ 3h 30m total · 2h 00m worked + 1h 30m off-clock`. Detail
+  summaries read `total 1h 32m over 3 days = 32m worked + 1h 00m off-clock`
+  for the same days as the total, and part cells add `(◌ 1h 00m)` for the
+  off-clock share.
+
+Conflict, drift, unstamped, and overlap diagnostics appear once each as
+ordinary `warning <message>  <code>` lines in every lens.
+
 Plain text under `NO_COLOR` or a non-TTY (`Styler::detect()`) drops the
 glyphs.
 
 ### CSV
 
-Tidy rows `date,end,metric,value,display,quality,provisional,num,den`
-(empty `num`/`den` when not a ratio).
+Tidy rows `date,end,metric,value,display,quality,provisional,num,den,clock`
+(empty `num`/`den` when not a ratio). `clock` is the last column: Pomodoro
+rows carry their effective canonical clock (`worked`, `off-clock`, or
+`total`) and every other metric leaves it empty. Adding the column changed the
+header, so consumers that pinned the old nine columns must tolerate a tenth.
 
 ### JSON
 
@@ -684,6 +821,27 @@ after-line outcomes, host naming, and which recorded events contribute to
 order disagree), duplicate keys, two hosts, malformed and truncated lines,
 unknown outcomes/tiers, pre/post-only days, keep-then-done, gap days, and
 pre-tracking dates.
+
+## Clock fixture and C-vector table
+
+The clock vectors reuse `tests/fixtures/stats/vault/` (its Oct 9 `MEET` row is
+a bare closed span, so Off-clock adoption is Oct 9) and, for the busier
+vectors, a temporary overlay that appends five rows and two tasks (`^off1`
+tagged `#offclock`, `^on1` untagged) to the Oct 9 note. The clock is the same
+Sunday 2026-10-11 noon and the window is `2026-10-08..2026-10-11`. Expected
+values are derived from the file contents and asserted in
+`src/native/stats/compute.rs` and `tests/cli/stats_clock.rs`.
+
+| # | Subject | What it proves |
+| --- | --- | --- |
+| C1 | Fixture, three lenses | Oct 9 is 32 worked, 60 off-clock, 92 total; Oct 8 is `not_tracked` for Off-clock and Total; window options read 42m / 1h 00m / 1h 42m |
+| C2 | Overlay, Oct 9 | Worked 97 (PLAN 25 + PLAN+SASE 7 + CONFLICT 20 + OVER 20 + LATE 25), Off-clock 110 (MEET 60 + EARLY 20 + SOLO 30), Total 207 with `off_clock` 110 |
+| C3 | Overlay diagnostics | 3 off-clock sessions, 2 unstamped (MEET, SOLO), 1 conflict, 2 drift (LATE tagged, EARLY untagged), 15 overlap minutes (OVER over PLAN) in every lens |
+| C4 | Overlay sessions | Worked lens lists 6 rows, Off-clock 3, Total 9; session minutes add up to the lens |
+| C5 | Overlay Total parts | `area`, `root_parent`, `project`, and `theme` values sum to 207 and their `off_clock` sub-shares to 110 |
+| C6 | Pinned metric | `family_time` (`clock: off-clock`) reads 110 with neutral direction in all three lenses; formulas `inner` (97) and `outer` stay put |
+| C7 | Clean overlay | Without the `MEET` row the Worked report is the pre-clock report, `clock.since` is `null`, and Off-clock says `No off-clock time in this window` |
+| C8 | Windows | Explicit ranges, presets, offsets, `all`, grouping, and `-c` keep Total = Worked + Off-clock everywhere Off-clock is tracked |
 
 ## Homes fixture and H-vector table
 
@@ -755,6 +913,11 @@ which stays unrooted for the `@unfiled` path; `gtd_daily.md` is an area under
   `health.tasks.invalid_dates: 1`, `closed_without_date: 230`, and
   `missing_created: 647`. Those counts are vault data quality, not
   engine errors; they do not change the headline metrics.
+- Total sums session minutes and may overlap; overlap is reported, never
+  subtracted. It is not occupied or free time.
+- Off-clock history before the first off-clock session is `not_tracked`, so
+  Off-clock and Total start later than Worked on a vault that adopted the
+  clock mid-history.
 - Release-mode `bob stats` on this vault is about 340–370 ms, above the
   original ≤300 ms target. See [Performance](#performance).
 

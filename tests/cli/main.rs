@@ -27,6 +27,7 @@ mod relations_rename;
 mod relations_reverse;
 mod run_env;
 mod stats;
+mod stats_clock;
 mod support;
 mod task_move;
 mod task_status_hooks;
