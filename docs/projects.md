@@ -972,9 +972,9 @@ the existing transactional writers (one undo step). Esc writes nothing and
 retains the anchor; stale inputs rebuild for a fresh choice.
 
 - **Not now (Enter).** P0 tasks enter at the first configured level in ladder
-  order whose `min_days` exceeds the effective refresh interval (7 → P2,
-  30 → P3 with the default ladder), unless `freshness.decay.enter` names a
-  valid fixed level. Prioritized tasks reuse the recommended roll or decay
+  order whose `min_days` is at least the effective refresh interval (3 → P1
+  on Bryan's 3–8 / 9–31 ladder; 7 → P2 and 30 → P3 with the default 2–7 /
+  8–30 ladder), unless `freshness.decay.enter` names a valid fixed level. Prioritized tasks reuse the recommended roll or decay
   unchanged. A terminal cancel is never offered: it substitutes a truthful
   same-level roll for this card only. Unknown priorities, unknown `enter`
   labels, invalid windows, and dates that would not defer into the future

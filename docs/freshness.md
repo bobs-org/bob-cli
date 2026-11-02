@@ -236,7 +236,10 @@ freshness:
 `false` keeps counting/display but never asks or skips. `keeps`
 accepts an integer 0–999; 0 asks on every due Ready re-confirmation,
 never NEW. `enter` is an optional nonempty configured priority
-label; absent/null uses interval-aware entry. Invalid scalar types,
+label; absent/null uses interval-aware entry (first ladder level whose
+`min_days` is at least the effective refresh interval, so Bryan's
+`interval: 3` and P1 `min_days: 3` enter P1, and the documented
+interval-7 example still enters P2). Invalid scalar types,
 fractional/negative/out-of-range values, and malformed blocks follow
 the current freshness config failure contract: Rust exit 2; plugin
 defaults with `invalid` diagnostics. Priority config validity is
