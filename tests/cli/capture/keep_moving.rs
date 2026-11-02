@@ -960,7 +960,12 @@ fn km21_later_close_of_prj_drops_group() {
         "!sase_badges:t\n\n!sase_badges:prj",
     );
     assert_eq!(moving_ids(&json, 0), Vec::<String>::new(), "{json}");
-    assert!(json["pull_in"].get("groups").is_none(), "{json}");
+    let groups = json["pull_in"]["groups"].as_array().expect("groups");
+    assert!(
+        groups.iter().all(|group| group["group"] != "keep_moving"),
+        "keep-moving group dropped: {groups:?}"
+    );
+    assert_eq!(groups[0]["group"], "project_finished", "{groups:?}");
 }
 
 // KM21: a later item that re-blocks a candidate drops only that row.

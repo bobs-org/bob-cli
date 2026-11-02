@@ -313,7 +313,28 @@ fn choice_required_error(
         .flat_map(|item| super::output::all_keep_moving_folds(&item.result))
         .cloned()
         .collect();
-    CaptureError::pull_in_choice_required(extra, offers, folds)
+    let relation_groups: Vec<crate::native::task_complete::RelationOfferGroup> =
+        items
+            .iter()
+            .flat_map(|item| super::output::all_relation_groups(&item.result))
+            .cloned()
+            .collect();
+    let relation_held: Vec<super::output::RelationHeldJson> = items
+        .iter()
+        .flat_map(|item| super::output::all_relation_held(&item.result))
+        .cloned()
+        .collect();
+    let relation_check = super::output::all_relation_check(
+        items.iter().map(|item| &item.result),
+    );
+    CaptureError::pull_in_choice_required(
+        extra,
+        offers,
+        folds,
+        relation_groups,
+        relation_held,
+        relation_check,
+    )
 }
 
 pub(super) fn assemble_pull_in(
@@ -322,8 +343,6 @@ pub(super) fn assemble_pull_in(
 ) -> PullInJson {
     let mut offer_count = 0;
     let mut picked_count = 0;
-    let mut folds: BTreeMap<(&'static str, String), PullInFoldedJson> =
-        BTreeMap::new();
     for item in items {
         for row in super::output::all_offer_rows(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
@@ -333,63 +352,15 @@ pub(super) fn assemble_pull_in(
                 }
             }
         }
-        for fold in super::output::all_project_folds(&item.result) {
-            folds.insert(
-                ("project", display_relative(&fold.project)),
-                PullInFoldedJson {
-                    hidden: fold.hidden,
-                    already_planned: fold.already_planned,
-                    sub_projects: fold.sub_projects,
-                    blocked: 0,
-                    scheduled: 0,
-                },
-            );
-        }
-        for fold in super::output::all_keep_moving_folds(&item.result) {
-            // Project folds cannot overwrite keep-moving folds: key by
-            // group and project.
-            folds.insert(
-                ("keep_moving", display_relative(&fold.project)),
-                PullInFoldedJson {
-                    hidden: fold.hidden,
-                    already_planned: 0,
-                    sub_projects: 0,
-                    blocked: fold.blocked,
-                    scheduled: fold.scheduled,
-                },
-            );
-        }
     }
-    let mut groups: Vec<PullInGroupJson> = folds
-        .into_iter()
-        .map(|((group, project), folded)| PullInGroupJson {
-            group,
-            project,
-            folded,
-        })
-        .collect();
-    // Omit groups with no surviving selectable rows is handled by the
-    // engine (folds only exist for offered projects). Keep the group
-    // order stable: project groups first, then keep-moving by path.
-    groups.sort_by(|left, right| {
-        (match left.group {
-            "project" => 0,
-            _ => 1,
-        })
-        .cmp(
-            &(match right.group {
-                "project" => 0,
-                _ => 1,
-            }),
-        )
-        .then(left.project.cmp(&right.project))
-    });
+    let (groups, copy) = super::pull_in_copy::assemble_groups(items);
     PullInJson {
         supported: true,
         offer_count,
         choice: choice.map(str::to_string),
         picked_count,
         groups,
+        copy,
     }
 }
 

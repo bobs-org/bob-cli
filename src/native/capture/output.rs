@@ -1080,6 +1080,10 @@ pub(super) struct PullInJson {
     pub(super) picked_count: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) groups: Vec<PullInGroupJson>,
+    /// Bob-authored picker title, capsule, and glyph. Omitted when there
+    /// are no groups (`docs/task-dependencies.md` §12.5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) copy: Option<PullInTopCopyJson>,
 }
 
 impl PullInJson {
@@ -1091,16 +1095,56 @@ impl PullInJson {
             choice: None,
             picked_count: 0,
             groups: Vec::new(),
+            copy: None,
         }
     }
 }
 
-/// One project group in `pull_in.groups`.
+/// Top-level `pull_in.copy` (`docs/task-dependencies.md` §12.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInTopCopyJson {
+    pub(super) title: String,
+    pub(super) capsule: String,
+    pub(super) glyph: &'static str,
+}
+
+/// Per-group `copy: {title, why?, tag?, fold?, glyph}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInGroupCopyJson {
+    pub(super) title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) why: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fold: Option<String>,
+    pub(super) glyph: &'static str,
+}
+
+/// Relation-group `after` identity (`docs/task-dependencies.md` §12.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInAfterJson {
+    pub(super) key: String,
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+/// One offered group in `pull_in.groups`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PullInGroupJson {
     pub(super) group: &'static str,
-    pub(super) project: String,
-    pub(super) folded: PullInFoldedJson,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) after: Option<PullInAfterJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) event: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) folded: Option<PullInFoldedJson>,
+    pub(super) copy: PullInGroupCopyJson,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1112,6 +1156,10 @@ pub(super) struct PullInFoldedJson {
     pub(super) blocked: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(super) scheduled: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) already_started: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) waits_for: usize,
 }
 
 /// One open dependent of the completed tasks that stays blocked
@@ -2336,6 +2384,75 @@ pub(super) fn all_offer_rows(
         .chain(all_keep_moving(item))
 }
 
+/// Every surviving relation group an item reports, in the same summary
+/// order as [`all_relation_successors`].
+pub(super) fn all_relation_groups(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &crate::native::task_complete::RelationOfferGroup> {
+    item.relation_groups.iter().chain(
+        item.task_complete
+            .iter()
+            .flat_map(|summary| summary.relation_groups.iter())
+            .chain(item.relation_completes.iter().flat_map(|complete| {
+                complete.task_complete.relation_groups.iter()
+            }))
+            .chain(
+                item.pomodoro_close
+                    .iter()
+                    .flat_map(|summary| summary.relation_groups.iter()),
+            ),
+    )
+}
+
+/// Every relation-held row an item reports, in the same summary order as
+/// [`all_relation_successors`].
+pub(super) fn all_relation_held(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &RelationHeldJson> {
+    item.relation_held.iter().chain(
+        item.task_complete
+            .iter()
+            .flat_map(|summary| summary.relation_held.iter())
+            .chain(item.relation_completes.iter().flat_map(|complete| {
+                complete.task_complete.relation_held.iter()
+            }))
+            .chain(
+                item.pomodoro_close
+                    .iter()
+                    .flat_map(|summary| summary.relation_held.iter()),
+            ),
+    )
+}
+
+/// `"checked"` / `"unavailable"` from every summary an item reports.
+/// Unavailable wins so a refusal can print the muted uncertainty line.
+pub(super) fn all_relation_check<'a>(
+    items: impl IntoIterator<Item = &'a CaptureItemResult>,
+) -> Option<&'static str> {
+    let mut checked = None;
+    for item in items {
+        for value in item.relation_check.into_iter().chain(
+            item.task_complete
+                .iter()
+                .filter_map(|summary| summary.relation_check)
+                .chain(item.relation_completes.iter().filter_map(|complete| {
+                    complete.task_complete.relation_check
+                }))
+                .chain(
+                    item.pomodoro_close
+                        .iter()
+                        .filter_map(|summary| summary.relation_check),
+                ),
+        ) {
+            if value == "unavailable" {
+                return Some(value);
+            }
+            checked = Some(value);
+        }
+    }
+    checked
+}
+
 /// Mutable access to every relation-successor vec an item reports, in
 /// the same order as [`all_relation_successors`].
 pub(super) fn relation_successors_vecs_mut(
@@ -2503,6 +2620,12 @@ pub(super) fn print_task_complete_details(
     print_human_successor_rows(
         &summary.unblocked,
         &summary.still_blocked,
+        RelationHumanOutput {
+            rows: &summary.relation_successors,
+            groups: &summary.relation_groups,
+            held: &summary.relation_held,
+            check: summary.relation_check,
+        },
         dry_run,
         styler,
     );
@@ -2517,8 +2640,14 @@ pub(super) fn print_task_complete_details(
 fn pulled_in_phrase(
     unblocked: &[TaskCompleteUnblockedJson],
     keep_moving: &[TaskCompleteUnblockedJson],
+    relation: &[TaskCompleteUnblockedJson],
 ) -> String {
-    let rows = || unblocked.iter().chain(keep_moving.iter());
+    let rows = || {
+        unblocked
+            .iter()
+            .chain(keep_moving.iter())
+            .chain(relation.iter())
+    };
     let offer_count = rows().filter(|row| row.offer.is_some()).count();
     let picked_count = rows()
         .filter(|row| row.offer.as_ref().is_some_and(|offer| offer.selected))
@@ -3012,7 +3141,13 @@ pub(super) fn print_human_item_success(
     if let Some(note) = result.project_note.as_ref()
         && let Some(successors) = note.successors.as_ref()
     {
-        print_human_successor_rows(successors, &[], result.dry_run, &styler);
+        print_human_successor_rows(
+            successors,
+            &[],
+            RelationHumanOutput::empty(),
+            result.dry_run,
+            &styler,
+        );
     }
     if result.project_note.is_some() {
         println!(
@@ -3354,6 +3489,12 @@ pub(super) fn print_human_pomodoro_close_success(
     print_human_successor_rows(
         &close.unblocked,
         &close.still_blocked,
+        RelationHumanOutput {
+            rows: &close.relation_successors,
+            groups: &close.relation_groups,
+            held: &close.relation_held,
+            check: close.relation_check,
+        },
         result.dry_run,
         styler,
     );
@@ -3425,7 +3566,11 @@ pub(super) fn print_human_pomodoro_close_success(
         } else {
             format!(" · {} unblocked", close.unblocked.len())
         };
-        let pulled = pulled_in_phrase(&close.unblocked, &close.keep_moving);
+        let pulled = pulled_in_phrase(
+            &close.unblocked,
+            &close.keep_moving,
+            &close.relation_successors,
+        );
         println!(
             "  {}",
             styler.dim(&format!(
@@ -4743,20 +4888,46 @@ pub(super) fn print_human_task_complete_success(
     } else {
         format!("{previous_marker} → {current_marker} {text}")
     };
-    let pulled = pulled_in_phrase(&summary.unblocked, &summary.keep_moving);
+    let pulled = pulled_in_phrase(
+        &summary.unblocked,
+        &summary.keep_moving,
+        &summary.relation_successors,
+    );
     println!(
         "{prefix} {verb} {head}  {ordinal}{target_label} {block_label}{pulled}"
     );
     print_task_complete_details(summary, result.dry_run, styler);
 }
 
+/// Relation rows, groups, and held metadata for one human successor
+/// block. Empty slices keep existing unblocked-only callers unchanged.
+pub(super) struct RelationHumanOutput<'a> {
+    rows: &'a [TaskCompleteUnblockedJson],
+    groups: &'a [crate::native::task_complete::RelationOfferGroup],
+    held: &'a [RelationHeldJson],
+    check: Option<&'static str>,
+}
+
+impl RelationHumanOutput<'static> {
+    fn empty() -> Self {
+        Self {
+            rows: &[],
+            groups: &[],
+            held: &[],
+            check: None,
+        }
+    }
+}
+
 /// Successor rows shared by `!` closes and Pomodoro closes
 /// (`docs/task-dependencies.md` §12.6 human output): linked rows with
 /// their destination capsule, recovered rows with their reason, and
-/// muted still-blocked rows.
+/// muted still-blocked rows. Relation groups print in engine order
+/// between hand-offs and project groups.
 pub(super) fn print_human_successor_rows(
     unblocked: &[TaskCompleteUnblockedJson],
     still_blocked: &[TaskCompleteStillBlockedJson],
+    relation: RelationHumanOutput<'_>,
     dry_run: bool,
     styler: &Styler,
 ) {
@@ -4765,16 +4936,21 @@ pub(super) fn print_human_successor_rows(
     offered.sort_by_key(|row| {
         row.offer.as_ref().map(|offer| offer.n).unwrap_or(0)
     });
-    let mut last_header: Option<String> = None;
-    for row in offered {
-        let offer = row.offer.as_ref().expect("offered row");
-        let header = successor_offer_header(row, offer);
-        if last_header.as_ref() != Some(&header) {
-            println!("  {header}");
-            last_header = Some(header);
-        }
-        print_human_unblocked_row(row, dry_run, styler, Some(offer.n));
-    }
+    print_unblocked_offer_groups(&offered, &["hand_off"], dry_run, styler);
+    print_human_relation_rows(
+        relation.rows,
+        relation.groups,
+        relation.held,
+        relation.check,
+        dry_run,
+        styler,
+    );
+    print_unblocked_offer_groups(
+        &offered,
+        &["project", "project_finished"],
+        dry_run,
+        styler,
+    );
     for row in unblocked.iter().filter(|row| row.offer.is_none()) {
         print_human_unblocked_row(row, dry_run, styler, None);
     }
@@ -4808,6 +4984,301 @@ pub(super) fn print_human_successor_rows(
             );
         }
     }
+}
+
+fn print_unblocked_offer_groups(
+    offered: &[&TaskCompleteUnblockedJson],
+    groups: &[&str],
+    dry_run: bool,
+    styler: &Styler,
+) {
+    let mut last_header: Option<String> = None;
+    for row in offered {
+        let offer = row.offer.as_ref().expect("offered row");
+        if !groups.contains(&offer.group) {
+            continue;
+        }
+        let header = successor_offer_header(row, offer);
+        if last_header.as_ref() != Some(&header) {
+            println!("  {header}");
+            last_header = Some(header);
+        }
+        print_human_unblocked_row(row, dry_run, styler, Some(offer.n));
+    }
+}
+
+fn print_human_relation_rows(
+    rows: &[TaskCompleteUnblockedJson],
+    groups: &[crate::native::task_complete::RelationOfferGroup],
+    held: &[RelationHeldJson],
+    check: Option<&str>,
+    dry_run: bool,
+    styler: &Styler,
+) {
+    use crate::native::task_complete::relation_successors::copy;
+
+    let mut offered: Vec<&TaskCompleteUnblockedJson> =
+        rows.iter().filter(|row| row.offer.is_some()).collect();
+    offered.sort_by_key(|row| {
+        row.offer.as_ref().map(|offer| offer.n).unwrap_or(0)
+    });
+    let mut order: Vec<(String, String)> = Vec::new();
+    for row in &offered {
+        let key = relation_row_group_key(row);
+        if !order.contains(&key) {
+            order.push(key);
+        }
+    }
+    for (after, label_key) in &order {
+        let group_rows: Vec<&TaskCompleteUnblockedJson> = offered
+            .iter()
+            .copied()
+            .filter(|row| {
+                let key = relation_row_group_key(row);
+                key.0 == *after && key.1 == *label_key
+            })
+            .collect();
+        let Some(first) = group_rows.first() else {
+            continue;
+        };
+        println!("  {}", relation_cli_header(first, groups, after, label_key));
+        for row in &group_rows {
+            print_human_relation_row(row, dry_run);
+        }
+        if let Some(fold) = relation_cli_fold(groups, after, label_key, held) {
+            println!("  {}", styler.dim(&fold));
+        }
+    }
+    if !offered.is_empty() {
+        return;
+    }
+    if check == Some("unavailable") {
+        let mut labels: Vec<String> = Vec::new();
+        for row in held {
+            if !labels.iter().any(|label| label == &row.relation.label) {
+                labels.push(row.relation.label.clone());
+            }
+        }
+        let notice = if labels.is_empty() {
+            Some(
+                "🪢 Couldn't check relation links · nothing offered"
+                    .to_string(),
+            )
+        } else {
+            copy::uncertainty_notice(&labels)
+        };
+        if let Some(line) = notice {
+            println!("  {}", styler.dim(&line));
+        }
+        return;
+    }
+    for row in held {
+        if row.reason == "already_planned" {
+            continue;
+        }
+        let target = row
+            .relation
+            .after
+            .first()
+            .map(|target| target.text.as_str())
+            .unwrap_or_default();
+        let Some(reason) = held_copy_reason(row) else {
+            continue;
+        };
+        if let Some(line) = copy::held_notice(copy::HeldNoticeCopy {
+            source: &row.text,
+            label: &row.relation.label,
+            target,
+            reason: &reason,
+        }) {
+            println!("  {}", styler.dim(&line));
+        }
+    }
+}
+
+fn relation_row_group_key(row: &TaskCompleteUnblockedJson) -> (String, String) {
+    let after = row
+        .offer
+        .as_ref()
+        .and_then(|offer| offer.after.clone())
+        .unwrap_or_default();
+    let label_key = row
+        .relation
+        .as_ref()
+        .map(|info| info.key.clone())
+        .unwrap_or_default();
+    (after, label_key)
+}
+
+fn relation_cli_header(
+    row: &TaskCompleteUnblockedJson,
+    groups: &[crate::native::task_complete::RelationOfferGroup],
+    after: &str,
+    label_key: &str,
+) -> String {
+    use crate::native::task_complete::relation_successors::copy::{
+        self, GroupCopy,
+    };
+    if let Some(group) = groups.iter().find(|group| {
+        group.label_key == label_key
+            && format!(
+                "{}#^{}",
+                display_relative(&group.target.note_path),
+                group.target.block_id
+            ) == after
+    }) {
+        return copy::cli_header(
+            GroupCopy {
+                label: &group.label,
+                target: &group.target.text,
+            },
+            group.event,
+        );
+    }
+    let info = row.relation.as_ref();
+    let label = info.map(|info| info.label.as_str()).unwrap_or(label_key);
+    let target = info
+        .and_then(|info| info.after.first())
+        .map(|target| target.text.as_str())
+        .unwrap_or_default();
+    let event = match info.map(|info| info.event) {
+        Some("done") => copy::EventKind::Done,
+        _ => copy::EventKind::Parked,
+    };
+    copy::cli_header(GroupCopy { label, target }, event)
+}
+
+fn relation_cli_fold(
+    groups: &[crate::native::task_complete::RelationOfferGroup],
+    after: &str,
+    label_key: &str,
+    held: &[RelationHeldJson],
+) -> Option<String> {
+    if let Some(fold) = groups.iter().find_map(|group| {
+        (group.label_key == label_key
+            && format!(
+                "{}#^{}",
+                display_relative(&group.target.note_path),
+                group.target.block_id
+            ) == after)
+            .then(|| group.fold.clone())
+            .flatten()
+    }) {
+        return Some(fold.replacen("not offered · ", "not offered  ", 1));
+    }
+    let _ = held;
+    None
+}
+
+fn print_human_relation_row(row: &TaskCompleteUnblockedJson, dry_run: bool) {
+    use crate::native::task_complete::relation_successors::copy::{
+        self, GroupCopy,
+    };
+    let Some(offer) = row.offer.as_ref() else {
+        return;
+    };
+    let locator = task_complete_locator(&row.note_path, &row.block_id);
+    let text = if row.text.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", row.text)
+    };
+    let suffix = relation_row_suffix(row);
+    if let Some(link) = row.link.as_ref() {
+        let verb = if dry_run { "would link" } else { "linked" };
+        let previous = keep_moving_lane_name(row.previous_status_symbol);
+        let current = keep_moving_lane_name(row.status_symbol);
+        let minted = link
+            .block_link
+            .rsplit_once('^')
+            .filter(|_| link.block_id_created)
+            .map(|(_, id)| format!(" · added ^{}", id.trim_end_matches("]]")))
+            .unwrap_or_default();
+        let linked_suffix = row
+            .relation
+            .as_ref()
+            .map(|info| {
+                let target = info
+                    .after
+                    .first()
+                    .map(|target| target.text.as_str())
+                    .unwrap_or_default();
+                copy::secondary_reason(GroupCopy {
+                    label: &info.label,
+                    target,
+                })
+            })
+            .unwrap_or_default();
+        println!(
+            "  offer {}  {verb} {previous} \u{2192} {current}{text}  {locator} \u{2192} {} {linked_suffix}{suffix}{minted}",
+            offer.n,
+            successor_destination(link),
+        );
+    } else {
+        let lane = keep_moving_lane_name(row.status_symbol);
+        let reason = row
+            .not_linked
+            .as_deref()
+            .filter(|_| !dry_run)
+            .map(|reason| format!(" \u{b7} {}", not_linked_reason(reason)))
+            .unwrap_or_default();
+        println!(
+            "  offer {}  {lane}{text}  {locator} \u{2192} {}{suffix}{reason}",
+            offer.n,
+            offer_destination_label(&offer.destination),
+        );
+    }
+}
+
+fn relation_row_suffix(row: &TaskCompleteUnblockedJson) -> String {
+    use crate::native::task_complete::relation_successors::copy;
+    let Some(info) = row.relation.as_ref() else {
+        return String::new();
+    };
+    if info.after.len() < 2 {
+        return String::new();
+    }
+    let texts: Vec<String> = info
+        .after
+        .iter()
+        .map(|target| target.text.clone())
+        .collect();
+    copy::trigger_suffix(&texts)
+        .map(|suffix| format!(" {suffix}"))
+        .unwrap_or_default()
+}
+
+fn held_copy_reason(
+    row: &RelationHeldJson,
+) -> Option<crate::native::task_complete::relation_successors::copy::HeldReason>
+{
+    use crate::native::task_complete::relation_successors::copy::HeldReason;
+    Some(match row.reason {
+        "already_started" => HeldReason::AlreadyStarted,
+        "hidden" => HeldReason::Hidden,
+        "project" => HeldReason::Project,
+        "waits_for" => HeldReason::WaitsFor(
+            row.waits_for
+                .as_ref()
+                .map(|targets| {
+                    targets.iter().map(|target| target.text.clone()).collect()
+                })
+                .unwrap_or_default(),
+        ),
+        "blocked" => {
+            if let Some(date) = row.scheduled.as_ref() {
+                HeldReason::Scheduled(date.clone())
+            } else if row.project.is_some() {
+                HeldReason::Project
+            } else {
+                HeldReason::Blocked {
+                    waits_on: row.waits_on.as_ref().map(Vec::len).unwrap_or(0),
+                }
+            }
+        }
+        "already_planned" => return None,
+        _ => return None,
+    })
 }
 
 fn is_keep_moving_row(row: &TaskCompleteUnblockedJson) -> bool {
@@ -5044,6 +5515,7 @@ fn print_human_unblocked_row(
         Some(n) => format!("  offer {n}  "),
         None => "  ".to_string(),
     };
+    let relation_suffix = unblocked_relation_suffix(unblocked);
     if let Some(link) = unblocked.link.as_ref() {
         let verb = if dry_run { "would link" } else { "linked" };
         let destination = successor_destination(link);
@@ -5054,7 +5526,7 @@ fn print_human_unblocked_row(
             .map(|(_, id)| format!(" · added ^{}", id.trim_end_matches("]]")))
             .unwrap_or_default();
         println!(
-            "{prefix}{verb} {head}  {locator} → {destination}{minted}{project_label}"
+            "{prefix}{verb} {head}  {locator} → {destination}{minted}{project_label}{relation_suffix}"
         );
     } else if project_empty
         && unblocked.hide_removed
@@ -5062,7 +5534,7 @@ fn print_human_unblocked_row(
     {
         let verb = if dry_run { "would surface" } else { "surfaced" };
         println!(
-            "{prefix}{verb} {}  {locator}{project_label}",
+            "{prefix}{verb} {}  {locator}{project_label}{relation_suffix}",
             unblocked.text
         );
     } else {
@@ -5072,13 +5544,38 @@ fn print_human_unblocked_row(
             .map(not_linked_reason)
             .unwrap_or_default();
         if reason.is_empty() {
-            println!("{prefix}unblocked {head}  {locator}{project_label}");
+            println!(
+                "{prefix}unblocked {head}  {locator}{project_label}{relation_suffix}"
+            );
         } else {
             println!(
-                "{prefix}unblocked {head}  {locator}{project_label} · {reason}"
+                "{prefix}unblocked {head}  {locator}{project_label} · {reason}{relation_suffix}"
             );
         }
     }
+}
+
+fn unblocked_relation_suffix(row: &TaskCompleteUnblockedJson) -> String {
+    use crate::native::task_complete::relation_successors::copy::{
+        self, GroupCopy,
+    };
+    row.relation
+        .as_ref()
+        .map(|info| {
+            let target = info
+                .after
+                .first()
+                .map(|target| target.text.as_str())
+                .unwrap_or_default();
+            format!(
+                " {}",
+                copy::secondary_reason(GroupCopy {
+                    label: &info.label,
+                    target,
+                })
+            )
+        })
+        .unwrap_or_default()
 }
 
 /// Destination capsule for a linked successor row
@@ -5230,17 +5727,24 @@ pub(super) fn print_capture_error(
                     .partition(is_keep_moving_row);
                 let (relation, dependents): (Vec<_>, Vec<_>) =
                     rest.into_iter().partition(is_relation_row);
-                print_human_successor_rows(&dependents, &[], false, &styler);
+                print_human_successor_rows(
+                    &dependents,
+                    &[],
+                    RelationHumanOutput {
+                        rows: &relation,
+                        groups: &error.human_relation_groups,
+                        held: &error.human_relation_held,
+                        check: error.human_relation_check,
+                    },
+                    false,
+                    &styler,
+                );
                 print_human_keep_moving_rows(
                     &moving,
                     &error.human_keep_moving_folds,
                     false,
                     &styler,
                 );
-                // Relation human copy belongs to the presentation phase;
-                // JSON refusal payloads still list the rows via
-                // `all_offer_rows`.
-                let _ = relation;
             }
         }
         OutputFormat::Json => {
@@ -5276,6 +5780,13 @@ pub(crate) struct CaptureError {
     /// Folded counts for the keep-moving groups in `human_unblocked`.
     pub(super) human_keep_moving_folds:
         Vec<crate::native::task_complete::KeepMovingFold>,
+    /// Surviving relation groups for human `pull_in_choice_required`.
+    pub(super) human_relation_groups:
+        Vec<crate::native::task_complete::RelationOfferGroup>,
+    /// Relation-held rows for human `pull_in_choice_required`.
+    pub(super) human_relation_held: Vec<RelationHeldJson>,
+    /// `"checked"` / `"unavailable"` for human `pull_in_choice_required`.
+    pub(super) human_relation_check: Option<&'static str>,
     /// Typed failure kind for `bob ref today`. Capture JSON ignores this
     /// so `bob capture` stays byte-identical.
     pub(crate) typed: Option<CaptureFailureKind>,
@@ -5305,6 +5816,9 @@ impl CaptureError {
             extra: None,
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
             typed: None,
         }
     }
@@ -5320,6 +5834,9 @@ impl CaptureError {
             extra: None,
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
             typed: None,
         }
     }
@@ -5332,6 +5849,9 @@ impl CaptureError {
             extra: None,
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
             typed: None,
         }
     }
@@ -5342,6 +5862,11 @@ impl CaptureError {
         human_keep_moving_folds: Vec<
             crate::native::task_complete::KeepMovingFold,
         >,
+        human_relation_groups: Vec<
+            crate::native::task_complete::RelationOfferGroup,
+        >,
+        human_relation_held: Vec<RelationHeldJson>,
+        human_relation_check: Option<&'static str>,
     ) -> Self {
         Self {
             kind: CaptureErrorKind::Io,
@@ -5351,6 +5876,9 @@ impl CaptureError {
             extra: Some(extra),
             human_unblocked,
             human_keep_moving_folds,
+            human_relation_groups,
+            human_relation_held,
+            human_relation_check,
             typed: None,
         }
     }
@@ -5374,6 +5902,9 @@ impl CaptureError {
             extra: Some(extra),
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
             typed: None,
         }
     }
@@ -5407,6 +5938,9 @@ impl CaptureError {
             extra: Some(extra),
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
             typed: None,
         }
     }
@@ -5441,6 +5975,9 @@ impl CaptureError {
             extra: Some(extra),
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
             typed: None,
         }
     }
@@ -5455,6 +5992,9 @@ impl CaptureError {
             extra: None,
             human_unblocked: Vec::new(),
             human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
             typed: None,
         }
     }
