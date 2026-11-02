@@ -661,6 +661,43 @@ pub(crate) struct PomodoroScan {
     pub(crate) warnings: Vec<String>,
 }
 
+/// The source selected by the shared "current Pomodoro" rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CurrentPomodoro {
+    Running(usize),
+    NextUp(usize),
+    Ambiguous,
+    Missing,
+}
+
+/// Resolve the running Pomodoro, or the next planned placeholder when no
+/// session is running. Both capture execution and completion use this so
+/// their implied source stays in sync.
+pub(crate) fn current_pomodoro(scan: &PomodoroScan) -> CurrentPomodoro {
+    let timed_open: Vec<usize> = scan
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry.state == PomodoroState::Open && entry.time_range.is_some()
+        })
+        .map(|(index, _)| index)
+        .collect();
+    match timed_open.as_slice() {
+        [index] => CurrentPomodoro::Running(*index),
+        [_, _, ..] => CurrentPomodoro::Ambiguous,
+        [] => next_future_pomodoro(scan)
+            .and_then(|next| {
+                scan.entries.iter().position(|entry| {
+                    entry.line == next.line
+                        && entry.name == next.name
+                        && entry.state == next.state
+                })
+            })
+            .map_or(CurrentPomodoro::Missing, CurrentPomodoro::NextUp),
+    }
+}
+
 impl PomodoroScan {
     /// Resolve a Pomodoro ref whose line component is one-based.
     pub(crate) fn by_ref(

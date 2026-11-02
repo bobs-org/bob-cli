@@ -233,7 +233,7 @@ note, and Template rows; bare-URL items also offer Listen. A typed letter \
 filters the rows, and opening the menu never reads the clipboard. Bare `#` \
 opens `task_type` with no row preselected. Every success response reports \
 `grammar: 4` while `schema_version` stays 1; an empty bare `#` or `%` \
-query, or an empty drawer query after `@route+id#`, adds \
+query, an empty `=*` merge source, or an empty drawer query after `@route+id#`, adds \
 `initial_selection: \"none\"`. \
 A solo leading `:` token \
 completes `task_link`: every linkable open task (Ready, Blocked, Next, In \

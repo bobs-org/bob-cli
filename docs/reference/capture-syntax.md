@@ -75,7 +75,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `=` / `=<X>` | Start the next future Pomodoro, or restart | [`=`](#equals-start) |
 | `=name` | Start a named Pomodoro (`=bugs`, same token as `=#bugs`) | [`=name`](#equals-named) |
 | `=/[base][#type…]` | Split types into separate planned Pomodoros | [`=/`](#equals-split) |
-| `=*[source]#destination[#destination…]` | Merge planned Pomodoros into one open session | [`=*`](#equals-merge) |
+| `=*[source][#destination…]` | Merge the next planned Pomodoro or named destinations into one open session | [`=*`](#equals-merge) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
 | `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
 | `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
@@ -129,7 +129,7 @@ what they attach to, not as one global operator.
 | `@` | right after `@route^block-id` / `@route:block-id` | Project-note seal: `^…@` creates the note, `:…@` also offers its tasks |
 | `*` | `*note:block-id` | Blocked-task (star) link |
 | `*` | `x*` | Park Task Links on close |
-| `*` | `=*source#destination` | Merge planned destination into source |
+| `*` | `=*` / `=*source` / `=*source#destination` | Merge the next planned Pomodoro or named destinations into source |
 | `/` | `=/base#type` | Split a type out of a merged Pomodoro |
 | `*` | line-initial bare `*` | Never a blocked-task marker |
 | `~` | `~note:block-id[\|"label"]`, `~note:block-id\|\|"label"` | Relation link ([`~`](#tilde-link)); `||` hides the label from suggestions once the capture succeeds |
@@ -935,19 +935,22 @@ bob capture --dry-run '=/build'
 
 Contract: [Splitting a merged Pomodoro](../capture.md#splitting-a-merged-pomodoro).
 
-### `=*[source]#destination[#destination…]` {#equals-merge}
+### `=*[source][#destination…]` {#equals-merge}
 
 `=*build#fix` keeps BUILD and absorbs FIX. The name before `#` selects the
 surviving source; names after `#` select entries to remove. `=*#fix` uses
 the open timed entry as source, else the next planned entry.
-`=*build#fix#read` absorbs FIX, then READ. The source may be timed or planned;
+`=*build#fix#read` absorbs FIX, then READ. Without a `#`, `=*` or `=*build`
+absorbs the first open, untimed, named Pomodoro below its source. It passes
+completed, timed, running, unnamed, and MEET entries and never wraps above the
+source. Only one entry is implied per token. The source may be timed or planned;
 it keeps its timing and ledger order and gains the absorbed names and children.
 An absorbed Task Link with an identical trimmed line already under the source
-is removed with its subtree. Absorbed entries must be untimed and open;
-MEET cannot merge. Bare `=*` or `=*build` needs a destination after `#`.
+is removed with its subtree. Named absorbed entries must be untimed and open;
+MEET cannot merge. A trailing `#` still needs a destination name.
 
 ```bash
-bob capture --dry-run '=*build#fix'
+bob capture --dry-run '=*'
 ```
 
 Contract: [Merging Pomodoros](../capture.md#merging-pomodoros).

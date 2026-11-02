@@ -102,7 +102,7 @@
   location: /reference/capture-syntax/#equals-named
 - query: "=/[base][#type…]"
   location: /reference/capture-syntax/#equals-split
-- query: "=*[source]#destination[#destination…]"
+- query: "=*[source][#destination…]"
   location: /reference/capture-syntax/#equals-merge
 - query: "~<K>"
   location: /reference/capture-syntax/#tilde-drop

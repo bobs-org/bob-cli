@@ -2759,7 +2759,16 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     // before retired close, so `=*build#fix` merges and `=*1` still
     // teaches `x*1`. `retired_whole_item_close_rewrite("=*")` stays Some
     // so `==*` remains the doubled-close teaching error.
-    if let Some(after_star) = first.strip_prefix("=*")
+    // Unlike other selectors, a quoted merge source can contain spaces
+    // (`=*"DEEP WORK"`). Lex the full parent text so the exact-name lexer
+    // can consume through its closing quote before the whole-item shape
+    // check decides whether trailing text remains.
+    let merge_text = text
+        .strip_prefix("=*")
+        .filter(|after_star| merge_star_rest_is_merge(after_star))
+        .map(|_| text)
+        .unwrap_or(first);
+    if let Some(after_star) = merge_text.strip_prefix("=*")
         && merge_star_rest_is_merge(after_star)
     {
         let (src, dests, merge_len) = lex_merge_after_star(after_star, 1);
@@ -3512,12 +3521,14 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             )))
         }
         EqualsToken::Merge { src, dests, len } => {
-            let Some(first) = parent_trimmed.split_whitespace().next() else {
+            let Some(first_token) = parent_trimmed.split_whitespace().next()
+            else {
                 return Ok(None);
             };
             if !parent_trimmed.starts_with("=*") {
                 return Ok(None);
             }
+            let first = parent_trimmed.get(..len).unwrap_or(first_token);
             for dest in &dests {
                 if dest.text.is_empty() {
                     return Err(pomodoro_merge_selector_error(first, ""));
@@ -3538,12 +3549,6 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             }
             let single_token_parent =
                 parent_trimmed == first && first.len() == len;
-            if dests.is_empty() {
-                if !single_token_parent || item.lines.len() != 1 {
-                    return Err(pomodoro_merge_shape_error(first));
-                }
-                return Err(pomodoro_merge_incomplete_error(first));
-            }
             if !single_token_parent || item.lines.len() != 1 {
                 return Err(pomodoro_merge_shape_error(first));
             }

@@ -318,6 +318,38 @@ pub(crate) enum SelectOutcome {
     Missing,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NextPlanned {
+    Entry(usize),
+    Missing { passed_meet: bool },
+}
+
+/// Find the first mergeable planned Pomodoro below `src`, in ledger order.
+/// MEET rows, unnamed placeholders, closed rows, and timed rows are passed.
+pub(crate) fn next_planned_below(
+    entries: &[SelectEntry<'_>],
+    src: usize,
+    skip: &[usize],
+) -> NextPlanned {
+    let mut passed_meet = false;
+    for (index, entry) in entries.iter().enumerate().skip(src.saturating_add(1))
+    {
+        if !entry.open || entry.running || entry.timed || skip.contains(&index)
+        {
+            continue;
+        }
+        let Some(name) = entry.name else {
+            continue;
+        };
+        if super::routing::is_meet_name(Some(name)) {
+            passed_meet = true;
+            continue;
+        }
+        return NextPlanned::Entry(index);
+    }
+    NextPlanned::Missing { passed_meet }
+}
+
 pub(crate) struct SelectInput<'a> {
     pub(crate) entries: &'a [SelectEntry<'a>],
     pub(crate) selector: &'a str,

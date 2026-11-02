@@ -640,10 +640,26 @@ pub(super) struct PomodoroSplitSummary {
     pub(super) stayed_links: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PomodoroMergeAbsorbedRole {
+    Named,
+    Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PomodoroMergeSourceRole {
+    Current,
+    NextUp,
+    Named,
+}
+
 /// One absorbed dest entry from a `=*` merge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroMergeAbsorbed {
     pub(super) name: String,
+    pub(super) role: PomodoroMergeAbsorbedRole,
     pub(super) from_line: usize,
     pub(super) moved_lines: usize,
     pub(super) dropped_duplicates: usize,
@@ -657,6 +673,9 @@ pub(super) struct PomodoroMergeSummary {
     pub(super) entry_line: usize,
     pub(super) before: String,
     pub(super) after: String,
+    pub(super) source_role: PomodoroMergeSourceRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) explicit: Option<String>,
     pub(super) absorbed: Vec<PomodoroMergeAbsorbed>,
     /// Task Links actually moved onto the survivor; used by human output.
     #[serde(skip)]

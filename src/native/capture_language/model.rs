@@ -439,7 +439,9 @@ pub(crate) struct PomodoroSplitSpec {
 }
 
 /// Whole-item `=*` merge specification: the optional source plus the
-/// ordered `#dest` selectors. `raw` is the trimmed token exactly as typed.
+/// ordered `#dest` selectors. An empty `dests` list means absorb the next
+/// planned Pomodoro below the resolved source. `raw` is the trimmed token
+/// exactly as typed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroMergeSpec {
     /// Trimmed merge token exactly as typed (for example `=*build#fix`).

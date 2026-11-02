@@ -1738,8 +1738,8 @@ pub(super) fn parse_editor_split_item<'a>(
 /// of [`parse_pomodoro_equals_item`] but never fails: an exact token
 /// reports `pomodoro_merge` with its spec, a `pomodoro_merge` span over
 /// `=*` plus `pomodoro_name` spans over the source and each dest name,
-/// while a dest-less `=*` / `=*<src>` or a trailing `#` reports
-/// `pomodoro_merge` needing `pomodoro_merge_dest`. Extra text, child
+/// while only a trailing `#` reports `pomodoro_merge` needing
+/// `pomodoro_merge_dest`. Extra text, child
 /// lines, or malformed selectors report `pomodoro_merge` plus one
 /// `invalid_pomodoro_merge` diagnostic. Purely lexical.
 pub(super) fn parse_editor_merge_item<'a>(
@@ -1765,10 +1765,11 @@ pub(super) fn parse_editor_merge_item<'a>(
         key: None,
     }];
     let mut offset = token_start + 2;
-    let first = parent_trimmed
+    let first_token = parent_trimmed
         .split_whitespace()
         .next()
         .unwrap_or(parent_trimmed);
+    let first = parent_trimmed.get(..len).unwrap_or(first_token);
     if let Some(src_name) = src.as_deref() {
         if !src_name.is_empty() {
             let rel = offset - token_start;
@@ -1911,8 +1912,7 @@ pub(super) fn parse_editor_merge_item<'a>(
             None,
         ));
     }
-    let needs_dest = dests.is_empty()
-        || dests.last().is_some_and(|last| last.text.is_empty());
+    let needs_dest = dests.last().is_some_and(|last| last.text.is_empty());
     if needs_dest {
         let spec = PomodoroMergeSpec {
             raw: first.to_string(),

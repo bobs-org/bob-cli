@@ -629,15 +629,6 @@ pub(super) fn pomodoro_merge_shape_error(token: &str) -> String {
     )
 }
 
-/// Dest-less `=*` / `=*<src>` incomplete merge: teach `#dest` and keep the
-/// retired `x*` close hint.
-pub(super) fn pomodoro_merge_incomplete_error(token: &str) -> String {
-    let example = format!("{token}#fix");
-    format!(
-        "`{token}` is incomplete: type a destination after `#` (for example `{example}`); to close parking every link, write `x*`"
-    )
-}
-
 /// Merge dest selector errors: empty, incomplete literal, or invalid characters.
 pub(super) fn pomodoro_merge_selector_error(
     token: &str,

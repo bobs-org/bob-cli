@@ -1232,10 +1232,9 @@ pub(super) fn pomodoro_split_type_candidates(
 fn merge_display_label(
     selector: &str,
     full: &str,
-    running: bool,
+    state: &str,
     links: usize,
 ) -> String {
-    let state = if running { "running" } else { "planned" };
     let links = if links == 0 {
         "no links".to_string()
     } else if links == 1 {
@@ -1297,7 +1296,32 @@ pub(super) fn pomodoro_merge_src_candidates(
     items.push(PomodoroNameCandidate {
         replacement: String::new(),
         pomodoro_ref: None,
-        name: Some("current".to_string()),
+        name: Some(match capture_pomodoros::current_pomodoro(&scan) {
+            capture_pomodoros::CurrentPomodoro::Running(index)
+            | capture_pomodoros::CurrentPomodoro::NextUp(index) => scan
+                .entries
+                .get(index)
+                .and_then(|entry| {
+                    entry.name.as_deref().map(|full| (entry, full))
+                })
+                .map(|(entry, full)| {
+                    merge_display_label(
+                        "current",
+                        full,
+                        if entry.time_range.is_some() {
+                            "running"
+                        } else {
+                            "planned"
+                        },
+                        entry.child_count,
+                    )
+                })
+                .unwrap_or_else(|| "current".to_string()),
+            capture_pomodoros::CurrentPomodoro::Ambiguous
+            | capture_pomodoros::CurrentPomodoro::Missing => {
+                "current".to_string()
+            }
+        }),
         themes: Vec::new(),
         origin: None,
         last_used: None,
@@ -1340,7 +1364,7 @@ pub(super) fn pomodoro_merge_src_candidates(
             name: Some(merge_display_label(
                 &selector,
                 &full_name,
-                running,
+                if running { "running" } else { "planned" },
                 entry.child_count,
             )),
             themes: Vec::new(),
@@ -1438,35 +1462,63 @@ pub(super) fn pomodoro_merge_dest_candidates(
             _ => None,
         }
     } else {
-        let timed: Vec<usize> = scan
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                entry.state == capture_pomodoros::PomodoroState::Open
-                    && entry.time_range.is_some()
-            })
-            .map(|(index, _)| index)
-            .collect();
-        if timed.len() == 1 {
-            Some(timed[0])
-        } else if timed.is_empty() {
-            capture_pomodoros::next_future_pomodoro(&scan).and_then(|next| {
-                scan.entries.iter().position(|entry| {
-                    entry.line == next.line && entry.name == next.name
-                })
-            })
-        } else {
-            None
+        match capture_pomodoros::current_pomodoro(&scan) {
+            capture_pomodoros::CurrentPomodoro::Running(index)
+            | capture_pomodoros::CurrentPomodoro::NextUp(index) => Some(index),
+            capture_pomodoros::CurrentPomodoro::Ambiguous
+            | capture_pomodoros::CurrentPomodoro::Missing => None,
         }
     };
     let selected_keys: std::collections::BTreeSet<String> = selected
         .iter()
         .map(|name| crate::native::plan_budget::normalize_component(name))
         .collect();
+    let mut selected_indices = Vec::new();
+    for selector in &selected {
+        let untimed = crate::native::pomodoro_themes::merged::SelectInput {
+            entries: &entries,
+            selector,
+            filter: crate::native::pomodoro_themes::merged::SelectFilter::UntimedPlanned {
+                except: src_index,
+            },
+            sources: &sources,
+        };
+        if let crate::native::pomodoro_themes::merged::SelectOutcome::Entry(
+            index,
+        ) = crate::native::pomodoro_themes::merged::select_by_type(&untimed)
+        {
+            selected_indices.push(index);
+        }
+    }
+    let next_index = src_index.and_then(|src_index| {
+        match crate::native::pomodoro_themes::merged::next_planned_below(
+            &entries,
+            src_index,
+            &selected_indices,
+        ) {
+            crate::native::pomodoro_themes::merged::NextPlanned::Entry(
+                index,
+            ) => Some(index),
+            crate::native::pomodoro_themes::merged::NextPlanned::Missing {
+                ..
+            } => None,
+        }
+    });
     let query_lower = query.to_lowercase();
     let mut items = Vec::new();
-    for (index, entry) in scan.entries.iter().enumerate() {
+    let mut order: Vec<usize> = Vec::with_capacity(scan.entries.len());
+    if let Some(index) = next_index {
+        order.push(index);
+    }
+    order.extend(
+        scan.entries.iter().enumerate().filter_map(|(index, _)| {
+            (Some(index) != next_index).then_some(index)
+        }),
+    );
+    for index in order {
+        let Some(entry) = scan.entries.get(index) else {
+            continue;
+        };
         if entry.state != capture_pomodoros::PomodoroState::Open {
             continue;
         }
@@ -1497,7 +1549,11 @@ pub(super) fn pomodoro_merge_dest_candidates(
             name: Some(merge_display_label(
                 &selector,
                 &full_name,
-                false,
+                if next_index == Some(index) {
+                    "next planned"
+                } else {
+                    "planned"
+                },
                 entry.child_count,
             )),
             themes: Vec::new(),

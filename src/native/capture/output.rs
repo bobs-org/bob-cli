@@ -3278,6 +3278,27 @@ pub(super) fn print_human_pomodoro_merge_success(
         merge.after, merge.path, merge.entry_line,
     );
     println!("  {}", styler.dim(&detail));
+    let mut implied = Vec::new();
+    if matches!(
+        merge.source_role,
+        PomodoroMergeSourceRole::Current | PomodoroMergeSourceRole::NextUp
+    ) {
+        implied.push(format!("current {}", merge.before));
+    }
+    implied.extend(
+        merge
+            .absorbed
+            .iter()
+            .filter(|item| item.role == PomodoroMergeAbsorbedRole::Next)
+            .map(|item| format!("next {}", item.name)),
+    );
+    if !implied.is_empty() {
+        let line = match merge.explicit.as_deref() {
+            Some(token) => format!("same as {token} · {}", implied.join(", ")),
+            None => implied.join(", "),
+        };
+        println!("  {}", styler.dim(&line));
+    }
     println!("  {}", styler.dim(&result.task_line));
 }
 

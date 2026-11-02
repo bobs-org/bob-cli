@@ -145,36 +145,6 @@ fn select_entries<'a>(
         .collect()
 }
 
-fn resolve_current_index(
-    scan: &crate::native::capture_pomodoros::PomodoroScan,
-) -> Option<usize> {
-    let timed_open: Vec<usize> = scan
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| {
-            entry.state == crate::native::capture_pomodoros::PomodoroState::Open
-                && entry.time_range.is_some()
-        })
-        .map(|(index, _)| index)
-        .collect();
-    if timed_open.len() > 1 {
-        return None;
-    }
-    if timed_open.len() == 1 {
-        return Some(timed_open[0]);
-    }
-    crate::native::capture_pomodoros::next_future_pomodoro(scan).and_then(
-        |next| {
-            scan.entries.iter().position(|entry| {
-                entry.line == next.line
-                    && entry.name == next.name
-                    && entry.state == next.state
-            })
-        },
-    )
-}
-
 fn first_type_selector(
     name: &str,
     sources: &crate::native::config::themes::ThemeSources,
@@ -297,6 +267,315 @@ fn merge_target_missing_error(
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedMerge {
+    src_index: usize,
+    source_role: PomodoroMergeSourceRole,
+    dests: Vec<(usize, PomodoroMergeAbsorbedRole)>,
+}
+
+fn merge_selector_for_name(
+    name: &str,
+    sources: &crate::native::config::themes::ThemeSources,
+) -> String {
+    let selector = first_type_selector(name, sources);
+    if crate::native::capture_language::is_pomodoro_selector_component(
+        &selector,
+    ) {
+        selector
+    } else {
+        format!("\"{name}\"")
+    }
+}
+
+fn merge_destination_spelling(
+    name: &str,
+    sources: &crate::native::config::themes::ThemeSources,
+) -> String {
+    let selector = first_type_selector(name, sources);
+    if crate::native::capture_language::is_pomodoro_selector_component(
+        &selector,
+    ) {
+        format!("#{selector}")
+    } else {
+        format!("#\"{name}\"")
+    }
+}
+
+fn merge_next_missing_error(
+    scan: &crate::native::capture_pomodoros::PomodoroScan,
+    src_index: usize,
+    src_name: &str,
+    sources: &crate::native::config::themes::ThemeSources,
+    passed_meet: bool,
+) -> CaptureError {
+    let above = scan.entries.iter().enumerate().find_map(|(index, entry)| {
+        (index < src_index
+            && entry.state
+                == crate::native::capture_pomodoros::PomodoroState::Open
+            && entry.time_range.is_none()
+            && !entry.is_current
+            && entry.name.is_some()
+            && !routing::is_meet_name(entry.name.as_deref()))
+        .then_some(entry.name.as_deref())
+        .flatten()
+    });
+    let message = if let Some(dest_name) = above {
+        let src_selector = merge_selector_for_name(src_name, sources);
+        let dest_selector = merge_destination_spelling(dest_name, sources);
+        format!(
+            "Nothing planned below {src_name} to merge; name one to absorb (for example `=*{src_selector}{dest_selector}`){}",
+            if passed_meet { " (MEET never merges)" } else { "" }
+        )
+    } else {
+        format!("Nothing planned below {src_name} to merge")
+    };
+    CaptureError::usage_code(message, "merge_next_missing")
+}
+
+fn implied_source_meet_error(
+    scan: &crate::native::capture_pomodoros::PomodoroScan,
+    src_index: usize,
+    sources: &crate::native::config::themes::ThemeSources,
+) -> CaptureError {
+    let example = scan.entries.iter().enumerate().find_map(|(index, entry)| {
+        (index != src_index
+            && entry.state
+                == crate::native::capture_pomodoros::PomodoroState::Open
+            && entry.time_range.is_none()
+            && !entry.is_current
+            && entry.name.is_some()
+            && !routing::is_meet_name(entry.name.as_deref()))
+        .then_some(entry.name.as_deref())
+        .flatten()
+        .map(|name| {
+            format!(
+                " (for example `=*{}`)",
+                merge_selector_for_name(name, sources)
+            )
+        })
+    });
+    CaptureError::usage_code(
+        format!(
+            "The current Pomodoro is MEET, which never merges; name the one to keep{}",
+            example.unwrap_or_default()
+        ),
+        "merge_meet",
+    )
+}
+
+fn resolve_merge(
+    spec: &PomodoroMergeSpec,
+    scan: &crate::native::capture_pomodoros::PomodoroScan,
+    entries: &[SelectEntry<'_>],
+    sources: &crate::native::config::themes::ThemeSources,
+    day_rel: &str,
+) -> Result<ResolvedMerge, CaptureError> {
+    let (src_index, source_role) = if let Some(src) = spec.src.as_deref() {
+        let input = SelectInput {
+            entries,
+            selector: src,
+            filter: SelectFilter::Open,
+            sources,
+        };
+        match select_by_type(&input) {
+            SelectOutcome::Entry(index) => {
+                (index, PomodoroMergeSourceRole::Named)
+            }
+            SelectOutcome::Missing => {
+                return Err(merge_target_missing_error(
+                    scan,
+                    day_rel,
+                    Some(src),
+                ));
+            }
+        }
+    } else {
+        match capture_pomodoros::current_pomodoro(scan) {
+            capture_pomodoros::CurrentPomodoro::Running(index) => {
+                (index, PomodoroMergeSourceRole::Current)
+            }
+            capture_pomodoros::CurrentPomodoro::NextUp(index) => {
+                (index, PomodoroMergeSourceRole::NextUp)
+            }
+            capture_pomodoros::CurrentPomodoro::Ambiguous => {
+                return Err(CaptureError::io(
+                    "cannot merge into the current Pomodoro: today's ledger has multiple open timed Pomodoros; finish all but one first",
+                ));
+            }
+            capture_pomodoros::CurrentPomodoro::Missing => {
+                return Err(merge_target_missing_error(scan, day_rel, None));
+            }
+        }
+    };
+    let src_entry = scan.entries.get(src_index).ok_or_else(|| {
+        merge_target_missing_error(scan, day_rel, spec.src.as_deref())
+    })?;
+    if routing::is_meet_name(src_entry.name.as_deref()) {
+        if spec.src.is_none() {
+            return Err(implied_source_meet_error(scan, src_index, sources));
+        }
+        return Err(CaptureError::usage_code(
+            "MEET entries never merge; calendar sync owns the MEET name"
+                .to_string(),
+            "merge_meet",
+        ));
+    }
+    let src_name = src_entry.name.as_deref().unwrap_or_default();
+    let mut dests = Vec::new();
+    if spec.dests.is_empty() {
+        match crate::native::pomodoro_themes::merged::next_planned_below(
+            entries,
+            src_index,
+            &[],
+        ) {
+            crate::native::pomodoro_themes::merged::NextPlanned::Entry(
+                index,
+            ) => dests.push((index, PomodoroMergeAbsorbedRole::Next)),
+            crate::native::pomodoro_themes::merged::NextPlanned::Missing {
+                passed_meet,
+            } => {
+                return Err(merge_next_missing_error(
+                    scan,
+                    src_index,
+                    src_name,
+                    sources,
+                    passed_meet,
+                ));
+            }
+        }
+        return Ok(ResolvedMerge {
+            src_index,
+            source_role,
+            dests,
+        });
+    }
+
+    for dest in &spec.dests {
+        let untimed = SelectInput {
+            entries,
+            selector: &dest.text,
+            filter: SelectFilter::UntimedPlanned {
+                except: Some(src_index),
+            },
+            sources,
+        };
+        let mut dest_index = match select_by_type(&untimed) {
+            SelectOutcome::Entry(index) => Some(index),
+            SelectOutcome::Missing => None,
+        };
+        if dest_index.is_none() {
+            let open = SelectInput {
+                entries,
+                selector: &dest.text,
+                filter: SelectFilter::Open,
+                sources,
+            };
+            dest_index = match select_by_type(&open) {
+                SelectOutcome::Entry(index) => Some(index),
+                SelectOutcome::Missing => None,
+            };
+        }
+        let Some(dest_index) = dest_index else {
+            return Err(merge_target_missing_error(
+                scan,
+                day_rel,
+                Some(&dest.text),
+            ));
+        };
+        if dest_index == src_index {
+            if dest_already_part_of_src(src_name, &dest.text, sources) {
+                return Err(CaptureError::usage_code(
+                    format!(
+                        "{src_name} already includes {}; nothing to merge",
+                        dest.text
+                    ),
+                    "merge_already_part",
+                ));
+            }
+            return Err(CaptureError::usage_code(
+                format!("{src_name} cannot merge into itself"),
+                "merge_same_pomodoro",
+            ));
+        }
+        let dest_entry = scan.entries.get(dest_index).ok_or_else(|| {
+            merge_target_missing_error(scan, day_rel, Some(&dest.text))
+        })?;
+        if dest_entry.time_range.is_some() || dest_entry.is_current {
+            let timed_name = dest_entry.name.clone().unwrap_or_default();
+            let timed_sel = first_type_selector(&timed_name, sources);
+            let src_sel = first_type_selector(src_name, sources);
+            return Err(CaptureError::usage_code(
+                format!(
+                    "{timed_name} is already running; merge the other way: `=*{timed_sel}#{src_sel}`"
+                ),
+                "merge_timed_pomodoro",
+            ));
+        }
+        if routing::is_meet_name(dest_entry.name.as_deref()) {
+            return Err(CaptureError::usage_code(
+                "MEET entries never merge; calendar sync owns the MEET name"
+                    .to_string(),
+                "merge_meet",
+            ));
+        }
+        if dests.iter().any(|(index, _)| *index == dest_index) {
+            return Err(CaptureError::usage_code(
+                format!(
+                    "{} is named twice; list each destination once",
+                    dest_entry
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| dest.text.clone())
+                ),
+                "merge_dest_repeated",
+            ));
+        }
+        dests.push((dest_index, PomodoroMergeAbsorbedRole::Named));
+    }
+    Ok(ResolvedMerge {
+        src_index,
+        source_role,
+        dests,
+    })
+}
+
+fn explicit_merge_spelling(
+    resolved: &ResolvedMerge,
+    scan: &crate::native::capture_pomodoros::PomodoroScan,
+    entries: &[SelectEntry<'_>],
+    sources: &crate::native::config::themes::ThemeSources,
+    day_rel: &str,
+) -> Option<String> {
+    let implied = resolved.source_role != PomodoroMergeSourceRole::Named
+        || resolved
+            .dests
+            .iter()
+            .any(|(_, role)| *role == PomodoroMergeAbsorbedRole::Next);
+    if !implied {
+        return None;
+    }
+    let source = scan.entries.get(resolved.src_index)?.name.as_deref()?;
+    let mut token = format!("=*{}", merge_selector_for_name(source, sources));
+    for (index, _) in &resolved.dests {
+        let dest = scan.entries.get(*index)?.name.as_deref()?;
+        token.push_str(&merge_destination_spelling(dest, sources));
+    }
+    let parsed =
+        crate::native::capture_language::editor_item_at(&token, token.len())?
+            .pomodoro_merge?;
+    let round_trip =
+        resolve_merge(&parsed, scan, entries, sources, day_rel).ok()?;
+    (round_trip.src_index == resolved.src_index
+        && round_trip.dests
+            == resolved
+                .dests
+                .iter()
+                .map(|(index, _)| (*index, PomodoroMergeAbsorbedRole::Named))
+                .collect::<Vec<_>>())
+    .then_some(token)
+}
+
 pub(super) fn plan_pomodoro_merge_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
@@ -333,147 +612,30 @@ pub(super) fn plan_pomodoro_merge_item(
     })?;
     let sources = catalog.theme_sources();
     let entries = select_entries(&scan);
-    let src_index = if let Some(src) = spec.src.as_deref() {
-        let input = SelectInput {
-            entries: &entries,
-            selector: src,
-            filter: SelectFilter::Open,
-            sources: &sources,
-        };
-        match select_by_type(&input) {
-            SelectOutcome::Entry(index) => index,
-            SelectOutcome::Missing => {
-                return Err(merge_target_missing_error(
-                    &scan,
-                    &day_rel,
-                    Some(src),
-                ));
-            }
-        }
-    } else {
-        match resolve_current_index(&scan) {
-            Some(index) => index,
-            None => {
-                if scan
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        entry.state
-                            == crate::native::capture_pomodoros::PomodoroState::Open
-                            && entry.time_range.is_some()
-                    })
-                    .count()
-                    > 1
-                {
-                    return Err(CaptureError::io(
-                        "cannot merge into the current Pomodoro: today's ledger has multiple open timed Pomodoros; finish all but one first",
-                    ));
-                }
-                return Err(merge_target_missing_error(&scan, &day_rel, None));
-            }
-        }
-    };
+    let resolved = resolve_merge(&spec, &scan, &entries, &sources, &day_rel)?;
+    let src_index = resolved.src_index;
+    let source_role = resolved.source_role;
     let src_entry = scan.entries.get(src_index).ok_or_else(|| {
         merge_target_missing_error(&scan, &day_rel, spec.src.as_deref())
     })?;
     let src_name = src_entry.name.clone().unwrap_or_default();
-    if routing::is_meet_name(src_entry.name.as_deref()) {
-        return Err(CaptureError::usage_code(
-            "MEET entries never merge; calendar sync owns the MEET name"
-                .to_string(),
-            "merge_meet",
-        ));
-    }
     let src_line = src_entry.line;
     if src_line == 0 {
         return Err(CaptureError::io(
             "Pomodoro merge invariant failed: source entry has no line",
         ));
     }
-    let mut dest_indices: Vec<usize> = Vec::new();
+    let dest_indices: Vec<usize> =
+        resolved.dests.iter().map(|(index, _)| *index).collect();
+    let dest_roles: Vec<PomodoroMergeAbsorbedRole> =
+        resolved.dests.iter().map(|(_, role)| *role).collect();
     let mut dest_names: Vec<String> = Vec::new();
     let mut dest_original_lines: Vec<usize> = Vec::new();
-    for dest in &spec.dests {
-        let untimed = SelectInput {
-            entries: &entries,
-            selector: &dest.text,
-            filter: SelectFilter::UntimedPlanned {
-                except: Some(src_index),
-            },
-            sources: &sources,
-        };
-        let mut dest_index = match select_by_type(&untimed) {
-            SelectOutcome::Entry(index) => Some(index),
-            SelectOutcome::Missing => None,
-        };
-        if dest_index.is_none() {
-            let open = SelectInput {
-                entries: &entries,
-                selector: &dest.text,
-                filter: SelectFilter::Open,
-                sources: &sources,
-            };
-            dest_index = match select_by_type(&open) {
-                SelectOutcome::Entry(index) => Some(index),
-                SelectOutcome::Missing => None,
-            };
-        }
-        let Some(dest_index) = dest_index else {
-            return Err(merge_target_missing_error(
-                &scan,
-                &day_rel,
-                Some(&dest.text),
-            ));
-        };
-        if dest_index == src_index {
-            if dest_already_part_of_src(&src_name, &dest.text, &sources) {
-                return Err(CaptureError::usage_code(
-                    format!(
-                        "{src_name} already includes {}; nothing to merge",
-                        dest.text
-                    ),
-                    "merge_already_part",
-                ));
-            }
-            return Err(CaptureError::usage_code(
-                format!("{src_name} cannot merge into itself"),
-                "merge_same_pomodoro",
-            ));
-        }
-        let dest_entry = scan.entries.get(dest_index).ok_or_else(|| {
-            merge_target_missing_error(&scan, &day_rel, Some(&dest.text))
-        })?;
-        if dest_entry.time_range.is_some() || dest_entry.is_current {
-            let timed_name = dest_entry.name.clone().unwrap_or_default();
-            let timed_sel = first_type_selector(&timed_name, &sources);
-            let src_sel = first_type_selector(&src_name, &sources);
-            return Err(CaptureError::usage_code(
-                format!(
-                    "{timed_name} is already running; merge the other way: `=*{timed_sel}#{src_sel}`"
-                ),
-                "merge_timed_pomodoro",
-            ));
-        }
-        if routing::is_meet_name(dest_entry.name.as_deref()) {
-            return Err(CaptureError::usage_code(
-                "MEET entries never merge; calendar sync owns the MEET name"
-                    .to_string(),
-                "merge_meet",
-            ));
-        }
-        if dest_indices.contains(&dest_index) {
-            return Err(CaptureError::usage_code(
-                format!(
-                    "{} is named twice; list each destination once",
-                    dest_entry
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| dest.text.clone())
-                ),
-                "merge_dest_repeated",
-            ));
-        }
-        dest_indices.push(dest_index);
+    for dest_index in &dest_indices {
+        let dest_entry = scan
+            .entries
+            .get(*dest_index)
+            .ok_or_else(|| merge_target_missing_error(&scan, &day_rel, None))?;
         dest_names.push(dest_entry.name.clone().unwrap_or_default());
         dest_original_lines.push(dest_entry.line);
     }
@@ -494,8 +656,10 @@ pub(super) fn plan_pomodoro_merge_item(
     let mut current = renamed;
     let mut absorbed = Vec::new();
     let mut links_moved = 0usize;
-    for (dest_name, original_line) in
-        dest_names.iter().zip(dest_original_lines.iter().copied())
+    for ((dest_name, original_line), role) in dest_names
+        .iter()
+        .zip(dest_original_lines.iter().copied())
+        .zip(dest_roles.iter().copied())
     {
         let mut moved_lines = 0usize;
         let mut dropped_duplicates = 0usize;
@@ -574,6 +738,7 @@ pub(super) fn plan_pomodoro_merge_item(
         }
         absorbed.push(PomodoroMergeAbsorbed {
             name: dest_name.clone(),
+            role,
             from_line: original_line,
             moved_lines,
             dropped_duplicates,
@@ -595,11 +760,15 @@ pub(super) fn plan_pomodoro_merge_item(
         .strip_prefix(&request.bob_dir)
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
+    let explicit =
+        explicit_merge_spelling(&resolved, &scan, &entries, &sources, &day_rel);
     let summary = PomodoroMergeSummary {
         path: relative_target.to_string_lossy().into_owned(),
         entry_line,
         before: src_name.clone(),
         after: after_name.clone(),
+        source_role,
+        explicit,
         absorbed,
         moved_links: links_moved,
     };

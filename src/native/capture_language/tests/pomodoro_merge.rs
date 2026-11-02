@@ -34,20 +34,28 @@ fn merge_into_current_omits_src() {
 }
 
 #[test]
-fn dest_less_merge_is_incomplete_and_teaches_x_star() {
-    for raw in ["=*", "=*build"] {
-        let error = execute(raw).expect_err(raw);
-        assert!(
-            error.contains("type a destination after `#`"),
-            "{raw}: {error}"
-        );
-        assert!(error.contains("`x*`"), "{raw}: {error}");
+fn dest_less_merge_is_complete() {
+    for raw in ["=*", "=*build", "=*\"DEEP WORK\""] {
+        let parsed = execute(raw).expect(raw);
+        let CaptureKind::PomodoroMerge { spec } = parsed.kind else {
+            panic!("expected merge kind for {raw}");
+        };
+        assert!(spec.dests.is_empty(), "{raw}");
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::PomodoroMerge, "{raw}");
-        assert_eq!(parse.needs, vec![Need::PomodoroMergeDest], "{raw}");
+        assert!(parse.needs.is_empty(), "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");
         assert_eq!(parse.spans[0].kind, SpanKind::PomodoroMerge, "{raw}");
     }
+}
+
+#[test]
+fn dest_less_merge_with_extra_text_is_invalid() {
+    let error = execute("=* extra").expect_err("extra text");
+    assert!(error.contains("must be the whole capture item"), "{error}");
+    let parse = editor("=* extra");
+    assert_eq!(parse.mode, EditorMode::PomodoroMerge);
+    assert_eq!(codes(&parse), vec!["invalid_pomodoro_merge"]);
 }
 
 #[test]

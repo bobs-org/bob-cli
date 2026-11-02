@@ -841,6 +841,11 @@ fn initial_selection(
     raw_text: &str,
     result: &CaptureCompleteResult,
 ) -> Option<&'static str> {
+    if matches!(result.context, Some(CompletionContext::PomodoroMergeSrc))
+        && result.replacement.start == result.replacement.end
+    {
+        return Some("none");
+    }
     if result.query.as_deref() != Some("") {
         return None;
     }

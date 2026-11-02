@@ -236,7 +236,7 @@ anything is written, and any failure rolls the whole batch back.
 | `=*build#fix` | Merge planned FIX into BUILD |
 | `=*#fix` | Merge planned FIX into the current Pomodoro |
 | `=*build#fix#read` | Merge planned FIX and READ into BUILD, in that order |
-| `=*` / `=*build` | Incomplete merge: type a destination after `#` (and the message still names `x*` for parking every link) |
+| `=*` / `=*build` | Merge the next planned Pomodoro below the current/source Pomodoro |
 | `=*1`, `=*!2`, `=**` | Unchanged retired-close teaching errors |
 | `= foo` | Ordinary task text; a bare `=` followed by prose stays prose |
 | `=xx`, `=xa`, `=xmas`, `=Bugs` | Named start (`=xx`/`=xa` were documented prose; that row changes), exactly like `=#xx` |
@@ -3585,19 +3585,21 @@ The bytes contract matches the start family: checkbox, timespan, position, separ
 
 ### Merging Pomodoros
 
-Capture a whole-item `=*` token to merge planned Pomodoros into a source. The token is `=*` plus an optional source plus `#dest` selectors (`#name` or `#"Literal"`):
+Capture a whole-item `=*` token to merge planned Pomodoros into a source. Each `#` names one Pomodoro to absorb. Without a `#`, `=*` absorbs exactly one: the next planned Pomodoro below its source. The token is `=*` plus an optional source plus `#dest` selectors (`#name` or `#"Literal"`):
 
 ```bash
 bob capture '=*#fix'
 bob capture '=*build#fix'
 bob capture '=*build#fix#read'
+bob capture '=*'
+bob capture '=*build'
 ```
 
-`=*#fix` merges the planned FIX Pomodoro into the current Pomodoro (running, else the next planned a bare `=` would start). `=*build#fix` merges planned FIX into the open BUILD entry. Several `#dest` selectors append in typed order. A dest-less `=*` or `=*<src>` is incomplete (`capture-parse` needs `pomodoro_merge_dest`); the execute error also names `x*` so the retired parking-every-link hint survives. Digit and marker forms (`=*1`, `=*!2`, `=**`) stay retired-close teaching errors. Link suffixes `^bob:stop=*` stay retired aliases (`=x*`). `==*` keeps its "not a close" error.
+`=*#fix` merges the planned FIX Pomodoro into the current Pomodoro (the one running, else the next planned Pomodoro). `=*build#fix` merges planned FIX into the open BUILD entry. Several `#dest` selectors append in typed order. A bare `=*` or `=*build` finds the first open, untimed, named Pomodoro below its source, passing completed, timed, running, unnamed, and MEET entries. It never wraps to entries above the source and absorbs only one entry per token. Repeating `=*` grows a session one planned entry at a time. If only MEET entries or unnamed placeholders remain below the source, the `merge_next_missing` error explains that MEET never merges when applicable. A trailing `#` still opens the destination picker and needs a name. Digit and marker forms (`=*1`, `=*!2`, `=**`) stay retired-close teaching errors. Link suffixes `^bob:stop=*` stay retired aliases (`=x*`). `==*` keeps its "not a close" error.
 
-Each dest must be an untimed planned entry other than the source. Children of each dest append under the source; a dest Task Link whose trimmed line already sits as a top-level child of the source (including a child moved from an earlier dest) is dropped with its entire subtree. The source keeps its checkbox, timespan, and ledger order; dest entries are removed. The survivor's name joins the source's components, then each dest's components in typed order, keeping the first spelling of each distinct component (`BUILD + FIX + READ`). Guards (timed dest, MEET, same Pomodoro, dest already part of the source, repeated dest, missing target) each produce a precise teaching refusal with stable codes (`merge_timed_pomodoro`, `merge_meet`, `merge_same_pomodoro`, `merge_already_part`, `merge_dest_repeated`, `merge_target_missing`). A timed dest teaches the swap (`=*fix#build` when FIX is running).
+Each named dest must be an untimed planned entry other than the source. Children of each dest append under the source; a dest Task Link whose trimmed line already sits as a top-level child of the source (including a child moved from an earlier dest) is dropped with its entire subtree. The source keeps its checkbox, timespan, and ledger order; dest entries are removed. The survivor's name joins the source's components, then each dest's components in selected order, keeping the first spelling of each distinct component (`BUILD + FIX + READ`). Guards (timed dest, MEET, same Pomodoro, dest already part of the source, repeated dest, missing target) each produce a precise teaching refusal with stable codes (`merge_timed_pomodoro`, `merge_meet`, `merge_same_pomodoro`, `merge_already_part`, `merge_dest_repeated`, `merge_target_missing`, `merge_next_missing`). A timed dest teaches the swap (`=*fix#build` when FIX is running).
 
-Moved child subtrees keep their nested content and adopt the surviving Pomodoro's child indentation; duplicate subtrees are removed as described above. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_merge` reports `pomodoro_merge: {path, entry_line, before, after, absorbed: [{name, from_line, moved_lines, dropped_duplicates}]}` and `pomodoro_blocks` refs for the survivor and every removed dest. Human output prints `merged FIX, READ → BUILD + FIX + READ · path line N · N links moved`.
+Moved child subtrees keep their nested content and adopt the surviving Pomodoro's child indentation; duplicate subtrees are removed as described above. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_merge` reports `pomodoro_merge: {path, entry_line, before, after, source_role, explicit?, absorbed: [{name, role, from_line, moved_lines, dropped_duplicates}]}`. `source_role` is `current`, `next_up`, or `named`; each absorbed row is `named` or `next`. When an implied choice can be spelled without changing the selected entries, `explicit` gives the equivalent fully named token. `pomodoro_blocks` includes refs for the survivor and every removed dest. Human output prints the merge detail and, when a choice was implied, a `same as =*plan#fix · current PLAN, next FIX` line listing the implied source and destinations. Fully named merges keep their existing output.
 
 ### Overriding the running Pomodoro
 
@@ -4160,7 +4162,7 @@ names the shed types on the next line,
 
 Whole-item `=x…` and `=!…`, plus digit and marker `=*` forms (`=*1`,
 `=*!2`, `=**`), are claimed teaching errors. They write nothing. Each
-message names the typed token and the exact bare-`x` rewrite. Letter,
+message names the typed token and the exact bare-`x` rewrite. Bare, letter,
 `#`, and quote `=*` forms merge instead (see [Merging Pomodoros](#merging-pomodoros)).
 Link and task suffixes keep `=x…`; only the short `=*` / `=!` aliases on
 those suffixes retire, rewriting to `=x*` / `=x!`.

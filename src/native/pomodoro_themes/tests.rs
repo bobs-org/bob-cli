@@ -948,3 +948,76 @@ fn theme_lookup_uses_cached_history_and_refreshes_changed_today() {
         .expect("lookup after today's note changed");
     assert!(refreshed.theme_ref("new", "NEW").known);
 }
+
+#[test]
+fn next_planned_below_skips_ineligible_meet_and_named_rows() {
+    use super::merged::{next_planned_below, NextPlanned, SelectEntry};
+
+    let entries = vec![
+        SelectEntry {
+            name: Some("ABOVE"),
+            open: true,
+            running: false,
+            timed: false,
+        },
+        SelectEntry {
+            name: Some("SOURCE"),
+            open: true,
+            running: false,
+            timed: false,
+        },
+        SelectEntry {
+            name: Some("COMPLETED"),
+            open: false,
+            running: false,
+            timed: false,
+        },
+        SelectEntry {
+            name: Some("TIMED"),
+            open: true,
+            running: false,
+            timed: true,
+        },
+        SelectEntry {
+            name: Some("RUNNING"),
+            open: true,
+            running: true,
+            timed: false,
+        },
+        SelectEntry {
+            name: None,
+            open: true,
+            running: false,
+            timed: false,
+        },
+        SelectEntry {
+            name: Some("MEET"),
+            open: true,
+            running: false,
+            timed: false,
+        },
+        SelectEntry {
+            name: Some("SKIP"),
+            open: true,
+            running: false,
+            timed: false,
+        },
+        SelectEntry {
+            name: Some("NEXT"),
+            open: true,
+            running: false,
+            timed: false,
+        },
+    ];
+
+    assert_eq!(next_planned_below(&entries, 1, &[]), NextPlanned::Entry(7));
+    assert_eq!(next_planned_below(&entries, 1, &[7]), NextPlanned::Entry(8));
+    assert_eq!(
+        next_planned_below(&entries, 1, &[7, 8]),
+        NextPlanned::Missing { passed_meet: true }
+    );
+    assert_eq!(
+        next_planned_below(&entries, 8, &[]),
+        NextPlanned::Missing { passed_meet: false }
+    );
+}

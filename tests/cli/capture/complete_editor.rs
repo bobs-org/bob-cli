@@ -87,6 +87,103 @@ fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
 }
 
 #[test]
+fn capture_complete_merge_labels_the_implied_rows_and_starts_unselected() {
+    let temp = TempDir::new("bob-cli-capture-complete-merge");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-1000**) — BUILD\n",
+            "  - [[tasks#^build]]\n",
+            "- [ ] () — FIX\n",
+            "  - [[tasks#^fix]]\n",
+            "- [ ] () — READ\n",
+        ),
+    );
+    let complete = |draft: &str| {
+        bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-c")
+            .arg(draft.len().to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_NOW", "2026-11-01 09:30")
+            .env("BOB_DAY_FILE", &day_file)
+            .output()
+            .expect("run merge completion")
+    };
+
+    let bare = complete("=*");
+    assert_success(&bare);
+    let bare_json: serde_json::Value =
+        serde_json::from_str(stdout(&bare).trim()).expect("bare merge JSON");
+    assert_eq!(bare_json["context"], "pomodoro_merge_src");
+    assert_eq!(bare_json["initial_selection"], "none");
+    assert_eq!(bare_json["candidates"][0]["replacement"], "");
+    assert_eq!(
+        bare_json["candidates"][0]["name"],
+        "current → BUILD (running · 1 link)"
+    );
+
+    let destination = complete("=*build#");
+    assert_success(&destination);
+    let destination_json: serde_json::Value =
+        serde_json::from_str(stdout(&destination).trim())
+            .expect("merge destination JSON");
+    assert_eq!(destination_json["context"], "pomodoro_merge_dest");
+    assert_eq!(destination_json["candidates"][0]["replacement"], "FIX");
+    assert!(destination_json["candidates"][0]["name"]
+        .as_str()
+        .unwrap()
+        .contains("(next planned · 1 link)"));
+
+    let typed_source = complete("=*bu");
+    assert_success(&typed_source);
+    let typed_json: serde_json::Value =
+        serde_json::from_str(stdout(&typed_source).trim()).expect("typed JSON");
+    assert!(typed_json.get("initial_selection").is_none());
+}
+
+#[test]
+fn capture_complete_merge_keeps_current_plain_when_ambiguous() {
+    let temp = TempDir::new("bob-cli-capture-complete-merge-ambiguous");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-1000**) — BUILD\n",
+            "- [ ] (**0900-1000**) — FIX\n",
+        ),
+    );
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("2")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=*")
+        .env("BOB_NOW", "2026-11-01 09:30")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run ambiguous merge completion");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["candidates"][0]["name"], "current");
+}
+
+#[test]
 fn capture_complete_pomodoro_name_json_offers_a_create_row() {
     let temp = TempDir::new("bob-cli-capture-complete-pomodoro-create");
     let vault = temp.path().join("vault");

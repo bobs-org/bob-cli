@@ -112,9 +112,15 @@ fn retired_closes_inside_chains_fail_on_their_own_range() {
     assert!(parse.items[0].diagnostics.is_empty());
     assert!(parse.items[0].pomodoro_close.is_some());
     assert_eq!(parse.items[1].mode, EditorMode::PomodoroMerge);
-    assert_eq!(parse.items[1].needs, vec![Need::PomodoroMergeDest]);
+    assert!(parse.items[1].needs.is_empty());
     assert!(parse.items[1].diagnostics.is_empty());
     assert_eq!(parse.items[1].spans[0].kind, SpanKind::PomodoroMerge);
+    assert!(parse.items[1]
+        .pomodoro_merge
+        .as_ref()
+        .unwrap()
+        .dests
+        .is_empty());
 
     // Digit `=*` forms stay retired closes inside a chain.
     let parse = parse_for_editor("x =*1");
