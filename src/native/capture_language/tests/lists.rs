@@ -3,6 +3,7 @@
 
 use super::super::draft::*;
 use super::super::editor_model::*;
+use super::super::editor_parse::*;
 use super::super::model::*;
 use super::*;
 
@@ -355,6 +356,40 @@ fn execution_quoted_sections_carry_exact() {
 fn execution_bare_at_with_bullets_refuses_incomplete_route() {
     let error = parse_draft("@\n- A task").unwrap_err();
     assert_eq!(error.code, Some("incomplete_route"));
+}
+
+#[test]
+fn unterminated_section_literal_is_incomplete_never_a_mistake() {
+    for raw in ["@sase#\"Fu", "boom @sase#\"Fu", "@sase#\"Fu\n- boom"] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parse.needs, vec![Need::Section], "{raw}");
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+        assert!(parse.section.is_none(), "{raw}");
+
+        let error = parse_draft(raw).unwrap_err();
+        assert_eq!(error.code, Some("incomplete_section"), "{raw}");
+        assert!(
+            error.message.contains("quoted section name"),
+            "{raw}: {}",
+            error.message
+        );
+    }
+
+    let complete = editor(r#"jot @dev#"Ideas""#);
+    assert_eq!(complete.mode, EditorMode::Bullet);
+    assert_eq!(complete.section.as_deref(), Some("Ideas"));
+    assert!(complete.needs.is_empty());
+}
+
+#[test]
+fn editor_item_at_header_with_bullets_resolves_to_first_item() {
+    let raw = "@sase#Fu\n- boom";
+    let item = editor_item_at(raw, 8).expect("header item");
+    assert_eq!(item.body, "boom");
+    assert_eq!(item.route.as_deref(), Some("sase"));
+    assert_eq!(item.section.as_deref(), Some("Fu"));
+    assert_eq!(item.list.as_ref().map(|list| list.position), Some(1));
 }
 
 #[test]

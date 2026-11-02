@@ -1319,15 +1319,41 @@ pub(crate) fn completion_field_at(
 
     let draft = split_capture_draft(raw_text);
     let items = draft.items;
-    let (item, line_index, line) = items.iter().find_map(|item| {
-        item.lines
-            .iter()
+    let header_item;
+    let (item, line_index, line) = if let Some(found) =
+        items.iter().find_map(|item| {
+            item.lines
+                .iter()
+                .enumerate()
+                .find(|(_, line)| {
+                    cursor >= line.raw.start && cursor <= line.raw.end
+                })
+                .map(|(line_index, line)| (item, line_index, line.raw))
+        }) {
+        found
+    } else {
+        // A list header with bullets below belongs to no per-bullet item.
+        // Complete it as a header-only leading line, matching an empty list.
+        let (line_number, header_raw) = split_physical_lines(raw_text)
+            .into_iter()
             .enumerate()
-            .find(|(_, line)| {
-                cursor >= line.raw.start && cursor <= line.raw.end
-            })
-            .map(|(line_index, line)| (item, line_index, line.raw))
-    })?;
+            .find(|(_, line)| cursor >= line.start && cursor <= line.end)?;
+        detect_list_header(&header_raw)?;
+        header_item = CaptureItem {
+            source: raw_text,
+            index: 0,
+            start: header_raw.start,
+            end: header_raw.end,
+            line_start: line_number + 1,
+            line_end: line_number + 1,
+            lines: vec![ItemLine {
+                raw: header_raw,
+                line_number: line_number + 1,
+            }],
+            list: None,
+        };
+        (&header_item, 0, header_raw)
+    };
     if let Some(field) = directive_completion_field_at(item, cursor) {
         return Some(field);
     }
@@ -2577,11 +2603,18 @@ pub(super) fn completion_field_from_parts(
             });
         }
         let split = cursor.clamp(right_start, right_end) - right_start;
+        let query = if right_context == CompletionContext::Section
+            && super::pomodoro_literal::opens_exact_name(parts.right_part)
+        {
+            exact_name_query(parts.right_part, split, true)
+        } else {
+            parts.right_part[..split].to_string()
+        };
         return Some(CompletionField {
             context: right_context,
             route: Some(parts.route_part.to_ascii_lowercase()),
             block_id: None,
-            query: parts.right_part[..split].to_string(),
+            query,
             replacement: (right_start, right_end),
             bare_name: false,
         });

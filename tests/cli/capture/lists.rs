@@ -1188,3 +1188,183 @@ fn capture_list_unchanged_forms_keep_old_behavior() {
             "- [ ] #task Plan trip [created::2026-11-02]\n\t- pack bags\n"
         ));
 }
+
+#[test]
+fn capture_unterminated_section_literal_refuses_incomplete_section() {
+    for draft in ["@sase#\"Fu", "boom @sase#\"Fu", "@sase#\"Fu\n- boom"] {
+        let parse = run_parse(draft);
+        assert_eq!(parse["mode"], "incomplete", "{draft}: {parse}");
+        assert_eq!(
+            parse["needs"],
+            serde_json::json!(["section"]),
+            "{draft}: {parse}"
+        );
+        assert!(
+            parse["diagnostics"].as_array().is_none_or(|d| d.is_empty()),
+            "{draft}: {parse}"
+        );
+        assert!(parse["section"].is_null(), "{draft}: {parse}");
+    }
+
+    let temp = TempDir::new("bob-cli-capture-incomplete-section");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&vault.join("sase.md"), "## Future Work\nnotes\n");
+    write_file(&vault.join("mac_inbox.md"), "# Tasks\n");
+    let day = day_file(&vault);
+    let before_sase =
+        fs::read_to_string(vault.join("sase.md")).expect("read sase");
+    let before_inbox =
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
+    let before_day = fs::read_to_string(&day).expect("read day");
+    let output = run_capture(&vault, &day, "@sase#\"Fu\n- boom", true);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected refusal:\n{}",
+        format_output(&output)
+    );
+    let json: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["code"], "incomplete_section", "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("incomplete: finish the quoted section name"),
+        "refusal copy must name the quoted section: {}",
+        json["error"]
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("read sase"),
+        before_sase
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        before_inbox
+    );
+    assert_eq!(fs::read_to_string(&day).expect("read day"), before_day);
+}
+
+#[test]
+fn capture_off_clock_list_matches_equivalent_batch() {
+    let list_draft = concat!(
+        "@dev\n",
+        "- Walk the dog #offclock now :walk\n",
+        "- Regular work :work\n",
+        "\n",
+        "=",
+    );
+    let batch_draft = concat!(
+        "Walk the dog #offclock now @dev:walk\n",
+        "\n",
+        "Regular work @dev:work\n",
+        "\n",
+        "=",
+    );
+
+    let temp = TempDir::new("bob-cli-capture-list-off-clock");
+    let list_vault = temp.path().join("list-vault");
+    fs::create_dir_all(&list_vault).expect("create list vault");
+    write_toggle_task_settings(&list_vault);
+    write_file(&list_vault.join("dev.md"), "# Tasks\n");
+    let list_day = list_vault.join("day.md");
+    write_file(&list_day, "## Pomodoros\n- [ ] () — WORK\n");
+    let list_json = dry_json(&list_vault, &list_day, list_draft);
+    capture_real(&list_vault, &list_day, list_draft);
+
+    let batch_vault = temp.path().join("batch-vault");
+    fs::create_dir_all(&batch_vault).expect("create batch vault");
+    write_toggle_task_settings(&batch_vault);
+    write_file(&batch_vault.join("dev.md"), "# Tasks\n");
+    let batch_day = batch_vault.join("day.md");
+    write_file(&batch_day, "## Pomodoros\n- [ ] () — WORK\n");
+    let batch_json = dry_json(&batch_vault, &batch_day, batch_draft);
+    capture_real(&batch_vault, &batch_day, batch_draft);
+
+    assert_eq!(
+        fs::read_to_string(list_vault.join("dev.md")).expect("read list dev"),
+        fs::read_to_string(batch_vault.join("dev.md")).expect("read batch dev"),
+        "list and batch must write identical notes"
+    );
+    assert_eq!(
+        fs::read_to_string(&list_day).expect("read list day"),
+        fs::read_to_string(&batch_day).expect("read batch day"),
+        "list and batch must write identical ledger rows"
+    );
+    assert_eq!(
+        list_json["warnings"], batch_json["warnings"],
+        "list and batch must warn the same way\nlist={list_json}\nbatch={batch_json}"
+    );
+    let list_start = &list_json["pomodoro_start"];
+    let batch_start = &batch_json["pomodoro_start"];
+    assert_eq!(
+        list_start["off_clock"], batch_start["off_clock"],
+        "{list_json}"
+    );
+    assert_eq!(
+        list_start["time_range"], batch_start["time_range"],
+        "{list_json}"
+    );
+    let day = fs::read_to_string(&list_day).expect("read day");
+    assert!(
+        day.contains("[off::") || day.contains("[t::"),
+        "ledger must stamp a clock field:\n{day}"
+    );
+}
+
+#[test]
+fn capture_complete_then_list_lands_under_future_work() {
+    let temp = TempDir::new("bob-cli-capture-section-screenshot");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&vault.join("sase.md"), "# Sase\n## Future Work\nexisting\n");
+    let day = day_file(&vault);
+
+    let draft = "@sase#Fu";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run capture-complete");
+    assert_success(&output);
+    let complete: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("complete JSON");
+    assert_eq!(complete["context"], "section", "{complete}");
+    let rows = complete["candidates"].as_array().expect("candidates");
+    let future = rows
+        .iter()
+        .find(|row| row["title"] == "Future Work")
+        .expect("Future Work row");
+    let replacement = future["replacement"].as_str().expect("replacement");
+    let start =
+        complete["replacement"]["start"].as_u64().expect("start") as usize;
+    let end = complete["replacement"]["end"].as_u64().expect("end") as usize;
+    let mut applied = String::new();
+    applied.push_str(&draft[..start]);
+    applied.push_str(replacement);
+    applied.push_str(&draft[end..]);
+    applied.push_str("\n- boom");
+
+    capture_real(&vault, &day, &applied);
+    let contents =
+        fs::read_to_string(vault.join("sase.md")).expect("read sase");
+    let heading = contents.find("## Future Work").expect("heading");
+    let boom = contents.find("- boom").expect("boom");
+    assert!(
+        boom > heading,
+        "boom must land under Future Work:\n{contents}"
+    );
+    assert!(
+        !contents[..heading].contains("- boom"),
+        "boom must not land in the zeroth section:\n{contents}"
+    );
+}

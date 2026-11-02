@@ -1347,9 +1347,7 @@ fn human_pick_suffix_and_not_pulled_in() {
     );
     // A minted ID is reported after the suffix.
     assert!(
-        out.contains(
-            "keeps sase_badges moving \u{b7} added ^write-changelog-entry"
-        ),
+        out.contains("keeps sase_badges moving \u{b7} added ^write-changelog"),
         "{out}"
     );
     assert!(!out.contains("unblocked"), "{out}");

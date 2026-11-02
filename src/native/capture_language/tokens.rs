@@ -56,6 +56,9 @@ pub(super) fn parse_route_token(token: &str) -> Option<RouteToken> {
     })
 }
 
+pub(super) const INCOMPLETE_SECTION_ERROR: &str =
+    "`#\"…` is incomplete: finish the quoted section name (for example `@sase#\"Future Work\"`)";
+
 pub(super) fn parse_terminal_route_token(
     token: &str,
 ) -> Result<Option<RouteToken>, String> {
@@ -76,7 +79,29 @@ pub(super) fn parse_terminal_route_token(
     if is_pomodoro_marker_candidate(token) {
         return parse_pomodoro_route_token(token).map(Some);
     }
+    if incomplete_quoted_section(token) {
+        return Err(INCOMPLETE_SECTION_ERROR.to_string());
+    }
     Ok(parse_route_token(token))
+}
+
+/// An unterminated `@route#"…` section literal: incomplete, never a
+/// section named `"…` and never a literal inbox task.
+fn incomplete_quoted_section(token: &str) -> bool {
+    let Some(rest) = token.strip_prefix('@') else {
+        return false;
+    };
+    let Some((route_part, prefix)) = rest.split_once('#') else {
+        return false;
+    };
+    if route_part.is_empty() || !is_route_token(route_part) {
+        return false;
+    }
+    if !opens_exact_name(prefix) {
+        return false;
+    }
+    lex_exact_name_after_hash(prefix, prefix.len())
+        .is_some_and(|lex| !lex.complete)
 }
 
 pub(super) fn parse_sub_bullet_route_token(

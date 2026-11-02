@@ -4,16 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{
-    model::{
-        ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
-        Candidates, CompleteError, DependencyCandidate, PickerRelationEntry,
-        PickerRelationship, PickerRelationshipEntry, RelationCandidate,
-        RelationLabelSuggestion, RouteCandidate, SectionCandidate,
-        TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate,
-        TaskLinkCandidate, TaskParentCandidate,
-    },
-    support::rank,
+use super::model::{
+    ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
+    Candidates, CompleteError, DependencyCandidate, PickerRelationEntry,
+    PickerRelationship, PickerRelationshipEntry, RelationCandidate,
+    RelationLabelSuggestion, RouteCandidate, SectionCandidate, TaskCandidate,
+    TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
+    TaskParentCandidate,
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
@@ -97,14 +94,13 @@ pub(super) fn section_candidates(
     query: &str,
 ) -> Result<Candidates, CompleteError> {
     let contents = read_target(bob_dir, route)?;
-    let sections = capture::non_tasks_section_headings(&contents);
-    let ranked = rank(sections, query, |section| section.title.as_str());
+    let ranked = capture::section_completion_rows(&contents, query);
 
     Ok(Candidates::Section(
         ranked
             .into_iter()
             .map(|section| SectionCandidate {
-                replacement: section.title.clone(),
+                replacement: section.replacement,
                 title: section.title,
                 level: section.level,
             })

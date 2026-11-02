@@ -235,15 +235,6 @@ pub(super) fn target_bullet_section(
     article: bool,
     reserved: &BTreeSet<usize>,
 ) -> MarkdownSection {
-    let matches = |heading: &MarkdownHeading<'_>| {
-        is_bullet_section(heading, reserved)
-            && heading_matches_bullet_selector(
-                heading.title,
-                section_prefix,
-                exact,
-                article,
-            )
-    };
     // Prefer the first matching non-H1 heading, falling back to the first
     // matching H1 heading only when no non-H1 heading matches.
     let find_preferred = |predicate: &dyn Fn(&MarkdownHeading<'_>) -> bool| {
@@ -256,21 +247,38 @@ pub(super) fn target_bullet_section(
                 })
             })
     };
-    let target = if article {
-        let raw = |heading: &MarkdownHeading<'_>| {
-            is_bullet_section(heading, reserved)
-                && raw_heading_matches(heading.title, section_prefix, exact)
-        };
-        let identity = |heading: &MarkdownHeading<'_>| {
-            is_bullet_section(heading, reserved)
+    let bullet =
+        |heading: &MarkdownHeading<'_>| is_bullet_section(heading, reserved);
+    let raw = |heading: &MarkdownHeading<'_>| {
+        bullet(heading)
+            && raw_heading_matches(heading.title, section_prefix, exact)
+    };
+    let identity = |heading: &MarkdownHeading<'_>| {
+        article
+            && bullet(heading)
+            && section_prefix.is_some_and(|selector| {
+                article_heading_matches(heading.title, selector, exact)
+            })
+    };
+    // Raw title, then article identity, then (non-exact only) whole-slug
+    // equality, then slug-prefix. Exact selectors never slug-match.
+    let mut target = find_preferred(&raw).or_else(|| find_preferred(&identity));
+    if target.is_none() && !exact {
+        let slug_eq = |heading: &MarkdownHeading<'_>| {
+            bullet(heading)
                 && section_prefix.is_some_and(|selector| {
-                    article_heading_matches(heading.title, selector, exact)
+                    slug_heading_matches(heading.title, selector, true)
                 })
         };
-        find_preferred(&raw).or_else(|| find_preferred(&identity))
-    } else {
-        find_preferred(&matches)
-    };
+        let slug_prefix = |heading: &MarkdownHeading<'_>| {
+            bullet(heading)
+                && section_prefix.is_some_and(|selector| {
+                    slug_heading_matches(heading.title, selector, false)
+                })
+        };
+        target =
+            find_preferred(&slug_eq).or_else(|| find_preferred(&slug_prefix));
+    }
 
     match target {
         Some(pos) => {
@@ -306,11 +314,14 @@ pub(super) fn target_bullet_section(
     }
 }
 
-/// Whether `title` matches a bullet capture's section selector. A bare marker
-/// (no selector) matches every heading; otherwise exact selectors compare the
-/// whole title case insensitively, and prefix selectors compare against the
-/// start of `title` case insensitively. Article notes also match on heading
-/// identity after the raw-title comparison.
+/// Whether `title` matches a bullet capture's section selector at the raw
+/// title or article-identity tiers. A bare marker (no selector) matches
+/// every heading; otherwise exact selectors compare the whole title case
+/// insensitively, and prefix selectors compare against the start of `title`
+/// case insensitively. Article notes also match on heading identity after
+/// the raw-title comparison. Slug matching is a later tier in
+/// [`target_bullet_section`] and is not part of this check.
+#[cfg(test)]
 pub(super) fn heading_matches_bullet_selector(
     title: &str,
     section_prefix: Option<&str>,
@@ -365,6 +376,138 @@ fn article_heading_matches(title: &str, selector: &str, exact: bool) -> bool {
                     .any(|heading| heading.starts_with(selector.as_str()))
         })
     }
+}
+
+fn slug_heading_matches(title: &str, selector: &str, exact: bool) -> bool {
+    let title_slug = capture_language::selector_slug(title);
+    let selector_slug = capture_language::selector_slug(selector);
+    if title_slug.is_empty() || selector_slug.is_empty() {
+        return false;
+    }
+    if exact {
+        title_slug == selector_slug
+    } else {
+        title_slug.starts_with(&selector_slug)
+    }
+}
+
+/// Heading line of the section `selector` resolves to, or `None` when the
+/// resolver falls through to the zeroth (pre-heading) section.
+fn resolved_bullet_heading_line(
+    contents: &str,
+    selector: &str,
+    exact: bool,
+) -> Option<usize> {
+    let lines = line_spans(contents);
+    let headings = markdown_headings(&lines);
+    let article = destination_is_article(contents);
+    let reserved = task_status_groups::reserved_group_heading_lines(contents);
+    let section = target_bullet_section(
+        &lines,
+        &headings,
+        Some(selector),
+        exact,
+        article,
+        &reserved,
+    );
+    section.heading_end?;
+    Some(section.start_line.saturating_sub(1))
+}
+
+fn quote_escape(title: &str) -> String {
+    title.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn unquoted_selector_spelling(title: &str) -> bool {
+    !title.is_empty()
+        && !title.chars().any(char::is_whitespace)
+        && !title.starts_with('"')
+        && !title.starts_with('“')
+}
+
+/// Replacement a section-completion row inserts for `title` at
+/// `heading_line_index`: the raw title when it is one unquoted selector
+/// that resolves back to this heading, else the hyphen slug when that
+/// round-trips, else a quoted `"Title"` with `"` and `\` escaped.
+fn section_selector_replacement(
+    contents: &str,
+    heading_line_index: usize,
+    title: &str,
+) -> String {
+    if unquoted_selector_spelling(title)
+        && resolved_bullet_heading_line(contents, title, false)
+            == Some(heading_line_index)
+    {
+        return title.to_string();
+    }
+    let slug = capture_language::selector_slug(title);
+    if !slug.is_empty()
+        && resolved_bullet_heading_line(contents, &slug, false)
+            == Some(heading_line_index)
+    {
+        return slug;
+    }
+    format!("\"{}\"", quote_escape(title))
+}
+
+/// One non-`Tasks` heading offered as a section-completion row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SectionCompletionRow {
+    pub(crate) title: String,
+    pub(crate) level: usize,
+    pub(crate) replacement: String,
+}
+
+/// Ranked section-completion rows for `contents`: title prefix or slug
+/// prefix first, then title substring, each group in document order. Each
+/// `replacement` round-trips through [`target_bullet_section`] to the same
+/// heading.
+pub(crate) fn section_completion_rows(
+    contents: &str,
+    query: &str,
+) -> Vec<SectionCompletionRow> {
+    let reserved = task_status_groups::reserved_group_heading_lines(contents);
+    let lines = line_spans(contents);
+    let headings: Vec<SectionCompletionRow> = markdown_headings(&lines)
+        .into_iter()
+        .filter(|heading| is_bullet_section(heading, &reserved))
+        .map(|heading| SectionCompletionRow {
+            replacement: section_selector_replacement(
+                contents,
+                heading.line_index,
+                heading.title,
+            ),
+            title: heading.title.to_string(),
+            level: heading.level,
+        })
+        .collect();
+    rank_section_rows(headings, query)
+}
+
+fn rank_section_rows(
+    rows: Vec<SectionCompletionRow>,
+    query: &str,
+) -> Vec<SectionCompletionRow> {
+    if query.is_empty() {
+        return rows;
+    }
+    let query_lower = query.to_lowercase();
+    let query_slug = capture_language::selector_slug(query);
+    let mut prefix = Vec::new();
+    let mut substring = Vec::new();
+    for row in rows {
+        let title_lower = row.title.to_lowercase();
+        let slug = capture_language::selector_slug(&row.title);
+        let is_prefix = title_lower.starts_with(&query_lower)
+            || (!query_slug.is_empty() && slug.starts_with(&query_slug));
+        if is_prefix {
+            prefix.push(row);
+        } else if title_lower.contains(&query_lower) {
+            substring.push(row);
+        }
+    }
+    prefix.extend(substring);
+    prefix
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

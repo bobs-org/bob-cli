@@ -114,7 +114,11 @@ covers '@route+fragment', including -a/--all-tasks missing-ID candidates. An inh
 becomes the current note for same-note wikilink heading/block completion unless \
 that item overrides it. Route completion is backed by the same \
 scan as `bob capture-targets`. Section completion covers '@route#prefix', \
-backed by the same scan as `bob capture-sections`. Drawer completion \
+'@route#\"partial', and a list-header '@route#prefix' even after bullets \
+are typed below it, backed by the same scan as `bob capture-sections`. Each \
+row's replacement is a selector that resolves back to that heading: the raw \
+title when it is one unquoted token, else the hyphen slug, else a quoted \
+'\"Title\"'. Drawer completion \
 covers '@route+id#prefix' and a bare '@route+id#' once the item has body text, backed by the same \
 scanner as `bob capture-drawers`; the replacement range and text cover the \
 `#` and the name (`#future-work`, or a quoted `#\"TITLE\"` when the slug does \

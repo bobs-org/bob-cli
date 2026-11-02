@@ -70,6 +70,69 @@ fn section_completes_after_a_resolved_route() {
 }
 
 #[test]
+fn quoted_section_literal_decodes_its_query_and_replaces_the_quotes() {
+    let hash = "Idea @sase".len();
+
+    let partial = "Idea @sase#\"Fu";
+    let field_partial = field(partial, partial.len()).expect("partial");
+    assert_eq!(field_partial.context, CompletionContext::Section);
+    assert_eq!(field_partial.route.as_deref(), Some("sase"));
+    assert_eq!(field_partial.query, "Fu");
+    assert_eq!(field_partial.replacement, (hash + 1, partial.len()));
+
+    let closed = "Idea @sase#\"Future Work\"";
+    let field_closed = field(closed, closed.len()).expect("closed");
+    assert_eq!(field_closed.query, "Future Work");
+    assert_eq!(field_closed.replacement, (hash + 1, closed.len()));
+
+    let inside = field(closed, hash + 3).expect("inside");
+    assert_eq!(inside.query, "F");
+    assert_eq!(inside.replacement, (hash + 1, closed.len()));
+}
+
+#[test]
+fn list_header_completes_section_after_bullets() {
+    let raw = "@sase#Fu\n- boom";
+    let cursor = "@sase#Fu".len();
+    let completion = field(raw, cursor).expect("header section");
+    assert_eq!(completion.context, CompletionContext::Section);
+    assert_eq!(completion.route.as_deref(), Some("sase"));
+    assert_eq!(completion.query, "Fu");
+    assert_eq!(completion.replacement, (6, cursor));
+}
+
+#[test]
+fn list_header_completes_route_after_bullets() {
+    let raw = "@sa\n- boom";
+    let completion = field(raw, 3).expect("header route");
+    assert_eq!(completion.context, CompletionContext::Route);
+    assert_eq!(completion.query, "sa");
+    assert_eq!(completion.replacement, (1, 3));
+}
+
+#[test]
+fn list_header_completes_with_crlf_and_utf8_before_it() {
+    let raw = "🙂\n@sase#Fu\r\n- boom";
+    let header = raw.find("@sase#Fu").expect("header");
+    let cursor = header + "@sase#Fu".len();
+    let completion = field(raw, cursor).expect("utf8 header");
+    assert_eq!(completion.context, CompletionContext::Section);
+    assert_eq!(completion.route.as_deref(), Some("sase"));
+    assert_eq!(completion.query, "Fu");
+    assert_eq!(completion.replacement, (header + 6, cursor));
+}
+
+#[test]
+fn list_header_completes_partial_quoted_section_after_bullets() {
+    let raw = "@sase#\"Fu\n- boom";
+    let cursor = "@sase#\"Fu".len();
+    let completion = field(raw, cursor).expect("quoted header");
+    assert_eq!(completion.context, CompletionContext::Section);
+    assert_eq!(completion.query, "Fu");
+    assert_eq!(completion.replacement, (6, cursor));
+}
+
+#[test]
 fn pomodoro_block_id_completes_after_a_resolved_route() {
     let completion = field("Do work @Dev:foc", 16).expect("pomodoro id");
     assert_eq!(completion.context, CompletionContext::PomodoroBlockId);

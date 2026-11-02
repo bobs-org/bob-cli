@@ -158,8 +158,8 @@ pub(crate) use pomodoro_insert::{
     DefaultPomodoroSelection,
 };
 pub(crate) use sections::{
-    insert_task_line, line_spans, non_tasks_section_headings, LineSpan,
-    SectionHeading,
+    insert_task_line, line_spans, non_tasks_section_headings,
+    section_completion_rows, LineSpan, SectionHeading,
 };
 pub(crate) use sub_bullet::{
     dominant_indent_unit, first_child_indentation,

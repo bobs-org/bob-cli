@@ -907,7 +907,10 @@ A first line that is only `@route` (a task list) or only `@route#section`
 (a section list) files each first-level bullet below it as its own item in
 that file, with the bullet's nested bullets as its children. A header line
 also starts a new list when no blank line precedes it, so `@dev` / `- a` /
-`@cash` / `- b` is two lists. For example, with this `dev.md`:
+`@cash` / `- b` is two lists. A section header may name a heading with spaces
+as `@sase#future-work` or `@sase#"Future Work"`; both file under
+`## Future Work`. An unterminated `@sase#"Fu` is incomplete (`needs:
+["section"]`) rather than a list. For example, with this `dev.md`:
 
 ```markdown
 ## Tasks
@@ -5603,15 +5606,23 @@ exact `--section` title matches when its de-numbered identity equals the
 heading's identity, so both `--section "Agent CLIs"` and a stale
 `--section "1.4 Agent CLIs"` land on `1.3 Agent CLIs`. Raw title matching still
 runs first, so `@note#1.3` prefers `## 1.3 Agent CLIs` over `### 1.3.1 Nested`
-in document order. Notes that are not articles keep the raw-title behavior
-only. Within the chosen section the bullet is inserted after the last existing
-top-level bullet, otherwise just below the heading (or after any YAML
-frontmatter for the zeroth section). The suffixed route token may
-lead or trail the body, so `@notes#Ideas jot idea` and `jot idea @notes#Ideas`
-both capture into `notes.md`. A standalone terminal `#<section-prefix>`
-marker not appended to an `@route` token, such as `note #Ideas @foo`, is
-still not accepted and fails with a usage error; a standalone bare `#`, such
-as `note @foo #`, is an incomplete type marker (add `#fix`, or write `\#`).
+in document order. A non-exact selector that matches no heading title (and, on
+an article, no heading identity) then matches the heading's `selector_slug`
+(trim, collapse whitespace, ASCII-lowercase, join with `-`): whole-slug
+equality first, then slug-prefix, with the same non-H1 preference, so
+`@sase#future-work` reaches `## Future Work`. Quoted `#\"Title\"` selectors
+and `--section` stay exact title (or article identity) matches and never
+slug-match. An unterminated `@route#\"…` is incomplete (`needs: ["section"]`,
+no diagnostic) and `bob capture` refuses it with zero writes. Notes that are
+not articles keep the raw-title then slug behavior. Within the chosen section
+the bullet is inserted after the last existing top-level bullet, otherwise just
+below the heading (or after any YAML frontmatter for the zeroth section). The
+suffixed route token may lead or trail the body, so `@notes#Ideas jot idea` and
+`jot idea @notes#Ideas` both capture into `notes.md`. A standalone terminal
+`#<section-prefix>` marker not appended to an `@route` token, such as
+`note #Ideas @foo`, is still not accepted and fails with a usage error; a
+standalone bare `#`, such as `note @foo #`, is an incomplete type marker (add
+`#fix`, or write `\#`).
 
 A `--route` target keeps `@tokens` literal. Add `--section TITLE` with
 `--route` to force bullet mode and place the bullet in a non-`Tasks` heading
@@ -6782,7 +6793,8 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 still has to supply, in the
 order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `drawer`, `drawer_notes`, `task_type`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
-needs `["section"]`, while `@route+id#` with an empty drawer name reports mode
+needs `["section"]`, an unterminated `@route#"…` reports mode `incomplete` and
+needs `["section"]` with no diagnostic, while `@route+id#` with an empty drawer name reports mode
 `incomplete` and needs `["drawer"]`, a first-level `- #` reports `["drawer"]`, a
 complete childless `- #future-work` reports `["drawer_notes"]`, and `@route:id#` reports mode
 `incomplete` and needs `["pomodoro_name"]`. A complete
@@ -7346,8 +7358,14 @@ success, while route, section, Pomodoro-name, dependency, and wikilink pickers
 in the template body remain available. Block-ID contexts and replacements that
 overlap a placeholder return empty success. `@@` completes only destinations;
 it never offers a template candidate. Section completion
-covers `@route#prefix`,
-backed by the same scan as `bob capture-sections`. Drawer completion
+covers `@route#prefix`, `@route#"partial`, and a list-header `@route#prefix`
+even after bullets are typed below it, backed by the same scan as
+`bob capture-sections`. Each row's `replacement` is a selector that resolves
+back to that heading: the raw title when it is one unquoted token, else the
+hyphen slug (`future-work` for `## Future Work`), else a quoted `"Title"`
+with `"` and `\` escaped. Partial quoted queries decode to the inner text
+and the replacement range covers the whole literal, opening quote included.
+Drawer completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-drawers`; the candidate
 `replacement` covers the `#` and the name, as `#slug` (`#future-work` for

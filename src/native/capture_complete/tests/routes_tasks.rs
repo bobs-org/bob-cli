@@ -140,6 +140,82 @@ fn section_completion_lists_headings_of_the_resolved_route() {
         .map(|section| section.title.as_str())
         .collect();
     assert_eq!(titles, vec!["Ideas", "Inbox Ideas"]);
+    assert_eq!(sections[0].replacement, "Ideas");
+    assert_eq!(sections[1].replacement, "inbox-ideas");
+}
+
+#[test]
+fn section_completion_round_trips_slug_and_quoted_replacements() {
+    let temp = TempDir::new("bob-cli-capture-complete-section-roundtrip");
+    write_file(
+        &temp.path().join("sase.md"),
+        concat!(
+            "## Future Work\n",
+            "future\n",
+            "## future-work\n",
+            "hyphen\n",
+            "## Inbox Ideas\n",
+            "inbox\n",
+            "## A \"Q\"\n",
+            "quoted\n",
+            "## a-\"q\"\n",
+            "hyphen-quote\n",
+        ),
+    );
+
+    let value = result(temp.path(), "@sase#", 6);
+    let Candidates::Section(sections) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    let by_title: std::collections::HashMap<&str, &str> = sections
+        .iter()
+        .map(|section| (section.title.as_str(), section.replacement.as_str()))
+        .collect();
+    assert_eq!(by_title["Future Work"], "\"Future Work\"");
+    assert_eq!(by_title["future-work"], "future-work");
+    assert_eq!(by_title["Inbox Ideas"], "inbox-ideas");
+    assert_eq!(by_title["A \"Q\""], "\"A \\\"Q\\\"\"");
+
+    let slug_query = result(temp.path(), "@sase#future-w", 14);
+    let Candidates::Section(slug_rows) = &slug_query.candidates else {
+        panic!("expected section candidates");
+    };
+    let slug_titles: Vec<&str> =
+        slug_rows.iter().map(|row| row.title.as_str()).collect();
+    assert!(slug_titles.contains(&"Future Work"), "{slug_titles:?}");
+    assert!(slug_titles.contains(&"future-work"), "{slug_titles:?}");
+}
+
+#[test]
+fn section_completion_partial_quoted_query_covers_the_literal() {
+    let temp = TempDir::new("bob-cli-capture-complete-section-quoted");
+    write_file(&temp.path().join("sase.md"), "## Future Work\nnotes\n");
+
+    let raw = "@sase#\"Fu";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::Section));
+    assert_eq!(value.replacement.start, 6);
+    assert_eq!(value.replacement.end, raw.len());
+    let Candidates::Section(sections) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    assert_eq!(sections[0].title, "Future Work");
+    assert_eq!(sections[0].replacement, "future-work");
+}
+
+#[test]
+fn section_completion_on_a_list_header_with_bullets() {
+    let temp = TempDir::new("bob-cli-capture-complete-section-header");
+    write_file(&temp.path().join("sase.md"), "## Future Work\nnotes\n");
+
+    let raw = "@sase#Fu\n- boom";
+    let value = result(temp.path(), raw, "@sase#Fu".len());
+    assert_eq!(value.context, Some(CompletionContext::Section));
+    let Candidates::Section(sections) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    assert_eq!(sections[0].title, "Future Work");
+    assert_eq!(sections[0].replacement, "future-work");
 }
 
 #[test]

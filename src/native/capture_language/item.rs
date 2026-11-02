@@ -401,6 +401,12 @@ pub(super) fn parse_capture_item<'a>(
             {
                 return Err(directive_only_error(&directive_occurrences));
             }
+            if error == super::tokens::INCOMPLETE_SECTION_ERROR {
+                return Err(CaptureItemParseError::coded(
+                    "incomplete_section",
+                    error,
+                ));
+            }
             if error
                 == "add the note text (`Postgres 17 minimum @foo+bar#requirements`)"
             {

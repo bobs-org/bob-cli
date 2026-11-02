@@ -2096,7 +2096,7 @@ pub(super) fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
         return None;
     }
 
-    Some(marker_parse(
+    let mut parsed = marker_parse(
         token,
         MarkerShape {
             sigil_len: 1,
@@ -2110,7 +2110,35 @@ pub(super) fn classify_route_token(token: &Token<'_>) -> Option<MarkerParse> {
             third: None,
             suffix: None,
         },
-    ))
+    );
+    // A `#"…"` section literal: a complete one reports the decoded name
+    // (the span already covers the quotes); an unterminated one is an
+    // editing state with a section need, never a mistake.
+    if !route_part.is_empty()
+        && super::pomodoro_literal::opens_exact_name(prefix)
+    {
+        match super::pomodoro_literal::lex_exact_name_after_hash(
+            prefix,
+            prefix.len(),
+        ) {
+            Some(lex)
+                if lex.complete
+                    && lex.literal_len == prefix.len()
+                    && !lex.decoded.is_empty() =>
+            {
+                parsed.section = Some(lex.decoded);
+            }
+            Some(lex) if !lex.complete => {
+                parsed.section = None;
+                parsed.mode = EditorMode::Incomplete;
+                if !parsed.needs.contains(&Need::Section) {
+                    parsed.needs.push(Need::Section);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(parsed)
 }
 
 /// The shared shape of every `@<route><separator><right>` marker, with an

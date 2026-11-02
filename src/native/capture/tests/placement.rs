@@ -960,6 +960,153 @@ fn bare_bullet_marker_ignores_exact_flag() {
     );
 }
 
+#[test]
+fn slug_selector_reaches_spaced_heading() {
+    let contents = "Intro\n## Future Work\nnotes\n";
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("future-work")),
+        (
+            format!("Intro\n## Future Work\n\n{BULLET}\nnotes\n"),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn raw_prefix_beats_an_earlier_slug_match() {
+    let contents = "## Future Work\nfirst\n## future-work-notes\nsecond\n";
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("future-work")),
+        (
+            format!(
+                "## Future Work\nfirst\n## future-work-notes\n\n{BULLET}\nsecond\n"
+            ),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn whole_slug_beats_an_earlier_slug_prefix() {
+    let contents = "## Future Workshop\nfirst\n## Future Work\nsecond\n";
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("future-work")),
+        (
+            format!(
+                "## Future Workshop\nfirst\n## Future Work\n\n{BULLET}\nsecond\n"
+            ),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn exact_selector_never_slug_matches() {
+    let contents = "Intro\n## Future Work\nnotes\n";
+    assert_eq!(
+        super::super::insert_bullet_line(
+            contents,
+            BULLET,
+            Some("future-work"),
+            true,
+        ),
+        (
+            format!("{BULLET}\nIntro\n## Future Work\nnotes\n"),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn slug_selector_falls_back_to_h1_when_no_non_h1_matches() {
+    let contents = "# Future Work\nnotes\n";
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("future-work")),
+        (
+            format!("# Future Work\n\n{BULLET}\nnotes\n"),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn article_slug_matches_after_raw_and_identity() {
+    let contents = concat!(
+        "---\n",
+        "type: \"[[article]]\"\n",
+        "---\n",
+        "## Future Work\n",
+        "notes\n",
+    );
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("future-work")),
+        (
+            format!(
+                "---\ntype: \"[[article]]\"\n---\n## Future Work\n\n{BULLET}\nnotes\n"
+            ),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn section_completion_prefers_raw_then_slug_then_quoted() {
+    let contents = concat!(
+        "## Ideas\n",
+        "notes\n",
+        "## Inbox Ideas\n",
+        "inbox\n",
+        "## Future Work\n",
+        "future\n",
+        "## future-work\n",
+        "hyphen\n",
+        "## A \"Q\"\n",
+        "quoted\n",
+        "## a-\"q\"\n",
+        "hyphen-quote\n",
+    );
+    let rows = super::super::section_completion_rows(contents, "");
+    let by_title: std::collections::HashMap<&str, &str> = rows
+        .iter()
+        .map(|row| (row.title.as_str(), row.replacement.as_str()))
+        .collect();
+    assert_eq!(by_title["Ideas"], "Ideas");
+    assert_eq!(by_title["Inbox Ideas"], "inbox-ideas");
+    assert_eq!(by_title["Future Work"], "\"Future Work\"");
+    assert_eq!(by_title["future-work"], "future-work");
+    assert_eq!(by_title["A \"Q\""], "\"A \\\"Q\\\"\"");
+    assert_eq!(by_title["a-\"q\""], "a-\"q\"");
+}
+
+#[test]
+fn heading_matches_bullet_selector_is_raw_or_identity() {
+    assert!(super::super::heading_matches_bullet_selector(
+        "Ideas",
+        Some("Id"),
+        false,
+        false,
+    ));
+    assert!(!super::super::heading_matches_bullet_selector(
+        "Future Work",
+        Some("future-work"),
+        false,
+        false,
+    ));
+}
+
+#[test]
+fn section_completion_slug_query_matches_spaced_title() {
+    let contents = "## Future Work\nnotes\n## Ideas\nmore\n";
+    let rows = super::super::section_completion_rows(contents, "future-w");
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Future Work"]
+    );
+    assert_eq!(rows[0].replacement, "future-work");
+}
+
 const ARTICLE_SECTIONS: &str = concat!(
     "---\n",
     "type: \"[[article]]\"\n",
