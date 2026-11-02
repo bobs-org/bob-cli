@@ -1,0 +1,312 @@
+{
+  "description": [
+    {
+      "id": "html-br-combinable",
+      "input": "@love<br>#untracked -30",
+      "route": "love",
+      "untracked": true,
+      "before": 30,
+      "after": 0
+    },
+    {
+      "id": "html-p-nbsp",
+      "input": "<p>@love</p><p>#untracked&nbsp;+15</p>",
+      "route": "love",
+      "untracked": true,
+      "before": 0,
+      "after": 15
+    },
+    {
+      "id": "html-div-li-br-slash",
+      "input": "<div>@body</div><li>-30m</li><BR/>#UNTRACKED",
+      "route": "body",
+      "untracked": true,
+      "before": 30,
+      "after": 0
+    },
+    {
+      "id": "comma-separators",
+      "input": "@love, -30, +15",
+      "route": "love",
+      "untracked": false,
+      "before": 30,
+      "after": 15
+    },
+    {
+      "id": "unicode-minus-and-en-dash",
+      "input": "−30 –15 +10",
+      "route": null,
+      "untracked": false,
+      "before": 30,
+      "after": 10
+    },
+    {
+      "id": "m-suffix",
+      "input": "-30m +15M",
+      "route": null,
+      "untracked": false,
+      "before": 30,
+      "after": 15
+    },
+    {
+      "id": "four-digit-token-kills-its-line",
+      "input": "@love\n-1234 +15\n+20",
+      "route": "love",
+      "untracked": false,
+      "before": 0,
+      "after": 20
+    },
+    {
+      "id": "phone-line-is-ignored",
+      "input": "Dial +1 555-1212\n@love -30",
+      "route": "love",
+      "untracked": false,
+      "before": 30,
+      "after": 0
+    },
+    {
+      "id": "first-wins-route-and-sides",
+      "input": "@love @job -30 -15 +10 +20",
+      "route": "love",
+      "untracked": false,
+      "before": 30,
+      "after": 10
+    },
+    {
+      "id": "cap-720",
+      "input": "-999 +721",
+      "route": null,
+      "untracked": false,
+      "before": 720,
+      "after": 720
+    },
+    {
+      "id": "standalone-untracked-still-counts",
+      "input": "Bring shoes\n#untracked",
+      "route": null,
+      "untracked": true,
+      "before": 0,
+      "after": 0
+    },
+    {
+      "id": "combined-one-line",
+      "input": "@love #untracked -30 +15",
+      "route": "love",
+      "untracked": true,
+      "before": 30,
+      "after": 15
+    },
+    {
+      "id": "ordinary-text-kills-the-line",
+      "input": "Lunch at noon -30 +15",
+      "route": null,
+      "untracked": false,
+      "before": 0,
+      "after": 0
+    }
+  ],
+  "row": [
+    {
+      "id": "full-buffer-and-badges",
+      "line": "- [*] #task **1200-1300** Lunch [📅](https://calendar.google.com/event?eid=lunch \"Open in Google Calendar\") #untracked [buffer:: -30m +15m] [root:: love] [type:: MEET] ^lunch",
+      "title": "Lunch",
+      "before": 30,
+      "after": 15,
+      "buffered_span": "1130-1315",
+      "field": "[buffer:: -30m +15m]",
+      "label": "−30m +15m"
+    },
+    {
+      "id": "before-only",
+      "line": "- [ ] #task **1200-1300** Prep [buffer:: -30m] ^prep",
+      "title": "Prep",
+      "before": 30,
+      "after": 0,
+      "buffered_span": "1130-1300",
+      "field": "[buffer:: -30m]",
+      "label": "−30m"
+    },
+    {
+      "id": "after-only",
+      "line": "- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup",
+      "title": "Standup",
+      "before": 0,
+      "after": 15,
+      "buffered_span": "1000-1045",
+      "field": "[buffer:: +15m]",
+      "label": "+15m"
+    },
+    {
+      "id": "unbuffered-parity",
+      "line": "- [ ] #task **1200-1230** Standup ^standup",
+      "title": "Standup",
+      "before": 0,
+      "after": 0,
+      "buffered_span": "1200-1230",
+      "field": null,
+      "label": null
+    },
+    {
+      "id": "midnight-clamp",
+      "line": "- [ ] #task **0015-0030** Early [buffer:: -30m] ^early",
+      "title": "Early",
+      "before": 30,
+      "after": 0,
+      "buffered_span": "0000-0030",
+      "field": "[buffer:: -30m]",
+      "label": "−30m"
+    },
+    {
+      "id": "overnight-event",
+      "line": "- [ ] #task **2330-0030** Late [buffer:: -30m +15m] ^late",
+      "title": "Late",
+      "before": 30,
+      "after": 15,
+      "buffered_span": "2300-0045",
+      "field": "[buffer:: -30m +15m]",
+      "label": "−30m +15m"
+    },
+    {
+      "id": "cap-720-from-field",
+      "line": "- [ ] #task **1200-1300** Long [buffer:: -999m] ^long",
+      "title": "Long",
+      "before": 720,
+      "after": 0,
+      "buffered_span": "0000-1300",
+      "field": "[buffer:: -720m]",
+      "label": "−720m"
+    },
+    {
+      "id": "typographic-minus-in-field",
+      "line": "- [ ] #task **1200-1300** Drive [buffer:: −30m +15m] ^drive",
+      "title": "Drive",
+      "before": 30,
+      "after": 15,
+      "buffered_span": "1130-1315",
+      "field": "[buffer:: -30m +15m]",
+      "label": "−30m +15m"
+    },
+    {
+      "id": "first-wins-in-field",
+      "line": "- [ ] #task **1200-1300** Mix [buffer:: -30m -15m +10m +20m] ^mix",
+      "title": "Mix",
+      "before": 30,
+      "after": 10,
+      "buffered_span": "1130-1310",
+      "field": "[buffer:: -30m +10m]",
+      "label": "−30m +10m"
+    }
+  ],
+  "conflict": [
+    {
+      "id": "lead-in-from-before",
+      "new": ["1110", "1135"],
+      "old": null,
+      "day": "- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n",
+      "crossed": "lunch",
+      "overlap_minutes": 5,
+      "buffer_part": "before",
+      "fit": "1130"
+    },
+    {
+      "id": "start-before-buffer-run-into-meeting",
+      "new": ["1110", "1215"],
+      "old": null,
+      "day": "- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n",
+      "crossed": "lunch",
+      "overlap_minutes": 45,
+      "buffer_part": null,
+      "fit": "1130"
+    },
+    {
+      "id": "start-inside-lead-in-run-into-meeting",
+      "new": ["1135", "1215"],
+      "old": null,
+      "day": "- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n",
+      "crossed": "lunch",
+      "overlap_minutes": 40,
+      "buffer_part": null,
+      "fit": null
+    },
+    {
+      "id": "start-inside-lead-out",
+      "new": ["1305", "1330"],
+      "old": null,
+      "day": "- [ ] #task **1200-1300** Lunch [buffer:: +15m] ^lunch\n",
+      "crossed": "lunch",
+      "overlap_minutes": 10,
+      "buffer_part": "after",
+      "fit": null
+    },
+    {
+      "id": "run-through-all-buffers-and-meeting",
+      "new": ["1110", "1320"],
+      "old": null,
+      "day": "- [ ] #task **1200-1300** Lunch [buffer:: -30m +15m] ^lunch\n",
+      "crossed": "lunch",
+      "overlap_minutes": 105,
+      "buffer_part": null,
+      "fit": "1130"
+    },
+    {
+      "id": "unbuffered-parity-start-crossed",
+      "new": ["1150", "1215"],
+      "old": null,
+      "day": "- [ ] #task **1200-1230** Standup ^standup\n",
+      "crossed": "standup",
+      "overlap_minutes": 15,
+      "buffer_part": null,
+      "fit": "1200"
+    },
+    {
+      "id": "unbuffered-mid-meeting-quiet",
+      "new": ["1210", "1230"],
+      "old": null,
+      "day": "- [ ] #task **1200-1300** Lunch ^lunch\n",
+      "crossed": null,
+      "overlap_minutes": 0,
+      "buffer_part": null,
+      "fit": null
+    },
+    {
+      "id": "unbuffered-already-crossed-is-not-new",
+      "new": ["1100", "1230"],
+      "old": ["1100", "1215"],
+      "day": "- [ ] #task **1200-1230** Standup ^standup\n",
+      "crossed": null,
+      "overlap_minutes": 0,
+      "buffer_part": null,
+      "fit": null
+    },
+    {
+      "id": "unbuffered-newly-crossed",
+      "new": ["1100", "1215"],
+      "old": ["1100", "1110"],
+      "day": "- [ ] #task **1200-1230** Standup ^standup\n",
+      "crossed": "standup",
+      "overlap_minutes": 15,
+      "buffer_part": null,
+      "fit": "1200"
+    },
+    {
+      "id": "overnight-lead-in",
+      "new": ["2245", "2310"],
+      "old": null,
+      "day": "- [ ] #task **2330-0030** Late [buffer:: -30m +15m] ^late\n",
+      "crossed": "late",
+      "overlap_minutes": 10,
+      "buffer_part": "before",
+      "fit": "2300"
+    },
+    {
+      "id": "unbuffered-overnight-wrap",
+      "new": ["2330", "0030"],
+      "old": null,
+      "day": "- [ ] #task **0020-0100** After midnight ^after\n",
+      "crossed": "after",
+      "overlap_minutes": 10,
+      "buffer_part": null,
+      "fit": "0020"
+    }
+  ]
+}

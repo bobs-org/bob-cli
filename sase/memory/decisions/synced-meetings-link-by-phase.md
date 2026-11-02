@@ -7,6 +7,7 @@ metadata:
   status: superseded-in-part
   superseded_by:
     - decisions:untracked-sessions-omit-t-field
+    - decisions:event-buffers-widen-the-span
 title: Synced Meetings Are Linked By Phase At Birth
 aliases:
   - synced-meetings-link-by-phase
@@ -71,6 +72,11 @@ Superseded in part: past clusters no longer always share one closed MEET;
 they split by trackedness, so two closed MEETs may overlap (one with
 `[t::]`, one without). See
 [[decisions:untracked-sessions-omit-t-field]].
+
+Superseded in part: past, current, and future phases, and the MEET
+clusters those phases write, use the event's buffered span as occupied
+time. The meeting span in the bold label is unchanged. See
+[[decisions:event-buffers-widen-the-span]].
 
 [[decisions:calendar-events-are-daily-note-event-tasks]]
 

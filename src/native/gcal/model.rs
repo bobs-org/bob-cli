@@ -1,10 +1,13 @@
 //! Normalized Google Calendar event data. Provider descriptions and attendee
-//! lists are parsed only long enough to derive Bob's route and RSVP.
+//! lists are parsed only long enough to derive Bob's route, RSVP, and
+//! occupied-time buffer.
 
 use chrono::{
     DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, TimeZone,
 };
 use serde::Deserialize;
+
+use crate::native::event_task::{parse_buffer_token, BufferPart, EventBuffer};
 
 use super::GcalError;
 
@@ -19,6 +22,7 @@ pub(crate) struct GcalEvent {
     pub title: String,
     pub title_route_hint: Option<String>,
     pub untracked: bool,
+    pub buffer: EventBuffer,
     pub route_hint: Option<String>,
     pub location: Option<String>,
     pub html_link: Option<String>,
@@ -112,11 +116,12 @@ impl GcalEvent {
             .filter(|summary| !summary.trim().is_empty())
             .unwrap_or_else(|| "(untitled event)".to_string());
         let (title, title_untracked) = strip_untracked_tokens(&raw_title);
-        let description_untracked = raw
+        let directives = raw
             .description
             .as_deref()
-            .is_some_and(description_has_untracked);
-        let untracked = title_untracked || description_untracked;
+            .map(description_directives)
+            .unwrap_or_default();
+        let untracked = title_untracked || directives.untracked;
         let title_route_hint =
             title.split_whitespace().last().and_then(parse_route_token);
         Ok(Self {
@@ -134,7 +139,8 @@ impl GcalEvent {
             title,
             title_route_hint,
             untracked,
-            route_hint: raw.description.as_deref().and_then(description_route),
+            buffer: directives.buffer,
+            route_hint: directives.route,
             location: raw.location,
             html_link: raw.html_link,
             join_link,
@@ -253,14 +259,153 @@ fn parse_route_token(token: &str) -> Option<String> {
     Some(route.to_string())
 }
 
-fn description_route(description: &str) -> Option<String> {
-    description.lines().find_map(|line| {
-        let line = line.trim();
-        if !line.starts_with('@') || line.split_whitespace().count() != 1 {
-            return None;
+/// Combined route, untracked, and buffer from HTML-normalized directive
+/// lines. The first route and the first value per buffer side win.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct DescriptionDirectives {
+    pub route: Option<String>,
+    pub untracked: bool,
+    pub buffer: EventBuffer,
+}
+
+pub(crate) fn description_directives(
+    description: &str,
+) -> DescriptionDirectives {
+    let normalized = normalize_description_html(description);
+    let mut out = DescriptionDirectives::default();
+    let mut before_set = false;
+    let mut after_set = false;
+    for line in normalized.lines() {
+        let tokens: Vec<&str> = line
+            .split(|ch: char| ch.is_whitespace() || ch == ',')
+            .filter(|token| !token.is_empty())
+            .collect();
+        if tokens.is_empty() || !tokens.iter().copied().all(is_directive_token)
+        {
+            continue;
         }
-        parse_route_token(line)
-    })
+        for token in tokens {
+            if let Some(route) = parse_route_token(token) {
+                if out.route.is_none() {
+                    out.route = Some(route);
+                }
+                continue;
+            }
+            if token.eq_ignore_ascii_case("#untracked") {
+                out.untracked = true;
+                continue;
+            }
+            let Some((part, minutes)) = parse_buffer_token(token) else {
+                continue;
+            };
+            match part {
+                BufferPart::Before if !before_set => {
+                    out.buffer.before_min = minutes;
+                    before_set = true;
+                }
+                BufferPart::After if !after_set => {
+                    out.buffer.after_min = minutes;
+                    after_set = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn is_directive_token(token: &str) -> bool {
+    parse_route_token(token).is_some()
+        || token.eq_ignore_ascii_case("#untracked")
+        || parse_buffer_token(token).is_some()
+}
+
+/// Turn Google HTML descriptions into plain directive text: `br`/`p`/
+/// `div`/`li` boundaries become line breaks, other tags are stripped,
+/// then common entities are decoded.
+fn normalize_description_html(input: &str) -> String {
+    decode_html_entities(&replace_html_tags(input))
+}
+
+fn replace_html_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let Some(end) = rest.find('>') else {
+            out.push_str(rest);
+            return out;
+        };
+        let tag = &rest[1..end];
+        rest = &rest[end + 1..];
+        if is_break_tag(tag) {
+            out.push('\n');
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn is_break_tag(tag: &str) -> bool {
+    let tag = tag.trim();
+    let tag = tag.strip_prefix('/').unwrap_or(tag);
+    let name = tag
+        .split(|ch: char| ch.is_whitespace() || ch == '/')
+        .next()
+        .unwrap_or("");
+    name.eq_ignore_ascii_case("br")
+        || name.eq_ignore_ascii_case("p")
+        || name.eq_ignore_ascii_case("div")
+        || name.eq_ignore_ascii_case("li")
+}
+
+fn decode_html_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let end = rest.find(';').unwrap_or(rest.len());
+        if end == rest.len() {
+            out.push_str(rest);
+            return out;
+        }
+        let entity = &rest[1..end];
+        let decoded = match entity {
+            "nbsp" => Some(' '),
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "#39" | "apos" => Some('\''),
+            _ => decode_numeric_entity(entity),
+        };
+        match decoded {
+            Some(ch) => {
+                out.push(ch);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn decode_numeric_entity(entity: &str) -> Option<char> {
+    let digits = if let Some(hex) = entity
+        .strip_prefix("#x")
+        .or_else(|| entity.strip_prefix("#X"))
+    {
+        u32::from_str_radix(hex, 16).ok()?
+    } else {
+        entity.strip_prefix('#')?.parse::<u32>().ok()?
+    };
+    char::from_u32(digits)
 }
 
 /// A standalone `#untracked` token in a Google title (case-insensitive,
@@ -290,14 +435,6 @@ fn strip_untracked_tokens(title: &str) -> (String, bool) {
     } else {
         (cleaned, true)
     }
-}
-
-/// A description line containing only `#untracked` (case-insensitive,
-/// surrounding whitespace allowed).
-fn description_has_untracked(description: &str) -> bool {
-    description
-        .lines()
-        .any(|line| line.trim().eq_ignore_ascii_case("#untracked"))
 }
 
 fn location_url(location: &str) -> Option<String> {
@@ -372,4 +509,95 @@ struct RawEntryPoint {
     #[serde(rename = "entryPointType")]
     entry_point_type: Option<String>,
     uri: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    fn event(title: &str, description: Option<&str>) -> GcalEvent {
+        let mut value = json!({
+            "id": "event-1",
+            "summary": title,
+            "status": "confirmed",
+            "start": {"dateTime": "2026-11-01T12:00:00-04:00"},
+            "end": {"dateTime": "2026-11-01T13:00:00-04:00"},
+            "attendees": [{"self": true, "responseStatus": "accepted"}]
+        });
+        if let Some(description) = description {
+            value["description"] = json!(description);
+        }
+        GcalEvent::from_google("primary", value).expect("event")
+    }
+
+    #[test]
+    fn description_directive_vectors() {
+        let vectors: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/event_buffer/vectors.json"
+        ))
+        .expect("shared vectors JSON");
+        for case in vectors["description"].as_array().expect("description") {
+            let parsed =
+                description_directives(case["input"].as_str().expect("input"));
+            assert_eq!(
+                parsed.route.as_deref(),
+                case["route"].as_str(),
+                "{}",
+                case["id"]
+            );
+            assert_eq!(
+                parsed.untracked,
+                case["untracked"].as_bool().expect("untracked"),
+                "{}",
+                case["id"]
+            );
+            let before =
+                u16::try_from(case["before"].as_u64().expect("before"))
+                    .expect("before fits");
+            let after = u16::try_from(case["after"].as_u64().expect("after"))
+                .expect("after fits");
+            assert_eq!(
+                parsed.buffer,
+                EventBuffer {
+                    before_min: before,
+                    after_min: after,
+                },
+                "{}",
+                case["id"]
+            );
+        }
+    }
+
+    #[test]
+    fn title_untracked_and_route_combine_with_description_buffers() {
+        let parsed = event("Lunch @love #untracked", Some("-30 +15"));
+        assert_eq!(parsed.title, "Lunch @love");
+        assert_eq!(parsed.title_route_hint.as_deref(), Some("love"));
+        assert!(parsed.untracked);
+        assert_eq!(parsed.route_hint, None);
+        assert_eq!(
+            parsed.buffer,
+            EventBuffer {
+                before_min: 30,
+                after_min: 15,
+            }
+        );
+    }
+
+    #[test]
+    fn combined_description_line_routes_untracks_and_buffers() {
+        let parsed = event("Lunch", Some("@love #untracked -30"));
+        assert_eq!(parsed.title, "Lunch");
+        assert_eq!(parsed.route_hint.as_deref(), Some("love"));
+        assert!(parsed.untracked);
+        assert_eq!(
+            parsed.buffer,
+            EventBuffer {
+                before_min: 30,
+                after_min: 0,
+            }
+        );
+        assert!(parsed.buffer.field().unwrap().contains("-30m"));
+    }
 }

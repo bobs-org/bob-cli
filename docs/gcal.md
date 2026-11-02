@@ -485,9 +485,17 @@ session stays on the calendar and off the clock: the closed MEET omits
 minutes and counts.
 
 In Google Calendar, write a standalone `#untracked` token anywhere in the
-title (case-insensitive), or a description line containing only `#untracked`.
-Sync strips the token from the displayed title, the way a resolved `@route`
-is stripped: the tag is removed first, then the title-ending `@route` is
+title (case-insensitive), or a **directive line** in the description. A
+directive line is one whose every token (split on whitespace or commas) is
+a directive: `@route`, `#untracked` (case-insensitive), `-N`/`-Nm` (ASCII
+or typographic minus), or `+M`/`+Mm`. Directives combine on one line or
+spread across several; HTML from Google's editor is normalized first
+(`<br>`, `<p>`, `<div>`, `<li>` become line breaks, other tags are
+stripped, common entities are decoded), so `@love<br>#untracked -30`
+untracks, routes, and buffers. A line with any other token — a phone
+number, a 4-digit value, a sentence — is ignored whole. Sync strips the
+title token from the displayed title, the way a resolved `@route` is
+stripped: the tag is removed first, then the title-ending `@route` is
 read, so `Lunch @love #untracked` routes to `love` and displays as `Lunch`.
 
 On the Event Task, sync writes ` #untracked` at the end of the badge run,
@@ -586,8 +594,9 @@ Timed multi-day events appear as context on each date they overlap.
 
 For Event Tasks, Bob tries these candidates in order and writes the first valid
 one: the series memory of your earlier `[root::]` edit on another occurrence
-of the same recurring event, a title-ending `@route` or description line
-containing only `@route`, `gcal.colors` by event colour, the calendar's
+of the same recurring event, a title-ending `@route` or a description
+directive line (combinable and HTML-safe, so `@love #untracked -30` on one
+line routes), `gcal.colors` by event colour, the calendar's
 `root`, then `gcal.root` (default `meet`). A root must resolve relative to
 the daily note, be an area at any depth or a root project, and must not be
 `@unfiled`.

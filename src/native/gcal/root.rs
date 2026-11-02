@@ -35,7 +35,7 @@ pub(crate) enum RootSourceKind {
     None,
     /// Source 1: series memory of an earlier `[root::]` edit.
     SeriesMemory,
-    /// Title-ending or description-only `@route` token.
+    /// Title-ending or description-directive `@route` token.
     Token,
     /// Event colour mapping (`gcal.colors`).
     Colour,

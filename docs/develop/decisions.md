@@ -517,6 +517,75 @@ activation boundary and trial-extension reopening condition only.
 
 Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.
 
+## Event Buffers Widen The Occupied Span {#event-buffers-widen-the-span}
+
+**Status:** Accepted
+
+The buffered span is what the event occupies; the meeting span is when the meeting happens.
+
+# Event Buffers Widen The Occupied Span
+
+**Applies to.** bob-cli, bob-plugins, Bob Mac Capture, and the vault.
+
+**Claim.** Every Event Task has its **meeting span**, the bold
+`**1200-1300**`, which is never rewritten. A `[buffer:: -30m +15m]` field
+adds a **buffered span**: `max(00:00, start − before)` to `end + after`.
+The buffered span is what the event occupies. The meeting span is when the
+meeting happens.
+
+| Uses the buffered span | Keeps the meeting span |
+| --- | --- |
+| MEET event run (`=` default range, early start, far-run warning, run clustering) | Timed close classification (`ended_inside`/`running`/…, shared `event_task_close` vectors) |
+| Run-into-event warnings and fit drafts (capture, Obsidian Notice) | Agenda row `phase` (`ended`/`running`/`upcoming`) and `focus` |
+| `bob gcal sync` phases (past/current/future) and the MEET clusters and spans it writes | The bold span text, its journal hash, and Google ownership of the time |
+| Agenda `gap`, `conflict`, `start_hint`, `refresh_at` | Row titles, `#untracked`, roots |
+
+Buffers are read from Google description **directive lines** (combinable,
+HTML-safe `@route` / `#untracked` / `-N` / `+M` tokens) and written as one
+Google-owned `[buffer::]` field. A side that is zero is omitted; an event
+without buffers has no field.
+
+**Why.** Bryan asked to reserve travel and prep around a meeting from the
+Google description (`-30` / `+15`) without losing the meeting's real time.
+Rewriting the bold span would break span parsers in Rust, JS, and Swift.
+Glyph tokens such as `⇤30m` are forgeable from titles and need new escapes
+and strippers in two languages. Two fields `[before::]` `[after::]` split
+one fact and are noisier. `escape_title` already neutralizes `::`, so a
+title cannot forge the field; Rust and JS already scan inline fields and
+strip them from titles.
+
+Rejected alternatives:
+
+- **Rewriting the bold span to the buffered span.** It loses the meeting
+  time and breaks span parsers in Rust, JS, and Swift.
+- **`⇤30m`-style glyph tokens.** They are forgeable from titles and need
+  new escapes and strippers in two languages.
+- **Two fields `[before::]` `[after::]`.** They are noisier and split one
+  fact in two.
+
+**Cost.** A pre-buffer stops at midnight. The first value for each side
+wins. Numbers in titles are never buffers. Timed close keeps the bare
+meeting clock, so a MEET closed at 13:00 still completes a 12:00–13:00
+lunch whose `+15` drive runs to 13:15. Description-only grammar means a
+description you cannot edit cannot take a Google-owned buffer.
+
+**Reopens when.** Buffers need to wrap past midnight, live in the title, or
+widen timed close.
+
+Evidence: `plan:202611/gcal_event_buffers.md`; `docs/gcal.md` § Untracked
+events, § Root selection; `docs/capture.md`;
+`tests/fixtures/event_buffer/vectors.json`.
+
+[Synced Meetings Are Linked By Phase At Birth](#synced-meetings-link-by-phase)
+
+[Calendar Events Are Daily-Note Event Tasks](#calendar-events-are-daily-note-event-tasks)
+
+[Event Task Links Close By The Clock](#event-task-links-close-by-the-clock)
+
+[Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field)
+
+[Event Task](../reference/glossary.md#event-task)
+
 ## Event Task Links Close By The Clock {#event-task-links-close-by-the-clock}
 
 **Status:** Accepted
@@ -2029,7 +2098,7 @@ only when picked. See [Unblocked Tasks Are Offered, Never Auto-Linked](#unblocke
 
 ## Synced Meetings Are Linked By Phase At Birth {#synced-meetings-link-by-phase}
 
-**Status:** Superseded in part by [Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field)
+**Status:** Superseded in part by [Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field), [Event Buffers Widen The Occupied Span](#event-buffers-widen-the-span)
 
 A new Event Task is filed under a past, running, or planned MEET at birth: closed clusters for ended meetings, one open MEET for current and future.
 
@@ -2091,6 +2160,11 @@ Superseded in part: past clusters no longer always share one closed MEET;
 they split by trackedness, so two closed MEETs may overlap (one with
 `[t::]`, one without). See
 [Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field).
+
+Superseded in part: past, current, and future phases, and the MEET
+clusters those phases write, use the event's buffered span as occupied
+time. The meeting span in the bold label is unchanged. See
+[Event Buffers Widen The Occupied Span](#event-buffers-widen-the-span).
 
 [Calendar Events Are Daily-Note Event Tasks](#calendar-events-are-daily-note-event-tasks)
 

@@ -8,7 +8,10 @@ use std::{
 
 use chrono::NaiveDate;
 
-use super::{collect_done, markdown, task_status_hooks::canonical_daily_date};
+use super::{
+    collect_done, markdown, task_fields,
+    task_status_hooks::canonical_daily_date,
+};
 
 const MINUTES_PER_DAY: i32 = 24 * 60;
 
@@ -38,6 +41,146 @@ impl EventSpan {
                 0
             }
     }
+
+    /// Occupied span: `max(0, start − before)` through `end + after`,
+    /// clamped so the total stays below 24h and `HHMM-HHMM` stays
+    /// unambiguous.
+    pub(crate) fn buffered(self, buffer: EventBuffer) -> EventSpan {
+        if buffer.is_empty() {
+            return self;
+        }
+        let start =
+            (i32::from(self.start_min) - i32::from(buffer.before_min)).max(0);
+        let mut end = self.end_on_timeline() + i32::from(buffer.after_min);
+        if end - start >= MINUTES_PER_DAY {
+            end = start + MINUTES_PER_DAY - 1;
+        }
+        EventSpan {
+            start_min: u16::try_from(start).unwrap_or(0),
+            end_min: u16::try_from(end.rem_euclid(MINUTES_PER_DAY))
+                .unwrap_or(0),
+            crosses_midnight: end >= MINUTES_PER_DAY,
+        }
+    }
+}
+
+/// Pre/post-event occupied-time buffer, each side `0..=720` minutes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct EventBuffer {
+    pub before_min: u16,
+    pub after_min: u16,
+}
+
+impl EventBuffer {
+    pub(crate) fn is_empty(self) -> bool {
+        self.before_min == 0 && self.after_min == 0
+    }
+
+    /// Parse vault-field tokens. Any invalid token, or no tokens, is
+    /// `None` (no buffer). The first value for each side wins; each
+    /// side is capped at 720.
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        let mut before = None;
+        let mut after = None;
+        let mut saw_token = false;
+        for token in value.split_whitespace() {
+            saw_token = true;
+            let (part, minutes) = parse_buffer_token(token)?;
+            match part {
+                BufferPart::Before => {
+                    if before.is_none() {
+                        before = Some(minutes);
+                    }
+                }
+                BufferPart::After => {
+                    if after.is_none() {
+                        after = Some(minutes);
+                    }
+                }
+            }
+        }
+        if !saw_token {
+            return None;
+        }
+        Some(Self {
+            before_min: before.unwrap_or(0),
+            after_min: after.unwrap_or(0),
+        })
+    }
+
+    /// Canonical field, `None` when both sides are zero.
+    #[allow(dead_code)] // gcal-sync-buffers and capture-buffers render this.
+    pub(crate) fn field(self) -> Option<String> {
+        self.body("-").map(|body| format!("[buffer:: {body}]"))
+    }
+
+    /// Human label with a typographic minus, `None` when empty.
+    #[allow(dead_code)] // gcal-sync-buffers and capture-buffers render this.
+    pub(crate) fn label(self) -> Option<String> {
+        self.body("\u{2212}")
+    }
+
+    #[allow(dead_code)]
+    fn body(self, minus: &str) -> Option<String> {
+        match (self.before_min, self.after_min) {
+            (0, 0) => None,
+            (before, 0) => Some(format!("{minus}{before}m")),
+            (0, after) => Some(format!("+{after}m")),
+            (before, after) => Some(format!("{minus}{before}m +{after}m")),
+        }
+    }
+}
+
+/// `-N`/`+M` token with optional `m`, ASCII or typographic minus.
+/// N and M are 1–3 digits, capped at 720.
+pub(crate) fn parse_buffer_token(token: &str) -> Option<(BufferPart, u16)> {
+    let (part, rest) = if let Some(rest) = token.strip_prefix('+') {
+        (BufferPart::After, rest)
+    } else if let Some(rest) = strip_minus_prefix(token) {
+        (BufferPart::Before, rest)
+    } else {
+        return None;
+    };
+    let digits = rest.strip_suffix(['m', 'M']).unwrap_or(rest);
+    if digits.is_empty()
+        || digits.len() > 3
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((part, digits.parse::<u16>().ok()?.min(720)))
+}
+
+fn strip_minus_prefix(token: &str) -> Option<&str> {
+    token
+        .strip_prefix('-')
+        .or_else(|| token.strip_prefix('\u{2212}'))
+        .or_else(|| token.strip_prefix('\u{2013}'))
+}
+
+/// Where a session overlap sits relative to the meeting clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BufferPart {
+    Before,
+    After,
+}
+
+impl BufferPart {
+    #[allow(dead_code)] // capture-buffers JSON and messages spell this.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+        }
+    }
+}
+
+/// One conflict between a session span and an open Event Task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EventSpanConflict {
+    pub overlap_minutes: u64,
+    pub buffer_part: Option<BufferPart>,
+    pub fit_start_min: Option<u16>,
 }
 
 #[allow(dead_code)]
@@ -52,6 +195,7 @@ pub(crate) enum EventKind {
 pub(crate) struct EventTask {
     pub line_index: usize,
     pub span: EventSpan,
+    pub buffer: EventBuffer,
     pub untracked: bool,
     pub status: char,
     pub block_id: Option<String>,
@@ -62,6 +206,11 @@ impl EventTask {
     pub(crate) fn is_open(&self) -> bool {
         is_open_status(self.status)
     }
+
+    #[allow(dead_code)] // capture-buffers and agenda-buffers consume this.
+    pub(crate) fn buffered_span(&self) -> EventSpan {
+        self.span.buffered(self.buffer)
+    }
 }
 
 /// One Events-section row: an Event Task or a timed/all-day context row.
@@ -71,6 +220,7 @@ pub(crate) struct EventNoteRow {
     pub line_index: usize,
     pub kind: EventKind,
     pub span: Option<EventSpan>,
+    pub buffer: EventBuffer,
     pub untracked: bool,
     pub status: Option<char>,
     pub block_id: Option<String>,
@@ -91,11 +241,16 @@ impl EventNoteRow {
         Some(EventTask {
             line_index: self.line_index,
             span: self.span?,
+            buffer: self.buffer,
             untracked: self.untracked,
             status: self.status?,
             block_id: self.block_id.clone(),
             title: self.title.clone(),
         })
+    }
+
+    pub(crate) fn buffered_span(&self) -> Option<EventSpan> {
+        Some(self.span?.buffered(self.buffer))
     }
 }
 
@@ -347,6 +502,7 @@ fn event_task_from_line(line_index: usize, line: &str) -> Option<EventTask> {
     Some(EventTask {
         line_index,
         span: parsed.span,
+        buffer: parse_event_buffer(line),
         untracked: line_has_untracked_tag(line),
         status: parsed.status,
         block_id: collect_done::trailing_block_id_in_line(line),
@@ -363,11 +519,24 @@ fn context_row_from_line(
         line_index,
         kind: parsed.kind,
         span: parsed.span,
+        buffer: parse_event_buffer(line),
         untracked: line_has_untracked_tag(line),
         status: None,
         block_id: collect_done::trailing_block_id_in_line(line),
         title: clean_event_title(parsed.after),
     })
+}
+
+/// First `[buffer::]` field outside code spans and Markdown links.
+/// An invalid value means no buffer.
+fn parse_event_buffer(line: &str) -> EventBuffer {
+    let masked = mask_code_and_markdown_links(line);
+    task_fields::inline_fields(&masked, "buffer")
+        .into_iter()
+        .next()
+        .and_then(|field| EventBuffer::parse(&field.value))
+        .filter(|buffer| !buffer.is_empty())
+        .unwrap_or_default()
 }
 
 pub(crate) fn event_task_by_id(
@@ -425,6 +594,7 @@ pub(crate) fn events_in_note(
                 line_index: task.line_index,
                 kind: EventKind::Task,
                 span: Some(task.span),
+                buffer: task.buffer,
                 untracked: task.untracked,
                 status: Some(task.status),
                 block_id: task.block_id,
@@ -453,55 +623,25 @@ pub(crate) fn events_in_note(
     events
 }
 
-/// Open Event Tasks whose start lies in `[session_start, session_end)`,
-/// wrapping overnight when the session end is earlier than its start,
-/// earliest first.
+/// Open Event Tasks whose occupied span conflicts with
+/// `[session_start, session_end)`. Unbuffered events keep today's
+/// start-in-session rule. Earliest buffered start first.
 pub(crate) fn event_starts_crossed<'a>(
     session_start_min: u16,
     session_end_min: u16,
     events: &'a [EventNoteRow],
     exclude_ids: &HashSet<String>,
 ) -> Vec<&'a EventNoteRow> {
-    let mut crossed = Vec::new();
-    for event in events {
-        if !event.is_open_task() {
-            continue;
-        }
-        if event
-            .block_id
-            .as_ref()
-            .is_some_and(|id| exclude_ids.contains(id))
-        {
-            continue;
-        }
-        let Some(span) = event.span else {
-            continue;
-        };
-        if !start_in_session(span.start_min, session_start_min, session_end_min)
-        {
-            continue;
-        }
-        crossed.push(event);
-    }
-    crossed.sort_by(|left, right| {
-        let left_span = left.span.expect("open task has a span");
-        let right_span = right.span.expect("open task has a span");
-        (
-            start_rank(left_span.start_min, session_start_min, session_end_min),
-            left_span.end_on_timeline(),
-            left.line_index,
-        )
-            .cmp(&(
-                start_rank(
-                    right_span.start_min,
-                    session_start_min,
-                    session_end_min,
-                ),
-                right_span.end_on_timeline(),
-                right.line_index,
-            ))
-    });
-    crossed
+    event_span_conflicts(
+        session_start_min,
+        session_end_min,
+        None,
+        events,
+        exclude_ids,
+    )
+    .into_iter()
+    .map(|(event, _)| event)
+    .collect()
 }
 
 /// Earliest open Event Task whose start lies in `[session_start, session_end)`,
@@ -520,6 +660,165 @@ pub(crate) fn first_event_start_crossed<'a>(
     )
     .into_iter()
     .next()
+}
+
+/// Newly conflicting open Event Tasks: `conflicts(new) && !conflicts(old)`,
+/// earliest buffered start first.
+pub(crate) fn event_span_conflicts<'a>(
+    new_start: u16,
+    new_end: u16,
+    old: Option<(u16, u16)>,
+    events: &'a [EventNoteRow],
+    exclude_ids: &HashSet<String>,
+) -> Vec<(&'a EventNoteRow, EventSpanConflict)> {
+    let mut crossed = Vec::new();
+    for event in events {
+        if !event.is_open_task() {
+            continue;
+        }
+        if event
+            .block_id
+            .as_ref()
+            .is_some_and(|id| exclude_ids.contains(id))
+        {
+            continue;
+        }
+        let Some(conflict) = span_conflict(new_start, new_end, event) else {
+            continue;
+        };
+        if old.is_some_and(|(old_start, old_end)| {
+            span_conflict(old_start, old_end, event).is_some()
+        }) {
+            continue;
+        }
+        crossed.push((event, conflict));
+    }
+    crossed.sort_by(|(left, _), (right, _)| {
+        let left_span = left.buffered_span().expect("open task has a span");
+        let right_span = right.buffered_span().expect("open task has a span");
+        (
+            start_rank(left_span.start_min, new_start, new_end),
+            left_span.end_on_timeline(),
+            left.line_index,
+        )
+            .cmp(&(
+                start_rank(right_span.start_min, new_start, new_end),
+                right_span.end_on_timeline(),
+                right.line_index,
+            ))
+    });
+    crossed
+}
+
+/// A non-MEET session `[S, E)` conflicts with an open Event Task when it
+/// overlaps the occupied (buffered) span and the meeting is not already
+/// in progress at `S` (`start < S < end`). Unbuffered events keep
+/// today's start-in-session rule.
+pub(crate) fn span_conflict(
+    session_start: u16,
+    session_end: u16,
+    event: &EventNoteRow,
+) -> Option<EventSpanConflict> {
+    let span = event.span?;
+    if meeting_in_progress_at(span, session_start) {
+        return None;
+    }
+    let buffered = span.buffered(event.buffer);
+    let overlap = session_range(session_start, session_end)
+        .and_then(|session| overlap_range(session, buffered));
+    if event.buffer.is_empty() {
+        if !start_in_session(span.start_min, session_start, session_end) {
+            return None;
+        }
+    } else if overlap.is_none() {
+        return None;
+    }
+    let (overlap_minutes, buffer_part) = match overlap {
+        Some((ov_start, ov_end, shift)) => {
+            let meeting_start = i32::from(span.start_min) + shift;
+            let meeting_end = span.end_on_timeline() + shift;
+            let part = if ov_start >= i32::from(buffered.start_min) + shift
+                && ov_end <= meeting_start
+            {
+                Some(BufferPart::Before)
+            } else if ov_start >= meeting_end
+                && ov_end <= buffered.end_on_timeline() + shift
+            {
+                Some(BufferPart::After)
+            } else {
+                None
+            };
+            (u64::try_from(ov_end - ov_start).unwrap_or(0), part)
+        }
+        None => (0, None),
+    };
+    Some(EventSpanConflict {
+        overlap_minutes,
+        buffer_part,
+        fit_start_min: session_precedes(
+            session_start,
+            session_end,
+            buffered.start_min,
+        )
+        .then_some(buffered.start_min),
+    })
+}
+
+fn meeting_in_progress_at(span: EventSpan, clock: u16) -> bool {
+    let start = i32::from(span.start_min);
+    let end = span.end_on_timeline();
+    let time = i32::from(clock);
+    (start < time && time < end)
+        || (start < time + MINUTES_PER_DAY && time + MINUTES_PER_DAY < end)
+}
+
+fn session_range(start: u16, end: u16) -> Option<(i32, i32)> {
+    if start == end {
+        return None;
+    }
+    let start = i32::from(start);
+    let mut end = i32::from(end);
+    if end < start {
+        end += MINUTES_PER_DAY;
+    }
+    Some((start, end))
+}
+
+fn overlap_range(
+    session: (i32, i32),
+    event: EventSpan,
+) -> Option<(i32, i32, i32)> {
+    let event_start = i32::from(event.start_min);
+    let event_end = event.end_on_timeline();
+    let mut best: Option<(i32, i32, i32, i32)> = None;
+    for shift in [-MINUTES_PER_DAY, 0, MINUTES_PER_DAY] {
+        let start = event_start + shift;
+        let end = event_end + shift;
+        let overlap_start = start.max(session.0);
+        let overlap_end = end.min(session.1);
+        let length = overlap_end - overlap_start;
+        if length > 0
+            && best.is_none_or(|(best_len, _, _, _)| length > best_len)
+        {
+            best = Some((length, overlap_start, overlap_end, shift));
+        }
+    }
+    best.map(|(_, overlap_start, overlap_end, shift)| {
+        (overlap_start, overlap_end, shift)
+    })
+}
+
+/// `S` is before `target` on the session's timeline, so a fit draft can
+/// end at the occupied start.
+fn session_precedes(session_start: u16, session_end: u16, target: u16) -> bool {
+    if session_start == session_end || session_start == target {
+        return false;
+    }
+    if session_end > session_start {
+        session_start < target
+    } else {
+        target > session_start || target < session_end
+    }
 }
 
 fn start_in_session(
@@ -679,39 +978,13 @@ fn clean_event_title(after_span: &str) -> String {
         }
     }
     loop {
-        let trimmed = title.trim_end();
-        let Some(open) = trimmed.rfind('[') else {
-            break;
-        };
-        if !(trimmed[open..].contains("::") && trimmed.ends_with(']')) {
-            break;
-        }
-        title = trimmed[..open].trim_end().to_string();
-    }
-    loop {
-        let trimmed = title.trim_end();
-        let Some(start) = trimmed.to_ascii_lowercase().rfind("#untracked")
-        else {
-            break;
-        };
-        if start + "#untracked".len() != trimmed.len() {
+        let before = title.len();
+        title = strip_trailing_inline_field(&title);
+        title = strip_trailing_untracked(&title);
+        title = strip_trailing_markdown_link(&title);
+        if title.len() == before {
             break;
         }
-        let before = trimmed[..start].chars().next_back();
-        if before.is_some_and(|ch| !ch.is_whitespace()) {
-            break;
-        }
-        title = trimmed[..start].trim_end().to_string();
-    }
-    loop {
-        let trimmed = title.trim_end();
-        let Some(open) = trimmed.rfind('[') else {
-            break;
-        };
-        if markdown_link_end(trimmed, open) != Some(trimmed.len()) {
-            break;
-        }
-        title = trimmed[..open].trim_end().to_string();
     }
     if let Some((head, tail)) = title.rsplit_once(" · *")
         && tail.ends_with('*')
@@ -720,6 +993,45 @@ fn clean_event_title(after_span: &str) -> String {
         title = head.trim_end().to_string();
     }
     title.trim().to_string()
+}
+
+fn strip_trailing_inline_field(title: &str) -> String {
+    let trimmed = title.trim_end();
+    let Some(open) = trimmed.rfind('[') else {
+        return trimmed.to_string();
+    };
+    if trimmed[open..].contains("::") && trimmed.ends_with(']') {
+        trimmed[..open].trim_end().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn strip_trailing_untracked(title: &str) -> String {
+    let trimmed = title.trim_end();
+    let Some(start) = trimmed.to_ascii_lowercase().rfind("#untracked") else {
+        return trimmed.to_string();
+    };
+    if start + "#untracked".len() != trimmed.len() {
+        return trimmed.to_string();
+    }
+    let before = trimmed[..start].chars().next_back();
+    if before.is_some_and(|ch| !ch.is_whitespace()) {
+        return trimmed.to_string();
+    }
+    trimmed[..start].trim_end().to_string()
+}
+
+fn strip_trailing_markdown_link(title: &str) -> String {
+    let trimmed = title.trim_end();
+    let Some(open) = trimmed.rfind('[') else {
+        return trimmed.to_string();
+    };
+    if markdown_link_end(trimmed, open) == Some(trimmed.len()) {
+        trimmed[..open].trim_end().to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn is_fenced_line(lines: &[&str], line_index: usize) -> bool {
@@ -952,5 +1264,165 @@ mod tests {
             clusters[1].iter().map(|item| item.id).collect::<Vec<_>>(),
             ["b", "c"]
         );
+    }
+
+    #[test]
+    fn shared_event_buffer_vectors() {
+        let vectors: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/event_buffer/vectors.json"
+        ))
+        .expect("shared vectors JSON");
+        for case in vectors["row"].as_array().expect("row cases") {
+            let line = case["line"].as_str().expect("line");
+            let contents = events_note(&format!("{line}\n"));
+            let date = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+            let events = events_in_note(&contents, date);
+            let event = events
+                .iter()
+                .find(|row| row.kind == EventKind::Task)
+                .expect("task row");
+            let before =
+                u16::try_from(case["before"].as_u64().expect("before"))
+                    .expect("before fits");
+            let after = u16::try_from(case["after"].as_u64().expect("after"))
+                .expect("after fits");
+            assert_eq!(
+                event.buffer,
+                EventBuffer {
+                    before_min: before,
+                    after_min: after,
+                },
+                "{}",
+                case["id"]
+            );
+            assert_eq!(
+                event.title,
+                case["title"].as_str().expect("title"),
+                "{}",
+                case["id"]
+            );
+            let buffered = event.buffered_span().expect("span");
+            assert_eq!(
+                buffered.text(),
+                case["buffered_span"].as_str().expect("buffered span"),
+                "{}",
+                case["id"]
+            );
+            assert_eq!(
+                event.buffer.field().as_deref(),
+                case["field"].as_str(),
+                "{}",
+                case["id"]
+            );
+            assert_eq!(
+                event.buffer.label().as_deref(),
+                case["label"].as_str(),
+                "{}",
+                case["id"]
+            );
+            let task = event.as_event_task().expect("task");
+            assert_eq!(task.buffered_span().text(), buffered.text());
+        }
+        for case in vectors["conflict"].as_array().expect("conflict cases") {
+            let contents = events_note(case["day"].as_str().expect("day"));
+            let date = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+            let events = events_in_note(&contents, date);
+            let new = clock_pair(case["new"].as_array().expect("new"));
+            let old = case["old"].as_array().map(|value| clock_pair(value));
+            let crossed = event_span_conflicts(
+                new.0,
+                new.1,
+                old,
+                &events,
+                &HashSet::new(),
+            );
+            let expected_id = case["crossed"].as_str();
+            match expected_id {
+                None => assert!(
+                    crossed.is_empty(),
+                    "{}: unexpected {:?}",
+                    case["id"],
+                    crossed
+                        .iter()
+                        .map(|(event, _)| event.block_id.as_deref())
+                        .collect::<Vec<_>>()
+                ),
+                Some(id) => {
+                    let (event, conflict) =
+                        crossed.first().expect("crossed event");
+                    assert_eq!(
+                        event.block_id.as_deref(),
+                        Some(id),
+                        "{}",
+                        case["id"]
+                    );
+                    assert_eq!(
+                        conflict.overlap_minutes,
+                        case["overlap_minutes"].as_u64().expect("overlap"),
+                        "{}",
+                        case["id"]
+                    );
+                    assert_eq!(
+                        conflict.buffer_part.map(BufferPart::as_str),
+                        case["buffer_part"].as_str(),
+                        "{}",
+                        case["id"]
+                    );
+                    let fit = case["fit"]
+                        .as_str()
+                        .map(|value| parse_hhmm(value).expect("fit HHMM"));
+                    assert_eq!(conflict.fit_start_min, fit, "{}", case["id"]);
+                }
+            }
+        }
+    }
+
+    fn clock_pair(value: &[Value]) -> (u16, u16) {
+        (
+            parse_hhmm(value[0].as_str().expect("start")).expect("start"),
+            parse_hhmm(value[1].as_str().expect("end")).expect("end"),
+        )
+    }
+
+    #[test]
+    fn clean_event_title_strips_interleaved_buffer_fields() {
+        let contents = events_note(concat!(
+            "- [*] #task **1200-1300** Lunch [📅](https://calendar.google.com/event?eid=lunch \"Open in Google Calendar\") #untracked [buffer:: -30m +15m] [root:: love] [type:: MEET] ^lunch\n",
+            "- [ ] #task **1000-1030** Standup [buffer:: +15m] [📅](https://calendar.google.com/event?eid=standup \"Open\") #untracked ^standup\n",
+        ));
+        let date = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let events = events_in_note(&contents, date);
+        assert_eq!(events[0].title, "Standup");
+        assert_eq!(
+            events[0].buffer,
+            EventBuffer {
+                before_min: 0,
+                after_min: 15,
+            }
+        );
+        assert_eq!(events[1].title, "Lunch");
+        assert_eq!(
+            events[1].buffer,
+            EventBuffer {
+                before_min: 30,
+                after_min: 15,
+            }
+        );
+        assert_eq!(events[1].buffered_span().unwrap().text(), "1130-1315");
+    }
+
+    #[test]
+    fn buffer_field_in_code_or_link_does_not_count() {
+        let contents = events_note(concat!(
+            "- [ ] #task **1200-1300** Notes `[buffer:: -30m]` ^code\n",
+            "- [ ] #task **1300-1400** See [buffer:: -15m](https://example.com) ^link\n",
+            "- [ ] #task **1400-1500** Broken [buffer:: -99x] ^bad\n",
+        ));
+        let date = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let events = events_in_note(&contents, date);
+        assert!(events.iter().all(|event| event.buffer.is_empty()));
+        assert_eq!(events[0].title, "Notes `[buffer:: -30m]`");
+        assert_eq!(events[1].title, "See");
+        assert_eq!(events[2].title, "Broken");
     }
 }
