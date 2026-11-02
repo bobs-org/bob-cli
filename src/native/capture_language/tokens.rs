@@ -17,21 +17,39 @@ use crate::native::collect_done;
 /// Parse one whitespace-free token as an `@route` token, returning `None` when
 /// it does not begin with `@` or its route part is not a valid route name. A
 /// `#` suffix selects bullet mode and is split off before route validation.
+/// A quoted `#` selector (`#"Literal"` / `#“Literal”`) decodes through the
+/// shared exact-name lexer and reports `exact: true`; an incomplete literal
+/// or trailing bytes after the closing quote are not a complete token.
 pub(super) fn parse_route_token(token: &str) -> Option<RouteToken> {
     let rest = token.strip_prefix('@')?;
     let (route_part, bullet) = match rest.split_once('#') {
         Some((route, prefix)) => {
-            let marker = (!prefix.is_empty()).then(|| prefix.to_string());
-            (route, Some(marker))
+            if prefix.is_empty() {
+                (route, Some((None, false)))
+            } else if opens_exact_name(prefix) {
+                let lex = lex_exact_name_after_hash(prefix, prefix.len())?;
+                if !lex.complete
+                    || lex.literal_len != prefix.len()
+                    || lex.decoded.is_empty()
+                {
+                    return None;
+                }
+                (route, Some((Some(lex.decoded), true)))
+            } else {
+                let marker = (!prefix.is_empty()).then(|| prefix.to_string());
+                // A quoted opener that failed to lex above already returned;
+                // an unquoted selector with embedded quotes stays literal.
+                (route, Some((marker, false)))
+            }
         }
         None => (rest, None),
     };
     is_route_token(route_part).then(|| RouteToken {
         route: Some(route_part.to_ascii_lowercase()),
         kind: match bullet {
-            Some(section_prefix) => CaptureKind::Bullet {
+            Some((section_prefix, exact)) => CaptureKind::Bullet {
                 section_prefix,
-                exact: false,
+                exact,
             },
             None => CaptureKind::Task,
         },

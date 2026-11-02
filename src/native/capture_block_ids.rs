@@ -577,7 +577,7 @@ const WEAK_TRAILING: &[&str] = &[
 /// First suggestion uses 3 content words when that join fits in this many
 /// bytes; otherwise the first 2. Vault calibration keeps mean first length
 /// ≤ 17; a higher cap trades length for Jaccard.
-const FIRST_SUGGESTION_MAX_BYTES: usize = 24;
+const FIRST_SUGGESTION_MAX_BYTES: usize = 20;
 
 fn is_stopword(word: &str) -> bool {
     STOPWORDS.contains(&word)
@@ -1163,6 +1163,41 @@ mod tests {
         );
         assert!(
             "fix-authentication-middleware".len() > FIRST_SUGGESTION_MAX_BYTES
+        );
+    }
+
+    #[test]
+    fn first_suggestion_prefers_three_words_within_twenty_bytes() {
+        // The 20-byte cap keeps mean first length ≤17 while preserving
+        // Jaccard: a 19-byte three-word join stays first, a 21-byte join
+        // falls back to two words. Both orders keep best-of-3 and top-3
+        // unchanged since the other form remains second.
+        let within =
+            suggest_ids("Add support for hermes LLM provider", '^', &[]);
+        assert_eq!(
+            within.first().map(String::as_str),
+            Some("hermes-llm-provider")
+        );
+        assert_eq!("hermes-llm-provider".len(), 19);
+        assert!("hermes-llm-provider".len() <= FIRST_SUGGESTION_MAX_BYTES);
+
+        let over = suggest_ids(
+            "Review quarterly planning documentation update",
+            '^',
+            &[],
+        );
+        // `quarterly-planning-documentation` is 29 bytes, over the cap,
+        // so the two-word form leads while the three-word form stays second.
+        assert_eq!(
+            over.first().map(String::as_str),
+            Some("quarterly-planning")
+        );
+        assert!(over
+            .iter()
+            .any(|id| id == "quarterly-planning-documentation"));
+        assert!(
+            "quarterly-planning-documentation".len()
+                > FIRST_SUGGESTION_MAX_BYTES
         );
     }
 

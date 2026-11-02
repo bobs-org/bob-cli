@@ -335,6 +335,20 @@ pub(super) fn parse_capture_item<'a>(
             list: outcome.list,
         });
     }
+    if forced_route.is_none()
+        && forced_section.is_none()
+        && options.recognize_lists
+        && !template
+        && !note
+        && !listen
+        && is_bare_at_list_attempt(item)
+    {
+        return Err(CaptureItemParseError::coded(
+            "incomplete_route",
+            "`@` is incomplete: type a destination after `@` (for example `@dev`)"
+                .to_string(),
+        ));
+    }
     let parsed = parse_capture_item_masked(
         &masked_item,
         forced_route,
@@ -956,7 +970,7 @@ fn parse_list_bullet_item<'a>(
             Some(list.route.clone()),
             CaptureKind::Bullet {
                 section_prefix: list.section.clone(),
-                exact: false,
+                exact: list.exact,
             },
         ),
         (false, Some(id)) if stripped_sigil == Some(':') => (
@@ -1194,6 +1208,29 @@ fn list_header_marker_from_resolved(
         .find(|sub| sub.depth == AuthoredDepth::First)
         .map(|sub| sub.body.trim())?;
     Some(list_header_marker_error(first, &stray, bullet))
+}
+
+/// A bare `@` header with list bullets below: the route was never
+/// finished, so the draft needs a route instead of filing literally.
+/// Column-zero is required; indented lines keep their literal meaning,
+/// and forced/template modes bypass this refusal.
+fn is_bare_at_list_attempt(item: &CaptureItem<'_>) -> bool {
+    let Some((first, rest)) = item.lines.split_first() else {
+        return false;
+    };
+    if first.raw.text.len() != first.raw.text.trim_start().len() {
+        return false;
+    }
+    if first.raw.text.trim() != "@" {
+        return false;
+    }
+    rest.iter().any(|line| {
+        matches!(
+            super::draft::classify_authored_line(line.raw),
+            super::draft::AuthoredLineClass::Item(authored)
+                if authored.depth == super::model::AuthoredDepth::First
+        )
+    })
 }
 
 /// Whether a token may follow a list header on its own line: schedule,

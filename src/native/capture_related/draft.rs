@@ -337,15 +337,32 @@ fn discard_range(
             end: draft.len(),
         });
     }
+    // A sole bullet owns its header, so removing it removes the header too;
+    // an ownerless prefix never owns the header. Any other bullet starts at
+    // its own bullet, after the shared header.
     let item_start = item
         .list
         .as_ref()
-        .filter(|list| list.count == 1)
+        .filter(|list| !list.ownerless && list.count == 1)
         .map_or(item.start, |list| list.header_start);
     if let Some(next) = all_items.get(position + 1) {
+        // End before the next item's physical header when it heads a
+        // different list, so discarding a bullet before another list never
+        // removes that list's header and silently refiles its survivors.
+        // Bullets sharing one header end at the next bullet's start, and
+        // ordinary successors keep the existing end at their start.
+        let end = match (item.list.as_ref(), next.list.as_ref()) {
+            (Some(current), Some(following))
+                if current.header_start == following.header_start =>
+            {
+                next.start
+            }
+            (_, Some(following)) => following.header_start,
+            (_, None) => next.start,
+        };
         Some(SourceRange {
             start: item_start,
-            end: next.start,
+            end,
         })
     } else {
         let previous = all_items.get(position.checked_sub(1)?)?;

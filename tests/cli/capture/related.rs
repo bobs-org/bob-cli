@@ -338,6 +338,222 @@ fn list_items_use_header_and_bullet_anchors_without_emptying_the_list() {
 }
 
 #[test]
+fn list_discard_ranges_keep_headers_intact() {
+    // Discarding one bullet must never remove another list's header.
+    // Cover first/middle/last, sole lists before/after ordinary items or
+    // another list, adjacent headers, blank separators, nested children,
+    // and CRLF. After applying the actual edit, the survivors keep their
+    // bodies, routes, and list counts, and per-bullet note actions stay
+    // suppressed.
+    fn apply_discard(draft: &str, range: &Value) -> String {
+        let start = range["start"].as_u64().unwrap() as usize;
+        let end = range["end"].as_u64().unwrap() as usize;
+        assert!(draft.is_char_boundary(start) && draft.is_char_boundary(end));
+        assert!(start <= end, "discard range must not invert: {range}");
+        format!("{}{}", &draft[..start], &draft[end..])
+    }
+
+    fn item_for<'a>(
+        items: &'a [Value],
+        needle: &str,
+        draft: &str,
+    ) -> &'a Value {
+        items
+            .iter()
+            .find(|item| {
+                let start = item["range"]["start"].as_u64().unwrap() as usize;
+                let end = item["range"]["end"].as_u64().unwrap() as usize;
+                draft[start..end].contains(needle)
+            })
+            .unwrap_or_else(|| {
+                panic!("no item contains {needle:?} in {draft:?}")
+            })
+    }
+
+    fn check_no_note_actions(items: &[Value]) {
+        for item in items {
+            for row in item["matches"].as_array().unwrap() {
+                assert!(
+                    !row["actions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|a| a == "note"),
+                    "per-bullet note actions stay suppressed: {row}"
+                );
+            }
+        }
+    }
+
+    let temp = TempDir::new("bob-cli-capture-related-list-discard");
+    let vault = fixture_vault(&temp);
+
+    // The plan's reproduction: discarding the last bullet of one list
+    // before another list must keep the next header.
+    let draft = "@dev\n- Keep\n- Duplicate\n@cash\n- Cash task";
+    let result = related_json(&vault, draft, &[]);
+    let items = result["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 3);
+    check_no_note_actions(&items);
+    let dup = item_for(&items, "Duplicate", draft);
+    let edited = apply_discard(draft, &dup["discard_range"]);
+    assert_eq!(edited, "@dev\n- Keep\n@cash\n- Cash task");
+    let reparsed = capture_parse_json(&edited);
+    let reparsed_items = reparsed["items"].as_array().unwrap();
+    assert_eq!(reparsed_items.len(), 2);
+    assert_eq!(reparsed_items[0]["body"], "Keep");
+    assert_eq!(reparsed_items[0]["route"], "dev");
+    assert_eq!(reparsed_items[0]["list"]["count"], 1);
+    assert_eq!(reparsed_items[1]["body"], "Cash task");
+    assert_eq!(reparsed_items[1]["route"], "cash");
+    assert_eq!(reparsed_items[1]["list"]["count"], 1);
+
+    // First bullet of a multi-bullet list.
+    let draft = "@dev\n- Keep\n- Duplicate\n- Third";
+    let result = related_json(&vault, draft, &[]);
+    let items = result["items"].as_array().unwrap().clone();
+    let first = item_for(&items, "Keep", draft);
+    let edited = apply_discard(draft, &first["discard_range"]);
+    assert_eq!(edited, "@dev\n- Duplicate\n- Third");
+    let reparsed = capture_parse_json(&edited);
+    assert_eq!(reparsed["items"].as_array().unwrap().len(), 2);
+    assert_eq!(reparsed["items"][0]["body"], "Duplicate");
+
+    // Middle bullet.
+    let draft = "@dev\n- Keep\n- Duplicate\n- Third";
+    let result = related_json(&vault, draft, &[]);
+    let items = result["items"].as_array().unwrap().clone();
+    let mid = item_for(&items, "Duplicate", draft);
+    let edited = apply_discard(draft, &mid["discard_range"]);
+    assert_eq!(edited, "@dev\n- Keep\n- Third");
+    let reparsed = capture_parse_json(&edited);
+    let bodies: Vec<_> = reparsed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["body"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(bodies, vec!["Keep", "Third"]);
+
+    // Last bullet of a list before another list (same as repro, plus blank separator variant).
+    for draft in [
+        "@dev\n- Keep\n- Duplicate\n@cash\n- Cash task",
+        "@dev\n- Keep\n- Duplicate\n\n@cash\n- Cash task",
+    ] {
+        let result = related_json(&vault, draft, &[]);
+        let items = result["items"].as_array().unwrap().clone();
+        let dup = item_for(&items, "Duplicate", draft);
+        let edited = apply_discard(draft, &dup["discard_range"]);
+        assert!(
+            edited.contains("@cash\n- Cash task"),
+            "cash header must survive in {edited:?}"
+        );
+        assert!(!edited.contains("Duplicate"), "{edited:?}");
+        let reparsed = capture_parse_json(&edited);
+        assert!(reparsed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["route"] == "cash"));
+    }
+
+    // Sole-bullet list before another list and before/after ordinary items.
+    for (draft, needle, must_contain, must_not_contain) in [
+        (
+            "@dev\n- Only\n@cash\n- Cash",
+            "Only",
+            "@cash\n- Cash",
+            "@dev",
+        ),
+        (
+            "@dev\n- Only\n\nPlain task @cash",
+            "Only",
+            "Plain task",
+            "@dev",
+        ),
+        (
+            "Plain task @dev\n\n@cash\n- Cash",
+            "Plain",
+            "@cash\n- Cash",
+            "Plain task",
+        ),
+        (
+            "@dev\n- Keep\n- Duplicate\n\nPlain task @cash",
+            "Duplicate",
+            "Plain task",
+            "Duplicate",
+        ),
+    ] {
+        let result = related_json(&vault, draft, &[]);
+        let items = result["items"].as_array().unwrap().clone();
+        let target = item_for(&items, needle, draft);
+        let edited = apply_discard(draft, &target["discard_range"]);
+        assert!(
+            edited.contains(must_contain),
+            "{edited:?} must contain {must_contain:?}"
+        );
+        assert!(
+            !edited.contains(must_not_contain) || needle == "Plain",
+            "{edited:?} must not contain {must_not_contain:?}"
+        );
+        let reparsed = capture_parse_json(&edited);
+        if let Some(reparsed_items) =
+            reparsed.get("items").and_then(|v| v.as_array())
+        {
+            assert!(
+                !reparsed_items.iter().any(|i| {
+                    i["body"].as_str().unwrap_or("").contains(needle)
+                        && needle != "Plain"
+                }) || needle == "Plain"
+            );
+        } else {
+            // Ordinary survivor has no `items` array; check the top-level body.
+            assert!(needle == "Only" || needle == "Duplicate");
+            assert!(!reparsed["body"].as_str().unwrap_or("").contains(needle));
+        }
+    }
+
+    // Normal item immediately before a list keeps the list header.
+    let draft = "Plain task @dev\n@cash\n- Cash task";
+    let result = related_json(&vault, draft, &[]);
+    let items = result["items"].as_array().unwrap().clone();
+    let plain = item_for(&items, "Plain", draft);
+    let edited = apply_discard(draft, &plain["discard_range"]);
+    assert!(edited.contains("@cash\n- Cash task"), "{edited:?}");
+    let reparsed = capture_parse_json(&edited);
+    assert_eq!(reparsed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(reparsed["items"][0]["route"], "cash");
+
+    // Nested children move with their owner; CRLF keeps char boundaries.
+    let draft = "@dev\n- Keep\n  - child\n- Duplicate\n@cash\n- Cash";
+    let result = related_json(&vault, draft, &[]);
+    let items = result["items"].as_array().unwrap().clone();
+    let keep = item_for(&items, "Keep", draft);
+    let edited = apply_discard(draft, &keep["discard_range"]);
+    assert!(
+        !edited.contains("Keep") && !edited.contains("child"),
+        "{edited:?}"
+    );
+    assert!(edited.contains("@cash\n- Cash"), "{edited:?}");
+
+    let crlf = "@dev\r\n- Keep\r\n- Duplicate\r\n@cash\r\n- Cash task";
+    let result = related_json(&vault, crlf, &[]);
+    let items = result["items"].as_array().unwrap().clone();
+    let dup = item_for(&items, "Duplicate", crlf);
+    let edited = apply_discard(crlf, &dup["discard_range"]);
+    assert!(edited.contains("@cash\r\n- Cash task"), "{edited:?}");
+    assert!(crlf.is_char_boundary(
+        dup["discard_range"]["start"].as_u64().unwrap() as usize
+    ));
+    let reparsed = capture_parse_json(&edited);
+    assert!(reparsed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|i| i["route"] == "cash"));
+}
+
+#[test]
 fn linked_candidates_are_reported_and_excluded_and_closed_rows_use_split_defaults(
 ) {
     let temp = TempDir::new("bob-cli-capture-related-linked-closed");

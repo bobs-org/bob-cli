@@ -18,6 +18,7 @@ Build it from source with [Continue with Mac Capture](../../start/mac-capture.md
 - [Capture panel](capture-panel.md) for the panel, editor, completion, drafts, live preview, submit, and stash.
 - [Pickers](pickers.md) for the shared picker lifecycle, with [task pickers](task-pickers.md) and [relationship pickers](relationship-pickers.md).
 - [Capture previews](capture-previews.md) for preview cards, session controls, completions, and successor offers.
+- [Capture lists](capture-lists.md) for lone `@file` headers over bullets, first-bullet entry, task-ID prompts, and grouped previews.
 
 ## Keyboard and agenda
 

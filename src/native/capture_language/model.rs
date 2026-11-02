@@ -795,6 +795,8 @@ pub(crate) struct ListContext {
     pub(crate) position: usize,
     pub(crate) count: usize,
     #[serde(skip)]
+    pub(crate) exact: bool,
+    #[serde(skip)]
     pub(crate) header_start: usize,
     #[serde(skip)]
     pub(crate) header_end: usize,

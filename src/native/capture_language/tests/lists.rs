@@ -292,8 +292,80 @@ fn editor_misplaced_and_unfinished_id_states() {
 #[test]
 fn editor_lone_at_still_needs_route() {
     // A lone `@` is not a list header: the editor keeps its long-standing
-    // incomplete state and execution keeps filing it literally.
+    // incomplete state needing `route`. Execution now refuses with
+    // `incomplete_route` instead of filing literally.
     let parse = editor("@\n- A task");
     assert_eq!(parse.mode, EditorMode::Incomplete);
     assert_eq!(parse.needs, vec![Need::Route]);
+}
+
+#[test]
+fn split_quoted_headers_decode_and_preserve_exact() {
+    let single = split_capture_draft("@dev#\"Ideas\"\n- Big idea");
+    assert_eq!(single.items.len(), 1);
+    let first = list_of(&single.items[0]);
+    assert_eq!(first.section.as_deref(), Some("Ideas"));
+    assert!(first.exact);
+    assert_eq!((first.header_start, first.header_end), (0, 12));
+
+    let multi = split_capture_draft("@dev#\"Release Ideas\"\n- Big idea");
+    assert_eq!(multi.items.len(), 1);
+    let first = list_of(&multi.items[0]);
+    assert_eq!(first.section.as_deref(), Some("Release Ideas"));
+    assert!(first.exact);
+    assert_eq!((first.header_start, first.header_end), (0, 20));
+
+    let plain = split_capture_draft("@dev#Ideas\n- Big idea");
+    let first = list_of(&plain.items[0]);
+    assert_eq!(first.section.as_deref(), Some("Ideas"));
+    assert!(!first.exact);
+
+    // Incomplete literals and trailing bytes are not headers.
+    for raw in [
+        "@dev#\"Release\n- Big idea",
+        "@dev#\"Ideas\"extra\n- Big idea",
+        "@dev#Ideas extra\n- Big idea",
+        "@dev s:3\n- Big idea",
+    ] {
+        let draft = split_capture_draft(raw);
+        assert!(draft.items.iter().all(|item| item.list.is_none()), "{raw}");
+    }
+
+    // Forced/template splits never recognize headers.
+    let forced = split_capture_draft_no_lists("@dev#\"Ideas\"\n- Big idea");
+    assert!(forced.items.iter().all(|item| item.list.is_none()));
+}
+
+#[test]
+fn execution_quoted_sections_carry_exact() {
+    let quoted =
+        parse_draft("@dev#\"Ideas\"\n- Big idea").expect("quoted parses");
+    assert!(matches!(
+        quoted.items[0].parsed.kind,
+        CaptureKind::Bullet { exact: true, .. }
+    ));
+    let plain = parse_draft("@dev#Ideas\n- Big idea").expect("plain parses");
+    assert!(matches!(
+        plain.items[0].parsed.kind,
+        CaptureKind::Bullet { exact: false, .. }
+    ));
+}
+
+#[test]
+fn execution_bare_at_with_bullets_refuses_incomplete_route() {
+    let error = parse_draft("@\n- A task").unwrap_err();
+    assert_eq!(error.code, Some("incomplete_route"));
+}
+
+#[test]
+fn split_quoted_headers_hold_utf8_and_crlf_offsets() {
+    let utf = split_capture_draft("@dev#\"Caf\u{00e9}\"\n- Big idea");
+    let first = list_of(&utf.items[0]);
+    assert_eq!(first.section.as_deref(), Some("Caf\u{00e9}"));
+    assert_eq!((first.header_start, first.header_end), (0, 12));
+
+    let crlf = split_capture_draft("@dev#\"Release Ideas\"\r\n- Big idea");
+    let first = list_of(&crlf.items[0]);
+    assert_eq!((first.header_start, first.header_end), (0, 20));
+    assert_eq!(crlf.items[0].start, 22);
 }

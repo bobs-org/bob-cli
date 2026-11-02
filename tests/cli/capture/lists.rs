@@ -738,10 +738,11 @@ fn capture_list_whole_item_forms_stay_text() {
 }
 
 #[test]
-fn capture_list_bare_at_header_keeps_head_behavior() {
-    // A lone `@` is not a list header (no route token): `capture-parse`
-    // keeps its long-standing `incomplete` needing `route`, and `bob
-    // capture` keeps filing it literally. Neither side changed.
+fn capture_list_bare_at_header_refuses_incomplete_route() {
+    // A bare `@` header with bullets is an unfinished route: `capture-parse`
+    // reports `incomplete` needing `route`, and `bob capture` refuses with
+    // the incomplete-route copy instead of filing literally. Forced
+    // destinations keep their literal behavior (covered elsewhere).
     let parse = run_parse("@\n- A task");
     assert_eq!(parse["mode"], "incomplete");
     assert_eq!(parse["needs"], serde_json::json!(["route"]));
@@ -750,11 +751,263 @@ fn capture_list_bare_at_header_keeps_head_behavior() {
     let vault = vault_with_dev(&temp);
     write_file(&vault.join("mac_inbox.md"), "# Tasks\n");
     let day = day_file(&vault);
-    let json = capture_real(&vault, &day, "@\n- A task");
-    assert_eq!(json["text"], "@");
-    assert!(fs::read_to_string(vault.join("mac_inbox.md"))
-        .expect("read inbox")
-        .contains("- [ ] #task @ [created::2026-11-02]\n\t- A task\n"));
+    let before_dev =
+        fs::read_to_string(vault.join("dev.md")).expect("read dev");
+    let before_inbox =
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox");
+    let before_day = fs::read_to_string(&day).expect("read day");
+    let output = run_capture(&vault, &day, "@\n- A task", false);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected refusal:\n{}",
+        format_output(&output)
+    );
+    let json: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["code"], "incomplete_route", "{json}");
+    assert_eq!(
+        fs::read_to_string(vault.join("dev.md")).expect("read dev"),
+        before_dev,
+        "refusal must not write dev.md"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
+        before_inbox,
+        "refusal must not write inbox"
+    );
+    assert_eq!(
+        fs::read_to_string(&day).expect("read day"),
+        before_day,
+        "refusal must not write day"
+    );
+}
+
+#[test]
+fn capture_list_quoted_section_headers_match_exactly() {
+    // Quoted one-word and multi-word section headers decode through the
+    // exact-name lexer, preserve exact-match semantics into execution,
+    // and agree between parse and execution. Unquoted stays prefix.
+    // Two adjacent quoted headers split, forced stays literal, template
+    // refuses, UTF-8/CRLF offsets hold, and list writes equal ordinary
+    // batch writes including missing-section fallback.
+    let temp = TempDir::new("bob-cli-capture-list-quoted");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("dev.md"),
+        concat!(
+            "# Tasks\n",
+            "## Ideas Extra\n",
+            "Existing extra\n",
+            "## Ideas\n",
+            "Existing\n",
+            "## Release Ideas\n",
+            "Existing release\n",
+            "## Caf\u{00e9}\n",
+            "Existing cafe\n",
+        ),
+    );
+    let day = day_file(&vault);
+
+    // One-word quoted decodes and reports the list contract.
+    let parse = run_parse("@dev#\"Ideas\"\n- Big idea");
+    assert_eq!(parse["mode"], "bullet", "{parse}");
+    assert_eq!(parse["section"], "Ideas", "{parse}");
+    assert_eq!(parse["list"]["section"], "Ideas", "{parse}");
+    assert_eq!(
+        parse["header_range"],
+        serde_json::json!({"start": 0, "end": 12}),
+        "{parse}"
+    );
+    let items = parse["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["section"], "Ideas");
+    assert_eq!(items[0]["list"]["section"], "Ideas");
+
+    // Multi-word quoted spans the literal including spaces.
+    let multi = run_parse("@dev#\"Release Ideas\"\n- Big idea");
+    assert_eq!(multi["section"], "Release Ideas", "{multi}");
+    assert_eq!(multi["list"]["section"], "Release Ideas", "{multi}");
+    assert_eq!(
+        multi["header_range"],
+        serde_json::json!({"start": 0, "end": 20}),
+        "{multi}"
+    );
+    let spans = multi["spans"].as_array().expect("spans");
+    assert!(
+        spans
+            .iter()
+            .any(|s| s["kind"] == "route" && s["start"] == 0 && s["end"] == 4),
+        "{spans:?}"
+    );
+    assert!(
+        spans.iter().any(|s| s["kind"] == "section"
+            && s["start"] == 5
+            && s["end"] == 20),
+        "{spans:?}"
+    );
+
+    // Exact versus prefix: unquoted `#Ideas` prefix-matches the first
+    // `Ideas*` heading (`Ideas Extra`), while quoted `#"Ideas"` matches
+    // exactly `Ideas`. Both list and ordinary agree.
+    let list_extra = dry_json(&vault, &day, "@dev#Ideas\n- Prefix task");
+    let list_exact = dry_json(&vault, &day, "@dev#\"Ideas\"\n- Exact task");
+    // Dry-run does not reveal placement, so compare real writes.
+    let temp_prefix = TempDir::new("bob-cli-capture-list-quoted-prefix");
+    let prefix_vault = temp_prefix.path().join("vault");
+    fs::create_dir_all(&prefix_vault).expect("create vault");
+    write_file(
+        &prefix_vault.join("dev.md"),
+        "# Tasks\n## Ideas Extra\nX\n## Ideas\nY\n",
+    );
+    let prefix_day = day_file(&prefix_vault);
+    capture_real(&prefix_vault, &prefix_day, "@dev#Ideas\n- Prefix task");
+    let prefix_contents =
+        fs::read_to_string(prefix_vault.join("dev.md")).expect("read");
+    let extra_pos = prefix_contents
+        .find("## Ideas Extra")
+        .expect("extra heading");
+    let ideas_pos = prefix_contents.find("## Ideas\n").expect("ideas heading");
+    let task_pos = prefix_contents.find("Prefix task").expect("task");
+    assert!(extra_pos < task_pos && task_pos < ideas_pos, "unquoted prefix should land under first prefix match (Ideas Extra):\n{prefix_contents}");
+
+    let temp_exact = TempDir::new("bob-cli-capture-list-quoted-exact");
+    let exact_vault = temp_exact.path().join("vault");
+    fs::create_dir_all(&exact_vault).expect("create vault");
+    write_file(
+        &exact_vault.join("dev.md"),
+        "# Tasks\n## Ideas Extra\nX\n## Ideas\nY\n",
+    );
+    let exact_day = day_file(&exact_vault);
+    capture_real(&exact_vault, &exact_day, "@dev#\"Ideas\"\n- Exact task");
+    let exact_contents =
+        fs::read_to_string(exact_vault.join("dev.md")).expect("read");
+    let extra_pos = exact_contents
+        .find("## Ideas Extra")
+        .expect("extra heading");
+    let ideas_pos = exact_contents.find("## Ideas\n").expect("ideas heading");
+    let task_pos = exact_contents.find("Exact task").expect("task");
+    assert!(
+        ideas_pos < task_pos,
+        "quoted exact should land under exact heading:\n{exact_contents}"
+    );
+    assert!(
+        !(extra_pos < task_pos && task_pos < ideas_pos),
+        "exact must not take prefix match:\n{exact_contents}"
+    );
+
+    // List writes equal the ordinary batch writes, including fallback.
+    for (list_draft, batch_draft) in [
+        (
+            "@dev#\"Release Ideas\"\n- Big idea",
+            "Big idea @dev#\"Release Ideas\"",
+        ),
+        ("@dev#\"Ideas\"\n- Big idea", "Big idea @dev#\"Ideas\""),
+        ("@dev#\"Missing\"\n- Big idea", "Big idea @dev#\"Missing\""),
+    ] {
+        let list_temp = TempDir::new("bob-cli-capture-list-quoted-equiv-list");
+        let list_v = list_temp.path().join("vault");
+        fs::create_dir_all(&list_v).expect("create vault");
+        write_file(
+            &list_v.join("dev.md"),
+            "# Tasks\n## Ideas\nY\n## Release Ideas\nZ\n",
+        );
+        let list_d = day_file(&list_v);
+        capture_real(&list_v, &list_d, list_draft);
+
+        let batch_temp =
+            TempDir::new("bob-cli-capture-list-quoted-equiv-batch");
+        let batch_v = batch_temp.path().join("vault");
+        fs::create_dir_all(&batch_v).expect("create vault");
+        write_file(
+            &batch_v.join("dev.md"),
+            "# Tasks\n## Ideas\nY\n## Release Ideas\nZ\n",
+        );
+        let batch_d = day_file(&batch_v);
+        capture_real(&batch_v, &batch_d, batch_draft);
+
+        assert_eq!(
+            fs::read_to_string(list_v.join("dev.md")).expect("read list"),
+            fs::read_to_string(batch_v.join("dev.md")).expect("read batch"),
+            "list vs batch mismatch for {list_draft:?}"
+        );
+    }
+    let _ = (list_extra, list_exact);
+
+    // Two adjacent quoted headers split into two lists.
+    let two_vault = temp.path().join("vault-two");
+    fs::create_dir_all(&two_vault).expect("create vault");
+    write_file(&two_vault.join("dev.md"), "# Tasks\n## Ideas\nY\n");
+    write_file(&two_vault.join("cash.md"), "# Tasks\n");
+    let two_day = day_file(&two_vault);
+    let two_json = capture_real(
+        &two_vault,
+        &two_day,
+        "@dev#\"Ideas\"\n- A task\n@cash\n- B task",
+    );
+    let caps = two_json["captures"].as_array().expect("captures");
+    assert_eq!(caps.len(), 2);
+    assert_eq!(caps[0]["list"]["section"], "Ideas");
+    assert_eq!(caps[1]["route"], "cash");
+
+    // UTF-8 section decodes and offsets land on char boundaries.
+    let utf = run_parse("@dev#\"Caf\u{00e9}\"\n- Big idea");
+    assert_eq!(utf["section"], "Caf\u{00e9}", "{utf}");
+    assert_eq!(
+        utf["header_range"],
+        serde_json::json!({"start": 0, "end": 12}),
+        "{utf}"
+    );
+
+    // CRLF line endings keep header ranges byte-exact.
+    let crlf = run_parse("@dev#\"Release Ideas\"\r\n- Big idea");
+    assert_eq!(crlf["list"]["section"], "Release Ideas", "{crlf}");
+    assert_eq!(
+        crlf["header_range"],
+        serde_json::json!({"start": 0, "end": 20}),
+        "{crlf}"
+    );
+    let crlf_items = crlf["items"].as_array().expect("items");
+    assert_eq!(crlf_items[0]["range"]["start"], 22, "{crlf}");
+
+    // Forced destinations keep `@` tokens literal (no list).
+    let mut forced = bob_command();
+    forced
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("--route")
+        .arg("dev")
+        .arg("--")
+        .arg("@dev#\"Ideas\"\n- Big idea")
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_NOW", NOW)
+        .env("TZ", "UTC0");
+    let forced_out = forced.output().expect("run forced capture");
+    assert_success(&forced_out);
+    let forced_json: Value =
+        serde_json::from_str(stdout(&forced_out).trim()).expect("forced JSON");
+    assert!(
+        forced_json.get("list").is_none() || forced_json["list"].is_null(),
+        "forced must not split lists: {forced_json}"
+    );
+    assert_eq!(forced_json["text"], "@dev#\"Ideas\"", "{forced_json}");
+
+    // Template bodies refuse quoted headers with the same code.
+    let (_temp, tvault, tday, tbefore) =
+        refusal_vault("bob-cli-capture-list-quoted-template");
+    assert_refusal(
+        &tvault,
+        &tday,
+        &tbefore,
+        "@dev#\"Ideas\" %t\n- detail {0}\n\nFoo",
+        "template_list",
+    );
 }
 
 #[test]

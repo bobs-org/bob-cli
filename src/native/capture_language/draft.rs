@@ -161,46 +161,109 @@ pub(super) fn split_items_from_item_lines<'a>(
 }
 
 /// A lone `@route` / `@route#section` line that heads a capture list.
+/// `exact` preserves a quoted selector's exact-match semantics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ListHeader {
     pub(crate) route: String,
     pub(crate) section: Option<String>,
+    pub(crate) exact: bool,
     pub(crate) kind: ListKind,
 }
 
+/// Parse one complete list-header route token, recognizing a quoted
+/// `#` selector that may hold spaces. Returns the route, section, exact
+/// flag, and list kind. A multi-token line, an incomplete literal, or
+/// trailing bytes after a closing quote are not a complete header.
+fn parse_list_header_token(
+    trimmed: &str,
+) -> Option<(String, Option<String>, bool, ListKind)> {
+    use super::pomodoro_literal::{
+        expand_literal_token, lex_exact_name_after_hash, opens_exact_name,
+    };
+    if trimmed.starts_with("@@") || !trimmed.starts_with('@') {
+        return None;
+    }
+    let first = trimmed.split_whitespace().next()?;
+    let (marker, len) = expand_literal_token(trimmed, first);
+    if len != trimmed.len() {
+        return None;
+    }
+    let Some(hash) = marker.find('#') else {
+        let route_part = marker.strip_prefix('@')?;
+        if !super::markers::is_route_token(route_part) {
+            return None;
+        }
+        return Some((
+            route_part.to_ascii_lowercase(),
+            None,
+            false,
+            ListKind::Tasks,
+        ));
+    };
+    let route_part = marker[1..hash].to_string();
+    if !super::markers::is_route_token(&route_part) {
+        return None;
+    }
+    let after_hash = &marker[hash + 1..];
+    if after_hash.is_empty() {
+        return Some((
+            route_part.to_ascii_lowercase(),
+            None,
+            false,
+            ListKind::Notes,
+        ));
+    }
+    if opens_exact_name(after_hash) {
+        let lex = lex_exact_name_after_hash(after_hash, after_hash.len())?;
+        if !lex.complete
+            || lex.literal_len != after_hash.len()
+            || lex.decoded.is_empty()
+        {
+            return None;
+        }
+        return Some((
+            route_part.to_ascii_lowercase(),
+            Some(lex.decoded),
+            true,
+            ListKind::Notes,
+        ));
+    }
+    if after_hash.contains(char::is_whitespace) {
+        return None;
+    }
+    Some((
+        route_part.to_ascii_lowercase(),
+        Some(after_hash.to_string()),
+        false,
+        ListKind::Notes,
+    ))
+}
+
 /// Detect a list header: a column-zero line whose trimmed text is exactly
-/// one token that lexes as a task (`@route`) or bullet (`@route#section`)
-/// route marker. `@@` declarations, indented lines, and multi-token lines
-/// never qualify; anything else keeps its existing meaning.
+/// one complete route token (`@route`, `@route#section`,
+/// `@route#"Literal"` with spaces, or `@route#`). `@@` declarations,
+/// indented lines, and multi-token lines never qualify; anything else
+/// keeps its existing meaning. Surrounding whitespace on the header line
+/// is honored via trimming, while indented later lines never start lists.
 pub(crate) fn detect_list_header(line: &RawLine<'_>) -> Option<ListHeader> {
     if line.text.len() != line.text.trim_start().len() {
         return None;
     }
     let trimmed = line.text.trim();
-    if trimmed.is_empty()
-        || trimmed.contains(char::is_whitespace)
-        || trimmed.starts_with("@@")
-    {
+    if trimmed.is_empty() {
         return None;
     }
-    let token = super::tokens::parse_terminal_route_token(trimmed)
-        .ok()
-        .flatten()?;
-    let route = token.route.clone()?;
-    let section = match &token.kind {
-        CaptureKind::Bullet { section_prefix, .. } => section_prefix.clone(),
-        _ => None,
-    };
-    let kind = match &token.kind {
-        CaptureKind::Task => ListKind::Tasks,
-        CaptureKind::Bullet { .. } => ListKind::Notes,
-        _ => return None,
-    };
-    Some(ListHeader {
-        route,
-        section,
-        kind,
-    })
+    let (route, section, exact, kind) = parse_list_header_token(trimmed)?;
+    // Only task and bullet markers head lists; operators, links, toggles,
+    // and project notes keep their existing meanings.
+    match kind {
+        ListKind::Tasks | ListKind::Notes => Some(ListHeader {
+            route,
+            section,
+            exact,
+            kind,
+        }),
+    }
 }
 
 /// Group a header-led block into its ownerless leading lines plus one
@@ -263,6 +326,7 @@ fn push_list_items<'a>(
         header_line: first.line_number,
         position: 0,
         count: bullets.len(),
+        exact: header.exact,
         header_start: first.raw.start,
         header_end: first.raw.end,
         ownerless: false,

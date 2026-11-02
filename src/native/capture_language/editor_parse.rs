@@ -345,6 +345,7 @@ pub(crate) fn parse_for_editor_with(
                 header_line: first.line_number,
                 position: 0,
                 count: 0,
+                exact: detected.exact,
                 header_start: first.raw.start,
                 header_end: first.raw.end,
                 ownerless: false,
