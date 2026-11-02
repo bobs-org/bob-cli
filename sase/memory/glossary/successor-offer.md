@@ -25,3 +25,7 @@ it fresh, while a task the same capture creates is never stamped. See
 [[decisions:unblocked-tasks-are-offered]].
 The Mac Pull-In card labels offers from capture-created projects as a new project and
 starts with nothing marked.
+
+Parking or completing a task also offers the tasks linked to it with a configured
+successor label (`starts after`) in their own relation group, which says which relation
+and event fired and that they are not dependents.

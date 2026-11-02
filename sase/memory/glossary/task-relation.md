@@ -8,7 +8,8 @@ aliases:
 
 *Requested · project*
 
-A directed, optionally labelled, inert link from one task to another. It is authored on
+A directed, optionally labelled link from one task to another, inert unless its label
+carries an effect. It is authored on
 the source task's 🪢 **LINKS:** line and mirrored on the target task's generated 🪢
 **LINKED FROM:** line. The generated LINKED FROM line also lists enabled-by-default [[task-mention]]s
 (`(💬 mentions)` entries), which are not relations. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
@@ -18,3 +19,8 @@ The status exceptions are committing a configured cancel label through capture o
 the Links stage, which cancels the source task at commit time, and committing a
 configured complete label through capture or the Links stage, which marks the source
 task Done at commit time.
+
+A relation whose label is a configured successor label (such as `starts after`) also
+offers its source as a [[successor-offer]] when its target is parked (left Pending with
+no live Task Link today) or done; it still never blocks, and its mirror reads
+`starts before`.

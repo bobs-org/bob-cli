@@ -13,6 +13,7 @@ pub(crate) const NAMED_PAIRS: &[(&str, &str)] = &[
     ("follow-up of", "followed up by"),
     ("merged into", "merged from"),
     ("split from", "split into"),
+    ("starts after", "starts before"),
 ];
 
 const PARTICIPLE_BASES: &[(&str, &str)] = &[

@@ -414,6 +414,10 @@ it fresh, while a task the same capture creates is never stamped. See
 The Mac Pull-In card labels offers from capture-created projects as a new project and
 starts with nothing marked.
 
+Parking or completing a task also offers the tasks linked to it with a configured
+successor label (`starts after`) in their own relation group, which says which relation
+and event fired and that they are not dependents.
+
 ### Task Dependency Link {#task-dependency-link}
 
 *Aliases: task dep link, dep link.*
@@ -505,7 +509,8 @@ or an authored relation on the pair wins. See `docs/task-relations.md` §19.
 
 *Requested · project*
 
-A directed, optionally labelled, inert link from one task to another. It is authored on
+A directed, optionally labelled link from one task to another, inert unless its label
+carries an effect. It is authored on
 the source task's 🪢 **LINKS:** line and mirrored on the target task's generated 🪢
 **LINKED FROM:** line. The generated LINKED FROM line also lists enabled-by-default [Task Mention](#task-mention)s
 (`(💬 mentions)` entries), which are not relations. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
@@ -515,6 +520,11 @@ The status exceptions are committing a configured cancel label through capture o
 the Links stage, which cancels the source task at commit time, and committing a
 configured complete label through capture or the Links stage, which marks the source
 task Done at commit time.
+
+A relation whose label is a configured successor label (such as `starts after`) also
+offers its source as a [Successor Offer](#successor-offer) when its target is parked (left Pending with
+no live Task Link today) or done; it still never blocks, and its mirror reads
+`starts before`.
 
 ### Task Successor {#task-successor}
 
@@ -539,6 +549,10 @@ promotion does. Successors are computed when the gesture runs and are never stor
 None is linked automatically: each becomes a [Successor Offer](#successor-offer), and only a picked
 one is linked under its Pomodoro destination and raised to Next. Only a picked
 existing task is stamped fresh, never a task the capture itself creates.
+
+A predecessor also leaves the plan when a gesture parks it (Pending, no live Task Link
+left today); parking or completing it offers every task linked to it with a successor
+label such as `starts after`, which need not depend on it.
 In Bob Mac Capture, project creation opens the Pull-In card with a New project context
 and no offers marked.
 

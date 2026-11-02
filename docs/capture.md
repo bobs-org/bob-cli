@@ -2792,6 +2792,12 @@ engine, in this order and all against the staged batch snapshot:
    or moves the predecessor around them and the vacated slot keeps the
    pick.
 
+Parking is separate from close-time dependent recovery. A parked `[/]`
+task can offer sources of configured `starts after` relations through
+the `relation` group; it does not run dependency, project, or
+keep-moving offers. See
+[task-dependencies.md §12.18](task-dependencies.md#1218-relation-successors-starts-after).
+
 Status-group moves, `^prj` frontmatter, `#hide`, and archiving stay with
 their existing writers (`bob task reconcile`, `bob projects sync`, and
 `bob task archive`); capture never writes them.
@@ -4235,6 +4241,10 @@ Field notes:
   empty; `trigger: "last_planned"`). Dry-run JSON equals real-run JSON
   with the same flags. The batch also carries top-level `pull_in` on
   every success.
+  Relation events add `relation_successors[]`, `relation_held[]`, and
+  `relation_check` to the same result (fields omitted when no configured
+  edge or event applies); see
+  [task-dependencies.md §12.5 and §12.18](task-dependencies.md#125-reporting-model).
 - When the successor logic created the continuation, `next_pomodoro`
   reports it (`{line, name, time_range: None, created: true}`); picked
   successors count as carried.
@@ -4245,8 +4255,9 @@ Field notes:
   continuation dropped, omitted when none.
 - Added block lines that equal a surviving picked successor bullet carry
   `"reason": "unblocked"` (or `"keep_moving"` for a surviving
-  keep-moving pick) in the `pomodoro_blocks` line objects; rows dropped
-  by net batch reporting lose the reason.
+  keep-moving pick, or `"relation"` for a relation successor) in the
+  `pomodoro_blocks` line objects; rows dropped by net batch reporting
+  lose the reason.
 
 Human output prints `closed NAME old → new (Nm, −Xm) · file line N` (or a
 single range with no decrement, plus `(ran Nm over)` on overruns), always
@@ -4387,6 +4398,10 @@ is the marker edits the user would make by hand, applied to the numbered
 lines, plus explicit carry metadata for parked links (normal work without
 carrying), followed by the unchanged close — so plain `x` works byte for
 byte as it always has.
+
+Parking with `x*` can offer configured relation successors when the
+parked task has no other live link today. This is the `parked` event in
+[task-dependencies.md §12.18](task-dependencies.md#1218-relation-successors-starts-after).
 
 **Numbering.** Every line of the running session's sub-bullet range whose
 list-item body, after stripping 🍅 markers, is exactly one block link is
@@ -5374,6 +5389,11 @@ Link presence for `@route+block-id!` is:
 | yes | any open status | Every matching link under every open Pomodoro removed; status unchanged |
 | — | done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, Next, and In Progress tasks can be toggled` |
 
+Unlinking does not offer successors in this release. The v1.1 unlink
+hand-off will offer sources of configured successor relations when the
+task is Pending and its last live link is removed (see
+[task-dependencies.md §12.18](task-dependencies.md#1218-relation-successors-starts-after)).
+
 When an unlinked task links with `!`, Bob inserts the task
 link under the Pomodoro the task's type places unless that entry already
 has the same link. In that idempotent case no duplicate is written and JSON
@@ -5956,7 +5976,8 @@ unnamed), 1-based `entry_line` and `line`, `entry_created`, `next_up`,
 `block_link`, and `block_id_created` — non-null exactly when this item
 linked a picked offer — additive `offer` with `key`, `n`, `group`
 (`hand_off` / `project` / `project_finished`), `project` on the project
-group, `destination` `{day_file, entry_name, entry_role, fallback}`
+group, or `relation` for successor-label offers; `destination`
+`{day_file, entry_name, entry_role, fallback}`
 (`entry_role` is `slot` / `closing` / `implicit` / `created` / `typed`),
 `selected`, and `block_id_needed`, `not_linked` with one of
 `already_planned`, `project_task`, `project_member`, `hidden`,
@@ -5977,7 +5998,15 @@ proved it unnecessary, `"unavailable"` when the dependents snapshot
 could not be built). Offered rows are emitted even when the status did
 not change. `block_id` holds the minted ID when one was minted
 (SL10), and `""` when the dependent has none and none was minted
-(unpicked rows never mint).
+(unpicked rows never mint). Additive relation arrays are omitted when
+the gate or event does not apply: `relation_successors[]` uses the
+successor row shape with `trigger: "relation"`, `offer.group:
+"relation"`, the relation label/key/event and event targets; a row in
+another group may carry the same relation as a second reason.
+`relation_held[]` reports held sources with reason and waiting-target
+details, and `relation_check` is `checked` or `unavailable` when the
+source lookup ran. See
+[task-dependencies.md §12.5 and §12.18](task-dependencies.md#125-reporting-model).
 `struck_in` and `dropped` are always present (possibly empty)
 whenever `ledger` is present; `struck` and `deduplicated` keep their count
 meaning. Entry `status` is `running`, `queued`, or `completed`; when an
@@ -5988,12 +6017,14 @@ all items are planned, net batch reporting drops any offer whose later
 item linked, completed, re-blocked, or dropped it, or whose task is no
 longer open (SL20). Every successful capture JSON (dry-run too) carries
 top-level `pull_in` with `supported: true`, `offer_count`, `choice`
-(`null` / `"all"` / `"none"` / `"subset"`), `picked_count`, and per
-project-group `folded` counts. Dry-run JSON equals real-run JSON with
-the same flags. The batch-level
+(`null` / `"all"` / `"none"` / `"subset"`), `picked_count`, and one
+group entry per offered group, each with bob-authored `copy`; folded
+counts apply where defined. Dry-run JSON equals real-run JSON with the
+same flags. The batch-level
 `task_blocks` array gains roles `"completed"` (the root and each closed
 subtask), `"unblocked"` (each recovered or picked dependent), and
-`"keep_moving"` (each keep-moving pick); see [Task blocks](#task-blocks).
+`"keep_moving"` (each keep-moving pick), and `"relation_successor"`
+(each picked relation successor); see [Task blocks](#task-blocks).
 Human output prints
 `✓ completed [*] → [x] <text>  <note> ^<id>` (dry-run: `would complete`),
 one indented row per closed subtask and left-open descendant, a `ledger`
@@ -6003,7 +6034,9 @@ group headers (including a `Keep <N> moving · <T> was its last task
 planned today (ready tasks, not dependents)` header for keep-moving
 groups; see
 [`docs/task-dependencies.md`](task-dependencies.md#1215-keep-moving-offers-leaf-projects)
-§12.15), one `linked` row per picked successor
+§12.15); relation groups read `Starts after “T” · it is parked (your
+🪢 links, not dependents)` or `it is done (…)`, and their linked and
+held rows name the relation label. One `linked` row per picked successor
 (`linked [?] → [*] <text>  <note> ^<id> → <destination>`,
 dry-run: `would link`, with destinations `→ FIX`, `→ FIX (next up)`,
 `→ new BOB session (next up)`, `→ new session`, and `→ line 37`, plus

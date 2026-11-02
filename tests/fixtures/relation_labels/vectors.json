@@ -475,6 +475,21 @@
       "expected": "followed up by"
     },
     {
+      "name": "starts after inverse",
+      "label": "starts after",
+      "expected": "starts before"
+    },
+    {
+      "name": "starts after inverse normalizes typed spelling",
+      "label": "Starts  After:",
+      "expected": "starts before"
+    },
+    {
+      "name": "starts before is not its own inverse",
+      "label": "starts before",
+      "expected": null
+    },
+    {
       "name": "Split From",
       "label": "Split From",
       "expected": "split into"

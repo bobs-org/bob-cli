@@ -534,7 +534,7 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
     continue(origin, outcome), // async, never throws: resolves { ok, advanced, stopped }
   }),
   notice: Object.freeze({
-    version: 1,
+    version: 3,
     showUnblocked(model),     // additive: renders the Unblocked notice card (§12.6); returns true when shown
   }),
   quickRoll: Object.freeze({
@@ -543,7 +543,7 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
     preview({ content | lines, line, tier }), // sync, never throws: frozen preview result
   }),
   successors: Object.freeze({
-    version: 1,
+    version: 3,
     pick(model),              // Promise<{picks: [{key, destination?}]} | null>; never rejects; null = none (§12.13)
   }),
 });
@@ -841,7 +841,7 @@ pure helpers. New offer-only cases live in the SO table (§12.12).
 | SL18 | `plan.link_unblocked: false` | recovery to derived rank; no offers, links, or mints; `disabled` |
 | SL19 | The same close re-applied (already Done) / a double press | no writes, no rows |
 | SL20 | Draft `!P` then `!D` | the first item's offer for D is dropped (net) |
-| SL21 | Cancel, reopen, raw checkbox, hooks run, `x*` park | never offer, never link |
+| SL21 | Cancel, reopen, raw checkbox, hooks run, `x*` park | never offer dependency/project/keep-moving rows; `x*` may offer relation rows (§12.18) |
 | SL22 | Ctrl+Enter on a Depends-On line | unchanged (nothing) |
 | SL23 | P closes as a subtask of an embedded root R planned today | P anchors at R's link (`inherit`) |
 | SL24 | Close creates no continuation; a later open entry named BOB exists | when picked, D appended to that BOB entry; `entry_created: false` |
@@ -934,14 +934,17 @@ the NEW and TICKLER review tiers resurface unpicked work.
   recovered, plus each §12.10 pull-in, plus — for capture's sealed
   `@route:id@` — each eligible open task of the project note that capture
   creates (trigger `project_created`, §12.5), plus every §12.15
-  keep-moving offer (trigger `last_planned`). One row per task identity.
+  keep-moving offer (trigger `last_planned`), plus each source reached
+  by a configured successor relation to an event target (§12.18). One
+  row per task identity.
 - **Pick / selection.** The input that chooses which offers to link.
   Nothing is pre-checked. ↵ applies the marked rows, or the highlighted
   row when none are marked; Esc means none.
 - **Groups.** `hand_off` (direct dependents), `project` (residents of an
   unblocked project, or of a project note capture just created),
   `project_finished` (§12.10 pull-ins), `keep_moving` (§12.15
-  keep-moving offers from a leaf project's last planned task).
+  keep-moving offers from a leaf project's last planned task), and
+  `relation` (§12.18 successor-label edges).
 - **Destination.** Where a picked link is inserted. Hand-offs and
   pull-ins use the §12.3 anchor (slot / closing / inherit). Project
   residents use the earliest anchor among `preds(R)` (the tasks that
@@ -1008,12 +1011,16 @@ It **never** prompts, offers, or links on any of the following:
 - reopen;
 - raw checkbox clicks;
 - `bob task reconcile` / hooks;
-- `x*` parks;
+- `x*` parks; it offers relation successors only (§12.18);
 - Ctrl+Enter on a Depends-On line.
 
 Cancels still recover dependents exactly as today. Cancel never offers
 or links a successor or a pull-in; it still un-hides an emptied
 project's `^prj` (surfaces only, §12.10).
+
+Parking with `x*` is not a managed Done gesture. It may offer relation
+successors for the parked task (§12.18); dependency, project,
+project-finished, and keep-moving offers still do not run.
 
 ### 12.2 Rule
 
@@ -1091,16 +1098,20 @@ PROJECT OFFERS: when a `^prj` R recovers (step 4) and R has no own or
            back to IMPLICIT DESTINATION.
 DEDUP    : one row per task identity; causes are merged. A resident
            that is also a direct dependent appears once, in hand_off.
-           Priority is hand_off > project > project_finished > keep_moving
-           (§12.15). In a multi-item capture draft, a later item that links,
+           Priority is hand_off > relation > project > project_finished > keep_moving
+           (§12.15). A relation reason is retained on a surviving row
+           from another group. In a multi-item capture draft, a later item that links,
            completes, re-blocks, or explicitly drops (`x~K`) a task
            removes its offer; a later item that adds open work to N
            removes N's project_finished offer; a later item that links
            any open task of N, or closes R, drops N's whole keep_moving
            group (§12.15, KM21).
-ORDER    : offers by group (hand_off, then project, then
+ORDER    : offers by group (hand_off, relation, project, then
            project_finished, then keep_moving), then anchor ledger position,
-           then note path, then line. Within keep_moving, rows sort by
+           then note path, then line. Relation groups sort by event-target
+           anchor position, target note path, then target line; rows within
+           each relation group sort Next → Ready, then note path and line.
+           Within keep_moving, rows sort by
            anchor ledger position, then note path, then lane pull order
            (Pending → Next → Ready), then line (§12.15).
 BREAKER  : deleted. No replacement cap. SL17, PP15, and the breaker
@@ -1337,7 +1348,7 @@ stale `[ ]` resident).
 - The existing fields keep their meaning; `unblocked` stays on
   `task_complete` and is new on `pomodoro_close`.
 - `trigger` is `"dependency"`, `"project_empty"`, or
-  `"project_created"`. Every existing successor row says
+  `"project_created"`; relation rows use `"relation"`. Every existing successor row says
   `"dependency"`; a missing key means an older bob. Project pull-in
   rows say `"project_empty"` (§12.10). Rows for a project note created
   by capture's `@route:id@` say `"project_created"`. Keep-moving rows
@@ -1360,10 +1371,11 @@ stale `[ ]` resident).
   - `key`: the offer key (§12.2 KEYS);
   - `n`: 1-based index in the numbered offer list this command reports
     without a selection;
-  - `group`: `"hand_off"` | `"project"` | `"project_finished"` |
-    `"keep_moving"` (§12.15);
+  - `group`: `"hand_off"` | `"relation"` | `"project"` |
+    `"project_finished"` | `"keep_moving"` (§12.18 / §12.15);
   - `project`: vault-relative path of N, present on the `project` and
     `keep_moving` groups;
+  - `after`: event target key for a `relation` group;
   - `destination`: `{day_file, entry_name, entry_role, fallback}` where
     `entry_role` is `"slot"` | `"closing"` | `"implicit"` | `"created"` | `"typed"`
     and `fallback` is true when the implicit destination was used
@@ -1436,6 +1448,45 @@ Keep-moving rows **never** appear in `unblocked[]`. Nested
 `relation_completes[].task_complete` carries the array automatically.
 See §12.15 for the trigger, the offer set, and the copy.
 
+**Relation rows (`relation_successors[]`, `relation_held[]`)** are
+additive on `task_complete` and `pomodoro_close`, nested
+`relation_completes[].task_complete`, and the capture item for a
+toggle. Fields are omitted when no relation event or configured edge
+applies. A `relation_successors[]` row uses the `unblocked[]` shape,
+with `trigger: "relation"`, `offer.group: "relation"`,
+`offer.after: "<note_path>#^<block_id>"`, and `unblocked_by` naming
+the event target(s). It adds:
+
+```json
+"relation": {
+  "label": "starts after", "key": "starts after", "event": "parked",
+  "after": [{"note_path": "agents.md", "block_id": "implement",
+              "text": "Send implementation prompt"}]
+}
+```
+
+The `event` is `parked` or `done`. A row in another group carries the
+same `relation` object when a relation is a second reason for offering
+it. `relation_held[]` carries task identity and display fields, a
+reason (`already_planned`, `already_started`, `blocked`, `hidden`, or
+`waits_for`), applicable `waits_on`, `scheduled`, `project`, and
+`waits_for` details, plus the relation object. `relation_check` is
+`checked` or `unavailable` only when the relation lookup gate ran.
+Held already-planned rows are JSON-only.
+
+`pull_in.offer_count`, `picked_count`, and the
+`pull_in_choice_required` refusal include relation offers. `groups[]`
+has one entry for each offered group of every kind, with bob-authored
+`copy: {title, why?, tag?, fold?, glyph}`. The `glyph` is one of
+`hand_off`, `project`, `project_created`, `project_finished`,
+`keep_moving`, or `relation`. Existing project and keep-moving groups
+keep their keys and add `copy`; hand-off and project-finished groups
+have no `folded`. A relation entry has `group`, `after`, `label`,
+`event`, folded counts (`hidden`, `blocked`, `already_started`,
+`waits_for`), and `copy`. `pull_in.copy` is `{title, capsule, glyph}`.
+The strings are specified in §12.18 and are the source for every
+client.
+
 **`still_blocked[]` rows**
 
 - `reason` is `waits_on`, `scheduled`, or `project`.
@@ -1484,14 +1535,18 @@ Present on **every** successful capture JSON (dry-run too):
 - `choice`: `null` when no `--pull-in` was given; otherwise `"all"`,
   `"none"`, or `"subset"`.
 - `picked_count`: how many offers were linked.
-- `groups`: folded counts (hidden, already planned, sub-projects) per
-  project group, plus one entry per keep-moving group:
-  `{"group": "keep_moving", "project": "<N path>", "folded":
-  {"hidden": h, "already_planned": 0, "sub_projects": 0, "blocked": b,
-  "scheduled": s}}`. `blocked` and `scheduled` are additive folded keys
-  for keep-moving (§12.15). Omitted when every folded count is zero and
-  there is no project or keep-moving group.
-- `offer_count` and `picked_count` include keep-moving offers. The
+- `groups`: one entry per offered group of every kind. Every entry has
+  bob-authored `copy: {title, why?, tag?, fold?, glyph}`. Project groups
+  carry folded counts (`hidden`, `already_planned`, `sub_projects`);
+  keep-moving groups also carry `blocked` and `scheduled` (§12.15);
+  relation groups carry `hidden`, `blocked`, `already_started`, and
+  `waits_for` (§12.18). Hand-off and project-finished groups have no
+  `folded` field. The example relation entry is
+  `{"group": "relation", "after": "agents.md#^implement",
+  "label": "starts after", "event": "parked", "folded": {...},
+  "copy": {"title": "Starts after …", "glyph": "relation"}}`.
+- `offer_count` and `picked_count` include keep-moving and relation
+  offers. The
   `pull_in_choice_required` refusal and its flat `offers` payload include
   them too.
 
@@ -1503,9 +1558,9 @@ Present on **every** successful capture JSON (dry-run too):
 - **`pomodoro_close.next_pomodoro`** names the successor's continuation
   when the successor logic created it.
 - **`pomodoro_blocks[].lines[].reason`.** Optional `"unblocked"` on
-  added lines that are surviving picked successor links, and
-  `"keep_moving"` on added lines that are surviving keep-moving picks
-  (§12.15).
+  added lines that are surviving picked dependency successors,
+  `"keep_moving"` on keep-moving picks (§12.15), or `"relation"` on a
+  surviving picked relation successor.
 - **Net batch reporting (SL20).** After all items are planned, an offer
   whose task is no longer open, or whose later item linked, completed,
   re-blocked, or dropped it, is dropped from its item's `unblocked[]`
@@ -1513,9 +1568,10 @@ Present on **every** successful capture JSON (dry-run too):
   that adds open work to N removes N's `project_finished` offer. A later
   item that links any open task of N, or closes R, drops N's whole
   keep-moving group (KM21).
-- **`task_blocks`.** Picked successors keep role `unblocked`;
+- **`task_blocks`.** Picked dependency successors keep role `unblocked`;
   `TaskBlockRole` gains `KeepMoving` (`"keep_moving"`) for keep-moving
-  picks (§12.15).
+  picks (§12.15) and `RelationSuccessor` (`"relation_successor"`) for
+  picked relation successors.
 
 **Shared notice model** (cycler → nav `api.notice.showUnblocked(model)`).
 It is the JSON row shape above, kept in snake_case on purpose so one
@@ -1533,6 +1589,11 @@ vocabulary serves Rust, JS, Swift, and the vectors:
 }
 ```
 
+Notice API v3 adds optional `relation_successors[]`, `relation_held[]`,
+and `relation_check` with the same snake_case rows described above.
+They are absent when the relation gate did not run or no relation row
+applies.
+
 ### 12.6 Copy
 
 **Copy rules (shared by every surface).**
@@ -1540,12 +1601,17 @@ vocabulary serves Rust, JS, Swift, and the vectors:
 - One notice per gesture, and silence when nothing was unblocked.
 - Each row reads successor text first, then the destination, then the
   cause.
-- Offer lists use group headers: `Hand-offs`, `Project ‹note›`,
-  `Project finished`, `Keep ‹N› moving` (§12.15). The project group's
+- Offer lists use group headers: `Hand-offs`, `‹Label› “‹T›”` (§12.18),
+  `Project ‹note›`, `Project finished`, and `Keep ‹N› moving` (§12.15). The project group's
   `^prj` is the header, not a choice, when N still has open work.
 - Keep-moving surfaces always lead with **why** and always say **not
   dependents**; they never use 🔓 or the word "unblocked". Their glyph
   is ⏭. See the §12.15 copy table and mocks.
+- Relation rows use the 🪢 glyph (Obsidian `link-2`, Mac `link`), a
+  neutral accent, and the configured relation label. They never use
+  🔓 or the word "unblocked". Relation groups say which relation fired,
+  what happened to its target, and that these are the user's links
+  rather than dependents. Use the exact §12.18 copy.
 - Use only existing glyphs: 🔓 unblocked (Mac `lock.open.fill`), 🔒
   still blocked (Mac `lock.fill`), ✓ done.
 - Use only existing `--task-status-*` colour tokens, with no new hex
@@ -1724,6 +1790,7 @@ plan 10/10 links
 | 2. Prefiltered parallel snapshot | One batch-scoped dependents snapshot. Byte reads run in parallel, and a prefilter keeps only notes containing `dependsOn` or `id::`. Staged files always overlay disk. Shared by every `!` and close item in the batch, never cloned per item. | About 30 ms per batch, paid only when the gate passes. |
 | 3. Obsidian Tasks cache | When Tasks reports Warm, build a reverse index `id → dependents` from `getTasks()`. Open editor buffers override the cache. Read only the candidate notes and today's daily note. A cold cache falls back to the full scan. | The notice lands about 50 ms after the keypress. |
 | 4. Project offers | Enumerate residents from N's already-staged text plus the dependents snapshot the gate already allows. No extra vault walk for descendant notes. | The `^bar` → `sase_foo` case costs one staged-note read. |
+| 5. Relation sources | Only when successor labels, `plan.link_unblocked`, an event, and a target block ID pass their gates, scan the shared batch path set once, prefilter LINKS and target block links, and overlay staged files. | One source snapshot shared with the dependents byte pass when both run; no LINKED FROM or persistent cache. |
 | No daemon, no persistent cache | A validated cache needs a stat walk (32–55 ms) that costs as much as layer 2. | Respects the thin-client rule: no Swift-side dependency or placement logic. |
 
 **Targets.** Measured on apollo with a release build, against a temporary
@@ -1751,6 +1818,10 @@ linking, and minting**:
 - `plan.keep_moving: false` disables only the keep-moving trigger
   (§12.15): no `keep_moving` group, no array, no picker section. Other
   groups follow their own switch.
+- An empty `relations.successor_labels` list also disables relation
+  offers. With either relation gate off, no relation-source scan runs
+  and relation fields are omitted; other offer groups follow their
+  own switches.
 
 Recovery is the honest half of the feature and costs nothing extra once
 the dependents are found. An invalid value falls back to `true` and
@@ -2204,12 +2275,36 @@ successors: {
   it would drop.
 - v1 models render exactly as before.
 
-**Notice API v2.** `api.notice.version` bumps to `2`.
+**Picker API v3 (relation successors).** Nav bumps
+`api.successors.version` to `3`. A `relation` group adds `header`,
+`caption`, `tag`, and `foldText`; `after: {notePath, blockId, text}`;
+`event: "parked"|"done"`; and `label`. `folded` may include
+`alreadyStarted` and `waitsFor`. A row may carry `suffix` (several
+triggers) and `reason` (a second reason), on any group. The relation
+group header icon is `link-2`; its accent stays neutral. When all groups
+are relational, the modal title is the model title and the icon is
+`link-2`. Unknown groups are still dropped, and v1/v2 models render as
+before.
+
+The cycler offers relation groups only when
+`api.successors.version >= 3`. A missing or older picker means no
+relation group is planned; the managed Done or park gesture still
+succeeds.
+
+**Notice API v2 (keep-moving).** `api.notice.version` is `2`.
 `buildUnblockedNoticeModel` reads an optional `keep_moving` row array.
 When every row is keep-moving, the card title is `Keep ‹N› moving` with
 ⏭ in the glyph slot; in a mixed card, keep-moving rows render after the
 others with the `keeps ‹N› moving` chip. The fallback text matches the
 §12.15 copy table.
+
+**Notice API v3 (relation successors).** Nav bumps `api.notice.version`
+to `3`. `buildUnblockedNoticeModel` reads optional `relation_successors`
+and `relation_held` rows. An all-relation notice uses `‹Label› “‹T›”`
+as its title, 🪢 and the neutral `is-relation` style. Mixed notices add
+a `‹label› “‹T›”` chip. The receipt reads `✓ ‹T›` for done and
+`‹T› parked` for parked. Held-only and unavailable checks use the muted
+copy from §12.18. Older payloads still render as before.
 
 ### 12.14 CLI selection
 
@@ -2326,11 +2421,12 @@ live link exists.
 - reopen;
 - raw checkbox clicks;
 - `bob task reconcile` / hooks;
-- `x*` parks;
+- `x*` parks; no keep-moving offers run, though relation successors may be offered (§12.18);
 - Ctrl+Enter on a Depends-On line;
 - capture's `@route:id@` project creation, which closes nothing.
 
-This is the §12.1 exclusion list, unchanged.
+This excludes only keep-moving offers; a parked task may still produce
+the relation event in §12.18.
 
 **Offer set**
 
@@ -2339,7 +2435,7 @@ post-gesture text, other than R and C:
 
 | Resident | Outcome |
 | --- | --- |
-| a direct dependent offered as `hand_off` by this gesture | stays in `hand_off` (dedup: hand_off > project > project_finished > keep_moving) |
+| a direct dependent offered as `hand_off` by this gesture | stays in `hand_off` (dedup: hand_off > relation > project > project_finished > keep_moving) |
 | `[?]`, or own open prerequisite (`task_dependency_states`), or `#prj_is_blocked` | folded: `blocked` |
 | `scheduled` after today | folded: `scheduled` |
 | whole-token `#hide` | folded: `hidden` |
@@ -2606,7 +2702,7 @@ Select-all is the default selection unless a row says otherwise.
 | KM17 | resident `[?]` / Ready with an open prerequisite / `scheduled` tomorrow / `#hide` | folded as `blocked` / `blocked` / `scheduled` / `hidden`; `scheduled` today is offered |
 | KM18 | `#ref` resident, nested subtask, recurring task due today | offered |
 | KM19 | `plan.keep_moving: false`, or `plan.link_unblocked: false` | no group; other groups follow their own switch |
-| KM20 | any cancel, reopen, `x*` park, raw checkbox click, or reconcile | nothing |
+| KM20 | any cancel, reopen, `x*` park, raw checkbox click, or reconcile | no keep-moving offers; `x*` may offer relation rows (§12.18) |
 | KM21 | draft `!N:t` then `@route:a` (links A) | the net pass drops N's group; a later item completing B drops only B's row |
 | KM22 | one `x` drains two leaf projects | two groups, ordered by anchor then path |
 | KM23 | T carries `[root:: sase]` | still triggers (leafness is by note) |
@@ -2644,6 +2740,281 @@ Both engines compute leafness with the R2 walk
 | LP10 | task in `sase_goals.md` with `[root:: sase_blog]` | its note is still a leaf |
 | LP11 | area, daily note, inbox file, `done/` archive, terminal project | never a leaf |
 | LP12 | `parent` cycle `a ↔ b`, neither with `root: true` | leaf (matches `resolve_note`) |
+
+### 12.18 Relation successors (starts after)
+
+A **successor label** is configured in `relations.successor_labels`.
+For the example label `starts after`, an edge from S to T is a standing
+offer of S when T is parked or done. It does not block S, mutate S, or
+fire when the edge is authored. Offers join the gesture's picker and
+are never linked automatically. The inverse shown on the target's
+LINKED FROM chip is `starts before`; that spelling is inert.
+
+```yaml
+relations:
+  successor_labels:
+    - starts after
+```
+
+The list uses the same `relation_label_key` matching as cancel and
+complete labels. A key in multiple effect lists has no effect and is
+dropped from all of them. `plan.link_unblocked: false` or an empty
+successor-label list disables relation offers and their source scan.
+Hiding a label only removes it from suggestions. It stays configured.
+
+#### Events
+
+An event `(T, parked)` or `(T, done)` exists only for the gesture that
+caused it; no offer state is stored. **Parked** means an explicit
+hand-off gesture leaves T `[/]` Pending with no live Task Link in
+today's open Pomodoros, and T had a live link on the pre-gesture
+baseline. **Done** means a managed Done gesture completed T. The
+baseline is today's day text after any explicit link step in the same
+capture item and before the gesture strikes, moves, or drops links.
+
+| Gesture on T | Event | Surface |
+| --- | --- | --- |
+| Capture close with effective parked outcome (`x*`, `x*N`, `x1*`, `x*!M`, `=x*…`); includes T already `[/]` | `parked`, only if no post-close live link remains | capture |
+| Every managed Done in §12.1, including capture close, complete label, Ctrl+Enter, Alt+] into Done, and walk PRE/POST completion | `done` | capture or cycler |
+| Capture `@route+id!` unlinking a `[/]` T | `parked` | capture, v1.1 |
+| Obsidian Ctrl+Shift+Enter unlink of a `[/]` T, once the Unlink task prompt settles | `parked` | Obsidian, v1.1 |
+
+Nothing else fires. In particular, a park that leaves another live link,
+cancel, `x~` drop, plain `x` carry or defer, Alt+N, reopen, raw
+checkbox, reconcile, hook, hand edit, vault sync, and relation edits do
+not produce an event. A label added after T was released does not replay
+the event; authoring reports `relation_successor_already_released`.
+Adding a link to a parked T before a later item completes the batch
+drops that T's parked event.
+
+#### Rule
+
+```text
+E(g)        = {(T, done) : T ∈ C(g)}
+            ∪ {(T, parked) : T had a live Task Link on BASELINE,
+                             T is [/] after g, and T has no live link on the post-g day}
+EDGES(T)    = accepted LINKS entries on S resolving to T, with S ≠ T
+              and relation_label_key(label) ∈ successor_labels
+              — staged LINKS text overlays disk; LINKED FROM is never read
+RELEASED(X) ⇔ X is Done or Cancelled
+              ∨ (X is [/] with no live link on the post-gesture day)
+```
+
+For each source S reached by an event target, apply the first matching
+rule:
+
+| Rule | Check | Result |
+| --- | --- | --- |
+| R1 | S is not an open `#task`, lives under `done/`, or is in the previous daily note | Skip, unreported |
+| R2 | S was parked by this gesture or was live-linked on BASELINE | Held `already_planned` (JSON only) |
+| R3 | S is `[/]` | Held `already_started` |
+| R4 | S is `[?]`, has an own open prerequisite, is scheduled after today, or is project-blocked after this gesture's recoveries | Held `blocked` with `waits_on`, `scheduled`, or `project` |
+| R5 | S has whole-token `#hide` | Held `hidden` |
+| R6 | Another successor-label target T′ of S resolves and is not RELEASED | Held `waits_for` with the waiting targets; unresolved targets are ignored, and every event target counts as released |
+| R7 | S is `[ ]` Ready or `[*]` Next | Offer S in `relation` |
+
+When `[dependsOn::]` exists but the dependents snapshot is unavailable,
+S is held `blocked` (parity with KM31). The relation engine reads
+accepted source LINKS, resolves them by the reconcile target rules, and
+never reads generated mirrors.
+
+#### Groups, deduplication, and order
+
+There is one group for each `(T, label key)` with at least one offered
+row. A group has `group: "relation"`, `trigger: "relation"`, the event
+target T, the configured label, and event `parked` or `done`. If S is
+reached from multiple event targets in one gesture, it appears once,
+under the first group in event order, with suffix `after “T1” and
+“T2”` or `after “T1” and k more`.
+
+Deduplication is by task identity; the surviving row keeps every
+offered reason. Group priority is `hand_off > relation > project >
+project_finished > keep_moving`. A direct dependent of a completed T
+stays in `hand_off` and carries relation as a second reason. Parking T
+instead leaves that dependent blocked. An S also offered as a project
+resident, project-finished pull-in, or keep-moving row moves to its
+relation group when R7 offers it, while retaining every recovery those
+rules perform. If the relation is held by R1–R6 but another group can
+offer S, that other offer remains selectable and the relation hold is
+reported separately. A project group with no selectable rows keeps
+its existing empty-group behavior.
+
+Groups follow that priority, then anchor ledger order, note path, and
+line. Relation groups sort by T's anchor position, then T's note path
+and line. Rows inside a relation group sort Next before Ready, then
+note path and line. Numbering, keys, and selection are the existing
+§12.2 rules.
+
+#### Placement and pick
+
+Placement uses the triggering target's §12.3 anchor and D7 type
+routing. A `done` event uses the struck-bullet slot, closing anchor,
+`inherit`, or implicit destination. A `parked` `x*` event uses the
+closing continuation (the matching open same-name entry, else a new
+placeholder). A v1.1 unlink uses T's first removed-link slot, or the
+implicit destination if cleanup removed that entry. A placeholder is
+never created only to display an offer.
+
+A picked row follows the ordinary successor write: Ready or Blocked
+becomes Next as allowed by the event rule; Next stays Next. Bob mints a
+missing block ID, stamps `[fresh:: today]` (clearing `[unblocked::]`
+and `[keeps::]`), and inserts a plain Task Link. A Pending source is
+held and is never offered. Unpicked rows write nothing: no status,
+mint, freshness, recovery, `[unblocked::]`, tickler, or link. Skipping
+S at a park is stateless; it can be offered again when T is done.
+
+Obsidian replans with picks against fresh text. If the edge vanished,
+S is no longer eligible, or T's event no longer holds, that row is
+refused; no substitute is selected. Capture plans the pick in its
+single batch pass.
+
+#### Batch and uncertainty
+
+In a multi-item capture draft, a successor edge added by an earlier
+item is visible in staged text (SA19). An edge added after its target
+was parked does not fire retroactively and warns
+`relation_successor_already_released` (SA20). A later item linking,
+completing, cancelling, dropping, starting, or re-blocking S removes
+its row. A later item live-linking a parked T drops that T's parked
+group (SA21).
+
+If the Rust relation-source snapshot is incomplete, or Obsidian's
+`api.relationIndex` is absent or not ready, the gesture succeeds with no
+relation rows, `relation_check: "unavailable"`, and a muted uncertainty
+line. If the gate is off, no scan runs and no relation fields are
+emitted. Rust builds one batch-scoped fresh source snapshot from the
+shared path set, byte-prefilters `**LINKS` and the event target's block
+IDs, then overlays staged files. It never uses a persistent cache or
+the 60-second relation-label cache. Obsidian reads
+`api.relationIndex.incoming(path, blockId)` and re-reads candidate S.
+
+#### Copy and presentation
+
+`‹T›`, `‹S›`, and `‹T′›` are cleaned task text truncated to 48
+characters with `…`. `‹label›` uses the configured spelling; `‹Label›`
+capitalizes its first letter. Relation groups use 🪢 (Obsidian
+`link-2`, Mac `link`), neutral accent, and lane names. They never use
+🔓 or "unblocked". Every relation surface says which relation fired,
+what happened to T, and that these are the user's links, not
+dependents.
+
+| Element | Copy |
+| --- | --- |
+| Group title | `‹Label› “‹T›”` |
+| Why, parked | `“‹T›” is parked · Pending, off today's plan` |
+| Why, done | `“‹T›” is done` |
+| Contrast tag | `your links · not dependents` |
+| Fold line | `not offered · “‹S›” waits for “‹T′›” · 1 already started · 1 blocked · 1 hidden` (omit zero parts; several waits add `+N more waiting`) |
+| Row suffix, several triggers | `after “‹T1›” and “‹T2›”` / `after “‹T1›” and k more` |
+| Second reason | `· ‹label› “‹T›”` |
+| Picker/card title, relation-only | `‹Label› “‹T›”` / `‹Label› k tasks`; mixed pickers keep the existing title |
+| Mac capsule | `‹Label›` |
+| One picked notice | `🪢 Next in ‹DEST›: ‹S› · ‹label› “‹T›”` |
+| Several picked notice | `🪢 n linked → ‹DEST› · ‹label› “‹T›”` |
+| Mixed with dependency rows | Existing 🔓 forms; relation picks count as linked |
+| Held notice | `🪢 “‹S›” ‹label› “‹T›” · not offered: waits for “‹T′›”` / `already started` / `blocked (waits on n)` / `scheduled ‹Mon D›` / `blocked by its project` / `hidden` |
+| Uncertainty | `🪢 Couldn't check ‹label› links · nothing offered` (several labels: `relation links`) |
+| CLI header | `‹Label› “‹T›” · it is parked (your 🪢 links, not dependents)` / `· it is done (…)` |
+| CLI held row | `not offered  “‹S›” waits for “‹T′›” · 1 already started` |
+| CLI linked suffix | `· ‹label› “‹T›”` |
+| Mac notification | `🪢 Pulled in n · ‹label› “‹T›”` |
+| Mac block-diff badge | SF `link`, `.help("Offered by your relation link")` |
+
+Already-planned held rows are JSON-only; silence when a gesture has no
+selectable offer and no other notice. Capture's `--dry-run` adds these
+rows without changing the existing close rows:
+
+```text
+would close BUILD 1145-1220 (35m)
+  Next → Pending  Send implementation prompt  agents.md ^implement · Parked · not carried
+  Starts after “Send implementation prompt” · it is parked (your 🪢 links, not dependents)
+  offer 1  Ready  Prepare evaluation prompt  agents.md ^evaluate → BUILD
+  not offered  “Write rollout notes” waits for “Ship schema change”
+  -p 1 · -p all
+```
+
+The Mac card renders bob-authored group copy:
+
+```text
+ 🔗 Starts after                                                       (capsule)
+ 🔗 Starts after “Send implementation prompt”          your links · not dependents
+    “Send implementation prompt” is parked · Pending, off today's plan
+    ☐ 1  Prepare evaluation prompt                         Ready   → BUILD
+    not offered · “Write rollout notes” waits for “Ship schema change”
+  ⇧↩ none                                                       ↩ pull in 1
+```
+
+The Obsidian picker uses a neutral relation group in a mixed Done picker:
+
+```text
+┌──────────────────────────────────────────────────────────────────────┐
+│ ⑂  Pull in successors of Send implementation prompt                   │
+│ [ Filter tasks, notes, and groups                                  ]  │
+│   Hand-offs                                                           │
+│   □ Ship the schema change            sase · Ready · → BUILD          │
+│ │ 🔗 Starts after “Send implementation prompt”  your links · not dependents │
+│ │ “Send implementation prompt” is done                                │
+│ │ □ Prepare evaluation prompt          agents · Next · → BUILD        │
+│ │   not offered · 1 already started                                   │
+│  Tab toggle and move · ↵ pull in · Esc none                           │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+The mixed picker keeps its existing title and
+`git-pull-request` header icon. A relation-only picker uses the relation
+title and `link-2` icon. Nav and notice API v3 details are in §12.13.
+
+### 12.19 SA — relation successor vectors
+
+These vectors extend the `hand_off`, `project`, `project_finished`, and
+`keep_moving` offer rules. Bob-cli owns
+`tests/fixtures/relation_successor/vectors.json`; bob-plugins copies it
+byte-for-byte. The contract fixture has `config`, `key`, `rule`, and
+`copy` sections. Rule cases use a shared base fixture (Ready source S
+in `agents.md`, `starts after` T, T Next and linked in today's open
+`BUILD`) plus explicit case overrides. Expected groups include event,
+label, `after` target, and ordered row keys/lane/suffix; expected held
+rows include key and reason. Vectors marked UI-only are covered by the
+surface that owns them, not the pure rule engines.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| SA1 | `x*` parks T; T has no other live link | `relation` group `Starts after “Send implementation prompt”`, event `parked`, S offered at closing anchor; no write without `-p`; pick → `[*]`, `[fresh:: today]`, link in continuation |
+| SA2 | Same, but T is linked in a later open placeholder | Silence |
+| SA3 | Same, with T already `[/]` before the park | Offered; the park is the event |
+| SA4 | `!agents:implement` | Event `done`; slot right after T's struck bullet |
+| SA5 | `x` with T embedded, or `x!1` completing T | Event `done`; closing anchor |
+| SA6 | Cancel T; `x~` drop; Alt+N release; plain `x` carry/defer; raw checkbox; reconcile | Silence |
+| SA7 | S is `[/]` | Held `already_started`; muted held notice; no picker |
+| SA8 | S is `[?]`, has an own open prerequisite, is scheduled tomorrow, or is project-blocked | Held `blocked` with `waits_on`, `waits_on`, `scheduled`, or `project` |
+| SA9 | S has `#hide` | Held `hidden` |
+| SA10 | S is already live-linked today | Held `already_planned`, JSON only |
+| SA11 | S also starts after T2 (Ready, unplanned) | Held `waits_for [T2]`; later parking T2 offers S under T2's group |
+| SA12 | One `x*` parks T and T2; S starts after both | One row under the earlier target group, suffixed `after “…” and “…”` |
+| SA13 | S's other target does not resolve | Ignore unresolved target; offer S |
+| SA14 | S also depends on T; T done | One `hand_off` row with relation as second reason; parking T leaves S held `blocked` |
+| SA15 | S is a resident of a project whose `^prj` T's Done recovered | One row in relation group; S is still recovered |
+| SA16 | Skip S at park, then complete T later | Offer S again |
+| SA17 | Pick S at park, then T done later | Held `already_planned` silently |
+| SA18 | `x*!2` completes A (with dependents) and parks T | One picker: Hand-offs, then `Starts after “T”` |
+| SA19 | Draft adds `starts after` edge, then `x*` | Offer S through staged edge |
+| SA20 | Draft `x*`, then adds the edge | No offer; warn `relation_successor_already_released` |
+| SA21 | Draft `x*` offers S, then links S or re-links T | Drop S's row or T's parked group |
+| SA22 | Label typed `Starts  After:`; `starts before` stored on T's LINKS | Key matches; `starts before` is inert; authoring shows inverse hint (key/authoring) |
+| SA23 | Key is in both `successor_labels` and `complete_labels` | No effect from either list; one warning (config) |
+| SA24 | `successor_labels: []` or `plan.link_unblocked: false` | No relation field and no scan (config/performance) |
+| SA25 | Edge added in Obsidian 5 seconds before `x*` | Found by fresh lookup, without TTL (UI/wiring) |
+| SA26 | Neither task has `[id::]`; `relations.linked_from_lines: false` | Still found; no dependency fields written |
+| SA27 | Rust source snapshot incomplete / JS relation index not ready | No rows; `relation_check: unavailable`; muted line; gesture succeeds (UI) |
+| SA28 | S is closed, under `done/`, or in previous daily note | Skip, unreported |
+| SA29 | Picked S lost its edge, became Blocked, or linked before Obsidian apply | Refuse that row; nothing substituted (UI revalidation) |
+| SA30 | Author edge to already parked / closed T | Caveat `already parked — … offered when it is done` / `already closed — nothing left to wait for`; no offer at commit (authoring) |
+| SA31 | `@agents+implement!` unlinks a `[/]` T | Event `parked`; offer at T's former slot (v1.1 UI) |
+| SA32 | `@agents+implement!` unlinks a `[*]` T | Silence (v1.1 UI) |
+| SA33 | Obsidian unlink prompt settles on `[/]` T | Relation picker with event `parked`; canceling the prompt is silent (v1.1 UI) |
+| SA34 | Nav `api.successors.version < 3` | Cycler plans no relation group; close succeeds (UI gate) |
+| SA35 | Same-day Obsidian reopen of T after picking S | Take back S's untouched link (UI undo) |
+| SA36 | Plain `x` parks/completes nothing, or JS closes T with no incoming successor-label edge | Zero added reads (performance/wiring) |
 
 ## 13. Project dependencies
 

@@ -8,10 +8,12 @@ text. The relation is authored once on the source's
 `🪢 **LINKS:**` line, and a generated `🪢 **LINKED FROM:**` line on
 the target always converges to it. That same LINKED FROM line also
 lists inert text mentions ([§19](#19-text-mentions)). Live chips
-render both ends correctly, and relations never block, promote,
-consume, schedule, stamp, or route anything. The exceptions are the
-commit-time cancel of [§17](#17-cancel-labels) and the commit-time
-complete of [§18](#18-complete-labels).
+render both ends correctly. Relations never block or change schedule,
+priority, or freshness. The exceptions are the commit-time cancel of
+[§17](#17-cancel-labels), the commit-time complete of
+[§18](#18-complete-labels), and the successor offers from configured
+labels in [§20](#20-successor-labels); successor labels never act at
+commit time.
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_relations/` (LINKS and LINKED FROM parsers, label
@@ -27,8 +29,9 @@ vector, fix this doc first in the same change.
 ## 1. Vocabulary
 
 - **Task relation** (or **relation**): a directed, optionally
-  labelled, inert edge from a **source** task S to a **target** task
-  T. It is stored as one entry on S's LINKS line.
+  labelled edge from a **source** task S to a **target** task T. It is
+  inert unless its label carries an effect. It is stored as one entry
+  on S's LINKS line.
 - **LINKS line**: the single managed direct-child line that holds a
   task's outgoing relations: `🪢 **LINKS:**`.
 - **LINKED FROM line**: the single generated direct-child line that
@@ -59,6 +62,13 @@ vector, fix this doc first in the same change.
   `relations.complete_labels`. Committing one through an explicit
   relation gesture marks the relation's source Done exactly as that
   surface's managed Done gesture would ([§18](#18-complete-labels)).
+- **Successor label**: a relation label listed in
+  `relations.successor_labels`. It offers the source as a successor
+  when the target is parked or done ([§20](#20-successor-labels)); it
+  has no commit-time effect.
+- **Label effect**: the one configured consequence of a relation
+  label: cancel, complete, or successor. A label in more than one
+  list has no effect and is dropped from every list.
 - **Closing label**: a cancel label or a complete label. One label
   carries at most one effect.
 - **Task Link** keeps its glossary meaning: a block link to an
@@ -74,10 +84,12 @@ lines so they point here). Neither reads a LINKED FROM line as input.
 
 A relation write, a relation line, or a relation gesture never:
 
-- blocks, unblocks, promotes, releases, or consumes anything; never
-  flips a checkbox to `[?]`, and never recovers one;
+- blocks, promotes, releases, or consumes anything; never flips a
+  checkbox to `[?]`, and never recovers one;
 - counts as a Pomodoro Task Link, a plan-budget item, a completable
-  sighting, a successor anchor, or a successor offer. Ctrl+Shift+Enter,
+  sighting, or a successor anchor. A configured successor label can
+  create an offer only at its target's parked or done event (§20);
+  Ctrl+Shift+Enter,
   `!`, and tree close never act on a relation line;
 - changes a status, lane, `[fresh::]`, `[keeps::]`, `[unblocked::]`,
   schedule, priority, `[id::]`, or `[dependsOn::]`. The only task-line
@@ -91,7 +103,9 @@ A relation write, a relation line, or a relation gesture never:
   Pomodoros, and recover blocked dependents, and the commit-time
   complete of [§18](#18-complete-labels), which may mark the source
   Done, retire its links from today's open Pomodoros, recover
-  blocked dependents, and offer successors.
+  blocked dependents, and offer successors. A configured successor
+  label [offers its source when the target is parked or done](#20-successor-labels),
+  but never fires when the relation is committed.
 
 A link that needs to block is a dependency (`&`, `b`).
 
@@ -434,6 +448,7 @@ stored). Named pairs the participle rule cannot produce:
 | `duplicate of` | `duplicated by` |
 | `follow-up of` | `followed up by` |
 | `split from` | `split into` |
+| `starts after` | `starts before` |
 
 Every other two-word label of the form `‹participle› by` derives an
 inverse: `inspired by` → `inspires`, `blocked by` → `blocks`,
@@ -2146,3 +2161,145 @@ truth. bob-plugins copies it byte-for-byte. Each vector carries:
 The fixture covers at least MN1–MN12, MN21–MN23, and MN25, and
 carries a `version` field. If an implementation disagrees with a
 vector, fix this section and the fixture first in the same change.
+
+## 20. Successor labels
+
+A relation can be a standing offer without making its source Blocked.
+The configured label `starts after` means that its source is offered
+when its target is parked or completed. The stored edge stays on the
+source's LINKS line; the target's generated mirror displays the inverse
+`starts before` ([§10](#10-chips)). The inverse is presentation only:
+typing or storing `starts before` never triggers an offer.
+
+### SU1 The rule
+
+A **successor label** is a label listed in `relations.successor_labels`.
+An accepted edge `S starts after T` is a standing offer from S to T:
+it never blocks, changes a status, or fires at relation commit. It is
+read when a supported gesture parks or completes T, and then S may
+appear as a selectable row in its own `relation` group. Offers never
+link automatically. Picking S follows the ordinary successor pick
+rules in [task-dependencies.md §12.18](task-dependencies.md#1218-relation-successors-starts-after).
+
+### SU2 Config and label effects
+
+```yaml
+relations:
+  cancel_labels: [duplicate of, superseded by]
+  complete_labels: [implemented by, verified by]
+  # Linking S with one of these labels to T offers S as a successor when T is
+  # parked (left Pending, off today's plan) or done. Never blocks; S is never
+  # auto-linked. Empty offers nothing.
+  successor_labels:
+    - starts after
+```
+
+Each label is matched by `relation_label_key` (trim, collapse
+whitespace, strip one trailing colon, lowercase). A label in more than
+one of `cancel_labels`, `complete_labels`, and `successor_labels` has
+no effect and is dropped from every list. The existing cancel/complete
+overlap warning stays unchanged. An overlap involving successor labels
+warns once:
+
+```text
+relations: “{label}” is in more than one of cancel_labels, complete_labels, successor_labels in <path>; it has no effect
+```
+
+The default `successor_labels` value is `[]`. Invalid config entries
+warn and are skipped; they never make config loading fail. A configured
+successor label is included in suggestions
+and in `bob relations list -a` at zero uses, marked `configured`.
+Hiding a label removes it from suggestions only and does not disable
+matching or offers, per the accepted
+relation-label-hide-is-suggestions-only policy.
+An empty `successor_labels` list or `plan.link_unblocked: false`
+disables successor offers and their source scan. This switch does not
+change project or keep-moving offers.
+
+### SU3 Source and target
+
+The source is S, whose accepted LINKS entry resolves to target T. The
+edge is read from LINKS, including staged text; the generated LINKED
+FROM line is never an input. Matching uses the normalized relation
+label key, and resolution follows the existing reconcile target rules
+(same-note `[[#^id]]`, basename, or path). S and T must be different
+tasks. Adding, changing, renaming, or deleting an edge only changes
+future events; it never replays a past park or close.
+
+### SU4 Events
+
+An event is `(T, parked)` or `(T, done)`, computed during the gesture
+and never stored. T is **parked** when an explicit hand-off leaves it
+`[/]` Pending with no live Task Link in today's open Pomodoros, and T
+had a live link before the gesture. T is **done** when a managed Done
+gesture completes it. Every supported gesture, event exclusion,
+baseline, batch rule, and pick destination is specified in
+[task-dependencies.md §12.18](task-dependencies.md#1218-relation-successors-starts-after).
+The capture unlink and Obsidian unlink events ship in v1.1.
+
+### SU5 Authoring indication
+
+Indications are additive and never block a write.
+
+| Surface | Indication |
+| --- | --- |
+| Label suggestions / relation list | `🪢 offers` / `🪢 offers source` |
+| Capture-complete verdict | `🪢 Offers “‹S›” when “‹T›” is parked or done · never blocks` |
+| Already-parked target | `“‹T›” is already parked — “‹S›” will be offered when it is done` |
+| Already-closed target | `“‹T›” is already closed — nothing left to wait for` |
+| Inverse spelling | `“‹typed›” never offers anything · to offer “‹X›” after this task, use ~~ with “‹label›”` |
+| Add edge after target was released | `relation_successor_already_released`, with the matching caveat |
+| Rename warning | `“‹label›” is a successor label in config.yml — update relations.successor_labels` |
+
+A new task may be a source: offers are evaluated only when a later
+gesture produces an event for its target.
+
+### SU6 Authoring JSON
+
+Fields are additive and omitted when no successor label is configured,
+so output stays byte-identical. `capture-complete` rows gain
+`offers_source: true` for configured keys; zero-use configured rows
+gain `configured: true`. A successor-label (or inverse-spelling)
+candidate also returns:
+
+```json
+"relation_successor": {
+  "source": {"path": "agents.md", "block_id": "evaluate", "text": "Prepare evaluation prompt"},
+  "target": {"path": "agents.md", "block_id": "implement", "text": "Send implementation prompt", "status_symbol": "/", "status_name": "In Progress"},
+  "verdict": "offers",
+  "message": "🪢 Offers “Prepare evaluation prompt” when “Send implementation prompt” is parked or done · never blocks"
+}
+```
+
+`verdict` is `offers`, `already_parked`, or `already_closed`. The
+response resolves only the two tasks and today's day text; it never
+scans the vault. An inverse spelling sets `hint`. `capture-parse`
+relation-label spans gain `offers_source: true`. Committed
+`relation_updates[]` rows gain `offer_effect` with the same three
+verdicts; a target already released at commit adds a
+`relation_successor_already_released` warning. Nothing fires at commit.
+`bob relations list` JSON adds row field `offers_source` and top-level
+`successor_labels`; its human header adds `· N offer`.
+
+### SU7 Architecture and vectors
+
+Rust policy lives with relation config and label effects. The Rust
+policy exposes `RelationsConfig::label_effect(key) -> Option<LabelEffect>`
+with `LabelEffect::{Cancel, Complete, Successor}`; `close_effect` is a
+view that never returns `Successor`. Inverse lookup reports both the
+stored label and its effect through
+`label_for_inverse(key) -> Option<(&str, LabelEffect)>`, so
+`starts before` is available as an authoring hint without becoming an
+effect label. The Rust capture
+engine and Obsidian cycler each compute event offers from
+current task and ledger text. Rust uses a fresh, batch-scoped LINKS
+snapshot; Obsidian uses the ready live relation index and re-reads
+candidate sources. Neither uses LINKED FROM or a persistent successor
+cache. Missing or incomplete source data is reported as unavailable;
+the gesture still succeeds without relation rows.
+
+`tests/fixtures/relation_successor/vectors.json` is the shared source
+for the successor rule, copy, config, and key vectors. Every SA row in
+[task-dependencies.md §12.19](task-dependencies.md#1219-sa-relation-successor-vectors)
+is either covered there or marked UI-only. bob-plugins copies this file
+byte-for-byte; bob-cli is authoritative.

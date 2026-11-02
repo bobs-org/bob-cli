@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "base": {
+    "config": {
+      "successor_labels": ["starts after"],
+      "link_unblocked": true,
+      "today": "2026-11-02"
+    },
+    "notes": [
+      {
+        "path": "agents.md",
+        "body": "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n  - 🪢 **LINKS:** starts after [[agents#^implement]]\n- [/] #task Send implementation prompt [id:: implement] ^implement\n"
+      }
+    ],
+    "day_before": "## Pomodoros\n- [ ] (**) — BUILD\n  - [[agents#^implement]]\n",
+    "day_after": "## Pomodoros\n- [ ] (**) — BUILD\n- [ ] () — BUILD\n",
+    "events": [
+      {"target": "agents.md#^implement", "event": "parked", "anchor": "closing"}
+    ]
+  },
+  "config": [
+    {"id": "SU-C1", "name": "missing block", "yaml": "", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 0}},
+    {"id": "SU-C2", "name": "null list", "yaml": "relations:\n  successor_labels: null\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 0}},
+    {"id": "SU-C3", "name": "empty list", "yaml": "relations:\n  successor_labels: []\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 0}},
+    {"id": "SU-C4", "name": "scalar list value", "yaml": "relations:\n  successor_labels: starts after\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 1}},
+    {"id": "SU-C5", "name": "mapping list value", "yaml": "relations:\n  successor_labels:\n    starts: after\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 1}},
+    {"id": "SU-C6", "name": "non-string and invalid entries skipped", "yaml": "relations:\n  successor_labels:\n    - starts after\n    - 3\n    - 'bad | label'\n", "expected": {"cancel": [], "complete": [], "successor": ["starts after"], "warnings": 2}},
+    {"id": "SU-C7", "name": "duplicate keys collapse", "yaml": "relations:\n  successor_labels: [' Starts  After:', starts after]\n", "expected": {"cancel": [], "complete": [], "successor": ["starts after"], "warnings": 0}},
+    {"id": "SA23", "name": "successor and complete overlap has no effect", "yaml": "relations:\n  complete_labels: [starts after]\n  successor_labels: [Starts  After:]\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 1}},
+    {"id": "SU-C8", "name": "empty successor labels", "yaml": "relations:\n  successor_labels: []\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 0}},
+    {"id": "SU-C9", "name": "cancel and successor overlap has no effect", "yaml": "relations:\n  cancel_labels: [starts after]\n  successor_labels: [starts after]\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 1}},
+    {"id": "SU-C11", "name": "existing cancel and complete overlap warning is preserved", "yaml": "relations:\n  cancel_labels: [starts after]\n  complete_labels: [starts after]\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 1}},
+    {"id": "SU-C10", "name": "all three effect lists overlap", "yaml": "relations:\n  cancel_labels: [starts after]\n  complete_labels: [starts after]\n  successor_labels: [starts after]\n", "expected": {"cancel": [], "complete": [], "successor": [], "warnings": 1}}
+  ],
+  "key": [
+    {"id": "SA22", "name": "configured label matches case whitespace and colon", "label": "Starts  After:", "successor_labels": ["starts after"], "expected": {"key": "starts after", "effect": "successor", "inverse": "starts before"}},
+    {"id": "SU-K2", "name": "canonical successor label", "label": "starts after", "successor_labels": ["starts after"], "expected": {"key": "starts after", "effect": "successor", "inverse": "starts before"}},
+    {"id": "SU-K3", "name": "inverse spelling is a hint, not an effect", "label": "starts before", "successor_labels": ["starts after"], "expected": {"key": "starts before", "effect": null, "inverse": {"label": "starts after", "effect": "successor"}}},
+    {"id": "SU-K4", "name": "substring never matches", "label": "starts", "successor_labels": ["starts after"], "expected": {"key": "starts", "effect": null, "inverse": null}}
+  ],
+  "rule": [
+    {"id": "SA1", "name": "park offers at closing anchor", "input": {"source": {"status": "Ready"}}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "parked", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA2", "name": "another post-gesture live link suppresses park event", "input": {"target": {"baseline_live": true, "post_live": true}, "events": []}, "expected": {"groups": [], "held": []}},
+    {"id": "SA3", "name": "already Pending target still produces park event", "input": {"target": {"status_before": "Pending", "status_after": "Pending", "baseline_live": true, "post_live": false}}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "parked", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA4", "name": "managed Done offers at predecessor slot", "input": {"events": [{"target": "agents.md#^implement", "event": "done", "anchor": "slot"}]}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "done", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA5", "name": "Done through close uses closing anchor", "input": {"events": [{"target": "agents.md#^implement", "event": "done", "anchor": "closing"}]}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "done", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA6", "name": "excluded gestures do not fire", "input": {"action": ["cancel", "x~ drop", "Alt+N", "plain x carry", "plain x defer", "raw checkbox", "reconcile"], "events": []}, "expected": {"groups": [], "held": []}},
+    {"id": "SA7", "name": "Pending source is held", "input": {"source": {"status": "Pending"}}, "expected": {"groups": [], "held": [{"key": "agents.md#^evaluate", "reason": "already_started"}]}},
+    {"id": "SA8", "name": "Blocked source reasons", "cases": [{"source": {"status": "Blocked"}, "expected": {"reason": "blocked", "waits_on": 1}}, {"source": {"status": "Ready", "open_prerequisites": 1}, "expected": {"reason": "blocked", "waits_on": 1}}, {"source": {"status": "Ready", "scheduled": "2026-11-03"}, "expected": {"reason": "blocked", "scheduled": "2026-11-03"}}, {"source": {"status": "Ready", "project_blocked": true}, "expected": {"reason": "blocked", "project": "agents-project.md"}}]},
+    {"id": "SA9", "name": "hidden source is held", "input": {"source": {"tags": ["#hide"]}}, "expected": {"groups": [], "held": [{"key": "agents.md#^evaluate", "reason": "hidden"}]}},
+    {"id": "SA10", "name": "already live-linked source is JSON-only held", "input": {"source": {"baseline_live": true}}, "expected": {"groups": [], "held": [{"key": "agents.md#^evaluate", "reason": "already_planned", "display": false}]}},
+    {"id": "SA11", "name": "another unreleased target holds source", "input": {"source": {"other_successor_targets": ["agents.md#^deploy"]}}, "expected": {"groups": [], "held": [{"key": "agents.md#^evaluate", "reason": "waits_for", "waits_for": ["agents.md#^deploy"]}]}},
+    {"id": "SA12", "name": "one row reached through two event targets", "input": {"events": [{"target": "agents.md#^implement", "event": "parked"}, {"target": "agents.md#^deploy", "event": "done"}], "source": {"successor_targets": ["agents.md#^implement", "agents.md#^deploy"]}}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "parked", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready", "suffix": "after “Send implementation prompt” and “Deploy release”"}]}], "held": []}},
+    {"id": "SA13", "name": "unresolved other target is ignored", "input": {"source": {"other_successor_targets": ["missing.md#^unknown"]}}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "parked", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA14", "name": "direct dependent stays hand-off with relation reason", "input": {"source": {"depends_on": ["agents.md#^implement"]}, "events": [{"target": "agents.md#^implement", "event": "done", "anchor": "slot"}]}, "expected": {"groups": [{"group": "hand_off", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready", "reason": "· starts after “Send implementation prompt”"}]}], "held": []}},
+    {"id": "SA14-P", "name": "parking leaves direct dependent Blocked", "input": {"source": {"status": "Blocked", "depends_on": ["agents.md#^implement"]}}, "expected": {"groups": [], "held": [{"key": "agents.md#^evaluate", "reason": "blocked", "waits_on": 1}]}},
+    {"id": "SA15", "name": "relation reason wins but project recovery remains", "input": {"source": {"project_resident": "agents-project.md", "project_recovered": true}}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "parked", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready", "recovered": true}]}], "held": []}},
+    {"id": "SA16", "name": "unpicked park is stateless and later Done offers again", "input": {"selection": "none", "events": [{"target": "agents.md#^implement", "event": "done", "anchor": "slot"}]}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "done", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA17", "name": "picked source is already planned on later event", "input": {"source": {"baseline_live": true}}, "expected": {"groups": [], "held": [{"key": "agents.md#^evaluate", "reason": "already_planned", "display": false}]}},
+    {"id": "SA18", "name": "mixed Done hand-off and parked relation group order", "input": {"events": [{"target": "agents.md#^schema", "event": "done", "anchor": "closing"}, {"target": "agents.md#^implement", "event": "parked", "anchor": "closing"}], "source": {"successor_targets": ["agents.md#^implement"]}, "other_offers": [{"group": "hand_off", "key": "agents.md#^schema-change"}]}, "expected": {"group_order": ["hand_off", "relation"]}},
+    {"id": "SA19", "name": "staged relation added before event is visible", "input": {"staged_edges": [{"source": "agents.md#^evaluate", "target": "agents.md#^implement", "label": "starts after"}]}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "parked", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA20", "name": "edge added after event does not replay", "input": {"edge_added_after_event": true}, "expected": {"groups": [], "held": [], "warning": "relation_successor_already_released"}},
+    {"id": "SA21", "name": "later item removes source or parked target group", "cases": [{"later_action": "link source", "expected": {"groups": [], "held": []}}, {"later_action": "relink target", "expected": {"groups": [], "held": []}}]},
+    {"id": "SA24", "name": "either relation gate disables scan and fields", "cases": [{"config": {"successor_labels": []}, "expected": {"groups": [], "held": [], "relation_check": null, "scan": false}}, {"config": {"successor_labels": ["starts after"], "plan.link_unblocked": false}, "expected": {"groups": [], "held": [], "relation_check": null, "scan": false}}]},
+    {"id": "SA26", "name": "relation lookup does not need dependency ids or mirror lines", "input": {"config": {"relations.linked_from_lines": false}, "source": {"id_field": null}, "target": {"id_field": null}}, "expected": {"groups": [{"group": "relation", "label": "starts after", "event": "parked", "after": "agents.md#^implement", "rows": [{"key": "agents.md#^evaluate", "lane": "Ready"}]}], "held": []}},
+    {"id": "SA28", "name": "closed archived and previous-day sources are skipped", "cases": [{"source": {"status": "Done"}}, {"source": {"path": "done/agents.md"}}, {"source": {"path": "2026/20261101.md"}}], "expected": {"groups": [], "held": []}}
+  ],
+  "copy": [
+    {"id": "SU-P1", "name": "single group title", "input": {"label": "starts after", "target": "Send implementation prompt"}, "expected": {"title": "Starts after “Send implementation prompt”"}},
+    {"id": "SU-P2", "name": "parked why and contrast", "input": {"label": "starts after", "target": "Send implementation prompt", "event": "parked"}, "expected": {"why": "“Send implementation prompt” is parked · Pending, off today's plan", "tag": "your links · not dependents"}},
+    {"id": "SU-P3", "name": "done why", "input": {"target": "Send implementation prompt", "event": "done"}, "expected": {"why": "“Send implementation prompt” is done"}},
+    {"id": "SU-P4", "name": "fold with named wait and counts", "input": {"source": "Write rollout notes", "waits_for": ["Ship schema change"], "already_started": 1, "blocked": 1, "hidden": 1}, "expected": {"fold": "not offered · “Write rollout notes” waits for “Ship schema change” · 1 already started · 1 blocked · 1 hidden"}},
+    {"id": "SU-P5", "name": "plural wait suffix", "input": {"targets": ["Implement A", "Implement B", "Implement C"]}, "expected": {"suffix": "after “Implement A” and 2 more"}},
+    {"id": "SU-P6", "name": "second reason", "input": {"label": "starts after", "target": "Send implementation prompt"}, "expected": {"reason": "· starts after “Send implementation prompt”"}},
+    {"id": "SU-P7", "name": "relation-only title plural", "input": {"label": "starts after", "targets": ["T1", "T2"], "count": 3}, "expected": {"title": "Starts after 3 tasks"}},
+    {"id": "SU-P8", "name": "capsule", "input": {"label": "starts after"}, "expected": {"capsule": "Starts after"}},
+    {"id": "SU-P9", "name": "single linked notice", "input": {"source": "Prepare evaluation prompt", "target": "Send implementation prompt", "label": "starts after", "destination": "BUILD"}, "expected": {"notice": "🪢 Next in BUILD: Prepare evaluation prompt · starts after “Send implementation prompt”"}},
+    {"id": "SU-P10", "name": "multiple linked notice", "input": {"count": 2, "destination": "BUILD", "label": "starts after", "target": "Send implementation prompt"}, "expected": {"notice": "🪢 2 linked → BUILD · starts after “Send implementation prompt”"}},
+    {"id": "SU-P11", "name": "mixed picker title stays unchanged", "input": {"mixed_groups": ["hand_off", "relation"], "existing_title": "Pull in successors of T"}, "expected": {"title": "Pull in successors of T"}},
+    {"id": "SU-P12", "name": "held wait notice", "input": {"source": "Write rollout notes", "label": "starts after", "target": "Send implementation prompt", "reason": "waits_for", "other_target": "Ship schema change"}, "expected": {"notice": "🪢 “Write rollout notes” starts after “Send implementation prompt” · not offered: waits for “Ship schema change”"}},
+    {"id": "SU-P13", "name": "held already-started notice", "input": {"source": "Write rollout notes", "label": "starts after", "target": "Send implementation prompt", "reason": "already_started"}, "expected": {"notice": "🪢 “Write rollout notes” starts after “Send implementation prompt” · not offered: already started"}},
+    {"id": "SU-P14", "name": "held blocked notice", "input": {"source": "Write rollout notes", "label": "starts after", "target": "Send implementation prompt", "reason": "blocked", "waits_on": 2}, "expected": {"notice": "🪢 “Write rollout notes” starts after “Send implementation prompt” · not offered: blocked (waits on 2)"}},
+    {"id": "SU-P15", "name": "held scheduled notice", "input": {"source": "Write rollout notes", "label": "starts after", "target": "Send implementation prompt", "reason": "scheduled", "date": "Nov 3"}, "expected": {"notice": "🪢 “Write rollout notes” starts after “Send implementation prompt” · not offered: scheduled Nov 3"}},
+    {"id": "SU-P16", "name": "held project and hidden notices", "input": {"source": "Write rollout notes", "label": "starts after", "target": "Send implementation prompt", "reasons": ["project", "hidden"]}, "expected": {"notices": ["🪢 “Write rollout notes” starts after “Send implementation prompt” · not offered: blocked by its project", "🪢 “Write rollout notes” starts after “Send implementation prompt” · not offered: hidden"]}},
+    {"id": "SU-P17", "name": "CLI header and held row", "input": {"label": "starts after", "target": "Send implementation prompt", "source": "Write rollout notes", "event": "parked", "already_started": 1}, "expected": {"header": "Starts after “Send implementation prompt” · it is parked (your 🪢 links, not dependents)", "fold": "not offered  “Write rollout notes” waits for “Send implementation prompt” · 1 already started"}},
+    {"id": "SU-P18", "name": "CLI done header and linked suffix", "input": {"label": "starts after", "target": "Send implementation prompt", "event": "done"}, "expected": {"header": "Starts after “Send implementation prompt” · it is done (your 🪢 links, not dependents)", "linked_suffix": "· starts after “Send implementation prompt”"}},
+    {"id": "SU-P19", "name": "Mac notification and badge help", "input": {"count": 2, "label": "starts after", "target": "Send implementation prompt"}, "expected": {"notification": "🪢 Pulled in 2 · starts after “Send implementation prompt”", "badge_help": "Offered by your relation link"}},
+    {"id": "SU-P20", "name": "uncertainty", "input": {"label": "starts after"}, "expected": {"notice": "🪢 Couldn't check starts after links · nothing offered"}},
+    {"id": "SU-P21", "name": "plural uncertainty", "input": {"labels": ["starts after", "follows after"]}, "expected": {"notice": "🪢 Couldn't check relation links · nothing offered"}},
+    {"id": "SU-P22", "name": "task text truncates at 48", "input": {"target": "012345678901234567890123456789012345678901234567890"}, "expected": {"target": "012345678901234567890123456789012345678901234567…"}},
+    {"id": "SU-P23", "name": "suggestion and relation-list meta", "input": {"count": 3}, "expected": {"suggestion": "🪢 offers", "relation_row": "🪢 offers source", "list_header": "· 3 offer", "list_row": "3 links · offers source"}},
+    {"id": "SU-P24", "name": "already-parked caveat", "input": {"source": "Prepare evaluation prompt", "target": "Send implementation prompt"}, "expected": {"message": "“Send implementation prompt” is already parked — “Prepare evaluation prompt” will be offered when it is done"}},
+    {"id": "SU-P25", "name": "already-closed caveat", "input": {"target": "Send implementation prompt"}, "expected": {"message": "“Send implementation prompt” is already closed — nothing left to wait for"}},
+    {"id": "SU-P26", "name": "inverse spelling hint", "input": {"typed": "starts before", "label": "starts after", "source": "Prepare evaluation prompt"}, "expected": {"hint": "“starts before” never offers anything · to offer “Prepare evaluation prompt” after this task, use ~~ with “starts after”"}},
+    {"id": "SU-P27", "name": "already-released structured warning", "input": {"label": "starts after", "source": "Prepare evaluation prompt", "target": "Send implementation prompt"}, "expected": {"code": "relation_successor_already_released", "message": "“Send implementation prompt” is already parked — “Prepare evaluation prompt” will be offered when it is done"}},
+    {"id": "SU-P28", "name": "rename warning", "input": {"label": "starts after"}, "expected": {"message": "“starts after” is a successor label in config.yml — update relations.successor_labels"}},
+    {"id": "SU-P29", "name": "two-target suffix", "input": {"targets": ["T1", "T2"]}, "expected": {"suffix": "after “T1” and “T2”"}},
+    {"id": "SU-P30", "name": "relation-only title with several groups", "input": {"label": "starts after", "targets": ["T1", "T2"], "count": 2}, "expected": {"title": "Starts after 2 tasks"}},
+    {"id": "SU-P31", "name": "capture-complete offers verdict", "input": {"source": "Prepare evaluation prompt", "target": "Send implementation prompt"}, "expected": {"message": "🪢 Offers “Prepare evaluation prompt” when “Send implementation prompt” is parked or done · never blocks"}}
+  ],
+  "ui_only": ["SA25", "SA27", "SA29", "SA30", "SA31", "SA32", "SA33", "SA34", "SA35", "SA36"],
+  "coverage": {
+    "SA22": "key",
+    "SA23": "config",
+    "SA24": "config and kill-switch wiring",
+    "SA25": "UI/live-index freshness",
+    "SA27": "UI uncertainty presentation",
+    "SA29": "UI revalidation",
+    "SA30": "authoring indication",
+    "SA31": "v1.1 capture unlink UI",
+    "SA32": "v1.1 capture unlink UI",
+    "SA33": "v1.1 Obsidian unlink UI",
+    "SA34": "UI API version gate",
+    "SA35": "UI undo receipt",
+    "SA36": "performance and wiring"
+  }
+}
