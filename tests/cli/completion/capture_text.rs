@@ -371,6 +371,38 @@ fn sections_complete_after_hash() {
 }
 
 #[test]
+fn quoted_section_replacement_is_a_raw_protocol_value() {
+    let temp = TempDir::new("bob-cli-complete-quoted-section");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "---\n",
+            "type: \"[[area]]\"\n",
+            "---\n",
+            "## Future Work\n",
+            "notes\n",
+            "## future-work\n",
+            "hyphen\n",
+        ),
+    );
+    write_file(&vault.join("2026/20260601.md"), "## Pomodoros\n");
+    let fixture = Fixture { _temp: temp, vault };
+    let output = complete(&fixture, &["bob", "capture", "jot", "@sase#"]);
+    assert_success(&output);
+    let values = values(&output);
+    assert!(
+        values.contains(&"@sase#\"Future Work\"".to_string()),
+        "protocol value stays the quoted replacement: {values:?}"
+    );
+    assert!(
+        !values.iter().any(|value| value.contains("@sase#\"\"")),
+        "adapters must not wrap Bob's quoted replacement again: {values:?}"
+    );
+}
+
+#[test]
 fn drawers_complete_after_id_hash() {
     let fixture = fixture();
     let output = complete(

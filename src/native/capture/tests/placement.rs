@@ -1107,6 +1107,132 @@ fn section_completion_slug_query_matches_spaced_title() {
     assert_eq!(rows[0].replacement, "future-work");
 }
 
+fn quoted_selector(title: &str) -> String {
+    format!("\"{}\"", title.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn completion_pairs(contents: &str) -> Vec<(String, String)> {
+    super::super::section_completion_rows(contents, "")
+        .into_iter()
+        .map(|row| (row.title, row.replacement))
+        .collect()
+}
+
+#[test]
+fn section_completion_omits_selectors_that_cannot_round_trip() {
+    let quote_leading_spaced = concat!(
+        "PREAMBLE\n",
+        "## \"Future Work\"\n",
+        "TARGET\n",
+        "## future-work\n",
+        "DECOY\n",
+    );
+    let quote_leading_word = concat!(
+        "PREAMBLE\n",
+        "## \"Quoted\"\n",
+        "TARGET\n",
+        "## quoted\n",
+        "DECOY\n",
+    );
+    let curly_spaced = concat!(
+        "PREAMBLE\n",
+        "## “Future Work”\n",
+        "TARGET\n",
+        "## future-work\n",
+        "DECOY\n",
+    );
+    let curly_word = concat!(
+        "PREAMBLE\n",
+        "## “Quoted”\n",
+        "TARGET\n",
+        "## quoted\n",
+        "DECOY\n",
+    );
+    let escaped = concat!(
+        "PREAMBLE\n",
+        "## Say \"hi\" \\ there\n",
+        "TARGET\n",
+        "## say-\"hi\"-\\-there\n",
+        "DECOY\n",
+    );
+    let duplicates = concat!(
+        "PREAMBLE\n",
+        "## Ideas\n",
+        "FIRST\n",
+        "## Ideas\n",
+        "SECOND\n",
+    );
+    let case_variants = concat!(
+        "PREAMBLE\n",
+        "## Ideas\n",
+        "FIRST\n",
+        "## ideas\n",
+        "SECOND\n",
+    );
+    let h1_shadowed =
+        concat!("PREAMBLE\n", "# Ideas\n", "H1\n", "## Ideas\n", "H2\n",);
+
+    assert_eq!(
+        completion_pairs(quote_leading_spaced),
+        vec![
+            (
+                "\"Future Work\"".to_string(),
+                quoted_selector("\"Future Work\""),
+            ),
+            ("future-work".to_string(), "future-work".to_string()),
+        ]
+    );
+    assert_eq!(
+        completion_pairs(quote_leading_word),
+        vec![
+            ("\"Quoted\"".to_string(), quoted_selector("\"Quoted\"")),
+            ("quoted".to_string(), "quoted".to_string()),
+        ]
+    );
+    assert_eq!(
+        completion_pairs(curly_spaced),
+        vec![
+            (
+                "“Future Work”".to_string(),
+                quoted_selector("“Future Work”"),
+            ),
+            ("future-work".to_string(), "future-work".to_string()),
+        ]
+    );
+    assert_eq!(
+        completion_pairs(curly_word),
+        vec![
+            ("“Quoted”".to_string(), quoted_selector("“Quoted”")),
+            ("quoted".to_string(), "quoted".to_string()),
+        ]
+    );
+    assert_eq!(
+        completion_pairs(escaped),
+        vec![
+            (
+                "Say \"hi\" \\ there".to_string(),
+                quoted_selector("Say \"hi\" \\ there"),
+            ),
+            (
+                "say-\"hi\"-\\-there".to_string(),
+                "say-\"hi\"-\\-there".to_string(),
+            ),
+        ]
+    );
+    assert_eq!(
+        completion_pairs(duplicates),
+        vec![("Ideas".to_string(), "Ideas".to_string())]
+    );
+    assert_eq!(
+        completion_pairs(case_variants),
+        vec![("Ideas".to_string(), "Ideas".to_string())]
+    );
+    assert_eq!(
+        completion_pairs(h1_shadowed),
+        vec![("Ideas".to_string(), "Ideas".to_string())]
+    );
+}
+
 const ARTICLE_SECTIONS: &str = concat!(
     "---\n",
     "type: \"[[article]]\"\n",

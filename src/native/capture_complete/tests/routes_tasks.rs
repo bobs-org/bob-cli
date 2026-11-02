@@ -219,6 +219,78 @@ fn section_completion_on_a_list_header_with_bullets() {
 }
 
 #[test]
+fn section_completion_quote_leading_titles_use_exact_fallback() {
+    let temp = TempDir::new("bob-cli-capture-complete-quote-leading");
+    write_file(
+        &temp.path().join("sase.md"),
+        concat!(
+            "PREAMBLE\n",
+            "## \"Future Work\"\n",
+            "TARGET\n",
+            "## future-work\n",
+            "DECOY\n",
+            "## “Quoted”\n",
+            "CURLY\n",
+            "## quoted\n",
+            "WORD\n",
+        ),
+    );
+
+    let value = result(temp.path(), "@sase#", 6);
+    let Candidates::Section(sections) = &value.candidates else {
+        panic!("expected section candidates");
+    };
+    let by_title: std::collections::HashMap<&str, &str> = sections
+        .iter()
+        .map(|section| (section.title.as_str(), section.replacement.as_str()))
+        .collect();
+    assert_eq!(by_title["\"Future Work\""], "\"\\\"Future Work\\\"\"");
+    assert_eq!(by_title["future-work"], "future-work");
+    assert_eq!(by_title["“Quoted”"], "\"“Quoted”\"");
+    assert_eq!(by_title["quoted"], "quoted");
+
+    let raw = "@sase#\"Fu\n- already";
+    let partial = result(temp.path(), raw, "@sase#\"Fu".len());
+    assert_eq!(partial.context, Some(CompletionContext::Section));
+    assert_eq!(partial.replacement.start, 6);
+    assert_eq!(partial.replacement.end, "@sase#\"Fu".len());
+    let Candidates::Section(partial_rows) = &partial.candidates else {
+        panic!("expected section candidates");
+    };
+    let quoted = partial_rows
+        .iter()
+        .find(|row| row.title == "\"Future Work\"")
+        .expect("quoted heading");
+    assert_eq!(quoted.replacement, "\"\\\"Future Work\\\"\"");
+}
+
+#[test]
+fn shell_completion_preserves_quoted_section_replacement() {
+    let temp = TempDir::new("bob-cli-capture-complete-shell-quoted");
+    write_file(
+        &temp.path().join("sase.md"),
+        "## Future Work\nnotes\n## future-work\nhyphen\n",
+    );
+    let shell = crate::native::capture_complete::shell::shell_completion(
+        temp.path(),
+        "@sase#",
+        6,
+    )
+    .expect("shell result")
+    .expect("section rows");
+    let fulls: Vec<&str> =
+        shell.rows.iter().map(|row| row.full.as_str()).collect();
+    assert!(
+        fulls.contains(&"@sase#\"Future Work\""),
+        "shell protocol carries the raw quoted replacement: {fulls:?}"
+    );
+    assert!(
+        !fulls.iter().any(|full| full.contains("@sase#\"\"")),
+        "shell.rs must not wrap the quoted replacement again: {fulls:?}"
+    );
+}
+
+#[test]
 fn section_completion_on_a_missing_note_is_an_empty_success() {
     let temp = TempDir::new("bob-cli-capture-complete-sections-missing");
     let value = result(temp.path(), "Idea @notes#", 12);

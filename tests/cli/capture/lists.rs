@@ -10,6 +10,7 @@
 use crate::support::*;
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
 
 const NOW: &str = "2026-11-02 10:00:00";
 
@@ -1367,4 +1368,390 @@ fn capture_complete_then_list_lands_under_future_work() {
         !contents[..heading].contains("- boom"),
         "boom must not land in the zeroth section:\n{contents}"
     );
+}
+
+fn run_complete(vault: &Path, draft: &str, cursor: usize) -> Value {
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(vault)
+        .arg("-c")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run capture-complete");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("complete JSON")
+}
+
+fn apply_complete_replacement(
+    draft: &str,
+    complete: &Value,
+    replacement: &str,
+) -> String {
+    let start =
+        complete["replacement"]["start"].as_u64().expect("start") as usize;
+    let end = complete["replacement"]["end"].as_u64().expect("end") as usize;
+    let mut applied = String::new();
+    applied.push_str(&draft[..start]);
+    applied.push_str(replacement);
+    applied.push_str(&draft[end..]);
+    applied
+}
+
+fn assert_note_between_headings(
+    contents: &str,
+    heading_line: &str,
+    next_heading_line: Option<&str>,
+    note: &str,
+    preamble: &str,
+    decoy: Option<&str>,
+) {
+    let heading = contents.find(heading_line).unwrap_or_else(|| {
+        panic!("missing heading {heading_line:?}:\n{contents}")
+    });
+    let note_pos = contents
+        .find(note)
+        .unwrap_or_else(|| panic!("missing note {note:?}:\n{contents}"));
+    assert!(
+        note_pos > heading,
+        "note must land after {heading_line:?}:\n{contents}"
+    );
+    if let Some(next) = next_heading_line {
+        let next_pos = contents.find(next).unwrap_or_else(|| {
+            panic!("missing next heading {next:?}:\n{contents}")
+        });
+        assert!(
+            heading < note_pos && note_pos < next_pos,
+            "note must lie between {heading_line:?} and {next:?}:\n{contents}"
+        );
+    }
+    assert!(
+        contents.contains(preamble),
+        "preamble must stay:\n{contents}"
+    );
+    assert!(
+        !contents[..heading].contains(note),
+        "note must not land in the preamble/zeroth section:\n{contents}"
+    );
+    if let Some(decoy) = decoy {
+        assert!(
+            contents.contains(decoy),
+            "decoy must stay untouched:\n{contents}"
+        );
+    }
+}
+
+#[test]
+fn capture_complete_replacements_round_trip_to_the_picked_heading() {
+    struct Case {
+        name: &'static str,
+        contents: &'static str,
+        draft: &'static str,
+        cursor: usize,
+        title: &'static str,
+        replacement: &'static str,
+        note: &'static str,
+        heading_line: &'static str,
+        next_heading_line: Option<&'static str>,
+        preamble: &'static str,
+        decoy: Option<&'static str>,
+        append_note: bool,
+        ordinary: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "straight-quote-leading-spaced",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## \"Future Work\"\n",
+                "TARGET\n",
+                "## future-work\n",
+                "DECOY\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "\"Future Work\"",
+            replacement: "\"\\\"Future Work\\\"\"",
+            note: "rt-quote-leading-spaced",
+            heading_line: "## \"Future Work\"",
+            next_heading_line: Some("## future-work"),
+            preamble: "PREAMBLE",
+            decoy: Some("DECOY"),
+            append_note: true,
+            ordinary: true,
+        },
+        Case {
+            name: "straight-quote-leading-word",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## \"Quoted\"\n",
+                "TARGET\n",
+                "## quoted\n",
+                "DECOY\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "\"Quoted\"",
+            replacement: "\"\\\"Quoted\\\"\"",
+            note: "rt-quote-leading-word",
+            heading_line: "## \"Quoted\"",
+            next_heading_line: Some("## quoted"),
+            preamble: "PREAMBLE",
+            decoy: Some("DECOY"),
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "curly-quote-leading-spaced",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## “Future Work”\n",
+                "TARGET\n",
+                "## future-work\n",
+                "DECOY\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "“Future Work”",
+            replacement: "\"“Future Work”\"",
+            note: "rt-curly-leading-spaced",
+            heading_line: "## “Future Work”",
+            next_heading_line: Some("## future-work"),
+            preamble: "PREAMBLE",
+            decoy: Some("DECOY"),
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "curly-quote-leading-word",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## “Quoted”\n",
+                "TARGET\n",
+                "## quoted\n",
+                "DECOY\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "“Quoted”",
+            replacement: "\"“Quoted”\"",
+            note: "rt-curly-leading-word",
+            heading_line: "## “Quoted”",
+            next_heading_line: Some("## quoted"),
+            preamble: "PREAMBLE",
+            decoy: Some("DECOY"),
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "escaped-quote-backslash",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## Say \"hi\" \\ there\n",
+                "TARGET\n",
+                "## say-\"hi\"-\\-there\n",
+                "DECOY\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "Say \"hi\" \\ there",
+            replacement: "\"Say \\\"hi\\\" \\\\ there\"",
+            note: "rt-escaped-fallback",
+            heading_line: "## Say \"hi\" \\ there",
+            next_heading_line: Some("## say-\"hi\"-\\-there"),
+            preamble: "PREAMBLE",
+            decoy: Some("DECOY"),
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "raw-single-word",
+            contents: concat!("PREAMBLE\n", "## Ideas\n", "TARGET\n"),
+            draft: "@sase#",
+            cursor: 6,
+            title: "Ideas",
+            replacement: "Ideas",
+            note: "rt-raw-word",
+            heading_line: "## Ideas",
+            next_heading_line: None,
+            preamble: "PREAMBLE",
+            decoy: None,
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "spaced-slug",
+            contents: concat!("PREAMBLE\n", "## Inbox Ideas\n", "TARGET\n"),
+            draft: "@sase#",
+            cursor: 6,
+            title: "Inbox Ideas",
+            replacement: "inbox-ideas",
+            note: "rt-spaced-slug",
+            heading_line: "## Inbox Ideas",
+            next_heading_line: None,
+            preamble: "PREAMBLE",
+            decoy: None,
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "slug-collision-spaced",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## Future Work\n",
+                "TARGET\n",
+                "## future-work\n",
+                "DECOY\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "Future Work",
+            replacement: "\"Future Work\"",
+            note: "rt-slug-collision",
+            heading_line: "## Future Work",
+            next_heading_line: Some("## future-work"),
+            preamble: "PREAMBLE",
+            decoy: Some("DECOY"),
+            append_note: true,
+            ordinary: true,
+        },
+        Case {
+            name: "duplicate-titles-keep-first",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## Ideas\n",
+                "FIRST\n",
+                "## Ideas\n",
+                "SECOND\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "Ideas",
+            replacement: "Ideas",
+            note: "rt-duplicate-first",
+            heading_line: "## Ideas\n",
+            next_heading_line: Some("## Ideas\nSECOND"),
+            preamble: "PREAMBLE",
+            decoy: Some("SECOND"),
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "h1-shadowed-by-non-h1",
+            contents: concat!(
+                "PREAMBLE\n",
+                "# Ideas\n",
+                "H1\n",
+                "## Ideas\n",
+                "H2\n",
+            ),
+            draft: "@sase#",
+            cursor: 6,
+            title: "Ideas",
+            replacement: "Ideas",
+            note: "rt-h2-preferred",
+            heading_line: "## Ideas",
+            next_heading_line: None,
+            preamble: "PREAMBLE",
+            decoy: Some("H1"),
+            append_note: true,
+            ordinary: false,
+        },
+        Case {
+            name: "partial-quoted-header-with-bullets",
+            contents: concat!(
+                "PREAMBLE\n",
+                "## Future Work\n",
+                "existing\n",
+                "## future-work\n",
+                "DECOY\n",
+            ),
+            draft: "@sase#\"Fu\n- rt-header-bullet",
+            cursor: "@sase#\"Fu".len(),
+            title: "Future Work",
+            replacement: "\"Future Work\"",
+            note: "rt-header-bullet",
+            heading_line: "## Future Work",
+            next_heading_line: Some("## future-work"),
+            preamble: "PREAMBLE",
+            decoy: Some("DECOY"),
+            append_note: false,
+            ordinary: false,
+        },
+    ];
+
+    for case in cases {
+        let temp = TempDir::new(&format!("bob-cli-section-rt-{}", case.name));
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("create vault");
+        write_file(&vault.join("sase.md"), case.contents);
+        let day = day_file(&vault);
+
+        let complete = run_complete(&vault, case.draft, case.cursor);
+        assert_eq!(complete["context"], "section", "{}: {complete}", case.name);
+        let rows = complete["candidates"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{}: candidates", case.name));
+        let matching: Vec<&Value> = rows
+            .iter()
+            .filter(|row| row["title"] == case.title)
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "{}: expected one row for {:?}, got {matching:?} from {rows:?}",
+            case.name,
+            case.title
+        );
+        let replacement = matching[0]["replacement"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{}: replacement", case.name));
+        assert_eq!(replacement, case.replacement, "{} replacement", case.name);
+
+        let applied =
+            apply_complete_replacement(case.draft, &complete, replacement);
+        let list_draft = if case.append_note {
+            format!("{applied}\n- {}", case.note)
+        } else {
+            applied
+        };
+        capture_real(&vault, &day, &list_draft);
+        let list_contents =
+            fs::read_to_string(vault.join("sase.md")).expect("read list");
+        assert_note_between_headings(
+            &list_contents,
+            case.heading_line,
+            case.next_heading_line,
+            case.note,
+            case.preamble,
+            case.decoy,
+        );
+
+        if case.ordinary {
+            let ordinary_temp =
+                TempDir::new(&format!("bob-cli-section-rt-ord-{}", case.name));
+            let ordinary_vault = ordinary_temp.path().join("vault");
+            fs::create_dir_all(&ordinary_vault).expect("create vault");
+            write_file(&ordinary_vault.join("sase.md"), case.contents);
+            let ordinary_day = day_file(&ordinary_vault);
+            let ordinary_draft = format!("{} @sase#{replacement}", case.note);
+            capture_real(&ordinary_vault, &ordinary_day, &ordinary_draft);
+            let ordinary_contents =
+                fs::read_to_string(ordinary_vault.join("sase.md"))
+                    .expect("read ordinary");
+            assert_note_between_headings(
+                &ordinary_contents,
+                case.heading_line,
+                case.next_heading_line,
+                case.note,
+                case.preamble,
+                case.decoy,
+            );
+        }
+    }
 }

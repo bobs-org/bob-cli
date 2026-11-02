@@ -428,26 +428,35 @@ fn unquoted_selector_spelling(title: &str) -> bool {
 /// Replacement a section-completion row inserts for `title` at
 /// `heading_line_index`: the raw title when it is one unquoted selector
 /// that resolves back to this heading, else the hyphen slug when that
-/// round-trips, else a quoted `"Title"` with `"` and `\` escaped.
+/// spelling is also unquoted-safe and round-trips, else a quoted
+/// `"Title"` with `"` and `\` escaped when the decoded title reaches
+/// this heading as an exact selector. `None` when no offered spelling
+/// can address this heading (duplicate titles, an H1 shadowed by a
+/// non-H1 match).
 fn section_selector_replacement(
     contents: &str,
     heading_line_index: usize,
     title: &str,
-) -> String {
+) -> Option<String> {
     if unquoted_selector_spelling(title)
         && resolved_bullet_heading_line(contents, title, false)
             == Some(heading_line_index)
     {
-        return title.to_string();
+        return Some(title.to_string());
     }
     let slug = capture_language::selector_slug(title);
-    if !slug.is_empty()
+    if unquoted_selector_spelling(&slug)
         && resolved_bullet_heading_line(contents, &slug, false)
             == Some(heading_line_index)
     {
-        return slug;
+        return Some(slug);
     }
-    format!("\"{}\"", quote_escape(title))
+    if resolved_bullet_heading_line(contents, title, true)
+        == Some(heading_line_index)
+    {
+        return Some(format!("\"{}\"", quote_escape(title)));
+    }
+    None
 }
 
 /// One non-`Tasks` heading offered as a section-completion row.
@@ -461,7 +470,7 @@ pub(crate) struct SectionCompletionRow {
 /// Ranked section-completion rows for `contents`: title prefix or slug
 /// prefix first, then title substring, each group in document order. Each
 /// `replacement` round-trips through [`target_bullet_section`] to the same
-/// heading.
+/// heading; unreachable headings are omitted.
 pub(crate) fn section_completion_rows(
     contents: &str,
     query: &str,
@@ -471,14 +480,17 @@ pub(crate) fn section_completion_rows(
     let headings: Vec<SectionCompletionRow> = markdown_headings(&lines)
         .into_iter()
         .filter(|heading| is_bullet_section(heading, &reserved))
-        .map(|heading| SectionCompletionRow {
-            replacement: section_selector_replacement(
+        .filter_map(|heading| {
+            section_selector_replacement(
                 contents,
                 heading.line_index,
                 heading.title,
-            ),
-            title: heading.title.to_string(),
-            level: heading.level,
+            )
+            .map(|replacement| SectionCompletionRow {
+                replacement,
+                title: heading.title.to_string(),
+                level: heading.level,
+            })
         })
         .collect();
     rank_section_rows(headings, query)
