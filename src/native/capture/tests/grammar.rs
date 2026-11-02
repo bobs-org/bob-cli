@@ -435,7 +435,6 @@ fn parses_auto_routes_like_hammerspoon() {
             None,
             "middle @token stays literal",
         ),
-        ("@route", "@route", None, "bare route stays literal"),
         (
             "@bad! body @Good",
             "@bad! body",
@@ -451,6 +450,15 @@ fn parses_auto_routes_like_hammerspoon() {
         assert_eq!(parsed.body, body, "{label}");
         assert_eq!(parsed.route.as_deref(), route, "{label}");
     }
+
+    // A lone header starts a list, so it refuses instead of staying a
+    // literal inbox task.
+    let error =
+        parse_capture_text("@route", None).expect_err("lone header refuses");
+    assert!(
+        error.message.contains("heads a list but has no bullets"),
+        "lone header: {error:?}"
+    );
 }
 
 #[test]

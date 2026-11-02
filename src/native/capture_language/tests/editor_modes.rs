@@ -464,7 +464,16 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[],
         ),
         ("buy milk", EditorMode::Task, None, None, None, &[]),
-        ("@route", EditorMode::Task, None, None, None, &[]),
+        // A lone header is an empty list: incomplete needing `list_item`,
+        // not a task.
+        (
+            "@route",
+            EditorMode::Incomplete,
+            Some("route"),
+            None,
+            None,
+            &[Need::ListItem],
+        ),
     ];
 
     for (raw, mode, route, section, block_id, needs) in cases {
@@ -1006,7 +1015,8 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "a @b @C",
         "@Work buy milk @home",
         "Email @home soon",
-        "@route",
+        // "@route" alone is an empty list now and refuses to execute, so
+        // it cannot appear among resolved captures.
         "@bad! body @Good",
         "Do thing @Dev^Foo-Bar",
         "@Dev^Foo-Bar Do thing s:2",

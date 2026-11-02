@@ -15,6 +15,10 @@ pub(crate) struct CaptureParseOptions<'a> {
     /// A forced destination or clip flag (`-r -s -t -S -c`, `--task-ref`)
     /// keeps the item a task.
     pub(crate) explicit_destination: bool,
+    /// Whether lone `@route` / `@route#section` headers split into capture
+    /// lists. `false` for forced-destination parses, where `@tokens` stay
+    /// literal. Template rows always pass `false` via the split call.
+    pub(crate) recognize_lists: bool,
     /// A `@@` declaration in the draft keeps every item a task. Draft
     /// resolution fills this in from the split declarations.
     pub(crate) has_global_destination: bool,
@@ -29,6 +33,7 @@ impl<'a> CaptureParseOptions<'a> {
             url_routing: None,
             explicit_destination: false,
             has_global_destination: false,
+            recognize_lists: true,
         }
     }
 
@@ -758,6 +763,45 @@ pub(crate) struct ItemLine<'a> {
     pub(crate) line_number: usize,
 }
 
+/// Whether a capture list files tasks or section bullets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ListKind {
+    Tasks,
+    Notes,
+}
+
+impl ListKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Tasks => "tasks",
+            Self::Notes => "notes",
+        }
+    }
+}
+
+/// Per-bullet context for items split from a lone `@route` / `@route#section`
+/// header. Every bullet block of one list shares route, section, header
+/// position, and count; `position` is 1-based within the list (`0` marks an
+/// ownerless (orphaned or invalid) leading block that errors instead of
+/// capturing). `header_start`/`header_end` cover the header's physical line
+/// and `ownerless` never cross the JSON API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ListContext {
+    pub(crate) kind: ListKind,
+    pub(crate) route: String,
+    pub(crate) section: Option<String>,
+    pub(crate) header_line: usize,
+    pub(crate) position: usize,
+    pub(crate) count: usize,
+    #[serde(skip)]
+    pub(crate) header_start: usize,
+    #[serde(skip)]
+    pub(crate) header_end: usize,
+    #[serde(skip)]
+    pub(crate) ownerless: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CaptureItem<'a> {
     /// Complete source draft, retained so lexical claims can consult
@@ -769,6 +813,9 @@ pub(crate) struct CaptureItem<'a> {
     pub(crate) line_start: usize,
     pub(crate) line_end: usize,
     pub(crate) lines: Vec<ItemLine<'a>>,
+    /// List context when this item is one bullet block split from a lone
+    /// `@route` / `@route#section` header. `None` for ordinary items.
+    pub(crate) list: Option<ListContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -779,6 +826,9 @@ pub(crate) struct ParsedCaptureItem {
     pub(crate) line_start: usize,
     pub(crate) line_end: usize,
     pub(crate) parsed: ParsedCaptureText,
+    /// List context threaded from the split item, so planning and output
+    /// report each bullet's list. `None` for ordinary items.
+    pub(crate) list: Option<ListContext>,
     /// The row that produced this item when it came from a template draft.
     pub(crate) template_row: Option<TemplateRowSummary>,
     /// Lexical ref-parent source for `Ref` items (`explicit` for an inline

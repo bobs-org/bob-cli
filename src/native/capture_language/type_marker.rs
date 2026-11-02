@@ -802,6 +802,7 @@ pub(crate) fn masked_item<'a>(
             .iter()
             .map(|line| ItemLineView::masked(line, source))
             .collect(),
+        list: item.list.clone(),
     }
 }
 

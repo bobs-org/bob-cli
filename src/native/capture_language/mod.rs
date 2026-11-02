@@ -39,7 +39,7 @@ mod tokens;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 5;
+pub(crate) const GRAMMAR_REVISION: u32 = 6;
 
 #[cfg(test)]
 mod tests;
@@ -61,6 +61,7 @@ pub(crate) use self::dependencies::close_blocked_task_error;
 pub(crate) use self::directive::clip_not_read_error;
 #[cfg(test)]
 pub(crate) use self::directive::incomplete_directive_error;
+pub(crate) use self::draft::detect_list_header;
 #[cfg(test)]
 pub(crate) use self::draft::parse_capture_draft_with_options;
 pub(crate) use self::draft::parse_capture_draft_with_options_coded;
@@ -69,6 +70,7 @@ pub(crate) use self::draft::parse_capture_text_with_options;
 #[cfg(test)]
 pub(crate) use self::draft::split_capture_draft;
 pub(crate) use self::draft::split_physical_lines;
+pub(crate) use self::draft::template_list_error;
 pub(crate) use self::drawer_bullet::empty_drawer_bullet_error;
 pub(crate) use self::drawer_bullet::existing_drawer_empty_error;
 pub(crate) use self::drawer_bullet::first_level_groups as drawer_bullet_groups;
@@ -123,6 +125,8 @@ pub(crate) use self::model::CloseLogEntry;
 pub(crate) use self::model::CloseLogOrigin;
 pub(crate) use self::model::DrawerSelector;
 pub(crate) use self::model::EditorParseOptions;
+pub(crate) use self::model::ListContext;
+pub(crate) use self::model::ListKind;
 pub(crate) use self::model::ParsedCaptureDraft;
 pub(crate) use self::model::ParsedCaptureItem;
 pub(crate) use self::model::ParsedCaptureText;
@@ -139,6 +143,7 @@ pub(crate) use self::model::PomodoroSplitSpec;
 pub(crate) use self::model::PomodoroStartSpec;
 pub(crate) use self::model::ProjectNoteForm;
 pub(crate) use self::model::ProjectTaskId;
+pub(crate) use self::model::RawLine;
 pub(crate) use self::model::RefParentSource;
 pub(crate) use self::model::SubBulletTarget;
 pub(crate) use self::model::TaskToggleIntent;

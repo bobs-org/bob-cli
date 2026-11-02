@@ -680,6 +680,10 @@ pub(super) struct CaptureItemResult {
     /// when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) mirror_skipped: Vec<MirrorSkippedJson>,
+    /// The capture list this bullet belongs to, when split from a lone
+    /// `@route` / `@route#section` header. Additive: omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) list: Option<ListContext>,
 }
 
 /// Per-item drawer report: the matched or created drawer title, its key,
@@ -1674,6 +1678,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         );
     }
     if result.captures.is_empty() {
+        print_list_summary(&result.item);
         print_human_item_success(result, None, &result.theme_refs);
         print_pull_in_hint(result);
         print_inbox_route_hint(result);
@@ -1685,6 +1690,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         if index > 0 {
             println!();
         }
+        print_list_summary(item);
         print_human_item_success(
             item,
             Some((index + 1, total)),
@@ -1693,6 +1699,28 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     }
     print_pull_in_hint(result);
     print_inbox_route_hint(result);
+}
+
+/// The one summary line that precedes each list's first item:
+/// `list  dev.md · 3 tasks` or `list  dev.md#ideas · 2 notes`.
+fn print_list_summary(item: &CaptureItemResult) {
+    let Some(list) = item.list.as_ref() else {
+        return;
+    };
+    if list.position != 1 {
+        return;
+    }
+    let mut target = item.relative_target.clone();
+    if let Some(section) = list.section.as_deref() {
+        target.push('#');
+        target.push_str(section);
+    }
+    let noun = match (list.kind, list.count) {
+        (ListKind::Tasks, 1) => "task",
+        (ListKind::Notes, 1) => "note",
+        (kind, _) => kind.label(),
+    };
+    println!("list  {target} · {} {noun}", list.count);
 }
 
 fn print_inbox_route_hint(result: &CaptureResult) {
@@ -5374,6 +5402,7 @@ mod tests {
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            list: None,
             relation_label_hides: Vec::new(),
         }
     }

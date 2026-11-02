@@ -121,6 +121,83 @@ pub(crate) fn reserved_project_task_id_error(raw: &str) -> String {
     )
 }
 
+/// One trailing task-ID token stripped from a token stream before marker
+/// extraction, with its original token for spans. The ID token is removed
+/// so schedule/priority markers behind it still extract; validation runs on
+/// the returned lex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StrippedTaskId<'a> {
+    pub(crate) token: Token<'a>,
+    pub(crate) lex: TaskIdLex,
+}
+
+/// Whether a token may sit between a task ID and the line end: schedule,
+/// priority, and ID candidates form the trailing marker run. Anything else
+/// (prose, routes, selectors, completions) ends the run.
+fn is_trailing_id_run_member(token: &str) -> bool {
+    lex_project_task_id(token).is_some()
+        || super::markers::parse_schedule_token(token).is_some()
+        || super::markers::parse_priority_token(token).is_some()
+        || super::markers::parse_retired_priority_token(token).is_some()
+}
+
+/// Whether a child line seals the item as a project note: its last body
+/// token parses as a project-note route marker (`@route^id@` /
+/// `@route:id@` and named seals). The whole item takes the trailing-run
+/// ID rule then, even when the parent line carries no marker itself.
+pub(crate) fn child_line_seals_project_note(body: &str) -> bool {
+    body.split_whitespace().last().is_some_and(|last| {
+        super::tokens::parse_terminal_route_token(last)
+            .ok()
+            .flatten()
+            .is_some_and(|route| {
+                matches!(route.kind, CaptureKind::ProjectNote { .. })
+            })
+    })
+}
+
+/// Remove one trailing-run task ID token from `tokens`: the last ID-lex
+/// token in the trailing run. A trailing route marker belongs to the item,
+/// not the ID run, so it is set aside before the scan (a project note's
+/// trailing `@route` marker); a lone `:`/`^` counts only when nothing but
+/// that marker follows it, and a mid-run lone sigil stays literal text.
+pub(crate) fn strip_trailing_task_id<'a>(
+    tokens: &mut Vec<Token<'a>>,
+) -> Option<StrippedTaskId<'a>> {
+    let mut run_end = tokens.len();
+    if run_end > 0
+        && super::tokens::parse_terminal_route_token(tokens[run_end - 1].text)
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        run_end -= 1;
+    }
+    let mut run_start = run_end;
+    while run_start > 0 && is_trailing_id_run_member(tokens[run_start - 1].text)
+    {
+        run_start -= 1;
+    }
+    let mut found: Option<usize> = None;
+    for (offset, token) in tokens
+        .iter()
+        .enumerate()
+        .skip(run_start)
+        .take(run_end - run_start)
+    {
+        if lex_project_task_id(token.text).is_some() {
+            found = Some(offset);
+        }
+    }
+    let index = found?;
+    let lex = lex_project_task_id(tokens[index].text)?;
+    if matches!(lex, TaskIdLex::Lone { .. }) && index + 1 != run_end {
+        return None;
+    }
+    let token = tokens.remove(index);
+    Some(StrippedTaskId { token, lex })
+}
+
 /// A well-formed or invalid task ID token on the project note's own parent
 /// line. `token` is the typed token including its sigil.
 pub(crate) fn misplaced_parent_task_id_error(token: &str) -> String {
@@ -163,6 +240,117 @@ pub(crate) fn unfinished_project_task_id_error(sigil: char) -> String {
     )
 }
 
+/// A lone ` :` / ` ^` ending a list bullet or one of its nested lines: the
+/// unfinished ID names its owner task.
+pub(crate) fn unfinished_list_task_id_error(
+    sigil: char,
+    owner: &str,
+) -> String {
+    format!(
+        "` {sigil}` on `{owner}` needs a task ID: end the bullet with ` {sigil}<block-id>`"
+    )
+}
+
+/// A complete ` :id` / ` ^id` on a nested list line: IDs live on the
+/// owner's own bullet. `owner_bullet` is the owner's stripped body.
+pub(crate) fn misplaced_list_task_id_error(
+    token: &str,
+    owner_bullet: &str,
+) -> String {
+    format!(
+        "a task ID goes at the end of its task's own bullet: move `{token}` to `- {owner_bullet}`"
+    )
+}
+
+/// A header with no bullets captures nothing.
+pub(crate) fn empty_list_error(header: &str, notes: bool) -> String {
+    if notes {
+        format!(
+            "`{header}` heads a list but has no bullets: add `- <note>` lines below it, or put the note on the same line (`Idea text {header}`)"
+        )
+    } else {
+        format!(
+            "`{header}` heads a list but has no bullets: add `- <task>` lines below it, or put the task on the same line (`Call the bank {header}`)"
+        )
+    }
+}
+
+/// A route marker plus item-wide markers on the header line: the header
+/// stands alone. `bullet` is the first bullet's body for the example.
+pub(crate) fn list_header_marker_error(
+    header: &str,
+    marker: &str,
+    bullet: &str,
+) -> String {
+    format!(
+        "`{header}` heads a list, so it stands alone on its line: move `{marker}` to the bullet it configures (`- {bullet} {marker}`)"
+    )
+}
+
+/// A route-changing marker on a list bullet.
+pub(crate) fn list_bullet_marker_error(
+    header: &str,
+    file: &str,
+    marker: &str,
+    suggestion: &str,
+) -> String {
+    format!(
+        "every bullet under `{header}` files into {file}; `{marker}` would route this one elsewhere, so {suggestion}"
+    )
+}
+
+/// The `+`/`%n`/`%l`/`%t`/`!note:id` variants name their own item form.
+pub(crate) fn list_bullet_marker_suggestion(
+    marker: &str,
+    body: &str,
+    route: &str,
+) -> String {
+    if marker.starts_with('+') {
+        format!(
+            "give it its own item (a blank line, then `{body} @{route}{marker}`)"
+        )
+    } else if marker == "%n" {
+        "give the Pomodoro note its own item (a blank line, then `%n`)"
+            .to_string()
+    } else if marker == "%l" {
+        "capture the link on its own (a blank line, then `%l` with the URL)"
+            .to_string()
+    } else if marker == "%t" {
+        "capture the template on its own (a blank line, then the `%t` item)"
+            .to_string()
+    } else if marker.starts_with('!') {
+        format!(
+            "complete the existing task on its own (a blank line, then `{marker}`)"
+        )
+    } else {
+        format!("give it its own item (a blank line, then `{body} {marker}`)")
+    }
+}
+
+/// A non-open checkbox on a list bullet: list bullets become new open tasks.
+pub(crate) fn list_bullet_checkbox_error(status: char) -> String {
+    format!(
+        "list bullets become new open tasks: drop `[{status}]` (complete an existing task with `!note:id`)"
+    )
+}
+
+/// A bullet-start `#` under a list header: first-level `#` never types.
+/// `example` shows the bullet's own words reordered trailing.
+pub(crate) fn drawer_bullet_position_list_error(
+    notes: bool,
+    example: &str,
+) -> String {
+    if notes {
+        format!(
+            "list bullets are notes, so `#` cannot start one: type the note at the end of its line (`{example}`), or write `\\#` to keep a literal `#`"
+        )
+    } else {
+        format!(
+            "list bullets are tasks, so `#` cannot start one: type the task at the end of its line (`{example}`), or write `\\#` to keep a literal `#`"
+        )
+    }
+}
+
 /// One first-level-or-nested child's task-ID decision, in the plan's
 /// evaluation order: shape and charset, then reserved, then placement, then
 /// empty body, then checkbox, then duplicate.
@@ -172,12 +360,9 @@ pub(crate) enum ChildTaskOutcome {
     Ignore,
     /// A lone sigil ending a first-level bullet.
     Unfinished { sigil: char },
-    /// An accepted ID: `stripped` is the body without the token.
-    Accept {
-        sigil: char,
-        id: String,
-        stripped: String,
-    },
+    /// An accepted ID. The caller already stripped the token before
+    /// marker extraction, so the body no longer holds it.
+    Accept { sigil: char, id: String },
     /// A rule violation with its diagnostic code and execution message.
     Error { code: &'static str, message: String },
 }
@@ -209,30 +394,33 @@ impl ProjectTaskPass {
         }
     }
 
-    /// Step 3: one child in source order.
+    /// Step 3: one child in source order. The caller strips the child's
+    /// trailing-run task ID before marker extraction, so schedule and
+    /// priority markers behind the ID still resolve; `stripped` carries
+    /// that token (or `None` when the line holds no trailing-run ID).
     pub(crate) fn check_child(
         &mut self,
+        stripped: Option<StrippedTaskId<'_>>,
         body: &str,
         depth: AuthoredDepth,
         line_number: usize,
     ) -> ChildTaskOutcome {
-        let Some(token) = last_body_word(body) else {
+        let Some(stripped) = stripped else {
             return ChildTaskOutcome::Ignore;
         };
-        match lex_project_task_id(token) {
-            None => ChildTaskOutcome::Ignore,
-            Some(TaskIdLex::Lone { sigil }) => {
-                if depth == AuthoredDepth::First {
-                    ChildTaskOutcome::Unfinished { sigil }
-                } else {
-                    ChildTaskOutcome::Ignore
-                }
+        let token = stripped.token.text;
+        match stripped.lex {
+            TaskIdLex::Lone { sigil } => {
+                // A lone sigil ends the owner's trailing run on nested
+                // lines too: it opens the unfinished-ID prompt for the
+                // owner task.
+                ChildTaskOutcome::Unfinished { sigil }
             }
-            Some(TaskIdLex::Invalid { raw, .. }) => ChildTaskOutcome::Error {
+            TaskIdLex::Invalid { raw, .. } => ChildTaskOutcome::Error {
                 code: "invalid_project_task_id",
                 message: invalid_project_task_id_charset_error(&raw),
             },
-            Some(TaskIdLex::Valid { sigil, id }) => {
+            TaskIdLex::Valid { sigil, id } => {
                 if is_reserved_project_task_id(&id) {
                     return ChildTaskOutcome::Error {
                         code: "invalid_project_task_id",
@@ -245,9 +433,8 @@ impl ProjectTaskPass {
                         message: misplaced_nested_task_id_error(token),
                     };
                 }
-                let stripped = strip_task_id_suffix(body);
                 let (_, without_checkbox) =
-                    split_leading_checkbox(stripped.trim_start());
+                    split_leading_checkbox(body.trim_start());
                 if without_checkbox.split_whitespace().next().is_none() {
                     return ChildTaskOutcome::Error {
                         code: "invalid_project_task_id",
@@ -257,7 +444,7 @@ impl ProjectTaskPass {
                 let link = sigil == ':';
                 if link {
                     let (checkbox, _) =
-                        split_leading_checkbox(stripped.trim_start());
+                        split_leading_checkbox(body.trim_start());
                     if let Some(status) = checkbox {
                         return ChildTaskOutcome::Error {
                             code: "invalid_project_task_id",
@@ -283,11 +470,7 @@ impl ProjectTaskPass {
                 if link {
                     self.has_link = true;
                 }
-                ChildTaskOutcome::Accept {
-                    sigil,
-                    id,
-                    stripped,
-                }
+                ChildTaskOutcome::Accept { sigil, id }
             }
         }
     }

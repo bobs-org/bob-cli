@@ -77,6 +77,9 @@ pub(super) struct LineEditorParse<'a> {
     /// source order. The task-ID post-pass reads the last entry to span
     /// the ` :id` / ` ^id` token exactly.
     pub(super) body_tokens: Vec<Token<'a>>,
+    /// A trailing-run task ID stripped before marker extraction, so the
+    /// spans above never cover it. `None` on lines that take no ID.
+    pub(super) stripped_task_id: Option<StrippedTaskId<'a>>,
     pub(super) marker: Option<MarkerParse>,
     pub(super) marker_text: Option<String>,
     pub(super) declarations: Vec<Token<'a>>,
@@ -96,6 +99,7 @@ pub(super) fn parse_editor_line<'a>(
     line_text: &str,
     line_base: usize,
     leading: bool,
+    strip_task_id: bool,
 ) -> LineEditorParse<'a> {
     let declarations = take_global_declarations(&mut tokens);
     // Dependency modifiers interleave with destination,
@@ -106,6 +110,14 @@ pub(super) fn parse_editor_line<'a>(
     let (stripped, dependencies) =
         extract_line_dependencies(tokens, line_text, line_base, leading);
     tokens = stripped;
+    // Task-bullet IDs (` :id` / ` ^id`) may sit anywhere in the trailing
+    // marker run, so the ID leaves before marker extraction and
+    // schedule/priority markers behind it still resolve.
+    let stripped_task_id = if strip_task_id {
+        strip_trailing_task_id(&mut tokens)
+    } else {
+        None
+    };
     let (markers, marker_spans) = extract_terminal_markers(&mut tokens);
     let mut terminal_spans: Vec<Span> = marker_spans
         .into_iter()
@@ -172,6 +184,7 @@ pub(super) fn parse_editor_line<'a>(
     LineEditorParse {
         body,
         body_tokens,
+        stripped_task_id,
         marker,
         marker_text,
         declarations,
@@ -295,7 +308,14 @@ pub(crate) fn parse_for_editor_with(
     raw_text: &str,
     options: &EditorParseOptions<'_>,
 ) -> EditorParse {
-    let draft = split_capture_draft(raw_text);
+    // Template rows are never split by headers, and a header in the
+    // template body is refused outright.
+    let template_draft = super::template::analyze(raw_text).directive.is_some();
+    let draft = if template_draft {
+        split_capture_draft_no_lists(raw_text)
+    } else {
+        split_capture_draft(raw_text)
+    };
     let mut global_spans = Vec::new();
     let mut global_diagnostics = Vec::new();
     let options = EditorParseOptions {
@@ -308,6 +328,37 @@ pub(crate) fn parse_for_editor_with(
         .iter()
         .map(|item| parse_editor_item_with(item, &options))
         .collect::<Vec<_>>();
+    if template_draft {
+        for (raw_item, outcome) in
+            draft.items.iter().zip(item_outcomes.iter_mut())
+        {
+            let Some(first) = raw_item.lines.first() else {
+                continue;
+            };
+            let Some(detected) = detect_list_header(&first.raw) else {
+                continue;
+            };
+            let list = ListContext {
+                kind: detected.kind,
+                route: detected.route,
+                section: detected.section,
+                header_line: first.line_number,
+                position: 0,
+                count: 0,
+                header_start: first.raw.start,
+                header_end: first.raw.end,
+                ownerless: false,
+            };
+            outcome.item = list_refusal_item(
+                raw_item,
+                &list,
+                Some(("template_list", super::draft::template_list_error())),
+                Some((first.raw.start, first.raw.end)),
+            )
+            .item;
+        }
+    }
+    attach_list_duplicate_id_diagnostics(&mut item_outcomes);
     let mut declarations = draft.declarations;
     for outcome in &item_outcomes {
         declarations.extend(outcome.declarations.iter().copied());
@@ -809,6 +860,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             relations: Vec::new(),
             dependency_target: None,
             task_complete: None,
+            list: None,
             spans: vec![Span {
                 start: token.start,
                 end: token.end,
@@ -861,6 +913,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             relations: Vec::new(),
             dependency_target: None,
             task_complete: None,
+            list: None,
             spans: vec![Span {
                 start: token.start,
                 end: token.end,
@@ -925,6 +978,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             relations: Vec::new(),
             dependency_target: None,
             task_complete,
+            list: None,
             spans,
             diagnostics,
             sub_bullets: Vec::new(),
@@ -1100,6 +1154,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             relations: found.relation_entries(),
             dependency_target: None,
             task_complete: None,
+            list: None,
             spans,
             diagnostics,
             sub_bullets: Vec::new(),
@@ -1185,6 +1240,7 @@ fn parse_editor_ref_item<'a>(
                 relations: Vec::new(),
                 dependency_target: None,
                 task_complete: None,
+                list: None,
                 spans: vec![Span {
                     start: token.start,
                     end: token.end,
@@ -1243,6 +1299,7 @@ fn parse_editor_ref_item<'a>(
                 relations: Vec::new(),
                 dependency_target: None,
                 task_complete: None,
+                list: None,
                 spans: vec![
                     Span {
                         start: url_token.start,
@@ -1307,8 +1364,53 @@ pub(super) fn parse_editor_item_with<'a>(
     let has_listen = resolved
         .as_ref()
         .is_some_and(|directives| directives.listen);
+    let has_template = resolved
+        .as_ref()
+        .is_some_and(|directives| directives.template);
+    if let Some(list) = item.list.as_ref() {
+        if has_template {
+            return list_refusal_item(
+                item,
+                list,
+                Some(("template_list", super::draft::template_list_error())),
+                None,
+            );
+        }
+        if has_note {
+            let suggestion =
+                list_bullet_marker_suggestion("%n", "", &list.route);
+            let header = list_header_text(item, list);
+            let file = format!("{}.md", list.route);
+            return list_refusal_item(
+                item,
+                list,
+                Some((
+                    "list_bullet_marker",
+                    list_bullet_marker_error(&header, &file, "%n", &suggestion),
+                )),
+                None,
+            );
+        }
+        if has_listen {
+            let suggestion =
+                list_bullet_marker_suggestion("%l", "", &list.route);
+            let header = list_header_text(item, list);
+            let file = format!("{}.md", list.route);
+            return list_refusal_item(
+                item,
+                list,
+                Some((
+                    "list_bullet_marker",
+                    list_bullet_marker_error(&header, &file, "%l", &suggestion),
+                )),
+                None,
+            );
+        }
+    }
     if occurrences.is_empty() && directive_occurrences.is_empty() {
-        return parse_editor_item_inner(item, options, false, false);
+        let mut outcome = parse_editor_item_inner(item, options, false, false);
+        attach_list_header_marker_diagnostic(item, &mut outcome.item);
+        return outcome;
     }
     // Type markers and % directives are transparent to every existing
     // claim: run the established parse on the offset-preserving masked
@@ -1341,7 +1443,170 @@ pub(super) fn parse_editor_item_with<'a>(
     if has_listen {
         apply_listen_directive(&mut outcome.item);
     }
+    if !has_note && !has_listen && !has_template {
+        attach_list_header_marker_diagnostic(item, &mut outcome.item);
+    }
     outcome
+}
+
+/// Refuse two equal task IDs inside one capture list, mirroring the
+/// execution `duplicate_project_task_id` refusal: the diagnostic lands on
+/// the second bullet and names both draft lines, with the ID token's range.
+fn attach_list_duplicate_id_diagnostics(
+    outcomes: &mut [EditorItemOutcome<'_>],
+) {
+    let mut seen: Vec<(usize, usize, String, usize)> = Vec::new();
+    for outcome in outcomes.iter_mut() {
+        let Some(list) = outcome
+            .item
+            .list
+            .as_ref()
+            .filter(|list| !list.ownerless && list.kind == ListKind::Tasks)
+        else {
+            continue;
+        };
+        let Some(block_id) = outcome.item.block_id.clone() else {
+            continue;
+        };
+        if let Some((_, _, _, first_line)) = seen.iter().find(|seen| {
+            seen.0 == list.header_start
+                && seen.1 == list.header_end
+                && seen.2 == block_id
+        }) {
+            let first_line = *first_line;
+            let range = duplicate_id_token_range(&outcome.item.spans);
+            outcome.item.diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "duplicate_project_task_id",
+                message: duplicate_project_task_id_error(
+                    &block_id,
+                    first_line,
+                    outcome.item.line_start,
+                ),
+                range,
+            });
+            continue;
+        }
+        seen.push((
+            list.header_start,
+            list.header_end,
+            block_id,
+            outcome.item.line_start,
+        ));
+    }
+}
+
+/// The ID token's range: the block-ID span widened left over its `:` link
+/// sigil when one directly precedes it.
+fn duplicate_id_token_range(spans: &[Span]) -> Option<(usize, usize)> {
+    let block = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::ProjectTaskBlockId)?;
+    let start = spans
+        .iter()
+        .filter(|span| {
+            span.kind == SpanKind::ProjectTaskLinkMarker
+                && span.end == block.start
+        })
+        .map(|span| span.start)
+        .min()
+        .unwrap_or(block.start);
+    Some((start, block.end))
+}
+
+/// A route marker plus only item-wide markers on the first line with
+/// bullets below: the header must stand alone. Mirrors the execution
+/// `list_header_marker` refusal with the same code and copy.
+fn attach_list_header_marker_diagnostic(
+    item: &CaptureItem<'_>,
+    parsed: &mut EditorItemParse,
+) {
+    if parsed.list.is_some() {
+        return;
+    }
+    if !matches!(parsed.mode, EditorMode::Task | EditorMode::Bullet) {
+        return;
+    }
+    // Either the marker was selected and the body emptied, or a bare
+    // `@route` stayed literal (its trailing markers extracted first).
+    let body_empty = parsed.body.trim().is_empty();
+    let body_is_bare_header = !body_empty
+        && parsed.route.is_none()
+        && item.lines.first().is_some_and(|parent| {
+            parent.raw.text.split_whitespace().next()
+                == Some(parsed.body.trim())
+        });
+    if !body_empty && !body_is_bare_header {
+        return;
+    }
+    if !parsed.dependencies.is_empty()
+        || !parsed.blocked_tasks.is_empty()
+        || !parsed.relations.is_empty()
+    {
+        return;
+    }
+    let Some(first) = parsed
+        .sub_bullets
+        .iter()
+        .find(|bullet| bullet.depth == AuthoredDepth::First)
+    else {
+        return;
+    };
+    let Some(parent) = item.lines.first() else {
+        return;
+    };
+    let mut tokens = parent.raw.text.split_whitespace();
+    let Some(first_token) = tokens.next() else {
+        return;
+    };
+    let Some(stray) = tokens.next() else {
+        return;
+    };
+    let marker_text = parsed
+        .local_destination_markers
+        .first()
+        .map(|marker| marker.text.as_str())
+        .unwrap_or("");
+    // Either the marker was selected, or a bare `@route` stayed literal.
+    let first_is_header =
+        super::tokens::parse_terminal_route_token(first_token)
+            .ok()
+            .flatten()
+            .is_some_and(|route| {
+                matches!(
+                    route.kind,
+                    CaptureKind::Task | CaptureKind::Bullet { .. }
+                )
+            });
+    if first_token != marker_text && !first_is_header {
+        return;
+    }
+    if parsed
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "list_header_marker")
+    {
+        return;
+    }
+    // Underline the marker that must move to the bullet: the second token
+    // on the header line, located after the header marker itself.
+    let range = parent.raw.text.find(first_token).and_then(|token_start| {
+        let search_from = token_start + first_token.len();
+        parent.raw.text[search_from..].find(stray).map(|offset| {
+            let start = parent.raw.start + search_from + offset;
+            (start, start + stray.len())
+        })
+    });
+    parsed.diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: "list_header_marker",
+        message: list_header_marker_error(
+            first_token,
+            stray,
+            first.body.trim(),
+        ),
+        range,
+    });
 }
 
 fn apply_note_directive(parsed: &mut EditorItemParse) {
@@ -1937,12 +2202,573 @@ fn type_marker_subject_for_editor(
     }
 }
 
+/// The header token text of a list item, trimmed.
+pub(super) fn list_header_text(
+    item: &CaptureItem<'_>,
+    list: &ListContext,
+) -> String {
+    item.source
+        .get(list.header_start..list.header_end)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// One refusal diagnostic item for a list header block: `incomplete` with
+/// the header spans and no other content, so a cursor or diagnostic on the
+/// header line resolves to the list's first item. A `None` diagnostic marks
+/// a still-typing incomplete state (the empty list), which needs
+/// `list_item` but reports no error.
+pub(super) fn list_refusal_item<'a>(
+    item: &CaptureItem<'a>,
+    list: &ListContext,
+    diagnostic: Option<(&'static str, String)>,
+    range: Option<(usize, usize)>,
+) -> EditorItemOutcome<'a> {
+    let spans = list_header_spans(item, list);
+    let mut diagnostics = Vec::new();
+    if let Some((code, message)) = diagnostic {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code,
+            message,
+            range,
+        });
+    }
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: String::new(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            list: Some(list.clone()),
+            spans,
+            diagnostics,
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+        },
+        declarations: Vec::new(),
+    }
+}
+
+/// Exactly the spans a leading `@route` / `@route#section` marker gets,
+/// re-lexed on the header token so the editor and execution agree.
+pub(super) fn list_header_spans(
+    item: &CaptureItem<'_>,
+    list: &ListContext,
+) -> Vec<Span> {
+    let text = item
+        .source
+        .get(list.header_start..list.header_end)
+        .unwrap_or("");
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let leading = text.len() - text.trim_start().len();
+    let token = Token {
+        text: trimmed,
+        start: list.header_start + leading,
+        end: list.header_start + leading + trimmed.len(),
+    };
+    super::editor_classify::classify_route_token(&token)
+        .map(|marker| marker.spans)
+        .unwrap_or_default()
+}
+
+/// Parse one list bullet block for the editor: the same modes, spans,
+/// needs, and diagnostics the execution parser reports, with an unfinished
+/// ID as `incomplete` needing `block_id` plus a placeholder span and no
+/// diagnostic.
+pub(super) fn parse_editor_list_item<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+) -> EditorItemOutcome<'a> {
+    let _ = options;
+    let list = item.list.clone().expect("list bullet item");
+    let header = list_header_text(item, &list);
+    let file = format!("{}.md", list.route);
+    let notes = list.kind == ListKind::Notes;
+    let mut spans = list_header_spans(item, &list);
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut needs: Vec<Need> = Vec::new();
+    let error_item = |spans: Vec<Span>,
+                      needs: Vec<Need>,
+                      code: &'static str,
+                      message: String,
+                      range: Option<(usize, usize)>| {
+        let mut outcome =
+            list_refusal_item(item, &list, Some((code, message)), range);
+        outcome.item.spans = spans;
+        outcome.item.needs = needs;
+        outcome
+    };
+    if list.ownerless {
+        let line = &item.lines[0];
+        let (code, message) = match classify_authored_line(line.raw) {
+            AuthoredLineClass::Item(authored)
+                if authored.depth == AuthoredDepth::Nested =>
+            {
+                (
+                    "orphaned_nested_bullet",
+                    orphaned_nested_bullet_error(line.line_number),
+                )
+            }
+            _ => (
+                "invalid_child_line",
+                invalid_child_line_error(line.line_number),
+            ),
+        };
+        return error_item(
+            spans.clone(),
+            needs.clone(),
+            code,
+            message,
+            Some((line.raw.start, line.raw.end)),
+        );
+    }
+    if list.count == 0 {
+        let mut outcome = list_refusal_item(
+            item,
+            &list,
+            None,
+            Some((list.header_start, list.header_end)),
+        );
+        outcome.item.spans = spans;
+        outcome.item.needs = vec![Need::ListItem];
+        outcome.item.route = Some(list.route.clone());
+        outcome.item.section = list.section.clone();
+        return outcome;
+    }
+    let parent_line = item.lines[0];
+    let raw_body = item
+        .source
+        .get(parent_line.raw.start..parent_line.raw.end)
+        .unwrap_or("");
+    let mut body_text = raw_body.trim().to_string();
+    if !notes {
+        let (checkbox, rest) = split_leading_checkbox(raw_body.trim_start());
+        if let Some(status) = checkbox {
+            if status != ' ' {
+                return error_item(
+                    spans.clone(),
+                    needs.clone(),
+                    "list_bullet_checkbox",
+                    list_bullet_checkbox_error(status),
+                    Some((parent_line.raw.start, parent_line.raw.end)),
+                );
+            }
+            body_text = rest.to_string();
+        }
+    }
+    if body_text.trim_start().starts_with('#') {
+        let mut words = body_text.trim_start().split_whitespace();
+        let first_word = words.next().unwrap_or("#");
+        let rest_words: Vec<&str> = words.collect();
+        let example = if rest_words.is_empty() {
+            format!("- {first_word}")
+        } else {
+            format!("- {} {first_word}", rest_words.join(" "))
+        };
+        return error_item(
+            spans.clone(),
+            needs.clone(),
+            "drawer_bullet_position",
+            drawer_bullet_position_list_error(notes, &example),
+            Some((parent_line.raw.start, parent_line.raw.end)),
+        );
+    }
+    let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+    let parent_parse = parse_editor_line(
+        parent_tokens,
+        parent_line.raw.text,
+        parent_line.raw.start,
+        false,
+        !notes,
+    );
+    let mut declarations = global_declarations_from_tokens(
+        parent_parse.declarations,
+        parent_line.line_number,
+    );
+    spans.extend(parent_parse.terminal_spans);
+    spans.extend(parent_parse.dependencies.spans.iter().cloned());
+    diagnostics.extend(parent_parse.diagnostics);
+    // A route marker on the bullet would file it elsewhere.
+    if let Some(marker) = parent_parse.marker {
+        let range = marker.spans.first().map(|span| (span.start, span.end));
+        let marker_text = parent_parse.marker_text.clone().unwrap_or_default();
+        let suggestion = list_bullet_marker_suggestion(
+            &marker_text,
+            parent_parse.body.trim(),
+            &list.route,
+        );
+        return error_item(
+            spans.clone(),
+            needs.clone(),
+            "list_bullet_marker",
+            list_bullet_marker_error(&header, &file, &marker_text, &suggestion),
+            range,
+        );
+    }
+    if let Some(affix) =
+        list_affix_token(&parent_parse.body_tokens, item.source)
+    {
+        let suggestion = list_bullet_marker_suggestion(
+            affix,
+            parent_parse.body.trim(),
+            &list.route,
+        );
+        return error_item(
+            spans.clone(),
+            needs.clone(),
+            "list_bullet_marker",
+            list_bullet_marker_error(&header, &file, affix, &suggestion),
+            parent_parse
+                .body_tokens
+                .iter()
+                .find(|token| token.text == affix)
+                .map(|token| (token.start, token.end)),
+        );
+    }
+    // The stripped ID decides the mode: ` :id` links (pomodoro task), ` ^id`
+    // names (plain task), and a section bullet never takes one.
+    let (mut mode, mut block_id) = match list.kind {
+        ListKind::Tasks => (EditorMode::Task, None),
+        ListKind::Notes => (EditorMode::Bullet, None),
+    };
+    let route = Some(list.route.clone());
+    let section = if notes { list.section.clone() } else { None };
+    let owner_body = parent_parse.body.clone();
+    if let Some(stripped) = parent_parse.stripped_task_id {
+        let token = stripped.token;
+        match stripped.lex {
+            TaskIdLex::Lone { .. } => {
+                mode = EditorMode::Incomplete;
+                if !needs.contains(&Need::BlockId) {
+                    needs.push(Need::BlockId);
+                }
+                spans.push(Span {
+                    start: token.start,
+                    end: token.end,
+                    kind: SpanKind::InteractivePlaceholder,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+            }
+            TaskIdLex::Invalid { raw, .. } => {
+                return error_item(
+                    spans.clone(),
+                    needs.clone(),
+                    "invalid_project_task_id",
+                    invalid_project_task_id_charset_error(&raw),
+                    Some((token.start, token.end)),
+                );
+            }
+            TaskIdLex::Valid { sigil, id } => {
+                if is_reserved_project_task_id(&id) {
+                    return error_item(
+                        spans.clone(),
+                        needs.clone(),
+                        "invalid_project_task_id",
+                        reserved_project_task_id_error(&id),
+                        Some((token.start, token.end)),
+                    );
+                }
+                if owner_body.trim().is_empty() {
+                    return error_item(
+                        spans.clone(),
+                        needs.clone(),
+                        "invalid_project_task_id",
+                        empty_project_task_body_error(parent_line.line_number),
+                        Some((token.start, token.end)),
+                    );
+                }
+                if sigil == ':' {
+                    mode = EditorMode::PomodoroTask;
+                    spans.push(Span {
+                        start: token.start,
+                        end: token.start + 1,
+                        kind: SpanKind::ProjectTaskLinkMarker,
+                        project_note: None,
+                        title: None,
+                        key: None,
+                    });
+                }
+                spans.push(Span {
+                    start: token.start + 1,
+                    end: token.end,
+                    kind: SpanKind::ProjectTaskBlockId,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+                block_id = Some(id);
+            }
+        }
+    }
+    if parent_parse.body.trim().is_empty() && block_id.is_none() {
+        mode = EditorMode::Incomplete;
+    }
+    let mut sub_bullets = Vec::new();
+    for line in item.lines.iter().skip(1) {
+        let line_number = line.line_number;
+        let authored = match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Invalid => {
+                return error_item(
+                    spans.clone(),
+                    needs.clone(),
+                    "invalid_child_line",
+                    invalid_child_line_error(line_number),
+                    Some((line.raw.start, line.raw.end)),
+                );
+            }
+            AuthoredLineClass::Item(authored) => authored,
+        };
+        let child_line = RawLine {
+            text: authored.body,
+            start: authored.body_start,
+            end: line.raw.end,
+        };
+        let child_tokens = tokenize_line_with_spans(&child_line);
+        let child_parse = parse_editor_line(
+            child_tokens,
+            child_line.text,
+            child_line.start,
+            false,
+            !notes,
+        );
+        declarations.extend(global_declarations_from_tokens(
+            child_parse.declarations,
+            line_number,
+        ));
+        spans.extend(child_parse.terminal_spans);
+        spans.extend(child_parse.dependencies.spans.iter().cloned());
+        diagnostics.extend(child_parse.diagnostics);
+        if let Some(marker) = child_parse.marker {
+            let range = marker.spans.first().map(|span| (span.start, span.end));
+            let marker_text =
+                child_parse.marker_text.clone().unwrap_or_default();
+            let suggestion = list_bullet_marker_suggestion(
+                &marker_text,
+                owner_body.trim(),
+                &list.route,
+            );
+            return error_item(
+                spans.clone(),
+                needs.clone(),
+                "list_bullet_marker",
+                list_bullet_marker_error(
+                    &header,
+                    &file,
+                    &marker_text,
+                    &suggestion,
+                ),
+                range,
+            );
+        }
+        if let Some(affix) =
+            list_affix_token(&child_parse.body_tokens, item.source)
+        {
+            let suggestion = list_bullet_marker_suggestion(
+                affix,
+                owner_body.trim(),
+                &list.route,
+            );
+            return error_item(
+                spans.clone(),
+                needs.clone(),
+                "list_bullet_marker",
+                list_bullet_marker_error(&header, &file, affix, &suggestion),
+                child_parse
+                    .body_tokens
+                    .iter()
+                    .find(|token| token.text == affix)
+                    .map(|token| (token.start, token.end)),
+            );
+        }
+        if let Some(stripped) = child_parse.stripped_task_id {
+            let token = stripped.token;
+            match stripped.lex {
+                TaskIdLex::Invalid { raw, .. } => {
+                    return error_item(
+                        spans.clone(),
+                        needs.clone(),
+                        "invalid_project_task_id",
+                        invalid_project_task_id_charset_error(&raw),
+                        Some((token.start, token.end)),
+                    );
+                }
+                TaskIdLex::Valid { id, .. } => {
+                    if is_reserved_project_task_id(&id) {
+                        return error_item(
+                            spans.clone(),
+                            needs.clone(),
+                            "invalid_project_task_id",
+                            reserved_project_task_id_error(&id),
+                            Some((token.start, token.end)),
+                        );
+                    }
+                    return error_item(
+                        spans.clone(),
+                        needs.clone(),
+                        "misplaced_project_task_id",
+                        misplaced_list_task_id_error(
+                            token.text,
+                            owner_body.trim(),
+                        ),
+                        Some((token.start, token.end)),
+                    );
+                }
+                TaskIdLex::Lone { .. } => {
+                    mode = EditorMode::Incomplete;
+                    if !needs.contains(&Need::BlockId) {
+                        needs.push(Need::BlockId);
+                    }
+                    spans.push(Span {
+                        start: token.start,
+                        end: token.end,
+                        kind: SpanKind::InteractivePlaceholder,
+                        project_note: None,
+                        title: None,
+                        key: None,
+                    });
+                }
+            }
+        }
+        if child_parse.body.trim().is_empty() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "empty_child_after_markers",
+                message: empty_child_after_markers_error(line_number),
+                range: Some((line.raw.start, line.raw.end)),
+            });
+            continue;
+        }
+        // The bullet line is this item's text line, so its nested lines sit
+        // one level higher than their lexical depth, mirroring the execution
+        // parser and the equivalence invariant.
+        let depth = match authored.depth {
+            AuthoredDepth::Nested => AuthoredDepth::First,
+            AuthoredDepth::First => AuthoredDepth::First,
+        };
+        sub_bullets.push(AuthoredSubBullet {
+            body: child_parse.body,
+            depth,
+            task_id: None,
+            drawer: None,
+        });
+    }
+    spans.sort_by_key(|span| (span.start, span.end));
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: owner_body,
+            mode,
+            route,
+            section,
+            block_id,
+            needs,
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            list: Some(list),
+            spans,
+            diagnostics,
+            sub_bullets,
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+        },
+        declarations,
+    }
+}
+
+/// A trailing parent selector (`+`/`+query`) or task completion
+/// (`!note:id`) among surviving body tokens: both would file the bullet
+/// elsewhere, so the bullet is refused instead.
+fn list_affix_token<'a>(tokens: &[Token<'a>], source: &str) -> Option<&'a str> {
+    for token in tokens {
+        if crate::native::capture_links::is_protected_markup_range(
+            source,
+            token.start,
+            token.end,
+        ) {
+            continue;
+        }
+        if token.text.starts_with('!')
+            && token.text.contains(':')
+            && !token.text.starts_with("!!")
+            && !token.text.starts_with("![")
+        {
+            return Some(token.text);
+        }
+    }
+    if let Some(token) = tokens.last()
+        && let Some(query) = token.text.strip_prefix('+')
+        && !query.starts_with('+')
+        && !query.starts_with('-')
+        && !query
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_digit())
+        && !crate::native::capture_links::is_protected_markup_range(
+            source,
+            token.start,
+            token.end,
+        )
+    {
+        return Some(token.text);
+    }
+    None
+}
+
 pub(super) fn parse_editor_item_inner<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
     has_clip: bool,
     has_listen: bool,
 ) -> EditorItemOutcome<'a> {
+    // List bullets parse as their own task-bullet grammar: no whole-item
+    // claims, no operator or picker forms.
+    if item.list.is_some() {
+        return parse_editor_list_item(item, options);
+    }
     if let Some(task_goto) = parse_editor_task_goto_item(item) {
         return task_goto;
     }
@@ -1988,6 +2814,7 @@ pub(super) fn parse_editor_item_inner<'a>(
         parent_line.text,
         parent_line.start,
         true,
+        false,
     );
     declarations.extend(global_declarations_from_tokens(
         parent_parse.declarations,
@@ -2059,8 +2886,24 @@ pub(super) fn parse_editor_item_inner<'a>(
         None => (EditorMode::Task, None, None, None, Vec::new(), None, None),
     };
 
+    // Project-note task bullets take the list ID rule: the ID may sit
+    // anywhere in the trailing marker run, so it leaves before marker
+    // extraction and schedule/priority markers behind it still resolve.
+    // The project-note marker may sit on a child line: a sealed marker
+    // there routes the whole item, so every sibling takes the ID rule.
+    let parent_takes_ids = matches!(
+        mode,
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+    ) || item.lines.iter().skip(1).any(|line| {
+        matches!(
+            classify_authored_line(line.raw),
+            AuthoredLineClass::Item(authored)
+                if child_line_seals_project_note(authored.body)
+        )
+    });
     let mut sub_bullets = Vec::new();
     let mut child_task_tokens: Vec<Option<Token<'_>>> = Vec::new();
+    let mut child_task_stripped: Vec<Option<StrippedTaskId<'_>>> = Vec::new();
     let mut child_task_lines: Vec<usize> = Vec::new();
     let mut has_first_level_owner = false;
     for line in item.lines.iter().skip(1) {
@@ -2100,6 +2943,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             child_line.text,
             child_line.start,
             false,
+            parent_takes_ids,
         );
         item_dependencies.absorb(&child_parse.dependencies);
         declarations.extend(global_declarations_from_tokens(
@@ -2182,7 +3026,10 @@ pub(super) fn parse_editor_item_inner<'a>(
             });
         }
 
-        if child_parse.body.is_empty() && drawer_hit.is_none() {
+        // A stripped task ID defers to the project-note post-pass, which
+        // reports the ID refusal with the execution code.
+        let id_pending = child_parse.stripped_task_id.is_some();
+        if child_parse.body.is_empty() && drawer_hit.is_none() && !id_pending {
             // A child holding only dependency modifiers contributes no
             // empty bullet: its prerequisites belong to the item's
             // dependent. Any other emptied child stays an error.
@@ -2204,6 +3051,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             }
         } else {
             child_task_tokens.push(child_parse.body_tokens.last().copied());
+            child_task_stripped.push(child_parse.stripped_task_id.clone());
             child_task_lines.push(line_number);
             let (child_body, drawer) = match drawer_hit {
                 Some(super::drawer_bullet::DrawerBulletHit::Escaped {
@@ -2221,16 +3069,22 @@ pub(super) fn parse_editor_item_inner<'a>(
                 }) => (title, Some(selector)),
                 _ => (child_parse.body, None),
             };
-            if child_body.is_empty() && drawer.is_none() {
-                if child_parse.dependencies.stripped_tokens == 0 {
-                    diagnostics.push(Diagnostic {
-                        severity: Severity::Error,
-                        code: "empty_child_after_markers",
-                        message: empty_child_after_markers_error(line_number),
-                        range: Some((raw.start, raw.end)),
-                    });
-                }
-            } else {
+            // A stripped task ID defers to the project-note post-pass
+            // without a diagnostic; everything else keeps the empty-child
+            // refusal and stays out of the bullet list.
+            let empty_bullet = child_body.is_empty() && drawer.is_none();
+            if empty_bullet
+                && !id_pending
+                && child_parse.dependencies.stripped_tokens == 0
+            {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "empty_child_after_markers",
+                    message: empty_child_after_markers_error(line_number),
+                    range: Some((raw.start, raw.end)),
+                });
+            }
+            if !empty_bullet || id_pending {
                 sub_bullets.push(AuthoredSubBullet {
                     body: child_body,
                     depth: authored.depth,
@@ -2441,8 +3295,14 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
         for (index, sub_bullet) in sub_bullets.iter_mut().enumerate() {
             let token = child_task_tokens[index];
+            let stripped = child_task_stripped.get(index).cloned().flatten();
             let line_number = child_task_lines[index];
+            // The stripped token carries the span; it left the body before
+            // marker extraction, so the body below is already clean.
+            let token =
+                stripped.as_ref().map(|stripped| stripped.token).or(token);
             match pass.check_child(
+                stripped,
                 &sub_bullet.body,
                 sub_bullet.depth,
                 line_number,
@@ -2467,13 +3327,8 @@ pub(super) fn parse_editor_item_inner<'a>(
                         });
                     }
                 }
-                ChildTaskOutcome::Accept {
-                    sigil,
-                    id,
-                    stripped,
-                } => {
+                ChildTaskOutcome::Accept { sigil, id } => {
                     let link = sigil == ':';
-                    sub_bullet.body = stripped;
                     sub_bullet.task_id =
                         Some(ProjectTaskId { block_id: id, link });
                     if let Some(token) = token {
@@ -3369,6 +4224,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             relations: item_dependencies.relation_entries(),
             dependency_target,
             task_complete: None,
+            list: None,
             spans,
             diagnostics,
             sub_bullets,
@@ -3412,15 +4268,36 @@ pub(crate) fn editor_item_at(
     cursor: usize,
 ) -> Option<EditorItemParse> {
     let draft = split_capture_draft(raw_text);
-    let index = draft
-        .items
-        .iter()
-        .find(|item| {
-            item.lines
+    let found = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
+    });
+    // A cursor or diagnostic on a header line belongs to the list's first
+    // item: per-bullet items hold zero-copy bullet slices, so the header
+    // line itself sits in no item's range.
+    let index = match found {
+        Some(item) => item.index,
+        None => {
+            let header =
+                split_physical_lines(raw_text).into_iter().find(|line| {
+                    cursor >= line.start
+                        && cursor <= line.end
+                        && detect_list_header(&line).is_some()
+                })?;
+            draft
+                .items
                 .iter()
-                .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
-        })?
-        .index;
+                .find(|item| {
+                    item.list.as_ref().is_some_and(|list| {
+                        !list.ownerless
+                            && list.header_start == header.start
+                            && list.header_end == header.end
+                    })
+                })?
+                .index
+        }
+    };
     parse_for_editor(raw_text)
         .items
         .into_iter()

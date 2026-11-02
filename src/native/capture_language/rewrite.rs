@@ -427,7 +427,7 @@ fn candidate_selects_plain_marker(
             };
             let tokens = tokenize_line_with_spans(&raw_line);
             let parse =
-                parse_editor_line(tokens, line_text, line_base, leading);
+                parse_editor_line(tokens, line_text, line_base, leading, false);
             let Some(marker) = parse.marker.as_ref() else {
                 return false;
             };

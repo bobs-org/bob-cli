@@ -879,6 +879,7 @@ fn planned_item_from_pomodoro_link_plan(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            list: None,
             relation_label_hides: Vec::new(),
         },
         clip_plan: None,

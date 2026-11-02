@@ -26,6 +26,7 @@ workflow guide.
   - [Bulk templates](#bulk-templates)
     - [Saved templates](#saved-templates)
   - [Authored sub-bullets](#authored-sub-bullets)
+  - [Lists: several tasks or notes at once](#lists-several-tasks-or-notes-at-once)
   - [Directives (`%`)](#directives)
   - [Clipboard](#clipboard)
   - [Saving links to your reading queue](#saving-links-to-your-reading-queue)
@@ -75,7 +76,9 @@ workflow guide.
 ## Grammar at a glance
 
 One capture item is a parent line plus optional authored child bullets. Blank
-physical lines split a draft into multiple items; each item is planned before
+physical lines split a draft into multiple items; a lone `@route` or
+`@route#section` header line plus its bullets is a list of items (see
+[Lists](#lists-several-tasks-or-notes-at-once)). Each item is planned before
 anything is written, and any failure rolls the whole batch back.
 
 **`@` says where. `#` names a place or a task type. `%` says how to capture.**
@@ -92,6 +95,10 @@ anything is written, and any failure rolls the whole batch back.
 | `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
+| `@route` alone on its line, bullets below | Task list: each first-level bullet below becomes its own task in `<route>.md` (see [Lists](#lists-several-tasks-or-notes-at-once)) |
+| `@route#Section` alone on its line, bullets below | Section list: each first-level bullet below becomes its own bullet under that heading |
+| `- <task> :<task-id>` (list bullet) | Same as the project-note bullet: name the task, make it Next, and link it into the Pomodoro the task's type places |
+| `- <task> ^<task-id>` (list bullet) | Same as the project-note bullet: name the task only |
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
 | `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; a future schedule (`s:<N>`, N ≥ 1) starts Blocked (`[?]`) and unlinked; the bare link lands in the Pomodoro the new task's type places |
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
@@ -583,7 +590,10 @@ warning. A MEET type destination changes a different effective type to MEET.
 ### Multi-item capture
 
 One or more blank or whitespace-only physical lines split `TEXT` into ordered
-capture items. Leading, trailing, and repeated separator runs are ignored, so
+capture items. A lone `@route` or `@route#section` header line also starts a
+new item even with no blank line before it, and its bullets split into one
+item per bullet (see [Lists](#lists-several-tasks-or-notes-at-once)).
+Leading, trailing, and repeated separator runs are ignored, so
 a draft with at least one nonempty item is valid even if it starts or ends
 with blank rows. Each item uses the normal capture grammar independently:
 the first nonblank line is that item's parent, later contiguous authored
@@ -890,6 +900,87 @@ the existing writer.
 Authored children render before clipboard children and the priority
 schedule log, so the full block order is: parent line, authored children,
 clipboard children, then the schedule log.
+
+### Lists: several tasks or notes at once
+
+A first line that is only `@route` (a task list) or only `@route#section`
+(a section list) files each first-level bullet below it as its own item in
+that file, with the bullet's nested bullets as its children. A header line
+also starts a new list when no blank line precedes it, so `@dev` / `- a` /
+`@cash` / `- b` is two lists. For example, with this `dev.md`:
+
+```markdown
+## Tasks
+
+- [ ] #task Existing thing [created::2026-10-01] ^existing
+```
+
+capturing
+
+```text
+@dev
+- Fix flaky gkeep test :fix-flaky-gkeep
+  - repro on CI first
+- Write release notes ^release-notes s:2
+- Ping Alice about the cutover
+```
+
+writes `dev.md`:
+
+```markdown
+## Tasks
+
+- [ ] #task Existing thing [created::2026-10-01] ^existing
+- [*] #task Fix flaky gkeep test [created::2026-11-02] ^fix-flaky-gkeep
+	- repro on CI first
+- [?] #task Write release notes [created::2026-11-02] [scheduled::2026-11-04] ^release-notes
+- [ ] #task Ping Alice about the cutover [created::2026-11-02]
+```
+
+and, in the same atomic batch, links `[[dev#^fix-flaky-gkeep]]` under the
+Pomodoro the new task's type places in today's daily note.
+
+Each bullet captures exactly as `<bullet text> @route` would on its own
+line: a trailing ` :<id>` is `@route:<id>` (Next plus the Pomodoro link),
+a trailing ` ^<id>` is `@route^<id>` (name only), and the ID token may sit
+anywhere in the line's trailing marker run (`:call-bank s:2` and
+`s:2 :call-bank` are the same task). A bullet under `@route#section`
+captures as `<bullet text> @route#section`; a ` :id` / ` ^id` there stays
+literal text and opens no prompt. Every per-task behavior that already
+exists — insertion point, duplicate-ID check, future-schedule and
+blocked-project guards, `&`/`*`/`~`, `%c` — applies unchanged, because it
+is the same code path. When no nested line starts with `#`, a list writes
+byte-for-byte what the equivalent blank-line batch writes.
+
+| Draft | Writes (and why) |
+| --- | --- |
+| `- Call the bank` | `- [ ] #task Call the bank [created::D]` at the ordinary `@dev` insertion point |
+| `- Call the bank ^call-bank` | Ordinary task with that block ID (`@dev^call-bank`); `[?]` when scheduled |
+| `- Call the bank :call-bank` | Next `[*]` task plus `[[dev#^call-bank]]` under the Pomodoro the task's type places in today's daily note |
+| `- Call the bank s:2 #fix :call-bank` | Trailing markers configure **this** task. A future `s:<N>` gives `[?]`, unlinked; a blocked destination project gives `[?]` + `#prj_is_blocked`, unlinked |
+| `- Deploy &dev:build` | `&`, `*`, `~`, `~~`, and `%c` work per task. A later bullet may name a task an earlier bullet creates, because items plan in order against staged content |
+| `  - detail` (nested) | A child of that task, one indentation unit beneath it |
+| `- [ ] Call the bank` | A leading open checkbox is dropped; the bullet becomes an open task |
+
+A header with no bullets captures nothing: `capture-parse` reports
+`incomplete` needing `list_item`, and `bob capture` refuses `empty_list`.
+A header with other markers on its line is refused `list_header_marker`:
+the header stands alone, so move the marker to the bullet it configures.
+Route-changing markers on a bullet (`@…`, trailing `+`/`+query`, `%n`,
+`%t`, `%l`, `!note:id`) are refused `list_bullet_marker`. Other checkbox
+states (`- [x] …`, `- [?] …`) are refused `list_bullet_checkbox`. A
+bullet-start `#` is refused `drawer_bullet_position`. A ` :id` / ` ^id`
+on a nested line is `misplaced_project_task_id`. A lone ` :` / ` ^`
+ending a bullet or a nested line is an unfinished ID: `capture-parse`
+reports `incomplete` needing `block_id`, and `bob capture` refuses it.
+The existing codes apply: an invalid or reserved ID or an empty body is
+`invalid_project_task_id`, and two equal IDs in one list are
+`duplicate_project_task_id`, naming both lines. Whole-item forms do not
+apply: a list bullet is always task text with trailing markers, so `- x`,
+`- =`, `- https://…`, and `- :dee` stay text or follow the ID rules above.
+Drawers are not offered under list tasks: a nested ALL-CAPS line is a plain
+note. In a `%t` template draft, a header in the template body is refused
+(`template_list`), and template rows are never split by headers.
 
 ### Directives (`%`)
 
@@ -4741,8 +4832,11 @@ keys), and no SASE memory changes.
 Use a leading or trailing `@<route>^<block-id>@` marker to create a brand-new
 sub-project note instead of a task. A `#<pomodoro>` name after the seal
 (`@<route>^<block-id>@#<pomodoro>`) picks the Pomodoro that ` :<id>` Task
-Links go under. Task bullets name their IDs with a trailing ` :<id>` (link
-into the Pomodoro) or ` ^<id>` (name only). To also be offered the new
+Links go under. Task bullets name their IDs with a ` :<id>` (link
+into the Pomodoro) or ` ^<id>` (name only) anywhere in the bullet's trailing
+marker run: `- Draft the memo s:2 :draft-memo` schedules and names the
+task, and a lone ` :` / ` ^` ending a bullet or one of its nested lines is
+an unfinished ID for that bullet's owner. To also be offered the new
 note's open tasks, write `@<route>:<block-id>@` instead; see
 [Offer a new project's tasks](#offer-a-new-projects-tasks). For example:
 
@@ -6354,7 +6448,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 5` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 6` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -6694,7 +6788,20 @@ and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`pomodoro_s
 exclude declaration-only `@@` lines but still index the original draft. Top-level and
 per-item `route`, `mode`, and `block_id` are the item's effective destination
 after inheritance. The legacy top-level fields continue to describe the first
-item so older clients retain a useful preview. `blocked_tasks` is the `*`
+item so older clients retain a useful preview. A list (see
+[Lists](#lists-several-tasks-or-notes-at-once)) reports one `items[]` entry
+per bullet (`range` covers the bullet's block); each entry carries its
+normal `mode` (`task`, `pomodoro_task`, `bullet`, `incomplete`), the same
+`list` object, and `header_range`. The additive `list` object is
+`{kind: "tasks"|"notes", route, section, header_line, position, count}`:
+`section` is the typed selector or null, `header_line` is the 1-based draft
+line of the header, and `position` is 1-based within the list.
+`header_range` covers the header's physical line. The header token gets
+exactly the spans a leading `@route`/`@route#section` marker gets, and
+list-bullet IDs get `project_task_link_marker` / `project_task_block_id`
+spans. A header with no bullets is one `incomplete` item with
+`needs: ["list_item"]` and `list.count: 0`. A cursor or diagnostic on a
+header line resolves to the list's first item. `blocked_tasks` is the `*`
 twin of `dependencies[]`: the same `{raw, note, block_id, quoted, range}`
 shape, emitted at the top level and per item, omitted when empty. Never put
 a direction flag on `dependencies[]`. A partial `*` needs `blocked_task`;
@@ -6839,7 +6946,7 @@ ALL-CAPS literal with nested notes under a new task or an existing
 `@route+id` target, ranged on the bullet's name; never on a new project note,
 and structural `^prj` headings or near-duplicates stay commit-time, because
 only the vault knows),
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one list or item, naming both lines), `empty_list` (a list header with no bullets), `list_header_marker` (item-wide markers on a list header line, which stands alone), `list_bullet_marker` (a route-changing marker on a list bullet), `list_bullet_checkbox` (a non-open checkbox on a list bullet), `template_list` (a list header in a `%t` template body), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a `%n` directive on the same item as `@route`,
 `s:<N>`, or `$<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
@@ -7461,7 +7568,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 5`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 6`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

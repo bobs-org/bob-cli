@@ -295,6 +295,8 @@ pub(crate) enum Need {
     PomodoroMergeDest,
     /// A template draft still needs a row to expand.
     TemplateRow,
+    /// A list header still needs bullets below it.
+    ListItem,
 }
 
 impl Need {
@@ -328,6 +330,7 @@ impl Need {
             Self::PomodoroSplitType => "pomodoro_split_type",
             Self::PomodoroMergeDest => "pomodoro_merge_dest",
             Self::TemplateRow => "template_row",
+            Self::ListItem => "list_item",
         }
     }
 }
@@ -544,6 +547,9 @@ pub(crate) struct EditorItemParse {
     pub(crate) dependency_target: Option<DependencyTarget>,
     /// Whole-item `!note:block-id` completion token, when claimed.
     pub(crate) task_complete: Option<TaskCompleteEntry>,
+    /// List context split from a lone `@route` / `@route#section` header.
+    /// `None` for ordinary items.
+    pub(crate) list: Option<ListContext>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,

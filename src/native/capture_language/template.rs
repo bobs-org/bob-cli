@@ -71,7 +71,7 @@ pub(crate) struct TemplateBlock {
     /// these bytes from the definition handed to expansion, so the engine
     /// sees the item exactly as it would without the directive.
     pub(crate) cut: Range<usize>,
-    lines: Vec<(usize, Range<usize>)>,
+    pub(crate) lines: Vec<(usize, Range<usize>)>,
 }
 
 impl TemplateBlock {

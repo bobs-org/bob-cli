@@ -54,6 +54,12 @@ pub(super) fn plan_capture_batch_with_config_path(
 ) -> Result<PlannedCaptureBatch, CaptureError> {
     // A forced `-r` route is an allowed explicit ref parent; every other
     // forced destination or clip flag keeps the item a task.
+    // Forced `--route/--section/--task/--task-ref/--drawer` modes keep
+    // `@tokens` literal, so no list header is recognized there.
+    let forced_literal = request.forced_route.is_some()
+        || request.forced_section.is_some()
+        || request.forced_sub_bullet_target.is_some()
+        || request.forced_drawer.is_some();
     let options = CaptureParseOptions {
         url_routing: routing,
         explicit_destination: request.forced_section.is_some()
@@ -61,6 +67,7 @@ pub(super) fn plan_capture_batch_with_config_path(
             || request.forced_drawer.is_some()
             || request.forced_clip.is_some(),
         has_global_destination: false,
+        recognize_lists: !forced_literal,
     };
     let parsed_draft = parse_capture_draft_with_options(
         &request.raw_text,
@@ -124,6 +131,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         let pre_day = planner.peek_text(&day_file);
         planner.begin_item(pre_day.clone());
         let pre_tasks = task_tracker.snapshot_pre(&planner);
+        let item_list = parsed_item.list.clone();
         if matches!(parsed_item.parsed.kind, CaptureKind::Ref(_)) {
             let assignment = ref_assignments
                 .remove(&parsed_item.index)
@@ -139,6 +147,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                             format!("{error_context}: {}", error.message);
                         error
                     })?;
+            planned.result.list = item_list;
             planned.result.consumed_links = planner.take_consumed_links();
             if let Some(job) = staged {
                 staged_jobs.push(StagedRefJob {
@@ -166,6 +175,7 @@ pub(super) fn plan_capture_batch_with_config_path(
             error.message = format!("{error_context}: {}", error.message);
             error
         })?;
+        planned.result.list = item_list;
         planned.result.consumed_links = planner.take_consumed_links();
         planned.result.normalize_dependency_updates();
         if let Some(warning) = warning_from_item(&planned.result) {
@@ -580,6 +590,7 @@ fn plan_ref_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            list: None,
             relation_label_hides: Vec::new(),
         },
         clip_plan: None,
@@ -1073,6 +1084,7 @@ pub(super) fn plan_capture_item(
                 linked_from_line_updates: Vec::new(),
                 minted_relation_block_ids: Vec::new(),
                 mirror_skipped: Vec::new(),
+                list: None,
                 relation_label_hides: Vec::new(),
             },
             clip_plan: None,
@@ -2487,6 +2499,7 @@ pub(super) fn plan_capture_item(
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
+            list: None,
             relation_label_hides,
         },
         clip_plan,
@@ -3597,6 +3610,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
+            list: None,
             relation_label_hides,
         },
         clip_plan: None,

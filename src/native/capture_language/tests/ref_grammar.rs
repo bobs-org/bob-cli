@@ -24,6 +24,7 @@ fn routing_options(
         url_routing: policy,
         explicit_destination: false,
         has_global_destination: false,
+        recognize_lists: true,
     }
 }
 

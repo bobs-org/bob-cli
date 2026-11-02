@@ -90,31 +90,255 @@ pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
 
     CaptureDraft {
         declarations,
-        items: split_items_from_item_lines(&item_lines, raw),
+        items: split_items_from_item_lines(&item_lines, raw, true),
+    }
+}
+
+/// Split a draft without recognizing capture lists: headers stay ordinary
+/// lines. Used for template rows and forced-destination parses, where
+/// `@tokens` keep their literal meaning.
+pub(crate) fn split_capture_draft_no_lists(raw: &str) -> CaptureDraft<'_> {
+    let lines = split_physical_lines(raw);
+    let mut declarations = Vec::new();
+    let mut item_lines = Vec::new();
+
+    for (index, line) in lines.iter().copied().enumerate() {
+        let tokens = tokenize_line_with_spans(&line);
+        if !tokens.is_empty()
+            && tokens.iter().all(|token| token.text.starts_with("@@"))
+        {
+            declarations.extend(tokens.into_iter().map(|token| {
+                GlobalDeclarationToken {
+                    token,
+                    line_number: index + 1,
+                }
+            }));
+            continue;
+        }
+
+        item_lines.push(ItemLine {
+            raw: line,
+            line_number: index + 1,
+        });
+    }
+
+    CaptureDraft {
+        declarations,
+        items: split_items_from_item_lines(&item_lines, raw, false),
     }
 }
 
 /// Split blank-line-separated item lines into [`CaptureItem`]s. A parent
 /// line that is a session-operator chain yields one single-token item per
-/// operator; see [`push_capture_item`].
+/// operator; see [`push_capture_item`]. When `allow_lists` is set, a
+/// column-zero list header also starts a new item even with no blank line
+/// before it, and a header-led block splits into one item per bullet.
 pub(super) fn split_items_from_item_lines<'a>(
     lines: &[ItemLine<'a>],
     source: &'a str,
+    allow_lists: bool,
 ) -> Vec<CaptureItem<'a>> {
     let mut items = Vec::new();
     let mut current: Vec<ItemLine<'_>> = Vec::new();
 
     for line in lines.iter().copied() {
         if line.raw.text.trim().is_empty() {
-            push_capture_item(&mut items, &mut current, source);
+            push_capture_item(&mut items, &mut current, source, allow_lists);
             continue;
+        }
+        if allow_lists
+            && !current.is_empty()
+            && detect_list_header(&line.raw).is_some()
+        {
+            push_capture_item(&mut items, &mut current, source, allow_lists);
         }
 
         current.push(line);
     }
 
-    push_capture_item(&mut items, &mut current, source);
+    push_capture_item(&mut items, &mut current, source, allow_lists);
     items
+}
+
+/// A lone `@route` / `@route#section` line that heads a capture list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListHeader {
+    pub(crate) route: String,
+    pub(crate) section: Option<String>,
+    pub(crate) kind: ListKind,
+}
+
+/// Detect a list header: a column-zero line whose trimmed text is exactly
+/// one token that lexes as a task (`@route`) or bullet (`@route#section`)
+/// route marker. `@@` declarations, indented lines, and multi-token lines
+/// never qualify; anything else keeps its existing meaning.
+pub(crate) fn detect_list_header(line: &RawLine<'_>) -> Option<ListHeader> {
+    if line.text.len() != line.text.trim_start().len() {
+        return None;
+    }
+    let trimmed = line.text.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(char::is_whitespace)
+        || trimmed.starts_with("@@")
+    {
+        return None;
+    }
+    let token = super::tokens::parse_terminal_route_token(trimmed)
+        .ok()
+        .flatten()?;
+    let route = token.route.clone()?;
+    let section = match &token.kind {
+        CaptureKind::Bullet { section_prefix, .. } => section_prefix.clone(),
+        _ => None,
+    };
+    let kind = match &token.kind {
+        CaptureKind::Task => ListKind::Tasks,
+        CaptureKind::Bullet { .. } => ListKind::Notes,
+        _ => return None,
+    };
+    Some(ListHeader {
+        route,
+        section,
+        kind,
+    })
+}
+
+/// Group a header-led block into its ownerless leading lines plus one
+/// per-bullet block (each bullet plus the nested lines that follow it).
+/// Placeholders never start a block and never reset the current bullet; any
+/// other non-bullet line joins the current block (or the ownerless prefix
+/// when no bullet precedes it) so the item parser reports its existing
+/// orphan/nested/continuation diagnostic.
+fn group_list_blocks<'a>(
+    lines: &[ItemLine<'a>],
+) -> (Vec<ItemLine<'a>>, Vec<Vec<ItemLine<'a>>>) {
+    let mut ownerless = Vec::new();
+    let mut bullets: Vec<Vec<ItemLine<'a>>> = Vec::new();
+    let mut current: Option<Vec<ItemLine<'a>>> = None;
+    for line in lines.iter().skip(1).copied() {
+        match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Item(authored)
+                if authored.depth == AuthoredDepth::First =>
+            {
+                if let Some(block) = current.take() {
+                    bullets.push(block);
+                }
+                current = Some(vec![line]);
+            }
+            AuthoredLineClass::Item(_) | AuthoredLineClass::Invalid => {
+                if let Some(block) = current.as_mut() {
+                    block.push(line);
+                } else {
+                    ownerless.push(line);
+                }
+            }
+        }
+    }
+    if let Some(block) = current.take() {
+        bullets.push(block);
+    }
+    (ownerless, bullets)
+}
+
+/// Push one header-led block as one [`CaptureItem`] per nonempty list
+/// bullet plus at most one ownerless prefix item. Each per-bullet item holds
+/// zero-copy slices of the original draft (the bullet's body slice plus its
+/// nested lines) with a shared [`ListContext`], so every span, range, and
+/// diagnostic offset stays exact. A header with no bullets and no stray
+/// lines becomes one header-only item carrying `count: 0`.
+fn push_list_items<'a>(
+    items: &mut Vec<CaptureItem<'a>>,
+    current: &mut Vec<ItemLine<'a>>,
+    source: &'a str,
+    header: ListHeader,
+) {
+    let block_lines = std::mem::take(current);
+    let first = block_lines.first().expect("header-led block");
+    let (ownerless, bullets) = group_list_blocks(&block_lines);
+    let base = ListContext {
+        kind: header.kind,
+        route: header.route,
+        section: header.section,
+        header_line: first.line_number,
+        position: 0,
+        count: bullets.len(),
+        header_start: first.raw.start,
+        header_end: first.raw.end,
+        ownerless: false,
+    };
+    let mut emitted_ownerless = false;
+    if !ownerless.is_empty() {
+        let last = ownerless.last().expect("nonempty ownerless");
+        let first_ownerless = ownerless.first().expect("nonempty ownerless");
+        items.push(CaptureItem {
+            source,
+            index: items.len(),
+            start: first_ownerless.raw.start,
+            end: last.raw.end,
+            line_start: first_ownerless.line_number,
+            line_end: last.line_number,
+            lines: ownerless,
+            list: Some(ListContext {
+                ownerless: true,
+                ..base.clone()
+            }),
+        });
+        emitted_ownerless = true;
+    }
+    for (position, bullet) in bullets.into_iter().enumerate() {
+        let (start, line_start, parent, end, line_end) = {
+            let first_bullet = bullet.first().expect("nonempty bullet");
+            let last_bullet = bullet.last().expect("nonempty bullet");
+            let authored = match classify_authored_line(first_bullet.raw) {
+                AuthoredLineClass::Item(authored) => authored,
+                _ => continue,
+            };
+            let parent = ItemLine {
+                raw: RawLine {
+                    text: authored.body,
+                    start: authored.body_start,
+                    end: first_bullet.raw.end,
+                },
+                line_number: first_bullet.line_number,
+            };
+            (
+                first_bullet.raw.start,
+                first_bullet.line_number,
+                parent,
+                last_bullet.raw.end,
+                last_bullet.line_number,
+            )
+        };
+        let mut lines = Vec::with_capacity(bullet.len());
+        lines.push(parent);
+        lines.extend(bullet.into_iter().skip(1));
+        items.push(CaptureItem {
+            source,
+            index: items.len(),
+            start,
+            end,
+            line_start,
+            line_end,
+            lines,
+            list: Some(ListContext {
+                position: position + 1,
+                ..base.clone()
+            }),
+        });
+    }
+    if base.count == 0 && !emitted_ownerless {
+        items.push(CaptureItem {
+            source,
+            index: items.len(),
+            start: first.raw.start,
+            end: first.raw.end,
+            line_start: first.line_number,
+            line_end: first.line_number,
+            lines: vec![*first],
+            list: Some(base),
+        });
+    }
 }
 
 /// Return the line's whitespace-separated tokens when the parent line is
@@ -241,6 +465,7 @@ pub(super) fn push_capture_item<'a>(
     items: &mut Vec<CaptureItem<'a>>,
     current: &mut Vec<ItemLine<'a>>,
     source: &'a str,
+    allow_lists: bool,
 ) {
     let Some(first) = current.first().copied() else {
         return;
@@ -262,6 +487,7 @@ pub(super) fn push_capture_item<'a>(
                 line_start: line.line_number,
                 line_end: line.line_number,
                 lines: vec![line],
+                list: None,
             });
         }
         return;
@@ -324,6 +550,7 @@ pub(super) fn push_capture_item<'a>(
                     line_start: first.line_number,
                     line_end,
                     lines,
+                    list: None,
                 });
             } else {
                 items.push(CaptureItem {
@@ -334,6 +561,7 @@ pub(super) fn push_capture_item<'a>(
                     line_start: first.line_number,
                     line_end: first.line_number,
                     lines: vec![token_line],
+                    list: None,
                 });
             }
         }
@@ -373,6 +601,7 @@ pub(super) fn push_capture_item<'a>(
                 line_start: first.line_number,
                 line_end: last.line_number,
                 lines: std::mem::take(current),
+                list: None,
             });
             return;
         }
@@ -400,6 +629,7 @@ pub(super) fn push_capture_item<'a>(
                 line_start: first.line_number,
                 line_end: first.line_number,
                 lines: vec![token_line],
+                list: None,
             });
         }
         let owner = parent_tokens[split.owner_index];
@@ -442,6 +672,7 @@ pub(super) fn push_capture_item<'a>(
                 line_start: first.line_number,
                 line_end,
                 lines,
+                list: None,
             });
         }
         for (position, token) in trail.iter().copied().enumerate() {
@@ -466,9 +697,14 @@ pub(super) fn push_capture_item<'a>(
                 line_start: first.line_number,
                 line_end: first.line_number,
                 lines: vec![token_line],
+                list: None,
             });
         }
         current.clear();
+        return;
+    }
+    if allow_lists && let Some(header) = detect_list_header(&first.raw) {
+        push_list_items(items, current, source, header);
         return;
     }
     let last = current.last().copied().expect("nonempty item");
@@ -480,6 +716,7 @@ pub(super) fn push_capture_item<'a>(
         line_start: first.line_number,
         line_end: last.line_number,
         lines: std::mem::take(current),
+        list: None,
     });
 }
 
@@ -683,7 +920,7 @@ impl TemplateCodedError {
         }
     }
 
-    fn coded(code: &'static str, message: String) -> Self {
+    pub(crate) fn coded(code: &'static str, message: String) -> Self {
         Self {
             code: Some(code),
             message,
@@ -724,6 +961,21 @@ pub(crate) fn parse_capture_draft_with_options_coded(
 ) -> Result<ParsedCaptureDraft, TemplateCodedError> {
     let analysis = super::template::analyze(raw_text);
     if analysis.directive.is_some() {
+        if let Some(block) = analysis.block.as_ref()
+            && block.definition_lines(raw_text).iter().any(|line| {
+                detect_list_header(&RawLine {
+                    text: line,
+                    start: 0,
+                    end: line.len(),
+                })
+                .is_some()
+            })
+        {
+            return Err(TemplateCodedError::coded(
+                "template_list",
+                template_list_error(),
+            ));
+        }
         if let Some(first_issue) = analysis.issues.first() {
             if let Some(row) =
                 super::template::row_number_for_issue(&analysis, first_issue)
@@ -787,7 +1039,16 @@ fn parse_ordinary_draft(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, CaptureItemParseError> {
-    let draft = split_capture_draft(raw_text);
+    // Forced destinations keep `@tokens` literal, so no header is
+    // recognized there.
+    let allow_lists = options.recognize_lists
+        && forced_route.is_none()
+        && forced_section.is_none();
+    let draft = if allow_lists {
+        split_capture_draft(raw_text)
+    } else {
+        split_capture_draft_no_lists(raw_text)
+    };
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
         return Err(if global.is_some() {
@@ -834,6 +1095,7 @@ fn parse_ordinary_draft(
     }
     let warnings = capture_shadow_warnings(&item_outcomes);
 
+    check_list_duplicate_ids(&item_outcomes)?;
     let mut items = Vec::with_capacity(item_outcomes.len());
     for mut outcome in item_outcomes.drain(..) {
         if forced_route.is_none()
@@ -886,6 +1148,7 @@ fn parse_ordinary_draft(
         } else {
             None
         };
+        let list = outcome.list.clone();
         items.push(ParsedCaptureItem {
             index: outcome.index,
             start: outcome.start,
@@ -893,6 +1156,7 @@ fn parse_ordinary_draft(
             line_start: outcome.line_start,
             line_end: outcome.line_end,
             parsed: outcome.parsed,
+            list,
             ref_source,
             template_row: None,
         });
@@ -904,6 +1168,60 @@ fn parse_ordinary_draft(
         warnings,
         template: None,
     })
+}
+
+/// Refuse two equal task IDs inside one capture list. Ordinary items keep
+/// their plan-time duplicate handling against staged content; list bullets
+/// fail up front so one bad bullet cannot depend on parse order.
+fn check_list_duplicate_ids(
+    outcomes: &[ParsedCaptureItemOutcome<'_>],
+) -> Result<(), CaptureItemParseError> {
+    let mut seen: Vec<(usize, usize, String, usize, usize)> = Vec::new();
+    for outcome in outcomes {
+        let Some(list) = outcome
+            .list
+            .as_ref()
+            .filter(|list| !list.ownerless && list.kind == ListKind::Tasks)
+        else {
+            continue;
+        };
+        let block_id = match &outcome.parsed.kind {
+            CaptureKind::Pomodoro { block_id, .. } => Some(block_id),
+            CaptureKind::TaskWithBlockId { block_id } => Some(block_id),
+            _ => None,
+        };
+        let Some(block_id) = block_id else {
+            continue;
+        };
+        if let Some((_, _, _, first_line, _)) = seen.iter().find(|seen| {
+            seen.0 == list.header_start
+                && seen.1 == list.header_end
+                && seen.2 == *block_id
+        }) {
+            let first_line = *first_line;
+            return Err(CaptureItemParseError::coded(
+                "duplicate_project_task_id",
+                format!(
+                    "capture item {} starting on line {}: {}",
+                    outcome.index + 1,
+                    outcome.line_start,
+                    super::project_tasks::duplicate_project_task_id_error(
+                        block_id,
+                        first_line,
+                        outcome.line_start,
+                    )
+                ),
+            ));
+        }
+        seen.push((
+            list.header_start,
+            list.header_end,
+            block_id.clone(),
+            outcome.line_start,
+            outcome.index,
+        ));
+    }
+    Ok(())
 }
 
 fn parse_template_expansion(
@@ -930,6 +1248,7 @@ fn parse_template_expansion(
             line_start: instance.line,
             line_end: instance.line,
             parsed: outcome_parsed,
+            list: None,
             ref_source,
             template_row: Some(TemplateRowSummary {
                 row: instance.row,
@@ -969,7 +1288,24 @@ fn parse_single_template_instance(
             line_number: instance.template_line_start + index,
         })
         .collect::<Vec<_>>();
-    let draft_items = split_items_from_item_lines(&lines, &instance.text);
+    // Template rows are never split by headers.
+    let draft_items =
+        split_items_from_item_lines(&lines, &instance.text, false);
+    if draft_items
+        .first()
+        .and_then(|item| item.lines.first())
+        .and_then(|line| detect_list_header(&line.raw))
+        .is_some()
+    {
+        return Err(TemplateCodedError::coded(
+            "template_list",
+            template_row_error(
+                instance.row,
+                instance.line,
+                template_list_error(),
+            ),
+        ));
+    }
     if draft_items.len() != 1 {
         return Err(TemplateCodedError::coded(
             "template_session_operator",
@@ -1068,6 +1404,13 @@ fn template_session_error(row: usize, line: usize) -> String {
         "a template can't drive the Pomodoro session; capture `=`, `x`, `+N`, and `++N` on their own"
             .to_string(),
     )
+}
+
+/// A list header has no meaning in a `%t` template: the body is a
+/// definition and rows are never split by headers.
+pub(crate) fn template_list_error() -> String {
+    "a list header cannot appear in a %t template body; capture the list outside the template"
+        .to_string()
 }
 
 fn is_template_session_kind(kind: &CaptureKind) -> bool {

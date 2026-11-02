@@ -3260,6 +3260,7 @@ pub(super) fn plan_dependency_only_item(
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
+            list: None,
             relation_label_hides: Vec::new(),
         },
         clip_plan: None,

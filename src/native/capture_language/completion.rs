@@ -1631,6 +1631,7 @@ fn project_task_token_at<'a>(
         child_line.text,
         child_line.start,
         false,
+        false,
     );
     let token = child_parse.body_tokens.last()?;
     // The lexer decides what counts as a trailing task-ID token; prose
@@ -1725,8 +1726,17 @@ pub(crate) fn project_task_block_id_detail(
             child_line.text,
             child_line.start,
             false,
+            false,
         );
-        if let ChildTaskOutcome::Accept { id, stripped, .. } = pass.check_child(
+        // The completion pass keeps last-word ID accounting: only an
+        // accepted trailing ID joins the used list, and the cursor line
+        // never does.
+        let last_id = child_parse.body_tokens.last().and_then(|token| {
+            lex_project_task_id(token.text)
+                .map(|lex| StrippedTaskId { token: *token, lex })
+        });
+        if let ChildTaskOutcome::Accept { id, .. } = pass.check_child(
+            last_id,
             &child_parse.body,
             authored.depth,
             child.line_number,
@@ -1735,7 +1745,9 @@ pub(crate) fn project_task_block_id_detail(
             used.push(ProjectTaskUsedId {
                 id,
                 line: child.line_number,
-                text: clean_project_task_body(&stripped),
+                text: clean_project_task_body(&strip_task_id_suffix(
+                    &child_parse.body,
+                )),
             });
         }
     }
@@ -1758,6 +1770,7 @@ pub(crate) fn project_task_block_id_detail(
         current_tokens,
         current_line.text,
         current_line.start,
+        false,
         false,
     );
     let stripped = strip_task_id_suffix(&current_parse.body);
@@ -1795,7 +1808,7 @@ pub(super) fn has_previous_first_level_authored_item(
             return false;
         }
         let tokens = tokenize_with_spans(&normalized);
-        !parse_editor_line(tokens, &normalized, 0, false)
+        !parse_editor_line(tokens, &normalized, 0, false, false)
             .body
             .is_empty()
     })

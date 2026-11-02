@@ -27,6 +27,7 @@ pub(super) struct ParsedCaptureItemOutcome<'a> {
     pub(super) parsed: ParsedCaptureText,
     pub(super) declarations: Vec<GlobalDeclarationToken<'a>>,
     pub(super) local_destination_marker: Option<String>,
+    pub(super) list: Option<ListContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +44,7 @@ impl CaptureItemParseError {
         }
     }
 
-    fn coded(code: &'static str, message: String) -> Self {
+    pub(crate) fn coded(code: &'static str, message: String) -> Self {
         Self {
             code: Some(code),
             message,
@@ -306,6 +307,34 @@ pub(super) fn parse_capture_item<'a>(
     let listen = resolved
         .as_ref()
         .is_some_and(|directives| directives.listen);
+    let template = resolved
+        .as_ref()
+        .is_some_and(|directives| directives.template);
+    if masked_item.list.is_some() {
+        let outcome = parse_list_bullet_item(
+            &masked_item,
+            clip,
+            note,
+            listen,
+            template,
+            options,
+        )?;
+        // Re-slice borrowed declarations back to the original draft text;
+        // masking preserves byte offsets, so only the slices change.
+        let declarations =
+            remap_type_marker_declarations(outcome.declarations, item.source);
+        return Ok(ParsedCaptureItemOutcome {
+            index: outcome.index,
+            start: outcome.start,
+            end: outcome.end,
+            line_start: outcome.line_start,
+            line_end: outcome.line_end,
+            parsed: outcome.parsed,
+            declarations,
+            local_destination_marker: outcome.local_destination_marker,
+            list: outcome.list,
+        });
+    }
     let parsed = parse_capture_item_masked(
         &masked_item,
         forced_route,
@@ -316,8 +345,38 @@ pub(super) fn parse_capture_item<'a>(
         listen,
     );
     let mut outcome = match parsed {
-        Ok(outcome) => outcome,
+        Ok(outcome) => {
+            // A bare Task route stays literal through resolve, so a header
+            // plus only item-wide markers never reaches `missing_text`:
+            // catch it on the success path instead.
+            if outcome.list.is_none()
+                && forced_route.is_none()
+                && let Some(marker_error) = list_header_marker_from_resolved(
+                    item,
+                    &occurrences,
+                    &outcome,
+                )
+            {
+                return Err(CaptureItemParseError::coded(
+                    "list_header_marker",
+                    marker_error,
+                ));
+            }
+            outcome
+        }
         Err(error) => {
+            if error == missing_text_error()
+                && let Some(marker_error) = list_header_marker_from_item(
+                    item,
+                    &occurrences,
+                    forced_route.is_some(),
+                )
+            {
+                return Err(CaptureItemParseError::coded(
+                    "list_header_marker",
+                    marker_error,
+                ));
+            }
             if error == missing_text_error()
                 && occurrences.iter().any(|item| item.is_marker())
             {
@@ -349,6 +408,18 @@ pub(super) fn parse_capture_item<'a>(
             }
             if let Some(code) = super::drawer_bullet::code_for_message(&error) {
                 return Err(CaptureItemParseError::coded(code, error));
+            }
+            // An unfinished ` :` / ` ^` names no ID: like the list
+            // path, it reports `invalid_project_task_id`. The checkbox
+            // copy starts "` :<id>` makes", so the " needs" tail keeps
+            // this rule specific to the unfinished shape.
+            if error.starts_with("` :` needs a task ID")
+                || error.starts_with("` ^` needs a task ID")
+            {
+                return Err(CaptureItemParseError::coded(
+                    "invalid_project_task_id",
+                    error,
+                ));
             }
             if error.starts_with("a new task has no drawers:") {
                 return Err(CaptureItemParseError::coded(
@@ -388,6 +459,7 @@ pub(super) fn parse_capture_item<'a>(
             parsed: outcome.parsed,
             declarations,
             local_destination_marker: outcome.local_destination_marker,
+            list: outcome.list,
         });
     };
     let marker = match occurrence {
@@ -441,7 +513,698 @@ pub(super) fn parse_capture_item<'a>(
         parsed: outcome.parsed,
         declarations,
         local_destination_marker: outcome.local_destination_marker,
+        list: outcome.list,
     })
+}
+
+/// A route marker plus only item-wide markers on the first line with
+/// bullets below: the header must stand alone. Returns the teaching error
+/// naming the first stray marker, or `None` when the item is not that
+/// shape. Forced destinations keep `@tokens` literal, so they never count.
+fn list_header_marker_from_item(
+    item: &CaptureItem<'_>,
+    occurrences: &[super::type_marker::TypeMarkerOccurrence],
+    forced: bool,
+) -> Option<String> {
+    if forced || item.list.is_some() {
+        return None;
+    }
+    if super::dependencies::scan_item_dependencies(item).has_entries() {
+        return None;
+    }
+    let (parent, children) = item.lines.split_first()?;
+    let tokens = tokenize_line_with_spans(&parent.raw);
+    let (tokens, _) = extract_line_dependencies(
+        tokens,
+        parent.raw.text,
+        parent.raw.start,
+        true,
+    );
+    let (first, rest) = tokens.split_first()?;
+    if parent.raw.text.len() != parent.raw.text.trim_start().len() {
+        return None;
+    }
+    let route = super::tokens::parse_terminal_route_token(first.text)
+        .ok()
+        .flatten()?;
+    if !matches!(route.kind, CaptureKind::Task | CaptureKind::Bullet { .. }) {
+        return None;
+    }
+    // Type markers are masked out of the token stream, so a masked `#fix`
+    // reads as a bare route: recover it from the collected occurrences.
+    let mut stray: Option<String> = rest
+        .split_first()
+        .map(|(marker, _)| marker.text.to_string());
+    if stray.is_none() {
+        stray = occurrences.iter().find_map(|occurrence| {
+            if !occurrence.is_marker() {
+                return None;
+            }
+            let span = occurrence.span();
+            if span.start < parent.raw.start || span.end > parent.raw.end {
+                return None;
+            }
+            Some(match occurrence {
+                super::type_marker::TypeMarkerOccurrence::Complete(marker) => {
+                    format!("#{}", marker.name)
+                }
+                super::type_marker::TypeMarkerOccurrence::Incomplete {
+                    ..
+                } => "#".to_string(),
+                super::type_marker::TypeMarkerOccurrence::Invalid {
+                    raw,
+                    ..
+                } => raw.clone(),
+                super::type_marker::TypeMarkerOccurrence::Escaped {
+                    ..
+                } => return None,
+            })
+        });
+    }
+    let stray = stray?;
+    if !rest
+        .iter()
+        .all(|token| is_list_header_marker_token(token.text))
+    {
+        return None;
+    }
+    for line in children {
+        if let AuthoredLineClass::Item(authored) =
+            classify_authored_line(line.raw)
+            && authored.depth == AuthoredDepth::First
+        {
+            return Some(list_header_marker_error(
+                first.text,
+                &stray,
+                authored.body.trim(),
+            ));
+        }
+    }
+    None
+}
+
+/// Parse one list bullet block: the bullet's body as a later line (task
+/// text plus trailing markers, never a leading-route, operator, URL-ref,
+/// caret-link, or picker form) with the header's route filled in. Section
+/// bullets parse exactly like `<text> @route#section`.
+fn parse_list_bullet_item<'a>(
+    item: &CaptureItem<'a>,
+    clip: Option<ClipRequest>,
+    note: bool,
+    listen: bool,
+    template: bool,
+    _options: &CaptureParseOptions<'_>,
+) -> Result<ParsedCaptureItemOutcome<'a>, CaptureItemParseError> {
+    let coded = |code: &'static str, message: String| {
+        CaptureItemParseError::coded(code, message)
+    };
+    let list = item.list.clone().expect("list bullet item");
+    let header_text = item
+        .source
+        .get(list.header_start..list.header_end)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let file = format!("{}.md", list.route);
+    let notes = list.kind == ListKind::Notes;
+    if template {
+        return Err(coded(
+            "template_list",
+            super::draft::template_list_error(),
+        ));
+    }
+    if note {
+        let suggestion = list_bullet_marker_suggestion("%n", "", &list.route);
+        return Err(coded(
+            "list_bullet_marker",
+            list_bullet_marker_error(&header_text, &file, "%n", &suggestion),
+        ));
+    }
+    if listen {
+        let suggestion = list_bullet_marker_suggestion("%l", "", &list.route);
+        return Err(coded(
+            "list_bullet_marker",
+            list_bullet_marker_error(&header_text, &file, "%l", &suggestion),
+        ));
+    }
+    if list.ownerless {
+        let line = &item.lines[0];
+        return Err(match classify_authored_line(line.raw) {
+            AuthoredLineClass::Item(authored)
+                if authored.depth == AuthoredDepth::Nested =>
+            {
+                coded(
+                    "orphaned_nested_bullet",
+                    orphaned_nested_bullet_error(line.line_number),
+                )
+            }
+            _ => coded(
+                "invalid_child_line",
+                invalid_child_line_error(line.line_number),
+            ),
+        });
+    }
+    if list.count == 0 {
+        return Err(coded("empty_list", empty_list_error(&header_text, notes)));
+    }
+    let parent_line = item.lines[0];
+    let raw_body = item
+        .source
+        .get(parent_line.raw.start..parent_line.raw.end)
+        .unwrap_or("");
+    let mut body_text = raw_body.trim().to_string();
+    if !notes {
+        let (checkbox, rest) = split_leading_checkbox(raw_body.trim_start());
+        if let Some(status) = checkbox {
+            if status != ' ' {
+                return Err(coded(
+                    "list_bullet_checkbox",
+                    list_bullet_checkbox_error(status),
+                ));
+            }
+            body_text = rest.to_string();
+        }
+    }
+    if body_text.trim_start().starts_with('#') {
+        let mut words = body_text.trim_start().split_whitespace();
+        let first_word = words.next().unwrap_or("#");
+        let rest_words: Vec<&str> = words.collect();
+        let example = if rest_words.is_empty() {
+            format!("- {first_word}")
+        } else {
+            format!("- {} {first_word}", rest_words.join(" "))
+        };
+        return Err(coded(
+            "drawer_bullet_position",
+            drawer_bullet_position_list_error(notes, &example),
+        ));
+    }
+    // Dependency modifiers leave before marker extraction, exactly like the
+    // ordinary path; malformed or partial modifiers refuse here.
+    let item_dependencies = scan_item_dependencies(item);
+    list_bullet_dependency_errors(&item_dependencies)?;
+    let mut parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+    let (stripped_tokens, parent_line_dependencies) = extract_line_dependencies(
+        parent_tokens,
+        parent_line.raw.text,
+        parent_line.raw.start,
+        true,
+    );
+    parent_tokens = stripped_tokens;
+    let stripped = if notes {
+        None
+    } else {
+        strip_trailing_task_id(&mut parent_tokens)
+    };
+    if let Some(stripped) = &stripped {
+        match &stripped.lex {
+            TaskIdLex::Invalid { raw, .. } => {
+                return Err(coded(
+                    "invalid_project_task_id",
+                    invalid_project_task_id_charset_error(raw),
+                ));
+            }
+            TaskIdLex::Valid { id, .. } if is_reserved_project_task_id(id) => {
+                return Err(coded(
+                    "invalid_project_task_id",
+                    reserved_project_task_id_error(id),
+                ));
+            }
+            _ => {}
+        }
+    }
+    refuse_list_bullet_affixes(
+        &parent_tokens,
+        item.source,
+        &header_text,
+        &file,
+        &list.route,
+        body_text.trim(),
+    )?;
+    let parent_tokens = unescape_execution_tokens(
+        parent_tokens,
+        &parent_line_dependencies.escapes,
+    );
+    let parent_outcome = resolve_line(parent_tokens, false, true)
+        .map_err(CaptureItemParseError::generic)?;
+    let mut declarations = global_declarations_from_tokens(
+        parent_outcome.declarations,
+        parent_line.line_number,
+    );
+    if parent_outcome.body.is_empty() {
+        if stripped.is_some() {
+            return Err(coded(
+                "invalid_project_task_id",
+                empty_project_task_body_error(parent_line.line_number),
+            ));
+        }
+        return Err(CaptureItemParseError::generic(missing_text_error()));
+    }
+    if let Some(marker_text) = parent_outcome
+        .route
+        .as_ref()
+        .map(|route| route.marker_text.clone())
+    {
+        let suggestion = list_bullet_marker_suggestion(
+            &marker_text,
+            parent_outcome.body.trim(),
+            &list.route,
+        );
+        return Err(coded(
+            "list_bullet_marker",
+            list_bullet_marker_error(
+                &header_text,
+                &file,
+                &marker_text,
+                &suggestion,
+            ),
+        ));
+    }
+    let (stripped_sigil, stripped_id) = match stripped {
+        Some(stripped) => match stripped.lex {
+            TaskIdLex::Lone { sigil } => {
+                return Err(coded(
+                    "invalid_project_task_id",
+                    unfinished_list_task_id_error(
+                        sigil,
+                        parent_outcome.body.trim(),
+                    ),
+                ));
+            }
+            TaskIdLex::Valid { sigil, id } => (Some(sigil), Some(id)),
+            TaskIdLex::Invalid { .. } => {
+                unreachable!("invalid list IDs return above")
+            }
+        },
+        None => (None, None),
+    };
+    let mut aggregate = AggregateMarkers::default();
+    aggregate.clip = clip;
+    aggregate
+        .absorb(parent_outcome.markers, None)
+        .map_err(CaptureItemParseError::generic)?;
+
+    let mut sub_bullets = Vec::new();
+    for line in item.lines.iter().skip(1) {
+        let line_number = line.line_number;
+        let authored = match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Invalid => {
+                return Err(coded(
+                    "invalid_child_line",
+                    invalid_child_line_error(line_number),
+                ));
+            }
+            AuthoredLineClass::Item(authored) => authored,
+        };
+        let child_line = RawLine {
+            text: authored.body,
+            start: authored.body_start,
+            end: line.raw.end,
+        };
+        let child_tokens = tokenize_line_with_spans(&child_line);
+        let (stripped_tokens, child_line_dependencies) =
+            extract_line_dependencies(
+                child_tokens,
+                child_line.text,
+                child_line.start,
+                false,
+            );
+        let mut child_tokens = stripped_tokens;
+        let child_stripped = if notes {
+            None
+        } else {
+            strip_trailing_task_id(&mut child_tokens)
+        };
+        if let Some(child_stripped) = &child_stripped {
+            match &child_stripped.lex {
+                TaskIdLex::Invalid { raw, .. } => {
+                    return Err(coded(
+                        "invalid_project_task_id",
+                        invalid_project_task_id_charset_error(raw),
+                    ));
+                }
+                TaskIdLex::Valid { id, .. }
+                    if is_reserved_project_task_id(id) =>
+                {
+                    return Err(coded(
+                        "invalid_project_task_id",
+                        reserved_project_task_id_error(id),
+                    ));
+                }
+                TaskIdLex::Valid { .. } => {
+                    return Err(coded(
+                        "misplaced_project_task_id",
+                        misplaced_list_task_id_error(
+                            child_stripped.token.text,
+                            parent_outcome.body.trim(),
+                        ),
+                    ));
+                }
+                TaskIdLex::Lone { sigil } => {
+                    return Err(coded(
+                        "invalid_project_task_id",
+                        unfinished_list_task_id_error(
+                            *sigil,
+                            parent_outcome.body.trim(),
+                        ),
+                    ));
+                }
+            }
+        }
+        refuse_list_bullet_affixes(
+            &child_tokens,
+            item.source,
+            &header_text,
+            &file,
+            &list.route,
+            parent_outcome.body.trim(),
+        )?;
+        let child_tokens = unescape_execution_tokens(
+            child_tokens,
+            &child_line_dependencies.escapes,
+        );
+        let outcome = resolve_line(child_tokens, false, true)
+            .map_err(CaptureItemParseError::generic)?;
+        declarations.extend(global_declarations_from_tokens(
+            outcome.declarations,
+            line_number,
+        ));
+        if outcome.body.is_empty() {
+            if child_line_dependencies.stripped_tokens > 0 {
+                continue;
+            }
+            return Err(coded(
+                "empty_child_after_markers",
+                empty_child_after_markers_error(line_number),
+            ));
+        }
+        if let Some(marker_text) = outcome
+            .route
+            .as_ref()
+            .map(|route| route.marker_text.clone())
+        {
+            let suggestion = list_bullet_marker_suggestion(
+                &marker_text,
+                parent_outcome.body.trim(),
+                &list.route,
+            );
+            return Err(coded(
+                "list_bullet_marker",
+                list_bullet_marker_error(
+                    &header_text,
+                    &file,
+                    &marker_text,
+                    &suggestion,
+                ),
+            ));
+        }
+        aggregate
+            .absorb(outcome.markers, None)
+            .map_err(CaptureItemParseError::generic)?;
+        let body = outcome.body;
+        if body.is_empty() {
+            if child_line_dependencies.stripped_tokens > 0 {
+                continue;
+            }
+            return Err(coded(
+                "empty_child_after_markers",
+                empty_child_after_markers_error(line_number),
+            ));
+        }
+        // The bullet line is this item's text line, so its nested lines sit
+        // one level higher than their lexical depth: exactly as `<text>
+        // @route` plus those lines as direct children would parse (the
+        // equivalence invariant). A deeper line cannot exist here; four
+        // spaces classify `Invalid` and refuse above.
+        let depth = match authored.depth {
+            AuthoredDepth::Nested => AuthoredDepth::First,
+            AuthoredDepth::First => AuthoredDepth::First,
+        };
+        sub_bullets.push(AuthoredSubBullet {
+            body,
+            depth,
+            task_id: None,
+            drawer: None,
+        });
+    }
+    let has_creation_modifiers = aggregate.clip.is_some()
+        || aggregate.scheduled_offset.is_some()
+        || aggregate.priority_level.is_some();
+    let (route, kind) = match (notes, stripped_id) {
+        (true, _) => (
+            Some(list.route.clone()),
+            CaptureKind::Bullet {
+                section_prefix: list.section.clone(),
+                exact: false,
+            },
+        ),
+        (false, Some(id)) if stripped_sigil == Some(':') => (
+            Some(list.route.clone()),
+            CaptureKind::Pomodoro {
+                block_id: id,
+                pomodoro_name: None,
+                pomodoro_name_is_literal: false,
+                start: None,
+                close: None,
+            },
+        ),
+        (false, Some(id)) => (
+            Some(list.route.clone()),
+            CaptureKind::TaskWithBlockId { block_id: id },
+        ),
+        (false, None) => (Some(list.route.clone()), CaptureKind::Task),
+    };
+    super::drawer_bullet::finish_execution_drawer_bullets(
+        &kind,
+        &parent_outcome.body,
+        &mut sub_bullets,
+    )
+    .map_err(CaptureItemParseError::generic)?;
+    let (dependencies, dependency_target) = execution_item_dependencies(
+        &item_dependencies,
+        &kind,
+        route.as_deref(),
+        parent_outcome.body.is_empty(),
+        has_creation_modifiers,
+        Some(&header_text),
+    )
+    .map_err(CaptureItemParseError::generic)?;
+    Ok(parsed_capture_item_outcome(
+        item,
+        ParsedCaptureText {
+            body: parent_outcome.body,
+            clip: aggregate.clip,
+            route,
+            kind,
+            scheduled_offset: aggregate.scheduled_offset,
+            priority_level: aggregate.priority_level,
+            sub_bullets,
+            dependencies,
+            blocked_tasks: execution_blocked_tasks(&item_dependencies),
+            relations: execution_relations(&item_dependencies),
+            dependency_target,
+            type_marker: None,
+        },
+        declarations,
+        Some(header_text),
+    ))
+}
+
+/// Refuse malformed or partial dependency modifiers on a list bullet before
+/// any other list rule, mirroring the ordinary item's dependency gate.
+fn list_bullet_dependency_errors(
+    found: &ItemDependencySet,
+) -> Result<(), CaptureItemParseError> {
+    let invalid = [
+        found
+            .invalid
+            .first()
+            .map(|invalid| (invalid.start, invalid.message.clone())),
+        found
+            .blocked_invalid
+            .first()
+            .map(|invalid| (invalid.start, invalid.message.clone())),
+        found
+            .relation_invalid
+            .first()
+            .map(|invalid| (invalid.start, invalid.message.clone())),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|(start, _)| *start)
+    .map(|(_, message)| message);
+    if let Some(invalid) = invalid {
+        return Err(CaptureItemParseError::generic(invalid));
+    }
+    if found.has_partial_tokens() {
+        let mut partials: Vec<(usize, String)> = Vec::new();
+        if let Some(partial) = found.partials.first() {
+            partials.push((partial.0, incomplete_dependency_error()));
+        }
+        if let Some(partial) = found.blocked_partials.first() {
+            partials.push((partial.0, incomplete_blocked_task_error()));
+        }
+        if let Some(partial) = found.relation_target_partials.first() {
+            partials.push((partial.0, incomplete_relation_target_error()));
+        }
+        if let Some(partial) = found.relation_label_partials.first() {
+            partials.push((partial.0, incomplete_relation_label_error()));
+        }
+        partials.sort_by_key(|(start, _)| *start);
+        if let Some((_, message)) = partials.first() {
+            return Err(CaptureItemParseError::generic(message.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse affixes that would route a list bullet elsewhere: a trailing
+/// parent selector (`+`/`+query`) or a task completion (`!note:id`).
+fn refuse_list_bullet_affixes(
+    tokens: &[Token<'_>],
+    source: &str,
+    header: &str,
+    file: &str,
+    route: &str,
+    body: &str,
+) -> Result<(), CaptureItemParseError> {
+    for token in tokens {
+        if crate::native::capture_links::is_protected_markup_range(
+            source,
+            token.start,
+            token.end,
+        ) {
+            continue;
+        }
+        if token.text.starts_with('!')
+            && token.text.contains(':')
+            && !token.text.starts_with("!!")
+            && !token.text.starts_with("![")
+        {
+            let suggestion =
+                list_bullet_marker_suggestion(token.text, body, route);
+            return Err(CaptureItemParseError::coded(
+                "list_bullet_marker",
+                list_bullet_marker_error(header, file, token.text, &suggestion),
+            ));
+        }
+    }
+    if let Some(token) = tokens.last()
+        && let Some(query) = token.text.strip_prefix('+')
+        && !query.starts_with('+')
+        && !query.starts_with('-')
+        && !query
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_digit())
+        && !crate::native::capture_links::is_protected_markup_range(
+            source,
+            token.start,
+            token.end,
+        )
+    {
+        let suggestion = list_bullet_marker_suggestion(token.text, body, route);
+        return Err(CaptureItemParseError::coded(
+            "list_bullet_marker",
+            list_bullet_marker_error(header, file, token.text, &suggestion),
+        ));
+    }
+    Ok(())
+}
+
+/// A resolved bare-Task header with only item-wide markers and bullets
+/// below: the header must stand alone. The bare `@route` form stays literal
+/// through resolve, so this runs on the success path; the `missing_text`
+/// path (sealed `@route#section` markers) is handled separately.
+fn list_header_marker_from_resolved(
+    item: &CaptureItem<'_>,
+    occurrences: &[super::type_marker::TypeMarkerOccurrence],
+    outcome: &ParsedCaptureItemOutcome<'_>,
+) -> Option<String> {
+    if outcome.parsed.route.is_some() {
+        return None;
+    }
+    if super::dependencies::scan_item_dependencies(item).has_entries() {
+        return None;
+    }
+    if !outcome
+        .parsed
+        .sub_bullets
+        .iter()
+        .any(|sub| sub.depth == AuthoredDepth::First)
+    {
+        return None;
+    }
+    let (parent, _) = item.lines.split_first()?;
+    let body = outcome.parsed.body.trim();
+    if body.is_empty() {
+        return None;
+    }
+    let mut tokens = parent.raw.text.split_whitespace();
+    let first = tokens.next()?;
+    if body != first {
+        return None;
+    }
+    let route = super::tokens::parse_terminal_route_token(first)
+        .ok()
+        .flatten()?;
+    if !matches!(route.kind, CaptureKind::Task | CaptureKind::Bullet { .. }) {
+        return None;
+    }
+    let mut rest = tokens.peekable();
+    let stray = if let Some(marker) = rest.next() {
+        if !is_list_header_marker_token(marker) {
+            return None;
+        }
+        marker.to_string()
+    } else {
+        occurrences
+            .iter()
+            .filter(|occurrence| {
+                occurrence.is_marker()
+                    && occurrence.span().start >= parent.raw.start
+                    && occurrence.span().end <= parent.raw.end
+            })
+            .find_map(|occurrence| match occurrence {
+                super::type_marker::TypeMarkerOccurrence::Complete(marker) => {
+                    Some(format!("#{}", marker.name))
+                }
+                super::type_marker::TypeMarkerOccurrence::Incomplete {
+                    ..
+                } => Some("#".to_string()),
+                super::type_marker::TypeMarkerOccurrence::Invalid {
+                    raw,
+                    ..
+                } => Some(raw.clone()),
+                super::type_marker::TypeMarkerOccurrence::Escaped {
+                    ..
+                } => None,
+            })?
+    };
+    for marker in rest {
+        if !is_list_header_marker_token(marker) {
+            return None;
+        }
+    }
+    let bullet = outcome
+        .parsed
+        .sub_bullets
+        .iter()
+        .find(|sub| sub.depth == AuthoredDepth::First)
+        .map(|sub| sub.body.trim())?;
+    Some(list_header_marker_error(first, &stray, bullet))
+}
+
+/// Whether a token may follow a list header on its own line: schedule,
+/// priority, `%` directives, and `#` type markers. Anything else (prose,
+/// routes, selectors, completions) keeps the ordinary reading.
+fn is_list_header_marker_token(token: &str) -> bool {
+    super::markers::parse_schedule_token(token).is_some()
+        || super::markers::parse_priority_token(token).is_some()
+        || super::markers::parse_retired_priority_token(token).is_some()
+        || token.starts_with('%')
+        || token.starts_with('#')
 }
 
 fn remap_type_marker_declarations<'a>(
@@ -856,12 +1619,27 @@ fn parse_capture_item_masked<'a>(
         return Err(missing_text_error());
     }
 
+    let parent_is_project_note = matches!(
+        parent_outcome.route.as_ref().map(|route| &route.token.kind),
+        Some(CaptureKind::ProjectNote { .. })
+    );
+    // The project-note marker may sit on a child line: a sealed marker
+    // there routes the whole item, so every sibling takes the ID rule.
+    let child_seals_note = child_lines.iter().any(|line| {
+        matches!(
+            classify_authored_line(line.raw),
+            AuthoredLineClass::Item(authored)
+                if child_line_seals_project_note(authored.body)
+        )
+    });
+    let parent_takes_ids = parent_is_project_note || child_seals_note;
     let mut aggregate = AggregateMarkers::default();
     aggregate.clip = clip;
     aggregate.absorb(parent_outcome.markers, parent_outcome.route)?;
 
     let mut sub_bullets = Vec::new();
     let mut sub_bullet_lines = Vec::new();
+    let mut sub_bullet_stripped = Vec::new();
     let mut has_first_level_owner = false;
     for line in child_lines {
         let line_number = line.line_number;
@@ -881,12 +1659,20 @@ fn parse_capture_item_masked<'a>(
             end: line.raw.end,
         };
         let tokens = tokenize_line_with_spans(&child_line);
-        let (tokens, child_line_dependencies) = extract_line_dependencies(
+        let (mut tokens, child_line_dependencies) = extract_line_dependencies(
             tokens,
             child_line.text,
             child_line.start,
             false,
         );
+        // Project-note task bullets take the list ID rule: the ID may sit
+        // anywhere in the trailing marker run, so it leaves before marker
+        // extraction and schedule/priority markers behind it still resolve.
+        let child_stripped = if parent_takes_ids {
+            strip_trailing_task_id(&mut tokens)
+        } else {
+            None
+        };
         let tokens =
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
         let outcome = resolve_line(tokens, false, detect_route)?;
@@ -927,7 +1713,12 @@ fn parse_capture_item_masked<'a>(
                 | DrawerBulletHit::Escaped { .. } => {}
             }
         }
-        if outcome.body.is_empty() && drawer_hit.is_none() {
+        // A stripped task ID defers to the post-pass, which reports the
+        // ID refusal in step order (marker, parent, children in source
+        // order, then unused `#pomodoro`). The loop below only refuses
+        // ID-less emptied children.
+        let id_pending = child_stripped.is_some();
+        if outcome.body.is_empty() && drawer_hit.is_none() && !id_pending {
             // A child holding only dependency modifiers contributes no
             // empty bullet; any other emptied child stays an error.
             if child_line_dependencies.stripped_tokens > 0 {
@@ -949,7 +1740,7 @@ fn parse_capture_item_masked<'a>(
             Some(_) => (outcome.body, None),
             None => (outcome.body, None),
         };
-        if body.is_empty() && drawer.is_none() {
+        if body.is_empty() && drawer.is_none() && !id_pending {
             if child_line_dependencies.stripped_tokens > 0 {
                 continue;
             }
@@ -962,6 +1753,7 @@ fn parse_capture_item_masked<'a>(
             drawer,
         });
         sub_bullet_lines.push(line_number);
+        sub_bullet_stripped.push(child_stripped);
         if authored.depth == AuthoredDepth::First {
             has_first_level_owner = true;
         }
@@ -1281,7 +2073,13 @@ fn parse_capture_item_masked<'a>(
         }
         for (index, child) in sub_bullets.iter_mut().enumerate() {
             let line_number = sub_bullet_lines[index];
-            match pass.check_child(&child.body, child.depth, line_number) {
+            let stripped = sub_bullet_stripped.get(index).cloned().flatten();
+            match pass.check_child(
+                stripped,
+                &child.body,
+                child.depth,
+                line_number,
+            ) {
                 ChildTaskOutcome::Ignore => {}
                 ChildTaskOutcome::Unfinished { sigil } => {
                     return Err(unfinished_project_task_id_error(sigil));
@@ -1289,12 +2087,7 @@ fn parse_capture_item_masked<'a>(
                 ChildTaskOutcome::Error { message, .. } => {
                     return Err(message);
                 }
-                ChildTaskOutcome::Accept {
-                    sigil,
-                    id,
-                    stripped,
-                } => {
-                    child.body = stripped;
+                ChildTaskOutcome::Accept { sigil, id } => {
                     child.task_id = Some(ProjectTaskId {
                         block_id: id,
                         link: sigil == ':',
@@ -1547,6 +2340,7 @@ pub(super) fn parsed_capture_item_outcome<'a>(
         parsed,
         declarations,
         local_destination_marker,
+        list: item.list.clone(),
     }
 }
 

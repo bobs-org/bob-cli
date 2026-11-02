@@ -17,10 +17,10 @@ use super::{
         self, resolve_exact_type_name, scan_line, unmatched_type_display,
         AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
-        EditorParseOptions, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
-        PomodoroMergeSpec, PomodoroShiftSpec, PomodoroSplitSpec,
-        PomodoroStartSpec, ProjectTaskId, RelationDirection, RelationEntry,
-        ResolvedTypeName, Severity, Span,
+        EditorParseOptions, ListContext, Need, PomodoroAdjustSpec,
+        PomodoroCloseSpec, PomodoroMergeSpec, PomodoroShiftSpec,
+        PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
+        RelationEntry, ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -172,7 +172,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 5` for the capture-language revision while \
+Success JSON reports `grammar: 6` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
@@ -553,6 +553,13 @@ struct CaptureParseResult {
     section: Option<String>,
     block_id: Option<String>,
     needs: Vec<Need>,
+    /// The capture list the first item belongs to, when split from a lone
+    /// `@route` / `@route#section` header. Additive: omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list: Option<ListContext>,
+    /// The header line's range. Present exactly when `list` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    header_range: Option<SourceRange>,
     /// Top-level `relation_grammar: 1` whenever the draft contains a `~`
     /// byte. Omitted otherwise, so drafts without relations stay
     /// byte-identical to today.
@@ -725,6 +732,13 @@ struct CaptureParseItem {
     section: Option<String>,
     block_id: Option<String>,
     needs: Vec<Need>,
+    /// The capture list this bullet belongs to, when split from a lone
+    /// `@route` / `@route#section` header. Additive: omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list: Option<ListContext>,
+    /// The header line's range. Present exactly when `list` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    header_range: Option<SourceRange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ref_parent: Option<RefParentParse>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1033,6 +1047,11 @@ impl CaptureParseResult {
         ));
         let relation_grammar = relation_grammar_for(&input);
         let relations = parse_relations(&parse.relations);
+        let top_list = items.first().and_then(|item| item.list.clone());
+        let top_header_range = top_list.as_ref().map(|list| SourceRange {
+            start: list.header_start,
+            end: list.header_end,
+        });
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -1044,6 +1063,8 @@ impl CaptureParseResult {
             section: parse.section,
             block_id: parse.block_id,
             needs: parse.needs,
+            list: top_list,
+            header_range: top_header_range,
             relation_grammar,
             ref_parent,
             ref_listen,
@@ -1239,6 +1260,8 @@ impl CaptureParseResult {
                     relations: Vec::new(),
                     dependency_target: None,
                     task_complete: None,
+                    list: None,
+                    header_range: None,
                     template_row: Some(template_row),
                 });
             } else {
@@ -1272,6 +1295,8 @@ impl CaptureParseResult {
                     relations: Vec::new(),
                     dependency_target: None,
                     task_complete: None,
+                    list: None,
+                    header_range: None,
                     template_row: Some(summary.clone()),
                 });
             }
@@ -1296,12 +1321,47 @@ impl CaptureParseResult {
         stamp_cancel_spans(&mut spans, &masked, &close_policy);
         stamp_complete_spans(&mut spans, &masked, &close_policy);
 
-        let mut diagnostics = analysis
-            .issues
-            .iter()
-            .filter(|issue| issue.code() != "template_missing_rows")
-            .map(template_issue_diagnostic)
-            .collect::<Vec<_>>();
+        // A header in the template body is refused in execution
+        // (`template_list`); surface the same code here so the template
+        // view agrees. Masking can hide the header from the item parse, so
+        // scan the definition lines exactly like the execution check, and
+        // point at the header token in the original input.
+        let mut diagnostics: Vec<Diagnostic> = analysis
+            .block
+            .as_ref()
+            .and_then(|block| {
+                let definitions = block.definition_lines(&input);
+                block.lines.iter().zip(definitions.iter()).find_map(
+                    |((_, range), definition)| {
+                        capture_language::detect_list_header(
+                            &capture_language::RawLine {
+                                text: definition,
+                                start: 0,
+                                end: definition.len(),
+                            },
+                        )
+                        .map(|_| {
+                            let token = definition.trim();
+                            (range.start, range.start + token.len())
+                        })
+                    },
+                )
+            })
+            .map(|(start, end)| Diagnostic {
+                severity: Severity::Error,
+                code: "template_list",
+                message: capture_language::template_list_error(),
+                range: Some((start, end)),
+            })
+            .into_iter()
+            .collect();
+        diagnostics.extend(
+            analysis
+                .issues
+                .iter()
+                .filter(|issue| issue.code() != "template_missing_rows")
+                .map(template_issue_diagnostic),
+        );
 
         diagnostics.extend(parsed.diagnostics.iter().filter_map(
             |diagnostic| {
@@ -1416,6 +1476,9 @@ impl CaptureParseResult {
             section: parsed.section,
             block_id: parsed.block_id,
             needs,
+            // Template rows never split into lists.
+            list: None,
+            header_range: None,
             relation_grammar,
             ref_parent,
             ref_listen: parsed.ref_listen,
@@ -2134,6 +2197,8 @@ fn empty_wire_item() -> CaptureParseItem {
         relations: Vec::new(),
         dependency_target: None,
         task_complete: None,
+        list: None,
+        header_range: None,
         template_row: None,
     }
 }
@@ -2177,7 +2242,10 @@ fn ref_parent_for(
 }
 
 fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
-    if items.len() <= 1 {
+    // One `items[]` entry per list bullet, even when a lone header carries
+    // a single bullet: the list object lives on the entry, not the batch.
+    if items.len() <= 1 && items.first().is_none_or(|item| item.list.is_none())
+    {
         return Vec::new();
     }
     items.iter().map(wire_item).collect()
@@ -2198,6 +2266,11 @@ fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
         section: item.section.clone(),
         block_id: item.block_id.clone(),
         needs: item.needs.clone(),
+        list: item.list.clone(),
+        header_range: item.list.as_ref().map(|list| SourceRange {
+            start: list.header_start,
+            end: list.header_end,
+        }),
         ref_parent: ref_parent_for(
             item.mode,
             item.route.as_deref(),
@@ -2982,7 +3055,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 5);
+        assert_eq!(value["grammar"], 6);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
