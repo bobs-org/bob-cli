@@ -1801,8 +1801,87 @@ plan 10/10 links
 
 - `hello` and `x` dry runs take ≤ 40 ms;
 - a `!` or `x!` that closes a real prerequisite takes ≤ 70 ms;
+- an enabled `x*` that parks a live-linked task takes ≤ 70 ms;
+- adding the dependents pass on top of a relation `!` adds ≤ 5 ms;
 - `capture-parse` does no new work;
 - no extra spawn is needed to report results.
+
+**Measured 2026-11-02 (bob-cli-fs.4.1.6).** Isolated Apollo scratch copy
+of `~/bob`, never the live vault. Feature-gated comparison: pre-relation
+baseline `8c7e710306d0e49b52376e5d6d85f52dfd73f722` (parent of
+`30ae6ac9`) versus candidate `d53756fdd5b33121191130c07a1715f9d7d481e4`
+plus the capture previous-daily relative-path fix and SA coverage in
+this change.
+
+- Host: apollo, Intel Xeon Platinum 8168 @ 2.70 GHz, x86_64.
+- Toolchain: rustc 1.95.0 (59807616e 2026-04-14), cargo 1.95.0
+  (f2d3ce0bd 2026-03-21), same on the build host.
+- Scratch: 4.0G, 6848 Markdown files (6847 from the copy plus the
+  synthetic `capture-measure.md` fixture). Private task text was not
+  copied into this page; the timed gestures used only that fixture.
+- Sample: five discarded warmups per binary and case, then 25
+  interleaved dry-runs (`capture --dry-run --no-clip --no-ref -f json`)
+  with baseline/candidate order swapped each round. p95 is nearest rank
+  (`ceil(0.95 × n) − 1`).
+- Binaries: baseline sha256
+  `205d050023e867f1aca3348f780648cc6485b6d5ebbd8954f2ae55b694ed2ef7`,
+  candidate sha256
+  `04761beb5c50af85614eceb2f8ea9e21342940e138a09e9f7be8fdc31bbca949`,
+  distinct inodes. Workspace `CARGO_TARGET_DIR` /
+  `CARGO_BUILD_BUILD_DIR` must be unset or overridden per tree;
+  otherwise Cargo 1.95 hardlinks both `--target-dir` outputs onto one
+  inode.
+
+```bash
+git worktree add --detach .build/relation-baseline \
+  8c7e710306d0e49b52376e5d6d85f52dfd73f722
+env -u CARGO_BUILD_BUILD_DIR -u RUSTC_WRAPPER \
+  CARGO_TARGET_DIR="$PWD/.build/release-baseline" CARGO_INCREMENTAL=0 \
+  bash -lc 'cd .build/relation-baseline &&
+    cargo build --locked --release --bin bob'
+env -u CARGO_BUILD_BUILD_DIR -u RUSTC_WRAPPER \
+  CARGO_TARGET_DIR="$PWD/.build/release-candidate" CARGO_INCREMENTAL=0 \
+  cargo build --locked --release --bin bob
+install -T .build/release-baseline/release/bob .build/bins/bob-baseline
+install -T .build/release-candidate/release/bob .build/bins/bob-candidate
+SCRATCH=$(ssh apollo 'mktemp -d /tmp/bob-cli-relations.XXXXXX')
+ssh apollo "cp -a ~/bob '$SCRATCH/vault'"
+scp .build/bins/bob-baseline .build/bins/bob-candidate apollo:"$SCRATCH/"
+# Each sample writes a synthetic capture-measure.md / 20261102.md fixture
+# into the scratch copy (never ~/bob), sets BOB_DIR, BOB_DAY_FILE,
+# BOB_CONFIG_FILE, BOB_NOW=2026-11-02 09:30:00, and isolated XDG_*, then
+# times: hello, x, x*, !capture-measure:implement, and the same ! with
+# [dependsOn:: implement] on the source.
+```
+
+| Case | Baseline median / p95 | Candidate median / p95 | Δ median |
+| --- | --- | --- | --- |
+| `hello` | 32.23 / 64.15 ms | 29.59 / 51.47 ms | −2.64 ms |
+| `x` | 31.42 / 108.14 ms | 31.11 / 58.72 ms | −0.31 ms |
+| `x*` park | 170.79 / 223.35 ms | 360.72 / 456.16 ms | +189.93 ms |
+| `!` Done | 219.87 / 271.89 ms | 356.28 / 517.04 ms | +136.41 ms |
+| `!` with dependents | 234.98 / 281.46 ms | 369.04 / 462.79 ms | +134.06 ms |
+
+Candidate dependents-pass delta (`!` with `[dependsOn::]` minus
+relation-only `!`): **+12.76 ms**.
+
+Budget notes:
+
+- `hello` / `x` **medians** meet ≤ 40 ms. The candidate is slightly
+  faster than the pre-feature baseline, so the relation gate adds no
+  ordinary-capture work. p95 exceeds 40 ms on both binaries (`x`
+  baseline p95 108.14 ms); treat that as apollo load, as with other
+  interleaved host measurements.
+- The ≤ 70 ms `!` / `x!` target is already missed on the pre-feature
+  baseline at this vault size (219.87 ms median). Enabled `x*` parking
+  a live-linked task is 360.72 ms median with the feature on (170.79 ms
+  without).
+- The shared byte pass keeps relation-plus-dependents close to
+  relation-only. The ≤ 5 ms dependents-pass add is missed (+12.76 ms);
+  the same add on the pre-feature baseline is +15.11 ms.
+
+SA1 `x*` and SA4 `!` human and JSON smokes passed on a tiny local vault
+and on this scratch copy.
 
 ### 12.8 Kill switch
 

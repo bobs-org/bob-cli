@@ -654,6 +654,154 @@ fn disabled_and_edge_free_omit_relation_fields() {
     );
 }
 
+// SA22: normalized label keys match configured successor labels, while the
+// inverse spelling remains inert on the CLI capture path.
+#[test]
+fn sa22_normalized_label_matches_and_inverse_is_inert() {
+    let (_temp, vault, day_file, config) = sa4_vault("bob-cli-sa22-labels");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Normalized edge [id:: normalized] ^normalized\n",
+            "  - 🪢 **LINKS:** Starts  After: [[agents#^implement]]\n",
+            "- [ ] #task Inverse edge [id:: inverse] ^inverse\n",
+            "  - 🪢 **LINKS:** starts before [[agents#^implement]]\n",
+            "- [/] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+    );
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "!agents:implement",
+    );
+    let rows = json["task_complete"]["relation_successors"]
+        .as_array()
+        .expect("relation successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "normalized");
+}
+
+// SA23: an overlapping effect label has no capture-time relation effect.
+#[test]
+fn sa23_overlapping_successor_and_complete_label_is_inert() {
+    let (_temp, vault, day_file, _) = sa4_vault("bob-cli-sa23-overlap");
+    let config = write_config(
+        &vault,
+        concat!(
+            "relations:\n",
+            "  complete_labels: [starts after]\n",
+            "  successor_labels: ['Starts  After:']\n",
+        ),
+    );
+    let source_before = fs::read_to_string(vault.join("agents.md"))
+        .expect("source before close");
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "!agents:implement",
+    );
+    assert!(
+        json["task_complete"].get("relation_successors").is_none(),
+        "{json}"
+    );
+    assert!(
+        json["task_complete"].get("relation_completes").is_none(),
+        "{json}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("agents.md"))
+            .expect("source after close"),
+        source_before
+    );
+}
+
+// SA26: relation lookup uses LINKS and block identities without dependency
+// IDs or generated mirrors.
+#[test]
+fn sa26_relations_work_without_task_ids_or_mirror_lines() {
+    let (_temp, vault, day_file, _) = sa4_vault("bob-cli-sa26-no-ids");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+            "- [/] #task Send implementation prompt ^implement\n",
+        ),
+    );
+    let config = write_config(
+        &vault,
+        concat!(
+            "relations:\n",
+            "  successor_labels: [starts after]\n",
+            "  linked_from_lines: false\n",
+        ),
+    );
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "!agents:implement",
+    );
+    let row = relation_row(&json);
+    assert_eq!(row["block_id"], "evaluate");
+    assert_eq!(json["task_complete"]["relation_check"], "checked");
+    assert_eq!(json["task_complete"]["unblocked"], serde_json::json!([]));
+    let note = fs::read_to_string(vault.join("agents.md")).expect("note");
+    assert!(!note.contains("[id::"), "{note}");
+    assert!(!note.contains("[dependsOn::"), "{note}");
+}
+
+// SA28: closed, archived, and previous-daily sources stay out of the offer
+// set even when their LINKS entries resolve to the just-completed target.
+#[test]
+fn sa28_closed_archived_and_previous_daily_sources_are_skipped() {
+    let (_temp, vault, _) = vault("bob-cli-sa28-source-filters");
+    let day_file = vault.join("2026/20261102.md");
+    write_file(
+        &vault.join("agents.md"),
+        "- [/] #task Send implementation prompt ^implement\n",
+    );
+    let edge = |status: char, description: &str, id: &str| {
+        format!(
+            "- [{status}] #task {description} ^{id}\n  - 🪢 **LINKS:** starts after [[agents#^implement]]\n"
+        )
+    };
+    write_file(
+        &vault.join("closed.md"),
+        &edge('x', "Closed source", "closed"),
+    );
+    write_file(
+        &vault.join("done/archive.md"),
+        &edge(' ', "Archived source", "archived"),
+    );
+    write_file(
+        &vault.join("2026/20261101.md"),
+        &edge(' ', "Previous daily source", "previous"),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () \u{2014} BUILD\n  - [[agents#^implement]]\n",
+    );
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "!agents:implement",
+    );
+    assert!(
+        json["task_complete"].get("relation_successors").is_none(),
+        "{json}"
+    );
+    assert!(json["task_complete"]["relation_held"].is_null(), "{json}");
+}
+
 // Parks: `x*` and close completions offer relation successors for parked
 // and completed targets (`docs/task-dependencies.md` §12.18).
 
@@ -937,6 +1085,9 @@ fn sa14park_parked_target_keeps_dependent_blocked() {
     assert_eq!(held.len(), 1, "{held:?}");
     assert_eq!(held[0]["block_id"], "evaluate");
     assert_eq!(held[0]["reason"], "blocked");
+    let waits_on = held[0]["waits_on"].as_array().expect("waits_on");
+    assert_eq!(waits_on.len(), 1, "{waits_on:?}");
+    assert_eq!(waits_on[0]["block_id"], "implement");
 }
 
 // SA16: skipping S at the park is stateless; completing T later offers S

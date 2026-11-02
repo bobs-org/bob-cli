@@ -36,6 +36,42 @@ fn staged_contents(batch: &PlannedCaptureBatch) -> BTreeMap<PathBuf, String> {
 }
 
 #[test]
+fn sa36_hello_and_plain_x_add_no_relation_snapshot_reads() {
+    use std::ffi::OsStr;
+
+    let temp = tempfile::tempdir().expect("create capture gate vault");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(vault.join("2026")).expect("create vault");
+    let day_file = vault.join("2026/20261102.md");
+    fs::write(&day_file, "## Pomodoros\n- [ ] (**0920-0950**) BUILD\n")
+        .expect("write running pomodoro");
+    let config = temp.path().join("config.yml");
+    fs::write(&config, "relations:\n  successor_labels: [starts after]\n")
+        .expect("write enabled relation config");
+    let _env = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_DAY_FILE", Some(day_file.as_os_str())),
+        ("BOB_NOW", Some(OsStr::new("2026-11-02 09:30:00"))),
+        ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+    ]);
+
+    for text in ["hello", "x"] {
+        let mut request = template_request(&vault, text);
+        request.no_clip = true;
+        request.no_ref = true;
+        let batch = plan_capture_batch(&request, None).expect("plan capture");
+        assert_eq!(
+            batch.catalog_walks, 0,
+            "{text:?} must not walk the vault catalog"
+        );
+        assert!(
+            batch.snapshot_read_counts.is_empty(),
+            "{text:?} must not read dependency/relation snapshot bytes: {:?}",
+            batch.snapshot_read_counts
+        );
+    }
+}
+
+#[test]
 fn planning_each_template_matches_planning_its_expansion() {
     let temp = tempfile::tempdir().expect("create template oracle directory");
     let vault = temp.path().join("vault");

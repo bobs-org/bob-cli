@@ -20,6 +20,13 @@ pub(super) struct PlannedCaptureBatch {
     /// enqueues them as rolled-back side effects and patches each
     /// item's `ref.job` with the created id.
     pub(super) staged_jobs: Vec<StagedRefJob>,
+    /// Per-vault read accounting for the relation/dependency byte pass.
+    /// This is present only in library tests so call-site gates can prove
+    /// that ordinary captures and no-op closes add no snapshot I/O.
+    #[cfg(test)]
+    pub(super) catalog_walks: usize,
+    #[cfg(test)]
+    pub(super) snapshot_read_counts: BTreeMap<PathBuf, usize>,
 }
 
 /// One reference item's staged ref job plus its position in the
@@ -291,6 +298,10 @@ pub(super) fn plan_capture_batch_with_config_path(
         template,
         template_rows,
         staged_jobs,
+        #[cfg(test)]
+        catalog_walks: dependency_ctx.catalog_walk_count(),
+        #[cfg(test)]
+        snapshot_read_counts: dependency_ctx.snapshot_read_counts(),
     })
 }
 

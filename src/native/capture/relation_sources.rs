@@ -176,7 +176,10 @@ pub(super) fn collect_relation_sources(
             parked: parked.to_vec(),
             relation_snapshot_complete,
             dependency_snapshot_complete,
-            previous_daily: ctx.previous_daily().map(Path::to_path_buf),
+            previous_daily: ctx
+                .previous_daily()
+                .and_then(|path| path.strip_prefix(bob_dir).ok())
+                .map(Path::to_path_buf),
             unavailable_targets,
         },
         source_notes,

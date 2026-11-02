@@ -102,6 +102,10 @@ pub(crate) fn link_existing_task(
             template: None,
             template_rows: Vec::new(),
             staged_jobs: Vec::new(),
+            #[cfg(test)]
+            catalog_walks: 0,
+            #[cfg(test)]
+            snapshot_read_counts: BTreeMap::new(),
         };
         commit_capture_batch(&mut batch, bob_dir)?;
     }
