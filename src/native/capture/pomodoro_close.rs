@@ -421,6 +421,7 @@ pub(super) fn build_close_summary_json(
                 name: next.name.clone(),
                 time_range: next.time_range.clone(),
                 created: next.created,
+                placed_last: next.placed_last,
                 shed: shed_theme_refs(&ledger.shed, types),
             });
     let task_links: Vec<PomodoroCloseTaskLinkJson> = plan
@@ -669,6 +670,7 @@ fn name_successor_continuation(
         },
         time_range: None,
         created: true,
+        placed_last: false,
         shed: Vec::new(),
     });
 }

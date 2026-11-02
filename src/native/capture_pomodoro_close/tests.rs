@@ -640,3 +640,232 @@ mod close_names {
         assert!(plan.shed.is_empty());
     }
 }
+
+mod meet_continuation_last {
+    use super::*;
+
+    fn meet_day() -> String {
+        note(&[
+            "## Pomodoros",
+            "",
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            "\t- [[bob#^later]]#",
+            "- [ ] () — BUILD",
+            "\t- [[bob#^task]]",
+            "- [ ] () — PLAN",
+        ])
+    }
+
+    #[test]
+    fn meet_close_carrying_a_link_moves_the_continuation_last() {
+        let plan = close_at(&meet_day(), 9, 37);
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "",
+                "- [x] (**0800-0900** [t:: 60m]) — MEET",
+                "- [ ] () — BUILD",
+                "\t- [[bob#^task]]",
+                "- [ ] () — PLAN",
+                "- [ ] () — MEET",
+                "\t- [[bob#^later]]",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.name.as_deref(), Some("MEET"));
+        assert_eq!(next.line, 7);
+        assert!(next.placed_last);
+    }
+
+    #[test]
+    fn no_open_entry_below_keeps_todays_slot() {
+        let contents = note(&[
+            "## Pomodoros",
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            "\t- [[bob#^later]]#",
+        ]);
+        let plan = close_at(&contents, 9, 37);
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "- [x] (**0800-0900** [t:: 60m]) — MEET",
+                "- [ ] () — MEET",
+                "\t- [[bob#^later]]",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.line, 3);
+        assert!(!next.placed_last);
+    }
+
+    #[test]
+    fn non_meet_close_keeps_todays_slot() {
+        let contents = note(&[
+            "## Pomodoros",
+            "- [ ] (**0800-0900** [t:: 60m]) — BUILD",
+            "\t- [[bob#^later]]#",
+            "- [ ] () — PLAN",
+        ]);
+        let plan = close_at(&contents, 9, 37);
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "- [x] (**0800-0900** [t:: 60m]) — BUILD",
+                "- [ ] () — BUILD",
+                "\t- [[bob#^later]]",
+                "- [ ] () — PLAN",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.name.as_deref(), Some("BUILD"));
+        assert_eq!(next.line, 3);
+        assert!(!next.placed_last);
+    }
+
+    #[test]
+    fn continuation_lands_before_a_hand_ordered_completed_entry() {
+        let contents = note(&[
+            "## Pomodoros",
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            "\t- [[bob#^later]]#",
+            "- [ ] () — BUILD",
+            "- [x] (**0700-0800** [t:: 60m]) — DONE",
+        ]);
+        let plan = close_at(&contents, 9, 37);
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "- [x] (**0800-0900** [t:: 60m]) — MEET",
+                "- [ ] () — BUILD",
+                "- [ ] () — MEET",
+                "\t- [[bob#^later]]",
+                "- [x] (**0700-0800** [t:: 60m]) — DONE",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.line, 4);
+        assert!(next.placed_last);
+    }
+
+    #[test]
+    fn continuation_follows_nested_children_and_interior_blanks() {
+        let contents = note(&[
+            "## Pomodoros",
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            "\t- [[bob#^later]]#",
+            "- [ ] () — PLAN",
+            "\t- [[bob#^task]]",
+            "",
+            "\t\t- nested detail",
+            "\t- [[bob#^other]]",
+        ]);
+        let plan = close_at(&contents, 9, 37);
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "- [x] (**0800-0900** [t:: 60m]) — MEET",
+                "- [ ] () — PLAN",
+                "\t- [[bob#^task]]",
+                "",
+                "\t\t- nested detail",
+                "\t- [[bob#^other]]",
+                "- [ ] () — MEET",
+                "\t- [[bob#^later]]",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.line, 8);
+        assert!(next.placed_last);
+    }
+
+    #[test]
+    fn deferred_and_dropped_lines_keep_the_reported_line_right() {
+        let contents = note(&[
+            "## Pomodoros",
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            "\t- [[bob#^later]]#",
+            "\t- ~[[bob#^dropped]]",
+            "- [ ] () — PLAN",
+        ]);
+        let plan = close_at(&contents, 9, 37);
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "- [x] (**0800-0900** [t:: 60m]) — MEET",
+                "- [ ] () — PLAN",
+                "- [ ] () — MEET",
+                "\t- [[bob#^later]]",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.line, 4);
+        assert!(next.placed_last);
+    }
+
+    #[test]
+    fn continuation_last_preserves_crlf_and_a_missing_final_newline() {
+        let contents = meet_day().replace('\n', "\r\n");
+        let contents = contents
+            .strip_suffix("\r\n")
+            .expect("trailing newline")
+            .to_string();
+        let plan = close_at(&contents, 9, 37);
+        let expected = note(&[
+            "## Pomodoros",
+            "",
+            "- [x] (**0800-0900** [t:: 60m]) — MEET",
+            "- [ ] () — BUILD",
+            "\t- [[bob#^task]]",
+            "- [ ] () — PLAN",
+            "- [ ] () — MEET",
+            "\t- [[bob#^later]]",
+        ])
+        .replace('\n', "\r\n");
+        let expected = expected.strip_suffix("\r\n").expect("trailing newline");
+        assert_eq!(plan.contents, expected);
+        assert!(plan.contents.contains("\r\n"));
+        assert!(!plan.contents.replace("\r\n", "").contains('\n'));
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.placed_last);
+        assert_eq!(next.line, 7);
+    }
+
+    #[test]
+    fn an_open_placeholder_above_is_never_an_anchor() {
+        let contents = note(&[
+            "## Pomodoros",
+            "- [ ] () — BUILD",
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            "\t- [[bob#^later]]#",
+            "- [ ] () — PLAN",
+        ]);
+        let plan = close_at(&contents, 9, 37);
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "- [ ] () — BUILD",
+                "- [x] (**0800-0900** [t:: 60m]) — MEET",
+                "- [ ] () — PLAN",
+                "- [ ] () — MEET",
+                "\t- [[bob#^later]]",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.line, 5);
+        assert!(next.placed_last);
+    }
+}

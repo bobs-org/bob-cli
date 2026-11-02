@@ -174,6 +174,10 @@ pub(super) struct PomodoroCloseNextJson {
     pub(super) name: Option<String>,
     pub(super) time_range: Option<String>,
     pub(super) created: bool,
+    /// True when a MEET close moved the created continuation after the
+    /// last open Pomodoro below the closed entry. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) placed_last: bool,
     /// Type components the created continuation shed, omitted when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) shed: Vec<super::super::pomodoro_themes::ThemeRef>,
@@ -3063,6 +3067,11 @@ pub(super) fn print_human_pomodoro_close_success(
         } else {
             String::new()
         };
+        let placed_last_text = if next.created && next.placed_last {
+            " · placed last"
+        } else {
+            ""
+        };
         let shed_text = if next.shed.is_empty() {
             String::new()
         } else {
@@ -3083,7 +3092,7 @@ pub(super) fn print_human_pomodoro_close_success(
         println!(
             "  {}",
             styler.dim(&format!(
-                "next: {next_name}{created_text} at line {}{carries_text}{shed_text}{unblocked_text}{pulled}",
+                "next: {next_name}{created_text} at line {}{carries_text}{placed_last_text}{shed_text}{unblocked_text}{pulled}",
                 next.line
             ))
         );

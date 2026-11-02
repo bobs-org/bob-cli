@@ -78,7 +78,7 @@
       "now": "2026-11-01 09:00:00",
       "token": "x",
       "day": "## Events\n- [ ] #task **1000-1030** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**0800-0900** [t:: 60m]) — MEET\n  - [[#^lunch]]\n- [ ] () — PLAN\n",
-      "expected_day": "## Events\n- [ ] #task **1000-1030** Lunch #untracked ^lunch\n\n## Pomodoros\n- [x] (**0800-0900** [t:: 60m]) — MEET\n- [ ] () — MEET\n  - [[#^lunch]]\n- [ ] () — PLAN\n",
+      "expected_day": "## Events\n- [ ] #task **1000-1030** Lunch #untracked ^lunch\n\n## Pomodoros\n- [x] (**0800-0900** [t:: 60m]) — MEET\n- [ ] () — PLAN\n- [ ] () — MEET\n  - [[#^lunch]]\n",
       "expected_off_clock": false
     },
     {

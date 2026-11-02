@@ -1851,9 +1851,9 @@ pub(crate) struct ResolvedClosingTarget {
 
 /// Resolve the closing target against the post-close day text: the
 /// continuation the close left behind, else the first open same-name
-/// entry after the closed one, else a created placeholder immediately
-/// after the closed entry's block (exactly where the close would have
-/// created its continuation). Successors count as carried.
+/// entry after the closed one, else a created placeholder directly
+/// below the closed entry (a MEET close may place its own continuation
+/// last, but case 3 never does). Successors count as carried.
 fn resolve_closing_target(
     text: &str,
     day_relative: &Path,

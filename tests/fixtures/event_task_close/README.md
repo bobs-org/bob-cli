@@ -14,3 +14,9 @@ adds it.
 
 The vectors use only hand-written Event Tasks; no Google Calendar account or
 generated sync state is needed.
+
+Pin: a MEET close that carries meetings with an open Pomodoro below now
+places the created `- [ ] () — MEET` continuation last, after the last
+open Pomodoro block
+(`all-deferred-meetings-pin-rust-output` shows `- [ ] () — PLAN` before
+the carried MEET).

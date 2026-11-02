@@ -1218,9 +1218,8 @@ subtree (`b` plus its deeper-indented children), in successor order.
 2. else the first open entry **after** the closed one with the same
    non-empty name;
 3. else a new placeholder, `- [ ] () — NAME` (or `- [ ] ()` when the
-   closed entry was unnamed). It goes immediately after the closed
-   entry's sub-bullet range, exactly where the close would have created
-   its continuation. Picked successors count as carried.
+   closed entry was unnamed). It goes directly below the closed entry.
+   Picked successors count as carried.
 
 Picked successors are appended after the target's existing children; a
 lone `\t- ` stub is replaced. Implicit-destination inserts are entry
@@ -1231,7 +1230,8 @@ gesture, in case 1 or 3.
 **Next up.** `link.next_up` is true when, after the gesture, the target
 entry is the first open untimed placeholder in the ledger: the one a
 bare `=` would start. A created continuation becomes next up, exactly
-like carried work today. The notice always says so, so it is never a
+like carried work today — except a MEET continuation a close placed
+last, which sits after other planned work and is not next up. The notice always says so, so it is never a
 surprise.
 
 ### 12.4 Writes

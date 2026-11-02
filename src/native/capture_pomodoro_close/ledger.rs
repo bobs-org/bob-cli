@@ -11,7 +11,7 @@ use super::super::{
         list_marker_len, nearest_shallower_list_item_parent,
         parse_adjustment_range, AdjustRange, LineSpan,
     },
-    capture_pomodoros, markdown, pomodoro, task_dependencies,
+    capture_pomodoros, markdown, pomodoro, pomodoro_themes, task_dependencies,
 };
 use super::links::{move_only_destination, rewrite_completed_markers};
 use super::names::CloseNames;
@@ -97,6 +97,9 @@ pub(crate) struct NextPomodoro {
     pub name: Option<String>,
     pub time_range: Option<String>,
     pub created: bool,
+    /// True when a MEET close moved the created continuation after the
+    /// last open Pomodoro below the closed entry (§meet-last rule).
+    pub placed_last: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -404,9 +407,32 @@ pub(crate) fn plan_ledger_close_with_parked(
         output_lines.push(rewrite_completed_markers(line));
     }
 
+    // A MEET close carries later meetings to the end of the ledger:
+    // the created continuation goes after the block of the last open
+    // Pomodoro below the closed entry. Every other close keeps today's
+    // slot directly below the closed entry's sub-bullet range.
+    let anchor_end = if should_create {
+        meet_continuation_anchor_end(
+            contents,
+            &line_text,
+            entry.line,
+            &range,
+            continuation_name.as_deref(),
+        )
+    } else {
+        range.end
+    };
+    let placed_last = anchor_end > range.end;
     let mut created_next = None;
     let mut shed = Vec::new();
     if should_create {
+        if placed_last {
+            output_lines.extend(
+                line_text[range.end..anchor_end]
+                    .iter()
+                    .map(|line| (*line).to_string()),
+            );
+        }
         let placeholder = match continuation_name.as_deref() {
             Some(name) => {
                 capture_pomodoros::format_named_placeholder_line(name)
@@ -425,13 +451,14 @@ pub(crate) fn plan_ledger_close_with_parked(
             name: continuation_name.clone(),
             time_range: None,
             created: true,
+            placed_last,
         });
         if let Some(names) = names {
             shed = names.shed.clone();
         }
     }
     output_lines.extend(
-        line_text[range.end..]
+        line_text[anchor_end..]
             .iter()
             .map(|line| (*line).to_string()),
     );
@@ -445,6 +472,7 @@ pub(crate) fn plan_ledger_close_with_parked(
                 name: pomodoro_line_name(line),
                 time_range: pomodoro_line_time_range(line),
                 created: false,
+                placed_last: false,
             }
         })
     });
@@ -525,6 +553,46 @@ fn is_top_level_task_line(line: &str) -> bool {
         return false;
     };
     status != ']' && chars.as_str().starts_with(']')
+}
+
+/// 0-based exclusive end of the last open Pomodoro block below the
+/// closed entry, for a MEET continuation that a timed close creates.
+/// Returns `range.end` when the rule does not apply (a non-MEET
+/// continuation, or no open entry below the closed entry), which keeps
+/// the current directly-below path byte-identical.
+fn meet_continuation_anchor_end(
+    contents: &str,
+    lines: &[&str],
+    running_line: usize,
+    range: &Range<usize>,
+    continuation_name: Option<&str>,
+) -> usize {
+    if !continuation_name
+        .is_some_and(|name| pomodoro_themes::routing::is_meet_name(Some(name)))
+    {
+        return range.end;
+    }
+    let scan = capture_pomodoros::scan(contents);
+    let Some(anchor) = scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Open
+                && entry.line > running_line
+        })
+        .last()
+    else {
+        return range.end;
+    };
+    let section_end = pomodoro::pomodoros_section_range(lines)
+        .map(|section| section.end)
+        .unwrap_or(lines.len());
+    let block = capture_pomodoros::pomodoro_block_range(
+        lines,
+        anchor.line.saturating_sub(1),
+        section_end,
+    );
+    block.end.max(range.end)
 }
 
 fn find_next_pomodoro_line(

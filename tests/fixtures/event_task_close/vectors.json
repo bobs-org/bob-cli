@@ -74,7 +74,7 @@
       "day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n- [ ] #task **1100-1130** Later meeting ^later-meeting\n\n## Pomodoros\n- [ ] (**0800-0900** [t:: 60m]) — MEET\n  - [[#^future-meeting]]\n  - [[#^later-meeting]]\n- [ ] () — PLAN\n",
       "expected_outcomes": ["deferred", "deferred"],
       "expected_clock": ["not_started", "not_started"],
-      "expected_day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n- [ ] #task **1100-1130** Later meeting ^later-meeting\n\n## Pomodoros\n- [x] (**0800-0900** [t:: 60m]) — MEET\n- [ ] () — MEET\n  - [[#^future-meeting]]\n  - [[#^later-meeting]]\n- [ ] () — PLAN\n"
+      "expected_day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n- [ ] #task **1100-1130** Later meeting ^later-meeting\n\n## Pomodoros\n- [x] (**0800-0900** [t:: 60m]) — MEET\n- [ ] () — PLAN\n- [ ] () — MEET\n  - [[#^future-meeting]]\n  - [[#^later-meeting]]\n"
     },
     {
       "id": "foreign-daily-event-link-keeps-ordinary-close-behavior",

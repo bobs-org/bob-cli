@@ -3340,6 +3340,57 @@ a closed BUILD ending at 0800:
 - At 08:12 (`S` = 0815) the run ends at `S`. MEET does not qualify, and
   BUILD starts with no warning.
 
+#### A MEET close carries later meetings to the end
+
+When a timed close of a session named MEET creates its continuation (the new
+`- [ ] () — MEET` placeholder plus every carried line), that block goes
+**after the block of the last open Pomodoro below the closed entry**, so
+other planned work comes first. With no open entry below the closed entry,
+the placeholder goes directly below the closed entry, exactly as before.
+Only the position moves: the placeholder bytes, every carried line, the
+closed entry's rewrite, Work Log writes, clock stamping, and embed
+retirement are unchanged.
+
+The anchor is the last entry the ledger scan reports as open below the
+closed entry. Its block runs from its headline through its nested children
+(keeping interior blank lines) up to, but not including, the trailing blank
+lines — the same range the successor closing anchor uses. The continuation
+lands after that block, before any trailing blank lines, hand-ordered
+completed entries, or section text that follows. Open entries above the
+closed entry never anchor: the continuation never moves above the session
+it continues. The name test is the same one that keeps `MEET` whole
+elsewhere: the continuation name, whitespace-collapsed and lowercased,
+equals `meet`. Non-MEET closes keep today's slot directly below the
+closed entry's sub-bullet range.
+
+Worked example: closing a running `(**0800-0815** [off:: 15m]) — MEET`
+that links an ended Swings! (0800-0815) and a later Lincoln Park
+(1900-2000), with `() — BUILD` and `() — PLAN` placeholders below:
+
+```markdown
+- [x] (**0800-0815** [off:: 15m]) — MEET
+- [ ] () — BUILD
+  - [[dev#^build]]
+- [ ] () — PLAN
+- [ ] () — MEET
+  - [[#^lincoln]]
+```
+
+This is safe because an unnamed start still joins the meeting in progress:
+a bare `=` after the close starts the first future placeholder (BUILD
+above), unless the carried MEET's event run occupies the start block —
+back to back, a 0815-0830 meeting carried by a close at 08:15 makes `x =`
+start the bottom MEET at 0815-0830. Successor offers are unchanged except
+in position: a picked successor joins the continuation wherever it now
+sits, else the first open same-name entry after the closed one, else a new
+placeholder directly below the closed entry. That last placeholder holds
+follow-up work, not later meetings, so it stays where it is.
+
+`pomodoro_close.next_pomodoro.placed_last` is `true` when the close moved
+the block below at least one open entry (omitted otherwise), and the human
+`next:` line appends ` · placed last` after the carry count: `next: MEET
+(created) at line 12 · carries 1 link · placed last`.
+
 #### Dropping queued Task Links as a session starts
 
 Write a trailing `~<K>` drop list on a whole-item start to start lean:
@@ -4199,7 +4250,10 @@ Carried lines (worked-on then deferred, in source order, at original
 indentation) move into a new `- [ ] ()` (or `- [ ] () — NAME`) placeholder
 inserted after the session's sub-bullet range, created iff something is
 carried or no later entry follows; with nothing carried the placeholder gets
-a `\t- ` stub. Direct-child qualifying links with descendants write stamped
+a `\t- ` stub. The one exception is a MEET close that carries later
+meetings with an open Pomodoro below: its continuation goes last, after
+the last open Pomodoro block (see [A MEET close carries later meetings to
+the end](#a-meet-close-carries-later-meetings-to-the-end)). Direct-child qualifying links with descendants write stamped
 Work Log entries under a `🛠️ **WORK LOG**` marker (newest on top) or append
 one after the task's child block. All entries from the close use one stamp
 from its write-time `now`; the day-file date remains the completion date.
@@ -4312,6 +4366,11 @@ Field notes:
 - When the successor logic created the continuation, `next_pomodoro`
   reports it (`{line, name, time_range: None, created: true}`); picked
   successors count as carried.
+- `pomodoro_close.next_pomodoro.placed_last` is `true` when a MEET close
+  moved the created continuation after the last open Pomodoro below the
+  closed entry (see [A MEET close carries later meetings to the
+  end](#a-meet-close-carries-later-meetings-to-the-end)), omitted
+  otherwise. Successor-created continuations omit it.
 - `pomodoro_close.closed_name` is the completed entry's name after the
   close (narrowed, per [Close names follow the work](#close-names-follow-the-work)),
   present when the entry is named. `next_pomodoro.name` carries the shed name,
