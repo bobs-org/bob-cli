@@ -350,6 +350,7 @@ fn json_success_shape_is_stable() {
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,

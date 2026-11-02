@@ -27,6 +27,7 @@ pub(crate) enum SpanKind {
     ActiveTaskBlockId,
     PomodoroAdjust,
     PomodoroShift,
+    PomodoroSplit,
     SubBulletRoute,
     SubBulletBlockId,
     Drawer,
@@ -98,6 +99,7 @@ impl SpanKind {
             Self::ActiveTaskBlockId => "active_task_block_id",
             Self::PomodoroAdjust => "pomodoro_adjust",
             Self::PomodoroShift => "pomodoro_shift",
+            Self::PomodoroSplit => "pomodoro_split",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::Drawer => "drawer",
@@ -204,6 +206,7 @@ pub(crate) enum EditorMode {
     PomodoroProjectNote,
     PomodoroAdjust,
     PomodoroShift,
+    PomodoroSplit,
     PomodoroLink,
     PomodoroClose,
     /// Whole-item `=`/`=<X>` start.
@@ -231,6 +234,7 @@ impl EditorMode {
             Self::PomodoroProjectNote => "pomodoro_project_note",
             Self::PomodoroAdjust => "pomodoro_adjust",
             Self::PomodoroShift => "pomodoro_shift",
+            Self::PomodoroSplit => "pomodoro_split",
             Self::PomodoroLink => "pomodoro_link",
             Self::PomodoroClose => "pomodoro_close",
             Self::PomodoroStart => "pomodoro_start",
@@ -281,6 +285,8 @@ pub(crate) enum Need {
     DependencyTarget,
     /// A completion picker is still open: a `!` token is partial.
     TaskComplete,
+    /// A `=/` split is still open: a trailing `#` needs a task type.
+    PomodoroSplitType,
     /// A template draft still needs a row to expand.
     TemplateRow,
 }
@@ -313,6 +319,7 @@ impl Need {
             Self::RelationLabel => "relation_label",
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",
+            Self::PomodoroSplitType => "pomodoro_split_type",
             Self::TemplateRow => "template_row",
         }
     }
@@ -452,6 +459,9 @@ pub(crate) struct EditorParse {
     /// is an exact session-operator shift. `None` for every older input,
     /// so version-tolerant readers see no change. Purely lexical.
     pub(crate) pomodoro_shift: Option<PomodoroShiftSpec>,
+    /// Validated additive whole-item `=/` split spec, when the item is an
+    /// exact split token. `None` for every older input.
+    pub(crate) pomodoro_split: Option<PomodoroSplitSpec>,
     /// Validated additive `=x` close suffix, when the resolved marker or
     /// whole item carries one. `None` for every older input, so
     /// version-tolerant readers see no change. Purely lexical.
@@ -511,6 +521,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
     pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
     pub(crate) pomodoro_shift: Option<PomodoroShiftSpec>,
+    pub(crate) pomodoro_split: Option<PomodoroSplitSpec>,
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
     /// Complete `&note:block-id` modifiers on this item, in source order.
     pub(crate) dependencies: Vec<DependencyEntry>,

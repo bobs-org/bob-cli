@@ -1129,6 +1129,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::TaskToggle { .. } => EditorMode::TaskToggle,
             CaptureKind::PomodoroAdjust { .. } => EditorMode::PomodoroAdjust,
             CaptureKind::PomodoroShift { .. } => EditorMode::PomodoroShift,
+            CaptureKind::PomodoroSplit { .. } => EditorMode::PomodoroSplit,
             CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
             CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,

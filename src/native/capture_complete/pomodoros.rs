@@ -691,3 +691,466 @@ pub(super) fn pomodoro_name_candidate_with_next_up(
         match_count,
     }
 }
+
+fn day_file_for_completion(bob_dir: &Path) -> std::path::PathBuf {
+    let today = crate::native::env::current_datetime().date();
+    let canonical = bob_dir.join(format!(
+        "{}/{}.md",
+        today.format("%Y"),
+        today.format("%Y%m%d")
+    ));
+    crate::native::env::var_os("BOB_DAY_FILE")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or(canonical)
+}
+
+fn open_merged_entries(
+    scan: &capture_pomodoros::PomodoroScan,
+    sources: &crate::native::config::themes::ThemeSources,
+) -> Vec<(usize, String, String)> {
+    scan.entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if entry.state != capture_pomodoros::PomodoroState::Open {
+                return None;
+            }
+            let name = entry.name.clone()?;
+            let components = crate::native::pomodoro_themes::routing::type_components(
+                Some(&name),
+                sources,
+            );
+            let types: Vec<_> =
+                components.into_iter().filter(|item| item.is_type).collect();
+            if types.len() < 2 {
+                return None;
+            }
+            let base = types.first()?.name.clone();
+            Some((index, name, base))
+        })
+        .collect()
+}
+
+pub(super) fn pomodoro_split_base_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let day_file = day_file_for_completion(bob_dir);
+    let (scan, _contents, mut warnings) = read_daily(&day_file)?;
+    let today = crate::native::env::current_datetime().date();
+    let catalog = crate::native::pomodoro_themes::Catalog::load_for_completion(
+        bob_dir,
+        today,
+        Default::default(),
+        (day_file
+            == bob_dir.join(format!(
+                "{}/{}.md",
+                today.format("%Y"),
+                today.format("%Y%m%d")
+            )))
+        .then_some(&scan),
+    );
+    let sources = match catalog {
+        Ok(catalog) => {
+            warnings.extend(
+                catalog.warnings().iter().cloned().map(bounded_warning),
+            );
+            catalog.theme_sources()
+        }
+        Err(error) => {
+            warnings
+                .push(bounded_warning(format!("read theme catalog: {error}")));
+            crate::native::config::themes::load_theme_sources()
+        }
+    };
+    let merged = open_merged_entries(&scan, &sources);
+    let query_lower = query.to_lowercase();
+    let mut items: Vec<PomodoroNameCandidate> = Vec::new();
+    items.push(PomodoroNameCandidate {
+        replacement: String::new(),
+        pomodoro_ref: None,
+        name: Some("current".to_string()),
+        themes: Vec::new(),
+        origin: None,
+        last_used: None,
+        days_used: None,
+        hidden: false,
+        similar_to: Vec::new(),
+        requires_name: false,
+        creates_pomodoro: false,
+        next_up: false,
+        suggested: false,
+        suggestion_label: None,
+        line: None,
+        state: capture_pomodoros::PomodoroState::Open,
+        status_symbol: ' ',
+        time_range: None,
+        placeholder: true,
+        is_current: true,
+        child_count: 0,
+        match_count: 0,
+    });
+    for (index, full_name, base) in merged {
+        if !query.is_empty()
+            && !base.to_lowercase().starts_with(&query_lower)
+            && !full_name.to_lowercase().starts_with(&query_lower)
+            && !full_name.to_lowercase().contains(&query_lower)
+        {
+            continue;
+        }
+        let entry = &scan.entries[index];
+        let key = crate::native::plan_budget::normalize_component(&base);
+        let theme_catalog =
+            crate::native::pomodoro_themes::Catalog::load(bob_dir, today, false)
+                .ok();
+        let themes = theme_catalog
+            .as_ref()
+            .map(|catalog| vec![catalog.theme_ref(&key, &base)])
+            .unwrap_or_default();
+        items.push(PomodoroNameCandidate {
+            replacement: base,
+            pomodoro_ref: Some(entry.pomodoro_ref.clone()),
+            name: Some(full_name),
+            themes,
+            origin: None,
+            last_used: None,
+            days_used: None,
+            hidden: false,
+            similar_to: Vec::new(),
+            requires_name: false,
+            creates_pomodoro: false,
+            next_up: false,
+            suggested: false,
+            suggestion_label: None,
+            line: Some(entry.line),
+            state: entry.state,
+            status_symbol: entry.status_symbol,
+            time_range: entry.time_range.clone(),
+            placeholder: entry.placeholder,
+            is_current: entry.is_current,
+            child_count: entry.child_count,
+            match_count: 0,
+        });
+    }
+    Ok((Candidates::PomodoroName(items), warnings))
+}
+
+pub(super) fn pomodoro_split_type_candidates(
+    bob_dir: &Path,
+    raw_text: &str,
+    cursor: usize,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let day_file = day_file_for_completion(bob_dir);
+    let (scan, contents, mut warnings) = read_daily(&day_file)?;
+    let today = crate::native::env::current_datetime().date();
+    let catalog = crate::native::pomodoro_themes::Catalog::load_for_completion(
+        bob_dir,
+        today,
+        Default::default(),
+        (day_file
+            == bob_dir.join(format!(
+                "{}/{}.md",
+                today.format("%Y"),
+                today.format("%Y%m%d")
+            )))
+        .then_some(&scan),
+    );
+    let sources = match catalog {
+        Ok(catalog) => {
+            warnings.extend(
+                catalog.warnings().iter().cloned().map(bounded_warning),
+            );
+            catalog.theme_sources()
+        }
+        Err(error) => {
+            warnings
+                .push(bounded_warning(format!("read theme catalog: {error}")));
+            crate::native::config::themes::load_theme_sources()
+        }
+    };
+    let item = capture_language::editor_item_at(raw_text, cursor);
+    let (base, selected): (Option<String>, Vec<String>) = item
+        .and_then(|item| {
+            item.pomodoro_split.map(|spec| {
+                (
+                    spec.base,
+                    spec.selectors
+                        .into_iter()
+                        .map(|selector| selector.text)
+                        .collect(),
+                )
+            })
+        })
+        .unwrap_or((None, Vec::new()));
+    let entries: Vec<
+        crate::native::pomodoro_themes::merged::SelectEntry<'_>,
+    > = scan
+        .entries
+        .iter()
+        .map(|entry| {
+            crate::native::pomodoro_themes::merged::SelectEntry {
+                name: entry.name.as_deref(),
+                open: entry.state
+                    == capture_pomodoros::PomodoroState::Open,
+                running: entry.is_current,
+                timed: entry.time_range.is_some(),
+            }
+        })
+        .collect();
+    let target_index = if let Some(base_name) = base.as_deref() {
+        let input =
+            crate::native::pomodoro_themes::merged::SelectInput {
+                entries: &entries,
+                selector: base_name,
+                filter:
+                    crate::native::pomodoro_themes::merged::SelectFilter::MergedBase,
+                sources: &sources,
+            };
+        match crate::native::pomodoro_themes::merged::select_by_type(&input)
+        {
+            crate::native::pomodoro_themes::merged::SelectOutcome::Entry(
+                index,
+            ) => Some(index),
+            _ => None,
+        }
+    } else {
+        let timed: Vec<usize> = scan
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.state == capture_pomodoros::PomodoroState::Open
+                    && entry.time_range.is_some()
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if timed.len() == 1 {
+            Some(timed[0])
+        } else if timed.is_empty() {
+            capture_pomodoros::next_future_pomodoro(&scan).and_then(|next| {
+                scan.entries.iter().position(|entry| {
+                    entry.line == next.line && entry.name == next.name
+                })
+            })
+        } else {
+            None
+        }
+    };
+    let Some(target_index) = target_index else {
+        return Ok((Candidates::PomodoroName(Vec::new()), warnings));
+    };
+    let target = &scan.entries[target_index];
+    let target_name = target.name.clone().unwrap_or_default();
+    let components = crate::native::pomodoro_themes::routing::type_components(
+        Some(&target_name),
+        &sources,
+    );
+    let merged_in: Vec<(String, String)> = {
+        let types: Vec<_> =
+            components.into_iter().filter(|item| item.is_type).collect();
+        if types.len() < 2 {
+            return Ok((Candidates::PomodoroName(Vec::new()), warnings));
+        }
+        if types.len() == 2 {
+            return Ok((Candidates::PomodoroName(Vec::new()), warnings));
+        }
+        types
+            .into_iter()
+            .skip(1)
+            .map(|item| (item.key, item.name))
+            .collect()
+    };
+    let selected_keys: std::collections::BTreeSet<String> = selected
+        .iter()
+        .map(|name| crate::native::plan_budget::normalize_component(name))
+        .collect();
+    let line_texts: Vec<&str> = contents.lines().collect();
+    let entry_index = target.line.checked_sub(1).unwrap_or(usize::MAX);
+    let counts = if entry_index < line_texts.len() {
+        let spans = capture::line_spans(&contents);
+        let end = crate::native::capture_task_toggle::child_block_end_line(
+            &spans, entry_index,
+        );
+        let parent_indent = line_texts
+            .get(entry_index)
+            .map(|text| text.len() - text.trim_start().len())
+            .unwrap_or(0);
+        let mut first_indent: Option<usize> = None;
+        for index in (entry_index + 1)..=end.min(line_texts.len().saturating_sub(1)) {
+            let text = line_texts.get(index).copied().unwrap_or("");
+            if text.trim().is_empty() {
+                continue;
+            }
+            let indent = text.len() - text.trim_start().len();
+            if indent <= parent_indent {
+                continue;
+            }
+            if first_indent.is_none() {
+                first_indent = Some(indent);
+            }
+        }
+        let top_indent = first_indent.unwrap_or(usize::MAX);
+        let mut top_lines = Vec::new();
+        for index in (entry_index + 1)..=end.min(line_texts.len().saturating_sub(1)) {
+            let text = line_texts.get(index).copied().unwrap_or("");
+            if text.trim().is_empty() {
+                continue;
+            }
+            if text.len() - text.trim_start().len() == top_indent {
+                top_lines.push(index);
+            }
+        }
+        let fenced = crate::native::markdown::fenced_lines(
+            &line_texts,
+            0..line_texts.len(),
+        );
+        let start = top_lines.first().copied().unwrap_or(entry_index + 1);
+        let numbered = crate::native::capture_pomodoro_close::number_task_links_in_range(
+            &line_texts,
+            &fenced,
+            start..end.min(line_texts.len()).saturating_add(1).min(line_texts.len()),
+        );
+        let top_set: std::collections::BTreeSet<usize> =
+            top_lines.into_iter().collect();
+        let mut planner = crate::native::capture::CaptureBatchPlanner::default();
+        let mut theme_ctx = crate::native::capture::CaptureTaskThemeContext::new(
+            bob_dir,
+            today,
+            None,
+        );
+        let mut counts = std::collections::BTreeMap::new();
+        for link in numbered {
+            let zero = link.line.checked_sub(1).unwrap_or(usize::MAX);
+            if !top_set.contains(&zero) {
+                continue;
+            }
+            let target_path = if link.path_part.is_empty() {
+                day_file.clone()
+            } else {
+                bob_dir.join(format!("{}.md", link.path_part))
+            };
+            let residence = if link.path_part.is_empty() {
+                day_file
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("today")
+                    .to_string()
+            } else {
+                link.path_part.clone()
+            };
+            let task_contents = std::fs::read_to_string(&target_path).ok();
+            let Some(task_contents) = task_contents else {
+                continue;
+            };
+            let settings =
+                crate::native::note_tasks::read_settings(bob_dir);
+            let scan = crate::native::note_tasks::scan(
+                &task_contents,
+                &settings,
+            );
+            let task_line = match scan.by_block_id(&link.block_id) {
+                crate::native::note_tasks::BlockIdLookup::Found(task) => {
+                    task_contents
+                        .lines()
+                        .nth(task.line_index)
+                        .unwrap_or("")
+                        .to_string()
+                }
+                _ => continue,
+            };
+            let mut placement_warnings = Vec::new();
+            let key = theme_ctx
+                .placement_for_task(
+                    &mut planner,
+                    &residence,
+                    &task_line,
+                    &mut placement_warnings,
+                )
+                .map(|placed| placed.suggestion.theme.key.clone());
+            for warning in placement_warnings {
+                let message = warning.message().into_owned();
+                if !warnings.contains(&message) {
+                    warnings.push(message);
+                }
+            }
+            if let Some(key) = key
+                && merged_in.iter().any(|(merged_key, _)| merged_key == &key)
+            {
+                *counts.entry(key).or_insert(0) += 1;
+            }
+        }
+        counts
+    } else {
+        Default::default()
+    };
+    let query_lower = query.to_lowercase();
+    let is_literal = raw_text
+        .get(..cursor.min(raw_text.len()))
+        .is_some_and(|prefix| {
+            let hash = prefix.rfind('#');
+            hash.is_some_and(|hash| {
+                prefix[hash + 1..].starts_with(['"', '“'])
+            })
+        });
+    let catalog_for_refs =
+        crate::native::pomodoro_themes::Catalog::load(bob_dir, today, false)
+            .ok();
+    let mut items = Vec::new();
+    for (key, name) in merged_in {
+        if selected_keys.contains(&key) {
+            continue;
+        }
+        if !query.is_empty() {
+            if is_literal {
+                if key.to_lowercase() != query_lower {
+                    continue;
+                }
+            } else if !key.to_lowercase().starts_with(&query_lower)
+                && !name.to_lowercase().starts_with(&query_lower)
+            {
+                continue;
+            }
+        }
+        let themes = catalog_for_refs
+            .as_ref()
+            .map(|catalog| vec![catalog.theme_ref(&key, &name)])
+            .unwrap_or_default();
+        let count = counts.get(&key).copied().unwrap_or(0);
+        items.push(PomodoroNameCandidate {
+            replacement: name.clone(),
+            pomodoro_ref: None,
+            name: Some(format!(
+                "{name} · {}",
+                if count == 0 {
+                    "no tasks".to_string()
+                } else if count == 1 {
+                    "1 task".to_string()
+                } else {
+                    format!("{count} tasks")
+                }
+            )),
+            themes,
+            origin: None,
+            last_used: None,
+            days_used: None,
+            hidden: false,
+            similar_to: Vec::new(),
+            requires_name: false,
+            creates_pomodoro: false,
+            next_up: false,
+            suggested: false,
+            suggestion_label: None,
+            line: Some(target.line),
+            state: target.state,
+            status_symbol: target.status_symbol,
+            time_range: target.time_range.clone(),
+            placeholder: target.placeholder,
+            is_current: target.is_current,
+            child_count: count,
+            match_count: count,
+        });
+    }
+    Ok((Candidates::PomodoroName(items), warnings))
+}

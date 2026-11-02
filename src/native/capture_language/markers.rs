@@ -591,6 +591,32 @@ pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cann
 
 pub(super) const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `x` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the close alone";
 
+pub(crate) const POMODORO_SPLIT_FORCED_ERROR: &str = "Pomodoro split `=/` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the split alone";
+
+/// Whole-item split shape error, formatted with the typed token.
+pub(super) fn pomodoro_split_shape_error(token: &str) -> String {
+    format!(
+        "Pomodoro split `{token}` must be the whole capture item; remove extra text, markers, or child lines"
+    )
+}
+
+/// Split selector errors: empty, incomplete literal, or invalid characters.
+pub(super) fn pomodoro_split_selector_error(token: &str, selector: &str) -> String {
+    if selector.is_empty() {
+        if token.ends_with('#') {
+            return format!(
+                "`{token}` is incomplete: type a task type after `#` (for example `{token}fix`)"
+            );
+        }
+        return format!(
+            "Pomodoro split `{token}` has an empty `#` selector; type a task type after each `#` (for example `=/build#fix`)"
+        );
+    }
+    format!(
+        "Pomodoro split selector `{selector}` in `{token}` may contain only A-Z, a-z, 0-9 or `& ' ( ) + , . / -`; write spaces as `-`"
+    )
+}
+
 /// Whole-item start shape error, formatted with the typed token: a counted
 /// token with extra text, markers, or child lines, or an exact token with
 /// child lines, is never a task.

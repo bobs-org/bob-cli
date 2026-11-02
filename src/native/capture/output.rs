@@ -285,7 +285,7 @@ fn is_zero(value: &usize) -> bool {
 /// (`docs/task-relations.md` §12).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
-pub(super) enum CaptureWarning {
+pub(crate) enum CaptureWarning {
     Text(String),
     Structured(StructuredCaptureWarning),
     Suggestion(super::super::pomodoro_themes::suggest::SuggestWarning),
@@ -299,7 +299,7 @@ impl From<String> for CaptureWarning {
 
 impl CaptureWarning {
     /// The human rendering of this warning, for stderr and dedup.
-    pub(super) fn message(&self) -> Cow<'_, str> {
+    pub(crate) fn message(&self) -> Cow<'_, str> {
         match self {
             Self::Text(message) => Cow::Borrowed(message),
             Self::Structured(warning) => Cow::Borrowed(&warning.message),
@@ -326,7 +326,7 @@ impl CaptureWarning {
 /// `message` is the bob-authored rendering, and `label`/`count` carry
 /// the pre-capture catalog facts for `hides_existing_relation_label`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct StructuredCaptureWarning {
+pub(crate) struct StructuredCaptureWarning {
     pub(super) code: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) label: Option<String>,
@@ -587,6 +587,8 @@ pub(super) struct CaptureItemResult {
     pub(super) pomodoro_adjust: Option<PomodoroAdjustSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_shift: Option<PomodoroShiftSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_split: Option<PomodoroSplitSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_close: Option<PomodoroCloseSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2412,6 +2414,13 @@ pub(super) fn print_human_item_success(
         print_consumed_links(result, &styler);
         return;
     }
+    if let Some(split) = result.pomodoro_split.as_ref() {
+        print_human_pomodoro_split_success(
+            result, split, &styler, &prefix, &ordinal, &target_label,
+        );
+        print_consumed_links(result, &styler);
+        return;
+    }
     if result.kind == "pomodoro_start"
         && let Some(start) = result.pomodoro_start.as_ref()
     {
@@ -3130,6 +3139,40 @@ pub(super) fn print_human_pomodoro_shift_success(
                 &shift.after_end,
                 conflict,
             ))
+        );
+    }
+    println!("  {}", styler.dim(&result.task_line));
+}
+
+pub(super) fn print_human_pomodoro_split_success(
+    result: &CaptureItemResult,
+    split: &PomodoroSplitSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run { "would split" } else { "split" };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let detail = format!(
+        "{} \u{2192} {} \u{00B7} {} line {}",
+        split.before, split.after, split.path, split.entry_line,
+    );
+    println!("  {}", styler.dim(&detail));
+    for created in &split.created {
+        let links = if created.moved_links == 0 {
+            "no links".to_string()
+        } else if created.moved_links == 1 {
+            "1 link".to_string()
+        } else {
+            format!("{} links", created.moved_links)
+        };
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "\u{2193} {}   new Pomodoro \u{00B7} {}",
+                created.name, links,
+            )),
         );
     }
     println!("  {}", styler.dim(&result.task_line));
@@ -5244,6 +5287,7 @@ mod tests {
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,

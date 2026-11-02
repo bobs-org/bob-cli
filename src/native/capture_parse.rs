@@ -18,7 +18,7 @@ use super::{
         AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
         EditorParseOptions, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
-        PomodoroShiftSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
+        PomodoroShiftSpec, PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
         RelationEntry, ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
@@ -171,7 +171,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 4` for the capture-language revision while \
+Success JSON reports `grammar: 5` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
@@ -183,7 +183,7 @@ component spans, every authored sub-bullet's normalized body plus depth, \
 an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` \
 start suffix (including the short `=name` suffix, e.g. `@work:outline=bugs`), an optional pomodoro_adjust object for a whole-item `+[N]`/`-[N]` \
 adjustment, an optional pomodoro_shift object for a whole-item `++[N]`/`--[N]` \
-shift, an optional pomodoro_close object for a `=x` link close suffix or \
+shift, an optional pomodoro_split object for a whole-item `=/` split, an optional pomodoro_close object for a `=x` link close suffix or \
 whole-item close, and structured diagnostics. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
@@ -223,7 +223,7 @@ purely lexical and never guesses current ledger times. A whole-item \
 minutes later, `--` moves it 5 minutes earlier) reports mode \
 'pomodoro_shift' with a `pomodoro_shift` object (`raw`, direction as \
 `later`, and 5-minute `units` defaulting to 1) and a `pomodoro_shift` span \
-covering only the operator token. A `@@` declaration still routes ordinary \
+covering only the operator token. A whole-item `=/` split (for example `=/` splits the current merged Pomodoro, `=/build` splits the merged entry whose base is build, `=/build#fix` splits only FIX out) reports mode 'pomodoro_split' with a `pomodoro_split` object (`raw`, optional `base`, and ordered `selectors`) plus a `pomodoro_split` span over `=/` and `pomodoro_name` spans over the base and each selector; a trailing `#` needs `pomodoro_split_type`. A `@@` declaration still routes ordinary \
 items in the same draft but never turns an operator into a task or changes \
 its destination. Invalid standalone counts (`+0`, `++0`, overflow) and \
 malformed operator-first items (extra text, markers, or child lines) report \
@@ -613,6 +613,10 @@ struct CaptureParseResult {
     /// times.
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_shift: Option<PomodoroShiftSpec>,
+    /// Validated additive whole-item `=/` split spec. Omitted for every
+    /// older input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_split: Option<PomodoroSplitSpec>,
     /// Validated additive `=x` link close suffix: the typed `=x…` text as `raw`.
     /// Omitted for every older input, so schema version 1 is unchanged
     /// for inputs without a close. Purely lexical and never guesses
@@ -732,6 +736,8 @@ struct CaptureParseItem {
     pomodoro_adjust: Option<PomodoroAdjustSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_shift: Option<PomodoroShiftSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_split: Option<PomodoroSplitSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSpec>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1048,6 +1054,7 @@ impl CaptureParseResult {
             pomodoro_start: parse.pomodoro_start,
             pomodoro_adjust: parse.pomodoro_adjust,
             pomodoro_shift: parse.pomodoro_shift,
+            pomodoro_split: parse.pomodoro_split,
             pomodoro_close: parse.pomodoro_close,
             dependencies: parse_dependencies(&parse.dependencies),
             blocked_tasks: parse_dependencies(&parse.blocked_tasks),
@@ -1216,6 +1223,7 @@ impl CaptureParseResult {
                     pomodoro_start: None,
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
+                    pomodoro_split: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1247,6 +1255,7 @@ impl CaptureParseResult {
                     pomodoro_start: None,
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
+                    pomodoro_split: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1411,6 +1420,7 @@ impl CaptureParseResult {
             pomodoro_start: parsed.pomodoro_start,
             pomodoro_adjust: parsed.pomodoro_adjust,
             pomodoro_shift: parsed.pomodoro_shift,
+            pomodoro_split: parsed.pomodoro_split,
             pomodoro_close: parsed.pomodoro_close,
             dependencies: parse_dependencies(&parsed.dependencies),
             blocked_tasks: parse_dependencies(&parsed.blocked_tasks),
@@ -2105,6 +2115,7 @@ fn empty_wire_item() -> CaptureParseItem {
         pomodoro_start: None,
         pomodoro_adjust: None,
         pomodoro_shift: None,
+        pomodoro_split: None,
         pomodoro_close: None,
         dependencies: Vec::new(),
         blocked_tasks: Vec::new(),
@@ -2187,6 +2198,7 @@ fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
         pomodoro_start: item.pomodoro_start.clone(),
         pomodoro_adjust: item.pomodoro_adjust.clone(),
         pomodoro_shift: item.pomodoro_shift.clone(),
+        pomodoro_split: item.pomodoro_split.clone(),
         pomodoro_close: item.pomodoro_close.clone(),
         dependencies: parse_dependencies(&item.dependencies),
         blocked_tasks: parse_dependencies(&item.blocked_tasks),
@@ -2340,6 +2352,9 @@ fn print_human_success_with_styler(
     }
     if let Some(shift) = result.pomodoro_shift.as_ref() {
         print_field(styler, "shift", &format_pomodoro_shift(shift));
+    }
+    if let Some(split) = result.pomodoro_split.as_ref() {
+        print_field(styler, "split", &format_pomodoro_split(split));
     }
     if let Some(close) = result.pomodoro_close.as_ref() {
         print_field(styler, "close", &format_pomodoro_close(close));
@@ -2511,6 +2526,27 @@ fn format_pomodoro_shift(shift: &PomodoroShiftSpec) -> String {
         shift.units,
         unit_noun(shift.units)
     )
+}
+
+fn format_pomodoro_split(split: &PomodoroSplitSpec) -> String {
+    if split.selectors.is_empty() {
+        if let Some(base) = split.base.as_deref() {
+            return format!("=/{} (all merged-in types)", base);
+        }
+        return "=/ (all merged-in types)".to_string();
+    }
+    let selectors = split.selectors.iter().map(|selector| {
+        if selector.literal {
+            format!("#\"{}\"", selector.text)
+        } else {
+            format!("#{}", selector.text)
+        }
+    }).collect::<Vec<_>>().join("");
+    if let Some(base) = split.base.as_deref() {
+        format!("=/{}{}", base, selectors)
+    } else {
+        format!("=/{}", selectors)
+    }
 }
 
 fn unit_noun(units: u64) -> &'static str {
@@ -2903,7 +2939,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 4);
+        assert_eq!(value["grammar"], 5);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");

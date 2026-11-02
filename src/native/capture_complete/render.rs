@@ -672,6 +672,8 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::RelationFrom => "relation_from",
         CompletionContext::RelationLabel => "relation_label",
         CompletionContext::TaskComplete => "task_complete",
+        CompletionContext::PomodoroSplitBase => "pomodoro_split_base",
+        CompletionContext::PomodoroSplitType => "pomodoro_split_type",
         CompletionContext::TaskType => "task_type",
         CompletionContext::Directive => "directive",
         CompletionContext::WikilinkNote => "wikilink_note",

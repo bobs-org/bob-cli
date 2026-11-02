@@ -116,6 +116,8 @@ fn build_result_inner(
             | CompletionContext::TaskComplete
             | CompletionContext::TaskType
             | CompletionContext::Directive
+            | CompletionContext::PomodoroSplitBase
+            | CompletionContext::PomodoroSplitType
             | CompletionContext::WikilinkTask => {
                 unreachable!("link field context")
             }
@@ -570,6 +572,24 @@ fn build_result_inner(
                 }
                 relation_complete = Some(plan.response);
             }
+            (candidates, warnings)
+        }
+        CompletionContext::PomodoroSplitBase => {
+            let (candidates, warnings) =
+                super::pomodoros::pomodoro_split_base_candidates(
+                    bob_dir,
+                    &field.query,
+                )?;
+            (candidates, warnings)
+        }
+        CompletionContext::PomodoroSplitType => {
+            let (candidates, warnings) =
+                super::pomodoros::pomodoro_split_type_candidates(
+                    bob_dir,
+                    raw_text,
+                    cursor,
+                    &field.query,
+                )?;
             (candidates, warnings)
         }
         CompletionContext::WikilinkNote

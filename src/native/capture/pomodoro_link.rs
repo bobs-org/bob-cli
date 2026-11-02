@@ -811,6 +811,7 @@ fn planned_item_from_pomodoro_link_plan(
             pomodoro_start: link.pomodoro_start.clone(),
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,

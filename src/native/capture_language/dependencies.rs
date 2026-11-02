@@ -1903,7 +1903,8 @@ pub(crate) fn resolve_execution_ownership(
             Err(unsupported_target_relation_error("Pomodoro-note", sigil))
         }
         CaptureKind::PomodoroAdjust { .. }
-        | CaptureKind::PomodoroShift { .. } => Err(
+        | CaptureKind::PomodoroShift { .. }
+        | CaptureKind::PomodoroSplit { .. } => Err(
             unsupported_target_relation_error("Pomodoro session-operator", sigil),
         ),
         CaptureKind::PomodoroClose { .. } => {

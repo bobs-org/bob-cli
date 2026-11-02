@@ -143,6 +143,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
             pomodoro_start: None,
             pomodoro_adjust,
             pomodoro_shift,
+            pomodoro_split: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -188,6 +189,7 @@ pub(super) fn editor_operator_outcome<'a>(
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -236,6 +238,7 @@ pub(super) fn editor_start_invalid_outcome<'a>(
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -775,6 +778,7 @@ fn editor_named_valid_outcome<'a>(
             pomodoro_start: Some(spec),
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -820,6 +824,7 @@ fn editor_start_drop_incomplete_outcome<'a>(
             pomodoro_start: Some(spec),
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -864,6 +869,7 @@ fn editor_start_timing_incomplete_outcome<'a>(
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -999,6 +1005,7 @@ fn editor_named_incomplete_outcome<'a>(
             pomodoro_start,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -1340,6 +1347,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     pomodoro_start: Some(base_spec),
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
+                    pomodoro_split: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1376,6 +1384,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     pomodoro_start: Some(spec),
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
+                    pomodoro_split: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1430,6 +1439,319 @@ pub(super) fn parse_editor_start_item<'a>(
             message,
             Some(range),
         )),
+    }
+}
+
+/// Whole-item `=/` split for the live editor. Mirrors the split branch
+/// of [`parse_pomodoro_equals_item`] but never fails: an exact token
+/// reports `pomodoro_split` with its spec, a `pomodoro_split` span over
+/// `=/` plus `pomodoro_name` spans over the base and each selector name
+/// (the `#` is in no span; literals cover their quotes), while a trailing
+/// `#` or unterminated literal reports `pomodoro_split` needing
+/// `pomodoro_split_type`. Extra text, child lines, or malformed selectors
+/// report `pomodoro_split` plus one `invalid_pomodoro_split` diagnostic
+/// reusing the execution texts. Purely lexical.
+pub(super) fn parse_editor_split_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    base: Option<String>,
+    selectors: Vec<PomodoroSplitSelector>,
+    len: usize,
+) -> Option<EditorItemOutcome<'a>> {
+    if !parent_trimmed.starts_with("=/") {
+        return None;
+    }
+    let parent = item.lines.first().expect("nonempty item");
+    let parent_text = parent.raw.text;
+    let leading = parent_text.len() - parent_text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let mut spans = vec![Span {
+        start: token_start,
+        end: token_start + 2,
+        kind: SpanKind::PomodoroSplit,
+        project_note: None,
+        title: None,
+        key: None,
+    }];
+    let mut offset = token_start + 2;
+    if let Some(base_name) = base.as_deref() {
+        if !base_name.is_empty() {
+            spans.push(Span {
+                start: offset,
+                end: offset + base_name.len(),
+                kind: SpanKind::PomodoroName,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+        }
+        offset += base_name.len();
+    }
+    // Selector spans: each `#` is in no span; the name (or literal with
+    // quotes) gets a `pomodoro_name` span. Empty selectors get no name
+    // span; the need below teaches the type.
+    let mut cursor = offset;
+    let first = parent_trimmed.split_whitespace().next().unwrap_or(parent_trimmed);
+    for selector in &selectors {
+        // Find the `#` for this selector from the cursor in trimmed
+        // coordinates, then map to absolute.
+        let trimmed_base = token_start;
+        let _ = trimmed_base;
+        // The `#` sits at `cursor`; the name starts one byte later.
+        let hash_abs = cursor;
+        cursor += 1;
+        if selector.text.is_empty() {
+            // Trailing `#` or `##` or incomplete literal: no name span.
+            // For incomplete literals the typed remainder still occupies
+            // bytes; extend the cursor over it so later spans stay aligned.
+            if selector.literal {
+                // Unterminated literal: consume the rest of the first token.
+                let rest = first.len().saturating_sub(cursor - token_start);
+                cursor += rest;
+            }
+            continue;
+        }
+        if selector.literal {
+            // Recover the typed literal length (quotes included) from the
+            // first token at this selector's `#`.
+            let rel = cursor - token_start;
+            let after_hash = first.get(rel..).unwrap_or("");
+            if let Some(lex) = super::pomodoro_literal::lex_exact_name_after_hash(
+                after_hash,
+                after_hash.len(),
+            ) {
+                if lex.complete {
+                    spans.push(Span {
+                        start: cursor,
+                        end: cursor + lex.literal_len,
+                        kind: SpanKind::PomodoroName,
+                        project_note: None,
+                        title: None,
+                        key: None,
+                    });
+                    cursor += lex.literal_len;
+                    continue;
+                }
+            }
+            spans.push(Span {
+                start: cursor,
+                end: cursor + selector.text.len(),
+                kind: SpanKind::PomodoroName,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+            cursor += selector.text.len();
+        } else {
+            spans.push(Span {
+                start: cursor,
+                end: cursor + selector.text.len(),
+                kind: SpanKind::PomodoroName,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+            cursor += selector.text.len();
+        }
+        let _ = hash_abs;
+    }
+    let single_token_parent = parent_trimmed == first && first.len() == len;
+    let exact = single_token_parent && item.lines.len() == 1;
+    // Malformed selectors first: empty non-trailing or invalid charset.
+    for (index, selector) in selectors.iter().enumerate() {
+        let is_last = index + 1 == selectors.len();
+        if selector.text.is_empty() {
+            if selector.literal || !is_last || !first.ends_with('#') {
+                // Middle `##` or invalid empty: diagnostic, not a need.
+                // Trailing `#` falls through to the need below.
+                if !(is_last && first.ends_with('#') && !selector.literal) {
+                    let message = crate::native::capture_language::markers::pomodoro_split_selector_error(
+                        first, "",
+                    );
+                    return Some(editor_split_invalid_outcome(
+                        item,
+                        parent_trimmed,
+                        spans,
+                        message,
+                        None,
+                    ));
+                }
+            }
+            continue;
+        }
+        if !selector.literal && !is_pomodoro_selector_component(&selector.text) {
+            let message = crate::native::capture_language::markers::pomodoro_split_selector_error(
+                first,
+                &selector.text,
+            );
+            return Some(editor_split_invalid_outcome(
+                item,
+                parent_trimmed,
+                spans,
+                message,
+                None,
+            ));
+        }
+    }
+    if let Some(base_name) = base.as_deref()
+        && !is_pomodoro_selector_component(base_name)
+    {
+        let message = crate::native::capture_language::markers::pomodoro_split_selector_error(
+            first, base_name,
+        );
+        return Some(editor_split_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            None,
+        ));
+    }
+    // Trailing `#` or unterminated literal needs a type.
+    let needs_type = selectors.last().is_some_and(|last| last.text.is_empty());
+    if needs_type {
+        let spec = PomodoroSplitSpec {
+            raw: first.to_string(),
+            base,
+            selectors: selectors
+                .iter()
+                .filter(|selector| !selector.text.is_empty())
+                .cloned()
+                .collect(),
+        };
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: parent_trimmed.to_string(),
+                mode: EditorMode::PomodoroSplit,
+                route: None,
+                section: None,
+                block_id: None,
+                needs: vec![Need::PomodoroSplitType],
+                ref_listen: false,
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_split: Some(spec),
+                pomodoro_close: None,
+                dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
+                relations: Vec::new(),
+                dependency_target: None,
+                task_complete: None,
+                spans,
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+                has_local_destination: false,
+                local_destination_markers: Vec::new(),
+                drawer_bullet_target: None,
+            },
+            declarations: Vec::new(),
+        });
+    }
+    if !exact {
+        let message = crate::native::capture_language::markers::pomodoro_split_shape_error(
+            first,
+        );
+        let range = extra_text_range(token_start, parent_trimmed, len);
+        return Some(editor_split_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            Some(range),
+        ));
+    }
+    let spec = PomodoroSplitSpec {
+        raw: first.to_string(),
+        base,
+        selectors,
+    };
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::PomodoroSplit,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: Some(spec),
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            spans,
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+        },
+        declarations: Vec::new(),
+    })
+}
+
+/// Build a split near-miss outcome: `pomodoro_split` mode, the spans typed
+/// so far, and one `invalid_pomodoro_split` diagnostic, with no spec.
+fn editor_split_invalid_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    spans: Vec<Span>,
+    message: String,
+    range: Option<(usize, usize)>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::PomodoroSplit,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            spans,
+            diagnostics: vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_split",
+                message,
+                range,
+            }],
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+        },
+        declarations: Vec::new(),
     }
 }
 
@@ -1519,6 +1841,19 @@ pub(super) fn parse_editor_close_item<'a>(
                 len,
                 drop,
                 timing,
+            );
+        }
+        EqualsToken::Split {
+            base,
+            selectors,
+            len,
+        } => {
+            return parse_editor_split_item(
+                item,
+                parent_trimmed,
+                base,
+                selectors,
+                len,
             );
         }
         EqualsToken::Close => {}
@@ -2377,6 +2712,7 @@ fn editor_close_outcome<'a>(
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),

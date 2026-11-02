@@ -538,6 +538,7 @@ pub(super) fn classify_local_marker(
         | EditorMode::PomodoroProjectNote
         | EditorMode::PomodoroAdjust
         | EditorMode::PomodoroShift
+        | EditorMode::PomodoroSplit
         | EditorMode::PomodoroLink
         | EditorMode::PomodoroClose
         | EditorMode::PomodoroStart
@@ -592,6 +593,10 @@ pub(super) fn non_absorbable_marker_notice(
         ),
         EditorMode::PomodoroShift => format!(
             "@@ cannot take a Pomodoro shift: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::PomodoroSplit => format!(
+            "@@ cannot take a Pomodoro split: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::PomodoroLink => format!(

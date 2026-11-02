@@ -987,6 +987,7 @@ pub(crate) enum TypeMarkerSubject {
     Start,
     Adjust,
     Shift,
+    Split,
 }
 
 impl TypeMarkerSubject {
@@ -1011,6 +1012,7 @@ impl TypeMarkerSubject {
             CaptureKind::PomodoroStart { .. } => Self::Start,
             CaptureKind::PomodoroAdjust { .. } => Self::Adjust,
             CaptureKind::PomodoroShift { .. } => Self::Shift,
+            CaptureKind::PomodoroSplit { .. } => Self::Split,
         }
     }
 }
@@ -1067,6 +1069,10 @@ pub(crate) fn type_marker_not_applicable_error(
         TypeMarkerSubject::Shift => (
             "shifts a Pomodoro session",
             "remove the shift gesture to capture a task",
+        ),
+        TypeMarkerSubject::Split => (
+            "splits a Pomodoro",
+            "remove the split gesture to capture a task",
         ),
     };
     format!("`{marker}` types a task, but this capture {action}; {remedy}")

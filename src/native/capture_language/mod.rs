@@ -39,7 +39,7 @@ mod tokens;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 4;
+pub(crate) const GRAMMAR_REVISION: u32 = 5;
 
 #[cfg(test)]
 mod tests;
@@ -134,6 +134,7 @@ pub(crate) use self::model::PomodoroAdjustSpec;
 pub(crate) use self::model::PomodoroCloseSpec;
 pub(crate) use self::model::PomodoroLinkSpelling;
 pub(crate) use self::model::PomodoroShiftSpec;
+pub(crate) use self::model::PomodoroSplitSpec;
 pub(crate) use self::model::PomodoroStartSpec;
 pub(crate) use self::model::ProjectNoteForm;
 pub(crate) use self::model::ProjectTaskId;

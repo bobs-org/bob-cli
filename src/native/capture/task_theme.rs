@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) struct CaptureTaskThemeContext {
+pub(crate) struct CaptureTaskThemeContext {
     root: PathBuf,
     today: NaiveDate,
     config_path: PathBuf,
@@ -87,8 +87,8 @@ pub(super) struct AppliedRelocation {
 
 /// Owned D7 typed-placement inputs for one bare link-creating capture:
 /// the task's effective type (D3, from the staged line).
-pub(super) struct PlacementType {
-    pub(super) suggestion: ThemeSuggestion,
+pub(crate) struct PlacementType {
+    pub(crate) suggestion: ThemeSuggestion,
     pub(super) exempt: Vec<String>,
 }
 
@@ -115,7 +115,7 @@ impl PlacementType {
 }
 
 impl CaptureTaskThemeContext {
-    pub(super) fn new(
+    pub(crate) fn new(
         root: &Path,
         today: NaiveDate,
         config_path: Option<&Path>,
@@ -959,7 +959,7 @@ impl CaptureTaskThemeContext {
     /// configured, closed task, unreadable catalog), in which case the
     /// caller keeps the legacy implicit selection. Pushes the same
     /// suggestion warnings as the named-capture path.
-    pub(super) fn placement_for_task(
+    pub(crate) fn placement_for_task(
         &mut self,
         planner: &mut CaptureBatchPlanner,
         residence_route: &str,

@@ -541,6 +541,7 @@ fn plan_ref_item(
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,
@@ -835,6 +836,17 @@ pub(super) fn plan_capture_item(
             request, parsed, spec, now, today, planner,
         );
     }
+    if let CaptureKind::PomodoroSplit { spec } = parsed.kind.clone() {
+        return plan_pomodoro_split_item(
+            request,
+            parsed,
+            spec,
+            today,
+            planner,
+            task_theme_context,
+            warnings,
+        );
+    }
     if let Some(target) = request.forced_sub_bullet_target.as_ref() {
         parsed.kind = CaptureKind::SubBullet {
             target: target.clone(),
@@ -1028,6 +1040,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_start: None,
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
+                pomodoro_split: None,
                 pomodoro_close: None,
                 pomodoro_reset: None,
                 dependency_update: None,
@@ -1362,6 +1375,9 @@ pub(super) fn plan_capture_item(
         }
         CaptureKind::PomodoroShift { .. } => {
             unreachable!("pomodoro shift capture is planned before this point")
+        }
+        CaptureKind::PomodoroSplit { .. } => {
+            unreachable!("pomodoro split capture is planned before this point")
         }
         CaptureKind::PomodoroLink { .. } => {
             unreachable!("pomodoro link capture is planned before this point")
@@ -2441,6 +2457,7 @@ pub(super) fn plan_capture_item(
                 .and_then(|edit| edit.start.clone()),
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update,
@@ -2594,6 +2611,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::TaskToggle { .. } => "task_toggle",
         CaptureKind::PomodoroAdjust { .. } => "pomodoro_adjust",
         CaptureKind::PomodoroShift { .. } => "pomodoro_shift",
+        CaptureKind::PomodoroSplit { .. } => "pomodoro_split",
         CaptureKind::PomodoroLink { .. } => "pomodoro_link",
         CaptureKind::PomodoroClose { .. } => "pomodoro_close",
         CaptureKind::PomodoroStart { .. } => "pomodoro_start",
@@ -3517,6 +3535,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update,

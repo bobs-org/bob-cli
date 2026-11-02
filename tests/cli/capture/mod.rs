@@ -56,6 +56,7 @@ mod pomodoro_name;
 mod pomodoro_override;
 mod pomodoro_reset;
 mod pomodoro_shift;
+mod pomodoro_split;
 mod pomodoro_start;
 mod pomodoro_start_drop;
 mod pomodoro_start_named;

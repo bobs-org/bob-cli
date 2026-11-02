@@ -112,6 +112,7 @@ pub(super) fn plan_task_complete_item(
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
+            pomodoro_split: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,

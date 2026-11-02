@@ -24,7 +24,7 @@ use super::{
         CaptureParseOptions, ClipRequest, DrawerSelector, ParsedCaptureItem,
         ParsedCaptureText, ParsedDependencyTarget, ParsedDependencyTargetKind,
         ParsedRelation, PomodoroAdjustSpec, PomodoroCloseSpec,
-        PomodoroShiftSpec, PomodoroStartSpec, ProjectNoteForm,
+        PomodoroShiftSpec, PomodoroSplitSpec, PomodoroStartSpec, ProjectNoteForm,
         RelationDirection, SubBulletTarget, TaskToggleIntent,
         POMODORO_CLOSE_INTERNAL_BULLETS_ERROR, POMODORO_START_FORCED_ERROR,
     },
@@ -71,6 +71,7 @@ mod output;
 mod plan;
 mod pomodoro_adjust;
 mod pomodoro_blocks;
+mod pomodoro_split;
 mod pomodoro_close;
 mod pomodoro_insert;
 mod pomodoro_link;
@@ -114,6 +115,7 @@ use plan::*;
 use pomodoro_adjust::*;
 use pomodoro_blocks::*;
 use pomodoro_close::*;
+use pomodoro_split::*;
 use pomodoro_insert::*;
 use pomodoro_link::*;
 use pomodoro_start::*;
@@ -134,7 +136,8 @@ use task_complete::*;
 use task_theme::*;
 use task_toggle::*;
 
-pub(crate) use batch::StagedTextFile;
+pub(crate) use batch::{CaptureBatchPlanner, StagedTextFile};
+pub(crate) use task_theme::CaptureTaskThemeContext;
 pub(crate) use block_diff::block_depths;
 pub(crate) use commit::{validate_target_parent, write_staged_files};
 pub(crate) use existing_task_link::{

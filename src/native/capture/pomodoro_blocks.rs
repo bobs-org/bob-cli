@@ -17,6 +17,7 @@ use super::*;
 pub(super) enum PomodoroBlockRole {
     Adjusted,
     Shifted,
+    Split,
     Started,
     Closed,
     Reset,

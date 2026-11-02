@@ -866,6 +866,58 @@ pub(crate) fn shell_completion(
             // the additive `block_id` object, not candidates).
             return Ok(Some(ShellCompletion { marker_start, rows }));
         }
+        CompletionContext::PomodoroSplitBase => {
+            let (candidates, _) =
+                super::pomodoros::pomodoro_split_base_candidates(
+                    bob_dir,
+                    &field.query,
+                )
+                .map_err(|error| error.message.clone())?;
+            let Candidates::PomodoroName(items) = candidates else {
+                return Ok(None);
+            };
+            for item in items {
+                let full = format!("{marker_prefix}{}", item.replacement);
+                if full.is_empty() {
+                    continue;
+                }
+                let description = item.name.unwrap_or(item.replacement.clone());
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description,
+                    group: "pomodoro".to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
+        CompletionContext::PomodoroSplitType => {
+            let (candidates, _) =
+                super::pomodoros::pomodoro_split_type_candidates(
+                    bob_dir,
+                    raw_text,
+                    cursor,
+                    &field.query,
+                )
+                .map_err(|error| error.message.clone())?;
+            let Candidates::PomodoroName(items) = candidates else {
+                return Ok(None);
+            };
+            for item in items {
+                let full = format!("{marker_prefix}{}", item.replacement);
+                if full.is_empty() {
+                    continue;
+                }
+                let description = item.name.unwrap_or(item.replacement.clone());
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description,
+                    group: "pomodoro".to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock

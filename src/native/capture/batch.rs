@@ -2,7 +2,7 @@
 use super::*;
 
 #[derive(Default)]
-pub(super) struct CaptureBatchPlanner {
+pub(crate) struct CaptureBatchPlanner {
     pub(super) files: Vec<BatchTextFile>,
     pub(super) by_path: HashMap<PathBuf, usize>,
     item_pre_day: Option<Option<String>>,
@@ -329,6 +329,11 @@ pub(super) fn plan_capture_to_target(
                 "pomodoro shift capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroSplit { .. } => {
+            return Err(CaptureError::io(
+                "pomodoro split capture invariant failed: wrong write planner",
+            ));
+        }
         CaptureKind::PomodoroLink { .. } => {
             return Err(CaptureError::io(
                 "pomodoro link capture invariant failed: wrong write planner",
@@ -591,6 +596,32 @@ pub(super) struct PomodoroShiftSummary {
     /// Omitted when the session is MEET or nothing new is crossed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) event_conflict: Option<EventConflictJson>,
+}
+
+/// One new planned entry created by a `=/` split, with its type pill and
+/// moved-link count. `line` is one-based in the post-image day file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroSplitCreated {
+    #[serde(rename = "type")]
+    pub(super) type_ref: crate::native::pomodoro_themes::ThemeRef,
+    pub(super) line: usize,
+    pub(super) name: String,
+    pub(super) moved_links: usize,
+}
+
+/// `=/` split report: the source entry before/after, its base pill, every
+/// created entry in source-name order (including zero-link entries), and
+/// the count of source Task Links left behind (including unresolved and
+/// untyped ones; nested lines never inflate counts).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroSplitSummary {
+    pub(super) path: String,
+    pub(super) entry_line: usize,
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) base: crate::native::pomodoro_themes::ThemeRef,
+    pub(super) created: Vec<PomodoroSplitCreated>,
+    pub(super) stayed_links: usize,
 }
 
 #[derive(Debug)]

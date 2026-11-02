@@ -507,6 +507,9 @@ fn refuse_clip_on_incompatible_kind(
         CaptureKind::PomodoroShift { .. } => {
             "Pomodoro shift `++N`/`--N` cannot be combined with %c; capture the shift alone"
         }
+        CaptureKind::PomodoroSplit { .. } => {
+            "Pomodoro split `=/` cannot be combined with %c; capture the split alone"
+        }
         CaptureKind::PomodoroClose { .. } => {
             "Pomodoro close `x` cannot be combined with %c; capture the close alone"
         }
@@ -1611,10 +1614,20 @@ pub(crate) fn session_operator_token(
 }
 
 /// A whole-item session token: either a close (a bare `x`, or a retired
-/// `=x`/`=*`/`=!` spelling that teaches it) or a start (`=` plus an
-/// `<X>`-shaped suffix and optional `#name` or bare `name` part).
+/// `=x`/`=*`/`=!` spelling that teaches it), a split (`=/` plus an
+/// optional bare base plus `#name`/`#"Literal"` selectors), or a start
+/// (`=` plus an `<X>`-shaped suffix and optional `#name` or bare `name`
+/// part).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EqualsToken {
+    /// A whole-item `=/` Pomodoro split: `base` is the optional bare base
+    /// name after `=/`, `selectors` are the ordered `#type` parts in typed
+    /// order, and `len` is the token's byte length including the sigil.
+    Split {
+        base: Option<String>,
+        selectors: Vec<PomodoroSplitSelector>,
+        len: usize,
+    },
     /// A leading bare lowercase `x`, one of its claimed selection/hash near
     /// misses, or a retired `=x`/`=X`/`=*`/`=!` spelling. The retired
     /// spellings stay claimed so they fail with a teaching error instead of
@@ -1663,6 +1676,109 @@ fn double_close_tail_is_claimed(after_first: &str) -> bool {
         && retired_whole_item_close_rewrite(first).is_some()
 }
 
+/// Byte length of a plain `=/` split `#name` part: ends at whitespace,
+/// `#`, `~`, or `@`, so adjacent `#` selectors never swallow into one
+/// name. Empty when the selector has no text (a trailing or doubled `#`).
+fn split_selector_extent(after_hash: &str) -> usize {
+    after_hash
+        .find(|character: char| {
+            character.is_ascii_whitespace()
+                || character == '#'
+                || character == '~'
+                || character == '@'
+        })
+        .unwrap_or(after_hash.len())
+}
+
+/// Lex the text after `=/` (the `/` already stripped) into an optional bare
+/// base plus ordered `#name`/`#"Literal"` selectors. `sigil_len` is 1 for
+/// the single `=` sigil. The returned length includes the sigil, the slash,
+/// the base, and every `#` part (including a trailing incomplete `#` or
+/// literal extent). Malformed or incomplete selectors are kept as empty or
+/// partial entries so the whole-item parser can teach precisely instead of
+/// falling through as a task.
+fn split_base_len(after_slash: &str) -> Option<usize> {
+    let end = after_slash
+        .find(|character: char| {
+            character.is_ascii_whitespace()
+                || character == '#'
+                || character == '~'
+                || character == '@'
+        })
+        .unwrap_or(after_slash.len());
+    if end == 0 {
+        return None;
+    }
+    let candidate = &after_slash[..end];
+    bare_start_name_len(candidate).filter(|len| *len == end)
+}
+
+fn lex_split_after_slash(
+    after_slash: &str,
+    sigil_len: usize,
+) -> (Option<String>, Vec<PomodoroSplitSelector>, usize) {
+    let mut token_len = sigil_len + 1;
+    let mut base: Option<String> = None;
+    let mut pos = 0;
+    if let Some(name_len) = split_base_len(after_slash) {
+        base = Some(after_slash[..name_len].to_string());
+        pos += name_len;
+        token_len += name_len;
+    }
+    let mut selectors = Vec::new();
+    let bytes_len = after_slash.len();
+    while pos < bytes_len && after_slash.as_bytes()[pos] == b'#' {
+        let after_hash = &after_slash[pos + 1..];
+        if after_hash.is_empty() {
+            selectors.push(PomodoroSplitSelector {
+                text: String::new(),
+                literal: false,
+            });
+            token_len += 1;
+            break;
+        }
+        if opens_exact_name(after_hash)
+            && let Some(lex) =
+                lex_exact_name_after_hash(after_hash, after_hash.len())
+        {
+            if lex.complete {
+                selectors.push(PomodoroSplitSelector {
+                    text: canonicalize_exact_name(&lex.decoded)
+                        .unwrap_or(lex.decoded),
+                    literal: true,
+                });
+                token_len += 1 + lex.literal_len;
+                pos += 1 + lex.literal_len;
+            } else {
+                selectors.push(PomodoroSplitSelector {
+                    text: String::new(),
+                    literal: true,
+                });
+                token_len += 1 + lex.literal_len;
+                pos += 1 + lex.literal_len;
+            }
+            continue;
+        }
+        let name_len = split_selector_extent(after_hash);
+        if name_len == 0 {
+            selectors.push(PomodoroSplitSelector {
+                text: String::new(),
+                literal: false,
+            });
+            token_len += 1;
+            pos += 1;
+            continue;
+        }
+        selectors.push(PomodoroSplitSelector {
+            text: after_hash[..name_len].to_string(),
+            literal: false,
+        });
+        token_len += 1 + name_len;
+        pos += 1 + name_len;
+    }
+    (base, selectors, token_len)
+}
+
 /// Claim a bare lowercase close at the first whitespace-delimited token, or
 /// lex the `=`-family token at the start of trimmed item text, mirroring
 /// [`session_operator_token`]. Returns `None` for ordinary prose. A retired
@@ -1706,6 +1822,18 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         }
         None => (rest, 1, false),
     };
+    // A leading `=/` claims the whole-item split before generic
+    // start/prose handling. A mid-body `=/` never reaches here because the
+    // text does not start with `=`.
+    if !doubled && let Some(after_slash) = rest.strip_prefix('/') {
+        let (base, selectors, split_len) =
+            lex_split_after_slash(after_slash, sigil_len);
+        return Some(EqualsToken::Split {
+            base,
+            selectors,
+            len: split_len,
+        });
+    }
     let bytes = rest.as_bytes();
     let mut len = 0;
     while len < bytes.len() && bytes[len].is_ascii_digit() {
@@ -1892,6 +2020,7 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
             }
             len == token.len() || counted
         }
+        Some(EqualsToken::Split { len, .. }) => len == token.len(),
         Some(EqualsToken::Close) => {
             // A `==`-prefixed close tail (`==x`, `==X1`, `==*`, `==!2`) is
             // a claimed teaching near miss, so it chains like any other
@@ -2350,6 +2479,73 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
         return Ok(None);
     };
     match token {
+        EqualsToken::Split {
+            base,
+            selectors,
+            len,
+        } => {
+            let Some(first) = parent_trimmed.split_whitespace().next() else {
+                return Ok(None);
+            };
+            // A mid-body `=/` never reaches here, but guard anyway: the
+            // token must start the trimmed line.
+            if !parent_trimmed.starts_with("=/") {
+                return Ok(None);
+            }
+            // Validate selectors before shape: empty text is an incomplete
+            // or malformed selector, never a task.
+            for selector in &selectors {
+                if selector.text.is_empty() {
+                    return Err(pomodoro_split_selector_error(
+                        first, "",
+                    ));
+                }
+                if !selector.literal
+                    && !is_pomodoro_selector_component(&selector.text)
+                {
+                    return Err(pomodoro_split_selector_error(
+                        first,
+                        &selector.text,
+                    ));
+                }
+            }
+            if let Some(base_name) = base.as_deref()
+                && !is_pomodoro_selector_component(base_name)
+            {
+                return Err(pomodoro_split_selector_error(first, base_name));
+            }
+            let single_token_parent = parent_trimmed == first && first.len() == len;
+            if !single_token_parent || item.lines.len() != 1 {
+                return Err(pomodoro_split_shape_error(first));
+            }
+            if forced_route.is_some() || forced_section.is_some() {
+                return Err(POMODORO_SPLIT_FORCED_ERROR.to_string());
+            }
+            let spec = PomodoroSplitSpec {
+                raw: first.to_string(),
+                base,
+                selectors,
+            };
+            return Ok(Some(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body: first.to_string(),
+                    clip: None,
+                    route: None,
+                    kind: CaptureKind::PomodoroSplit { spec },
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                    dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
+                    dependency_target: None,
+                    type_marker: None,
+                },
+                Vec::new(),
+                None,
+            )));
+        }
         EqualsToken::Close => {
             let Some(first) = parent_trimmed.split_whitespace().next() else {
                 return Ok(None);

@@ -163,6 +163,13 @@ pub(crate) enum CaptureKind {
         block_id: String,
         quoted: bool,
     },
+    /// A whole-item `=/` Pomodoro split: split a merged Pomodoro's types
+    /// into planned entries. The item must contain only the split token
+    /// and have exactly one physical line; any extra text, markers, or
+    /// child lines are refused with a teaching error, never a task.
+    PomodoroSplit {
+        spec: PomodoroSplitSpec,
+    },
 }
 
 /// Which sigil spelled a solo Pomodoro-link item.
@@ -393,6 +400,30 @@ pub(crate) struct PomodoroStartSpec {
     /// start-drop grammar lands; the lineup engine already applies it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) drop: Vec<u32>,
+}
+
+/// One `=/` split selector: a `#name` or `#"Literal"` type part.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PomodoroSplitSelector {
+    /// Decoded selector text (literal decoded, plain as typed).
+    pub(crate) text: String,
+    /// True when spelled as a quoted literal: whole-key match only.
+    pub(crate) literal: bool,
+}
+
+/// Whole-item `=/` split specification: the optional bare base plus the
+/// ordered `#type` selectors. `raw` is the trimmed token exactly as typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PomodoroSplitSpec {
+    /// Trimmed split token exactly as typed (for example `=/build#fix`).
+    pub(crate) raw: String,
+    /// Optional bare base name after `=/` (for example `build` in
+    /// `=/build#fix`). `None` selects the current Pomodoro.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) base: Option<String>,
+    /// Ordered split selectors after the base, in typed order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) selectors: Vec<PomodoroSplitSelector>,
 }
 
 /// How a marker-only `@route+block-id` capture should change an existing task.

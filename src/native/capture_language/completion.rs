@@ -63,6 +63,10 @@ pub(crate) enum CompletionContext {
     /// included, so refetching at `replacement.start` returns the
     /// unfiltered snapshot.
     TaskComplete,
+    /// A `=/` split base field: today's open merged Pomodoros.
+    PomodoroSplitBase,
+    /// A `=/` split `#type` field: the target's merged-in types.
+    PomodoroSplitType,
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
@@ -933,6 +937,148 @@ fn pomodoro_start_name_field(
     })
 }
 
+/// Completion field for a `=/` split base or `#type` selector. The cursor
+/// must lie inside the base (just after `=/` through the end of the base)
+/// or inside a selector name (just after `#` through the end of that
+/// selector). A cursor on `=/` or at a `#` byte itself yields nothing, and
+/// neither sigil is inside the replacement. The replacement covers the
+/// whole base or selector part regardless of where the cursor sits inside
+/// it, preserving surrounding selectors, quotes, and chain siblings.
+fn pomodoro_split_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let parent = item.lines.first()?;
+    let text = parent.raw.text;
+    let trimmed = text.trim();
+    let super::item::EqualsToken::Split {
+        base,
+        selectors,
+        len,
+    } = super::item::session_equals_token(trimmed)?
+    else {
+        return None;
+    };
+    let _ = len;
+    let leading = text.len() - text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    // Base range: just after `=/` through the end of the base (empty when
+    // omitted). A cursor there completes the base.
+    let base_start = token_start + 2;
+    let base_end = base_start + base.as_deref().unwrap_or_default().len();
+    if cursor >= base_start && cursor <= base_end {
+        // When a `#` selector starts exactly at the cursor (e.g. `=/#fix`
+        // with the cursor before `#`), the cursor is on a selector sigil,
+        // not in the base.
+        let first = trimmed.split_whitespace().next().unwrap_or(trimmed);
+        let rel = cursor - token_start;
+        if first.as_bytes().get(rel) == Some(&b'#') {
+            return None;
+        }
+        let query = base
+            .as_deref()
+            .unwrap_or_default()
+            .get(..cursor - base_start)
+            .unwrap_or_default()
+            .to_string();
+        return Some(CompletionField {
+            context: CompletionContext::PomodoroSplitBase,
+            route: None,
+            block_id: None,
+            query,
+            replacement: (base_start, base_end),
+            bare_name: true,
+        });
+    }
+    // Selector ranges: walk `#` parts in order, tracking absolute offsets.
+    // Plain names cover their text; literals cover their quotes.
+    let mut rel = (base_end - token_start) as usize;
+    // Re-derive selector extents from the first whitespace-delimited token
+    // so quoted literals with spaces stay aligned.
+    let first = trimmed.split_whitespace().next().unwrap_or(trimmed);
+    // `rel` currently points just after the base (relative to token start).
+    // Walk each selector in order.
+    let mut selector_index = 0;
+    while rel < first.len() && first.as_bytes()[rel] == b'#' {
+        let after_hash = &first[rel + 1..];
+        let selector = selectors.get(selector_index)?;
+        let name_start_abs = token_start + rel + 1;
+        let name_end_abs = if selector.literal {
+            if let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+            {
+                if lex.complete {
+                    name_start_abs + lex.literal_len
+                } else {
+                    // Unterminated literal: the name runs to the token end.
+                    token_start + first.len()
+                }
+            } else {
+                name_start_abs
+            }
+        } else {
+            name_start_abs + selector.text.len()
+        };
+        if cursor > name_start_abs - 1 && cursor <= name_end_abs && cursor >= name_start_abs {
+            // Cursor just after `#` through the end of the name.
+            let typed_len = cursor - name_start_abs;
+            let query = if selector.literal {
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+                .map(|_lex| {
+                    // Truncate the decoded query at the cursor: decode the
+                    // typed prefix the same way the literal lexer does.
+                    let typed = &after_hash[..typed_len.min(after_hash.len())];
+                    super::pomodoro_literal::decode_partial_literal_text(
+                        typed
+                            .strip_prefix('"')
+                            .or_else(|| typed.strip_prefix('“'))
+                            .unwrap_or(typed),
+                    )
+                })
+                .unwrap_or_default()
+            } else {
+                selector.text.get(..typed_len).unwrap_or_default().to_string()
+            };
+            // An empty decoded query still completes (unfiltered list).
+            return Some(CompletionField {
+                context: CompletionContext::PomodoroSplitType,
+                route: None,
+                block_id: None,
+                query,
+                replacement: (name_start_abs, name_end_abs),
+                bare_name: false,
+            });
+        }
+        // A cursor exactly on `#` yields nothing.
+        if cursor == name_start_abs - 1 {
+            return None;
+        }
+        // Advance past this selector.
+        if selector.literal {
+            if let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+            {
+                rel += 1 + lex.literal_len;
+            } else {
+                rel += 1;
+            }
+        } else {
+            rel += 1 + selector.text.len();
+        }
+        selector_index += 1;
+    }
+    return None;
+}
+
 /// For a `pomodoro_start_name` field, whether a swap would keep the
 /// running ledger: `Some(true)` when the leading `<X>` suffix is empty
 /// and no `@` part was typed, `Some(false)` for a fresh `<X>` timing.
@@ -1037,6 +1183,15 @@ pub(crate) fn completion_field_at(
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
     if let Some(field) = directive_completion_field_at(item, cursor) {
+        return Some(field);
+    }
+    // A `=/` split base or `#type` completes before generic task-type
+    // masking can consume the split `#`, and before the session-action
+    // early return below. This keeps split `#` selectors from becoming
+    // task-type markers.
+    if line_index == 0
+        && let Some(field) = pomodoro_split_field_at(item, cursor)
+    {
         return Some(field);
     }
     // Type markers are transparent to field detection: run every claim

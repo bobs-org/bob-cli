@@ -220,6 +220,11 @@ anything is written, and any failure rolls the whole batch back.
 | `@work:outline#bugs=focus` | New error: name the Pomodoro once (`@work:outline=focus` or `@work:outline#focus=`) |
 | `==important== thing`, `==foo`, `== foo`, `===` | Ordinary task text; `==` is retired, and a bare `==` run followed by prose stays prose, which protects Obsidian highlights |
 | `==x` | Error: `` `==x` is not a close: close the running Pomodoro with `x` `` |
+| `=/` | Split the current Pomodoro (running, else next planned); all merged-in types split |
+| `=/build` | Split the open merged Pomodoro whose base is build; all merged-in types |
+| `=/build#fix` | Split only FIX out of BUILD + FIX + READ (target must have ≥3 types) |
+| `=/#fix` | Same, on the current Pomodoro |
+| `=/build foo` | Error: a split item must contain only the token; remove extra text, markers, or child lines |
 | `= foo` | Ordinary task text; a bare `=` followed by prose stays prose |
 | `=xx`, `=xa`, `=xmas`, `=Bugs` | Named start (`=xx`/`=xa` were documented prose; that row changes), exactly like `=#xx` |
 | `=x`, `=X`, `=x2!1`, `=*`, `=!`, `=x wired the lexer` | Unchanged retired-close teaching errors |
@@ -3331,6 +3336,23 @@ empty. A `@@` declaration never applies to named starts, and forced
 them with the existing start error. Quote named starts in zsh like every
 other `=` item: zsh's `EQUALS` expansion rewrites a word that starts with `=`, so `bob capture =focus` fails unquoted. Always single-quote (`bob capture '=bugs'`, `bob capture 'x =bugs'`, `bob capture '=#"DEEP WORK"'`).
 
+### Splitting a merged Pomodoro
+
+Capture a whole-item `=/` token to split a merged Pomodoro by type. The token is `=/` plus an optional bare base plus `#type` selectors (`#name` or `#"Literal"`):
+
+```bash
+bob capture '=/'
+bob capture '=/build'
+bob capture '=/build#fix'
+bob capture '=/#fix'
+```
+
+`=/` splits the current Pomodoro (running, else the next planned a bare `=` would start); all merged-in types split. `=/build` splits the open merged Pomodoro whose base matches build; all merged-in types split. `=/build#fix[#read]` splits only the listed types (target must have three or more types); `=/#fix` does the same on the current Pomodoro. With exactly two types the split type is implicit, so an explicit `#type` is refused with `split_type_not_needed` (write `=/` or `=/build`).
+
+Inputs are the target entry (an open merged Pomodoro) and the split set (non-empty, a subset of the merged-in types). Each top-level child whose body is exactly a Task Link (`[[T]]`, `[[T]]#`, `![[T]]`, `![[T]]#`, including same-note `[[#^id]]`) moves with its whole subtree to its type's new entry; prose, notes, mentions, and every other link stay. The source keeps its checkbox, timespan, and position; new entries are untimed `- [ ] () — T` directly below the source block, in source-name order, even when a type has no links. Guards (closed history, MEET, single-type, base, unknown, repeated, two-type explicit) each produce a precise teaching refusal with stable codes (`split_not_merged`, `split_base_type`, `split_type_unknown`, `split_type_repeated`, `split_type_not_needed`, `split_meet`, `split_target_missing`). A missing explicit base never falls back to current, and closed entries never participate.
+
+The bytes contract matches the start family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. JSON kind `pomodoro_split` keeps schema version 1 with `pomodoro_split: {path, entry_line, before, after, base, created: [{type, line, name, moved_links}], stayed_links}` and `pomodoro_blocks` refs for the source and every created entry (including zero-link entries). Human output prints `split BEFORE → AFTER · path line N` plus `↓ TYPE new Pomodoro · N links` rows (`no links` when empty).
+
 ### Overriding the running Pomodoro
 
 A whole-item `=` / `=<X>` restarts the single running session with fresh
@@ -4519,7 +4541,7 @@ a +1` keeps `+1` as text. `x 1,3` and `x1 !2` keep the no-spaces hint
 because `1,3` and `!2` are not chain tokens.
 
 Tokens run left to right exactly like blank-line items: `+2 x` extends then
-closes, `x =` closes then starts the next future Pomodoro (a session switch
+closes, `x =/` closes then splits the next Pomodoro, `=/ =` splits then starts, `x =` closes then starts the next future Pomodoro (a session switch
 in one line), `x =bugs` closes then starts the open `BUGS` session,
 `x2 =3` closes keeping task 2 in progress then starts a
 15-minute session, `= +2` starts then extends, `=bugs +2` starts `BUGS`
@@ -5797,7 +5819,7 @@ Field rules:
 - `removed` is true when this capture deleted the entry; omitted when
   false. A deleted entry's `lines` all carry `change: "removed"`.
 - `roles` is an informational, deduplicated list in first-touch order. The
-  vocabulary is `"adjusted"`, `"shifted"`, `"started"`, `"closed"`,
+  vocabulary is `"adjusted"`, `"shifted"`, `"split"`, `"started"`, `"closed"`,
   `"reset"` (a demoted swap session or `x0` reset), `"next"`,
   `"linked"`, `"unlinked"`, `"removed"` (the entry this capture emptied),
   and `"changed"` (auto-detected);
@@ -5816,7 +5838,7 @@ Field rules:
 Blocks appear in first-touch order across the batch. A chain such as
 `+2 x` touches the same session twice but reports it once, in its final
 state, with the cumulative diff against the ledger before the capture.
-Whole-item adjust, shift, start (including named starts), and close report
+Whole-item adjust, shift, split, start (including named starts), and close report
 their sessions; link and task forms report theirs through auto-detection
 until they carry explicit refs. Every `PomodoroBlockRef::removed`
 producer reports the deleted entry this way, not just consumption.
