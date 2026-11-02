@@ -86,6 +86,7 @@ fn run_sel(
         snapshot_complete: true,
         selection,
         index: vault_index,
+        relation: None,
     })
 }
 
@@ -1311,6 +1312,7 @@ fn r3_project_reason_carries_scheduled() {
         link_unblocked: true,
         keep_moving: false,
         snapshot_complete: true,
+        relation: None,
         selection: SuccessorSelection::All,
         index: &vault_index,
     });

@@ -83,6 +83,7 @@ pub(crate) fn recover_cancelled_source(
             link_unblocked: false,
             keep_moving: false,
             snapshot_complete: true,
+            relation: None,
             selection: SuccessorSelection::None,
             index,
         },

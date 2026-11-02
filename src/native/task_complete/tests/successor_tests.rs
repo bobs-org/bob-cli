@@ -84,6 +84,7 @@ fn run_sel(
         snapshot_complete: true,
         selection,
         index,
+        relation: None,
     })
 }
 

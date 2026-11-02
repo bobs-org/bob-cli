@@ -54,6 +54,11 @@ use super::project_pull_in::{
     pull_in_preview_line, pull_in_recover_status, PullInCandidate, PullInClass,
     RowEmit,
 };
+use super::relation_successors::{
+    classify_relation_successors, MapTargetReader, RelationCheck,
+    RelationClassifyInput, RelationEvent, RelationOfferGroup,
+    RelationSuccessorInput, SourceRecovery,
+};
 use crate::native::capture_dependency_tasks::{
     has_hide_tag, has_prj_is_blocked_tag,
 };
@@ -72,13 +77,20 @@ pub(crate) enum SuccessorSelection {
 
 /// Draft-list sort key: group, anchor (entry, bullet), note path, lane, line.
 /// Lane is 0 for existing groups so their relative order is unchanged;
-/// keep-moving uses Pending → Next → Ready (`keep_moving_lane`).
+/// keep-moving uses Pending → Next → Ready (`keep_moving_lane`);
+/// relation rows use Next → Ready (`lane_order`) so rows within one
+/// relation group stay lane-first while the tuple shape keeps legacy
+/// ordering stable when no relation offers exist.
 pub(crate) type OfferOrderKey = (u8, (usize, usize), PathBuf, u8, usize);
 
 /// Offer group (`docs/task-dependencies.md` §12.2 ORDER).
+/// Precedence is `hand_off > relation > project > project_finished >
+/// keep_moving`; the numeric ranks preserve the old relative order when
+/// no relation offers exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OfferGroup {
     HandOff,
+    Relation,
     Project,
     ProjectFinished,
     KeepMoving,
@@ -88,11 +100,24 @@ impl OfferGroup {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::HandOff => "hand_off",
+            Self::Relation => "relation",
             Self::Project => "project",
             Self::ProjectFinished => "project_finished",
             Self::KeepMoving => "keep_moving",
         }
     }
+}
+
+/// Relation second-reason or winning-group metadata kept on internal
+/// rows and offers. Capture serializers ignore these fields until the
+/// parent capture/authoring phases deliberately expose them, so capture
+/// output stays byte-identical while `relation: None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RelationRowInfo {
+    pub(crate) label: String,
+    pub(crate) key: String,
+    pub(crate) event: super::relation_successors::RelationEventKind,
+    pub(crate) after: Vec<super::relation_successors::RelationTarget>,
 }
 
 /// Where a picked offer's successor bullet lands.
@@ -157,6 +182,9 @@ pub(crate) struct OfferReport {
     pub block_id_needed: bool,
     /// Crate-private draft order; never a JSON field.
     pub order_key: OfferOrderKey,
+    /// Relation second-reason or winning-group metadata. Capture
+    /// serializers ignore this until the parent phases expose it.
+    pub relation: Option<RelationRowInfo>,
 }
 
 /// Folded counts for one project whose `^prj` entered project offers.
@@ -216,6 +244,10 @@ pub(crate) struct SuccessorInput<'a> {
     pub snapshot_complete: bool,
     pub selection: SuccessorSelection,
     pub index: &'a NoteIndex,
+    /// Optional relation-successor engine input. Production capture
+    /// callers pass `None` so capture output stays byte-identical;
+    /// recovery-only never runs relations even when supplied.
+    pub relation: Option<super::relation_successors::RelationSuccessorInput>,
 }
 
 /// Closing-target context for Pomodoro closes
@@ -281,12 +313,16 @@ pub(crate) struct UnblockedRow {
     pub unblocked_by: Vec<PredecessorRef>,
     pub link: Option<SuccessorLinkReport>,
     pub not_linked: Option<&'static str>,
-    /// `"dependency"` for existing rows, `"project_empty"` for pull-ins.
+    /// `"dependency"` for existing rows, `"project_empty"` for pull-ins,
+    /// `"relation"` for relation winners.
     pub trigger: &'static str,
     /// Whether the gesture removed `#hide` from this row's line.
     pub hide_removed: bool,
     /// Present on every offered row, picked or not.
     pub offer: Option<OfferReport>,
+    /// Relation second-reason or winning-group metadata. Capture
+    /// serializers ignore this until the parent phases expose it.
+    pub relation: Option<RelationRowInfo>,
 }
 
 /// One open dependent of C that stays blocked (§12.5 `still_blocked[]`).
@@ -326,6 +362,20 @@ pub(crate) struct SuccessorPlan {
     pub keep_moving: Vec<UnblockedRow>,
     /// Folded keep-moving counts per project with at least one selectable row.
     pub keep_moving_folds: Vec<super::keep_moving::KeepMovingFold>,
+    /// Relation-winning rows (group `relation`, trigger `"relation"`).
+    /// Only rows whose winning group is Relation land here; secondary
+    /// relation reasons stay on existing groups' rows. Capture
+    /// serializers ignore these until the parent phases expose them.
+    pub relation_successors: Vec<UnblockedRow>,
+    /// Relation-held rows that never become offers.
+    pub relation_held: Vec<super::relation_successors::RelationHeldRow>,
+    /// Relation groups with shared copy, recomputed after dedup so only
+    /// surviving selectable rows remain.
+    pub relation_groups: Vec<super::relation_successors::RelationOfferGroup>,
+    /// Present only when the relation gate reached the lookup:
+    /// `Checked` or `Unavailable`. `None` when disabled, nontriggering,
+    /// or recovery-only.
+    pub relation_check: Option<super::relation_successors::RelationCheck>,
 }
 
 /// Whether a vault-relative note is an inbox note, mirroring nav's
@@ -679,6 +729,14 @@ pub(crate) struct DependentVerdict {
     /// True for §12.15 keep-moving verdicts: unpicked rows write nothing
     /// and emit into `SuccessorPlan.keep_moving`.
     pub(crate) keep_moving: bool,
+    /// Relation reason for this task (winning or second reason).
+    /// Separate from recovery: changing the displayed group never erases
+    /// project/pull-in recovery nor creates recovery for relation-only
+    /// sources.
+    pub(crate) relation: Option<RelationRowInfo>,
+    /// True when this verdict exists only because of a relation offer.
+    /// Unpicked relation-only rows write absolutely nothing.
+    pub(crate) relation_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -699,6 +757,7 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
 /// Run only the existing dependency/project recovery rules for a
 /// cancellation. This mode never detects project-finished pull-ins, builds
 /// offers, assigns keys, selects rows, mints IDs, or writes successor links.
+/// It never runs relations even when the caller supplies relation data.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plan_recovery_only(
     mut input: SuccessorInput,
@@ -706,6 +765,7 @@ pub(crate) fn plan_recovery_only(
 ) -> SuccessorPlan {
     input.link_unblocked = false;
     input.selection = SuccessorSelection::None;
+    input.relation = None;
     plan_successors_inner(
         input,
         SuccessorMode::CancelRecovery {
@@ -742,6 +802,369 @@ fn empty_paths() -> &'static BTreeSet<PathBuf> {
     static EMPTY: std::sync::OnceLock<BTreeSet<PathBuf>> =
         std::sync::OnceLock::new();
     EMPTY.get_or_init(BTreeSet::new)
+}
+
+fn relation_identity_key(path: &Path, block_id: &str) -> String {
+    let display = path.to_string_lossy().replace('\\', "/");
+    if block_id.is_empty() {
+        display
+    } else {
+        format!("{display}#^{block_id}")
+    }
+}
+
+/// Build the caller-supplied recovered overlay for R4 from the legacy
+/// verdicts planned by this same gesture: a task whose legacy verdict is
+/// Offer/Successor/Recover counts as recovered (prerequisites closed and
+/// project unblocked); StillBlocked rows keep their open counts.
+fn relation_recovered_map(
+    verdicts: &[DependentVerdict],
+    files: &[FileScan],
+) -> BTreeMap<String, SourceRecovery> {
+    let mut map = BTreeMap::new();
+    for verdict in verdicts {
+        let file = &files[verdict.file];
+        let task = &file.tasks[verdict.task];
+        let key = relation_identity_key(
+            &file.relative_path,
+            task.block_id.as_deref().unwrap_or(""),
+        );
+        let recovered = match verdict.kind {
+            VerdictKind::StillBlockedWaitsOn
+            | VerdictKind::StillBlockedScheduled
+            | VerdictKind::StillBlockedProject => SourceRecovery {
+                recovered_prerequisites: false,
+                recovered_project: false,
+                project_path: verdict
+                    .offer
+                    .as_ref()
+                    .and_then(|offer| offer.project.clone())
+                    .or_else(|| verdict.muted_project.clone()),
+                open_prerequisite_count: Some(verdict.open_count),
+            },
+            _ => SourceRecovery {
+                recovered_prerequisites: true,
+                recovered_project: true,
+                project_path: verdict
+                    .offer
+                    .as_ref()
+                    .and_then(|offer| offer.project.clone())
+                    .or_else(|| verdict.muted_project.clone()),
+                open_prerequisite_count: Some(verdict.open_count),
+            },
+        };
+        map.insert(key, recovered);
+    }
+    map
+}
+
+fn find_file_task_for_relation_source(
+    files: &[FileScan],
+    source: &super::relation_successors::RelationTarget,
+) -> Option<(usize, usize)> {
+    for (file_index, file) in files.iter().enumerate() {
+        if file.relative_path != source.note_path {
+            continue;
+        }
+        for (task_index, task) in file.tasks.iter().enumerate() {
+            if task.block_id.as_deref() == Some(source.block_id.as_str()) {
+                return Some((file_index, task_index));
+            }
+        }
+        for (task_index, task) in file.tasks.iter().enumerate() {
+            if task.block_id.is_none() && task.description == source.text {
+                return Some((file_index, task_index));
+            }
+        }
+        return None;
+    }
+    None
+}
+
+fn find_verdict_for_relation_source(
+    verdicts: &[DependentVerdict],
+    files: &[FileScan],
+    source: &super::relation_successors::RelationTarget,
+) -> Option<usize> {
+    find_file_task_for_relation_source(files, source).and_then(
+        |(file, task)| {
+            verdicts.iter().position(|verdict| {
+                verdict.file == file && verdict.task == task
+            })
+        },
+    )
+}
+
+/// Merge relation offers into the legacy verdicts after recovery.
+///
+/// Precedence is `hand_off > relation > project > project_finished >
+/// keep_moving`. A hand-off keeps its group and gains relation metadata;
+/// a lower-priority offer moves to the relation group while keeping its
+/// recovery; relation-only sources become new `Relation` verdicts. Held
+/// rows never become offers. Returns held rows, surviving relation
+/// groups (only groups with selectable relation-winning rows), and the
+/// relation check.
+#[allow(clippy::too_many_arguments)]
+fn integrate_relation_offers(
+    verdicts: &mut Vec<DependentVerdict>,
+    files: &[FileScan],
+    completed: &[CompletedTask],
+    relation_input: &RelationSuccessorInput,
+    relation_events: &[RelationEvent],
+    link_unblocked: bool,
+    snapshot_complete: bool,
+    pre_day: Option<&str>,
+    post_day: Option<&str>,
+    day_relative: &Path,
+    _index: &NoteIndex,
+    today: NaiveDate,
+    tasks_settings: &TasksSettings,
+    anchors: &[Option<SlotAnchor>],
+    day: &DayView,
+    closing: bool,
+    implicit: Option<&ImplicitDest>,
+) -> (
+    Vec<super::relation_successors::RelationHeldRow>,
+    Vec<RelationOfferGroup>,
+    Option<RelationCheck>,
+) {
+    if relation_input.labels.is_empty()
+        || !link_unblocked
+        || relation_events.is_empty()
+        || relation_events
+            .iter()
+            .all(|event| event.target.block_id.is_empty())
+    {
+        return (Vec::new(), Vec::new(), None);
+    }
+    if !relation_input.relation_snapshot_complete {
+        return (Vec::new(), Vec::new(), Some(RelationCheck::Unavailable));
+    }
+    let mut source_texts = BTreeMap::new();
+    for file in files {
+        source_texts.insert(file.relative_path.clone(), file.contents.clone());
+    }
+    let known_paths: Vec<PathBuf> = files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect();
+    let archive_paths: Vec<PathBuf> = known_paths
+        .iter()
+        .filter(|path| path.components().any(|part| part.as_os_str() == "done"))
+        .cloned()
+        .collect();
+    let recovered = relation_recovered_map(verdicts, files);
+    let day_after = post_day.or(pre_day);
+    let mut reader = MapTargetReader::new(
+        source_texts.clone(),
+        relation_input.unavailable_targets.clone(),
+    );
+    let classify_input = RelationClassifyInput {
+        labels: &relation_input.labels,
+        events: relation_events,
+        source_texts: &source_texts,
+        known_paths: &known_paths,
+        archive_paths: &archive_paths,
+        day_before: pre_day,
+        day_after,
+        day_path: day_relative,
+        previous_daily: relation_input.previous_daily.as_deref(),
+        today,
+        link_unblocked,
+        snapshot_complete: relation_input.relation_snapshot_complete,
+        dependency_snapshot_complete: snapshot_complete,
+        recovered: &recovered,
+        tasks_settings,
+    };
+    let result = classify_relation_successors(&classify_input, &mut reader);
+    let check = result.check;
+    if check.is_none() {
+        return (Vec::new(), Vec::new(), None);
+    }
+    if check == Some(RelationCheck::Unavailable) {
+        return (Vec::new(), Vec::new(), check);
+    }
+    let completed_keys: BTreeMap<(PathBuf, String), usize> = completed
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| !task.block_id.is_empty())
+        .map(|(index, task)| {
+            ((task.relative_path.clone(), task.block_id.clone()), index)
+        })
+        .collect();
+    for group in &result.groups {
+        let label_key = group.label_key.clone();
+        for row in &group.rows {
+            let info = RelationRowInfo {
+                label: group.label.clone(),
+                key: label_key.clone(),
+                event: group.event,
+                after: row.triggering_targets.clone(),
+            };
+            if let Some(position) =
+                find_verdict_for_relation_source(verdicts, files, &row.source)
+            {
+                let existing_group =
+                    verdicts[position].offer.as_ref().map(|offer| offer.group);
+                match existing_group {
+                    Some(OfferGroup::HandOff) => {
+                        verdicts[position].relation = Some(info);
+                    }
+                    Some(
+                        OfferGroup::Project
+                        | OfferGroup::ProjectFinished
+                        | OfferGroup::KeepMoving,
+                    ) => {
+                        verdicts[position].relation = Some(info);
+                        if let Some(offer) = verdicts[position].offer.as_mut() {
+                            offer.group = OfferGroup::Relation;
+                            offer.project = None;
+                        }
+                    }
+                    Some(OfferGroup::Relation) => {
+                        let current = verdicts[position]
+                            .relation
+                            .as_ref()
+                            .map(|existing| existing.after.len())
+                            .unwrap_or(0);
+                        if info.after.len() > current {
+                            verdicts[position].relation = Some(info);
+                        }
+                    }
+                    None => {
+                        verdicts[position].relation = Some(info);
+                        let mut anchor = None;
+                        for target in &row.triggering_targets {
+                            if let Some(completed_index) =
+                                completed_keys.get(&(
+                                    target.note_path.clone(),
+                                    target.block_id.clone(),
+                                ))
+                                && let Some(candidate) = anchors
+                                    .get(*completed_index)
+                                    .and_then(|anchor| anchor.clone())
+                            {
+                                let better = anchor.as_ref().is_none_or(
+                                    |current: &SlotAnchor| {
+                                        (
+                                            candidate.entry_index,
+                                            candidate.bullet_end,
+                                        ) < (
+                                            current.entry_index,
+                                            current.bullet_end,
+                                        )
+                                    },
+                                );
+                                if better {
+                                    anchor = Some(candidate);
+                                }
+                            }
+                        }
+                        verdicts[position].anchor = anchor;
+                        verdicts[position].kind = VerdictKind::Offer;
+                        attach_offer(
+                            &mut verdicts[position],
+                            files,
+                            day,
+                            day_relative,
+                            closing,
+                            implicit,
+                            OfferGroup::Relation,
+                            None,
+                        );
+                    }
+                }
+                continue;
+            }
+            let Some((file_index, task_index)) =
+                find_file_task_for_relation_source(files, &row.source)
+            else {
+                continue;
+            };
+            let mut anchor = None;
+            for target in &row.triggering_targets {
+                if let Some(completed_index) = completed_keys
+                    .get(&(target.note_path.clone(), target.block_id.clone()))
+                    && let Some(candidate) = anchors
+                        .get(*completed_index)
+                        .and_then(|anchor| anchor.clone())
+                {
+                    let better =
+                        anchor.as_ref().is_none_or(|current: &SlotAnchor| {
+                            (candidate.entry_index, candidate.bullet_end)
+                                < (current.entry_index, current.bullet_end)
+                        });
+                    if better {
+                        anchor = Some(candidate);
+                    }
+                }
+            }
+            let mut verdict = DependentVerdict {
+                file: file_index,
+                task: task_index,
+                preds: Vec::new(),
+                anchor,
+                kind: VerdictKind::Offer,
+                open_count: 0,
+                pull_in: false,
+                offer: None,
+                muted_project: None,
+                keep_moving: false,
+                relation: Some(info),
+                relation_only: true,
+            };
+            if attach_offer(
+                &mut verdict,
+                files,
+                day,
+                day_relative,
+                closing,
+                implicit,
+                OfferGroup::Relation,
+                None,
+            ) {
+                verdicts.push(verdict);
+            }
+        }
+    }
+    let mut surviving: BTreeSet<(PathBuf, String)> = BTreeSet::new();
+    for verdict in verdicts.iter() {
+        if verdict
+            .offer
+            .as_ref()
+            .is_some_and(|offer| offer.group == OfferGroup::Relation)
+        {
+            let file = &files[verdict.file];
+            let task = &file.tasks[verdict.task];
+            let key = task.block_id.clone().unwrap_or_else(|| {
+                format!("@{}:{}", file.relative_path.display(), task.line_index)
+            });
+            surviving.insert((file.relative_path.clone(), key));
+        }
+    }
+    let mut groups = Vec::new();
+    for group in result.groups {
+        let mut rows = Vec::new();
+        for row in group.rows {
+            let Some((file_index, task_index)) =
+                find_file_task_for_relation_source(files, &row.source)
+            else {
+                continue;
+            };
+            let file = &files[file_index];
+            let task = &file.tasks[task_index];
+            let key = task.block_id.clone().unwrap_or_else(|| {
+                format!("@{}:{}", file.relative_path.display(), task.line_index)
+            });
+            if surviving.contains(&(file.relative_path.clone(), key)) {
+                rows.push(row);
+            }
+        }
+        if !rows.is_empty() {
+            groups.push(RelationOfferGroup { rows, ..group });
+        }
+    }
+    (result.held, groups, check)
 }
 
 /// Build a read-only project-context view for a just-cancelled `^prj`.
@@ -878,12 +1301,36 @@ fn plan_successors_inner(
         );
     // GATE: without an `[id::]` on any completed task no dependent can
     // name this close, so skip the lookup with no extra reads — unless a
-    // pull-in candidate was detected from the staged texts, or the
-    // keep-moving G1–G3 pre-gate found an eligible leaf close.
+    // pull-in candidate was detected from the staged texts, the
+    // keep-moving G1–G3 pre-gate found an eligible leaf close, or a
+    // relation event (Done derived from C, or parked-only with empty C)
+    // can offer. Recovery-only never runs relations.
+    let relation_planned_events: Vec<
+        super::relation_successors::RelationEvent,
+    > = if mode.is_cancel_recovery() {
+        Vec::new()
+    } else if let Some(relation) = input.relation.as_ref() {
+        super::relation_successors::relation_events_for_planner(
+            &input.completed,
+            &relation.parked,
+        )
+    } else {
+        Vec::new()
+    };
+    let relation_wants_lookup =
+        input.relation.as_ref().is_some_and(|relation| {
+            !relation.labels.is_empty()
+                && input.link_unblocked
+                && !relation_planned_events.is_empty()
+                && !relation_planned_events
+                    .iter()
+                    .all(|event| event.target.block_id.is_empty())
+        });
     if !input.completed.iter().any(|task| !task.task_id.is_empty())
         && pull_ins.is_empty()
         && mode.cancelled_project_paths().is_empty()
         && !keep_moving_eligible
+        && !relation_wants_lookup
     {
         return SuccessorPlan::default();
     }
@@ -1027,6 +1474,8 @@ fn plan_successors_inner(
                         offer: None,
                         muted_project: None,
                         keep_moving: false,
+                        relation: None,
+                        relation_only: false,
                     });
                     continue;
                 }
@@ -1103,6 +1552,8 @@ fn plan_successors_inner(
                     offer: None,
                     muted_project: None,
                     keep_moving: false,
+                    relation: None,
+                    relation_only: false,
                 });
             }
         }
@@ -1132,6 +1583,8 @@ fn plan_successors_inner(
                     offer: None,
                     muted_project: None,
                     keep_moving: false,
+                    relation: None,
+                    relation_only: false,
                 });
             }
         }
@@ -1221,6 +1674,8 @@ fn plan_successors_inner(
                 offer: None,
                 muted_project: None,
                 keep_moving: true,
+                relation: None,
+                relation_only: false,
             };
             if attach_offer(
                 &mut verdict,
@@ -1246,6 +1701,33 @@ fn plan_successors_inner(
             .filter(|fold| offered.contains(&fold.project))
             .collect();
     }
+
+    let (relation_held, relation_groups, relation_check) =
+        if mode.is_cancel_recovery() {
+            (Vec::new(), Vec::new(), None)
+        } else if let Some(relation_input) = input.relation.as_ref() {
+            integrate_relation_offers(
+                &mut verdicts,
+                &files,
+                &input.completed,
+                relation_input,
+                &relation_planned_events,
+                input.link_unblocked,
+                input.snapshot_complete,
+                input.pre_day.as_deref(),
+                input.post_day.as_deref(),
+                &input.day_relative,
+                input.index,
+                input.today,
+                input.tasks_settings,
+                &anchors,
+                &day,
+                input.closing.is_some(),
+                implicit.as_ref(),
+            )
+        } else {
+            (Vec::new(), Vec::new(), None)
+        };
 
     // Lazy routing: skip catalog/home setup when no verdict has an
     // offer. Nontriggering closes pay no routing cost; triggering closes
@@ -1310,6 +1792,9 @@ fn plan_successors_inner(
         &surfaces,
         project_folds,
         keep_moving_folds,
+        relation_held,
+        relation_groups,
+        relation_check,
     )
 }
 
@@ -1471,10 +1956,11 @@ fn offer_order_key(
 ) -> OfferOrderKey {
     let group = match verdict.offer.as_ref().map(|offer| offer.group) {
         Some(OfferGroup::HandOff) => 0,
-        Some(OfferGroup::Project) => 1,
-        Some(OfferGroup::ProjectFinished) => 2,
-        Some(OfferGroup::KeepMoving) => 3,
-        None => 4,
+        Some(OfferGroup::Relation) => 1,
+        Some(OfferGroup::Project) => 2,
+        Some(OfferGroup::ProjectFinished) => 3,
+        Some(OfferGroup::KeepMoving) => 4,
+        None => 5,
     };
     let lane = if verdict
         .offer
@@ -1484,11 +1970,25 @@ fn offer_order_key(
         super::keep_moving::keep_moving_lane(
             files[verdict.file].tasks[verdict.task].status,
         )
+    } else if verdict
+        .offer
+        .as_ref()
+        .is_some_and(|offer| offer.group == OfferGroup::Relation)
+    {
+        relation_lane(files[verdict.file].tasks[verdict.task].status)
     } else {
         0
     };
     let ((entry, bullet), path, line) = successor_order_key(verdict, files);
     (group, (entry, bullet), path, lane, line)
+}
+
+fn relation_lane(status: char) -> u8 {
+    match status {
+        '*' => 0,
+        ' ' => 1,
+        _ => 2,
+    }
 }
 
 struct ImplicitDest {
@@ -1573,7 +2073,7 @@ fn make_offer(
         placement_refusal: None,
         placement_routed: false,
         n: 0,
-        order_key: (4, (usize::MAX, usize::MAX), PathBuf::new(), 0, 0),
+        order_key: (5, (usize::MAX, usize::MAX), PathBuf::new(), 0, 0),
     }
 }
 
@@ -1829,6 +2329,8 @@ fn apply_project_member_classes(
                 offer: None,
                 muted_project,
                 keep_moving: false,
+                relation: None,
+                relation_only: false,
             };
             if kind == VerdictKind::Offer {
                 attach_offer(
@@ -2192,7 +2694,10 @@ fn named_creation_insert_at(day_text: &str) -> usize {
         .unwrap_or(lines.len())
 }
 
-pub(crate) fn offer_report(offer: &OfferDraft) -> OfferReport {
+pub(crate) fn offer_report(
+    offer: &OfferDraft,
+    relation: Option<&RelationRowInfo>,
+) -> OfferReport {
     OfferReport {
         key: offer.key.clone(),
         n: offer.n,
@@ -2202,6 +2707,7 @@ pub(crate) fn offer_report(offer: &OfferDraft) -> OfferReport {
         selected: offer.selected,
         block_id_needed: offer.block_id_needed,
         order_key: offer.order_key.clone(),
+        relation: relation.cloned(),
     }
 }
 
@@ -2276,11 +2782,17 @@ fn apply_verdicts(
     surfaces: &[Option<ProjectSurface>],
     project_folds: Vec<ProjectFold>,
     keep_moving_folds: Vec<super::keep_moving::KeepMovingFold>,
+    relation_held: Vec<super::relation_successors::RelationHeldRow>,
+    relation_groups: Vec<super::relation_successors::RelationOfferGroup>,
+    relation_check: Option<super::relation_successors::RelationCheck>,
 ) -> SuccessorPlan {
     let mut plan = SuccessorPlan {
         ran_lookup: true,
         project_folds,
         keep_moving_folds,
+        relation_held,
+        relation_groups,
+        relation_check,
         ..SuccessorPlan::default()
     };
     // Mint successor block IDs in placement order so the per-note used
@@ -2292,11 +2804,23 @@ fn apply_verdicts(
         BTreeMap::new();
     for position in &successor_positions {
         let verdict = &verdicts[*position];
-        if verdict.pull_in
-            || files[verdict.file].tasks[verdict.task]
-                .block_id
-                .as_deref()
-                .is_some_and(|id| is_project_task_id(Some(id)))
+        let is_relation_winner = verdict
+            .offer
+            .as_ref()
+            .is_some_and(|offer| offer.group == OfferGroup::Relation);
+        if !is_relation_winner
+            && (verdict.pull_in
+                || files[verdict.file].tasks[verdict.task]
+                    .block_id
+                    .as_deref()
+                    .is_some_and(|id| is_project_task_id(Some(id))))
+        {
+            continue;
+        }
+        if files[verdict.file].tasks[verdict.task]
+            .block_id
+            .as_deref()
+            .is_some_and(|id| is_project_task_id(Some(id)))
         {
             continue;
         }
@@ -2512,6 +3036,11 @@ fn apply_verdicts(
             continue;
         };
         if verdict.keep_moving {
+            continue;
+        }
+        // Unpicked relation-only rows write absolutely nothing;
+        // independent legacy recovery still runs for moved rows.
+        if verdict.relation_only {
             continue;
         }
         let file = &files[verdict.file];

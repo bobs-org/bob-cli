@@ -902,6 +902,7 @@ fn plan_close_successors(
         link_unblocked: dependency_ctx.link_unblocked(),
         keep_moving: dependency_ctx.keep_moving(),
         snapshot_complete: unblocked_check != "unavailable",
+        relation: None,
         selection: request.selection.clone(),
         index,
     });

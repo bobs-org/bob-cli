@@ -49,6 +49,9 @@ pub(crate) const PULL_IN_TRIGGER: &str = "project_empty";
 /// Trigger value every existing dependency row reports.
 pub(crate) const DEPENDENCY_TRIGGER: &str = "dependency";
 
+/// Trigger value every relation-winning row reports.
+pub(crate) const RELATION_TRIGGER: &str = "relation";
+
 /// Trigger value every new-project offer row reports.
 pub(crate) const PROJECT_CREATED_TRIGGER: &str = "project_created";
 
@@ -630,6 +633,14 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
         );
         let (trigger, hide_removed, text) =
             successor_row_fields(file, task, verdict);
+        let is_relation_winner = verdict.offer.as_ref().is_some_and(|offer| {
+            offer.group == super::successors::OfferGroup::Relation
+        });
+        let unblocked_by = if is_relation_winner {
+            relation_unblocked_by(verdict)
+        } else {
+            predecessor_refs(completed, &verdict.preds)
+        };
         let row = UnblockedRow {
             note_path: file.relative_path.clone(),
             block_id,
@@ -638,7 +649,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
             previous_status_symbol: task.status,
             status_symbol: successor_new_status(task.status),
             inbox: is_inbox_note(&file.relative_path, &file.contents, index),
-            unblocked_by: predecessor_refs(completed, &verdict.preds),
+            unblocked_by,
             link: Some(SuccessorLinkReport {
                 entry_name,
                 entry_line: placed_link.entry_line,
@@ -658,9 +669,17 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
             not_linked: None,
             trigger,
             hide_removed,
-            offer: verdict.offer.as_ref().map(super::successors::offer_report),
+            offer: verdict.offer.as_ref().map(|offer| {
+                super::successors::offer_report(
+                    offer,
+                    verdict.relation.as_ref(),
+                )
+            }),
+            relation: verdict.relation.clone(),
         };
-        if verdict.keep_moving {
+        if is_relation_winner {
+            plan.relation_successors.push(row);
+        } else if verdict.keep_moving {
             plan.keep_moving.push(row);
         } else {
             plan.unblocked.push(row);
@@ -753,7 +772,11 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                 });
             }
             super::successors::VerdictKind::Recover(reason) => {
-                if verdict.keep_moving {
+                let is_relation_winner =
+                    verdict.offer.as_ref().is_some_and(|offer| {
+                        offer.group == super::successors::OfferGroup::Relation
+                    });
+                if !is_relation_winner && verdict.keep_moving {
                     emit_keep_moving_recover(
                         plan,
                         completed,
@@ -767,7 +790,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     );
                     continue;
                 }
-                if verdict.pull_in {
+                if !is_relation_winner && verdict.pull_in {
                     emit_pull_in_recover(
                         plan,
                         completed,
@@ -807,7 +830,19 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     &block_id,
                     task.line_index + 1,
                 );
-                plan.unblocked.push(UnblockedRow {
+                let is_relation_winner =
+                    verdict.offer.as_ref().is_some_and(|offer| {
+                        offer.group == super::successors::OfferGroup::Relation
+                    });
+                let (trigger, unblocked_by) = if is_relation_winner {
+                    (RELATION_TRIGGER, relation_unblocked_by(verdict))
+                } else {
+                    (
+                        DEPENDENCY_TRIGGER,
+                        predecessor_refs(completed, &verdict.preds),
+                    )
+                };
+                let row = UnblockedRow {
                     note_path: file.relative_path.clone(),
                     block_id,
                     line,
@@ -819,16 +854,24 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                         &file.contents,
                         index,
                     ),
-                    unblocked_by: predecessor_refs(completed, &verdict.preds),
+                    unblocked_by,
                     link: None,
                     not_linked: Some(reason),
-                    trigger: DEPENDENCY_TRIGGER,
+                    trigger,
                     hide_removed: false,
-                    offer: verdict
-                        .offer
-                        .as_ref()
-                        .map(super::successors::offer_report),
-                });
+                    offer: verdict.offer.as_ref().map(|offer| {
+                        super::successors::offer_report(
+                            offer,
+                            verdict.relation.as_ref(),
+                        )
+                    }),
+                    relation: verdict.relation.clone(),
+                };
+                if is_relation_winner {
+                    plan.relation_successors.push(row);
+                } else {
+                    plan.unblocked.push(row);
+                }
             }
             super::successors::VerdictKind::Successor
             | super::successors::VerdictKind::Offer => {}
@@ -842,7 +885,11 @@ fn successor_row_fields(
     task: &TaskLine,
     verdict: &DependentVerdict,
 ) -> (&'static str, bool, String) {
-    if verdict.pull_in {
+    if verdict.offer.as_ref().is_some_and(|offer| {
+        offer.group == super::successors::OfferGroup::Relation
+    }) {
+        (RELATION_TRIGGER, false, task.description.clone())
+    } else if verdict.pull_in {
         let raw = raw_task_line(&file.contents, task.line_index);
         (
             PULL_IN_TRIGGER,
@@ -854,6 +901,23 @@ fn successor_row_fields(
     } else {
         (DEPENDENCY_TRIGGER, false, task.description.clone())
     }
+}
+
+fn relation_unblocked_by(verdict: &DependentVerdict) -> Vec<PredecessorRef> {
+    verdict
+        .relation
+        .as_ref()
+        .map(|info| {
+            info.after
+                .iter()
+                .map(|target| PredecessorRef {
+                    note_path: target.note_path.clone(),
+                    block_id: target.block_id.clone(),
+                    text: target.text.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn emit_keep_moving_recover(
@@ -888,7 +952,10 @@ fn emit_keep_moving_recover(
         not_linked: Some(reason),
         trigger: KEEP_MOVING_TRIGGER,
         hide_removed: false,
-        offer: verdict.offer.as_ref().map(super::successors::offer_report),
+        offer: verdict.offer.as_ref().map(|offer| {
+            super::successors::offer_report(offer, verdict.relation.as_ref())
+        }),
+        relation: verdict.relation.clone(),
     });
 }
 
@@ -988,6 +1055,9 @@ fn emit_pull_in_recover(
         not_linked: Some(reason),
         trigger: PULL_IN_TRIGGER,
         hide_removed,
-        offer: verdict.offer.as_ref().map(super::successors::offer_report),
+        offer: verdict.offer.as_ref().map(|offer| {
+            super::successors::offer_report(offer, verdict.relation.as_ref())
+        }),
+        relation: verdict.relation.clone(),
     });
 }

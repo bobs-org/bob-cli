@@ -140,6 +140,7 @@ fn run_km_full(
         snapshot_complete,
         selection,
         index: &vault_index,
+        relation: None,
     })
 }
 
@@ -1328,6 +1329,7 @@ fn routing_is_lazy_and_narrow_with_shared_destination() {
         link_unblocked: true,
         keep_moving: true,
         snapshot_complete: true,
+        relation: None,
         selection: SuccessorSelection::None,
         index: &plain_index,
     });
@@ -1352,6 +1354,7 @@ fn routing_is_lazy_and_narrow_with_shared_destination() {
         link_unblocked: true,
         keep_moving: true,
         snapshot_complete: true,
+        relation: None,
         selection: SuccessorSelection::None,
         index: &vault_index,
     });
@@ -1427,6 +1430,7 @@ fn routing_is_lazy_and_narrow_with_shared_destination() {
         link_unblocked: true,
         keep_moving: true,
         snapshot_complete: true,
+        relation: None,
         selection: SuccessorSelection::All,
         index: &vault_index,
     });

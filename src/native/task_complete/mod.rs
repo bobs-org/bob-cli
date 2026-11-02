@@ -24,13 +24,15 @@ pub(crate) use project_pull_in::{
 // The classifier and integration phases consume this shared API.
 #[allow(unused_imports)]
 pub(crate) use relation_successors::{
-    classify_relation_successors, CountingReader, RelationCheck,
-    RelationClassifyInput, RelationClassifyResult, RelationEvent,
-    RelationEventKind, RelationFoldCopy, RelationGroupCopy, RelationHeldCopy,
-    RelationHeldCopyReason, RelationHeldReason, RelationHeldRow,
-    RelationOfferGroup, RelationOfferRow, RelationPickedNoticeCopy,
-    RelationSlotAnchor, RelationTarget, ReleaseState, SourceRecovery,
-    StructuredWarning, TargetNoteRead, TargetNoteReader,
+    classify_relation_successors, edge_added_after_release_warning,
+    relation_events_for_planner, relation_offer_survives_final_state,
+    CountingReader, MapTargetReader, RelationCheck, RelationClassifyInput,
+    RelationClassifyResult, RelationEvent, RelationEventKind, RelationFoldCopy,
+    RelationGroupCopy, RelationHeldCopy, RelationHeldCopyReason,
+    RelationHeldReason, RelationHeldRow, RelationOfferGroup, RelationOfferRow,
+    RelationPickedNoticeCopy, RelationSlotAnchor, RelationSuccessorInput,
+    RelationTarget, ReleaseState, SourceRecovery, StructuredWarning,
+    TargetNoteRead, TargetNoteReader,
 };
 pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,
