@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     batch::CaptureBatchPlanner,
-    dependencies::{staged_note_index, under_archive_dir, DependencyContext},
+    dependencies::{under_archive_dir, DependencyContext, DependentsSnapshot},
 };
 use crate::native::{
     config::relations::CancelLabel,
@@ -40,7 +40,8 @@ pub(super) struct RelationSourceRead {
 
 /// Assemble relation input after the cheap gate. `task_complete` passes the
 /// result to `plan_successors`; Pomodoro parked events stay on the parks
-/// phase.
+/// phase. The caller supplies its already-built staged index so this
+/// function never rebuilds it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn collect_relation_sources(
     ctx: &DependencyContext,
@@ -50,6 +51,7 @@ pub(super) fn collect_relation_sources(
     parked: &[RelationEvent],
     existing_note_texts: &[(PathBuf, String)],
     tasks_settings: &TasksSettings,
+    note_index: &NoteIndex,
 ) -> Result<Option<RelationSourceRead>, super::CaptureError> {
     let labels = ctx.successor_labels().to_vec();
     if labels.is_empty() {
@@ -72,7 +74,8 @@ pub(super) fn collect_relation_sources(
 
     // The catalog walk and all note reads begin after G0-G3. If dependency
     // recovery already requested the snapshot earlier in this batch, this
-    // derives a relation view from its retained raw bytes without rereading.
+    // derives a relation view from the shared worker-classified texts
+    // without rereading.
     let relation_snapshot = ctx.relation_sources_snapshot();
     let dependency_snapshot = ctx.dependents_snapshot();
     let staged = staged_markdown_overlay(bob_dir, planner);
@@ -80,14 +83,12 @@ pub(super) fn collect_relation_sources(
         relation_snapshot.snapshot_complete(&staged);
     let dependency_snapshot_complete =
         dependency_snapshot.snapshot_complete(&staged);
-    let dependency_notes = dependency_snapshot.overlaid(staged.clone());
 
     let mut source_notes = Vec::new();
     let mut target_refs = BTreeSet::<(PathBuf, String)>::new();
     let mut unavailable_targets = BTreeSet::new();
 
     if relation_snapshot_complete {
-        let staged_index = staged_note_index(ctx, planner, bob_dir);
         let event_targets: BTreeSet<(PathBuf, String)> = trigger_events
             .iter()
             .filter(|event| !event.target.block_id.is_empty())
@@ -104,19 +105,19 @@ pub(super) fn collect_relation_sources(
             .map(|event| event.target.block_id.as_str())
             .collect();
 
-        for (source_path, contents) in relation_snapshot.overlaid(staged) {
-            // Cheap per-gesture token filter before parsing a LINKS note.
-            // A false positive is harmless; a shared block-id token cannot
-            // be missed by the parser's accepted `#^id` link forms.
-            if !contains_event_block_token(&contents, &event_ids) {
-                continue;
-            }
+        // Borrow the snapshot and clone only token-matching notes. Staged
+        // text supersedes disk via the shared overlay helper.
+        let candidates = relation_snapshot
+            .overlaid_matching(&staged, |contents| {
+                contains_event_block_token(contents, &event_ids)
+            });
+        for (source_path, contents) in candidates {
             let (matched, targets) = source_targets_for_events(
                 &source_path,
                 &contents,
                 &labels,
                 &event_targets,
-                &staged_index,
+                note_index,
                 tasks_settings,
             );
             if !matched {
@@ -126,6 +127,14 @@ pub(super) fn collect_relation_sources(
             source_notes.push((source_path, contents));
         }
     }
+
+    // Dependency proof is only needed when at least one source matched.
+    // With zero matched sources the engine needs no dependency texts.
+    let dependency_notes = if source_notes.is_empty() {
+        Vec::new()
+    } else {
+        dependency_snapshot.overlaid(staged.clone())
+    };
 
     let source_texts: BTreeMap<PathBuf, String> =
         source_notes.iter().cloned().collect();
@@ -147,7 +156,8 @@ pub(super) fn collect_relation_sources(
     let event_paths: BTreeSet<PathBuf> = event_paths_for_notes(&trigger_events);
     for path in event_paths {
         load_target_note(
-            ctx,
+            relation_snapshot,
+            dependency_snapshot,
             &path,
             bob_dir,
             planner,
@@ -159,7 +169,8 @@ pub(super) fn collect_relation_sources(
     }
     for (path, _) in &target_refs {
         load_target_note(
-            ctx,
+            relation_snapshot,
+            dependency_snapshot,
             path,
             bob_dir,
             planner,
@@ -285,7 +296,8 @@ fn source_targets_for_events(
 
 #[allow(clippy::too_many_arguments)]
 fn load_target_note(
-    ctx: &DependencyContext,
+    relation_snapshot: &DependentsSnapshot,
+    dependency_snapshot: &DependentsSnapshot,
     relative: &Path,
     bob_dir: &Path,
     planner: &mut CaptureBatchPlanner,
@@ -301,10 +313,29 @@ fn load_target_note(
         return Ok(());
     }
     let absolute = bob_dir.join(relative);
-    match planner.current_contents_from_snapshot(
-        &absolute,
-        ctx.cached_note_text(relative),
-    ) {
+    // Reuse snapshot text when this note is a member, so an already-scanned
+    // path is never read twice. Marker-negative notes fall through to a
+    // single narrow planner read and still reach R6.
+    if let Some(snapshot_text) = relation_snapshot
+        .get(relative)
+        .or_else(|| dependency_snapshot.get(relative))
+    {
+        match planner.current_contents_from_snapshot(
+            &absolute,
+            Some(snapshot_text.to_string()),
+        ) {
+            Ok(Some(contents)) => {
+                target_notes.insert(relative.to_path_buf(), contents);
+            }
+            Ok(None) | Err(_) => {
+                // A missing/unreadable resolved note makes R6 uncertain, but
+                // does not turn a successfully planned close into an error.
+                unavailable_targets.insert(relative.to_path_buf());
+            }
+        }
+        return Ok(());
+    }
+    match planner.current_contents(&absolute) {
         Ok(Some(contents)) => {
             target_notes.insert(relative.to_path_buf(), contents);
         }
@@ -325,7 +356,7 @@ mod tests {
     use chrono::NaiveDate;
 
     use crate::native::{
-        capture::dependencies::{display_relative, DependentsSnapshot},
+        capture::dependencies::display_relative,
         task_complete::relation_successors::{
             RelationEventKind, RelationTarget,
         },
@@ -387,6 +418,8 @@ mod tests {
         root: &Path,
         events: &[RelationEvent],
     ) -> RelationSourceRead {
+        let index =
+            super::super::dependencies::staged_note_index(ctx, planner, root);
         collect_relation_sources(
             ctx,
             planner,
@@ -395,6 +428,7 @@ mod tests {
             &[],
             &[],
             &settings(root),
+            &index,
         )
         .expect("collect relation sources")
         .expect("candidate passes gate")
@@ -456,6 +490,10 @@ mod tests {
         ];
         for (ctx, events) in cases {
             let mut planner = CaptureBatchPlanner::default();
+            // The cheap G0-G3 gate rejects before the snapshot; callers
+            // only build their staged index when a candidate may pass, so
+            // pass an empty index and prove no catalog or byte-pass reads.
+            let index = NoteIndex::default();
             assert!(collect_relation_sources(
                 &ctx,
                 &mut planner,
@@ -464,6 +502,7 @@ mod tests {
                 &[],
                 &[],
                 &settings(root),
+                &index,
             )
             .expect("gate")
             .is_none());
@@ -485,6 +524,8 @@ mod tests {
         let ctx = context(root, &["starts after"], true);
         let mut planner = CaptureBatchPlanner::default();
         let parked = [parked_event("target.md", "t")];
+        let index =
+            super::super::dependencies::staged_note_index(&ctx, &planner, root);
         let result = collect_relation_sources(
             &ctx,
             &mut planner,
@@ -493,6 +534,7 @@ mod tests {
             &parked,
             &[],
             &settings(root),
+            &index,
         )
         .expect("collect parked relation sources")
         .expect("parked event passes the gate");
@@ -644,63 +686,130 @@ mod tests {
             .iter()
             .any(|(path, _)| path == Path::new("failed.md")));
 
-        // Relevant invalid UTF-8 taints only its predicate.
-        let dep_invalid = BTreeMap::from([(
-            PathBuf::from("dep-invalid.md"),
-            b"id::\xff".to_vec(),
-        )]);
-        let rel_invalid = BTreeMap::from([(
-            PathBuf::from("rel-invalid.md"),
-            b"LINKS\xff".to_vec(),
-        )]);
-        let reads = Vec::new();
-        let dep = DependentsSnapshot::from_raw(
-            true,
-            &dep_invalid,
-            &reads,
-            super::super::dependencies::SnapshotKind::Dependencies,
+        // Worker classification keeps per-predicate failure sets: an
+        // invalid-UTF-8 note matching only one marker taints only that
+        // snapshot. Covering the tainted path with a staged deletion
+        // restores completeness even while the other predicate's invalid
+        // note stays uncovered.
+        {
+            let invalid_vault = tempfile::tempdir().expect("vault");
+            let invalid_root = invalid_vault.path();
+            fs::write(invalid_root.join("dep-invalid.md"), b"id::\xff")
+                .expect("write dep invalid");
+            fs::write(invalid_root.join("rel-invalid.md"), b"LINKS\xff")
+                .expect("write rel invalid");
+            write_note(invalid_root, "plain.md", "plain text\n");
+            let invalid_ctx = context(invalid_root, &["starts after"], true);
+            let dep_snapshot = invalid_ctx.dependents_snapshot();
+            let rel_snapshot = invalid_ctx.relation_sources_snapshot();
+            // Each snapshot is incomplete on its own invalid note.
+            assert!(!dep_snapshot.snapshot_complete(&BTreeMap::new()));
+            assert!(!rel_snapshot.snapshot_complete(&BTreeMap::new()));
+            // Masking only the relation-invalid note restores the relation
+            // snapshot even though the dependency-invalid note is still
+            // uncovered, proving the dependency-only bytes never tainted it.
+            assert!(rel_snapshot.snapshot_complete(&BTreeMap::from([(
+                PathBuf::from("rel-invalid.md"),
+                None,
+            )])));
+            // And the reverse: masking only the dependency-invalid note
+            // restores the dependency snapshot.
+            assert!(dep_snapshot.snapshot_complete(&BTreeMap::from([(
+                PathBuf::from("dep-invalid.md"),
+                Some("- [ ] #task Replaced ^replacement\n".to_string()),
+            )])));
+            // Marker-negative bytes are never retained.
+            assert!(dep_snapshot.get(Path::new("plain.md")).is_none());
+            assert!(rel_snapshot.get(Path::new("plain.md")).is_none());
+        }
+    }
+
+    #[test]
+    fn zero_matching_sources_returns_empty_source_and_dependency_notes() {
+        let vault = tempfile::tempdir().expect("vault");
+        let root = vault.path();
+        write_note(
+            root,
+            "source.md",
+            "- [ ] #task Source ^s\n  - 🪢 **LINKS:** starts after [[other#^o]]\n",
         );
-        let rel = DependentsSnapshot::from_raw(
-            true,
-            &dep_invalid,
-            &reads,
-            super::super::dependencies::SnapshotKind::Relations,
+        write_note(root, "target.md", "- [x] #task Target ^t\n");
+        let ctx = context(root, &["starts after"], true);
+        let mut planner = CaptureBatchPlanner::default();
+        let result =
+            collect(&ctx, &mut planner, root, &[event("target.md", "t")]);
+        assert!(result.source_notes.is_empty());
+        assert!(result.dependency_notes.is_empty());
+    }
+
+    #[test]
+    fn marker_negative_target_loads_through_planner_and_missing_is_unavailable()
+    {
+        let vault = tempfile::tempdir().expect("vault");
+        let root = vault.path();
+        write_note(
+            root,
+            "source.md",
+            "- [ ] #task Source ^s\n  - 🪢 **LINKS:** starts after [[target#^t]]\n",
         );
-        assert!(!dep.snapshot_complete(&BTreeMap::new()));
-        assert!(rel.snapshot_complete(&BTreeMap::new()));
-        assert!(dep.snapshot_complete(&BTreeMap::from([(
-            PathBuf::from("dep-invalid.md"),
-            Some("- [ ] #task Replaced ^replacement\n".to_string()),
-        )])));
-        let rel = DependentsSnapshot::from_raw(
-            true,
-            &rel_invalid,
-            &reads,
-            super::super::dependencies::SnapshotKind::Relations,
+        // Neither dependency nor relation markers: must still reach R6 via
+        // one narrow planner read.
+        write_note(root, "target.md", "- [ ] #task Target ^t\n");
+        let ctx = context(root, &["starts after"], true);
+        let mut planner = CaptureBatchPlanner::default();
+        let index =
+            super::super::dependencies::staged_note_index(&ctx, &planner, root);
+        let result = collect_relation_sources(
+            &ctx,
+            &mut planner,
+            root,
+            &[event("target.md", "t")],
+            &[],
+            &[],
+            &settings(root),
+            &index,
+        )
+        .expect("collect")
+        .expect("candidate passes gate");
+        assert_eq!(result.source_notes.len(), 1);
+        // The marker-negative target is carried as a target note, not as
+        // unavailable, and the planner holds it after exactly one narrow
+        // read (the shared pass already read it once and dropped it).
+        assert!(result
+            .target_notes
+            .iter()
+            .any(|(path, _)| path == Path::new("target.md")));
+        assert!(!result
+            .input
+            .unavailable_targets
+            .contains(Path::new("target.md")));
+        assert!(planner.by_path.contains_key(&root.join("target.md")));
+        assert_eq!(
+            ctx.snapshot_read_counts().get(Path::new("target.md")),
+            Some(&1)
         );
-        let dep = DependentsSnapshot::from_raw(
-            true,
-            &rel_invalid,
-            &reads,
-            super::super::dependencies::SnapshotKind::Dependencies,
-        );
-        assert!(!rel.snapshot_complete(&BTreeMap::new()));
-        assert!(dep.snapshot_complete(&BTreeMap::new()));
-        assert!(rel.snapshot_complete(&BTreeMap::from([(
-            PathBuf::from("rel-invalid.md"),
-            None,
-        )])));
-        let read_failed = DependentsSnapshot::from_raw(
-            true,
-            &BTreeMap::new(),
-            &[PathBuf::from("failed.md")],
-            super::super::dependencies::SnapshotKind::Relations,
-        );
-        assert!(!read_failed.snapshot_complete(&BTreeMap::new()));
-        assert!(read_failed.snapshot_complete(&BTreeMap::from([(
-            PathBuf::from("failed.md"),
-            None
-        )])));
+
+        // A missing target still lands in unavailable_targets.
+        let missing_index =
+            super::super::dependencies::staged_note_index(&ctx, &planner, root);
+        let missing = collect_relation_sources(
+            &ctx,
+            &mut planner,
+            root,
+            &[event("missing.md", "m")],
+            &[],
+            &[],
+            &settings(root),
+            &missing_index,
+        )
+        .expect("collect missing")
+        .expect("candidate passes gate");
+        assert!(missing.source_notes.is_empty());
+        assert!(missing.dependency_notes.is_empty());
+        assert!(missing
+            .input
+            .unavailable_targets
+            .contains(Path::new("missing.md")));
     }
 
     #[test]

@@ -378,7 +378,7 @@ impl World {
     }
 
     fn classify(&self) -> RelationClassifyResult {
-        let known = self.notes.keys().cloned().collect::<Vec<_>>();
+        let known = self.notes.keys().cloned().collect::<BTreeSet<_>>();
         let archives = known
             .iter()
             .filter(|path| {
@@ -1165,7 +1165,7 @@ fn gates_do_not_read_targets() {
         World::materialize(&data["base"], &Value::Null, &Value::Null);
     world.labels.clear();
     let mut reader = CountingReader::new(world.notes.clone());
-    let known = world.notes.keys().cloned().collect::<Vec<_>>();
+    let known = world.notes.keys().cloned().collect::<BTreeSet<_>>();
     let input = RelationClassifyInput {
         labels: &world.labels,
         events: &world.events,
@@ -1218,7 +1218,7 @@ fn incomplete_snapshot_is_unavailable_without_reads() {
     let data = vectors();
     let world = World::materialize(&data["base"], &Value::Null, &Value::Null);
     let mut reader = CountingReader::new(world.notes.clone());
-    let known = world.notes.keys().cloned().collect::<Vec<_>>();
+    let known = world.notes.keys().cloned().collect::<BTreeSet<_>>();
     let input = RelationClassifyInput {
         labels: &world.labels,
         events: &world.events,
@@ -1355,7 +1355,7 @@ fn unread_resolved_target_does_not_count_as_released() {
     }
     let mut source_texts = world.notes.clone();
     source_texts.remove(Path::new("other.md"));
-    let known = world.notes.keys().cloned().collect::<Vec<_>>();
+    let known = world.notes.keys().cloned().collect::<BTreeSet<_>>();
     let mut reader = Unavailable;
     let input = RelationClassifyInput {
         labels: &world.labels,

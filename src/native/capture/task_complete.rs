@@ -478,11 +478,25 @@ pub(super) fn complete_existing_task(
                         &[],
                         &note_texts,
                         &tasks_settings,
+                        index,
                     )?
                 {
                     overlay_note_texts(&mut note_texts, read.source_notes);
                     overlay_note_texts(&mut note_texts, read.target_notes);
-                    overlay_note_texts(&mut note_texts, read.dependency_notes);
+                    // Dependency proof already lives in `snapshot` on the
+                    // needs_snapshot path; overlay only paths the snapshot
+                    // does not already carry.
+                    let snapshot_paths: BTreeSet<&PathBuf> =
+                        snapshot.iter().map(|(path, _)| path).collect();
+                    let missing_dependency_notes: Vec<(PathBuf, String)> = read
+                        .dependency_notes
+                        .into_iter()
+                        .filter(|(path, _)| !snapshot_paths.contains(path))
+                        .collect();
+                    overlay_note_texts(
+                        &mut note_texts,
+                        missing_dependency_notes,
+                    );
                     relation = Some(read.input);
                 }
             }

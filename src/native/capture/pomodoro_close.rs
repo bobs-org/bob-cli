@@ -1024,6 +1024,7 @@ fn plan_close_successors(
             &parked_events,
             &note_texts,
             &tasks_settings,
+            index,
         )? {
             super::task_complete::overlay_note_texts(
                 &mut note_texts,
@@ -1033,9 +1034,19 @@ fn plan_close_successors(
                 &mut note_texts,
                 read.target_notes,
             );
+            // Dependency proof already lives in `snapshot` on the
+            // needs_snapshot path; overlay only paths the snapshot does
+            // not already carry.
+            let snapshot_paths: std::collections::BTreeSet<&PathBuf> =
+                snapshot.iter().map(|(path, _)| path).collect();
+            let missing_dependency_notes: Vec<(PathBuf, String)> = read
+                .dependency_notes
+                .into_iter()
+                .filter(|(path, _)| !snapshot_paths.contains(path))
+                .collect();
             super::task_complete::overlay_note_texts(
                 &mut note_texts,
-                read.dependency_notes,
+                missing_dependency_notes,
             );
             relation = Some(read.input);
         }

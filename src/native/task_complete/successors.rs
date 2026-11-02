@@ -1292,23 +1292,74 @@ fn integrate_relation_offers(
     if !relation_input.relation_snapshot_complete {
         return (Vec::new(), Vec::new(), Some(RelationCheck::Unavailable), 0);
     }
-    let mut source_texts = BTreeMap::new();
+    let mut all_texts = BTreeMap::new();
     for file in files {
-        source_texts.insert(file.relative_path.clone(), file.contents.clone());
+        all_texts.insert(file.relative_path.clone(), file.contents.clone());
     }
     // Use the complete caller-supplied note index for resolution so
     // ambiguity from a known-but-unheld note is detectable and an
     // unavailable target in the index does not silently disappear.
-    // Source texts remain the held files; staged texts override snapshots.
-    let known_paths: Vec<PathBuf> = index
+    // One vault index build serves both classification and target reads.
+    let known: BTreeSet<PathBuf> = index
         .relative_paths()
         .map(|path| path.to_path_buf())
         .collect();
-    let archive_paths: Vec<PathBuf> = known_paths
+    let archive_paths: Vec<PathBuf> = known
         .iter()
         .filter(|path| path.components().any(|part| part.as_os_str() == "done"))
         .cloned()
         .collect();
+    // Hand the engine only relation-relevant text: held files whose text
+    // contains LINKS and a `^id` token for some event target, plus held
+    // event targets so their validation hits the in-memory cache instead
+    // of counting a target read. Every held file stays available to the
+    // target reader.
+    let event_ids: BTreeSet<&str> = relation_events
+        .iter()
+        .filter(|event| !event.target.block_id.is_empty())
+        .map(|event| event.target.block_id.as_str())
+        .collect();
+    let mut source_texts = BTreeMap::new();
+    for (path, contents) in &all_texts {
+        if memchr::memmem::find(contents.as_bytes(), b"LINKS").is_none() {
+            // Event targets without LINKS are still cached so their
+            // validation does not count a target read; extraction skips
+            // them cheaply without parsing.
+            let is_event_target = relation_events.iter().any(|event| {
+                !event.target.block_id.is_empty()
+                    && event.target.note_path == *path
+            });
+            if is_event_target {
+                source_texts.insert(path.clone(), contents.clone());
+            }
+            continue;
+        }
+        let mut matches_target = false;
+        for id in &event_ids {
+            let mut token = String::with_capacity(id.len() + 1);
+            token.push('^');
+            token.push_str(id);
+            if memchr::memmem::find(contents.as_bytes(), token.as_bytes())
+                .is_some()
+            {
+                matches_target = true;
+                break;
+            }
+        }
+        if matches_target {
+            source_texts.insert(path.clone(), contents.clone());
+        } else {
+            // Held event targets stay cached even when they are not LINKS
+            // sources.
+            let is_event_target = relation_events.iter().any(|event| {
+                !event.target.block_id.is_empty()
+                    && event.target.note_path == *path
+            });
+            if is_event_target {
+                source_texts.insert(path.clone(), contents.clone());
+            }
+        }
+    }
     let day_after = post_day.or(pre_day);
     // Relation R4 can use a dependency proof carried solely for matched
     // relation sources. This proof does not turn on the normal recovery
@@ -1326,15 +1377,15 @@ fn integrate_relation_offers(
         index,
     );
     let mut reader = MapTargetReader::new(
-        source_texts.clone(),
-        known_paths.iter().cloned().collect(),
+        all_texts,
+        &known,
         relation_input.unavailable_targets.clone(),
     );
     let classify_input = RelationClassifyInput {
         labels: &relation_input.labels,
         events: relation_events,
         source_texts: &source_texts,
-        known_paths: &known_paths,
+        known_paths: &known,
         archive_paths: &archive_paths,
         day_before: pre_day,
         day_after,

@@ -16,7 +16,7 @@ use std::{
     ffi::OsStr,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        OnceLock,
+        Arc, OnceLock,
     },
 };
 
@@ -158,37 +158,31 @@ impl DependencyContext {
     /// Batch-scoped prefiltered dependents snapshot for `!` recovery,
     /// derived from the shared byte pass and borrowed afterwards.
     pub(super) fn dependents_snapshot(&self) -> &DependentsSnapshot {
-        self.note_bytes().dependency_snapshot()
+        &self.note_bytes().dependency
     }
 
     /// Batch-local relation source candidates, derived only after the
     /// caller passes the relation gate. When successor labels are enabled,
-    /// the shared byte pass retains its results so dependency and relation
-    /// consumers in either order do not read a note twice.
+    /// the shared byte pass evaluates both predicates in workers so
+    /// dependency and relation consumers in either order do not read a
+    /// note twice.
     pub(super) fn relation_sources_snapshot(&self) -> &DependentsSnapshot {
-        self.note_bytes().relation_snapshot()
-    }
-
-    /// Valid UTF-8 text from the retained batch read. Relation targets use
-    /// this as the planner preimage instead of reading an already-scanned
-    /// catalog path a second time.
-    pub(super) fn cached_note_text(&self, relative: &Path) -> Option<String> {
-        self.note_bytes().cached_text(relative)
+        &self.note_bytes().relation
     }
 
     fn note_bytes(&self) -> &SharedNoteBytes {
         self.note_bytes.get_or_init(|| {
             // Loading the shared close policy here exposes the effective
-            // successor labels alongside cancel/complete labels. Keeping
-            // raw bytes is batch-scoped and only needed when relations are
-            // configured; ordinary dependency-only batches keep the old
-            // prefiltered-memory fast path.
-            let retain_raw =
+            // successor labels alongside cancel/complete labels. Retaining
+            // marker-positive text is batch-scoped and only needed when
+            // relations are configured; ordinary dependency-only batches
+            // keep the old prefiltered-memory fast path.
+            let relations_enabled =
                 !self.close_policy().2.is_empty() && self.link_unblocked();
             SharedNoteBytes::build(
                 &self.bob_dir,
                 self.catalog(),
-                retain_raw,
+                relations_enabled,
                 &self.snapshot_reads,
             )
         })
@@ -459,8 +453,10 @@ impl NoteCatalog {
 /// Filtered view of one batch-scoped byte pass. Dependency and relation
 /// predicates own independent failure sets, so invalid UTF-8 in a note
 /// unrelated to one predicate cannot make that snapshot unavailable.
+/// Marker-positive text only, for the lifetime of the batch. Notes
+/// matching both predicates share one allocation.
 pub(super) struct DependentsSnapshot {
-    base: BTreeMap<PathBuf, String>,
+    base: BTreeMap<PathBuf, Arc<str>>,
     /// Vault-relative paths whose on-disk image could not be used despite
     /// looking dependency-relevant: read failures and marker-positive
     /// invalid UTF-8. Marker-negative bytes (safe to omit) never land
@@ -505,36 +501,9 @@ impl DependentsSnapshot {
         }
     }
 
-    pub(super) fn from_raw(
-        available: bool,
-        raw: &BTreeMap<PathBuf, Vec<u8>>,
-        read_failed: &[PathBuf],
-        kind: SnapshotKind,
-    ) -> Self {
-        if !available {
-            return Self::unavailable(kind);
-        }
-        let mut base = BTreeMap::new();
-        let mut failed = read_failed.to_vec();
-        for (relative, bytes) in raw {
-            if !kind.contains(bytes) {
-                continue;
-            }
-            match String::from_utf8(bytes.clone()) {
-                Ok(text) => {
-                    base.insert(relative.clone(), text);
-                }
-                Err(_) => failed.push(relative.clone()),
-            }
-        }
-        failed.sort();
-        failed.dedup();
-        Self {
-            base,
-            failed,
-            available: true,
-            kind,
-        }
+    /// Borrowed disk text for a snapshot member, for narrow target reads.
+    pub(super) fn get(&self, relative: &Path) -> Option<&str> {
+        self.base.get(relative).map(AsRef::as_ref)
     }
 
     /// Whether the snapshot covers every dependency-relevant note once the
@@ -570,7 +539,7 @@ impl DependentsSnapshot {
             if staged.contains_key(relative) {
                 continue;
             }
-            snapshot.push((relative.clone(), text.clone()));
+            snapshot.push((relative.clone(), text.to_string()));
         }
         for (relative, contents) in staged {
             let Some(text) = contents else {
@@ -584,6 +553,44 @@ impl DependentsSnapshot {
         }
         snapshot.sort_by(|left, right| left.0.cmp(&right.0));
         snapshot
+    }
+
+    /// Overlaid entries whose effective text passes `accept`, cloning
+    /// only matches. Staged text supersedes disk (deletions remove), and
+    /// staged additions pass the same marker prefilter. Keeps the overlay
+    /// rules in one place so per-gesture token filters never clone the
+    /// whole snapshot.
+    pub(super) fn overlaid_matching(
+        &self,
+        staged: &BTreeMap<PathBuf, Option<String>>,
+        mut accept: impl FnMut(&str) -> bool,
+    ) -> Vec<(PathBuf, String)> {
+        let mut matched = Vec::new();
+        for (relative, text) in &self.base {
+            if staged.contains_key(relative) {
+                continue;
+            }
+            let text: &str = text.as_ref();
+            if accept(text) {
+                matched.push((relative.clone(), text.to_string()));
+            }
+        }
+        for (relative, contents) in staged {
+            let Some(text) = contents else {
+                continue;
+            };
+            if under_archive_dir(relative) {
+                continue;
+            }
+            if !self.kind.contains(text.as_bytes()) {
+                continue;
+            }
+            if accept(text) {
+                matched.push((relative.clone(), text.clone()));
+            }
+        }
+        matched.sort_by(|left, right| left.0.cmp(&right.0));
+        matched
     }
 }
 
@@ -638,44 +645,106 @@ impl SnapshotReadCounts {
     }
 }
 
-/// One note read from the shared catalog. When successor labels are
-/// enabled the batch retains each raw result so either consumer order can
-/// derive its predicate without another read; otherwise only the existing
-/// dependency prefilter is retained.
+/// One note read from the shared catalog. When relations are enabled
+/// each worker evaluates both predicates on one read so either consumer
+/// order needs no second pass; otherwise only the dependency prefilter
+/// is retained.
 enum SnapshotRead {
-    Raw((PathBuf, Vec<u8>)),
-    Dependency((PathBuf, String)),
+    Both((PathBuf, Arc<str>)),
+    Dependency((PathBuf, Arc<str>)),
+    Relation((PathBuf, Arc<str>)),
     Skipped,
-    Failed(PathBuf),
+    FailedBoth(PathBuf),
+    FailedDependency(PathBuf),
+    FailedRelation(PathBuf),
 }
 
 fn read_snapshot_one(
     pair: &(PathBuf, PathBuf),
-    retain_raw: bool,
+    relations_enabled: bool,
     reads: &SnapshotReadCounts,
 ) -> SnapshotRead {
     reads.record(&pair.1);
     let bytes = match std::fs::read(&pair.0) {
         Ok(bytes) => bytes,
-        Err(_) => return SnapshotRead::Failed(pair.1.clone()),
+        Err(_) => {
+            return if relations_enabled {
+                SnapshotRead::FailedBoth(pair.1.clone())
+            } else {
+                SnapshotRead::FailedDependency(pair.1.clone())
+            };
+        }
     };
-    if retain_raw {
-        return SnapshotRead::Raw((pair.1.clone(), bytes));
+    if !relations_enabled {
+        if !contains_dependency_markers(&bytes) {
+            return SnapshotRead::Skipped;
+        }
+        return match String::from_utf8(bytes) {
+            Ok(text) => {
+                SnapshotRead::Dependency((pair.1.clone(), Arc::from(text)))
+            }
+            Err(_) => SnapshotRead::FailedDependency(pair.1.clone()),
+        };
     }
-    if !contains_dependency_markers(&bytes) {
+    let dep_match = contains_dependency_markers(&bytes);
+    let rel_match = contains_relation_markers(&bytes);
+    if !dep_match && !rel_match {
         return SnapshotRead::Skipped;
     }
     match String::from_utf8(bytes) {
-        Ok(text) => SnapshotRead::Dependency((pair.1.clone(), text)),
-        Err(_) => SnapshotRead::Failed(pair.1.clone()),
+        Ok(text) => {
+            let shared: Arc<str> = Arc::from(text);
+            match (dep_match, rel_match) {
+                (true, true) => SnapshotRead::Both((pair.1.clone(), shared)),
+                (true, false) => {
+                    SnapshotRead::Dependency((pair.1.clone(), shared))
+                }
+                (false, true) => {
+                    SnapshotRead::Relation((pair.1.clone(), shared))
+                }
+                (false, false) => SnapshotRead::Skipped,
+            }
+        }
+        Err(_) => match (dep_match, rel_match) {
+            (true, true) => SnapshotRead::FailedBoth(pair.1.clone()),
+            (true, false) => SnapshotRead::FailedDependency(pair.1.clone()),
+            (false, true) => SnapshotRead::FailedRelation(pair.1.clone()),
+            (false, false) => SnapshotRead::Skipped,
+        },
     }
 }
 
 #[derive(Default)]
 struct SnapshotWorkerOutput {
-    raw: Vec<(PathBuf, Vec<u8>)>,
-    dependencies: Vec<(PathBuf, String)>,
-    failed: Vec<PathBuf>,
+    dependencies: Vec<(PathBuf, Arc<str>)>,
+    relations: Vec<(PathBuf, Arc<str>)>,
+    dep_failed: Vec<PathBuf>,
+    rel_failed: Vec<PathBuf>,
+}
+
+impl SnapshotWorkerOutput {
+    fn record(&mut self, read: SnapshotRead) {
+        match read {
+            SnapshotRead::Both((relative, text)) => {
+                self.dependencies
+                    .push((relative.clone(), Arc::clone(&text)));
+                self.relations.push((relative, text));
+            }
+            SnapshotRead::Dependency(entry) => self.dependencies.push(entry),
+            SnapshotRead::Relation(entry) => self.relations.push(entry),
+            SnapshotRead::Skipped => {}
+            SnapshotRead::FailedBoth(relative) => {
+                self.dep_failed.push(relative.clone());
+                self.rel_failed.push(relative);
+            }
+            SnapshotRead::FailedDependency(relative) => {
+                self.dep_failed.push(relative);
+            }
+            SnapshotRead::FailedRelation(relative) => {
+                self.rel_failed.push(relative);
+            }
+        }
+    }
 }
 
 /// Read the shared catalog once using scoped workers. Paths are resolved
@@ -683,7 +752,7 @@ struct SnapshotWorkerOutput {
 /// the vault root. The merge is deterministic by relative path.
 fn read_snapshot_parallel(
     pairs: &[(PathBuf, PathBuf)],
-    retain_raw: bool,
+    relations_enabled: bool,
     reads: &SnapshotReadCounts,
 ) -> SnapshotWorkerOutput {
     if pairs.is_empty() {
@@ -697,16 +766,12 @@ fn read_snapshot_parallel(
     if worker_count <= 1 {
         let mut output = SnapshotWorkerOutput::default();
         for pair in pairs {
-            match read_snapshot_one(pair, retain_raw, reads) {
-                SnapshotRead::Raw(entry) => output.raw.push(entry),
-                SnapshotRead::Dependency(entry) => {
-                    output.dependencies.push(entry);
-                }
-                SnapshotRead::Skipped => {}
-                SnapshotRead::Failed(relative) => output.failed.push(relative),
-            }
+            output.record(read_snapshot_one(pair, relations_enabled, reads));
         }
-        output.failed.sort();
+        output.dep_failed.sort();
+        output.dep_failed.dedup();
+        output.rel_failed.sort();
+        output.rel_failed.dedup();
         return output;
     }
     let next = AtomicUsize::new(0);
@@ -720,16 +785,11 @@ fn read_snapshot_parallel(
                         let Some(pair) = pairs.get(index) else {
                             break;
                         };
-                        match read_snapshot_one(pair, retain_raw, reads) {
-                            SnapshotRead::Raw(entry) => local.raw.push(entry),
-                            SnapshotRead::Dependency(entry) => {
-                                local.dependencies.push(entry);
-                            }
-                            SnapshotRead::Skipped => {}
-                            SnapshotRead::Failed(relative) => {
-                                local.failed.push(relative);
-                            }
-                        }
+                        local.record(read_snapshot_one(
+                            pair,
+                            relations_enabled,
+                            reads,
+                        ));
                     }
                     local
                 })
@@ -742,49 +802,43 @@ fn read_snapshot_parallel(
     });
     let mut merged = SnapshotWorkerOutput::default();
     for mut local in collected {
-        merged.raw.append(&mut local.raw);
         merged.dependencies.append(&mut local.dependencies);
-        merged.failed.append(&mut local.failed);
+        merged.relations.append(&mut local.relations);
+        merged.dep_failed.append(&mut local.dep_failed);
+        merged.rel_failed.append(&mut local.rel_failed);
     }
-    merged.raw.sort_by(|left, right| left.0.cmp(&right.0));
     merged
         .dependencies
         .sort_by(|left, right| left.0.cmp(&right.0));
-    merged.failed.sort();
-    merged.failed.dedup();
+    merged.relations.sort_by(|left, right| left.0.cmp(&right.0));
+    merged.dep_failed.sort();
+    merged.dep_failed.dedup();
+    merged.rel_failed.sort();
+    merged.rel_failed.dedup();
     merged
 }
 
-/// Shared batch-local bytes and lazily derived consumer views.
+/// Shared batch-local marker-positive texts for both consumers.
 struct SharedNoteBytes {
-    available: bool,
-    raw: Option<BTreeMap<PathBuf, Vec<u8>>>,
-    read_failed: Vec<PathBuf>,
-    dependency: OnceLock<DependentsSnapshot>,
-    relation: OnceLock<DependentsSnapshot>,
+    dependency: DependentsSnapshot,
+    relation: DependentsSnapshot,
 }
 
 impl SharedNoteBytes {
     fn build(
         bob_dir: &Path,
         catalog: &NoteCatalog,
-        retain_raw: bool,
+        relations_enabled: bool,
         reads: &SnapshotReadCounts,
     ) -> Self {
         if !catalog.complete() {
-            let dependency = OnceLock::new();
-            let relation = OnceLock::new();
-            let _ = dependency.set(DependentsSnapshot::unavailable(
-                SnapshotKind::Dependencies,
-            ));
-            let _ = relation
-                .set(DependentsSnapshot::unavailable(SnapshotKind::Relations));
             return Self {
-                available: false,
-                raw: None,
-                read_failed: Vec::new(),
-                dependency,
-                relation,
+                dependency: DependentsSnapshot::unavailable(
+                    SnapshotKind::Dependencies,
+                ),
+                relation: DependentsSnapshot::unavailable(
+                    SnapshotKind::Relations,
+                ),
             };
         }
         let pairs: Vec<_> = catalog
@@ -793,64 +847,27 @@ impl SharedNoteBytes {
             .filter(|relative| !under_archive_dir(relative))
             .map(|relative| (bob_dir.join(relative), relative.to_path_buf()))
             .collect();
-        let mut output = read_snapshot_parallel(&pairs, retain_raw, reads);
-        let dependency = OnceLock::new();
-        if !retain_raw {
-            let base = output.dependencies.drain(..).collect();
-            let mut failed = output.failed.clone();
-            failed.sort();
-            failed.dedup();
-            let _ = dependency.set(DependentsSnapshot {
-                base,
-                failed,
-                available: true,
-                kind: SnapshotKind::Dependencies,
-            });
-        }
-        Self {
+        let output = read_snapshot_parallel(&pairs, relations_enabled, reads);
+        let dependency = DependentsSnapshot {
+            base: output.dependencies.into_iter().collect(),
+            failed: output.dep_failed,
             available: true,
-            raw: retain_raw.then(|| output.raw.into_iter().collect()),
-            read_failed: output.failed,
+            kind: SnapshotKind::Dependencies,
+        };
+        let relation = if relations_enabled {
+            DependentsSnapshot {
+                base: output.relations.into_iter().collect(),
+                failed: output.rel_failed,
+                available: true,
+                kind: SnapshotKind::Relations,
+            }
+        } else {
+            DependentsSnapshot::unavailable(SnapshotKind::Relations)
+        };
+        Self {
             dependency,
-            relation: OnceLock::new(),
+            relation,
         }
-    }
-
-    fn dependency_snapshot(&self) -> &DependentsSnapshot {
-        self.dependency.get_or_init(|| {
-            self.raw.as_ref().map_or_else(
-                || DependentsSnapshot::unavailable(SnapshotKind::Dependencies),
-                |raw| {
-                    DependentsSnapshot::from_raw(
-                        self.available,
-                        raw,
-                        &self.read_failed,
-                        SnapshotKind::Dependencies,
-                    )
-                },
-            )
-        })
-    }
-
-    fn relation_snapshot(&self) -> &DependentsSnapshot {
-        self.relation.get_or_init(|| {
-            self.raw.as_ref().map_or_else(
-                || DependentsSnapshot::unavailable(SnapshotKind::Relations),
-                |raw| {
-                    DependentsSnapshot::from_raw(
-                        self.available,
-                        raw,
-                        &self.read_failed,
-                        SnapshotKind::Relations,
-                    )
-                },
-            )
-        })
-    }
-
-    fn cached_text(&self, relative: &Path) -> Option<String> {
-        let bytes = self.raw.as_ref()?.get(relative)?;
-        String::from_utf8(bytes.clone()).ok()
     }
 }
 
@@ -3706,7 +3723,7 @@ mod tests {
             false,
             &SnapshotReadCounts::default(),
         );
-        let base = shared.dependency_snapshot();
+        let base = &shared.dependency;
         assert!(base.available);
         assert!(
             !base.base.contains_key(Path::new("prose.md")),

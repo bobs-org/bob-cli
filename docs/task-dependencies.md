@@ -1883,6 +1883,65 @@ Budget notes:
 SA1 `x*` and SA4 `!` human and JSON smokes passed on a tiny local vault
 and on this scratch copy.
 
+**Re-measured 2026-11-02 after relation-overhead fixes.** Same §12.7
+method on apollo: release baseline
+`8c7e710306d0e49b52376e5d6d85f52dfd73f722` against candidate
+`b4a17e86622bc3cf6145f7fb105b1f985f6ce621` plus the uncommitted
+perf working tree (8 files, working-tree diff sha256
+`02bca984d5532aeed0bcc53f6e6a2a59e27244c1ab8f47b74abdda953277c830`).
+Isolated scratch copy of `~/bob`, never the live vault.
+
+- Host: apollo, Intel Xeon Platinum 8168 @ 2.70 GHz, x86_64.
+- Toolchain: apollo rustc 1.95.0 (59807616e 2026-04-14), cargo 1.95.0
+  (f2d3ce0bd 2026-03-21); local build host rustc 1.95.0
+  (59807616e 2026-04-14).
+- Scratch: 4.1G, 6847 Markdown files in the copy (the timed gestures
+  use only the synthetic `capture-measure.md` fixture). Private task
+  text was not copied into this page.
+- Sample: five discarded warmups per binary and case, then 25
+  interleaved dry-runs (`capture --dry-run --no-clip --no-ref -f json`)
+  with baseline/candidate order swapped each round. p95 is nearest rank
+  (`ceil(0.95 × n) − 1`). Fixed `BOB_NOW=2026-11-02 09:30:00` with
+  isolated `BOB_CONFIG_FILE` and `XDG_*`.
+- Binaries: baseline sha256
+  `205d050023e867f1aca3348f780648cc6485b6d5ebbd8954f2ae55b694ed2ef7`,
+  candidate sha256
+  `62a4d8c2db23484534e55fc93b82a46021677f7749b17bfb8c884f8858d7c2de`,
+  distinct inodes.
+
+| Case | Baseline median / p95 | Candidate median / p95 | Δ median |
+| --- | --- | --- | --- |
+| `hello` | 27.51 / 45.97 ms | 27.60 / 36.50 ms | +0.10 ms |
+| `x` (plain) | 27.71 / 99.35 ms | 26.88 / 44.99 ms | −0.83 ms |
+| `x*` park | 152.10 / 219.18 ms | 235.93 / 321.82 ms | +83.83 ms |
+| `!` Done | 183.62 / 232.28 ms | 250.94 / 344.18 ms | +67.32 ms |
+| `!` with dependents | 198.89 / 225.22 ms | 242.57 / 419.52 ms | +43.69 ms |
+
+Candidate dependents-pass delta (`!` with `[dependsOn::]` minus
+relation-only `!`): **−8.37 ms**.
+
+Budget notes (re-measured):
+
+- `hello` meets ≤ 40 ms on median and p95. Plain `x` meets on median
+  (26.88 ms) and misses p95 by about 5 ms (44.99 ms); the baseline `x`
+  p95 (99.35 ms) shows the same apollo-load variance as the earlier run.
+- The ≤ 70 ms `!` / `x*` target is still missed on both binaries at this
+  vault size: baseline `!` 183.62 ms and `x*` 152.10 ms medians already
+  miss, and the relation-enabled candidate is `!` 250.94 ms and `x*`
+  235.93 ms. The overhead fell by roughly half since the 2026-11-02
+  bob-cli-fs.4.1.6 measurement (`x*` Δ +189.93 ms → +83.83 ms, `!` Δ
+  +136.41 ms → +67.32 ms), but `!` with relations enabled is not within
+  a few ms of relations disabled, and `x*` still adds well beyond the
+  shared byte pass. The remaining `!` gap predates this epic and stays
+  filed as **bob-cli-gc**; no `!` budget is declared met here.
+- The ≤ 5 ms dependents-pass add is met on medians (−8.37 ms), against
+  +12.76 ms in the earlier run. Candidate `!` with dependents p95
+  (419.52 ms) stays noisy under apollo load, above the relation-only
+  `!` p95 (344.18 ms).
+- SA1 `x*` and SA4 `!` human and JSON smokes passed on this scratch copy
+  (park human 376.15 ms / json 266.97 ms, bang human 398.37 ms /
+  json 285.99 ms) and on a tiny local vault during the same run.
+
 ### 12.8 Kill switch
 
 `plan.link_unblocked: true` and `plan.keep_moving: true` live in

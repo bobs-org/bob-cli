@@ -123,7 +123,7 @@ pub(crate) struct RelationClassifyInput<'a> {
     pub labels: &'a [CancelLabel],
     pub events: &'a [RelationEvent],
     pub source_texts: &'a BTreeMap<PathBuf, String>,
-    pub known_paths: &'a [PathBuf],
+    pub known_paths: &'a BTreeSet<PathBuf>,
     pub archive_paths: &'a [PathBuf],
     pub day_before: Option<&'a str>,
     pub day_after: Option<&'a str>,
@@ -484,6 +484,11 @@ fn extract_sources<R: TargetNoteReader>(
         .collect::<BTreeSet<_>>();
     let mut sources = Vec::new();
     for (path, contents) in input.source_texts {
+        // Event targets without LINKS are cached for validation but never
+        // parsed as sources.
+        if memchr::memmem::find(contents.as_bytes(), b"LINKS").is_none() {
+            continue;
+        }
         let scan = FileScan {
             path: path.clone(),
             relative_path: path.clone(),
