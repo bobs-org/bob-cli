@@ -11,6 +11,7 @@ use crate::native::event_task::{parse_buffer_token, BufferPart, EventBuffer};
 
 use super::model::{is_off_clock_token, parse_route_token};
 
+mod boilerplate;
 mod html;
 mod plain;
 
@@ -133,19 +134,17 @@ pub(crate) fn description_directives(
     .directives
 }
 
-/// Drop directive lines. `boilerplate-filter` inserts separator,
-/// badge-duplicate, and vendor-block passes here while blank and
-/// separator lines are still in the stream.
+/// Drop directive lines, then separator, badge-duplicate, and
+/// vendor-block lines while blank and separator lines are still present.
 fn filter_source_lines(
     lines: Vec<SourceLine>,
     ctx: &DescriptionContext<'_>,
 ) -> Vec<SourceLine> {
-    let _join_link = ctx.join_link;
-    let _location = ctx.location;
-    lines
+    let lines: Vec<SourceLine> = lines
         .into_iter()
         .filter(|line| !is_directive_line(line))
-        .collect()
+        .collect();
+    boilerplate::filter(lines, ctx)
 }
 
 fn outline(lines: Vec<SourceLine>) -> Vec<DescriptionLine> {
@@ -365,6 +364,60 @@ impl SourceLine {
         matches!(self.kind, SourceKind::ListItem { .. })
     }
 
+    pub(super) fn kind_is_blank(&self) -> bool {
+        matches!(self.kind, SourceKind::Blank)
+    }
+
+    pub(super) fn kind_is_separator(&self) -> bool {
+        matches!(self.kind, SourceKind::Separator)
+    }
+
+    pub(super) fn kind_is_list_item(&self) -> bool {
+        self.is_list_item()
+    }
+
+    pub(super) fn kind_is_bullet_list_item(&self) -> bool {
+        matches!(
+            self.kind,
+            SourceKind::ListItem {
+                marker: LineMarker::Bullet,
+                ..
+            }
+        )
+    }
+
+    pub(super) fn project_text(&self) -> String {
+        project_text(self)
+    }
+
+    pub(super) fn inline_urls(&self) -> impl Iterator<Item = &str> {
+        self.inlines.iter().filter_map(|inline| match inline {
+            Inline::Link { url, .. } => Some(url.as_str()),
+            Inline::Text { .. } => None,
+        })
+    }
+
+    /// The URL when the line is a lone link with no other text.
+    pub(super) fn only_link_url(&self) -> Option<&str> {
+        let mut found = None;
+        for inline in &self.inlines {
+            match inline {
+                Inline::Link { url, .. } => {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some(url.as_str());
+                }
+                Inline::Text { text, .. } => {
+                    if !text.trim().is_empty() {
+                        return None;
+                    }
+                }
+            }
+        }
+        found
+    }
+
     fn is_content(&self) -> bool {
         !matches!(self.kind, SourceKind::Blank | SourceKind::Separator)
     }
@@ -536,10 +589,59 @@ mod tests {
         )
     }
 
+    fn parse_with_ctx(raw: &str, case: &Value) -> EventDescription {
+        parse_description(
+            raw,
+            &DescriptionContext {
+                join_link: case["join_link"].as_str(),
+                location: case["location"].as_str(),
+            },
+        )
+    }
+
     fn marker_label(marker: LineMarker) -> String {
         match marker {
             LineMarker::Bullet => "-".to_string(),
             LineMarker::Ordered(n) => format!("{n}."),
+        }
+    }
+
+    fn assert_outlined_lines(
+        id: &str,
+        parsed: &EventDescription,
+        expected_lines: &[Value],
+    ) {
+        assert_eq!(
+            parsed.lines.len(),
+            expected_lines.len(),
+            "{id} line count: got {:#?}",
+            parsed
+                .lines
+                .iter()
+                .map(|line| (
+                    line.depth,
+                    marker_label(line.marker),
+                    line.inlines.iter().map(inline_json).collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>()
+        );
+        for (line, expected) in parsed.lines.iter().zip(expected_lines.iter()) {
+            assert_eq!(
+                line.depth,
+                u8::try_from(expected["depth"].as_u64().expect("depth"))
+                    .expect("depth fits"),
+                "{id} depth"
+            );
+            assert_eq!(
+                marker_label(line.marker),
+                expected["marker"].as_str().expect("marker"),
+                "{id} marker"
+            );
+            let expected_inlines =
+                expected["inlines"].as_array().expect("inlines");
+            let got: Vec<Value> =
+                line.inlines.iter().map(inline_json).collect();
+            assert_eq!(got, *expected_inlines, "{id} inlines");
         }
     }
 
@@ -637,49 +739,77 @@ mod tests {
                 );
             }
             let expected_lines = case["lines"].as_array().expect("lines");
-            assert_eq!(
-                parsed.lines.len(),
-                expected_lines.len(),
-                "{id} line count: got {:#?}",
-                parsed
-                    .lines
-                    .iter()
-                    .map(|line| (
-                        line.depth,
-                        marker_label(line.marker),
-                        line.inlines
-                            .iter()
-                            .map(inline_json)
-                            .collect::<Vec<_>>()
-                    ))
-                    .collect::<Vec<_>>()
-            );
-            for (line, expected) in
-                parsed.lines.iter().zip(expected_lines.iter())
-            {
-                assert_eq!(
-                    line.depth,
-                    u8::try_from(expected["depth"].as_u64().expect("depth"))
-                        .expect("depth fits"),
-                    "{id} depth"
-                );
-                assert_eq!(
-                    marker_label(line.marker),
-                    expected["marker"].as_str().expect("marker"),
-                    "{id} marker"
-                );
-                let expected_inlines =
-                    expected["inlines"].as_array().expect("inlines");
-                let got: Vec<Value> =
-                    line.inlines.iter().map(inline_json).collect();
-                assert_eq!(got, *expected_inlines, "{id} inlines");
-            }
+            assert_outlined_lines(id, &parsed, expected_lines);
             assert_eq!(
                 parsed.oversized,
                 case["oversized"].as_bool().unwrap_or(false),
                 "{id} oversized"
             );
         }
+    }
+
+    #[test]
+    fn boilerplate_vectors() {
+        let vectors: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/gcal_description/boilerplate.json"
+        ))
+        .expect("boilerplate JSON");
+        for case in vectors["cases"].as_array().expect("cases") {
+            let id = case["id"].as_str().expect("id");
+            let parsed =
+                parse_with_ctx(case["input"].as_str().expect("input"), case);
+            let expected_lines = case["lines"].as_array().expect("lines");
+            assert_outlined_lines(id, &parsed, expected_lines);
+            assert_eq!(
+                parsed.oversized,
+                case["oversized"].as_bool().unwrap_or(false),
+                "{id} oversized"
+            );
+        }
+    }
+
+    #[test]
+    fn keep_bullet_labels_by_vendor() {
+        let walls = [
+            (
+                "Hello\n\nJoin with Google Meet\nhttps://meet.google.com/aaa-bbbb-ccc",
+                "Join Google Meet",
+                "https://meet.google.com/aaa-bbbb-ccc",
+            ),
+            (
+                "Hello\n\nJoin on your computer\nhttps://teams.live.com/meet/9370000000000?p=FAKE",
+                "Join Teams meeting",
+                "https://teams.live.com/meet/9370000000000?p=FAKE",
+            ),
+            (
+                "Hello\n\nJoin by video system\nhttps://example.webex.com/meet/FAKE",
+                "Join Webex meeting",
+                "https://example.webex.com/meet/FAKE",
+            ),
+        ];
+        for (input, label, url) in walls {
+            let parsed = parse(input);
+            assert_eq!(parsed.lines.len(), 2, "{label}");
+            let [_, keep] = parsed.lines.as_slice() else {
+                panic!("{label} keeps one join line");
+            };
+            assert_eq!(keep.depth, 1, "{label}");
+            assert_eq!(keep.marker, LineMarker::Bullet, "{label}");
+            assert_eq!(
+                keep.inlines,
+                vec![Inline::Link {
+                    text: label.to_string(),
+                    url: url.to_string(),
+                }],
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_vendor_content_writes_no_keep_bullet() {
+        let parsed = parse("Hello\n\nSee you there");
+        assert_eq!(parsed.lines.len(), 2);
     }
 
     #[test]

@@ -1,0 +1,224 @@
+{
+  "cases": [
+    {
+      "id": "meet-with-badge",
+      "input": "Team standup\n\nJoin with Google Meet\nhttps://meet.google.com/abc-defg-hij\nJoin by phone\n+1 555-0100\nMore phone numbers\nhttps://tel.meet/abc-defg-hij?pin=123456789",
+      "join_link": "https://meet.google.com/abc-defg-hij",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Team standup" }]
+        }
+      ]
+    },
+    {
+      "id": "zoom-with-badge",
+      "input": "Design sync\n\nJoin Zoom Meeting\nhttps://example.zoom.us/j/123456789\nMeeting ID: 123 456 789\nPasscode: 654321\nOne tap mobile\n+15550100,,123456789#",
+      "join_link": "https://example.zoom.us/j/123456789",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Design sync" }]
+        }
+      ]
+    },
+    {
+      "id": "zoom-without-badge-keeps-join-link",
+      "input": "Design sync\n\nJoin Zoom Meeting\nhttps://example.zoom.us/j/123456789\nMeeting ID: 123 456 789\nPasscode: 654321\nOne tap mobile\n+15550100,,123456789#",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Design sync" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "Join Zoom meeting",
+              "url": "https://example.zoom.us/j/123456789"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "teams-classic-with-badge",
+      "input": "Sprint review\n\nMicrosoft Teams meeting\nJoin on your computer\nhttps://teams.microsoft.com/l/meetup-join/19%3Ameeting_FAKE123\nMeeting ID: 234 567 890\nPasscode: AbC123\nDial in by phone\n+1 555-0101\nFind your local number\nhttps://dialin.example.com/abc",
+      "join_link": "https://teams.microsoft.com/l/meetup-join/19%3Ameeting_FAKE123",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Sprint review" }]
+        }
+      ]
+    },
+    {
+      "id": "teams-new-layout-with-badge",
+      "input": "Sprint review\n\nJoin the meeting now\nhttps://teams.live.com/meet/9370000000000?p=FAKEmeeting\nMeeting options\nhttps://teams.live.com/meet/options?p=FAKEoptions",
+      "join_link": "https://teams.live.com/meet/9370000000000?p=FAKEmeeting",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Sprint review" }]
+        }
+      ]
+    },
+    {
+      "id": "webex-with-badge",
+      "input": "All hands\n\nWhen it's time, join your Webex meeting\nhttps://example.webex.com/meet/FAKEroom\nJoin by video system\nDial 123456789@example.webex.com\nMore ways to join\nhttps://example.webex.com/meet/FAKEroom?from=join\n-- Do not delete or change any of the following text. --\nMeeting ID: 123 456 789\nAccess code: 123456789",
+      "join_link": "https://example.webex.com/meet/FAKEroom",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "All hands" }]
+        }
+      ]
+    },
+    {
+      "id": "fenced-wall-drops-non-anchor-filler",
+      "input": "Notes here\n___________\nDial-in details below\nJoin Zoom Meeting\nhttps://example.zoom.us/j/111222333\n___________\nMore notes",
+      "join_link": "https://example.zoom.us/j/111222333",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Notes here" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "More notes" }]
+        }
+      ]
+    },
+    {
+      "id": "agenda-above-vendor-wall",
+      "input": "Agenda:\n- Intros\n- Launch plan\n\nJoin Zoom Meeting\nhttps://example.zoom.us/j/999888777\nMeeting ID: 999 888 777",
+      "join_link": "https://example.zoom.us/j/999888777",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Agenda:" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "Intros" }]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [{ "text": "Launch plan" }]
+        }
+      ]
+    },
+    {
+      "id": "meeting-id-prose-without-primary-stays",
+      "input": "Agenda\nMeeting ID: decide whether to publish\nQ&A after",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Agenda" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Meeting ID: decide whether to publish" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Q&A after" }]
+        }
+      ]
+    },
+    {
+      "id": "separators-between-paragraphs",
+      "input": "First thought\n---\nSecond thought\n* * *\nThird thought",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "First thought" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Second thought" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Third thought" }]
+        }
+      ]
+    },
+    {
+      "id": "location-text-repeat-dropped",
+      "input": "Office day\n\nRoom 4B",
+      "location": "Room 4B",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Office day" }]
+        }
+      ]
+    },
+    {
+      "id": "location-link-repeat-dropped",
+      "input": "Office day\n\n[map](https://maps.example.com/room4b)",
+      "location": "https://maps.example.com/room4b",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Office day" }]
+        }
+      ]
+    },
+    {
+      "id": "google-fence-pair-with-blank-inside",
+      "input": "Agenda\n-::~:~::~:~::~:~::~:~::~:~::-\nJoin with Google Meet\n\nDial-in: +1 555-0100\n-::~:~::~:~::~:~::~:~:~::~:~::-\nNotes here",
+      "join_link": "https://meet.google.com/aaa-bbbb-ccc",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Agenda" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Notes here" }]
+        }
+      ]
+    },
+    {
+      "id": "redirect-wrapped-vendor-url-joins-run",
+      "input": "<div>Team lunch</div><br><br><div><a href=\"https://www.google.com/url?q=https://example.zoom.us/j/555666777&sa=D\">Join Audio</a></div><br><br><div>See you there</div>",
+      "join_link": "https://example.zoom.us/j/555666777",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "Team lunch" }]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [{ "text": "See you there" }]
+        }
+      ]
+    }
+  ]
+}
