@@ -10,6 +10,7 @@ pub(crate) mod project_close;
 pub(crate) mod project_pull_in;
 #[cfg(test)]
 pub(crate) mod recovery;
+pub(crate) mod relation_successors;
 pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;
@@ -19,6 +20,14 @@ pub(crate) mod verdicts;
 pub(crate) use keep_moving::KeepMovingFold;
 pub(crate) use project_pull_in::{
     closed_prj_may_have_parent, inspect_pull_ins, PROJECT_CREATED_TRIGGER,
+};
+// The classifier and integration phases consume this shared API.
+#[allow(unused_imports)]
+pub(crate) use relation_successors::{
+    RelationEvent, RelationEventKind, RelationFoldCopy, RelationGroupCopy,
+    RelationHeldCopy, RelationHeldCopyReason, RelationHeldReason,
+    RelationHeldRow, RelationPickedNoticeCopy, RelationSlotAnchor,
+    RelationTarget, ReleaseState, StructuredWarning,
 };
 pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,

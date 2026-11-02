@@ -26,7 +26,12 @@ pub(crate) use gcal::{
     GcalCalendarSettings, GcalSettings, GcalTentative,
 };
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
-pub(crate) use relations::{load_relations_config, RelationsConfig};
+// Relation-successor authoring consumers use `LabelEffect`; this phase
+// publishes the policy type before those consumers land.
+#[allow(unused_imports)]
+pub(crate) use relations::{
+    load_relations_config, LabelEffect, RelationsConfig,
+};
 #[allow(unused_imports)]
 pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};
 pub(crate) use themes::{

@@ -22,12 +22,20 @@ pub(crate) enum CloseEffect {
     Complete,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LabelEffect {
+    Cancel,
+    Complete,
+    Successor,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelationsConfig {
     pub(crate) linked_from_lines: bool,
     pub(crate) linked_from_mentions: bool,
     pub(crate) cancel_labels: Vec<CancelLabel>,
     pub(crate) complete_labels: Vec<CompleteLabel>,
+    pub(crate) successor_labels: Vec<CancelLabel>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -38,6 +46,7 @@ impl Default for RelationsConfig {
             linked_from_mentions: true,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
+            successor_labels: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -55,13 +64,29 @@ impl RelationsConfig {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn close_effect(&self, key: &str) -> Option<CloseEffect> {
+    pub(crate) fn is_successor_label(&self, key: &str) -> bool {
+        self.successor_labels.iter().any(|label| label.key == key)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn label_effect(&self, key: &str) -> Option<LabelEffect> {
         if self.is_cancel_label(key) {
-            Some(CloseEffect::Cancel)
+            Some(LabelEffect::Cancel)
         } else if self.is_complete_label(key) {
-            Some(CloseEffect::Complete)
+            Some(LabelEffect::Complete)
+        } else if self.is_successor_label(key) {
+            Some(LabelEffect::Successor)
         } else {
             None
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn close_effect(&self, key: &str) -> Option<CloseEffect> {
+        match self.label_effect(key) {
+            Some(LabelEffect::Cancel) => Some(CloseEffect::Cancel),
+            Some(LabelEffect::Complete) => Some(CloseEffect::Complete),
+            Some(LabelEffect::Successor) | None => None,
         }
     }
 
@@ -76,13 +101,31 @@ impl RelationsConfig {
         &self,
         key: &str,
     ) -> Option<(&str, CloseEffect)> {
+        self.label_for_inverse(key)
+            .and_then(|(label, effect)| match effect {
+                LabelEffect::Cancel => Some((label, CloseEffect::Cancel)),
+                LabelEffect::Complete => Some((label, CloseEffect::Complete)),
+                LabelEffect::Successor => None,
+            })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn label_for_inverse(
+        &self,
+        key: &str,
+    ) -> Option<(&str, LabelEffect)> {
         self.cancel_labels
             .iter()
-            .map(|label| (label, CloseEffect::Cancel))
+            .map(|label| (label, LabelEffect::Cancel))
             .chain(
                 self.complete_labels
                     .iter()
-                    .map(|label| (label, CloseEffect::Complete)),
+                    .map(|label| (label, LabelEffect::Complete)),
+            )
+            .chain(
+                self.successor_labels
+                    .iter()
+                    .map(|label| (label, LabelEffect::Successor)),
             )
             .find_map(|(label, effect)| {
                 crate::native::task_relations::label::inverse_phrase(
@@ -135,6 +178,7 @@ pub(crate) fn parse_relations_config(
     let mentions_key = Value::String("linked_from_mentions".to_string());
     let cancel_key = Value::String("cancel_labels".to_string());
     let complete_key = Value::String("complete_labels".to_string());
+    let successor_key = Value::String("successor_labels".to_string());
     let mut warnings = Vec::new();
     let linked_from_lines = match mapping.get(&key) {
         None | Some(Value::Null) => true,
@@ -172,33 +216,75 @@ pub(crate) fn parse_relations_config(
         "completing",
         &mut warnings,
     );
+    let mut successor_labels = parse_effect_labels(
+        mapping.get(&successor_key),
+        &path_display.to_string(),
+        "successor_labels",
+        "offering successors",
+        &mut warnings,
+    );
+    let cancel_keys = cancel_labels
+        .iter()
+        .map(|label| label.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     let complete_keys = complete_labels
         .iter()
         .map(|label| label.key.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let overlaps = cancel_labels
+    let successor_keys = successor_labels
         .iter()
-        .filter(|label| complete_keys.contains(label.key.as_str()))
-        .map(|label| (label.key.clone(), label.name.clone()))
-        .collect::<Vec<_>>();
-    for (_, name) in &overlaps {
-        warnings.push(format!(
-            "relations: “{name}” is in both cancel_labels and complete_labels in {path_display}; it closes nothing"
-        ));
+        .map(|label| label.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    // Preserve the legacy cancel-label iteration order when successor
+    // labels are absent; otherwise visit each normalized key once in
+    // config-list order.
+    let mut overlaps = Vec::new();
+    for label in cancel_labels
+        .iter()
+        .chain(complete_labels.iter())
+        .chain(successor_labels.iter())
+    {
+        let in_cancel = cancel_keys.contains(label.key.as_str());
+        let in_complete = complete_keys.contains(label.key.as_str());
+        let in_successor = successor_keys.contains(label.key.as_str());
+        let count = usize::from(in_cancel)
+            + usize::from(in_complete)
+            + usize::from(in_successor);
+        if count > 1 && !overlaps.iter().any(|(key, _, _)| key == &label.key) {
+            let legacy_overlap = in_cancel && in_complete && !in_successor;
+            if legacy_overlap {
+                warnings.push(format!(
+                    "relations: “{}” is in both cancel_labels and complete_labels in {path_display}; it closes nothing",
+                    label.name
+            ));
+            } else {
+                warnings.push(format!(
+                    "relations: “{}” is in more than one of cancel_labels, complete_labels, successor_labels in {path_display}; it has no effect",
+                    label.name
+                ));
+            }
+            overlaps.push((
+                label.key.clone(),
+                label.name.clone(),
+                legacy_overlap,
+            ));
+        }
     }
     if !overlaps.is_empty() {
         let overlap_keys = overlaps
             .into_iter()
-            .map(|(key, _)| key)
+            .map(|(key, _, _)| key)
             .collect::<std::collections::BTreeSet<_>>();
         cancel_labels.retain(|label| !overlap_keys.contains(&label.key));
         complete_labels.retain(|label| !overlap_keys.contains(&label.key));
+        successor_labels.retain(|label| !overlap_keys.contains(&label.key));
     }
     Ok(RelationsConfig {
         linked_from_lines,
         linked_from_mentions,
         cancel_labels,
         complete_labels,
+        successor_labels,
         warnings,
     })
 }
