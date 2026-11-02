@@ -1140,6 +1140,138 @@ fn explicit_root_park_form_offers_relation() {
     assert_eq!(rows[0]["relation"]["event"], "parked");
 }
 
+// SA19: a successor edge added by an earlier draft item is visible in
+// staged text, so a later `x*` offers S through it.
+#[test]
+fn sa19_staged_edge_before_park_offers() {
+    let (temp, vault, day_file) = vault("bob-cli-sa19-staged");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+    );
+    write_file(&day_file, &park_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "@agents+evaluate ~agents:implement|\"starts after\"\n\nx*",
+    );
+    let _ = temp;
+    let close = &json["captures"][1]["pomodoro_close"];
+    let rows = close["relation_successors"]
+        .as_array()
+        .expect("relation_successors");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["block_id"], "evaluate");
+    assert_eq!(rows[0]["relation"]["event"], "parked");
+    assert_eq!(json["pull_in"]["offer_count"], 1);
+}
+
+// SA20: an edge added after its target was parked does not fire
+// retroactively; authoring reports `relation_successor_already_released`.
+#[test]
+fn sa20_edge_after_park_warns_without_offer() {
+    let (temp, vault, day_file) = vault("bob-cli-sa20-released");
+    write_file(
+        &vault.join("agents.md"),
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "- [*] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+    );
+    write_file(&day_file, &park_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "x*\n\n@agents+evaluate ~agents:implement|\"starts after\"",
+    );
+    let _ = temp;
+    let close = &json["captures"][0]["pomodoro_close"];
+    assert!(
+        close.get("relation_successors").is_none(),
+        "park before the edge offers nothing: {close}"
+    );
+    let warnings = json["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| {
+            warning["code"] == "relation_successor_already_released"
+        }),
+        "{warnings:?}"
+    );
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+}
+
+// SA21: a later item linking S drops S's row.
+#[test]
+fn sa21_later_link_of_source_drops_row() {
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa21-source");
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "x*\n\n@agents:evaluate",
+    );
+    let close = &json["captures"][0]["pomodoro_close"];
+    assert!(
+        close.get("relation_successors").is_none(),
+        "later link drops S's row: {close}"
+    );
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+}
+
+// SA21: a later item re-linking a parked T drops that T's parked group,
+// even when the originating pick already linked S.
+#[test]
+fn sa21_later_relink_of_target_drops_parked_group() {
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa21-target");
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run", "-p", "all"],
+        "x*\n\n@agents:implement",
+    );
+    let close = &json["captures"][0]["pomodoro_close"];
+    assert!(
+        close.get("relation_successors").is_none(),
+        "relinked T drops its parked group: {close}"
+    );
+    assert_eq!(json["pull_in"]["offer_count"], 0);
+}
+
+// SA21: a picked S stays linked on disk when a later link drops its row
+// from reporting; net reporting changes reporting, never files.
+#[test]
+fn sa21_dropped_pick_stays_linked_on_disk() {
+    let (_temp, vault, day_file, config) = park_vault("bob-cli-sa21-disk");
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["-p", "all"],
+        "x*\n\n@agents:evaluate",
+    );
+    let close = &json["captures"][0]["pomodoro_close"];
+    assert!(
+        close.get("relation_successors").is_none(),
+        "picked row dropped from reporting: {close}"
+    );
+    let day = fs::read_to_string(&day_file).expect("day");
+    assert!(
+        day.contains("[[agents#^evaluate]]"),
+        "picked S stays linked: {day}"
+    );
+}
+
 // `plan.link_unblocked: false` is the other kill switch.
 #[test]
 fn link_unblocked_false_omits_relation_fields() {

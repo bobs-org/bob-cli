@@ -2355,6 +2355,29 @@ pub(super) fn relation_successors_vecs_mut(
     vecs
 }
 
+/// Mutable access to every relation group vec an item reports, in
+/// the same summary order as [`all_relation_successors`]: item-level
+/// toggle containers, whole-item `task_complete`, nested
+/// `relation_completes`, then `pomodoro_close`. The batches net pass
+/// prunes invalidated parked groups so a dropped group leaves no stale
+/// internal entry for the presentation phase.
+pub(super) fn relation_groups_mut(
+    item: &mut CaptureItemResult,
+) -> Vec<&mut Vec<crate::native::task_complete::RelationOfferGroup>> {
+    let mut vecs = Vec::new();
+    vecs.push(&mut item.relation_groups);
+    if let Some(summary) = item.task_complete.as_mut() {
+        vecs.push(&mut summary.relation_groups);
+    }
+    for complete in &mut item.relation_completes {
+        vecs.push(&mut complete.task_complete.relation_groups);
+    }
+    if let Some(summary) = item.pomodoro_close.as_mut() {
+        vecs.push(&mut summary.relation_groups);
+    }
+    vecs
+}
+
 /// Mutable access to every keep-moving vec an item reports, in the same
 /// order as [`all_keep_moving`].
 pub(super) fn keep_moving_vecs_mut(

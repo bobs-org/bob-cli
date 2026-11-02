@@ -1197,6 +1197,18 @@ pub(super) fn apply_successor_net_post_pass(
         dependency_ctx,
         bob_dir,
     );
+    // SA21: later live-linking a parked T drops its parked group, and
+    // later linking S drops S's row, sharing the keep-moving provenance
+    // so own picks never invalidate their own groups. Runs before the
+    // final-state row checks so surviving multi-trigger rows keep their
+    // pruned trigger lists.
+    super::keep_moving_net::drop_invalidated_relation_groups(
+        items,
+        keep_moving_trace,
+        planner,
+        dependency_ctx,
+        bob_dir,
+    );
     let day_file = pomodoro::day_file_for(bob_dir);
     let day_relative = capture_pomodoros::relative_day_file(&day_file, bob_dir);
     let live = if any_linked || any_offer {
@@ -1258,10 +1270,21 @@ pub(super) fn apply_successor_net_post_pass(
                     &tasks_settings,
                 )
             });
+            for row in vec.iter_mut() {
+                refresh_relation_row_final_position(
+                    row,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                );
+            }
         }
     }
     // A group with no surviving selectable row is silent, folds included.
     super::keep_moving_net::prune_empty_folds(items);
+    // Relation groups with no surviving row are silent too; the
+    // presentation phase must not render an empty parked group.
+    prune_empty_relation_groups(items);
 }
 
 fn refresh_project_offer_final_position(
@@ -1284,6 +1307,73 @@ fn refresh_project_offer_final_position(
     if row.status_symbol != task.status {
         row.status_symbol = task.status;
         row.status_name = status_name_for(bob_dir, task.status);
+    }
+}
+
+/// Refresh a surviving relation row's line (and status spelling) from
+/// the final staged text, so later items that insert context or mint
+/// IDs do not leave a stale line behind. ID-less relation sources are
+/// rare (R1–R7 need a target block ID, not a source ID), but the lookup
+/// falls back to line identity like other rows when no ID exists.
+fn refresh_relation_row_final_position(
+    row: &mut TaskCompleteUnblockedJson,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) {
+    if row.offer.is_none() {
+        return;
+    }
+    let Some(task) =
+        successor_task_lookup(&*row, planner, bob_dir, tasks_settings)
+    else {
+        return;
+    };
+    row.line = task.line_index + 1;
+    if row.status_symbol != task.status {
+        row.status_symbol = task.status;
+        row.status_name = status_name_for(bob_dir, task.status);
+    }
+}
+
+/// Drop relation groups with no surviving selectable row. A group is
+/// referenced when some surviving row carries its target in the row's
+/// trigger list with a matching label key and parked/done event; an
+/// empty trigger list never references a group.
+fn prune_empty_relation_groups(items: &mut [PlannedCaptureItem]) {
+    for item in items.iter_mut() {
+        let referenced: std::collections::BTreeSet<(
+            PathBuf,
+            String,
+            String,
+            String,
+        )> = super::output::all_relation_successors(&item.result)
+            .filter(|row| row.offer.is_some())
+            .filter_map(|row| {
+                let relation = row.relation.as_ref()?;
+                let mut keys = Vec::new();
+                for target in &relation.after {
+                    keys.push((
+                        PathBuf::from(&target.note_path),
+                        target.block_id.clone(),
+                        relation.key.clone(),
+                        relation.event.to_string(),
+                    ));
+                }
+                Some(keys)
+            })
+            .flatten()
+            .collect();
+        for vec in super::output::relation_groups_mut(&mut item.result) {
+            vec.retain(|group| {
+                referenced.contains(&(
+                    group.target.note_path.clone(),
+                    group.target.block_id.clone(),
+                    group.label_key.clone(),
+                    group.event.as_str().to_string(),
+                ))
+            });
+        }
     }
 }
 

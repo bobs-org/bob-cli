@@ -21,8 +21,10 @@ use std::collections::BTreeSet;
 type LiveKeys = BTreeSet<(PathBuf, String)>;
 
 /// Staged day text and explicit link target after each item, recorded only
-/// from the first item that reported a keep-moving offer onward, so drafts
-/// without keep-moving offers pay nothing.
+/// from the first item that reported a keep-moving or relation offer
+/// onward, so drafts without either offer pay nothing. Relation-only
+/// drafts must activate the tracer too, or a later item's relink of a
+/// parked target would be invisible to the batches net pass (SA21).
 #[derive(Debug, Default)]
 pub(super) struct KeepMovingTrace {
     active: bool,
@@ -48,7 +50,9 @@ impl KeepMovingTrace {
     ) {
         if !self.active {
             let has_offer = super::output::all_keep_moving(&item.result)
-                .any(|row| row.offer.is_some());
+                .any(|row| row.offer.is_some())
+                || super::output::all_relation_successors(&item.result)
+                    .any(|row| row.offer.is_some());
             if !has_offer {
                 return;
             }
@@ -236,6 +240,231 @@ fn group_invalidated(
                     && is_open(task)
             })
     })
+}
+
+/// Drop relation rows and parked groups a later item invalidated (SA21).
+///
+/// Two rules share the keep-moving provenance mechanism, so an
+/// originating close's own picks never invalidate their own groups:
+///
+/// - Later live-linking a parked T drops that T's parked group. Rows
+///   naming several triggers keep the surviving targets; a row whose
+///   winning group is not relation keeps its independent reason with
+///   the relation metadata cleared, while a relation-winning row with
+///   no surviving trigger is dropped.
+/// - Later linking S drops S's row outright, including picked rows a
+///   final-live check alone would keep when the relink leaves the live
+///   set unchanged (the trace records explicit link targets).
+///
+/// Group invalidation changes reporting only; staged picks stay linked.
+pub(super) fn drop_invalidated_relation_groups(
+    items: &mut [PlannedCaptureItem],
+    trace: &KeepMovingTrace,
+    planner: &mut CaptureBatchPlanner,
+    dependency_ctx: &DependencyContext,
+    bob_dir: &Path,
+) {
+    if !trace.active {
+        return;
+    }
+    let any_rows = items.iter().any(|item| {
+        super::output::all_relation_successors(&item.result)
+            .any(|row| row.offer.is_some())
+    });
+    if !any_rows {
+        return;
+    }
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let day_relative = capture_pomodoros::relative_day_file(&day_file, bob_dir);
+    let index = super::task_complete::staged_note_index(
+        bob_dir,
+        planner,
+        dependency_ctx,
+    );
+    let live: BTreeMap<usize, LiveKeys> = trace
+        .steps
+        .iter()
+        .filter_map(|(item, step)| {
+            let text = step.day_after.as_deref()?;
+            Some((
+                *item,
+                engine::live_link_keys(text, Path::new(&day_relative), &index),
+            ))
+        })
+        .collect();
+    for position in 0..items.len() {
+        let has_relation =
+            super::output::all_relation_successors(&items[position].result)
+                .any(|row| row.offer.is_some());
+        if !has_relation {
+            continue;
+        }
+        let later = later_link_effects(position, items.len(), trace, &live);
+        if later.is_empty() {
+            continue;
+        }
+        // Later linking S drops S's row even when the originating pick
+        // already made S live; own picks are absent from `later`, so
+        // they never invalidate their own rows. This runs for every
+        // relation offer, parked or done.
+        prune_relation_rows_for_source_links(
+            &mut items[position].result,
+            &later,
+        );
+        let parked: BTreeSet<(PathBuf, String)> =
+            parked_targets(&items[position].result);
+        let invalidated: BTreeSet<(PathBuf, String)> =
+            parked.intersection(&later).cloned().collect();
+        if invalidated.is_empty() {
+            continue;
+        }
+        prune_relation_rows_for_targets(
+            &mut items[position].result,
+            &invalidated,
+        );
+        prune_relation_groups_for_targets(
+            &mut items[position].result,
+            &invalidated,
+        );
+    }
+}
+
+/// Parked event targets in an item's relation groups, as live-link keys.
+fn parked_targets(
+    result: &super::output::CaptureItemResult,
+) -> BTreeSet<(PathBuf, String)> {
+    let mut targets = BTreeSet::new();
+    let groups: Vec<&crate::native::task_complete::RelationOfferGroup> =
+        result
+            .relation_groups
+            .iter()
+            .chain(
+                result
+                    .task_complete
+                    .iter()
+                    .flat_map(|summary| summary.relation_groups.iter()),
+            )
+            .chain(result.relation_completes.iter().flat_map(|complete| {
+                complete.task_complete.relation_groups.iter()
+            }))
+            .chain(
+                result
+                    .pomodoro_close
+                    .iter()
+                    .flat_map(|summary| summary.relation_groups.iter()),
+            )
+            .collect();
+    for group in groups {
+        if group.event
+            == crate::native::task_complete::relation_successors::RelationEventKind::Parked
+        {
+            targets.insert((
+                group.target.note_path.clone(),
+                group.target.block_id.clone(),
+            ));
+        }
+    }
+    targets
+}
+
+/// Drop relation rows whose source a later item linked. Own picks are
+/// absent from `later`, so they never invalidate their own rows.
+fn prune_relation_rows_for_source_links(
+    result: &mut super::output::CaptureItemResult,
+    later: &BTreeSet<(PathBuf, String)>,
+) {
+    for vec in super::output::relation_successors_vecs_mut(result) {
+        vec.retain(|row| {
+            !later.contains(&(
+                PathBuf::from(&row.note_path),
+                row.block_id.clone(),
+            ))
+        });
+    }
+}
+
+/// Prune invalidated parked targets from relation rows: a parked T
+/// prunes its entry from the row's trigger list, dropping
+/// relation-winning rows with no surviving trigger and clearing
+/// second-reason metadata on rows whose winning group is independent.
+fn prune_relation_rows_for_targets(
+    result: &mut super::output::CaptureItemResult,
+    invalidated: &BTreeSet<(PathBuf, String)>,
+) {
+    for vec in super::output::relation_successors_vecs_mut(result) {
+        let mut dropped: Vec<bool> = Vec::with_capacity(vec.len());
+        for row in vec.iter_mut() {
+            let Some(relation) = row.relation.as_mut() else {
+                dropped.push(false);
+                continue;
+            };
+            if relation.event != "parked" {
+                dropped.push(false);
+                continue;
+            }
+            let before = relation.after.len();
+            relation.after.retain(|target| {
+                !invalidated.contains(&(
+                    PathBuf::from(&target.note_path),
+                    target.block_id.clone(),
+                ))
+            });
+            if relation.after.len() == before {
+                dropped.push(false);
+                continue;
+            }
+            if relation.after.is_empty() {
+                let winning_relation = row
+                    .offer
+                    .as_ref()
+                    .is_some_and(|offer| offer.group == "relation");
+                if winning_relation {
+                    dropped.push(true);
+                } else {
+                    row.relation = None;
+                    dropped.push(false);
+                }
+                continue;
+            }
+            // Keep the surviving triggers; the offer's single `after`
+            // follows the new first trigger for relation winners.
+            if let Some(offer) = row.offer.as_mut()
+                && offer.group == "relation"
+            {
+                let first = &relation.after[0];
+                offer.after =
+                    Some(format!("{}#^{}", first.note_path, first.block_id));
+            }
+            dropped.push(false);
+        }
+        let mut kept = Vec::with_capacity(vec.len());
+        for (row, drop) in vec.drain(..).zip(dropped) {
+            if !drop {
+                kept.push(row);
+            }
+        }
+        *vec = kept;
+    }
+}
+
+/// Prune parked groups whose target a later item live-linked.
+fn prune_relation_groups_for_targets(
+    result: &mut super::output::CaptureItemResult,
+    invalidated: &BTreeSet<(PathBuf, String)>,
+) {
+    for vec in super::output::relation_groups_mut(result) {
+        vec.retain(|group| {
+            if group.event
+                != crate::native::task_complete::relation_successors::RelationEventKind::Parked
+            {
+                return true;
+            }
+            !invalidated.contains(&(
+                group.target.note_path.clone(),
+                group.target.block_id.clone(),
+            ))
+        });
+    }
 }
 
 /// Drop folded counts whose project no longer has a surviving row: a group
