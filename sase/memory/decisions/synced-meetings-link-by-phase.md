@@ -8,6 +8,7 @@ metadata:
   superseded_by:
     - decisions:untracked-sessions-omit-t-field
     - decisions:event-buffers-widen-the-span
+    - decisions:sync-sorts-event-task-links
 title: Synced Meetings Are Linked By Phase At Birth
 aliases:
   - synced-meetings-link-by-phase
@@ -77,6 +78,10 @@ Superseded in part: past, current, and future phases, and the MEET
 clusters those phases write, use the event's buffered span as occupied
 time. The meeting span in the bold label is unchanged. See
 [[decisions:event-buffers-widen-the-span]].
+
+Superseded in part: sync no longer only appends links; every run reorders
+each entry's Event Task links by meeting time. See
+[[decisions:sync-sorts-event-task-links]].
 
 [[decisions:calendar-events-are-daily-note-event-tasks]]
 

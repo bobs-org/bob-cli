@@ -13,6 +13,7 @@ mod doctor;
 mod gog;
 mod journal;
 pub(crate) mod lifecycle;
+mod link_order;
 mod list;
 mod login;
 mod login_ui;

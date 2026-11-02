@@ -64,6 +64,7 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             rows: Vec::new(),
             entries: Vec::new(),
             links_added: 0,
+            links_sorted: 0,
             warnings: Vec::new(),
             quiet: true,
             json: false,
@@ -94,6 +95,7 @@ struct SyncReport {
     rows: Vec<ReportRow>,
     entries: Vec<MeetPomodoroEntry>,
     links_added: usize,
+    links_sorted: usize,
     warnings: Vec<String>,
     quiet: bool,
     json: bool,
@@ -199,6 +201,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             rows: report_rows(&plan),
             entries: plan.pomodoro_entries.clone(),
             links_added: plan.links_added.len(),
+            links_sorted: plan.links_sorted,
             warnings: merge_warnings(warnings, &plan.warnings),
             quiet: args.quiet,
             json: args.format.is_json(),
@@ -216,6 +219,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             rows: Vec::new(),
             entries: Vec::new(),
             links_added: 0,
+            links_sorted: 0,
             warnings,
             quiet: args.quiet,
             json: args.format.is_json(),
@@ -298,6 +302,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         rows: Vec::new(),
                         entries: Vec::new(),
                         links_added: 0,
+                        links_sorted: 0,
                         warnings,
                         quiet: args.quiet,
                         json: args.format.is_json(),
@@ -333,6 +338,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         rows: report_rows(&plan),
         entries: plan.pomodoro_entries.clone(),
         links_added: plan.links_added.len(),
+        links_sorted: plan.links_sorted,
         warnings,
         quiet: args.quiet,
         json: args.format.is_json(),
@@ -358,6 +364,7 @@ fn waiting(
         rows: Vec::new(),
         entries: Vec::new(),
         links_added: 0,
+        links_sorted: 0,
         warnings: warnings.to_vec(),
         quiet: args.quiet,
         json: args.format.is_json(),
@@ -1194,6 +1201,7 @@ fn print_json(report: &SyncReport) {
                 "created": first_open_entry(report)
                     .is_some_and(|entry| entry.created),
                 "links_added": report.links_added,
+                "links_sorted": report.links_sorted,
                 "entries": json_entries(report),
             },
             "warnings": report.warnings,
@@ -1276,9 +1284,20 @@ fn print_human(report: &SyncReport) {
     let stamp_only = report.status == "written"
         && report.rows.is_empty()
         && report.links_added == 0
+        && report.links_sorted == 0
+        && created_entries == 0;
+    let sort_only = report.status == "written"
+        && report.rows.is_empty()
+        && report.links_added == 0
+        && report.links_sorted > 0
         && created_entries == 0;
     let summary = if report.status == "unchanged" {
         "✓ Events unchanged · Pomodoros unchanged".to_string()
+    } else if sort_only {
+        format!(
+            "✓ Events unchanged · Pomodoros ↕{} links sorted",
+            report.links_sorted
+        )
     } else if stamp_only {
         "✓ Events unchanged · stamp refreshed".to_string()
     } else {
@@ -1306,11 +1325,15 @@ fn print_human(report: &SyncReport) {
         } else {
             "entries"
         };
-        format!(
+        let mut pomodoros = format!(
             "✓ Events {} · Pomodoros +{created_entries} {entry_word}, +{} links",
             parts.join(", "),
             report.links_added,
-        )
+        );
+        if report.links_sorted > 0 {
+            pomodoros.push_str(&format!(", ↕{} sorted", report.links_sorted));
+        }
+        pomodoros
     };
     println!("{summary}");
     if let Some(stamp) = &report.stamp {

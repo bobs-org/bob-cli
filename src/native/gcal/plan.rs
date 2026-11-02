@@ -2,9 +2,11 @@
 //! `SyncPlan{contents, records, report}` out.
 //!
 //! The plan inserts new rows in time order (never reordering existing
-//! lines), adopts crash-recovery rows by their `📅` URL, tombstones
+//! rows), adopts crash-recovery rows by their `📅` URL, tombstones
 //! journaled rows whose line is gone, and files each created Event Task
-//! under a past, running, or planned MEET Pomodoro in the same write. It
+//! under a past, running, or planned MEET Pomodoro in the same write. Each
+//! run also keeps every Pomodoro entry's Event Task links in meeting-time
+//! order. It
 //! keeps a blank line under the `## Events` heading, then writes or
 //! refreshes the Bob-owned Events stamp as its last step. A run at a
 //! later minute rewrites only that stamp. When the computed contents
@@ -221,6 +223,8 @@ pub(crate) struct SyncPlan {
     pub rows_adopted: Vec<AdoptedRow>,
     pub rows_gone: Vec<GoneRow>,
     pub links_added: Vec<PlannedLink>,
+    /// Event Task link lines this run moved into meeting-time order.
+    pub links_sorted: usize,
     /// Google-owned spans and unedited `[root::]` values replaced in place.
     pub rows_updated: Vec<PlannedRow>,
     /// Untouched tasks cancelled for declined, deleted, or moved events.
@@ -445,6 +449,15 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
 
     plan_meet_pomodoros(input, &mut working, &mut plan);
 
+    let (sorted, links_sorted) = super::link_order::sort_event_task_links(
+        &working.finish(),
+        note_day(input),
+    );
+    if links_sorted > 0 {
+        working.replace(&sorted);
+        plan.links_sorted = links_sorted;
+    }
+
     plan_stamp(input, &mut working, &mut plan);
 
     plan.contents = working.finish();
@@ -470,6 +483,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
         plan.rows_gone.clear();
         plan.rows_removed.clear();
         plan.links_added.clear();
+        plan.links_sorted = 0;
         plan.rows_updated.clear();
         plan.rows_cancelled.clear();
         plan.rows_upgraded.clear();

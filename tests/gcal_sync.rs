@@ -594,6 +594,99 @@ fn sync_json_reports_rows_and_pomodoro() {
 }
 
 #[test]
+fn sync_sorts_event_task_links_and_reports_sort_only_runs() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-link-order");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = |id: &str, summary: &str, start: &str, end: &str| {
+        serde_json::json!({
+            "id": id,
+            "summary": summary,
+            "status": "confirmed",
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+            "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+            "attendees": [{"self": true, "responseStatus": "accepted"}]
+        })
+    };
+    let later_only = serde_json::json!({
+        "events": [event(
+            "lincoln-park-w",
+            "Lincoln Park W",
+            "2026-10-30T19:00:00-04:00",
+            "2026-10-30T19:30:00-04:00"
+        )],
+        "nextPageToken": null,
+    });
+    fake.events_json(&later_only.to_string());
+
+    let first = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 06:44:00");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    assert!(today_note(&env).contains("[[#^lincoln-park-w]]"));
+
+    let both = serde_json::json!({
+        "events": [
+            event(
+                "lincoln-park-w",
+                "Lincoln Park W",
+                "2026-10-30T19:00:00-04:00",
+                "2026-10-30T19:30:00-04:00"
+            ),
+            event(
+                "swings",
+                "Swings",
+                "2026-10-30T08:00:00-04:00",
+                "2026-10-30T08:30:00-04:00"
+            ),
+        ],
+        "nextPageToken": null,
+    });
+    fake.events_json(&both.to_string());
+
+    let added = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 06:44:00");
+    assert_eq!(added.status.code(), Some(0), "{}", stderr(&added));
+    let report: Value =
+        serde_json::from_str(&stdout(&added)).expect("JSON report");
+    assert_eq!(report["status"], "written");
+    assert_eq!(report["pomodoro"]["links_added"], 1);
+    assert_eq!(report["pomodoro"]["links_sorted"], 2);
+    let note = today_note(&env);
+    assert!(
+        note.find("[[#^swings]]") < note.find("[[#^lincoln-park-w]]"),
+        "{note}"
+    );
+
+    let sorted_pair = "\t- [[#^swings]]\n\t- [[#^lincoln-park-w]]";
+    let reversed_pair = "\t- [[#^lincoln-park-w]]\n\t- [[#^swings]]";
+    assert!(note.contains(sorted_pair), "{note}");
+    fs::write(
+        env.vault().join("2026/20261030.md"),
+        note.replacen(sorted_pair, reversed_pair, 1),
+    )
+    .expect("hand-reorder Event Task links");
+
+    let repaired = sync_at(&env, &fake, &[], "2026-10-30 06:44:00");
+    assert_eq!(repaired.status.code(), Some(0), "{}", stderr(&repaired));
+    assert_eq!(
+        stdout(&repaired)
+            .matches("✓ Events unchanged · Pomodoros ↕2 links sorted")
+            .count(),
+        1,
+        "{}",
+        stdout(&repaired)
+    );
+    assert!(today_note(&env).contains(sorted_pair));
+
+    let unchanged =
+        sync_at(&env, &fake, &["-f", "json"], "2026-10-30 06:44:00");
+    assert_eq!(unchanged.status.code(), Some(0), "{}", stderr(&unchanged));
+    let report: Value =
+        serde_json::from_str(&stdout(&unchanged)).expect("JSON report");
+    assert_eq!(report["status"], "unchanged");
+    assert_eq!(report["pomodoro"]["links_sorted"], 0);
+}
+
+#[test]
 fn hostile_titles_stay_data() {
     let env = GcalEnv::new("bob-cli-gcal-sync-hostile");
     prepare(&env);

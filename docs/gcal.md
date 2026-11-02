@@ -379,6 +379,12 @@ upgraded in place) is linked by phase, on any day:
 | Current: buffered start ≤ now < buffered end, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
 | Future: the buffered span has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
 
+Every sync run also keeps each Pomodoro entry's dedicated links to same-note
+Event Tasks in meeting-time order, matching the Events rows' bold spans. A
+link moves with its child bullets; notes, non-Event Task links, and other
+children stay in their existing positions. A hand reorder of Event Task links
+is restored on the next sync.
+
 Phases use the buffered span — what the event [occupies](#buffers) — while
 each row keeps its meeting span: the bold `**HHMM-HHMM**`, its journal
 hash, and Google ownership of the time never widen. Back-to-back or
@@ -397,8 +403,9 @@ named MEET, otherwise under the placeholder (created when missing). Sync
 never creates a running entry while any open timed Pomodoro exists; those
 current meetings go under the placeholder with a warning. Sync never starts,
 closes, retimes, renames, or moves an existing Pomodoro: it only creates
-entries and appends links. Existing unlinked rows still earn an open-MEET
-link only on today's note, and only when the event has not ended.
+entries, adds links, and reorders Event Task links within an entry. Existing
+unlinked rows still earn an open-MEET link only on today's note, and only
+when the event has not ended.
 
 A past day (`-D yesterday`) gains closed MEET entries and `[/]` rows. A
 future day (`-D tomorrow`) gains a MEET placeholder and `[*]` rows; task
@@ -419,7 +426,8 @@ success, no-op, or waiting.
 (`action`, `kind`, `time`, `title`, `root`, `source`, `off_clock`, deprecated
 `untracked`, and `buffer` as `{"before_minutes", "after_minutes"}` or
 `null`), `pomodoro`
-(`entry_line`, `created`, `links_added`, `entries`), `warnings`, and `stamp`
+(`entry_line`, `created`, `links_added`, `links_sorted`, `entries`),
+`warnings`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). Human rows append the buffer label to the time
 (`~ task 12:00–13:00 −30m +15m  Lunch …`), and MEET lines show buffered
@@ -428,7 +436,10 @@ created or appended links into (`state` `closed`/`running`/`planned`,
 1-based `line`, `time` as `HHMM-HHMM` or null, `created`, `links`) in
 ledger order. `entry_line` and `created` describe the first open entry in
 that list (`null` / `false` when the run linked only under closed entries).
-`links_added` counts every link, closed entries included.
+`links_added` counts every link, closed entries included. `links_sorted` counts
+Event Task link lines moved into meeting-time order. A sort-only human summary
+looks like `✓ Events unchanged · Pomodoros ↕2 links sorted`; other Pomodoro
+summaries append `, ↕2 sorted` when links moved.
 
 ### Events stamp
 
@@ -476,7 +487,7 @@ account, or set `gcal.account` to the stamp's account.
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Child bullets (meeting notes) | You | Never touched |
-| MEET Task Link | Bob, once | Never re-added or moved; removed only by a cancel |
+| MEET Task Link | Bob, once | Never re-added; kept in Event Task time order within its entry, so a hand reorder is undone; removed only by a cancel |
 | MEET Pomodoro entries | Bob, once | Created only in the write that adds their first link; never started, closed, retimed, renamed, or moved afterwards |
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
 | Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
@@ -730,7 +741,8 @@ no provider description or attendee list, and carries `off_clock`, deprecated
 
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
 `warnings`, and `stamp`. `stamp` is `{account, synced_at, refreshed}` or
-`null`. `pomodoro` carries `entry_line`, `created`, `links_added`, and
+`null`. `pomodoro` carries `entry_line`, `created`, `links_added`,
+`links_sorted`, and
 `entries` as in [Sync](#sync). Row actions add `updated`, `cancelled`,
 `removed` (context), `upgraded`, and `learned` to the sync-phase `added`,
 `adopted`, and `removed` (task) actions; lifecycle notices also arrive as

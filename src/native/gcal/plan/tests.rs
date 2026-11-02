@@ -1198,6 +1198,148 @@ fn replanning_output_with_journal_is_idempotent() {
 }
 
 #[test]
+fn new_earlier_event_sorts_before_a_previously_journaled_link() {
+    let late = with_phase(
+        occurrence("lincoln", "Lincoln Park", true, "1900-1930", 1140),
+        LinkPhase::Future,
+    );
+    let first = run_at(
+        empty_ledger(),
+        vec![late.clone()],
+        ACCOUNT,
+        now_at(6, 44),
+        true,
+    );
+    let late_row = first.rows_added.first().expect("late row");
+    let (key, mut state) = journal_task(
+        &late_row.event_id,
+        &late_row.block_id,
+        late_row.url.as_deref(),
+        true,
+    );
+    state
+        .row
+        .as_mut()
+        .expect("journal row")
+        .spans
+        .clone_from(&late_row.spans);
+    let journal = BTreeMap::from([(key, state)]);
+
+    let early = with_phase(
+        occurrence("swings", "Swings", true, "0800-0830", 480),
+        LinkPhase::Future,
+    );
+    let plan = plan_sync(&SyncPlanInput {
+        contents: &first.contents,
+        is_today: true,
+        occurrences: vec![late, early],
+        journal: &journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now: now_at(6, 44),
+    });
+
+    let pomodoros = plan.contents.split("## Pomodoros\n").nth(1).unwrap();
+    assert!(
+        pomodoros.find("[[#^swings]]") < pomodoros.find("[[#^lincoln-park]]"),
+        "{pomodoros}"
+    );
+    assert_eq!(plan.links_added.len(), 1);
+    assert_eq!(plan.links_sorted, 2);
+}
+
+#[test]
+fn sort_only_plan_refreshes_stamp_and_is_idempotent() {
+    let occurrences = vec![
+        with_phase(
+            occurrence("early", "Early", true, "0800-0830", 480),
+            LinkPhase::Future,
+        ),
+        with_phase(
+            occurrence("late", "Late", true, "1900-1930", 1140),
+            LinkPhase::Future,
+        ),
+    ];
+    let first = run_at(
+        empty_ledger(),
+        occurrences.clone(),
+        ACCOUNT,
+        now_at(6, 44),
+        true,
+    );
+    let mut journal = BTreeMap::new();
+    for row in &first.rows_added {
+        let (key, mut state) = journal_task(
+            &row.event_id,
+            &row.block_id,
+            row.url.as_deref(),
+            true,
+        );
+        state
+            .row
+            .as_mut()
+            .expect("journal row")
+            .spans
+            .clone_from(&row.spans);
+        journal.insert(key, state);
+    }
+    let early = first
+        .rows_added
+        .iter()
+        .find(|row| row.event_id == "early")
+        .expect("early row");
+    let late = first
+        .rows_added
+        .iter()
+        .find(|row| row.event_id == "late")
+        .expect("late row");
+    let early_link = format!("\t- [[#^{}]]", early.block_id);
+    let late_link = format!("\t- [[#^{}]]", late.block_id);
+    let mut misordered = first.contents.clone();
+    let ordered_pair = format!("{early_link}\n{late_link}");
+    let misordered_pair = format!("{late_link}\n{early_link}");
+    assert!(misordered.contains(&ordered_pair), "{}", misordered);
+    misordered = misordered.replacen(&ordered_pair, &misordered_pair, 1);
+
+    let sorted = plan_sync(&SyncPlanInput {
+        contents: &misordered,
+        is_today: true,
+        occurrences: occurrences.clone(),
+        journal: &journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now: now_at(6, 44),
+    });
+    assert!(sorted.changed);
+    assert!(sorted.stamp_refreshed);
+    assert_eq!(sorted.links_sorted, 2);
+    assert!(sorted.rows_added.is_empty());
+    assert!(sorted.links_added.is_empty());
+
+    let rerun = plan_sync(&SyncPlanInput {
+        contents: &sorted.contents,
+        is_today: true,
+        occurrences,
+        journal: &journal,
+        day_string: "2026-10-30".to_string(),
+        today: note_day(),
+        lifecycle: Vec::new(),
+        series_roots: &BTreeMap::new(),
+        account: ACCOUNT,
+        now: now_at(6, 44),
+    });
+    assert!(!rerun.changed);
+    assert_eq!(rerun.contents, sorted.contents);
+    assert_eq!(rerun.links_sorted, 0);
+}
+
+#[test]
 fn unedited_root_reroutes_to_token_and_adds_meet_type() {
     let (contents, journal, mut occ, block_id) = seed_task(with_root(
         occurrence("standup", "Standup", true, "0900-0930", 540),
