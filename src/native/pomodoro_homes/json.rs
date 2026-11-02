@@ -47,5 +47,9 @@ pub(crate) struct Homes {
     pub(crate) hue: Option<Hue>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) untracked: bool,
+    /// Off-clock marker beside deprecated `untracked`. Both are set from
+    /// the session clock; readers should prefer `off_clock`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) off_clock: bool,
     pub(crate) parts: Vec<HomePart>,
 }

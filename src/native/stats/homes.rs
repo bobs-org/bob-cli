@@ -2,25 +2,35 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::Path,
 };
 
 use chrono::NaiveDate;
 
 use super::{
+    clock::StatsClock,
     index::{PomodoroSession, StatsIndex},
     report::{
         HomeCatalogEntry, HomeLintReport, HomesHealthReport,
-        HueCollisionReport, RootFieldInvalidReport, RootFieldNotRootReport,
-        SessionFact, StatsWarning,
+        HueCollisionReport, OverlapReport, RootFieldInvalidReport,
+        RootFieldNotRootReport, SessionFact, StatsWarning,
     },
+    series::format_minutes,
     session_facts::session_fact,
 };
-use crate::native::pomodoro_homes::{
-    attribute_session, path_string, unfiled_home, unlinked_home, Home,
-    HomeKind, HomeResolver, Hue, IndexedHomeSource, NoteKind, ResolverHealth,
-    SessionHomes, SessionKind,
+use crate::native::{
+    capture::ClockStamp,
+    collect_done::trailing_block_id_in_line,
+    event_task::{
+        clock_verdict, line_has_off_clock_tag, ClockVerdict, LinkFact,
+    },
+    pomodoro_homes::{
+        attribute_session, is_checkbox_line, path_string, unfiled_home,
+        unlinked_home, Home, HomeKind, HomeResolver, Hue, IndexedHomeSource,
+        NoteKind, ResolverHealth, SessionHomes, SessionKind,
+    },
+    vault_links::LinkResolution,
 };
 
 pub(crate) struct HomesEngine<'a> {
@@ -104,6 +114,7 @@ impl<'a> HomesEngine<'a> {
         start: NaiveDate,
         end: NaiveDate,
         collect_sessions: bool,
+        clock: StatsClock,
     ) -> (
         BTreeMap<String, HomeCatalogEntry>,
         HomesHealthReport,
@@ -192,24 +203,77 @@ impl<'a> HomesEngine<'a> {
         }
         health.hue_collisions = collisions;
 
+        // Current task lines by (note path, block id) for drift checks.
+        // Duplicate block ids resolve to no line, matching `by_block_id`.
+        let task_lines = index_task_lines(&index.buffers);
+
         let mut sessions = Vec::new();
+        let mut intervals: Vec<(NaiveDate, u32, u32, u32)> = Vec::new();
         for (date, note) in &index.daily_notes {
             if *date < start || *date > end {
                 continue;
             }
             let daily_path = Path::new(&note.path);
             for session in &note.closed_pomodoros {
-                if session.untracked {
-                    health.untracked_sessions =
-                        health.untracked_sessions.saturating_add(1);
+                // Clock diagnostics cover closed timed sessions and ignore
+                // the request lens, so every view reports the same window.
+                if let Some(session_clock) = session.stats_clock() {
+                    if session_clock == StatsClock::OffClock {
+                        health.off_clock_sessions =
+                            health.off_clock_sessions.saturating_add(1);
+                        health.untracked_sessions =
+                            health.untracked_sessions.saturating_add(1);
+                    }
+                    match session.stamp {
+                        ClockStamp::Bare => {
+                            health.unstamped_sessions =
+                                health.unstamped_sessions.saturating_add(1);
+                        }
+                        ClockStamp::Conflict => {
+                            health.clock_conflicts =
+                                health.clock_conflicts.saturating_add(1);
+                        }
+                        ClockStamp::Keyed => {}
+                    }
+                    if session.stamp == ClockStamp::Keyed {
+                        let mut resolver = self.resolver.borrow_mut();
+                        if session_drifted(
+                            session,
+                            daily_path,
+                            &task_lines,
+                            &mut resolver,
+                        ) {
+                            health.clock_drift =
+                                health.clock_drift.saturating_add(1);
+                        }
+                    }
+                    if let Some((overlap_start, overlap_end)) =
+                        parse_session_interval(session.time_range.as_deref())
+                    {
+                        intervals.push((
+                            *date,
+                            session.line,
+                            overlap_start,
+                            overlap_end,
+                        ));
+                    }
                 }
-                let minutes = if session.untracked {
-                    Some(0)
-                } else {
-                    session.recorded_minutes
-                };
+                let minutes = session.counted_minutes();
                 let attributed = self.attribute(session, daily_path, minutes);
-                if collect_sessions {
+                let show = collect_sessions
+                    && match session.stats_clock() {
+                        Some(session_clock) => match clock {
+                            StatsClock::Worked => {
+                                session_clock == StatsClock::Worked
+                            }
+                            StatsClock::OffClock => {
+                                session_clock == StatsClock::OffClock
+                            }
+                            StatsClock::Total => true,
+                        },
+                        None => false,
+                    };
+                if show {
                     sessions.push(session_fact(
                         *date,
                         &note.path,
@@ -243,6 +307,9 @@ impl<'a> HomesEngine<'a> {
                 }
             }
         }
+        let (overlap_minutes, overlaps) = detect_overlaps(intervals);
+        health.overlap_minutes = overlap_minutes;
+        health.overlaps = overlaps;
 
         let needed_areas: Vec<String> = self
             .seen
@@ -651,6 +718,197 @@ fn add_named(parts: &mut Vec<(String, i64)>, key: &str, value: i64) {
     }
 }
 
+/// Current checkbox task lines by (vault-relative note path, block id).
+/// A block id found on more than one line resolves to no line, matching
+/// `note_tasks::by_block_id`: drift needs exactly one current task line.
+fn index_task_lines(
+    buffers: &[(String, String)],
+) -> HashMap<(String, String), String> {
+    let mut lines: HashMap<(String, String), String> = HashMap::new();
+    let mut duplicates: HashSet<(String, String)> = HashSet::new();
+    for (path, contents) in buffers {
+        for line in contents.lines() {
+            let Some(block_id) = trailing_block_id_in_line(line) else {
+                continue;
+            };
+            if !is_checkbox_line(line) {
+                continue;
+            }
+            let key = (path.clone(), block_id);
+            if duplicates.contains(&key) {
+                continue;
+            }
+            if lines.contains_key(&key) {
+                lines.remove(&key);
+                duplicates.insert(key);
+            } else {
+                lines.insert(key, line.to_string());
+            }
+        }
+    }
+    lines
+}
+
+/// Whether a keyed row's key disagrees with the verdict recomputed from its
+/// counted Task Links. Closed rows are history: later tag edits are
+/// reported here and never applied. Only fully resolved non-empty lineups
+/// can drift; unresolved or ambiguous links keep their existing resolver
+/// diagnostics, and empty lineups follow the shared Unlinked verdict with
+/// no task evidence to disagree with. Bare rows carry no key, and
+/// conflicts already surface through `clock_conflicts`.
+fn session_drifted(
+    session: &PomodoroSession,
+    daily_path: &Path,
+    task_lines: &HashMap<(String, String), String>,
+    resolver: &mut HomeResolver<IndexedHomeSource<'_>>,
+) -> bool {
+    let Some(row_clock) = session.stats_clock() else {
+        return false;
+    };
+    let mut seen = BTreeSet::new();
+    let mut facts = Vec::new();
+    for link in &session.links {
+        if !seen.insert((link.target.clone(), link.block_id.clone())) {
+            continue;
+        }
+        let Some(off_clock) =
+            resolve_link_clock(link, daily_path, task_lines, resolver)
+        else {
+            return false;
+        };
+        facts.push(LinkFact {
+            off_clock: Some(off_clock),
+        });
+    }
+    if facts.is_empty() {
+        return false;
+    }
+    match clock_verdict(&facts) {
+        ClockVerdict::OffClock => row_clock == StatsClock::Worked,
+        ClockVerdict::Worked { .. } => row_clock == StatsClock::OffClock,
+    }
+}
+
+/// Resolve one counted Task Link to its current task line and read the
+/// `#offclock` tag there. `None` means the link does not pin to exactly
+/// one task: no block id, an ambiguous or missing note, or a missing or
+/// duplicated block id. Same-note blocks resolve through the daily note,
+/// and archived tasks resolve wherever the note index finds them.
+fn resolve_link_clock(
+    link: &crate::native::pomodoro_homes::SessionLink,
+    daily_path: &Path,
+    task_lines: &HashMap<(String, String), String>,
+    resolver: &mut HomeResolver<IndexedHomeSource<'_>>,
+) -> Option<bool> {
+    if link.block_id.is_empty() {
+        return None;
+    }
+    let LinkResolution::Found(path) =
+        resolver.resolve_target(daily_path, &link.target)
+    else {
+        return None;
+    };
+    let line = task_lines.get(&(path_string(&path), link.block_id.clone()))?;
+    Some(line_has_off_clock_tag(line))
+}
+
+/// Parse a ledger time range into half-open minutes for overlap checks.
+/// Overnight spans normalize past midnight; touching endpoints stay
+/// empty, so adjacent sessions never overlap. Returns `None` for
+/// unparseable ranges and zero-length spans.
+fn parse_session_interval(time_range: Option<&str>) -> Option<(u32, u32)> {
+    let range = time_range?;
+    let (start_text, end_text) = range.split_once('-')?;
+    let (start_hour, start_min) = parse_hhmm(start_text)?;
+    let (end_hour, end_min) = parse_hhmm(end_text)?;
+    let start = start_hour * 60 + start_min;
+    let mut end = end_hour * 60 + end_min;
+    if end < start {
+        end += 24 * 60;
+    }
+    (end > start).then_some((start, end))
+}
+
+fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
+    let digits: String = text
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect();
+    if digits.len() != 4 {
+        return None;
+    }
+    let hour = digits[..2].parse::<u32>().ok()?;
+    let minute = digits[2..].parse::<u32>().ok()?;
+    (hour <= 23 && minute <= 59).then_some((hour, minute))
+}
+
+/// Cap for the reported overlapping pairs. The aggregate stays exact past
+/// the cap; only the detail sample is bounded.
+const MAX_OVERLAP_DETAILS: usize = 50;
+
+/// Sweep closed timed sessions for overlap using actual timed intervals,
+/// independent of keyed minute overrides. Comparisons stay per date inside
+/// the displayed window, never quadratic over all history. The aggregate
+/// is the union covered by two or more sessions, so a triple overlap
+/// contributes its shared minutes once even though the pairwise detail
+/// lists every pair. Clock totals never subtract this value.
+fn detect_overlaps(
+    intervals: Vec<(NaiveDate, u32, u32, u32)>,
+) -> (u32, Vec<OverlapReport>) {
+    let mut by_date: BTreeMap<NaiveDate, Vec<(u32, u32, u32)>> =
+        BTreeMap::new();
+    for (date, line, start, end) in intervals {
+        by_date.entry(date).or_default().push((line, start, end));
+    }
+    let mut total = 0u32;
+    let mut details = Vec::new();
+    for (date, mut spans) in by_date {
+        spans.sort();
+        let mut events: Vec<(u32, i32)> = Vec::with_capacity(spans.len() * 2);
+        for (_, start, end) in &spans {
+            events.push((*start, 1));
+            events.push((*end, -1));
+        }
+        events.sort_by(|left, right| {
+            left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
+        });
+        let mut depth = 0i32;
+        let mut covered_from = 0u32;
+        for (at, delta) in events {
+            let covered = depth >= 2;
+            depth += delta;
+            if covered && depth < 2 {
+                total = total.saturating_add(at.saturating_sub(covered_from));
+            } else if !covered && depth >= 2 {
+                covered_from = at;
+            }
+        }
+        for (first, rest) in spans.iter().enumerate() {
+            for other in &spans[first + 1..] {
+                let shared =
+                    rest.2.min(other.2).saturating_sub(rest.1.max(other.1));
+                if shared > 0 {
+                    let mut lines = vec![rest.0, other.0];
+                    lines.sort();
+                    details.push(OverlapReport {
+                        date,
+                        lines,
+                        minutes: shared,
+                    });
+                }
+            }
+        }
+    }
+    details.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then_with(|| left.lines.cmp(&right.lines))
+            .then_with(|| left.minutes.cmp(&right.minutes))
+    });
+    details.truncate(MAX_OVERLAP_DETAILS);
+    (total, details)
+}
+
 fn link_health(
     session: &PomodoroSession,
     daily_path: &Path,
@@ -759,7 +1017,65 @@ fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
             ),
         });
     }
+    // Clock diagnostics ride the existing warning channel so renderers can
+    // surface them without a second vault pass. Messages stay lowercase:
+    // only the off-clock view headers use the capitalized clock names.
+    if health.clock_conflicts > 0 {
+        warnings.push(StatsWarning {
+            code: "clock_conflict".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{} closed {} more than one duration key; counted as worked",
+                health.clock_conflicts,
+                plural_session(health.clock_conflicts),
+            ),
+        });
+    }
+    if health.clock_drift > 0 {
+        warnings.push(StatsWarning {
+            code: "clock_drift".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{} closed {} disagree with the linked tasks' #offclock tags; closed rows keep their keys",
+                health.clock_drift,
+                plural_session(health.clock_drift),
+            ),
+        });
+    }
+    if health.unstamped_sessions > 0 {
+        warnings.push(StatsWarning {
+            code: "clock_unstamped".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{} closed {} no duration key; counted from the time span",
+                health.unstamped_sessions,
+                plural_session(health.unstamped_sessions),
+            ),
+        });
+    }
+    if health.overlap_minutes > 0 {
+        warnings.push(StatsWarning {
+            code: "clock_overlap".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "closed sessions overlap by {}; clock totals count every session",
+                format_minutes(i64::from(health.overlap_minutes)),
+            ),
+        });
+    }
     warnings
+}
+
+fn plural_session(count: u32) -> &'static str {
+    if count == 1 {
+        "session has"
+    } else {
+        "sessions have"
+    }
 }
 
 fn join_names(names: &[String]) -> String {
@@ -1471,5 +1787,94 @@ mod tests {
         assert!(catalog.get("@review:PLAN").is_none());
         assert_eq!(catalog["gtd_daily.md"]["root_parent"], "gtd_daily.md");
         assert_eq!(catalog["@unlinked"]["label"], "unlinked");
+    }
+
+    #[test]
+    fn session_intervals_parse_spans_and_reject_empty_ranges() {
+        assert_eq!(
+            super::parse_session_interval(Some("08:00 - 08:25")),
+            Some((480, 505))
+        );
+        assert_eq!(
+            super::parse_session_interval(Some("0800-0825")),
+            Some((480, 505))
+        );
+        assert_eq!(
+            super::parse_session_interval(Some("2200-0100")),
+            Some((1320, 1500))
+        );
+        assert_eq!(super::parse_session_interval(Some("0900-0900")), None);
+        assert_eq!(super::parse_session_interval(None), None);
+        assert_eq!(super::parse_session_interval(Some("nope")), None);
+        assert_eq!(super::parse_session_interval(Some("25:00-2600")), None);
+    }
+
+    #[test]
+    fn overlap_sweep_counts_shared_minutes_once_for_triple_overlaps() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 9).expect("fixture date");
+        // A 08:00-09:00, B 08:30-09:30, C 08:45-09:15: the union covered
+        // twice is 08:30-09:15 (45m) even though three pairs overlap.
+        let (total, details) = super::detect_overlaps(vec![
+            (day, 9, 480, 540),
+            (day, 10, 510, 570),
+            (day, 11, 525, 555),
+        ]);
+        assert_eq!(total, 45);
+        assert_eq!(details.len(), 3);
+        assert_eq!(details[0].lines, vec![9, 10]);
+        assert_eq!(details[0].minutes, 30);
+        assert_eq!(details[1].lines, vec![9, 11]);
+        assert_eq!(details[1].minutes, 15);
+        assert_eq!(details[2].lines, vec![10, 11]);
+        assert_eq!(details[2].minutes, 30);
+        assert!(details.iter().all(|detail| detail.date == day));
+    }
+
+    #[test]
+    fn overlap_ignores_touching_endpoints_and_normalizes_overnight() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 9).expect("fixture date");
+        // Adjacent sessions share an endpoint but never overlap.
+        let (total, details) = super::detect_overlaps(vec![
+            (day, 9, 480, 510),
+            (day, 10, 510, 540),
+        ]);
+        assert_eq!(total, 0);
+        assert!(details.is_empty());
+        // Two overnight spans overlap past midnight after normalization.
+        let (total, details) = super::detect_overlaps(vec![
+            (day, 9, 1380, 1500),
+            (day, 10, 1320, 1410),
+        ]);
+        assert_eq!(total, 30);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].lines, vec![9, 10]);
+        assert_eq!(details[0].minutes, 30);
+    }
+
+    #[test]
+    fn overlap_details_cap_at_fifty_while_the_aggregate_stays_exact() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 9).expect("fixture date");
+        let intervals = (1..=61u32).map(|line| (day, line, 480, 540)).collect();
+        let (total, details) = super::detect_overlaps(intervals);
+        assert_eq!(total, 60);
+        assert_eq!(details.len(), 50);
+        assert_eq!(details[0].lines, vec![1, 2]);
+    }
+
+    #[test]
+    fn duplicate_block_ids_resolve_to_no_task_line() {
+        let buffers = vec![(
+            "tasks.md".to_string(),
+            "- [ ] #task One ^t\n- [ ] #task Two ^t\n- [ ] #task Three ^u\n"
+                .to_string(),
+        )];
+        let lines = super::index_task_lines(&buffers);
+        assert!(lines
+            .get(&("tasks.md".to_string(), "t".to_string()))
+            .is_none());
+        assert_eq!(
+            lines.get(&("tasks.md".to_string(), "u".to_string())),
+            Some(&"- [ ] #task Three ^u".to_string())
+        );
     }
 }

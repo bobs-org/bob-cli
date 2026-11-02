@@ -90,6 +90,7 @@ pub(crate) struct PomodoroSession {
     pub(crate) line: u32,
     pub(crate) links: Vec<pomodoro_homes::SessionLink>,
     pub(crate) clock: crate::native::capture::SessionClock,
+    pub(crate) stamp: crate::native::capture::ClockStamp,
     pub(crate) untracked: bool,
 }
 
@@ -667,6 +668,7 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 .and_then(|line| lines.get(line).copied())
                 .unwrap_or("");
             let clock = crate::native::pomodoro::session_clock(raw_line);
+            let stamp = crate::native::capture::clock_stamp(raw_line);
             let untracked = matches!(
                 clock,
                 crate::native::capture::SessionClock::OffClock { .. }
@@ -695,6 +697,7 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                     entry.line.saturating_sub(1),
                 ),
                 clock,
+                stamp,
                 untracked,
             }
         })
@@ -1205,6 +1208,7 @@ mod tests {
                 clock: crate::native::capture::SessionClock::Worked {
                     minutes: 0,
                 },
+                stamp: crate::native::capture::ClockStamp::Keyed,
                 untracked: false,
             }],
             frontmatter_fields: BTreeMap::from([(

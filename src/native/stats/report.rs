@@ -315,6 +315,10 @@ pub(crate) struct SessionFact {
     pub(crate) quality: DataQuality,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
+    /// True for off-clock rows. Omitted for worked rows; the nested
+    /// homes object keeps deprecated `untracked` beside `off_clock`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) off_clock: bool,
     pub(crate) homes: Homes,
 }
 
@@ -353,6 +357,30 @@ pub(crate) struct HomesHealthReport {
     pub(crate) unlinked_sessions: u32,
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub(crate) untracked_sessions: u32,
+    /// Closed off-clock sessions in the window. Kept equal to deprecated
+    /// `untracked_sessions` through the compatibility window.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub(crate) off_clock_sessions: u32,
+    /// Closed timed sessions with no duration key (bare spans).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub(crate) unstamped_sessions: u32,
+    /// Closed timed sessions carrying both `[t::]` and `[off::]`.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub(crate) clock_conflicts: u32,
+    /// Keyed rows whose key disagrees with the verdict recomputed from
+    /// their fully resolved counted Task Links.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub(crate) clock_drift: u32,
+    /// Minutes covered by two or more closed timed sessions. Totals never
+    /// subtract this; it only describes the overlap.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub(crate) overlap_minutes: u32,
+    /// Bounded detail sample of overlapping pairs (at most 50). The
+    /// aggregate `overlap_minutes` stays exact when details are capped:
+    /// it sweeps the union covered twice, so a triple overlap never
+    /// inflates it the way a pairwise listing would.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) overlaps: Vec<OverlapReport>,
     pub(crate) unfiled_links: u32,
     pub(crate) ambiguous_links: u32,
     pub(crate) unresolved_links: u32,
@@ -370,6 +398,16 @@ pub(crate) struct HomesHealthReport {
 pub(crate) struct HomeLintReport {
     pub(crate) path: String,
     pub(crate) raw: String,
+}
+
+/// One overlapping pair of closed timed sessions. At most 50 entries are
+/// reported; see `HomesHealthReport::overlaps`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct OverlapReport {
+    #[serde(serialize_with = "iso_date")]
+    pub(crate) date: NaiveDate,
+    pub(crate) lines: Vec<u32>,
+    pub(crate) minutes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -3,25 +3,24 @@
 use chrono::NaiveDate;
 
 use super::{
-    index::PomodoroSession, report::SessionFact, series::format_minutes,
-    value::DataQuality,
+    clock::StatsClock, index::PomodoroSession, report::SessionFact,
+    series::format_minutes, value::DataQuality,
 };
 use crate::native::pomodoro_homes::SessionHomes;
 
-/// One closed-session fact. `attributed` is the unfiltered R9 object.
+/// One closed-session fact. `attributed` is the unfiltered R9 object with
+/// real closed-session minutes; off-clock rows carry `off_clock`.
 pub(crate) fn session_fact(
     date: NaiveDate,
     path: &str,
     session: &PomodoroSession,
     attributed: &SessionHomes,
 ) -> SessionFact {
-    let (minutes, quality) = if session.untracked {
-        (Some(0), DataQuality::Ok)
+    let minutes = session.counted_minutes();
+    let quality = if minutes.is_some() {
+        DataQuality::Ok
     } else {
-        match (session.recorded_minutes, session.range_minutes) {
-            (Some(minutes), _) => (Some(minutes), DataQuality::Ok),
-            (None, _) => (None, DataQuality::Missing),
-        }
+        DataQuality::Missing
     };
     let minutes_display = match minutes {
         Some(minutes) => format_minutes(i64::from(minutes)),
@@ -36,6 +35,7 @@ pub(crate) fn session_fact(
         minutes_display,
         quality,
         name: session.name.clone(),
+        off_clock: session.stats_clock() == Some(StatsClock::OffClock),
         homes: attributed.homes.clone(),
     }
 }

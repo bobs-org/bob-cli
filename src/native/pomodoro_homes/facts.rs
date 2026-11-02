@@ -150,7 +150,7 @@ fn collect_task_roots(contents: &str) -> HashMap<String, TaskRootFact> {
         .collect()
 }
 
-fn is_checkbox_line(line: &str) -> bool {
+pub(crate) fn is_checkbox_line(line: &str) -> bool {
     let stripped = strip_blockquote_prefix(line).trim_start();
     let after_marker = stripped
         .strip_prefix('-')

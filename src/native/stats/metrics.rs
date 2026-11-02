@@ -1537,6 +1537,7 @@ mod tests {
                         clock: crate::native::capture::SessionClock::Worked {
                             minutes: 0,
                         },
+                        stamp: crate::native::capture::ClockStamp::Keyed,
                         untracked: false,
                     },
                     super::super::index::PomodoroSession {
@@ -1550,6 +1551,7 @@ mod tests {
                             minutes: 0,
                             stamped: true,
                         },
+                        stamp: crate::native::capture::ClockStamp::Keyed,
                         untracked: true,
                     },
                 ],
@@ -1595,6 +1597,7 @@ mod tests {
                     clock: crate::native::capture::SessionClock::Worked {
                         minutes: 0,
                     },
+                    stamp: crate::native::capture::ClockStamp::Keyed,
                     untracked: false,
                 }],
                 ..DailyNoteInputs::default()
@@ -1652,6 +1655,7 @@ mod tests {
                         clock: crate::native::capture::SessionClock::Worked {
                             minutes: 0,
                         },
+                        stamp: crate::native::capture::ClockStamp::Keyed,
                         untracked: false,
                     },
                     super::super::index::PomodoroSession {
@@ -1671,6 +1675,7 @@ mod tests {
                         clock: crate::native::capture::SessionClock::Worked {
                             minutes: 0,
                         },
+                        stamp: crate::native::capture::ClockStamp::Keyed,
                         untracked: false,
                     },
                 ],
@@ -1717,6 +1722,7 @@ mod tests {
                     clock: crate::native::capture::SessionClock::Worked {
                         minutes: 0,
                     },
+                    stamp: crate::native::capture::ClockStamp::Keyed,
                     untracked: false,
                 }],
                 ..DailyNoteInputs::default()
@@ -2070,6 +2076,7 @@ mod tests {
                     clock: crate::native::capture::SessionClock::Worked {
                         minutes: 0,
                     },
+                    stamp: crate::native::capture::ClockStamp::Keyed,
                     untracked: false,
                 }],
                 ..DailyNoteInputs::default()
@@ -2110,6 +2117,23 @@ mod tests {
             clock,
             crate::native::capture::SessionClock::OffClock { .. }
         );
+        let stamp = match clock {
+            crate::native::capture::SessionClock::Worked { .. } => {
+                crate::native::capture::ClockStamp::Keyed
+            }
+            crate::native::capture::SessionClock::OffClock {
+                stamped, ..
+            } => {
+                if stamped {
+                    crate::native::capture::ClockStamp::Keyed
+                } else {
+                    crate::native::capture::ClockStamp::Bare
+                }
+            }
+            crate::native::capture::SessionClock::Placeholder => {
+                crate::native::capture::ClockStamp::Bare
+            }
+        };
         super::super::index::PomodoroSession {
             name: Some(name.to_string()),
             recorded_minutes: recorded,
@@ -2118,6 +2142,7 @@ mod tests {
             line: 1,
             links: Vec::new(),
             clock,
+            stamp,
             untracked,
         }
     }

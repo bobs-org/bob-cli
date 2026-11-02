@@ -822,9 +822,10 @@ pub(crate) enum SessionClock {
 }
 
 /// Diagnostic for the explicit clock metadata on a ledger row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum ClockStamp {
     Keyed,
+    #[default]
     Bare,
     Conflict,
 }

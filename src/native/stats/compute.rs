@@ -175,6 +175,7 @@ pub(crate) fn compute(
         resolved.report.start,
         health_end,
         collect_sessions,
+        request.clock,
     );
 
     let mut metrics = Vec::with_capacity(selected.len());
@@ -709,11 +710,20 @@ mod tests {
             crate::native::pomodoro_themes::HueSource::Exempt
         );
         assert!(report.theme_hues["sase"].known);
-        assert_eq!(report.warnings.len(), 3);
+        assert_eq!(report.warnings.len(), 4);
         assert!(report
             .warnings
             .iter()
+            .filter(|warning| warning.code != "clock_unstamped")
             .all(|warning| warning.code == "journal_gap"));
+        assert_eq!(
+            report
+                .warnings
+                .iter()
+                .filter(|warning| warning.code == "clock_unstamped")
+                .count(),
+            1
+        );
 
         // Explicit ranges carry no preset; the end stays yesterday while
         // today rides along as a provisional point.
@@ -1275,20 +1285,29 @@ mod tests {
         assert_eq!(review_time.summary.p25, Some(0));
         assert_eq!(review_time.summary.p75, Some(0));
 
-        assert_eq!(report.sessions.len(), 4);
+        // The Worked lens filters the bare off-clock MEET row out of the
+        // drill-down; Total brings it back with real span minutes.
+        assert_eq!(report.sessions.len(), 3);
         assert_eq!(report.sessions[0].name.as_deref(), Some("PLAN"));
         assert_eq!(report.sessions[0].minutes, Some(25));
         assert_eq!(report.sessions[0].quality, DataQuality::Ok);
+        assert!(!report.sessions[0].off_clock);
         assert_eq!(report.sessions[1].name.as_deref(), Some("PLAN + SASE"));
         assert_eq!(report.sessions[1].minutes, Some(7));
-        assert_eq!(report.sessions[2].name.as_deref(), Some("MEET"));
-        assert_eq!(report.sessions[2].minutes, Some(0));
-        assert_eq!(report.sessions[2].quality, DataQuality::Ok);
-        assert!(report.sessions[2].homes.untracked);
-        assert_eq!(report.sessions[3].name.as_deref(), Some("SASE"));
-        assert_eq!(report.sessions[3].minutes, Some(10));
-        assert_eq!(report.sessions[3].date, day(11));
+        assert!(!report.sessions[1].off_clock);
+        assert_eq!(report.sessions[2].name.as_deref(), Some("SASE"));
+        assert_eq!(report.sessions[2].minutes, Some(10));
+        assert_eq!(report.sessions[2].date, day(11));
+        assert!(!report.sessions[2].off_clock);
+        assert!(!report.sessions[2].homes.untracked);
+        assert!(!report.sessions[2].homes.off_clock);
         assert_eq!(report.health.homes.untracked_sessions, 1);
+        assert_eq!(report.health.homes.off_clock_sessions, 1);
+        assert_eq!(report.health.homes.unstamped_sessions, 1);
+        assert_eq!(report.health.homes.clock_conflicts, 0);
+        assert_eq!(report.health.homes.clock_drift, 0);
+        assert_eq!(report.health.homes.overlap_minutes, 0);
+        assert!(report.health.homes.overlaps.is_empty());
 
         // M11 sessions: count mode counts each closed row once even when it
         // carries two themes; parts still attribute the row to PLAN.
@@ -1775,6 +1794,15 @@ stats:
             DataQuality::Ok,
             false,
         );
+        // The Off-clock lens shows only the bare MEET row, with real span
+        // minutes and both off-clock markers set.
+        assert_eq!(off.sessions.len(), 1);
+        assert_eq!(off.sessions[0].name.as_deref(), Some("MEET"));
+        assert_eq!(off.sessions[0].minutes, Some(60));
+        assert_eq!(off.sessions[0].quality, DataQuality::Ok);
+        assert!(off.sessions[0].off_clock);
+        assert!(off.sessions[0].homes.untracked);
+        assert!(off.sessions[0].homes.off_clock);
 
         let family = metric(&off, "family_time");
         assert_eq!(family.label, "Family time · off-clock");
@@ -1844,6 +1872,32 @@ stats:
             DataQuality::Ok,
             false,
         );
+        // Total shows every row: the bare MEET row carries real span
+        // minutes and the off-clock flag, worked rows omit the flag.
+        assert_eq!(total.sessions.len(), 4);
+        let meet = total
+            .sessions
+            .iter()
+            .find(|session| session.name.as_deref() == Some("MEET"))
+            .expect("MEET session");
+        assert_eq!(meet.minutes, Some(60));
+        assert!(meet.off_clock);
+        assert!(meet.homes.untracked);
+        assert!(meet.homes.off_clock);
+        assert!(total
+            .sessions
+            .iter()
+            .filter(|session| session.name.as_deref() != Some("MEET"))
+            .all(|session| !session.off_clock));
+        let meet_json = serde_json::to_value(meet).expect("session JSON");
+        assert_eq!(meet_json["off_clock"], true);
+        assert_eq!(meet_json["homes"]["off_clock"], true);
+        assert_eq!(meet_json["homes"]["untracked"], true);
+        let plan_json =
+            serde_json::to_value(&total.sessions[0]).expect("session JSON");
+        assert!(plan_json.get("off_clock").is_none());
+        assert!(plan_json["homes"].get("off_clock").is_none());
+        assert!(plan_json["homes"].get("untracked").is_none());
         expect_point(
             &metric(&total, "inner").points[1],
             day(9),
@@ -1869,8 +1923,194 @@ stats:
         assert_eq!(family.direction, "neutral");
         assert_eq!(family.points[0].value, Some(60));
         assert_eq!(family.points[0].off_clock, None);
-        assert_eq!(pinned.sessions[2].minutes, Some(0));
-        assert!(pinned.sessions[2].homes.untracked);
+        // The Worked lens keeps the three worked rows; diagnostics still
+        // describe the whole window.
+        assert_eq!(pinned.sessions.len(), 3);
+        assert_eq!(pinned.sessions[2].name.as_deref(), Some("SASE"));
+        assert_eq!(pinned.sessions[2].minutes, Some(10));
+        assert!(!pinned.sessions[2].off_clock);
+        assert!(!pinned.sessions[2].homes.untracked);
+        assert_eq!(pinned.health.homes.off_clock_sessions, 1);
+        assert_eq!(pinned.health.homes.untracked_sessions, 1);
+        assert_eq!(pinned.health.homes.unstamped_sessions, 1);
+        assert_eq!(pinned.health.homes.clock_conflicts, 0);
+        assert_eq!(pinned.health.homes.clock_drift, 0);
+        assert!(pinned.health.homes.overlaps.is_empty());
+        let warnings: Vec<&str> = pinned
+            .warnings
+            .iter()
+            .map(|warning| warning.code.as_str())
+            .collect();
+        assert!(warnings.contains(&"clock_unstamped"));
+        assert!(!warnings.contains(&"clock_conflict"));
+        assert!(!warnings.contains(&"clock_drift"));
+        assert!(!warnings.contains(&"clock_overlap"));
+    }
+
+    #[test]
+    fn session_diagnostics_filter_sessions_and_report_window_counts() {
+        let workspace = TempDir::new().unwrap();
+        let vault = workspace.path().join("vault");
+        copy_tree(&fixture_vault(), &vault);
+        for dir in ["a", "b"] {
+            let note = vault.join(dir).join("dup.md");
+            std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+            std::fs::write(
+                &note,
+                "- [x] #task Dup task [created:: 2026-10-09] [completion:: 2026-10-09] ^t\n",
+            )
+            .unwrap();
+        }
+        let tasks = vault.join("tasks.md");
+        let mut task_text = std::fs::read_to_string(&tasks).unwrap();
+        task_text.push_str(
+            "- [ ] #task Off-clock errand #offclock [created:: 2026-10-09] ^off1\n",
+        );
+        task_text.push_str(
+            "- [x] #task On-clock chore [created:: 2026-10-09] [completion:: 2026-10-09] ^on1\n",
+        );
+        std::fs::write(&tasks, task_text).unwrap();
+        let daily = vault.join("2026/20261009.md");
+        let mut daily_text = std::fs::read_to_string(&daily).unwrap();
+        daily_text.push_str(
+            "- [x] (**10:00 - 10:30** [t:: 20m] [off:: 45m]) — CONFLICT\n",
+        );
+        daily_text.push_str("- [x] (**08:10 - 08:40** [t:: 20m]) — OVER\n");
+        daily_text.push_str(
+            "- [x] (**14:00 - 14:25** [t:: 25m]) — LATE\n  - [[TASKS#^off1]]\n",
+        );
+        daily_text.push_str(
+            "- [x] (**15:00 - 15:20** [off:: 20m]) — EARLY\n  - [[tasks#^on1]]\n",
+        );
+        daily_text.push_str(
+            "- [x] (**16:00 - 16:10** [t:: 10m]) — LOST\n  - [[missing#^x1]]\n",
+        );
+        daily_text.push_str(
+            "- [x] (**16:20 - 16:30** [t:: 10m]) — TWICE\n  - [[dup#^t]]\n",
+        );
+        daily_text.push_str(
+            "- [x] (**16:40 - 16:50** [t:: 10m]) — NOBLOCK\n  - [[tasks#^nope]]\n",
+        );
+        daily_text.push_str("- [x] (**18:00 - 18:30**) — SOLO\n");
+        daily_text.push_str("- [x] () — GHOST\n");
+        std::fs::write(&daily, daily_text).unwrap();
+        let config = write_config(&workspace, "stats:\n");
+
+        let mut request =
+            StatsRequest::at(vault.clone(), config.clone(), fixed_now());
+        request.selection =
+            MetricSelection::Explicit(vec!["worked".to_string()]);
+        request.range = Some("2026-10-08..2026-10-11".to_string());
+        request.grouping = Grouping::Day;
+        let report = compute(&request).expect("worked diagnostics");
+
+        // Keyed rows count their keys; the conflict keeps `[t::]`, and the
+        // bare rows count their spans off the clock.
+        let worked = metric(&report, "worked");
+        assert_eq!(worked.points[1].value, Some(127));
+        assert_eq!(worked.points[1].off_clock, Some(110));
+
+        // The Worked lens hides the three off-clock rows; the completed
+        // placeholder never appears in any lens.
+        assert_eq!(report.sessions.len(), 9);
+        assert!(report.sessions.iter().all(|session| !session.off_clock));
+        assert!(report
+            .sessions
+            .iter()
+            .all(|session| session.name.as_deref() != Some("GHOST")));
+
+        // Diagnostics describe the whole window, not the lens.
+        let health = &report.health.homes;
+        assert_eq!(health.off_clock_sessions, 3);
+        assert_eq!(health.untracked_sessions, 3);
+        assert_eq!(health.unstamped_sessions, 2);
+        assert_eq!(health.clock_conflicts, 1);
+        assert_eq!(health.clock_drift, 2);
+        assert_eq!(health.overlap_minutes, 15);
+        assert_eq!(health.overlaps.len(), 1);
+        assert_eq!(health.overlaps[0].minutes, 15);
+        assert_eq!(health.overlaps[0].lines, vec![9, 14]);
+        // Unlinked rows carry real minutes now: the bare SOLO span counts.
+        // The completed GHOST placeholder stays unlinked but out of every
+        // diagnostic and lens.
+        assert_eq!(health.unlinked_minutes, 112);
+        assert_eq!(health.unlinked_sessions, 7);
+        let codes: Vec<&str> = report
+            .warnings
+            .iter()
+            .map(|warning| warning.code.as_str())
+            .collect();
+        for code in [
+            "clock_conflict",
+            "clock_drift",
+            "clock_unstamped",
+            "clock_overlap",
+        ] {
+            assert!(codes.contains(&code), "missing {code}: {codes:?}");
+        }
+
+        // The Off-clock lens shows only MEET, EARLY, and SOLO.
+        let mut off_request = request.clone();
+        off_request.clock = StatsClock::OffClock;
+        let off = compute(&off_request).expect("off-clock diagnostics");
+        assert_eq!(off.sessions.len(), 3);
+        assert!(off.sessions.iter().all(|session| session.off_clock));
+        assert_eq!(off.health.homes.clock_drift, 2);
+        assert_eq!(off.health.homes.overlap_minutes, 15);
+
+        // Total shows every timed row with real minutes, still no GHOST.
+        let mut total_request = request.clone();
+        total_request.clock = StatsClock::Total;
+        let total = compute(&total_request).expect("total diagnostics");
+        assert_eq!(total.sessions.len(), 12);
+        let solo = total
+            .sessions
+            .iter()
+            .find(|session| session.name.as_deref() == Some("SOLO"))
+            .expect("SOLO session");
+        assert_eq!(solo.minutes, Some(30));
+        assert!(solo.off_clock);
+        let conflict = total
+            .sessions
+            .iter()
+            .find(|session| session.name.as_deref() == Some("CONFLICT"))
+            .expect("CONFLICT session");
+        assert_eq!(conflict.minutes, Some(20));
+        assert!(!conflict.off_clock);
+        let meet = total
+            .sessions
+            .iter()
+            .find(|session| session.name.as_deref() == Some("MEET"))
+            .expect("MEET session");
+        let meet_json = serde_json::to_value(meet).expect("session JSON");
+        assert_eq!(meet_json["minutes"], 60);
+        assert_eq!(meet_json["off_clock"], true);
+        assert_eq!(meet_json["homes"]["off_clock"], true);
+        assert_eq!(meet_json["homes"]["untracked"], true);
+        let part_minutes: u32 = meet_json["homes"]["parts"]
+            .as_array()
+            .expect("home parts")
+            .iter()
+            .map(|part| part["minutes"].as_u64().unwrap_or(0) as u32)
+            .sum();
+        assert_eq!(part_minutes, 60);
+
+        // Empty diagnostics stay omitted from the JSON contract.
+        let mut golden_request =
+            golden_request(fixture_vault(), config.clone());
+        golden_request.selection =
+            MetricSelection::Explicit(vec!["worked".to_string()]);
+        let golden =
+            compute(&golden_request).expect("pristine fixture computes");
+        let health_json =
+            serde_json::to_value(&golden.health.homes).expect("health JSON");
+        assert!(health_json.get("clock_conflicts").is_none());
+        assert!(health_json.get("clock_drift").is_none());
+        assert!(health_json.get("overlap_minutes").is_none());
+        assert!(health_json.get("overlaps").is_none());
+        assert_eq!(health_json["off_clock_sessions"], 1);
+        assert_eq!(health_json["untracked_sessions"], 1);
+        assert_eq!(health_json["unstamped_sessions"], 1);
     }
 
     #[test]
