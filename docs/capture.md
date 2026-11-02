@@ -876,8 +876,14 @@ stays a plain note. Same-line notes under `@route+id <note>` still nest,
 and a drawer shortcut there is refused (`drawer_bullet_position`). A
 drawer shortcut takes no same-line text (`drawer_bullet_text`); nest the
 note beneath it. Capture never creates an empty drawer
-(`empty_drawer_bullet`). On a new project note the shortcut becomes a
-`## Title Case` section through the existing writer.
+(`empty_drawer_bullet`). A Bob-managed name (`TASKS`, `SCHEDULE LOG`,
+`LINKS`, and the other managed log and relation labels) cannot name a drawer
+under a task: `#tasks` and a literal `TASKS` with nested notes are refused
+(`reserved_drawer`), and `bob capture-parse` reports the same code and wording
+on the bullet's exact byte range as soon as it is typed. A childless literal
+stays a plain note, and a new project note keeps `TASKS` as a structural merge.
+On a new project note the shortcut becomes a `## Title Case` section through
+the existing writer.
 
 Authored children render before clipboard children and the priority
 schedule log, so the full block order is: parent line, authored children,
@@ -5103,6 +5109,17 @@ nests, and ALL-CAPS stays literal there. Item-wide `s:<N>`, `$<N>`, `%c`,
 and `--clip` are refused on this form, while a separate `#type` retypes the
 target and `&`, `*`, `~` keep it as owner.
 
+The modifiers do exactly what they do beside a single note. A configured
+complete label (`~other:id|"implemented by"`) completes the owner, and a
+configured cancel label cancels it; with `~~` the picked source is the one
+completed or cancelled. Today's ledger link, successors, and keep-moving
+offers follow, and the same conflict and recurring-task refusals roll the
+whole draft back. The item's `parent_line`, `parent_text`,
+`parent_status_symbol`, and `parent_status_name` describe the parent after
+every staged effect (a `&` block, a `*` lane change, a relation close, or a
+same-note mirror that moved its line), and agree with its `task_blocks`
+entry and the file bytes.
+
 Every sub-bullet batch also reports its parent tasks once, in final state,
 in the batch-level `task_blocks` array; see
 [Task blocks](#task-blocks).
@@ -6693,6 +6710,11 @@ Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_drawer`,
 `drawer_bullet_text`, `drawer_bullet_position`, `empty_drawer_bullet`,
+`reserved_drawer` (a Bob-managed drawer name on a first-level shortcut or
+ALL-CAPS literal with nested notes under a new task or an existing
+`@route+id` target, ranged on the bullet's name; never on a new project note,
+and structural `^prj` headings or near-duplicates stay commit-time, because
+only the vault knows),
 `invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `@` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `@`, a `#name` without its `@` seal, text after the seal, or an `=` suffix), `retired_project_note_marker` (a `+` project-note spelling, teaching both `@`-sealed forms), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `^`-form `#name` with no ` :` task, ranged on the name; the `:` offer form is never flagged at parse time, and `bob capture` refuses its `#name` only when the note has nothing to offer or link), `unsupported_explicit_toggle`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a `%n` directive on the same item as `@route`,
 `s:<N>`, or `$<N>`),

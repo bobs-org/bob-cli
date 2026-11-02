@@ -118,6 +118,40 @@ pub(crate) fn is_reserved_drawer_key(key: &str) -> bool {
     reserved_drawer_keys().contains(key)
 }
 
+/// The managed key a drawer selector would be refused for, if any. An exact
+/// (quoted or ALL-CAPS literal) selector has one key; a slug selector is
+/// checked under both its plain and hyphen-as-space spellings, in that
+/// order. The commit-time resolver and the lexical editor parse share this
+/// one rule so a reserved name never reads differently in each place.
+pub(crate) fn reserved_selector_key(
+    selector_text: &str,
+    exact: bool,
+) -> Option<String> {
+    if exact {
+        let key = drawer_key(selector_text);
+        return is_reserved_drawer_key(&key).then_some(key);
+    }
+    let key_plain = selector_text.to_ascii_uppercase();
+    let key_spaced =
+        capture_language::normalize_task_text(&selector_text.replace('-', " "))
+            .to_ascii_uppercase();
+    [key_plain, key_spaced]
+        .into_iter()
+        .find(|key| is_reserved_drawer_key(key))
+}
+
+/// The task-drawer `reserved_drawer` refusal for a lexically reserved
+/// selector, or `None` when the name is not managed. Whether the target is a
+/// `^prj` section or has a near-duplicate is vault-dependent and left to the
+/// commit-time resolver.
+pub(crate) fn reserved_selector_error(
+    selector_text: &str,
+    exact: bool,
+) -> Option<DrawerResolveError> {
+    reserved_selector_key(selector_text, exact)
+        .map(|key| reserved_drawer_error(&key, DrawerScope::Task))
+}
+
 // ---------------------------------------------------------------------------
 // Cached drawer catalog (relation_labels/scan.rs precedent).
 // ---------------------------------------------------------------------------
@@ -992,10 +1026,10 @@ pub(crate) fn resolve_drawer_for_write(
     let _ = (route, parent_block_id);
     let noun = scope.noun();
     if exact {
-        let key = drawer_key(selector_text);
-        if is_reserved_drawer_key(&key) {
+        if let Some(key) = reserved_selector_key(selector_text, true) {
             return Err(reserved_drawer_error(&key, scope));
         }
+        let key = drawer_key(selector_text);
         // Exact key matching.
         let matches: Vec<&Drawer> =
             drawers.iter().filter(|d| d.key == key).collect();
@@ -1076,10 +1110,8 @@ pub(crate) fn resolve_drawer_for_write(
     }
     // No match: reserved?
     // A slug whose key (either interpretation) is reserved refuses.
-    for key in [&key_plain, &key_spaced] {
-        if is_reserved_drawer_key(key) {
-            return Err(reserved_drawer_error(key, scope));
-        }
+    if let Some(key) = reserved_selector_key(&slug, false) {
+        return Err(reserved_drawer_error(&key, scope));
     }
     // Near-duplicate guard (slug only): strict prefix or edit distance 1.
     // The suggestion names the existing drawer, but the quoted creation

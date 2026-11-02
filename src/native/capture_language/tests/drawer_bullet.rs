@@ -119,6 +119,147 @@ fn editor_reports_drawer_needs_and_all_caps_spans() {
     assert!(childless_caps.sub_bullets[0].drawer.is_none());
 }
 
+/// The reserved-name diagnostics of one parse, as `(code, text)` pairs
+/// where `text` is the exact byte range the diagnostic points at.
+fn reserved_ranges(raw: &str) -> Vec<(&'static str, String)> {
+    let parse = editor(raw);
+    parse
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "reserved_drawer")
+        .map(|diagnostic| {
+            let (start, end) = diagnostic.range.expect("ranged diagnostic");
+            (diagnostic.code, raw[start..end].to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn editor_flags_reserved_shortcuts_and_literals_under_a_task() {
+    for (raw, flagged) in [
+        ("Ship it\n- #tasks\n  - note", "#tasks"),
+        ("Ship it\n- TASKS\n  - note", "TASKS"),
+        ("Ship it\n- #schedule-log\n  - note", "#schedule-log"),
+        (
+            "Ship it\n- #\"Schedule Log\"\n  - note",
+            "#\"Schedule Log\"",
+        ),
+        ("Ship it\n- SCHEDULE LOG\n  - note", "SCHEDULE LOG"),
+        ("Ship it\n- #links\n  - note", "#links"),
+        ("@foo+bar\n- #tasks\n  - note", "#tasks"),
+        ("@foo+bar\n- TASKS\n  - note", "TASKS"),
+    ] {
+        assert_eq!(
+            reserved_ranges(raw),
+            vec![("reserved_drawer", flagged.to_string())],
+            "{raw:?}"
+        );
+        let parse = editor(raw);
+        let diagnostic = &parse.diagnostics[0];
+        assert!(
+            diagnostic.message.contains("is managed by Bob")
+                && diagnostic.message.contains("something else"),
+            "{diagnostic:?}"
+        );
+    }
+}
+
+#[test]
+fn reserved_diagnostic_message_matches_the_commit_resolver() {
+    let parse = editor("Ship it\n- #schedule-log\n  - note");
+    let commit = crate::native::capture_drawers::resolve_drawer_for_write(
+        &[],
+        "schedule-log",
+        false,
+        &Default::default(),
+        "",
+        None,
+        crate::native::capture_drawers::DrawerScope::Task,
+    )
+    .expect_err("the resolver refuses a managed name");
+    assert_eq!(commit.code, "reserved_drawer");
+    assert_eq!(parse.diagnostics[0].code, commit.code);
+    assert_eq!(parse.diagnostics[0].message, commit.message);
+}
+
+#[test]
+fn reserved_ranges_are_utf8_byte_offsets() {
+    // A multibyte parent line shifts every later byte offset.
+    let raw = "Ship caf\u{e9} \u{1f680}\n- #tasks\n  - note";
+    assert_eq!(
+        reserved_ranges(raw),
+        vec![("reserved_drawer", "#tasks".to_string())]
+    );
+    let literal = "Ship caf\u{e9} \u{1f680}\n- TASKS\n  - note";
+    assert_eq!(
+        reserved_ranges(literal),
+        vec![("reserved_drawer", "TASKS".to_string())]
+    );
+}
+
+#[test]
+fn legal_controls_and_vault_dependent_names_stay_unflagged() {
+    for raw in [
+        // An ordinary drawer, shortcut and literal.
+        "Ship it\n- #future-work\n  - note",
+        "Ship it\n- FUTURE WORK\n  - note",
+        // A childless literal ALL-CAPS bullet is a plain note, even when
+        // the word is a managed name.
+        "Ship it\n- TASKS",
+        "Ship it\n- NYC",
+        // An escaped hash and a nested task-type marker are not drawers.
+        "Ship it\n- \\#tasks\n  - note",
+        "Ship it\n- check\n  - #tasks",
+        // A `^prj` structural heading is only reserved on a project note,
+        // which only the vault can tell.
+        "@foo+bar\n- #pomodoros\n  - note",
+        // A same-line note is not an under-task position at all.
+        "@foo+bar a note\n- TASKS\n  - note",
+    ] {
+        assert!(reserved_ranges(raw).is_empty(), "{raw:?}");
+    }
+}
+
+#[test]
+fn a_new_project_note_keeps_its_structural_sections() {
+    for raw in [
+        "Parent @cash^p1@\n- #tasks\n  - merged\n- Real",
+        "Parent @cash^p2@\n- TASKS\n  - merged\n- Real",
+        "Parent @cash^p3@\n- #schedule-log\n  - merged\n- Real",
+    ] {
+        assert!(reserved_ranges(raw).is_empty(), "{raw:?}");
+        assert_eq!(editor(raw).mode, EditorMode::ProjectNote, "{raw:?}");
+    }
+}
+
+#[test]
+fn reserved_childless_shortcut_keeps_its_drawer_notes_need() {
+    let parse = editor("Ship it\n- #tasks");
+    assert_eq!(parse.mode, EditorMode::Incomplete);
+    assert!(parse.needs.contains(&Need::DrawerNotes), "{parse:?}");
+    assert_eq!(
+        reserved_ranges("Ship it\n- #tasks"),
+        vec![("reserved_drawer", "#tasks".to_string())]
+    );
+}
+
+#[test]
+fn each_reserved_bullet_is_flagged_once_and_a_glued_drawer_stays_quiet() {
+    let raw = "Ship it\n- #tasks\n  - a\n- #future-work\n  - b\n- LINKS\n  - c";
+    assert_eq!(
+        reserved_ranges(raw),
+        vec![
+            ("reserved_drawer", "#tasks".to_string()),
+            ("reserved_drawer", "LINKS".to_string()),
+        ]
+    );
+    // Every bullet of a glued drawer item already lives in that drawer, so
+    // a drawer-looking bullet there is not a drawer position.
+    assert!(
+        reserved_ranges("@foo+bar#future-work\n- TASKS\n  - note").is_empty()
+    );
+}
+
 #[test]
 fn execution_files_a_shortcut_under_a_new_task() {
     let parsed = execute("Ship it\n- #future-work\n  - try replication")

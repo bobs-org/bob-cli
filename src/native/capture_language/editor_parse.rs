@@ -1561,6 +1561,7 @@ fn attach_drawer_bullet_metadata(
         is_all_caps_drawer_title, is_under_task_mode, scan_leading,
         DrawerBulletHit,
     };
+    use crate::native::capture_drawers::reserved_selector_error;
 
     let has_first_level = sub_bullets
         .iter()
@@ -1575,6 +1576,16 @@ fn attach_drawer_bullet_metadata(
             && parent_body.trim().is_empty()
             && !is_glued
             && has_first_level);
+    // Managed names (`TASKS`, `SCHEDULE LOG`, …) are refused as task
+    // drawers and as existing-target sections, but a newly created project
+    // note owns its structural headings, so `- TASKS` there is a valid
+    // merge. Structural `^prj` headings and near-duplicates depend on the
+    // vault and are left to the commit-time resolver.
+    let reserved_applies = under_task
+        && !matches!(
+            *mode,
+            EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+        );
     let mut authored_lines: Vec<(AuthoredDepth, &str, usize)> = Vec::new();
     for line in item.lines.iter().skip(1) {
         let AuthoredLineClass::Item(authored) =
@@ -1607,10 +1618,10 @@ fn attach_drawer_bullet_metadata(
         match scan_leading(body_text, body_start) {
             Some(DrawerBulletHit::Complete {
                 span,
+                selector,
                 title,
                 key,
                 leftover,
-                ..
             }) => {
                 spans.push(Span {
                     start: span.start,
@@ -1635,6 +1646,17 @@ fn attach_drawer_bullet_metadata(
                         range: Some((span.start, span.end)),
                     });
                     continue;
+                }
+                if reserved_applies
+                    && let Some(error) =
+                        reserved_selector_error(&selector.text, selector.exact)
+                {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: error.code,
+                        message: error.message,
+                        range: Some((span.start, span.end)),
+                    });
                 }
                 if !nested {
                     if !needs.contains(&Need::DrawerNotes) {
@@ -1669,6 +1691,17 @@ fn attach_drawer_bullet_metadata(
                     let trailing = body_text.len() - body_text.trim_end().len();
                     let start = body_start + leading;
                     let end = body_start + body_text.len() - trailing;
+                    if reserved_applies
+                        && let Some(error) =
+                            reserved_selector_error(&title, true)
+                    {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            code: error.code,
+                            message: error.message,
+                            range: Some((start, end)),
+                        });
+                    }
                     spans.push(Span {
                         start,
                         end,

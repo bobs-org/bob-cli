@@ -1151,6 +1151,87 @@ fn km21_nested_complete_label_group_and_net_drop() {
     assert!(json["pull_in"].get("groups").is_none(), "{json}");
 }
 
+// The note-less `@file+id` multi-note form runs the same closing-label
+// engine as a single note: the completed owner carries its keep-moving
+// group, and a later link in the draft nets it away.
+#[test]
+fn km21_multi_note_complete_label_matches_the_single_note_group() {
+    let setup = |name: &str| {
+        let (temp, vault, day_file) = blocked_leaf_vault(name);
+        write_file(
+            &vault.join("other.md"),
+            "- [ ] #task Implement badges [id:: x] ^x\n",
+        );
+        let config = vault.parent().unwrap().join("relations.yml");
+        write_file(
+            &config,
+            "relations:\n  complete_labels:\n    - implemented by\n",
+        );
+        (temp, vault, day_file, config)
+    };
+    let dry = |vault: &Path, day_file: &Path, config: &Path, text: &str| {
+        let output = capture_output_with_config(
+            vault,
+            day_file,
+            &["--dry-run"],
+            text,
+            false,
+            Some(config),
+        );
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("json")
+    };
+
+    let (_temp, vault, day_file, config) = setup("bob-cli-km21-multi-note");
+    let single = dry(
+        &vault,
+        &day_file,
+        &config,
+        // One note plus a nested bullet adds the same two lines under the
+        // task as two notes, so later rows report identical line numbers.
+        "@sase_badges+t one note ~other:x|\"implemented by\"\n- nested",
+    );
+    let multi = dry(
+        &vault,
+        &day_file,
+        &config,
+        "@sase_badges+t ~other:x|\"implemented by\"\n- first\n- second",
+    );
+    let nested = multi["relation_completes"][0]["task_complete"]["keep_moving"]
+        .as_array()
+        .expect("nested keep_moving");
+    assert_eq!(nested.len(), 3, "{nested:?}");
+    assert_eq!(
+        multi["relation_completes"][0]["task_complete"],
+        single["relation_completes"][0]["task_complete"],
+        "multi-note completion must equal the single-note completion"
+    );
+    assert_eq!(multi["pull_in"], single["pull_in"]);
+    assert_eq!(multi["pull_in"]["offer_count"], 3);
+    assert_eq!(multi["pull_in"]["groups"][0]["group"], "keep_moving");
+    assert_eq!(multi["parent_status_symbol"], "x", "{multi}");
+    assert_eq!(multi["parent_status_name"], "Done", "{multi}");
+    assert_eq!(multi["notes"].as_array().expect("notes").len(), 2);
+
+    // A later item linking a resident drops the nested group too.
+    let (_temp2, vault2, day_file2, config2) =
+        setup("bob-cli-km21-multi-note-net");
+    let netted = dry(
+        &vault2,
+        &day_file2,
+        &config2,
+        "@sase_badges+t ~other:x|\"implemented by\"\n- first\n- second\n\n@sase_badges:a",
+    );
+    let nested = netted["captures"][0]["relation_completes"][0]
+        ["task_complete"]["keep_moving"]
+        .as_array()
+        .expect("nested keep_moving");
+    assert!(nested.is_empty(), "{nested:?}");
+    assert_eq!(netted["pull_in"]["offer_count"], 0);
+    assert!(netted["pull_in"].get("groups").is_none(), "{netted}");
+}
+
 // ---------------------------------------------------------------------
 // Finish phase: approved human copy (§12.15)
 // ---------------------------------------------------------------------

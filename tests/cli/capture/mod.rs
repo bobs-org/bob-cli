@@ -33,6 +33,7 @@ mod link_guard;
 mod meet_event_run;
 mod mentions;
 mod note_bullets;
+mod note_bullets_compose;
 mod open_notes;
 mod parse;
 mod parse_blocked_task;

@@ -200,6 +200,49 @@ pub(super) fn count_open_tasks(
         .count()
 }
 
+/// One item's staged `~` / `~~` relation writes together with the
+/// closing-label effects they trigger. The ordinary item path and the
+/// multi-note path both stage relations through this one sequence, so a
+/// configured complete or cancel label never works for one and silently
+/// stays open for the other.
+pub(super) struct ItemRelationReports {
+    pub(super) writes: PlannedRelationReports,
+    pub(super) close: RelationCloseReports,
+}
+
+/// Stage the item's relation writes, then its cancel- and complete-label
+/// commits against the same overlays. `writes.updates` carries the
+/// per-edge `cancel_effect` / `complete_effect` marks on return.
+pub(super) fn plan_item_relations(
+    ctx: &mut DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    request: &CaptureRequest,
+    parsed: &ParsedCaptureText,
+    owner: &RelationOwner,
+    existing_owner: bool,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<ItemRelationReports, CaptureError> {
+    let mut writes = plan_relation_writes(
+        ctx,
+        planner,
+        &request.bob_dir,
+        owner,
+        &parsed.relations,
+        warnings,
+        existing_owner,
+    )?;
+    let close = plan_relation_close_effects(
+        ctx,
+        planner,
+        request,
+        parsed,
+        &mut writes.updates,
+        existing_owner,
+        warnings,
+    )?;
+    Ok(ItemRelationReports { writes, close })
+}
+
 /// Plan cancel-label and complete-label commits for one item's already
 /// staged relation writes. Prefights opposite effects on the same
 /// source (this item and earlier items in the draft) before either

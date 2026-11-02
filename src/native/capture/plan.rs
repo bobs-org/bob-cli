@@ -2145,29 +2145,22 @@ pub(super) fn plan_capture_item(
             parsed.dependency_target.as_ref().map(|target| target.kind),
             Some(ParsedDependencyTargetKind::ExistingTask)
         );
-        let reports = plan_relation_writes(
+        let staged = plan_item_relations(
             dependency_ctx,
             planner,
-            &request.bob_dir,
+            request,
+            &parsed,
             &owner,
-            &parsed.relations,
-            warnings,
             existing_owner,
+            warnings,
         )?;
+        let reports = staged.writes;
+        let close = staged.close;
         relation_updates = reports.updates;
         linked_from_line_updates = reports.linked_from;
         minted_relation_block_ids.extend(reports.minted);
         mirror_skipped = reports.skipped;
         dependency_block_refs.extend(reports.source_refs);
-        let close = plan_relation_close_effects(
-            dependency_ctx,
-            planner,
-            request,
-            &parsed,
-            &mut relation_updates,
-            existing_owner,
-            warnings,
-        )?;
         relation_cancels = close.cancels;
         relation_completes = close.completes;
         pomodoro_refs.extend(close.pomodoro_refs);
@@ -3420,8 +3413,10 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         }
     }
     let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
-    let relation_cancels: Vec<RelationCancelJson> = Vec::new();
-    let relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
+    let mut relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut close_day_file: Option<String> = None;
+    let mut close_task_block_refs: Vec<TaskBlockRef> = Vec::new();
     let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
     let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
         Vec::new();
@@ -3442,20 +3437,30 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             parsed.dependency_target.as_ref().map(|target| target.kind),
             Some(ParsedDependencyTargetKind::ExistingTask)
         );
-        let reports = plan_relation_writes(
+        // The same write-then-close sequence the single-note path runs, so
+        // a configured complete or cancel label acts on the owner (`~`) or
+        // the picked source (`~~`) exactly as it does beside one note.
+        let staged = plan_item_relations(
             dependency_ctx,
             planner,
-            &request.bob_dir,
+            request,
+            &parsed,
             &owner,
-            &parsed.relations,
-            warnings,
             existing_owner,
+            warnings,
         )?;
+        let reports = staged.writes;
+        let close = staged.close;
         relation_updates = reports.updates;
         linked_from_line_updates = reports.linked_from;
         minted_relation_block_ids.extend(reports.minted);
         mirror_skipped = reports.skipped;
         dependency_block_refs.extend(reports.source_refs);
+        relation_cancels = close.cancels;
+        relation_completes = close.completes;
+        pomodoro_refs.extend(close.pomodoro_refs);
+        close_task_block_refs = close.task_block_refs;
+        close_day_file = close.day_file;
     }
     let (dependency_update, dependency_updates) =
         fold_dependency_updates(dependency_summaries);
@@ -3468,6 +3473,24 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let (relation_label_hides, relation_hide_warnings) =
         plan_relation_label_hides(&request.bob_dir, &parsed.relations);
     warnings.extend(relation_hide_warnings);
+    // Every staged effect (`&`, `*`, relation mirrors, cancel and complete
+    // commits) can move or re-status the parent after its notes landed, so
+    // the reported parent is re-read from the final staged text by its
+    // block id rather than carried from the first note's plan.
+    if let Some(block_id) = first_block_id.as_deref() {
+        let contents = current_note_text(planner, &target)?;
+        let scan = note_tasks::scan(&contents, dependency_ctx.settings());
+        if let Ok(task) = lookup_staged_task(
+            &scan,
+            &display_relative(&relative_target),
+            block_id,
+        ) {
+            first_parent_line = Some(task.line_index + 1);
+            first_parent_text = Some(task.description.clone());
+            first_parent_status_symbol = Some(task.status_symbol);
+            first_parent_status_name = Some(task.status_name.clone());
+        }
+    }
     let parent_line = first_parent_line;
     let parent_text = first_parent_text;
     let task_block_refs = if let (Some(line), Some(block_id)) =
@@ -3524,7 +3547,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             clip: None,
             schedule_log: None,
             block_id: first_block_id,
-            day_file: None,
+            day_file: close_day_file,
             block_link: None,
             pomodoro_link_placement: None,
             parent_line,
@@ -3581,6 +3604,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         task_block_refs: {
             let mut refs = task_block_refs;
             refs.extend(dependency_block_refs);
+            refs.extend(close_task_block_refs);
             refs
         },
     })
