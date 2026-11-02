@@ -152,22 +152,44 @@ body {
 }
 ```
 
-A node test computes each glyph-on-wash-on-tint contrast with
+A node test (`scripts/test-ledger-tools-block-marks-contrast.cjs`)
+computes each glyph-on-wash-on-tint contrast with
 Obsidian default-theme tokens, light and dark, and enforces at least
 4.5:1. If a value fails, adjust the mix percentages and record the
 final values here.
+
+Measured paint calibration (child-epic phase paint_api, 2026-11-02;
+base tokens read from the shipped Obsidian bundle: background
+`#ffffff` / `#1c1c1c`, normal text `#222222` / `#dadada`, muted text
+`#5c5c5c` / `#b3b3b3`, red `#e93147` / `#fb464c`):
+
+- The contract ramp ships unchanged (72% anchor; 68/38/12% level
+  mixes): every waiting glyph already meets 4.5:1 on its washed row,
+  so no waiting correction was needed. `date` uses the P1 ink and
+  `repeat` the P4 ink.
+- White on the uncorrected solid red fails (4.20 light, 3.45 dark),
+  so held boxes use a local darkening mix of the blocked fill —
+  `black 4%` in light (`#e02f44`, white at 4.52) and `black 14%`
+  in dark (`#d83c41`, white at 4.52) — without redefining the global
+  blocked color.
+- Waiting glyph ratios (ink on 12% wash over the 5.5% row tint):
+  light P1 4.87, P2 5.36, P3 5.51, P4 5.37;
+  dark P1 4.70, P2 4.94, P3 5.35, P4 5.83.
 
 ## Glyphs
 
 `&`, the digits, and `?` are text through `--task-status-symbol`, in
 the interface font with `font-variant-numeric: tabular-nums`. The
 `prj` box draws a chevron-up mask (viewBox `0 0 16 16`, a single
-stroked polyline near `M4 10.25 8 6.25l4 4`, round caps and joins,
-stroke width about 2.1; the implementation records the final
-geometry here). It is a mask, not the `^` character, because `^` sits
-too high in the interface font. The `repeat` box reuses the existing
-`--bob-date-glyph-repeat` mask, so the checkbox loop matches the `⟲
-daily` recurrence mark on the same line.
+stroked polyline `M4 10.25 8 6.25l4 4`, round caps and joins, stroke
+width 2.1, shipped as `--bob-block-glyph-chevron`). It is a mask, not
+the `^` character, because `^` sits too high in the interface font.
+The `repeat` box reuses the existing `--bob-date-glyph-repeat` mask,
+so the checkbox loop matches the `⟲ daily` recurrence mark on the
+same line. The pip is a 6 px dot at the box's top-right corner
+(`top: -3px; right: -3px`), ringed 1.5 px in `--background-primary`
+(`box-shadow: 0 0 0 1.5px`), filled with the highest losing reason's
+ink, with visible overflow and no pointer handling.
 
 ## Pip
 
@@ -284,9 +306,13 @@ function is synchronous and never throws.
   `{ kind: "dep"|"prj"|"date", key, text }`, winner first.
 - `render(host, model, { decorative })` appends a listener-free
   miniature box
-  `span.bob-block-mark[data-bob-block][data-bob-block-family]` to
-  `host` and returns it, or returns `null`. It gets `role="img"` and
-  an `aria-label` unless `decorative`.
+  `span.bob-block-mark[data-bob-block][data-bob-block-family]` (plus
+  `data-bob-block-more` when a losing reason shows as a pip) to
+  `host` and returns it, or returns `null` for invalid input, a
+  disabled gate, or an unavailable DOM. It gets `role="img"` and
+  an `aria-label` unless `decorative`. It resolves the host's own
+  document, accepts synthetic digit models, and never requires a
+  source task.
 
 `model` ships with the pure classifier; `render` ships with checkbox
 rendering (it shares the CSS).
