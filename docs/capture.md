@@ -148,7 +148,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id` + bullets, no note text | File each first-level bullet as its own note, drawer bullets into that task's drawers |
 | `@route+block-id#drawer` + bullets, no note text | File each first-level bullet as its own note inside that drawer |
 | `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
-| `@route+block-id #<type>` with no other text | Retype that existing task, then Ensure Next using its existing Task Link |
+| `@route+block-id #<type>` with no other text | Retype that existing task, then Ensure Next and relocate its existing Task Link in today's open Pomodoros; refuses if no link exists |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | `%n` | Plain-text note on a Pomodoro; `%n` does not open task-type completion |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
@@ -554,7 +554,7 @@ Exactly one marker per item. A second marker fails with the duplicate
 `type marker (#<type>)` error. The marker types the item's subject task; it
 never types prerequisites, blocked tasks, or relation targets. A marker on a
 note-heading bullet, project note, reference, Pomodoro note, or
-completion/close/start/adjust/shift gesture is refused with a teaching error.
+completion/close/start/adjust/shift/split/merge gesture is refused with a teaching error.
 A link-close suffix (`@route:id=x`) also refuses: remove the close gesture
 to capture a task.
 
@@ -574,9 +574,10 @@ spaces for hyphens. Unknown names fail transactionally with code
 `type_not_configured`, including in dry-run mode. Bob suggests a nearby
 configured type when available and explains how to add a type or keep the
 text as an escaped tag. When the item also names a Pomodoro (`#NAME` in a
-Pomodoro-link position), the marker sets the task's type before landing:
-the destination gains that type if missing. Containers keep the task's type
-with a warning; MEET destinations retype to MEET.
+Pomodoro-link position), the marker sets the task's type before landing.
+A destination with type components gains that type if missing. A container
+(a name with no type components) keeps its name and the task's type, with a
+warning. A MEET type destination changes a different effective type to MEET.
 
 ### Multi-item capture
 
@@ -3377,9 +3378,9 @@ bob capture '=*build#fix#read'
 
 `=*#fix` merges the planned FIX Pomodoro into the current Pomodoro (running, else the next planned a bare `=` would start). `=*build#fix` merges planned FIX into the open BUILD entry. Several `#dest` selectors append in typed order. A dest-less `=*` or `=*<src>` is incomplete (`capture-parse` needs `pomodoro_merge_dest`); the execute error also names `x*` so the retired parking-every-link hint survives. Digit and marker forms (`=*1`, `=*!2`, `=**`) stay retired-close teaching errors. Link suffixes `^bob:stop=*` stay retired aliases (`=x*`). `==*` keeps its "not a close" error.
 
-Each dest must be an untimed planned entry other than the source. Children of each dest append under the source; a dest Task Link whose trimmed line already sits as a top-level child of the source (or of an earlier dest) is dropped as a duplicate. The source keeps its checkbox, timespan, and position; dest entries are removed. The survivor's name is the R5 join (`BUILD + FIX + READ`). Guards (timed dest, MEET, same Pomodoro, dest already part of the source, repeated dest, missing target) each produce a precise teaching refusal with stable codes (`merge_timed_pomodoro`, `merge_meet`, `merge_same_pomodoro`, `merge_already_part`, `merge_dest_repeated`, `merge_target_missing`). A timed dest teaches the swap (`=*fix#build` when FIX is running).
+Each dest must be an untimed planned entry other than the source. Children of each dest append under the source; a dest Task Link whose trimmed line already sits as a top-level child of the source (including a child moved from an earlier dest) is dropped with its entire subtree. The source keeps its checkbox, timespan, and ledger order; dest entries are removed. The survivor's name joins the source's components, then each dest's components in typed order, keeping the first spelling of each distinct component (`BUILD + FIX + READ`). Guards (timed dest, MEET, same Pomodoro, dest already part of the source, repeated dest, missing target) each produce a precise teaching refusal with stable codes (`merge_timed_pomodoro`, `merge_meet`, `merge_same_pomodoro`, `merge_already_part`, `merge_dest_repeated`, `merge_target_missing`). A timed dest teaches the swap (`=*fix#build` when FIX is running).
 
-The bytes contract matches the split family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_merge` reports `pomodoro_merge: {path, entry_line, before, after, absorbed: [{name, from_line, moved_lines, dropped_duplicates}]}` and `pomodoro_blocks` refs for the survivor and every removed dest. Human output prints `merged FIX, READ → BUILD + FIX + READ · path line N · N links moved`.
+Moved child subtrees keep their nested content and adopt the surviving Pomodoro's child indentation; duplicate subtrees are removed as described above. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_merge` reports `pomodoro_merge: {path, entry_line, before, after, absorbed: [{name, from_line, moved_lines, dropped_duplicates}]}` and `pomodoro_blocks` refs for the survivor and every removed dest. Human output prints `merged FIX, READ → BUILD + FIX + READ · path line N · N links moved`.
 
 ### Overriding the running Pomodoro
 

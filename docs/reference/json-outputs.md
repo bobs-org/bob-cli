@@ -118,16 +118,21 @@ Capture results are unversioned, including these per-item session payloads:
 | `=/` split | `kind: "pomodoro_split"`, with `pomodoro_split: {path, entry_line, before, after, base, created, stayed_links}`; `created[]` contains `type`, `line`, `name`, and `moved_links` |
 | `=*` merge | `kind: "pomodoro_merge"`, with `pomodoro_merge: {path, entry_line, before, after, absorbed}`; `absorbed[]` contains `name`, `from_line`, `moved_lines`, and `dropped_duplicates` |
 
-Both split and merge also return final `pomodoro_blocks` for affected entries,
-including entries removed by a merge. Parse reports modes `pomodoro_split`
-and `pomodoro_merge`; incomplete merge input needs `pomodoro_merge_dest`.
+Both split and merge return batch-level `pomodoro_blocks` for affected entries.
+Surviving entries show line-level changes, including removed lines. Removed
+entries carry `removed: true` and their previous lines marked `change: "removed"`. Parse reports modes
+`pomodoro_split` and `pomodoro_merge`; incomplete merge input needs
+`pomodoro_merge_dest`.
 See [split](../capture.md#splitting-a-merged-pomodoro) and
 [merge](../capture.md#merging-pomodoros) for selection and refusal rules.
 
 Managed Done results can carry `keep_moving` offers beside `unblocked`, with
-`keep_moving_folds` for excluded candidates. These offers are ready tasks
-from a leaf project whose last task planned today was closed; they are not
-dependents. They join the batch's `pull_in` choices and link only when picked.
+`keep_moving_folds` counting hidden, blocked, and future-scheduled candidates.
+These offers are eligible Pending, Next, and Ready tasks from a leaf project
+whose last task linked in today's open Pomodoros was closed. A leaf project
+is a subproject with a different root parent; it may itself have subprojects.
+These offers do not require a dependency on the completed task. They join
+the batch's `pull_in` choices and link only when picked.
 See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
 ### Inbox-routing results

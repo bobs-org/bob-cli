@@ -916,11 +916,12 @@ and [Lossless acceptance](../task-types.md#pt8-lossless-acceptance).
 
 ### `=/[base][#type…]` {#equals-split}
 
-`=/` splits all merged-in types out of the current Pomodoro: the running
-entry, else the next planned entry. `=/build` selects an open merged entry
-by its base type. The base stays; each split type gets an untimed placeholder
-immediately below it, with that type's Task Links and their nested notes.
-The source keeps its timing and other notes.
+`=/` splits the current Pomodoro: the open timed entry, else the next
+planned entry. Its base (first task-type component) stays; every other type
+gets an untimed planned entry immediately below it, in source-name order,
+with that type's Task Links and their nested notes. The source keeps its
+timing and other notes. `=/build` selects an open merged entry whose base
+is BUILD; it does not fall back to the current entry if none matches.
 
 For three or more types, `=/build#fix` splits only FIX and
 `=/build#fix#read` selects both. With exactly two types, omit `#type`.
@@ -934,12 +935,14 @@ Contract: [Splitting a merged Pomodoro](../capture.md#splitting-a-merged-pomodor
 
 ### `=*[source]#destination[#destination…]` {#equals-merge}
 
-`=*build#fix` absorbs planned FIX into open BUILD; `=*#fix` uses the current
-Pomodoro as source. `=*build#fix#read` absorbs both in typed order. The
-source keeps its timing and position, gains the destination names and
-children, and replaces the absorbed entries. Duplicate Task Link lines are
-removed. Destinations must be untimed planned entries; MEET cannot merge.
-Bare `=*` or `=*build` is incomplete: add a destination after `#`.
+`=*build#fix` keeps BUILD and absorbs FIX. The name before `#` selects the
+surviving source; names after `#` select entries to remove. `=*#fix` uses
+the open timed entry as source, else the next planned entry.
+`=*build#fix#read` absorbs FIX, then READ. The source may be timed or planned;
+it keeps its timing and ledger order and gains the absorbed names and children.
+An absorbed Task Link with an identical trimmed line already under the source
+is removed with its subtree. Absorbed entries must be untimed and open;
+MEET cannot merge. Bare `=*` or `=*build` needs a destination after `#`.
 
 ```bash
 bob capture --dry-run '=*build#fix'
@@ -1064,8 +1067,8 @@ number, the line logs to the first task the close works. A leading number
 names the task (`x 1 3 bugs fixed` logs `3 bugs fixed` to task 1). `x 1`
 without text is incomplete (`pomodoro_close_log_text`). Entries receive
 `*YYYY-MM-DD HH:MM* —` timestamps. Bullets are numbered all or none;
-`- * summary` copies a summary to every remaining worked task. A two-space
-bullet nests an undated detail.
+`- * summary` copies a summary to each worked task without a task-specific
+entry in this close. A two-space bullet nests an undated detail.
 
 ```bash
 bob capture --dry-run 'x wired the lexer'
@@ -1229,10 +1232,11 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### `@route+block-id#drawer` {#plus-child-section}
 
-Child bullet inside the task's ALL-CAPS drawer: `@route+block-id#section`
-targets `SECTION`. A glued `#drawer` always
-names a drawer and requires note text or child bullets. Matching is exact;
-a missing drawer is created on demand. A quoted `#"FUTURE WORK"` permits
+Child bullet inside a task drawer: an ALL-CAPS child bullet holding nested
+notes. `@route+block-id#section` targets `SECTION`. The glued `#drawer`
+requires note text or child bullets. Names match by normalized key;
+`#future-work` matches `FUTURE WORK`. Missing drawers are created, but a
+prefix or near-duplicate name is refused. A quoted `#"FUTURE WORK"` permits
 deliberate creation near an existing name. On a project's `^prj`, drawers
 are eligible `##` sections. Managed logs and structural headings are reserved.
 
@@ -1250,9 +1254,10 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### Drawer bullets and several notes {#drawer-bullets}
 
-A first-level `- #requirements` with nested notes names a drawer. Completion
-inserts the ALL-CAPS title; an ALL-CAPS bullet with nested notes has the same
-meaning. Empty drawer bullets refuse.
+A first-level `- #requirements` under a task, with nested notes, names a
+drawer. Completion inserts the ALL-CAPS title; an ALL-CAPS bullet with
+nested notes has the same meaning. A `- #drawer` without notes is refused;
+an ALL-CAPS bullet without notes stays a plain bullet.
 
 A note-less `@route+id` files each first-level bullet as a separate note;
 drawer bullets append inside their drawers. With `@route+id#drawer`, every
@@ -1263,12 +1268,14 @@ Contract: [Several notes at once](../capture.md#several-notes-at-once).
 
 ### `@route+block-id` with no other text {#plus-ensure-next}
 
-`@route+block-id` ensures Next or preserves In Progress and relocates the
-task's existing open-Pomodoro Task Link by its effective type. With no type,
+With no note text or child bullets, `@route+block-id` ensures Next or preserves
+In Progress and moves an existing Task Link within today's open Pomodoros.
+Placement uses the task's effective type (explicit or inherited); with none,
 it uses today's current/next Pomodoro. A separate `#type` retypes first:
 `@work+outline #fix`. Without an existing link it refuses; `@work+outline!`
-adds one. Use `^route:block-id#NAME` for a named destination.
-Own-prerequisite Blocked targets drop those links first.
+adds one when eligible. Use `^route:block-id#NAME` to move an existing link
+to a named destination. Tasks blocked only by their own prerequisites drop
+those dependencies first.
 
 ```bash
 bob capture '@work+outline'
@@ -1425,10 +1432,12 @@ token) types the new task with that explicit block ID. Named Pomodoro owners suc
 `@route:block-id@#NAME` keep their existing meanings.
 
 When the item also names a Pomodoro, the task keeps its effective type
-(including a separate `#type` choice), and the destination gains that type
-if missing: BUILD landing in FIX makes `FIX + BUILD`. A container accepts
-any type with a warning; MEET destinations retype to MEET. Explicit retyping
-stages the `[type::]` edit with the gesture and relocates the live Task Link.
+(including a separate `#type` choice), and a destination with type components
+gains that type if missing: a BUILD task landing in FIX makes `FIX + BUILD`.
+A container (a name with no type components) keeps its name and the task's
+type, with a warning. A MEET type destination changes a different effective
+type to MEET. Explicit retyping stages the `[type::]` edit with the gesture
+and relocates the live Task Link.
 Closed targets are refused.
 
 ```bash

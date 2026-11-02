@@ -491,12 +491,13 @@ a directive: `@route`, `#untracked` (case-insensitive), `-N`/`-Nm` (ASCII
 or typographic minus), or `+M`/`+Mm`. Directives combine on one line or
 spread across several; HTML from Google's editor is normalized first
 (`<br>`, `<p>`, `<div>`, `<li>` become line breaks, other tags are
-stripped, common entities are decoded), so `@love<br>#untracked`
-routes the event to `love` and marks it untracked. A line with any other
-token — a phone number, a 4-digit value, a sentence — is ignored whole. Sync strips the
+stripped, common entities are decoded). With a resolvable `love` root,
+`@love<br>#untracked` sets `[root:: love]` and marks the Event Task untracked;
+the task stays in the daily note. A line with any other token — a phone
+number, a 4-digit value, a sentence — is ignored whole. Sync strips the
 title token from the displayed title, the way a resolved `@route` is
 stripped: the tag is removed first, then the title-ending `@route` is
-read, so `Lunch @love #untracked` routes to `love` and displays as `Lunch`.
+read, so `Lunch @love #untracked` gets the same root and displays as `Lunch`.
 
 On the Event Task, sync writes ` #untracked` at the end of the badge run,
 before `[root::]`:
