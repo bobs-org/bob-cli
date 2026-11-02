@@ -1969,15 +1969,14 @@ struct SuccessorTypeRouting {
 /// contexts were built. Nontriggering closes must build none; triggering
 /// closes build one narrow context with no full root scan.
 #[cfg(test)]
-pub(crate) static ROUTING_LOAD_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static ROUTING_LOAD_COUNT: pomodoro_themes::scan::VaultCounter =
+    pomodoro_themes::scan::VaultCounter::new();
 
 impl SuccessorTypeRouting {
     fn load(root: &Path, today: NaiveDate) -> Option<Self> {
         #[cfg(test)]
         {
-            ROUTING_LOAD_COUNT
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            ROUTING_LOAD_COUNT.bump(root);
         }
         Some(Self {
             config: config::load_plan_config(&config::config_path()).ok()?,

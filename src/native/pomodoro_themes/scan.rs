@@ -21,12 +21,35 @@ use crate::native::{
 /// Test-only read counters for the keep-moving routing regression: full
 /// root scans (unrestricted) versus narrow key-restricted scans. The
 /// successor router must never pay a full scan.
+///
+/// Counts are keyed by vault path so concurrent tests on their own temp
+/// vaults never observe each other's reads.
 #[cfg(test)]
-pub(crate) static FULL_ROOT_SCAN_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) struct VaultCounter(
+    std::sync::Mutex<std::collections::BTreeMap<PathBuf, usize>>,
+);
+
 #[cfg(test)]
-pub(crate) static NARROW_ROOT_SCAN_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+impl VaultCounter {
+    pub(crate) const fn new() -> Self {
+        Self(std::sync::Mutex::new(std::collections::BTreeMap::new()))
+    }
+
+    pub(crate) fn bump(&self, vault: &Path) {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        *map.entry(vault.to_path_buf()).or_insert(0) += 1;
+    }
+
+    pub(crate) fn get(&self, vault: &Path) -> usize {
+        let map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(vault).copied().unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+pub(crate) static FULL_ROOT_SCAN_COUNT: VaultCounter = VaultCounter::new();
+#[cfg(test)]
+pub(crate) static NARROW_ROOT_SCAN_COUNT: VaultCounter = VaultCounter::new();
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FileTheme {
@@ -177,11 +200,9 @@ fn scan_root_areas_matching(
     #[cfg(test)]
     {
         if keys.is_none() {
-            FULL_ROOT_SCAN_COUNT
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            FULL_ROOT_SCAN_COUNT.bump(vault);
         } else {
-            NARROW_ROOT_SCAN_COUNT
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            NARROW_ROOT_SCAN_COUNT.bump(vault);
         }
     }
     let mut areas = BTreeMap::new();

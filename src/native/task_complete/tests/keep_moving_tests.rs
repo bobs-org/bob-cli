@@ -16,9 +16,7 @@ use super::super::successors::{
     ROUTING_LOAD_COUNT,
 };
 use super::*;
-use crate::native::pomodoro_themes::scan::{
-    FULL_ROOT_SCAN_COUNT, NARROW_ROOT_SCAN_COUNT,
-};
+use crate::native::pomodoro_themes::scan::FULL_ROOT_SCAN_COUNT;
 
 fn today() -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(2026, 10, 5).expect("date")
@@ -1253,11 +1251,6 @@ fn unavailable_snapshot_suppresses_all_legacy_writes() {
 // legacy hand-off keep stable keys, lane order, and Pending.
 #[test]
 fn routing_is_lazy_and_narrow_with_shared_destination() {
-    use std::sync::atomic::Ordering;
-    ROUTING_LOAD_COUNT.store(0, Ordering::SeqCst);
-    FULL_ROOT_SCAN_COUNT.store(0, Ordering::SeqCst);
-    NARROW_ROOT_SCAN_COUNT.store(0, Ordering::SeqCst);
-
     let dir = tempfile::tempdir().expect("temp vault");
     let root = dir.path();
     for (name, contents) in [
@@ -1340,8 +1333,8 @@ fn routing_is_lazy_and_narrow_with_shared_destination() {
     });
     assert!(plain.keep_moving.is_empty());
     assert!(plain.unblocked.is_empty());
-    assert_eq!(ROUTING_LOAD_COUNT.load(Ordering::SeqCst), 0);
-    assert_eq!(FULL_ROOT_SCAN_COUNT.load(Ordering::SeqCst), 0);
+    assert_eq!(ROUTING_LOAD_COUNT.get(root), 0);
+    assert_eq!(FULL_ROOT_SCAN_COUNT.get(root), 0);
 
     // Triggering direct (!): hand_off F plus typed keep-moving P/B/A share FIX.
     let direct = plan_successors(SuccessorInput {
@@ -1362,8 +1355,8 @@ fn routing_is_lazy_and_narrow_with_shared_destination() {
         selection: SuccessorSelection::None,
         index: &vault_index,
     });
-    assert_eq!(ROUTING_LOAD_COUNT.load(Ordering::SeqCst), 1);
-    assert_eq!(FULL_ROOT_SCAN_COUNT.load(Ordering::SeqCst), 0);
+    assert_eq!(ROUTING_LOAD_COUNT.get(root), 1);
+    assert_eq!(FULL_ROOT_SCAN_COUNT.get(root), 0);
     // Mixed groups share FIX slot: hand_off first, keep-moving after.
     assert_eq!(direct.unblocked.len(), 1);
     assert_eq!(
@@ -1437,8 +1430,8 @@ fn routing_is_lazy_and_narrow_with_shared_destination() {
         selection: SuccessorSelection::All,
         index: &vault_index,
     });
-    assert_eq!(ROUTING_LOAD_COUNT.load(Ordering::SeqCst), 2);
-    assert_eq!(FULL_ROOT_SCAN_COUNT.load(Ordering::SeqCst), 0);
+    assert_eq!(ROUTING_LOAD_COUNT.get(root), 2);
+    assert_eq!(FULL_ROOT_SCAN_COUNT.get(root), 0);
     let pending = picked
         .keep_moving
         .iter()
