@@ -359,7 +359,7 @@ wrapping `<p>`.
 Verified 49/49 in an isolated scratch vault (light and dark, Live Preview and
 Reading) with screenshots reviewed against Anatomy and look. Compact pill, quiet
 muted rest color, baseline-aligned key, 🔓 then 🔑 on the both-marks row, and a CDP
-hover whose visible `.tooltip` matches the aria-label. CSS metrics from the live
+hover whose visible `.tooltip` matches the aria-label. CSS metrics from the landing
 pass: mark 36.1×13.2px, `gap: 0.22em` (2.82px), `margin-inline-start: 0.4em`
 (5.12px), `font-size: 0.8em` (12.8px), `vertical-align: baseline`; row height 26.375px
 with the gate on and off. No CSS values changed.
@@ -374,10 +374,11 @@ vault. Tasks plugin `taskFormat: dataview` so `[id::]` / `[dependsOn::]` parse.
   `span.bob-unblocked-glyph`
 - a CDP hover plus `Input.dispatchMouseEvent` shows the visible `.tooltip` text for
   FC1: `Closing this frees 1 task` / `• Launch another epic chain for sase task beads! · sase`
-- plain click places the caret at the link end and writes nothing; Mod+click opens
-  the owner note in a tab
-- an edit that adds a second FC1 dependent changes the pill from 1 to 2 within about
-  a second and fires `bob-frees-mark-tick` once on Live Preview
+- plain click writes nothing and places the caret at the exact link-end column
+  (`ch=16` on `\t- [[sase#^fc1]]`); Mod+click opens the owner note in a tab
+- an edit that adds a second FC1 dependent changes the pill from 1 to 2 in 322 ms
+  (1 s target, 500 ms documented tolerance) and fires one `bob-frees-mark-tick`
+  animation burst on Live Preview; the four visible FC1 rows share that burst
 - the session toggle removes every mark, leaves row height unchanged, then restores
   the marks
 
