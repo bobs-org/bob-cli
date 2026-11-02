@@ -532,6 +532,10 @@ pub(crate) struct EditorItemParse {
     /// "more than one" (Rule A6), and the sole entry's span to build the
     /// absorb-local-marker edit (Rule A1).
     pub(crate) local_destination_markers: Vec<LocalDestinationMarker>,
+    /// Where this item's first-level bullets land, when a bullet-start `#`
+    /// would name a drawer there. Drives bullet drawer completion.
+    pub(crate) drawer_bullet_target:
+        Option<super::drawer_bullet::DrawerBulletTarget>,
 }
 
 /// One complete local destination marker token an item owns, with the span

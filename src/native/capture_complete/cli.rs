@@ -118,7 +118,12 @@ backed by the same scan as `bob capture-sections`. Drawer completion \
 covers '@route+id#prefix' and a bare '@route+id#' once the item has body text, backed by the same \
 scanner as `bob capture-drawers`; the replacement range and text cover the \
 `#` and the name (`#future-work`, or a quoted `#\"TITLE\"` when the slug does \
-not resolve back to the same drawer). Pomodoro-name completion covers '@route:id#prefix', a bare \
+not resolve back to the same drawer). Bullet drawer completion covers the '#' that \
+starts a first-level bullet (`- #`, `- #fut`) where its bullets land directly under a \
+task (a new task, a new project note, or a note-less '@route+id'): every row's \
+replacement is the bare ALL-CAPS title (`FUTURE WORK`), with a nested `  - ` bullet \
+opened after it when nothing nested follows, and a bullet-start '#' that cannot name \
+a drawer returns a successful empty result. Pomodoro-name completion covers '@route:id#prefix', a bare \
 '@route:id#', '@route:#prefix', '@route^id@#prefix', and a bare '@route^id@#'; \
 Today rows come from `bob capture-pomodoros`: link-name completion offers \
 open entries, while start-name completion also offers completed names as \

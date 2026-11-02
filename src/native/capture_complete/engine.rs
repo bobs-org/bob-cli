@@ -290,6 +290,13 @@ fn build_result_inner(
     }
 
     let editor_item = capture_language::editor_item_at(raw_text, cursor);
+    // A drawer field at a first-level bullet start carries its own target
+    // and accept continuation; the glued `@route+id#` field has neither.
+    let bullet = (field.context == CompletionContext::Drawer)
+        .then(|| {
+            capture_language::drawer_bullet_completion_at(raw_text, cursor)
+        })
+        .flatten();
     let mut hidden_count = None;
     let mut relation_cancel = None;
     let mut relation_complete = None;
@@ -334,16 +341,26 @@ fn build_result_inner(
             )
         }
         CompletionContext::Drawer => {
-            let route = field.route.as_deref().expect("route resolved");
-            super::drawers::drawer_candidates(
-                bob_dir,
-                route,
-                field.block_id.as_deref(),
-                &field.query,
-                raw_text[field.replacement.0..]
-                    .strip_prefix('#')
-                    .is_some_and(|name| name.starts_with(['"', '“'])),
-            )?
+            let quoted = raw_text[field.replacement.0..]
+                .strip_prefix('#')
+                .is_some_and(|name| name.starts_with(['"', '“']));
+            if let Some(bullet) = bullet.as_ref() {
+                super::drawers::bullet_drawer_candidates(
+                    bob_dir,
+                    &bullet.target,
+                    &field.query,
+                    quoted,
+                )?
+            } else {
+                let route = field.route.as_deref().expect("route resolved");
+                super::drawers::drawer_candidates(
+                    bob_dir,
+                    route,
+                    field.block_id.as_deref(),
+                    &field.query,
+                    quoted,
+                )?
+            }
         }
         CompletionContext::PomodoroName => {
             let (candidates, warnings, suggestion) =
@@ -645,6 +662,9 @@ fn build_result_inner(
     if field.bare_name {
         apply_bare_start_name_replacements(&mut candidates);
     }
+    if bullet.as_ref().is_some_and(|bullet| bullet.continuation) {
+        super::drawers::append_continuation(&mut candidates);
+    }
     if field.context == CompletionContext::Drawer {
         super::drawers::place_cursor_after(
             &mut candidates,
@@ -653,7 +673,12 @@ fn build_result_inner(
     }
 
     let drawer_target = if field.context == CompletionContext::Drawer {
-        drawer_completion_target(bob_dir, &field, &candidates)
+        bullet
+            .as_ref()
+            .and_then(|bullet| {
+                super::drawers::fresh_bullet_target(&bullet.target)
+            })
+            .or_else(|| drawer_completion_target(bob_dir, &field, &candidates))
     } else {
         None
     };

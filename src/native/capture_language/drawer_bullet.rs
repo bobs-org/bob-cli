@@ -11,7 +11,7 @@ use super::draft::strip_bullet_marker_at;
 use super::editor_model::EditorMode;
 use super::line::normalize_task_text;
 use super::model::{
-    AuthoredDepth, AuthoredSubBullet, CaptureKind, DrawerSelector,
+    AuthoredDepth, AuthoredSubBullet, CaptureItem, CaptureKind, DrawerSelector,
 };
 use super::pomodoro_literal::lex_exact_name_after_hash;
 use super::project_tasks::split_leading_checkbox;
@@ -133,6 +133,82 @@ pub(crate) fn is_under_task_mode(mode: EditorMode) -> bool {
             | EditorMode::ProjectNote
             | EditorMode::PomodoroProjectNote
     )
+}
+
+/// Where a first-level bullet's drawer shortcut would land, derived from
+/// the item's resolved shape. Completion reads this to decide whether the
+/// bullet-start `#` opens a drawer menu and which drawers it offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DrawerBulletTarget {
+    /// A note-less `@route+id` item: the existing task (or `^prj` note).
+    ExistingTask { route: String, block_id: String },
+    /// A new task: plain text, `@route`, `@route^id`, or `@route:id` with
+    /// body text. `route` is `None` for the default inbox.
+    NewTask { route: Option<String>, text: String },
+    /// A new project note (`@route^id@`, `@route:id@`).
+    NewProjectNote {
+        route: String,
+        block_id: String,
+        text: String,
+    },
+}
+
+/// Classify the under-task target of an item's first-level bullets from
+/// the editor state *on entry* to drawer-bullet metadata (before a bare
+/// `- #` clobbers the mode with `Incomplete`). `None` means a bullet-start
+/// `#` here is not a drawer position.
+pub(crate) fn classify_target(
+    entry_mode: EditorMode,
+    route: Option<&str>,
+    block_id: Option<&str>,
+    parent_body: &str,
+    glued_section: Option<&str>,
+    has_first_level_line: bool,
+    explicit_toggle: bool,
+) -> Option<DrawerBulletTarget> {
+    match entry_mode {
+        EditorMode::Task | EditorMode::PomodoroTask => {
+            Some(DrawerBulletTarget::NewTask {
+                route: route.map(str::to_string),
+                text: parent_body.trim().to_string(),
+            })
+        }
+        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote => {
+            Some(DrawerBulletTarget::NewProjectNote {
+                route: route?.to_string(),
+                block_id: block_id?.to_string(),
+                text: parent_body.trim().to_string(),
+            })
+        }
+        EditorMode::SubBullet | EditorMode::TaskToggle => {
+            let glued =
+                glued_section.is_some_and(|section| !section.is_empty());
+            if !parent_body.trim().is_empty()
+                || glued
+                || explicit_toggle
+                || !has_first_level_line
+            {
+                return None;
+            }
+            Some(DrawerBulletTarget::ExistingTask {
+                route: route?.to_string(),
+                block_id: block_id?.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Whether any physical child line of the item is a first-level authored
+/// bullet, including a bare `- #` that parses into no sub-bullet yet.
+pub(crate) fn item_has_first_level_line(item: &CaptureItem<'_>) -> bool {
+    item.lines.iter().skip(1).any(|line| {
+        matches!(
+            super::draft::classify_authored_line(line.raw),
+            super::draft::AuthoredLineClass::Item(authored)
+                if authored.depth == AuthoredDepth::First
+        )
+    })
 }
 
 pub(crate) fn lexical_title_for_slug(slug: &str) -> String {

@@ -1431,7 +1431,13 @@ pub(super) fn plan_capture_item(
         || !parsed.sub_bullets.is_empty())
     .then(|| child_indent_unit(planner, &target))
     .transpose()?;
-    let sub_bullet_lines: Vec<String> = if parsed.sub_bullets.is_empty() {
+    // A multi-note item resolves each drawer bullet against its existing
+    // target inside `plan_multi_note_sub_bullet_item`; resolving them here
+    // against an empty new-task drawer list would refuse `^prj` section
+    // titles with the wrong scope's reason.
+    let sub_bullet_lines: Vec<String> = if parsed.sub_bullets.is_empty()
+        || is_multi_note_capture(&parsed, request)
+    {
         Vec::new()
     } else {
         let indent = child_indent.as_deref().unwrap_or("\t");

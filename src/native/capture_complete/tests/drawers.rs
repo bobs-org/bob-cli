@@ -579,3 +579,353 @@ fn shell_drawer_rows_are_the_targets_own_unrefused_drawers() {
     assert_eq!(items[0].replacement, "#requirements");
     assert!(warnings.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// The drawer menu at a first-level bullet's leading `#`.
+// ---------------------------------------------------------------------------
+
+/// A bullet menu with the cursor at the end of the draft.
+fn bullet(temp: &TempDir, raw: &str) -> CaptureCompleteResult {
+    menu(temp, raw)
+}
+
+/// `true` when the draft's cursor offers no completion at all.
+fn is_empty_success(temp: &TempDir, raw: &str, cursor: usize) -> bool {
+    let _cache = isolate_cache();
+    let value = result(temp.path(), raw, cursor);
+    value.context.is_none() && value.candidates.is_empty()
+}
+
+#[test]
+fn bullet_menu_on_an_existing_task_offers_bare_titles_with_the_glued_copy() {
+    let temp = vault("bob-cli-bullet-menu-existing");
+    let raw = "@foo+bar\n- #";
+    let value = bullet(&temp, raw);
+
+    assert_eq!(value.initial_selection, Some("none"));
+    assert_eq!(value.query.as_deref(), Some(""));
+    assert_eq!(
+        value.replacement,
+        Replacement {
+            start: raw.len() - 1,
+            end: raw.len()
+        }
+    );
+    assert_eq!(
+        shape(&value),
+        [
+            "task:REQUIREMENTS",
+            "task:FUTURE WORKFLOW",
+            "task:NOTES",
+            "task:FUTURE WORK",
+            "recent:MOTIVATION",
+            "recent:ACCEPTANCE",
+        ]
+    );
+    let target = value.target.as_ref().expect("target");
+    assert_eq!(target.route, "foo.md");
+    assert_eq!(target.block_id.as_deref(), Some("bar"));
+    assert_eq!(target.text, "Parent task");
+
+    let requirements = row(&value, "task", "REQUIREMENTS");
+    assert_eq!(requirements.replacement, "REQUIREMENTS\n  - ");
+    assert_eq!(
+        requirements.consequence.as_deref(),
+        Some("Adds after \"fast disk\" in REQUIREMENTS")
+    );
+    assert_eq!(requirements.detail, "2 notes");
+    assert_eq!(
+        row(&value, "recent", "MOTIVATION").consequence.as_deref(),
+        Some("Creates MOTIVATION under ^bar")
+    );
+    // Every replacement is a bare title: never `#slug` or `#"TITLE"`.
+    for item in rows(&value) {
+        assert!(!item.replacement.starts_with('#'), "{item:?}");
+    }
+}
+
+#[test]
+fn bullet_replacement_continues_with_a_nested_bullet_only_when_nothing_follows()
+{
+    let temp = vault("bob-cli-bullet-menu-continuation");
+    let hash = "@foo+bar\n- ".len();
+
+    // Token last on its line, nothing after: the continuation opens the
+    // drawer's first note and the caret lands past it.
+    let end = bullet(&temp, "@foo+bar\n- #req");
+    let requirements = row(&end, "task", "REQUIREMENTS");
+    assert_eq!(requirements.replacement, "REQUIREMENTS\n  - ");
+    assert_eq!(
+        requirements.cursor_after,
+        Some(hash + "REQUIREMENTS\n  - ".len())
+    );
+
+    // A nested bullet already follows: bare title, caret after the title.
+    let nested_raw = "@foo+bar\n- #req\n  - already";
+    let _cache = isolate_cache();
+    let nested = result(temp.path(), nested_raw, hash + "#req".len());
+    let requirements = row(&nested, "task", "REQUIREMENTS");
+    assert_eq!(requirements.replacement, "REQUIREMENTS");
+    assert_eq!(requirements.cursor_after, Some(hash + "REQUIREMENTS".len()));
+
+    // A sibling first-level bullet is not a nested bullet.
+    let sibling_raw = "@foo+bar\n- #req\n- other";
+    let sibling = result(temp.path(), sibling_raw, hash + "#req".len());
+    assert_eq!(
+        row(&sibling, "task", "REQUIREMENTS").replacement,
+        "REQUIREMENTS\n  - "
+    );
+
+    // Text after the token on the line: no continuation.
+    let trailing_raw = "@foo+bar\n- #req tail";
+    let trailing = result(temp.path(), trailing_raw, hash + "#req".len());
+    assert_eq!(
+        row(&trailing, "task", "REQUIREMENTS").replacement,
+        "REQUIREMENTS"
+    );
+}
+
+#[test]
+fn bullet_menu_filters_by_the_typed_name_and_decodes_a_quoted_literal() {
+    let temp = vault("bob-cli-bullet-menu-typed");
+    let value = bullet(&temp, "@foo+bar\n- #future");
+    assert_eq!(value.initial_selection, None);
+    assert_eq!(value.query.as_deref(), Some("future"));
+    assert_eq!(
+        shape(&value),
+        ["task:FUTURE WORKFLOW", "task:FUTURE WORK", "new:FUTURE"]
+    );
+
+    // A closed literal queries the whole decoded name and its replacement
+    // covers the quotes too.
+    let raw = "@foo+bar\n- #\"FUTURE WORK\"";
+    let quoted = bullet(&temp, raw);
+    assert_eq!(quoted.query.as_deref(), Some("FUTURE WORK"));
+    assert_eq!(
+        quoted.replacement,
+        Replacement {
+            start: raw.len() - "#\"FUTURE WORK\"".len(),
+            end: raw.len()
+        }
+    );
+    assert_eq!(
+        row(&quoted, "task", "FUTURE WORK").replacement,
+        "FUTURE WORK\n  - "
+    );
+}
+
+#[test]
+fn bullet_new_row_spells_a_typed_slug_as_the_title_the_shortcut_creates() {
+    let temp = vault("bob-cli-bullet-menu-new");
+    let value = bullet(&temp, "@foo+bar\n- #brand-new");
+    let created = row(&value, "new", "BRAND NEW");
+    assert_eq!(created.replacement, "BRAND NEW\n  - ");
+    assert_eq!(
+        created.consequence.as_deref(),
+        Some("Creates BRAND NEW under ^bar")
+    );
+
+    // A quoted literal keeps its hyphen.
+    let literal = bullet(&temp, "@foo+bar\n- #\"brand-new\"");
+    assert_eq!(
+        row(&literal, "new", "BRAND-NEW").replacement,
+        "BRAND-NEW\n  - "
+    );
+}
+
+#[test]
+fn bullet_menu_on_a_new_task_offers_recent_and_new_rows_only() {
+    let temp = vault("bob-cli-bullet-menu-new-task");
+    let value = bullet(&temp, "Ship it\n- #");
+    assert_eq!(shape(&value), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
+    let target = value.target.as_ref().expect("target");
+    assert_eq!(target.route, "mac_inbox.md");
+    assert_eq!(target.block_id, None);
+    assert_eq!(target.text, "Ship it");
+    assert_eq!(
+        row(&value, "recent", "MOTIVATION").consequence.as_deref(),
+        Some("Starts MOTIVATION on the new task")
+    );
+
+    // The item's route, and a global `@@route`, name the destination.
+    let routed = bullet(&temp, "Ship it @foo\n- #mot");
+    assert_eq!(routed.target.as_ref().expect("target").route, "foo.md");
+    assert_eq!(
+        shape(&routed),
+        ["recent:MOTIVATION", "new:MOT"],
+        "a prefix of a catalog key still gets its own new row"
+    );
+    let global = bullet(&temp, "@@foo\nShip it\n- #");
+    assert_eq!(global.target.as_ref().expect("target").route, "foo.md");
+
+    // A new task owns no drawers, so a repeated name never shows a task
+    // row, only the create rows.
+    let typed = bullet(&temp, "Ship it\n- #brand-new");
+    assert_eq!(shape(&typed), ["new:BRAND NEW"]);
+}
+
+#[test]
+fn bullet_menu_on_a_new_project_note_creates_title_case_sections() {
+    let temp = vault("bob-cli-bullet-menu-project-note");
+    let value = bullet(&temp, "@foo^fresh@ Plan it\n- #");
+    assert_eq!(shape(&value), ["recent:Motivation", "recent:Acceptance"]);
+    let target = value.target.as_ref().expect("target");
+    assert_eq!(target.route, "foo_fresh.md");
+    assert_eq!(target.block_id.as_deref(), Some("prj"));
+    assert_eq!(target.text, "Plan it");
+    let motivation = row(&value, "recent", "Motivation");
+    assert_eq!(
+        motivation.consequence.as_deref(),
+        Some("Creates ## Motivation")
+    );
+    // The bullet text stays ALL-CAPS: the project-note writer converts it.
+    assert_eq!(motivation.replacement, "MOTIVATION\n  - ");
+
+    // The offer form `@route:id@` is also a new project note.
+    let offer = bullet(&temp, "@foo:fresh@ Plan it\n- #");
+    assert_eq!(offer.target.as_ref().expect("target").route, "foo_fresh.md");
+}
+
+#[test]
+fn bullet_menu_on_a_prj_task_lists_sections_and_refuses_structural_ones() {
+    let temp = vault("bob-cli-bullet-menu-prj");
+    write_file(
+        &temp.path().join("proj.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\n---\n\n",
+            "# Project\n\n",
+            "- [ ] #task #prj Ship it ^prj\n\n",
+            "## Requirements\n\n",
+            "- first\n",
+            "- second\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0900-0930) Work\n\n",
+            "## Future Work\n\n",
+            "- existing\n",
+        ),
+    );
+    let value = bullet(&temp, "@proj+prj\n- #");
+    assert_eq!(
+        shape(&value),
+        [
+            "task:Requirements",
+            "task:Future Work",
+            "recent:Motivation",
+            "recent:Acceptance",
+        ]
+    );
+    let requirements = row(&value, "task", "Requirements");
+    assert_eq!(requirements.replacement, "REQUIREMENTS\n  - ");
+    assert_eq!(
+        requirements.consequence.as_deref(),
+        Some("Adds to ## Requirements")
+    );
+
+    let structural = bullet(&temp, "@proj+prj\n- #pomodoros");
+    assert_eq!(
+        row(&structural, "new", "POMODOROS").refused.as_deref(),
+        Some("use `@proj#<Heading>` to capture into a project `##` section")
+    );
+}
+
+#[test]
+fn bullet_rows_refuse_with_the_exact_resolvers_reason() {
+    let temp = vault("bob-cli-bullet-menu-refused");
+    write_file(
+        &temp.path().join("foo.md"),
+        concat!(
+            "---\ntype: [[area]]\n---\n",
+            "- [ ] #task Parent task ^bar\n",
+            "\t- REQUIREMENTS\n",
+            "\t- NOTES\n",
+            "\t- NOTES\n",
+        ),
+    );
+
+    let reserved = bullet(&temp, "@foo+bar\n- #tasks");
+    let tasks = row(&reserved, "new", "TASKS");
+    assert_eq!(
+        tasks.refused.as_deref(),
+        Some("`TASKS` is managed by Bob; name the drawer something else")
+    );
+    assert_eq!(tasks.consequence, None);
+
+    // Exact resolution has no near-duplicate guard: `REQ` is a plain new
+    // drawer for a bullet, just like typing `- REQ` with notes under it.
+    let near = bullet(&temp, "@foo+bar\n- #req");
+    let req = row(&near, "new", "REQ");
+    assert_eq!(req.refused, None);
+    assert_eq!(req.consequence.as_deref(), Some("Creates REQ under ^bar"));
+
+    // Duplicate drawers are both listed and both refused.
+    let ambiguous = bullet(&temp, "@foo+bar\n- #notes");
+    let duplicates: Vec<&DrawerCandidate> = rows(&ambiguous)
+        .iter()
+        .filter(|row| row.group == "task")
+        .collect();
+    assert_eq!(duplicates.len(), 2);
+    for duplicate in duplicates {
+        assert_eq!(duplicate.replacement, "NOTES\n  - ");
+        assert_eq!(
+            duplicate.refused.as_deref(),
+            Some("drawer `NOTES` matches more than one drawer (lines 6, 7); rename one")
+        );
+    }
+}
+
+#[test]
+fn bullet_starts_that_cannot_name_a_drawer_are_empty_successes() {
+    let temp = vault("bob-cli-bullet-menu-positions");
+    for raw in [
+        // The bullets nest under a same-line note.
+        "@foo+bar fix it\n- #",
+        // A glued drawer already files every bullet.
+        "@foo+bar#requirements\n- #",
+        // A Pomodoro note, a close, and an adjustment own their bullets.
+        "%n\n- #",
+        "x\n- #",
+        "+5\n- #",
+        // An explicit toggle refuses bullets.
+        "@foo+bar!\n- #",
+        // An escaped hash is prose.
+        "Ship it\n- \\#",
+    ] {
+        assert!(
+            is_empty_success(&temp, raw, raw.len()),
+            "{raw:?} must not open a menu"
+        );
+    }
+
+    // The cursor must sit after the `#`.
+    let before = "Ship it\n- #fu";
+    assert!(is_empty_success(&temp, before, before.len() - 3));
+}
+
+#[test]
+fn nested_bullet_hash_still_offers_task_types() {
+    let temp = vault("bob-cli-bullet-menu-nested-types");
+    let _cache = isolate_cache();
+    let raw = "Ship it\n- check\n  - #";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::TaskType));
+
+    let parent = "Ship it #";
+    let value = result(temp.path(), parent, parent.len());
+    assert_eq!(value.context, Some(CompletionContext::TaskType));
+}
+
+#[test]
+fn shell_completion_never_reaches_a_bullet_start() {
+    // A shell command line is one line, so a bullet start (which needs a
+    // second physical line) is outside shell completion.
+    let temp = vault("bob-cli-bullet-menu-shell");
+    let _cache = isolate_cache();
+    let raw = "@foo+bar\n- #";
+    let shell = crate::native::capture_complete::shell::shell_completion(
+        temp.path(),
+        raw,
+        raw.len(),
+    )
+    .expect("shell completion");
+    assert_eq!(shell, None);
+}

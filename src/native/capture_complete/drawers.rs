@@ -1,12 +1,14 @@
-//! Drawer completion for a glued `@route+id#…` selector: the target's own
-//! drawers (`task`), catalog drawers it lacks (`recent`), and one `new` row
-//! for a typed name nothing else claims.
+//! Drawer completion for a glued `@route+id#…` selector or a first-level
+//! bullet's leading `#`: the target's own drawers (`task`), catalog drawers
+//! it lacks (`recent`), and one `new` row for a typed name nothing else
+//! claims.
 //!
-//! Every row's `replacement` is the exact selector a commit would receive,
-//! and its `refused` reason is the commit's own resolver decision
-//! (`resolve_drawer_for_write` / `resolve_h2_for_write`), never a parallel
-//! rule. A menu choice is therefore never authority to skip commit-time
-//! resolution.
+//! Every row's `replacement` is the exact text a commit would receive (a
+//! `#slug` / `#"TITLE"` selector for the glued form, the bare ALL-CAPS
+//! title for a bullet), and its `refused` reason is the commit's own
+//! resolver decision (`resolve_drawer_for_write` / `resolve_h2_for_write`),
+//! never a parallel rule. A menu choice is therefore never authority to
+//! skip commit-time resolution.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -14,20 +16,30 @@ use std::{
     path::Path,
 };
 
-use super::model::{Candidates, CompleteError, DrawerCandidate};
+use super::model::{Candidates, CompleteError, DrawerCandidate, DrawerTarget};
 use crate::native::{
     capture,
     capture_drawers::{
         self, Drawer, DrawerCatalogRecord, DrawerMatch, DrawerResolveError,
         DrawerResolveOutcome, DrawerResolved, DrawerScope,
     },
-    capture_language,
+    capture_language::{self, DrawerBulletTarget},
+    capture_project_note,
     note_tasks::{self, BlockIdLookup},
 };
 
 pub(super) const GROUP_TASK: &str = "task";
 pub(super) const GROUP_RECENT: &str = "recent";
 pub(super) const GROUP_NEW: &str = "new";
+
+/// How a menu row spells its `replacement`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowStyle {
+    /// A glued `@route+id#…` selector: `#slug` or `#"TITLE"`.
+    Glued,
+    /// A first-level bullet's body: the bare ALL-CAPS title.
+    Bullet,
+}
 
 /// The full drawer menu for `@route+block-id#query`. `quoted` is true when
 /// the typed selector opened a `"` literal.
@@ -38,12 +50,64 @@ pub(super) fn drawer_candidates(
     query: &str,
     quoted: bool,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
-    let target = match lookup_target(bob_dir, route, block_id)? {
-        Lookup::Found(target) => target,
+    match lookup_target(bob_dir, route, block_id)? {
+        Lookup::Found(target) => Ok(menu(bob_dir, &target, query, quoted)),
         Lookup::Diagnostic(warnings) => {
-            return Ok((Candidates::Drawer(Vec::new()), warnings));
+            Ok((Candidates::Drawer(Vec::new()), warnings))
         }
+    }
+}
+
+/// The drawer menu behind a first-level bullet's leading `#`. Existing
+/// tasks offer their own drawers too; a new task or project note has none,
+/// so it offers catalog (`recent`) and `new` rows only.
+pub(super) fn bullet_drawer_candidates(
+    bob_dir: &Path,
+    bullet: &DrawerBulletTarget,
+    query: &str,
+    quoted: bool,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let target = match bullet {
+        DrawerBulletTarget::ExistingTask { route, block_id } => {
+            match lookup_target(bob_dir, route, Some(block_id))? {
+                Lookup::Found(mut target) => {
+                    target.style = RowStyle::Bullet;
+                    target
+                }
+                Lookup::Diagnostic(warnings) => {
+                    return Ok((Candidates::Drawer(Vec::new()), warnings));
+                }
+            }
+        }
+        fresh => Box::new(
+            Target::fresh(fresh).expect("fresh bullet target has no lookup"),
+        ),
     };
+    Ok(menu(bob_dir, &target, query, quoted))
+}
+
+/// The `target` object a bullet drawer response carries for a task or
+/// project note that does not exist yet. An existing task reads its
+/// target from the vault like the glued menu does.
+pub(super) fn fresh_bullet_target(
+    bullet: &DrawerBulletTarget,
+) -> Option<DrawerTarget> {
+    let target = Target::fresh(bullet)?;
+    Some(DrawerTarget {
+        route: capture::route_label(&target.route),
+        block_id: target.block_id,
+        text: target.text,
+    })
+}
+
+/// One menu over a resolved target: its own drawers, the catalog drawers it
+/// lacks, and the single `new` row.
+fn menu(
+    bob_dir: &Path,
+    target: &Target,
+    query: &str,
+    quoted: bool,
+) -> (Candidates, Vec<String>) {
     let mut warnings = Vec::new();
     // One cached catalog load per request; the target's own rows read only
     // the target note.
@@ -73,11 +137,13 @@ pub(super) fn drawer_candidates(
     if let Some(row) = target.new_row(query, quoted, &rows, &catalog) {
         rows.push(row);
     }
-    Ok((Candidates::Drawer(rows), warnings))
+    (Candidates::Drawer(rows), warnings)
 }
 
 /// Only the target's own drawers, for shell completion: no catalog scan,
-/// no query, and no refused rows.
+/// no query, and no refused rows. Shell completion serves one-line drafts
+/// only, so it never reaches a bullet start and only spells glued
+/// selectors.
 pub(super) fn target_drawer_candidates(
     bob_dir: &Path,
     route: &str,
@@ -95,6 +161,16 @@ pub(super) fn target_drawer_candidates(
         .filter(|row| row.refused.is_none())
         .collect();
     Ok((Candidates::Drawer(rows), Vec::new()))
+}
+
+/// Open the nested `  - ` bullet right after an accepted row's title, so
+/// the caret lands where the drawer's first note goes.
+pub(super) fn append_continuation(candidates: &mut Candidates) {
+    if let Candidates::Drawer(rows) = candidates {
+        for row in rows {
+            row.replacement.push_str("\n  - ");
+        }
+    }
 }
 
 /// Each row's `cursor_after`: the draft offset just past its replacement,
@@ -128,6 +204,54 @@ struct Target {
     /// Every eligible drawer on the target, unfiltered: ambiguity and
     /// round trips are checked against the whole list.
     drawers: Vec<Drawer>,
+    style: RowStyle,
+    /// A project note this capture is about to create. Its writer turns
+    /// every ALL-CAPS bullet into a `## Title Case` section, structural
+    /// and managed names included, so no resolver refusal applies.
+    new_note: bool,
+}
+
+impl Target {
+    /// A bullet target that does not exist in the vault yet: a new task
+    /// (no drawers, no block ID) or a new project note (no sections yet).
+    /// `None` for an existing task, which needs a vault lookup.
+    fn fresh(bullet: &DrawerBulletTarget) -> Option<Self> {
+        let (route, block_id, text, scope, new_note) = match bullet {
+            DrawerBulletTarget::ExistingTask { .. } => return None,
+            DrawerBulletTarget::NewTask { route, text } => (
+                route
+                    .clone()
+                    .unwrap_or_else(|| capture::inbox_route().to_string()),
+                None,
+                text.clone(),
+                DrawerScope::Task,
+                false,
+            ),
+            DrawerBulletTarget::NewProjectNote {
+                route,
+                block_id,
+                text,
+            } => (
+                capture_project_note::project_note_basename(route, block_id)
+                    .trim_end_matches(".md")
+                    .to_string(),
+                Some("prj".to_string()),
+                text.clone(),
+                DrawerScope::ProjectSection,
+                true,
+            ),
+        };
+        Some(Self {
+            route,
+            block_id,
+            text,
+            contents: String::new(),
+            scope,
+            drawers: Vec::new(),
+            style: RowStyle::Bullet,
+            new_note,
+        })
+    }
 }
 
 fn lookup_target(
@@ -181,6 +305,8 @@ fn lookup_target(
                 scope,
                 drawers,
                 contents,
+                style: RowStyle::Glued,
+                new_note: false,
             };
             return Ok(Lookup::Found(Box::new(target)));
         }
@@ -253,6 +379,9 @@ impl Target {
         want: Want,
         catalog: &BTreeMap<String, DrawerCatalogRecord>,
     ) -> Choice {
+        if self.style == RowStyle::Bullet {
+            return self.choose_bullet(title, want, catalog);
+        }
         let slug = capture_language::selector_slug(title);
         if capture_drawers::is_drawer_slug(&slug) {
             match self.resolve(&slug, false, catalog) {
@@ -277,6 +406,64 @@ impl Target {
         Choice {
             replacement: format!("#\"{}\"", quote_escape(title)),
             resolved: self.resolve(title, true, catalog),
+        }
+    }
+
+    /// A bullet row's replacement is the bare ALL-CAPS title, valid only
+    /// when committing that literal title (an exact resolution, like any
+    /// ALL-CAPS drawer bullet) reaches the row's intent: the same existing
+    /// drawer, or a creation of the same key.
+    fn choose_bullet(
+        &self,
+        title: &str,
+        want: Want,
+        catalog: &BTreeMap<String, DrawerCatalogRecord>,
+    ) -> Choice {
+        let Some(canonical) = capture_drawers::normalize_drawer_literal(title)
+        else {
+            return Choice {
+                replacement: capture_drawers::drawer_key(title),
+                resolved: Err(DrawerResolveError {
+                    code: "unnameable_drawer",
+                    message: unnameable_bullet_copy(self.scope),
+                }),
+            };
+        };
+        if self.new_note {
+            // The writer owns a new note's sections: any ALL-CAPS title
+            // becomes `## Title Case`, merging repeats.
+            let key = capture_drawers::drawer_key(&canonical);
+            return Choice {
+                resolved: Ok(DrawerResolved {
+                    outcome: DrawerResolveOutcome::Create {
+                        title:
+                            capture_project_note::format_project_section_title(
+                                &canonical,
+                            ),
+                        slug: capture_language::selector_slug(&canonical),
+                        key,
+                    },
+                    created: true,
+                    warning: None,
+                }),
+                replacement: canonical,
+            };
+        }
+        let resolved = match self.resolve(&canonical, true, catalog) {
+            Ok(resolved) if !matches_want(&resolved, want, &canonical) => {
+                Err(DrawerResolveError {
+                    code: "drawer_mismatch",
+                    message: format!(
+                        "`{canonical}` would not reach this {} on commit",
+                        scope_noun(self.scope)
+                    ),
+                })
+            }
+            other => other,
+        };
+        Choice {
+            replacement: canonical,
+            resolved,
         }
     }
 
@@ -404,9 +591,21 @@ impl Target {
         if rows.iter().any(|row| claimed.contains(&row.key)) {
             return None;
         }
-        let mut row = self.base_row(&title, &claimed[0], GROUP_NEW);
-        let choice = self.choose(&title, Want::Create, catalog);
-        self.apply_choice(&mut row, choice, &title);
+        // A bullet commits the literal title, so an unquoted slug spells
+        // the title the `#slug` shortcut would create: hyphens read as
+        // spaces.
+        let wanted = match self.style {
+            RowStyle::Bullet if !quoted => {
+                capture_drawers::normalize_drawer_literal(
+                    &title.replace('-', " "),
+                )
+                .unwrap_or_else(|| title.clone())
+            }
+            _ => title,
+        };
+        let mut row = self.base_row(&wanted, &claimed[0], GROUP_NEW);
+        let choice = self.choose(&wanted, Want::Create, catalog);
+        self.apply_choice(&mut row, choice, &wanted);
         if row.refused.is_none()
             && let Some(near) =
                 capture_drawers::near_catalog_title(&row.key, catalog)
@@ -435,7 +634,18 @@ impl Target {
                 if let DrawerResolveOutcome::Create { title, key, slug } =
                     resolved.outcome
                 {
-                    row.consequence = Some(self.create_consequence(&title));
+                    // A new note's template already carries `## Tasks`,
+                    // so a `TASKS` bullet adds to it instead of creating.
+                    let template_tasks = self.new_note
+                        && key == capture_drawers::drawer_key("Tasks");
+                    row.consequence = Some(if template_tasks {
+                        capture_drawers::h2_consequence(&title)
+                    } else {
+                        self.create_consequence(&title)
+                    });
+                    if template_tasks {
+                        row.creates = false;
+                    }
                     row.title = title;
                     row.key = key;
                     row.slug = slug;
@@ -445,12 +655,16 @@ impl Target {
     }
 
     fn create_consequence(&self, title: &str) -> String {
-        match self.scope {
-            DrawerScope::Task => format!(
-                "Creates {title} under ^{}",
-                self.block_id.as_deref().unwrap_or_default()
-            ),
-            DrawerScope::ProjectSection => format!("Creates ## {title}"),
+        match (self.scope, self.block_id.as_deref()) {
+            (DrawerScope::Task, Some(block_id)) => {
+                format!("Creates {title} under ^{block_id}")
+            }
+            (DrawerScope::Task, None) => {
+                format!("Starts {title} on the new task")
+            }
+            (DrawerScope::ProjectSection, _) => {
+                format!("Creates ## {title}")
+            }
         }
     }
 }
@@ -483,13 +697,24 @@ fn quoted_title_is_nameable(replacement: &str, title: &str) -> bool {
         || capture_drawers::normalize_drawer_literal(title).is_some()
 }
 
-fn unnameable_copy(scope: DrawerScope) -> String {
-    let noun = match scope {
+fn scope_noun(scope: DrawerScope) -> &'static str {
+    match scope {
         DrawerScope::Task => "drawer",
         DrawerScope::ProjectSection => "section",
-    };
+    }
+}
+
+fn unnameable_copy(scope: DrawerScope) -> String {
     format!(
-        "this {noun} name uses characters `#\"NAME\"` cannot spell; capture into it with `@route#Heading`"
+        "this {} name uses characters `#\"NAME\"` cannot spell; capture into it with `@route#Heading`",
+        scope_noun(scope)
+    )
+}
+
+fn unnameable_bullet_copy(scope: DrawerScope) -> String {
+    format!(
+        "this {} name uses characters an ALL-CAPS bullet cannot spell; capture into it with `@route#Heading`",
+        scope_noun(scope)
     )
 }
 

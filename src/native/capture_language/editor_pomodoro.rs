@@ -154,6 +154,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     })
@@ -203,6 +204,7 @@ pub(super) fn editor_operator_outcome<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     }
@@ -250,6 +252,7 @@ pub(super) fn editor_start_invalid_outcome<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     }
@@ -783,6 +786,7 @@ fn editor_named_valid_outcome<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     }
@@ -827,6 +831,7 @@ fn editor_start_drop_incomplete_outcome<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     }
@@ -870,6 +875,7 @@ fn editor_start_timing_incomplete_outcome<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     }
@@ -1004,6 +1010,7 @@ fn editor_named_incomplete_outcome<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     }
@@ -1344,6 +1351,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     sub_bullets: Vec::new(),
                     has_local_destination: false,
                     local_destination_markers: Vec::new(),
+                    drawer_bullet_target: None,
                 },
                 declarations: Vec::new(),
             })
@@ -1379,6 +1387,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     sub_bullets: Vec::new(),
                     has_local_destination: false,
                     local_destination_markers: Vec::new(),
+                    drawer_bullet_target: None,
                 },
                 declarations: Vec::new(),
             })
@@ -2379,6 +2388,7 @@ fn editor_close_outcome<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: false,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     }

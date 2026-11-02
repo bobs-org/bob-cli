@@ -1016,6 +1016,15 @@ pub(crate) fn completion_field_at(
         }
     }
 
+    // A first-level bullet's leading `#` names a drawer. It either opens
+    // the drawer menu or is an empty success; it never reaches the
+    // task-type or marker claims below.
+    match drawer_bullet_probe(raw_text, cursor) {
+        Some(Some(bullet)) => return Some(bullet.into_field()),
+        Some(None) => return None,
+        None => {}
+    }
+
     let draft = split_capture_draft(raw_text);
     let items = draft.items;
     let (item, line_index, line) = items.iter().find_map(|item| {
@@ -1815,6 +1824,162 @@ pub(super) fn global_completion_field_at(
     )
 }
 
+/// The decoded query of a quoted-literal name component. `part` is the
+/// literal's text from its opening quote, `split` the cursor's byte offset
+/// inside it. With `whole_when_closed`, a cursor past a closed literal
+/// queries the whole decoded name instead of the closing quote with it.
+fn exact_name_query(
+    part: &str,
+    split: usize,
+    whole_when_closed: bool,
+) -> String {
+    let closed = whole_when_closed
+        .then(|| {
+            super::pomodoro_literal::lex_exact_name_after_hash(part, part.len())
+        })
+        .flatten()
+        .filter(|lex| lex.complete && split >= lex.literal_len);
+    match closed {
+        Some(lex) => lex.decoded,
+        None => {
+            let raw_query = &part[..split];
+            let inner = raw_query
+                .strip_prefix('"')
+                .or_else(|| raw_query.strip_prefix('“'))
+                .unwrap_or(raw_query);
+            super::pomodoro_literal::decode_partial_literal_text(inner)
+        }
+    }
+}
+
+/// A first-level bullet's drawer shortcut under the cursor: the bare `#`,
+/// a `#slug`, or a quoted `#"TITLE"` literal, in a position where the
+/// item's first-level bullets land directly under a task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DrawerBulletCompletion {
+    pub(crate) target: super::drawer_bullet::DrawerBulletTarget,
+    /// The decoded name typed so far, up to the cursor.
+    pub(crate) query: String,
+    /// The whole shortcut token, `#` through its end.
+    pub(crate) replacement: (usize, usize),
+    /// True when the token ends its line and the next physical line of the
+    /// item is not a nested bullet, so accepting a row also opens the
+    /// drawer's first nested `  - ` bullet.
+    pub(crate) continuation: bool,
+}
+
+impl DrawerBulletCompletion {
+    fn into_field(self) -> CompletionField {
+        use super::drawer_bullet::DrawerBulletTarget;
+        let (route, block_id) = match self.target {
+            DrawerBulletTarget::ExistingTask { route, block_id } => {
+                (route, Some(block_id))
+            }
+            DrawerBulletTarget::NewTask { route, .. } => (
+                route.unwrap_or_else(|| {
+                    crate::native::capture::inbox_route().to_string()
+                }),
+                None,
+            ),
+            DrawerBulletTarget::NewProjectNote {
+                route, block_id, ..
+            } => (
+                crate::native::capture_project_note::project_note_basename(
+                    &route, &block_id,
+                )
+                .trim_end_matches(".md")
+                .to_string(),
+                Some("prj".to_string()),
+            ),
+        };
+        CompletionField {
+            context: CompletionContext::Drawer,
+            route: Some(route),
+            block_id,
+            query: self.query,
+            replacement: self.replacement,
+            bare_name: false,
+        }
+    }
+}
+
+/// Probe for a drawer shortcut at a first-level bullet start.
+///
+/// The outer `None` means the cursor is not in such a token, so other
+/// completion claims run as usual. `Some(None)` means it is, but this
+/// position cannot name a drawer: the field is an empty success and never
+/// falls through to the task-type menu.
+fn drawer_bullet_probe(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<Option<DrawerBulletCompletion>> {
+    use super::drawer_bullet::{scan_leading, DrawerBulletHit};
+
+    let draft = split_capture_draft(raw_text);
+    let (item, line_index, line) = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                cursor >= line.raw.start && cursor <= line.raw.end
+            })
+            .map(|(line_index, line)| (item, line_index, line.raw))
+    })?;
+    if line_index == 0 {
+        return None;
+    }
+    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+        return None;
+    };
+    if authored.depth != AuthoredDepth::First {
+        return None;
+    }
+    let hit = scan_leading(authored.body, authored.body_start)?;
+    if matches!(hit, DrawerBulletHit::Escaped { .. }) {
+        return None;
+    }
+    let span = hit.span().clone();
+    // The `#` itself is outside the claim, exactly like a glued selector.
+    if cursor <= span.start || cursor > span.end {
+        return None;
+    }
+    let Some(target) = super::editor_parse::editor_item_at(raw_text, cursor)
+        .and_then(|parsed| parsed.drawer_bullet_target)
+    else {
+        return Some(None);
+    };
+    let name_start = span.start + 1;
+    let part = raw_text.get(name_start..span.end)?;
+    let split = cursor - name_start;
+    let query = if super::pomodoro_literal::opens_exact_name(part) {
+        exact_name_query(part, split, true)
+    } else {
+        part.get(..split)?.to_string()
+    };
+    let next_is_nested = item.lines.get(line_index + 1).is_some_and(|next| {
+        matches!(
+            classify_authored_line(next.raw),
+            AuthoredLineClass::Item(next_line)
+                if next_line.depth == AuthoredDepth::Nested
+        )
+    });
+    Some(Some(DrawerBulletCompletion {
+        target,
+        query,
+        replacement: (span.start, span.end),
+        continuation: span.end == line.end && !next_is_nested,
+    }))
+}
+
+/// The drawer menu a first-level bullet's leading `#` opens, or `None`
+/// anywhere else (including a bullet-start `#` that cannot name a drawer).
+pub(crate) fn drawer_bullet_completion_at(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<DrawerBulletCompletion> {
+    drawer_bullet_probe(raw_text, cursor).flatten()
+}
+
 /// Build the completion field for one decomposed `@<route><sep><right>`
 /// marker, given which side of the (possible) separator `cursor` lands on.
 /// The route component spans exactly the route text, excluding the leading
@@ -1956,25 +2121,11 @@ pub(super) fn completion_field_from_parts(
     {
         // A drawer's cursor past a closed literal queries the whole
         // decoded name, never the closing quote with it.
-        let closed = (third.context == CompletionContext::Drawer)
-            .then(|| {
-                super::pomodoro_literal::lex_exact_name_after_hash(
-                    third.part,
-                    third.part.len(),
-                )
-            })
-            .flatten()
-            .filter(|lex| lex.complete && split >= lex.literal_len);
-        match closed {
-            Some(lex) => lex.decoded,
-            None => {
-                let inner = raw_query
-                    .strip_prefix('"')
-                    .or_else(|| raw_query.strip_prefix('“'))
-                    .unwrap_or(raw_query);
-                super::pomodoro_literal::decode_partial_literal_text(inner)
-            }
-        }
+        exact_name_query(
+            third.part,
+            split,
+            third.context == CompletionContext::Drawer,
+        )
     } else {
         raw_query.to_string()
     };

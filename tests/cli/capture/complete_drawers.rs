@@ -378,3 +378,295 @@ fn drawer_menu_human_output_lists_bobs_detail_and_refusals() {
     );
     assert!(!text.contains(" items"), "{text}");
 }
+
+// ---------------------------------------------------------------------------
+// The drawer menu at a first-level bullet's leading `#`.
+// ---------------------------------------------------------------------------
+
+fn complete_at(
+    temp: &TempDir,
+    vault: &Path,
+    draft: &str,
+    cursor: usize,
+) -> Value {
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(vault)
+        .arg("-c")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run capture-complete");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("completion JSON")
+}
+
+fn write_prj_note(vault: &Path) {
+    write_file(
+        &vault.join("proj.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\n---\n\n",
+            "# Project\n\n",
+            "- [ ] #task #prj Ship it ^prj\n\n",
+            "## Requirements\n\n",
+            "- first\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0900-0930) Work\n",
+        ),
+    );
+}
+
+#[test]
+fn bullet_menu_json_pins_the_target_the_bare_titles_and_the_continuation() {
+    let temp = TempDir::new("bob-cli-bullet-menu-wire");
+    let vault = drawer_vault(&temp);
+    let draft = "@foo+bar\n- #";
+    let json = complete(&temp, &vault, draft);
+
+    assert_eq!(json["grammar"], 4);
+    assert_eq!(json["context"], "drawer");
+    assert_eq!(json["initial_selection"], "none");
+    assert_eq!(json["query"], "");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": draft.len() - 1, "end": draft.len()})
+    );
+    assert_eq!(
+        json["target"],
+        serde_json::json!({
+            "route": "foo.md",
+            "block_id": "bar",
+            "text": "Upgrade Postgres",
+        })
+    );
+    assert_eq!(
+        shape(&json),
+        [
+            "task:REQUIREMENTS",
+            "task:NOTES",
+            "task:NOTES",
+            "task:FUTURE WORK",
+            "recent:MOTIVATION",
+            "recent:ACCEPTANCE",
+        ]
+    );
+    let requirements = row(&json, "task", "REQUIREMENTS");
+    assert_eq!(
+        *requirements,
+        serde_json::json!({
+            "replacement": "REQUIREMENTS\n  - ",
+            "title": "REQUIREMENTS",
+            "key": "REQUIREMENTS",
+            "slug": "requirements",
+            "route": "foo",
+            "block_id": "bar",
+            "text": "Upgrade Postgres",
+            "line": 5,
+            "entry_count": 2,
+            "group": "task",
+            "detail": "2 notes",
+            "creates": false,
+            "consequence": "Adds after \"fast disk\" in REQUIREMENTS",
+            "cursor_after": draft.len() - 1 + "REQUIREMENTS\n  - ".len(),
+        })
+    );
+    assert_eq!(
+        row(&json, "recent", "MOTIVATION")["consequence"],
+        "Creates MOTIVATION under ^bar"
+    );
+}
+
+#[test]
+fn bullet_menu_continuation_depends_on_what_follows_the_token() {
+    let temp = TempDir::new("bob-cli-bullet-menu-continuation-wire");
+    let vault = drawer_vault(&temp);
+
+    let end = "@foo+bar\n- #req";
+    let json = complete(&temp, &vault, end);
+    assert_eq!(
+        row(&json, "task", "REQUIREMENTS")["replacement"],
+        "REQUIREMENTS\n  - "
+    );
+
+    let nested = "@foo+bar\n- #req\n  - already";
+    let json = complete_at(&temp, &vault, nested, end.len());
+    let requirements = row(&json, "task", "REQUIREMENTS");
+    assert_eq!(requirements["replacement"], "REQUIREMENTS");
+    assert_eq!(
+        requirements["cursor_after"],
+        "@foo+bar\n- ".len() + "REQUIREMENTS".len()
+    );
+}
+
+#[test]
+fn bullet_menu_on_new_tasks_and_project_notes_carries_the_new_target() {
+    let temp = TempDir::new("bob-cli-bullet-menu-new-wire");
+    let vault = drawer_vault(&temp);
+
+    let task = complete(&temp, &vault, "Ship it @foo\n- #");
+    assert_eq!(
+        task["target"],
+        serde_json::json!({
+            "route": "foo.md",
+            "block_id": null,
+            "text": "Ship it",
+        })
+    );
+    assert_eq!(shape(&task), ["recent:MOTIVATION", "recent:ACCEPTANCE"]);
+    assert_eq!(
+        row(&task, "recent", "MOTIVATION")["consequence"],
+        "Starts MOTIVATION on the new task"
+    );
+    let inbox = complete(&temp, &vault, "Ship it\n- #");
+    assert_eq!(inbox["target"]["route"], "mac_inbox.md");
+
+    let note = complete(&temp, &vault, "@foo^fresh@ Plan\n- #");
+    assert_eq!(
+        note["target"],
+        serde_json::json!({
+            "route": "foo_fresh.md",
+            "block_id": "prj",
+            "text": "Plan",
+        })
+    );
+    assert_eq!(shape(&note), ["recent:Motivation", "recent:Acceptance"]);
+    let motivation = row(&note, "recent", "Motivation");
+    assert_eq!(motivation["replacement"], "MOTIVATION\n  - ");
+    assert_eq!(motivation["consequence"], "Creates ## Motivation");
+
+    write_prj_note(&vault);
+    let prj = complete(&temp, &vault, "@proj+prj\n- #");
+    assert_eq!(prj["target"]["block_id"], "prj");
+    assert_eq!(
+        row(&prj, "task", "Requirements")["replacement"],
+        "REQUIREMENTS\n  - "
+    );
+    let structural = complete(&temp, &vault, "@proj+prj\n- #pomodoros");
+    assert_eq!(
+        row(&structural, "new", "POMODOROS")["refused"],
+        "use `@proj#<Heading>` to capture into a project `##` section"
+    );
+}
+
+#[test]
+fn bullet_starts_that_cannot_name_a_drawer_are_empty_successes() {
+    let temp = TempDir::new("bob-cli-bullet-menu-positions-wire");
+    let vault = drawer_vault(&temp);
+    for draft in [
+        "@foo+bar fix it\n- #",
+        "@foo+bar#requirements\n- #",
+        "%n\n- #",
+        "x\n- #",
+        "Ship it\n- \\#",
+    ] {
+        let json = complete(&temp, &vault, draft);
+        assert_eq!(json["context"], Value::Null, "{draft:?}: {json}");
+        assert_eq!(rows(&json).len(), 0, "{draft:?}: {json}");
+    }
+
+    // A nested `  - #` is still a task-type position.
+    let nested = complete(&temp, &vault, "Ship it\n- check\n  - #");
+    assert_eq!(nested["context"], "task_type");
+}
+
+#[test]
+fn accepting_a_bullet_row_makes_the_commit_agree_with_the_menu() {
+    let temp = TempDir::new("bob-cli-bullet-menu-roundtrip");
+    let vault = drawer_vault(&temp);
+    write_prj_note(&vault);
+
+    for (prefix, scope) in [
+        ("@foo+bar\n- #", "task"),
+        ("@proj+prj\n- #", "section"),
+        ("Ship it\n- #", "new task"),
+        ("@foo^fresh@ Plan\n- #", "new project note"),
+    ] {
+        for query in ["", "req", "motiv", "perf", "tasks", "notes", "future"] {
+            let draft = format!("{prefix}{query}");
+            let menu = complete(&temp, &vault, &draft);
+            for row in rows(&menu) {
+                let replacement =
+                    row["replacement"].as_str().expect("replacement");
+                // The accepted draft ends on the fresh nested bullet, so
+                // the user's first note is the only thing left to type.
+                assert!(replacement.ends_with("\n  - "), "{row}");
+                let accepted =
+                    format!("{}note", accept(&draft, &menu, replacement));
+                let (ok, json) = dry_run(&vault, &accepted);
+                let label = format!("{scope} {draft:?} → {accepted:?}: {row}");
+                if let Some(reason) = row.get("refused") {
+                    assert!(!ok, "{label}: {json}");
+                    let error = json["error"].as_str().expect("error");
+                    assert!(
+                        error.ends_with(reason.as_str().expect("reason")),
+                        "{label}: {json}"
+                    );
+                    continue;
+                }
+                assert!(ok, "{label}: {json}");
+                let title = row["key"].as_str().expect("key");
+                match scope {
+                    "task" | "section" => assert_eq!(
+                        json["drawer"]["created"], row["creates"],
+                        "{label}: {json}"
+                    ),
+                    "new task" => assert_eq!(
+                        json["sub_bullets"][0],
+                        format!("\t- {title}"),
+                        "{label}: {json}"
+                    ),
+                    // The template's own `## Tasks` is not a new section.
+                    _ if row["creates"] == false => assert_eq!(
+                        json["project_note"]["sections"],
+                        serde_json::json!([]),
+                        "{label}: {json}"
+                    ),
+                    _ => assert_eq!(
+                        json["project_note"]["sections"][0]
+                            .as_str()
+                            .map(str::to_uppercase),
+                        Some(title.to_string()),
+                        "{label}: {json}"
+                    ),
+                }
+                if scope == "task" || scope == "section" {
+                    assert_eq!(json["drawer"]["key"], row["key"], "{label}");
+                }
+                // The caret lands past the title and the opened bullet.
+                let after = row["cursor_after"].as_u64().unwrap() as usize;
+                assert_eq!(
+                    after,
+                    draft.rfind('#').unwrap() + replacement.len(),
+                    "{label}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn bullet_menu_human_output_shows_the_title_line_only() {
+    let temp = TempDir::new("bob-cli-bullet-menu-human");
+    let vault = drawer_vault(&temp);
+    let draft = "@foo+bar\n- #";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("--")
+        .arg(draft)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run human capture-complete");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("REQUIREMENTS  2 notes  · task"), "{text}");
+    assert!(!text.contains("\n  - "), "{text}");
+}

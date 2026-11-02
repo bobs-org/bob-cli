@@ -2,6 +2,10 @@
 title: Capture Sigils Say Where, What, and How
 summary: "'@' says where, glued '#' names a place and free '#' a type, '%' says how."
 requested: project
+metadata:
+  status: superseded-in-part
+  superseded_by:
+    - decisions:capture-bullets-mirror-the-task-block
 aka:
   - capture sigils say where what how
   - where what how grammar
@@ -41,3 +45,6 @@ restores prefix matching or attached typing.
 (`src/native/capture_drawers.rs`, `capture_language/` grammar revision 3,
 `bob capture-drawers` with hidden `capture-task-sections` alias). See also
 [[glossary:task-drawer]] and [[glossary:task-type]].
+
+Superseded in part: a `#` at a first-level bullet start now names a drawer, not a type
+([[decisions:capture-bullets-mirror-the-task-block]]).

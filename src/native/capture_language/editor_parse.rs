@@ -528,6 +528,22 @@ pub(super) fn inherit_editor_global_destination(
     let had_task_dependency_need = item.needs.contains(&Need::TaskDependency);
     let had_blocked_task_need = item.needs.contains(&Need::BlockedTask);
     let had_target_need = item.needs.contains(&Need::DependencyTarget);
+    // Only a new task under a plain `@@route` keeps its drawer position,
+    // now filed at the global route.
+    item.drawer_bullet_target =
+        match (item.drawer_bullet_target.take(), global.mode) {
+            (
+                Some(super::drawer_bullet::DrawerBulletTarget::NewTask {
+                    text,
+                    ..
+                }),
+                EditorMode::Task,
+            ) => Some(super::drawer_bullet::DrawerBulletTarget::NewTask {
+                route: global.route.clone(),
+                text,
+            }),
+            _ => None,
+        };
     item.mode = global.mode;
     item.route = global.route.clone();
     item.section = None;
@@ -794,6 +810,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: true,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     })
@@ -843,6 +860,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: true,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     })
@@ -897,6 +915,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: true,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         })
     };
     match claim {
@@ -1069,6 +1088,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             sub_bullets: Vec::new(),
             has_local_destination: true,
             local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
         },
         declarations: Vec::new(),
     })
@@ -1158,6 +1178,7 @@ fn parse_editor_ref_item<'a>(
                 sub_bullets: Vec::new(),
                 has_local_destination: false,
                 local_destination_markers: Vec::new(),
+                drawer_bullet_target: None,
             },
             declarations: Vec::new(),
         });
@@ -1231,6 +1252,7 @@ fn parse_editor_ref_item<'a>(
                     block_id: None,
                     section: None,
                 }],
+                drawer_bullet_target: None,
             },
             declarations: Vec::new(),
         });
@@ -1315,6 +1337,8 @@ fn apply_note_directive(parsed: &mut EditorItemParse) {
         return;
     }
     parsed.mode = EditorMode::PomodoroNote;
+    // A Pomodoro note's bullets are note lines, never drawers.
+    parsed.drawer_bullet_target = None;
     parsed.route = None;
     parsed.section = None;
     parsed.block_id = None;
@@ -3224,6 +3248,9 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
     }
 
+    // A bare `- #` rewrites the mode to `Incomplete`, so the bullet
+    // target is classified from the mode on entry.
+    let entry_mode = mode;
     attach_drawer_bullet_metadata(
         item,
         &mut mode,
@@ -3233,6 +3260,17 @@ pub(super) fn parse_editor_item_inner<'a>(
         &mut spans,
         &mut diagnostics,
         &mut sub_bullets,
+    );
+    let drawer_bullet_target = super::drawer_bullet::classify_target(
+        entry_mode,
+        route.as_deref(),
+        block_id.as_deref(),
+        &body,
+        section.as_deref(),
+        super::drawer_bullet::item_has_first_level_line(item),
+        spans
+            .iter()
+            .any(|span| span.kind == SpanKind::TaskToggleExplicitToggle),
     );
 
     spans.sort_by_key(|span| (span.start, span.end));
@@ -3264,6 +3302,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             sub_bullets,
             has_local_destination,
             local_destination_markers,
+            drawer_bullet_target,
         },
         declarations,
     }

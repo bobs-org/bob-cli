@@ -443,7 +443,10 @@ pub(super) fn candidate_lines(
                     None if item.detail.is_empty() => item.group.clone(),
                     None => format!("{}  · {}", item.detail, item.group),
                 };
-                (item.replacement.clone(), format!("{}  {note}", item.title))
+                // A bullet row may carry its `\n  - ` continuation; the
+                // listing shows only the title line.
+                let label = item.replacement.lines().next().unwrap_or_default();
+                (label.to_string(), format!("{}  {note}", item.title))
             })
             .collect(),
         Candidates::ActiveTask(items) => items

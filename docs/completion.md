@@ -483,6 +483,24 @@ another thin client of that service (see `docs/capture.md`
   `initial_selection: "none"`; a missing, duplicate, or non-task target returns
   its diagnostic and no rows. Zsh lists the target's own unrefused drawers in
   the `drawers` group.
+- **`#` at a first-level bullet start completes drawers.** In
+  `Ship it` / `- #`, the `#` after a column-zero `- ` (or `* `, `+ `) opens the
+  same `drawer` context, wherever the item's first-level bullets land directly
+  under a task: a new task, a new project note, or a note-less `@route+id`.
+  The replacement covers the whole shortcut, and each row inserts the bare
+  ALL-CAPS title (`FUTURE WORK`) rather than `#future-work`, so the draft reads
+  exactly like the task block it writes. Existing tasks list `task`, `recent`,
+  and `new` rows; new tasks and new project notes list `recent` and `new`
+  rows (`Starts FUTURE WORK on the new task`, `Creates ## Future Work`), and the
+  response `target` carries `block_id: null` for a new task. When the token
+  ends its line and no nested bullet follows, the replacement also opens the
+  nested bullet (`FUTURE WORK\n  - `) and `cursor_after` lands on it. Zsh
+  completes single-line drafts only, so it never reaches a bullet start. Rows
+  are refused by the commit's own exact resolution (reserved or ambiguous
+  names). Where the
+  bullets cannot name a drawer (a same-line note, a glued `#drawer`, a Pomodoro
+  note, a close), the answer is an empty success; a nested `  - #` still
+  completes task types.
 - **`%` completes capture directives.** A bare `%` opens the Clip (`%c`),
   Pomodoro note (`%n`), and Template (`%t`) rows; a bare-URL reference also
   offers Listen (`%l`). Bob supplies the row labels, details, and disabled

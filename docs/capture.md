@@ -7012,6 +7012,26 @@ an empty query adds `initial_selection: "none"`. On the project note's own
 `^prj` task the `task` group lists the note's eligible `##` sections instead,
 with `entry_count` set to their top-level list items and a `consequence` that
 names the section (`Adds to ## Requirements`).
+Bullet drawer completion covers the `#` that starts a first-level bullet
+(`- #`, `- #fut`, `- #"FUTURE W`) wherever its bullets land directly under a
+task: a new task, a new project note, or a note-less `@route+id` (the
+[multi-note form](#several-notes-at-once)). The field's
+`replacement` covers the whole shortcut, `#` through its end, and every row's
+`replacement` is the bare ALL-CAPS title (`FUTURE WORK`), never `#slug`. A row
+is valid only when committing that literal title (an exact resolution, like any
+ALL-CAPS drawer bullet) reaches the row's intent: the same existing drawer, or
+a creation of the same key; otherwise the row carries the resolver's `refused`
+reason. An existing task offers `task`, `recent`, and `new` rows with the glued
+menu's copy; a new task offers `recent` and `new` rows only, with the
+consequence `Starts FUTURE WORK on the new task`; a new project note offers
+the same two groups with `Creates ## Future Work`. When the shortcut ends its
+line and the next physical line is not a nested bullet, each `replacement` is
+`TITLE\n  - ` and `cursor_after` lands on the opened nested bullet. Shell
+completion serves one-line drafts only, so it never reaches a bullet start. A
+bullet-start `#`
+that cannot name a drawer (a same-line note, a glued drawer, a Pomodoro note,
+a close, an explicit toggle, or `\#`) returns a successful empty result with a
+null context, and a nested `  - #` still completes task types.
 Pomodoro-name completion covers `@route:id#prefix`, a bare `@route:id#`,
 `@route:#prefix`, and `@route:id=name` (e.g. `@work:outline=bu|`); only the route
 must already resolve because the Pomodoro list does not depend on the block
@@ -7533,7 +7553,12 @@ or a quoted `#"TITLE"` when the slug does not resolve back to exactly that
 drawer; it covers the `#` and the name, and `cursor_after` is the draft offset
 just past it. The response adds `target: {route, block_id, text}`, and a
 `query` holding the decoded drawer query. On a `^prj` parent the `task` rows
-are the note's eligible `##` sections instead of task-child drawers. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
+are the note's eligible `##` sections instead of task-child drawers. At a
+bullet start the rows use the same fields, `replacement` is the bare ALL-CAPS
+title (with `\n  - ` appended when it opens the nested bullet), and `target`
+describes where the bullets land: `block_id` is `null` for a new task
+(`route` is its destination note, `text` its body) and `"prj"` for a new
+project note (`route` is the note that will be created). A Pomodoro-name candidate has nullable `ref`, nullable `name`,
 `requires_name`, optional `creates_pomodoro` (absent or false on existing
 rows), nullable `line`, `state`, `status_symbol`, nullable `time_range`,
 `placeholder`, `is_current`, `child_count`, and `match_count`; selectable named
