@@ -187,6 +187,72 @@ fn top_level_trimmed(
         .collect()
 }
 
+fn shift_index_after_remove(
+    index: usize,
+    start: usize,
+    end: usize,
+) -> Option<usize> {
+    if index >= start && index <= end {
+        None
+    } else if index > end {
+        Some(index - (end - start + 1))
+    } else {
+        Some(index)
+    }
+}
+
+fn shift_index_after_insert_after(
+    index: usize,
+    after: usize,
+    count: usize,
+) -> usize {
+    if index > after {
+        index + count
+    } else {
+        index
+    }
+}
+
+fn shift_index_after_move_subtree(
+    index: usize,
+    child: usize,
+    sub_end: usize,
+    dest_child_end: usize,
+) -> Option<usize> {
+    let subtree_len = sub_end - child + 1;
+    let removed_before = if child <= dest_child_end {
+        subtree_len
+    } else {
+        0
+    };
+    let dest_after = dest_child_end.saturating_sub(removed_before);
+    let after_remove = shift_index_after_remove(index, child, sub_end)?;
+    Some(shift_index_after_insert_after(
+        after_remove,
+        dest_after,
+        subtree_len,
+    ))
+}
+
+fn retarget_tracked_lines(
+    src_zero: &mut usize,
+    dest_zeros: &mut [usize],
+    from_dest: usize,
+    mut shift: impl FnMut(usize) -> Option<usize>,
+) -> Result<(), CaptureError> {
+    *src_zero = shift(*src_zero).ok_or_else(|| {
+        CaptureError::io(
+            "Pomodoro merge invariant failed: source header was removed",
+        )
+    })?;
+    for dest in dest_zeros.iter_mut().skip(from_dest) {
+        if let Some(next) = shift(*dest) {
+            *dest = next;
+        }
+    }
+    Ok(())
+}
+
 fn task_link_zero_indices(
     lines: &[LineSpan<'_>],
     entry_index: usize,
@@ -320,16 +386,17 @@ fn merge_next_missing_error(
         .then_some(entry.name.as_deref())
         .flatten()
     });
-    let message = if let Some(dest_name) = above {
+    let mut message = format!("Nothing planned below {src_name} to merge");
+    if passed_meet {
+        message.push_str(" (MEET never merges)");
+    }
+    if let Some(dest_name) = above {
         let src_selector = merge_selector_for_name(src_name, sources);
         let dest_selector = merge_destination_spelling(dest_name, sources);
-        format!(
-            "Nothing planned below {src_name} to merge; name one to absorb (for example `=*{src_selector}{dest_selector}`){}",
-            if passed_meet { " (MEET never merges)" } else { "" }
-        )
-    } else {
-        format!("Nothing planned below {src_name} to merge")
-    };
+        message.push_str(&format!(
+            "; name one to absorb (for example `=*{src_selector}{dest_selector}`)"
+        ));
+    }
     CaptureError::usage_code(message, "merge_next_missing")
 }
 
@@ -656,42 +723,24 @@ pub(super) fn plan_pomodoro_merge_item(
     let mut current = renamed;
     let mut absorbed = Vec::new();
     let mut links_moved = 0usize;
-    for ((dest_name, original_line), role) in dest_names
+    let mut src_zero = src_line.checked_sub(1).ok_or_else(|| {
+        CaptureError::io(
+            "Pomodoro merge invariant failed: source entry has no line",
+        )
+    })?;
+    let mut dest_zeros: Vec<usize> = dest_original_lines
         .iter()
-        .zip(dest_original_lines.iter().copied())
-        .zip(dest_roles.iter().copied())
-    {
+        .map(|line| line.saturating_sub(1))
+        .collect();
+    for dest_i in 0..dest_zeros.len() {
+        let dest_name = dest_names[dest_i].clone();
+        let original_line = dest_original_lines[dest_i];
+        let role = dest_roles[dest_i];
         let mut moved_lines = 0usize;
         let mut dropped_duplicates = 0usize;
         loop {
             let spans_now = line_spans(&current);
-            let scan_now = capture_pomodoros::scan(&current);
-            let Some(dest_entry) = scan_now.entries.iter().find(|entry| {
-                entry.line == original_line
-                    || (entry.name.as_deref() == Some(dest_name.as_str())
-                        && entry.line != src_line)
-            }) else {
-                break;
-            };
-            let dest_zero = dest_entry.line.checked_sub(1).ok_or_else(|| {
-                CaptureError::io(
-                    "Pomodoro merge invariant failed: dest entry is out of range",
-                )
-            })?;
-            let src_zero = {
-                let src_now = scan_now
-                    .entries
-                    .iter()
-                    .find(|entry| entry.line == src_line)
-                    .or_else(|| {
-                        scan_now.entries.iter().find(|entry| {
-                            entry.name.as_deref() == Some(after_name.as_str())
-                        })
-                    });
-                src_now
-                    .and_then(|entry| entry.line.checked_sub(1))
-                    .unwrap_or(src_line.saturating_sub(1))
-            };
+            let dest_zero = dest_zeros[dest_i];
             if dest_zero >= spans_now.len() || src_zero >= spans_now.len() {
                 return Err(CaptureError::io(
                     "Pomodoro merge invariant failed: dest entry is out of range",
@@ -702,6 +751,14 @@ pub(super) fn plan_pomodoro_merge_item(
                 current = crate::native::capture_task_toggle::remove_line_range(
                     &current, &spans_now, dest_zero, dest_zero,
                 );
+                retarget_tracked_lines(
+                    &mut src_zero,
+                    &mut dest_zeros,
+                    dest_i,
+                    |index| {
+                        shift_index_after_remove(index, dest_zero, dest_zero)
+                    },
+                )?;
                 break;
             }
             let child = children[0];
@@ -709,21 +766,44 @@ pub(super) fn plan_pomodoro_merge_item(
             let child_trim = spans_now[child].text.trim().to_string();
             let is_link =
                 task_link_zero_indices(&spans_now, dest_zero).contains(&child);
-            if is_link && src_trims.iter().any(|text| text == &child_trim) {
+            if is_link && src_trims.contains(&child_trim) {
                 let sub_end = subtree_end_for(&spans_now, child);
                 current = crate::native::capture_task_toggle::remove_line_range(
                     &current, &spans_now, child, sub_end,
                 );
+                retarget_tracked_lines(
+                    &mut src_zero,
+                    &mut dest_zeros,
+                    dest_i,
+                    |index| shift_index_after_remove(index, child, sub_end),
+                )?;
                 dropped_duplicates += 1;
                 continue;
             }
             let sub_end = subtree_end_for(&spans_now, child);
             let subtree_len = sub_end.saturating_sub(child) + 1;
+            let dest_child_end =
+                crate::native::capture_task_toggle::child_block_end_line(
+                    &spans_now, src_zero,
+                );
             match crate::native::capture_task_toggle::move_subtree_to_entry(
                 &current, child, sub_end, src_zero,
             ) {
                 Ok((updated, _)) => {
                     current = updated;
+                    retarget_tracked_lines(
+                        &mut src_zero,
+                        &mut dest_zeros,
+                        dest_i,
+                        |index| {
+                            shift_index_after_move_subtree(
+                                index,
+                                child,
+                                sub_end,
+                                dest_child_end,
+                            )
+                        },
+                    )?;
                     moved_lines += subtree_len;
                     if is_link {
                         links_moved += 1;
@@ -737,24 +817,14 @@ pub(super) fn plan_pomodoro_merge_item(
             }
         }
         absorbed.push(PomodoroMergeAbsorbed {
-            name: dest_name.clone(),
+            name: dest_name,
             role,
             from_line: original_line,
             moved_lines,
             dropped_duplicates,
         });
     }
-    let final_scan = capture_pomodoros::scan(&current);
-    let src_final = final_scan
-        .entries
-        .iter()
-        .find(|entry| entry.line == src_line)
-        .or_else(|| {
-            final_scan.entries.iter().find(|entry| {
-                entry.name.as_deref() == Some(after_name.as_str())
-            })
-        });
-    let entry_line = src_final.map(|entry| entry.line).unwrap_or(src_line);
+    let entry_line = src_zero + 1;
     planner.stage(&day_file, current.clone())?;
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)

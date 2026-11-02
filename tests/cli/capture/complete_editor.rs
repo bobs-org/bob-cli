@@ -151,6 +151,119 @@ fn capture_complete_merge_labels_the_implied_rows_and_starts_unselected() {
 }
 
 #[test]
+fn capture_complete_merge_excludes_resolved_dests_not_the_field_being_edited() {
+    let temp = TempDir::new("bob-cli-capture-complete-merge-exclude");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261101.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-1000**) — BUILD\n",
+            "  - [[tasks#^build]]\n",
+            "- [ ] () — FIX\n",
+            "  - [[tasks#^fix]]\n",
+            "- [ ] () — READ\n",
+            "- [ ] () — BUILD + WRITE\n",
+            "- [ ] () — DEEP:WORK\n",
+        ),
+    );
+    let complete = |draft: &str| {
+        bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-c")
+            .arg(draft.len().to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_NOW", "2026-11-01 09:30")
+            .env("BOB_DAY_FILE", &day_file)
+            .output()
+            .expect("run merge destination completion")
+    };
+    let names = |json: &serde_json::Value| {
+        json["candidates"]
+            .as_array()
+            .expect("candidates")
+            .iter()
+            .map(|row| row["name"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let editing = complete("=*build#fi");
+    assert_success(&editing);
+    let editing_json: serde_json::Value =
+        serde_json::from_str(stdout(&editing).trim()).expect("editing JSON");
+    assert_eq!(editing_json["context"], "pomodoro_merge_dest");
+    let editing_names = names(&editing_json);
+    assert!(
+        editing_names
+            .iter()
+            .any(|name| name.contains("FIX") && name.contains("next planned")),
+        "FIX stays available while editing #fi: {editing_names:?}"
+    );
+
+    let committed = complete("=*build#fi#");
+    assert_success(&committed);
+    let committed_json: serde_json::Value =
+        serde_json::from_str(stdout(&committed).trim())
+            .expect("committed JSON");
+    assert_eq!(committed_json["context"], "pomodoro_merge_dest");
+    let committed_names = names(&committed_json);
+    assert_eq!(committed_json["candidates"][0]["replacement"], "READ");
+    assert!(
+        committed_json["candidates"][0]["name"]
+            .as_str()
+            .unwrap()
+            .contains("(next planned"),
+        "{}",
+        committed_json["candidates"][0]["name"]
+    );
+    assert!(
+        committed_names.iter().all(|name| !name.contains("FIX →")),
+        "already selected FIX is absent: {committed_names:?}"
+    );
+
+    let quoted = complete("=*build#\"DEEP:WORK\"#");
+    assert_success(&quoted);
+    let quoted_json: serde_json::Value =
+        serde_json::from_str(stdout(&quoted).trim()).expect("quoted JSON");
+    let quoted_names = names(&quoted_json);
+    assert!(
+        quoted_names.iter().all(|name| !name.contains("DEEP:WORK")),
+        "quoted dest is excluded by resolved identity: {quoted_names:?}"
+    );
+    assert!(
+        quoted_names
+            .iter()
+            .any(|name| name.contains("FIX") && name.contains("next planned")),
+        "next planned stays FIX after quoting DEEP:WORK: {quoted_names:?}"
+    );
+
+    let secondary = complete("=*build#write#");
+    assert_success(&secondary);
+    let secondary_json: serde_json::Value =
+        serde_json::from_str(stdout(&secondary).trim())
+            .expect("secondary JSON");
+    let secondary_names = names(&secondary_json);
+    assert!(
+        secondary_names
+            .iter()
+            .all(|name| !name.contains("BUILD + WRITE")),
+        "secondary component of a merged name is excluded: {secondary_names:?}"
+    );
+    assert!(
+        secondary_names
+            .iter()
+            .any(|name| name.contains("FIX") && name.contains("next planned")),
+        "next planned stays FIX after selecting WRITE: {secondary_names:?}"
+    );
+}
+
+#[test]
 fn capture_complete_merge_keeps_current_plain_when_ambiguous() {
     let temp = TempDir::new("bob-cli-capture-complete-merge-ambiguous");
     let vault = temp.path().join("vault");

@@ -1245,6 +1245,61 @@ fn merge_display_label(
     format!("{selector} → {full} ({state} · {links})")
 }
 
+fn merge_dest_index_at(raw_text: &str, cursor: usize) -> Option<usize> {
+    let field = capture_language::completion_field_at(raw_text, cursor)?;
+    if field.context != capture_language::CompletionContext::PomodoroMergeDest {
+        return None;
+    }
+    let prefix = raw_text.get(..field.replacement.0)?;
+    let star = prefix.rfind("=*")?;
+    let after_star = prefix.get(star + 2..)?;
+    let mut dest_index = 0usize;
+    let mut in_quote = false;
+    for ch in after_star.chars() {
+        if !in_quote && ch == '#' {
+            dest_index += 1;
+        } else if !in_quote && (ch == '"' || ch == '\u{201c}') {
+            in_quote = true;
+        } else if in_quote && (ch == '"' || ch == '\u{201d}') {
+            in_quote = false;
+        }
+    }
+    dest_index.checked_sub(1)
+}
+
+fn resolve_merge_dest_index(
+    entries: &[crate::native::pomodoro_themes::merged::SelectEntry<'_>],
+    selector: &str,
+    src_index: Option<usize>,
+    sources: &crate::native::config::themes::ThemeSources,
+) -> Option<usize> {
+    let untimed = crate::native::pomodoro_themes::merged::SelectInput {
+        entries,
+        selector,
+        filter: crate::native::pomodoro_themes::merged::SelectFilter::UntimedPlanned {
+            except: src_index,
+        },
+        sources,
+    };
+    if let crate::native::pomodoro_themes::merged::SelectOutcome::Entry(index) =
+        crate::native::pomodoro_themes::merged::select_by_type(&untimed)
+    {
+        return Some(index);
+    }
+    let open = crate::native::pomodoro_themes::merged::SelectInput {
+        entries,
+        selector,
+        filter: crate::native::pomodoro_themes::merged::SelectFilter::Open,
+        sources,
+    };
+    match crate::native::pomodoro_themes::merged::select_by_type(&open) {
+        crate::native::pomodoro_themes::merged::SelectOutcome::Entry(index) => {
+            Some(index)
+        }
+        crate::native::pomodoro_themes::merged::SelectOutcome::Missing => None,
+    }
+}
+
 fn first_type_name(
     name: &str,
     sources: &crate::native::config::themes::ThemeSources,
@@ -1469,23 +1524,18 @@ pub(super) fn pomodoro_merge_dest_candidates(
             | capture_pomodoros::CurrentPomodoro::Missing => None,
         }
     };
-    let selected_keys: std::collections::BTreeSet<String> = selected
-        .iter()
-        .map(|name| crate::native::plan_budget::normalize_component(name))
-        .collect();
+    let editing_dest = merge_dest_index_at(raw_text, cursor);
     let mut selected_indices = Vec::new();
-    for selector in &selected {
-        let untimed = crate::native::pomodoro_themes::merged::SelectInput {
-            entries: &entries,
-            selector,
-            filter: crate::native::pomodoro_themes::merged::SelectFilter::UntimedPlanned {
-                except: src_index,
-            },
-            sources: &sources,
-        };
-        if let crate::native::pomodoro_themes::merged::SelectOutcome::Entry(
-            index,
-        ) = crate::native::pomodoro_themes::merged::select_by_type(&untimed)
+    for (dest_i, selector) in selected.iter().enumerate() {
+        if selector.is_empty() {
+            continue;
+        }
+        if editing_dest == Some(dest_i) && !query.is_empty() {
+            continue;
+        }
+        if let Some(index) =
+            resolve_merge_dest_index(&entries, selector, src_index, &sources)
+            && !selected_indices.contains(&index)
         {
             selected_indices.push(index);
         }
@@ -1532,8 +1582,7 @@ pub(super) fn pomodoro_merge_dest_candidates(
             continue;
         };
         let selector = first_type_name(&full_name, &sources);
-        let key = crate::native::plan_budget::normalize_component(&selector);
-        if selected_keys.contains(&key) {
+        if selected_indices.contains(&index) {
             continue;
         }
         if !query.is_empty()
