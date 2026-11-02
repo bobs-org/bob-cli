@@ -218,6 +218,105 @@ fn agenda_events_golden() {
 }
 
 #[test]
+fn agenda_events_buffered_golden() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-events-buffered");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_tasks_vault(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Events\n",
+            "- [x] #task **0830-0855** Past standup [buffer:: +30m] ^past-standup\n",
+            "- [ ] #task **0940-1000** Lunch [buffer:: -30m +15m] #untracked ^lunch\n",
+            "- [ ] #task **1030-1100** Standup [buffer:: +15m] ^standup\n",
+            "## Pomodoros\n",
+            "- [ ] (0905-0915 [t:: 10m]) — BOB\n",
+            "- [ ] () — MEET\n",
+            "\t- [[#^lunch]]\n",
+            "\t- [[#^standup]]\n",
+        ),
+    );
+    check_golden("agenda-events-buffered", &vault, &day_file, &[]);
+    let json = agenda_json(&vault, &day_file, &[]);
+    assert_eq!(json["events"]["rows"][0]["phase"], "ended");
+    assert_eq!(
+        json["events"]["rows"][0]["buffer"]["ends_at"],
+        "2026-08-28T09:25"
+    );
+    assert_eq!(
+        json["events"]["conflict"],
+        serde_json::json!({
+            "pomodoro_line": 7,
+            "event": 1,
+            "overlap_minutes": 5,
+            "buffer_part": "before"
+        })
+    );
+    assert_eq!(json["events"]["start_hint"], "x =meet");
+    assert_eq!(json["events"]["refresh_at"], "2026-08-28T09:25");
+    assert_eq!(
+        json["pomodoros"][1]["items"][0]["event"]["buffer"]["time_range"],
+        "0910-1015"
+    );
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--tasks")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("run human capture-pomodoros agenda with buffers");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(human.contains("Past standup"), "{human}");
+    assert!(human.contains("+30m"), "{human}");
+    assert!(human.contains("−30m +15m"), "{human}");
+}
+
+#[test]
+fn agenda_gap_skips_a_running_event_lead_out() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-gap-buffer");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_tasks_vault(&vault);
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Events\n",
+            "- [ ] #task **0830-0900** Post-event [buffer:: +30m] ^post-event\n",
+            "- [ ] #task **1000-1030** Focus block ^focus\n",
+            "## Pomodoros\n",
+        ),
+    );
+    let json = agenda_json(&vault, &day_file, &[]);
+    assert_eq!(
+        json["events"]["gap"],
+        serde_json::json!({
+            "from": "09:30",
+            "until": "10:00",
+            "minutes": 30,
+            "fits": "=6"
+        })
+    );
+    assert_eq!(json["events"]["refresh_at"], "2026-08-28T09:30");
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--tasks")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("run human capture-pomodoros agenda");
+    assert_success(&output);
+    assert!(stdout(&output).contains("Post-event"));
+}
+
+#[test]
 fn agenda_events_idle_gap_reports_a_plain_fit() {
     let temp = TempDir::new("bob-cli-pomodoros-agenda-events-gap");
     let vault = temp.path().join("vault");

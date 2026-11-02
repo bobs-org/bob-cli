@@ -656,6 +656,7 @@ pub(crate) fn event_starts_crossed<'a>(
 
 /// Earliest open Event Task whose start lies in `[session_start, session_end)`,
 /// wrapping overnight when the session end is earlier than its start.
+#[allow(dead_code)] // Retained for direct overnight behavior regression tests.
 pub(crate) fn first_event_start_crossed<'a>(
     session_start_min: u16,
     session_end_min: u16,

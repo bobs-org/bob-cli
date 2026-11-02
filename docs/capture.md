@@ -7871,6 +7871,9 @@ after the entry name when `chip` is set. The schema stays version `1`. Calls
 without `--tasks` omit `homes`. When the day note has an `## Events` section,
 `--tasks` also adds a top-level `events` object; without that section the key is
 omitted. Human output places a compact Calendar block before the Pomodoro rows.
+The Calendar block appends each buffer label after its meeting time and keeps an
+event visible through the end of its buffer. Event Task row phases and focus
+continue to use the meeting span.
 Each entry also adds `role` (`current`, `next`,
 `later`, `open`, or `completed`), naive `starts_at`/`ends_at` datetimes
 (`"YYYY-MM-DDTHH:MM"` for timed entries, `null` otherwise; both keys are always
@@ -7896,7 +7899,9 @@ lines the line without indentation), relative `depth`, `kind` (`bullet`,
 
 An item linked to an Event Task in today's daily note also carries `event` with
 its `time_range`, naive `starts_at`/`ends_at`, `untracked` flag, and clean
-`title`; other items omit this field.
+`title`; buffered Event Tasks add `buffer` with `before_minutes`,
+`after_minutes`, the buffered `time_range`, and buffered naive `starts_at` and
+`ends_at`; other items omit this field.
 
 The top-level `events` object has `synced_at` (the Events stamp time or `null`),
 `all_day` context rows (`line`, `title`, and nullable `qualifier`), and timed
@@ -7907,15 +7912,22 @@ The top-level `events` object has `synced_at` (the Events stamp time or `null`),
 `join_url`, `calendar_url`, and `location`, and nullable `pomodoro` attribution
 (`line`, `role`, and lineup `index`). Timed context rows use
 `kind: "timed_context"` and have no task status or Pomodoro attribution.
+Buffered Event Tasks add `buffer` with `before_minutes`, `after_minutes`, the
+buffered `time_range`, and buffered naive `starts_at`/`ends_at`; rows without a
+nonzero buffer omit it. The row's own time fields, duration, phase, and focus
+remain on the meeting span.
 `focus` is the row index of the earliest running open Event Task, or the next
-upcoming open Event Task. `gap` reports free minutes to that event from the
-running Pomodoro's end, or the next five-minute slot when no Pomodoro is
-running; `fits` is the largest plain five-minute `=N` start and is present only
-while idle. `conflict` identifies a running non-MEET Pomodoro that crosses the
-focus event's start and its overlap in minutes. `start_hint` is `=meet` or
-`x =meet` when the focus event is linked under a non-running MEET and is
-starting soon. `refresh_at` is the next timed event phase boundary. Empty
-optional values are `null`, and the schema remains version `1`.
+upcoming open Event Task. `gap` reports free minutes to that event's buffered
+start, from the running Pomodoro's end or the next five-minute slot when no
+Pomodoro is running; it advances past any open Event Task buffer already in
+progress. `fits` is the largest plain five-minute `=N` start and is present
+only while idle. `conflict` identifies a running non-MEET Pomodoro that newly
+overlaps the focus event's occupied span, and reports its overlap minutes plus
+`buffer_part` (`before` or `after`) when the overlap lies wholly inside one
+buffer. `start_hint` is `=meet` when the focus event's buffer starts within 25
+minutes and `x =meet` once that buffered start has passed, when the focus event
+is linked under a non-running MEET. `refresh_at` is the next meeting or buffer
+boundary. Empty optional values are `null`, and the schema remains version `1`.
 
 The `events` block is derived read-only from the daily note. It adds no calendar
 fetch and does not write the vault.

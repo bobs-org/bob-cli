@@ -1202,12 +1202,13 @@ fn human_events_block(
         .iter()
         .enumerate()
         .filter(|(_, row)| {
-            row.phase != Some(AgendaEventPhase::Ended)
+            row.buffered_phase.or(row.phase) != Some(AgendaEventPhase::Ended)
                 && (row.kind == AgendaEventKind::TimedContext
                     || (row.kind == AgendaEventKind::Task
-                        && row.status_symbol.is_some_and(|symbol| {
-                            !matches!(symbol, 'x' | 'X' | '-')
-                        })))
+                        && (row.buffer.is_some()
+                            || row.status_symbol.is_some_and(|symbol| {
+                                !matches!(symbol, 'x' | 'X' | '-')
+                            }))))
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
@@ -1236,7 +1237,13 @@ fn human_events_block(
         } else {
             "·"
         };
-        let mut detail = format!("{marker} {time} {}", row.title);
+        let buffer_label = row
+            .buffer
+            .as_ref()
+            .and_then(|buffer| buffer.label())
+            .map(|label| format!(" {}", styler.dim(&label)))
+            .unwrap_or_default();
+        let mut detail = format!("{marker} {time}{buffer_label} {}", row.title);
         if row.untracked {
             detail.push_str(" · untracked");
         }

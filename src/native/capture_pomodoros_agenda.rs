@@ -141,6 +141,8 @@ pub(crate) struct AgendaItemEvent {
     pub(crate) ends_at: String,
     pub(crate) untracked: bool,
     pub(crate) title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) buffer: Option<AgendaEventBuffer>,
 }
 
 /// Per-entry agenda additions for `--tasks`.
@@ -199,8 +201,12 @@ pub(crate) struct AgendaEventRow {
     pub(crate) time_range: Option<String>,
     pub(crate) starts_at: Option<String>,
     pub(crate) ends_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) buffer: Option<AgendaEventBuffer>,
     pub(crate) duration_minutes: Option<u64>,
     pub(crate) phase: Option<AgendaEventPhase>,
+    #[serde(skip)]
+    pub(crate) buffered_phase: Option<AgendaEventPhase>,
     pub(crate) status_symbol: Option<char>,
     pub(crate) status_type: Option<String>,
     pub(crate) untracked: bool,
@@ -210,6 +216,26 @@ pub(crate) struct AgendaEventRow {
     pub(crate) calendar_url: Option<String>,
     pub(crate) location: Option<String>,
     pub(crate) pomodoro: Option<AgendaEventPomodoro>,
+}
+
+/// Occupied time widened by a calendar event's pre/post buffers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct AgendaEventBuffer {
+    pub(crate) before_minutes: u16,
+    pub(crate) after_minutes: u16,
+    pub(crate) time_range: String,
+    pub(crate) starts_at: String,
+    pub(crate) ends_at: String,
+}
+
+impl AgendaEventBuffer {
+    pub(crate) fn label(&self) -> Option<String> {
+        event_task::EventBuffer {
+            before_min: self.before_minutes,
+            after_min: self.after_minutes,
+        }
+        .label()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -225,6 +251,8 @@ pub(crate) struct AgendaEventConflict {
     pub(crate) pomodoro_line: usize,
     pub(crate) event: usize,
     pub(crate) overlap_minutes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) buffer_part: Option<String>,
 }
 
 /// Calendar facts and timing hints for the Mac Capture idle agenda.
@@ -817,6 +845,18 @@ pub(crate) fn agenda_events_payload(
             continue;
         };
         let (starts_at, ends_at) = event_datetimes(date, span);
+        let row_buffer = if event.kind == EventKind::Task {
+            agenda_event_buffer(date, span, event.buffer)
+        } else {
+            None
+        };
+        let buffered_span = if event.kind == EventKind::Task {
+            event.buffered_span().unwrap_or(span)
+        } else {
+            span
+        };
+        let (buffered_starts_at, buffered_ends_at) =
+            event_datetimes(date, buffered_span);
         let task = task_scan.task_at(event.line_index);
         let root = if event.kind == EventKind::Task {
             match task_root::parse_task_root(raw_line) {
@@ -852,6 +892,7 @@ pub(crate) fn agenda_events_payload(
             time_range: Some(span.text()),
             starts_at: Some(format_datetime(starts_at)),
             ends_at: Some(format_datetime(ends_at)),
+            buffer: row_buffer,
             duration_minutes: Some(
                 u64::try_from(
                     span.end_on_timeline() - i32::from(span.start_min),
@@ -859,6 +900,11 @@ pub(crate) fn agenda_events_payload(
                 .unwrap_or_default(),
             ),
             phase: Some(event_phase(starts_at, ends_at, now)),
+            buffered_phase: Some(event_phase(
+                buffered_starts_at,
+                buffered_ends_at,
+                now,
+            )),
             status_symbol: event.status,
             status_type: task
                 .map(|task| status_type_label(task.status_type).to_string()),
@@ -879,8 +925,9 @@ pub(crate) fn agenda_events_payload(
     }
 
     let focus = focus_event_index(&rows);
-    let gap =
-        focus.and_then(|index| event_gap(&rows[index], entries, date, now));
+    let gap = focus.and_then(|index| {
+        event_gap(&rows[index], &note_rows, entries, date, now)
+    });
     let conflict = focus.and_then(|index| {
         event_conflict(index, &rows, &note_rows, entries, agenda, &day_relative)
     });
@@ -888,7 +935,14 @@ pub(crate) fn agenda_events_payload(
         focus.and_then(|index| event_start_hint(&rows[index], entries, now));
     let refresh_at = rows
         .iter()
-        .flat_map(|row| [row.starts_at.as_deref(), row.ends_at.as_deref()])
+        .flat_map(|row| {
+            [
+                row.starts_at.as_deref(),
+                row.ends_at.as_deref(),
+                row.buffer.as_ref().map(|buffer| buffer.starts_at.as_str()),
+                row.buffer.as_ref().map(|buffer| buffer.ends_at.as_str()),
+            ]
+        })
         .flatten()
         .filter_map(parse_local_datetime)
         .filter(|boundary| *boundary > now)
@@ -918,6 +972,25 @@ fn event_datetimes(
     let end = date.and_hms_opt(0, 0, 0).expect("midnight is valid")
         + Duration::minutes(i64::from(end_minute));
     (start, end)
+}
+
+fn agenda_event_buffer(
+    date: NaiveDate,
+    span: event_task::EventSpan,
+    buffer: event_task::EventBuffer,
+) -> Option<AgendaEventBuffer> {
+    if buffer.is_empty() {
+        return None;
+    }
+    let occupied = span.buffered(buffer);
+    let (starts_at, ends_at) = event_datetimes(date, occupied);
+    Some(AgendaEventBuffer {
+        before_minutes: buffer.before_min,
+        after_minutes: buffer.after_min,
+        time_range: occupied.text(),
+        starts_at: format_datetime(starts_at),
+        ends_at: format_datetime(ends_at),
+    })
 }
 
 fn event_phase(
@@ -1020,19 +1093,39 @@ fn focus_event_index(rows: &[AgendaEventRow]) -> Option<usize> {
 
 fn event_gap(
     focus: &AgendaEventRow,
+    note_rows: &[EventNoteRow],
     entries: &[super::capture_pomodoros::PomodoroEntry],
     date: NaiveDate,
     now: NaiveDateTime,
 ) -> Option<AgendaEventGap> {
-    let until = parse_local_datetime(focus.starts_at.as_deref()?)?;
+    let until_text = match focus.buffer.as_ref() {
+        Some(buffer) => buffer.starts_at.as_str(),
+        None => focus.starts_at.as_deref()?,
+    };
+    let until = parse_local_datetime(until_text)?;
     let current = entries.iter().find(|entry| entry.is_current);
-    let from = if let Some(current) = current {
+    let mut from = if let Some(current) = current {
         parse_local_datetime(
             &agenda_datetimes(date, current.time_range.as_deref()).1?,
         )?
     } else {
         next_five_minute_slot(now)
     };
+    loop {
+        let next_end = note_rows
+            .iter()
+            .filter(|event| event.is_open_task())
+            .filter_map(|event| {
+                let occupied = event.buffered_span()?;
+                let (starts_at, ends_at) = event_datetimes(date, occupied);
+                (starts_at <= from && from < ends_at).then_some(ends_at)
+            })
+            .max();
+        let Some(next_end) = next_end.filter(|end| *end > from) else {
+            break;
+        };
+        from = next_end;
+    }
     if until < from {
         return None;
     }
@@ -1097,26 +1190,19 @@ fn event_conflict(
     }
     let excluded: std::collections::HashSet<String> =
         excluded.into_iter().collect();
-    let crossed = event_task::first_event_start_crossed(
-        start_min, end_min, note_rows, &excluded,
-    )?;
+    let (crossed, conflict) = event_task::event_span_conflicts(
+        start_min, end_min, None, note_rows, &excluded,
+    )
+    .into_iter()
+    .next()?;
     if crossed.line_index + 1 != focus.line {
         return None;
     }
-    let span = crossed.span?;
-    let session_start = i32::from(start_min);
-    let mut session_end = i32::from(end_min);
-    if session_end <= session_start {
-        session_end += 24 * 60;
-    }
-    let overlap_start = i32::from(span.start_min).max(session_start);
-    let overlap_end = span.end_on_timeline().min(session_end);
-    let overlap_minutes =
-        u64::try_from((overlap_end - overlap_start).max(0)).ok()?;
     Some(AgendaEventConflict {
         pomodoro_line: current.line,
         event: focus_index,
-        overlap_minutes,
+        overlap_minutes: conflict.overlap_minutes,
+        buffer_part: conflict.buffer_part.map(|part| part.as_str().to_string()),
     })
 }
 
@@ -1134,10 +1220,14 @@ fn event_start_hint(
     {
         return None;
     }
-    if focus.phase == Some(AgendaEventPhase::Running) {
+    let starts_at = match focus.buffer.as_ref() {
+        Some(buffer) => buffer.starts_at.as_str(),
+        None => focus.starts_at.as_deref()?,
+    };
+    let starts_at = parse_local_datetime(starts_at)?;
+    if now >= starts_at {
         return Some("x =meet".to_string());
     }
-    let starts_at = parse_local_datetime(focus.starts_at.as_deref()?)?;
     let until = starts_at - now;
     (until >= Duration::zero() && until <= Duration::minutes(25))
         .then(|| "=meet".to_string())
@@ -1222,6 +1312,7 @@ fn event_item_chips(
             ends_at,
             untracked: event.untracked,
             title: event.title,
+            buffer: agenda_event_buffer(date, span, event.buffer),
         };
         if chips.insert(block_id.clone(), chip).is_some() {
             chips.remove(&block_id);

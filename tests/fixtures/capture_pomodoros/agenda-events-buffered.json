@@ -1,0 +1,281 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0
+  },
+  "count": 2,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "events": {
+    "all_day": [],
+    "conflict": {
+      "buffer_part": "before",
+      "event": 1,
+      "overlap_minutes": 5,
+      "pomodoro_line": 7
+    },
+    "focus": 1,
+    "gap": null,
+    "refresh_at": "2026-08-28T09:25",
+    "rows": [
+      {
+        "block_id": "past-standup",
+        "buffer": {
+          "after_minutes": 30,
+          "before_minutes": 0,
+          "ends_at": "2026-08-28T09:25",
+          "starts_at": "2026-08-28T08:30",
+          "time_range": "0830-0925"
+        },
+        "calendar_url": null,
+        "duration_minutes": 25,
+        "ends_at": "2026-08-28T08:55",
+        "home": null,
+        "join_url": null,
+        "kind": "task",
+        "line": 3,
+        "location": null,
+        "phase": "ended",
+        "pomodoro": null,
+        "qualifier": null,
+        "root": null,
+        "starts_at": "2026-08-28T08:30",
+        "status_symbol": "x",
+        "status_type": "DONE",
+        "time_range": "0830-0855",
+        "title": "Past standup",
+        "untracked": false
+      },
+      {
+        "block_id": "lunch",
+        "buffer": {
+          "after_minutes": 15,
+          "before_minutes": 30,
+          "ends_at": "2026-08-28T10:15",
+          "starts_at": "2026-08-28T09:10",
+          "time_range": "0910-1015"
+        },
+        "calendar_url": null,
+        "duration_minutes": 20,
+        "ends_at": "2026-08-28T10:00",
+        "home": null,
+        "join_url": null,
+        "kind": "task",
+        "line": 4,
+        "location": null,
+        "phase": "upcoming",
+        "pomodoro": {
+          "index": 1,
+          "line": 8,
+          "role": "next"
+        },
+        "qualifier": null,
+        "root": null,
+        "starts_at": "2026-08-28T09:40",
+        "status_symbol": " ",
+        "status_type": "TODO",
+        "time_range": "0940-1000",
+        "title": "Lunch",
+        "untracked": true
+      },
+      {
+        "block_id": "standup",
+        "buffer": {
+          "after_minutes": 15,
+          "before_minutes": 0,
+          "ends_at": "2026-08-28T11:15",
+          "starts_at": "2026-08-28T10:30",
+          "time_range": "1030-1115"
+        },
+        "calendar_url": null,
+        "duration_minutes": 30,
+        "ends_at": "2026-08-28T11:00",
+        "home": null,
+        "join_url": null,
+        "kind": "task",
+        "line": 5,
+        "location": null,
+        "phase": "upcoming",
+        "pomodoro": {
+          "index": 2,
+          "line": 8,
+          "role": "next"
+        },
+        "qualifier": null,
+        "root": null,
+        "starts_at": "2026-08-28T10:30",
+        "status_symbol": " ",
+        "status_type": "TODO",
+        "time_range": "1030-1100",
+        "title": "Standup",
+        "untracked": false
+      }
+    ],
+    "start_hint": "x =meet",
+    "synced_at": null
+  },
+  "ok": true,
+  "plan_budget": {
+    "links": {
+      "cap": 10,
+      "count": 2,
+      "over": false
+    },
+    "status": "ok"
+  },
+  "pomodoros": [
+    {
+      "child_count": 0,
+      "ends_at": "2026-08-28T09:15",
+      "homes": {
+        "chip": null,
+        "hue": null,
+        "kind": "unlinked",
+        "label": "",
+        "parts": [],
+        "state": "forecast"
+      },
+      "is_current": true,
+      "items": [],
+      "line": 7,
+      "name": "BOB",
+      "notes": [],
+      "placeholder": false,
+      "ref": "7:7195770e",
+      "retired_link_count": 0,
+      "role": "current",
+      "selectable": true,
+      "slug": "bob",
+      "starts_at": "2026-08-28T09:05",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": 0,
+      "themes": [
+        {
+          "hue": "magenta",
+          "hue_source": "hash",
+          "key": "bob",
+          "name": "BOB"
+        }
+      ],
+      "time_range": "0905-0915"
+    },
+    {
+      "child_count": 2,
+      "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 2
+          }
+        ],
+        "state": "forecast"
+      },
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "lunch",
+          "block_link": "[[#^lunch]]",
+          "event": {
+            "buffer": {
+              "after_minutes": 15,
+              "before_minutes": 30,
+              "ends_at": "2026-08-28T10:15",
+              "starts_at": "2026-08-28T09:10",
+              "time_range": "0910-1015"
+            },
+            "ends_at": "2026-08-28T10:00",
+            "starts_at": "2026-08-28T09:40",
+            "time_range": "0940-1000",
+            "title": "Lunch",
+            "untracked": true
+          },
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 9,
+          "ledger_notes": [],
+          "line": 4,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "2026/20260828.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "**0940-1000** Lunch #untracked",
+          "warning": null
+        },
+        {
+          "block_id": "standup",
+          "block_link": "[[#^standup]]",
+          "event": {
+            "buffer": {
+              "after_minutes": 15,
+              "before_minutes": 0,
+              "ends_at": "2026-08-28T11:15",
+              "starts_at": "2026-08-28T10:30",
+              "time_range": "1030-1115"
+            },
+            "ends_at": "2026-08-28T11:00",
+            "starts_at": "2026-08-28T10:30",
+            "time_range": "1030-1100",
+            "title": "Standup",
+            "untracked": false
+          },
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 10,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "2026/20260828.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "**1030-1100** Standup",
+          "warning": null
+        }
+      ],
+      "line": 8,
+      "name": "MEET",
+      "notes": [],
+      "placeholder": true,
+      "ref": "8:20ea0b2d",
+      "retired_link_count": 0,
+      "role": "next",
+      "selectable": true,
+      "slug": "meet",
+      "starts_at": null,
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "themes": [
+        {
+          "hue": "violet",
+          "hue_source": "hash",
+          "key": "meet",
+          "name": "MEET"
+        }
+      ],
+      "time_range": null
+    }
+  ],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "warnings": []
+}
