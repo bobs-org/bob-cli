@@ -42,8 +42,10 @@ pub(super) fn plan_task_complete_item(
     note: &str,
     block_id: &str,
     today: NaiveDate,
+    now: chrono::NaiveDateTime,
     planner: &mut CaptureBatchPlanner,
     dependency_ctx: &mut DependencyContext,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_task_complete_conflicts(parsed, request, raw)?;
     let outcome = complete_existing_task(
@@ -52,8 +54,10 @@ pub(super) fn plan_task_complete_item(
         note,
         block_id,
         today,
+        now,
         planner,
         dependency_ctx,
+        warnings,
     )?;
     let summary = outcome.summary.clone();
     let status_changed =
@@ -155,8 +159,10 @@ pub(super) fn complete_existing_task(
     note: &str,
     block_id: &str,
     today: NaiveDate,
+    now: chrono::NaiveDateTime,
     planner: &mut CaptureBatchPlanner,
     dependency_ctx: &mut DependencyContext,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<CompleteExistingTaskOutcome, CaptureError> {
     let bob_dir = &request.bob_dir;
     let settings = note_tasks::read_settings(bob_dir);
@@ -526,9 +532,21 @@ pub(super) fn complete_existing_task(
             &link_statuses,
             &tasks_settings,
         );
-        if retirement.changed {
-            planner.stage(&day_file, retirement.text.clone())?;
-        }
+        let final_day_text = if retirement.changed {
+            retirement.text.clone()
+        } else {
+            day_text.clone()
+        };
+        pomodoro_refs.extend(restamp_changed_timed_entries(
+            planner,
+            bob_dir,
+            &day_file,
+            Path::new(&day_relative),
+            pre_day.as_deref().unwrap_or(&day_text),
+            final_day_text,
+            now,
+            warnings,
+        )?);
         if retirement.changed
             || retirement.struck > 0
             || !retirement.struck_in.is_empty()

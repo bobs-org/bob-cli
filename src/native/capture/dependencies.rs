@@ -2476,6 +2476,7 @@ pub(super) fn plan_existing_task_dependencies(
     ctx: &mut DependencyContext,
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
+    now: chrono::NaiveDateTime,
     dependent_ref: &DependentRef,
     deps: &[ParsedDependency],
     warnings: &mut Vec<CaptureWarning>,
@@ -2818,7 +2819,8 @@ pub(super) fn plan_existing_task_dependencies(
             .into_iter()
             .map(|block_id| (dep_rel.clone(), block_id))
             .collect::<BTreeSet<_>>();
-        let consumption = consume_live_links(planner, bob_dir, &identities)?;
+        let consumption =
+            consume_live_links(planner, bob_dir, &identities, now, warnings)?;
         append_consumption_warning(warnings, consumption.removed_links);
         pomodoro_refs = consumption.pomodoro_refs;
     }
@@ -3303,6 +3305,7 @@ pub(super) fn plan_dependency_only_item(
     request: &CaptureRequest,
     parsed: &ParsedCaptureText,
     target: &ParsedDependencyTarget,
+    now: chrono::NaiveDateTime,
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
@@ -3343,6 +3346,7 @@ pub(super) fn plan_dependency_only_item(
             ctx,
             planner,
             &request.bob_dir,
+            now,
             &owner,
             &parsed.dependencies,
             warnings,
@@ -3361,6 +3365,7 @@ pub(super) fn plan_dependency_only_item(
             ctx,
             planner,
             &request.bob_dir,
+            now,
             &owner,
             &parsed.blocked_tasks,
             warnings,
@@ -3412,6 +3417,7 @@ pub(super) fn plan_dependency_only_item(
             parsed,
             &mut relation_updates,
             true,
+            now,
             warnings,
         )?;
         relation_cancels = close.cancels;

@@ -2814,7 +2814,7 @@ the link under the running `CAPTURE` session):
 
 ```text
 ## Pomodoros
-- [ ] (**0920-0950**) — CAPTURE
+- [ ] (**0920-0950** [t:: 30m]) — CAPTURE
   - [[sase#^fix-flaky]]
 ```
 
@@ -2831,7 +2831,7 @@ After, the day file reads:
 
 ```text
 ## Pomodoros
-- [ ] (**0920-0950**) — CAPTURE
+- [ ] (**0920-0950** [t:: 30m]) — CAPTURE
   - ~~[[sase#^fix-flaky]]~~
 ```
 
@@ -3584,7 +3584,7 @@ bob capture '=/#fix'
 
 Inputs are the target entry (an open merged Pomodoro) and the split set (non-empty, a subset of the merged-in types). Each top-level child whose body is exactly a Task Link (`[[T]]`, `[[T]]#`, `![[T]]`, `![[T]]#`, including same-note `[[#^id]]`) moves with its whole subtree to its type's new entry; prose, notes, mentions, and every other link stay. The source keeps its checkbox, timespan, and position; new entries are untimed `- [ ] () — T` directly below the source block, in source-name order, even when a type has no links. Guards (closed history, MEET, single-type, base, unknown, repeated, two-type explicit) each produce a precise teaching refusal with stable codes (`split_not_merged`, `split_base_type`, `split_type_unknown`, `split_type_repeated`, `split_type_not_needed`, `split_meet`, `split_target_missing`). A missing explicit base never falls back to current, and closed entries never participate.
 
-The bytes contract matches the start family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_split` reports `pomodoro_split: {path, entry_line, before, after, base, created: [{type, line, name, moved_links}], stayed_links}` and `pomodoro_blocks` refs for the source and every created entry (including zero-link entries). Human output prints `split BEFORE → AFTER · path line N` plus `↓ TYPE new Pomodoro · N links` rows (`no links` when empty).
+The bytes contract matches the start family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. If the source is the running session, its key is restamped from the remaining links; a mixed lineup warns `pomodoro_clock_mixed`. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_split` reports `pomodoro_split: {path, entry_line, before, after, base, created: [{type, line, name, moved_links}], stayed_links}` and `pomodoro_blocks` refs for the source and every created entry (including zero-link entries). Human output prints `split BEFORE → AFTER · path line N` plus `↓ TYPE new Pomodoro · N links` rows (`no links` when empty).
 
 ### Merging Pomodoros
 
@@ -3602,7 +3602,7 @@ bob capture '=*build'
 
 Each named dest must be an untimed planned entry other than the source. Children of each dest append under the source; a dest Task Link whose trimmed line already sits as a top-level child of the source (including a child moved from an earlier dest) is dropped with its entire subtree. The source keeps its checkbox, timespan, and ledger order; dest entries are removed. The survivor's name joins the source's components, then each dest's components in selected order, keeping the first spelling of each distinct component (`BUILD + FIX + READ`). Guards (timed dest, MEET, same Pomodoro, dest already part of the source, repeated dest, missing target) each produce a precise teaching refusal with stable codes (`merge_timed_pomodoro`, `merge_meet`, `merge_same_pomodoro`, `merge_already_part`, `merge_dest_repeated`, `merge_target_missing`, `merge_next_missing`). A timed dest teaches the swap (`=*fix#build` when FIX is running).
 
-Moved child subtrees keep their nested content and adopt the surviving Pomodoro's child indentation; duplicate subtrees are removed as described above. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_merge` reports `pomodoro_merge: {path, entry_line, before, after, source_role, explicit?, absorbed: [{name, role, from_line, moved_lines, dropped_duplicates}]}`. `source_role` is `current`, `next_up`, or `named`; each absorbed row is `named` or `next`. When an implied choice can be spelled without changing the selected entries, `explicit` gives the equivalent fully named token. `pomodoro_blocks` includes refs for the survivor and every removed dest. Human output prints the merge detail and, when a choice was implied, a `same as =*plan#fix · current PLAN, next FIX` line listing the implied source and destinations. Fully named merges keep their existing output.
+Moved child subtrees keep their nested content and adopt the surviving Pomodoro's child indentation; duplicate subtrees are removed as described above. If the source is the running session, its key is restamped from the merged links; a mixed lineup warns `pomodoro_clock_mixed`. Dry-run computes the same result without writing, and any failure rolls the whole batch back. Unversioned JSON kind `pomodoro_merge` reports `pomodoro_merge: {path, entry_line, before, after, source_role, explicit?, absorbed: [{name, role, from_line, moved_lines, dropped_duplicates}]}`. `source_role` is `current`, `next_up`, or `named`; each absorbed row is `named` or `next`. When an implied choice can be spelled without changing the selected entries, `explicit` gives the equivalent fully named token. `pomodoro_blocks` includes refs for the survivor and every removed dest. Human output prints the merge detail and, when a choice was implied, a `same as =*plan#fix · current PLAN, next FIX` line listing the implied source and destinations. Fully named merges keep their existing output.
 
 ### Overriding the running Pomodoro
 
@@ -3807,7 +3807,7 @@ clock. Off-clock rows write `[off:: Nm]`; worked rows write `[t:: Nm]`.
 | Start of a `MEET` with a non-empty [event run](#meet-starts-follow-the-calendar) | The run's events. Later lineup events are queue and do not mix the run. |
 | Any other start (plain, named, created, restart, kept-ledger swap, link start) | The started entry's counted Task Links, resolved against the staged vault. Same-note Event Tasks read the note being rewritten. |
 | Close | The links the closed row keeps after by-the-clock classification and the selection. Deferred and dropped lines are gone; a worked link that is also carried still counts. The key switches even when remaining time is under five minutes and the span does not retime. |
-| Running lineup edit (`^route:id`, a new-task link, `~K` on a start) | The running entry's counted Task Links after the add or drop, so the Now card stays honest. Open rows never count toward stats. |
+| Running lineup edit (`^route:id`, a new-task link, `~K` on a start, merge `=*`, split `=/`, capture blocked-link consumption) | The running entry's counted Task Links after the add, move, or drop, so the Now card stays honest. Open rows never count toward stats. |
 
 Four edges:
 

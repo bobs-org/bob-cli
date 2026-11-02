@@ -1166,6 +1166,7 @@ impl CaptureTaskThemeContext {
         block_id: &str,
         type_key: &str,
         type_name: &str,
+        now: chrono::NaiveDateTime,
         pomodoro_refs: &mut Vec<PomodoroBlockRef>,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedRelocation>, CaptureError> {
@@ -1191,10 +1192,24 @@ impl CaptureTaskThemeContext {
         else {
             return Ok(None);
         };
+        let restamped_refs =
+            super::project_deps::restamp_changed_timed_entries(
+                planner,
+                &self.root,
+                &day_file,
+                day_file
+                    .strip_prefix(&self.root)
+                    .unwrap_or(day_file.as_path()),
+                &day_contents,
+                updated,
+                now,
+                warnings,
+            )?;
+        let updated = planner.read_existing(&day_file)?;
         let refs = std::mem::take(pomodoro_refs);
         *pomodoro_refs =
             compose_type_relocation_refs(refs, &info, &day_contents, &updated);
-        planner.stage(&day_file, updated)?;
+        pomodoro_refs.extend(restamped_refs);
         Ok(Some(AppliedRelocation {
             json: super::output::TypeRelocationJson {
                 outcome: info.outcome,

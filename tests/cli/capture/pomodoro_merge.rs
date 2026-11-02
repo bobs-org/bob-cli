@@ -573,7 +573,10 @@ fn bare_merge_absorbs_the_below_duplicate_and_leaves_the_above_row() {
     assert_eq!(merge["absorbed"][0]["name"], "FIX");
     assert_eq!(merge["absorbed"][0]["role"], "next");
     assert_eq!(merge["absorbed"][0]["from_line"], 7);
-    assert_eq!(dry["task_line"], "- [ ] (**0900-1000**) — BUILD + FIX");
+    assert_eq!(
+        dry["task_line"],
+        "- [ ] (**0900-1000** [t:: 60m]) — BUILD + FIX"
+    );
 
     let json = capture_json_dry_run_matches_real(
         &vault,
@@ -589,7 +592,7 @@ fn bare_merge_absorbs_the_below_duplicate_and_leaves_the_above_row() {
         "{after}"
     );
     assert!(
-        after.contains("- [ ] (**0900-1000**) — BUILD + FIX\n  - [[tasks#^a1]]\n  - below child\n"),
+        after.contains("- [ ] (**0900-1000** [t:: 60m]) — BUILD + FIX\n  - [[tasks#^a1]]\n  - below child\n"),
         "{after}"
     );
     assert!(!after.contains("- below child\n- [ ] () — FIX"), "{after}");
@@ -665,7 +668,7 @@ fn merge_keeps_later_rows_when_children_shift_onto_the_dest_line() {
     assert_eq!(merge["absorbed"][0]["moved_lines"], 2);
     let after = fs::read_to_string(&day_file).expect("day");
     assert!(
-        after.contains("- [ ] (**0900-1000**) — BUILD + FIX\n  - [[tasks#^a1]]\n  - fix one\n  - fix two\n"),
+        after.contains("- [ ] (**0900-1000** [t:: 60m]) — BUILD + FIX\n  - [[tasks#^a1]]\n  - fix one\n  - fix two\n"),
         "{after}"
     );
     assert!(
@@ -708,7 +711,7 @@ fn explicit_dest_above_the_source_and_multiple_named_dests_keep_identity() {
     assert_eq!(merge["absorbed"][1]["from_line"], 7);
     let after = fs::read_to_string(&day_file).expect("day");
     assert!(
-        after.contains("- [ ] (**0900-1000**) — BUILD + FIX + READ\n  - [[tasks#^a1]]\n  - above child\n  - [[tasks#^a3]]\n"),
+        after.contains("- [ ] (**0900-1000** [t:: 60m]) — BUILD + FIX + READ\n  - [[tasks#^a1]]\n  - above child\n  - [[tasks#^a3]]\n"),
         "{after}"
     );
     assert!(!after.contains("- [ ] () — FIX\n"), "{after}");

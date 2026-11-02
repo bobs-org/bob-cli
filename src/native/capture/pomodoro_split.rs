@@ -287,6 +287,7 @@ pub(super) fn plan_pomodoro_split_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
     spec: PomodoroSplitSpec,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     task_theme_context: &mut CaptureTaskThemeContext,
@@ -498,48 +499,6 @@ pub(super) fn plan_pomodoro_split_item(
         ));
     };
     let mut current = renamed;
-    if let Some(kind) = match session_clock(line_texts[entry_index]) {
-        SessionClock::Worked { .. } => Some(ClockKind::Worked),
-        SessionClock::OffClock { .. } => Some(ClockKind::OffClock),
-        SessionClock::Placeholder => None,
-    } {
-        let spans_renamed = line_spans(&current);
-        let renamed_text = spans_renamed
-            .get(entry_index)
-            .map(|span| span.text)
-            .ok_or_else(|| {
-                CaptureError::io(
-                    "Pomodoro split invariant failed: target entry is out of range",
-                )
-            })?;
-        let normalized = set_ledger_clock(renamed_text, kind);
-        if normalized != renamed_text {
-            let target_span = spans_renamed.get(entry_index).ok_or_else(|| {
-                CaptureError::io(
-                    "Pomodoro split invariant failed: target entry is out of range",
-                )
-            })?;
-            let target_start = if entry_index == 0 {
-                0
-            } else {
-                spans_renamed
-                    .get(entry_index - 1)
-                    .map(|span| span.end)
-                    .ok_or_else(|| {
-                        CaptureError::io(
-                            "Pomodoro split invariant failed: target entry is out of range",
-                        )
-                    })?
-            };
-            let target_text_end = target_start + target_span.text.len();
-            current = format!(
-                "{}{}{}",
-                &current[..target_start],
-                normalized,
-                &current[target_text_end..]
-            );
-        }
-    }
     let mut spans_now = line_spans(&current);
     let mut source_end =
         crate::native::capture_task_toggle::child_block_end_line(
@@ -737,6 +696,31 @@ pub(super) fn plan_pomodoro_split_item(
         }
     }
     planner.stage(&day_file, current.clone())?;
+    let day_rel =
+        capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
+    let mut changed_timed_lines = vec![entry_line];
+    changed_timed_lines.extend(final_created_lines.iter().copied());
+    for line in changed_timed_lines {
+        let index = line.saturating_sub(1);
+        let timed = line_spans(&current).get(index).is_some_and(|span| {
+            matches!(
+                session_clock(span.text),
+                SessionClock::Worked { .. } | SessionClock::OffClock { .. }
+            )
+        });
+        if timed {
+            restamp_session_clock(
+                planner,
+                &request.bob_dir,
+                &day_file,
+                Path::new(&day_rel),
+                line,
+                now,
+                warnings,
+            )?;
+        }
+    }
+    current = planner.read_existing(&day_file)?;
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
         .map(std::path::Path::to_path_buf)

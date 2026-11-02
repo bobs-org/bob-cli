@@ -245,6 +245,7 @@ pub(super) fn plan_blocked_task_writes(
     ctx: &mut DependencyContext,
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
+    now: chrono::NaiveDateTime,
     owner: &DependentRef,
     blocked_tasks: &[ParsedDependency],
     warnings: &mut Vec<CaptureWarning>,
@@ -272,6 +273,7 @@ pub(super) fn plan_blocked_task_writes(
             ctx,
             planner,
             bob_dir,
+            now,
             &target,
             &[prereq],
             warnings,
@@ -298,6 +300,10 @@ mod tests {
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 10, 14).expect("date")
+    }
+
+    fn test_now() -> chrono::NaiveDateTime {
+        today().and_hms_opt(12, 0, 0).expect("time")
     }
 
     fn write_note(root: &Path, relative: &str, contents: &str) {
@@ -363,6 +369,7 @@ mod tests {
             &mut ctx,
             &mut planner,
             root,
+            test_now(),
             dependent,
             deps,
             &mut warnings,
@@ -411,6 +418,7 @@ mod tests {
             &mut ctx,
             &mut planner,
             root,
+            test_now(),
             &dependent,
             &[parsed_dep("mac_inbox", "ask-kelly")],
             &mut warnings,
@@ -456,6 +464,7 @@ mod tests {
             &mut ctx,
             &mut planner,
             root,
+            test_now(),
             &DependentRef::from_route("job", "cleanup"),
             &[parsed_dep("mac_inbox", "ask-kelly")],
             &mut warnings,
@@ -485,6 +494,7 @@ mod tests {
             &mut ctx,
             &mut planner,
             root,
+            test_now(),
             &DependentRef::from_route("proj", "prj"),
             &[parsed_dep("inbox2", "new-blocker")],
             &mut warnings,
@@ -516,6 +526,7 @@ mod tests {
             &mut ctx,
             &mut planner,
             root,
+            test_now(),
             &DependentRef::from_route("job", "cleanup"),
             &[parsed_dep("mac_inbox", "ask-kelly")],
             &mut warnings,
@@ -583,6 +594,7 @@ mod tests {
             &mut ctx,
             &mut planner,
             root,
+            test_now(),
             &DependentRef::from_route("job", "cleanup"),
             &[parsed_dep("mac_inbox", "ask-kelly")],
             &mut warnings,
@@ -734,6 +746,7 @@ mod tests {
             &mut ctx,
             &mut planner,
             root,
+            test_now(),
             &DependentRef::from_route("parent", "prj"),
             &[parsed_dep("parent", "staged")],
             &mut warnings,

@@ -287,9 +287,18 @@ pub(super) fn consume_live_links(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
     blocked: &std::collections::BTreeSet<(PathBuf, String)>,
+    now: chrono::NaiveDateTime,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<LiveLinkConsumption, CaptureError> {
     let day_absolute = pomodoro::day_file_for(bob_dir);
-    consume_live_links_from_day(planner, bob_dir, &day_absolute, blocked)
+    consume_live_links_from_day(
+        planner,
+        bob_dir,
+        &day_absolute,
+        blocked,
+        now,
+        warnings,
+    )
 }
 
 fn consume_live_links_from_day(
@@ -297,6 +306,8 @@ fn consume_live_links_from_day(
     bob_dir: &Path,
     day_absolute: &Path,
     blocked: &std::collections::BTreeSet<(PathBuf, String)>,
+    now: chrono::NaiveDateTime,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<LiveLinkConsumption, CaptureError> {
     if blocked.is_empty() {
         return Ok(LiveLinkConsumption::default());
@@ -470,11 +481,103 @@ fn consume_live_links_from_day(
         });
     }
     planner.record_consumed_links(consumed_links);
-    planner.stage(day_absolute, consumption.contents)?;
+    pomodoro_refs.extend(restamp_changed_timed_entries(
+        planner,
+        bob_dir,
+        day_absolute,
+        &day_relative,
+        &before,
+        consumption.contents,
+        now,
+        warnings,
+    )?);
     Ok(LiveLinkConsumption {
         removed_links: consumption.consumed.len(),
         pomodoro_refs,
     })
+}
+
+/// Stage a capture edit to Pomodoro children, then restamp every surviving
+/// open timed entry whose child lines changed. Returns refs for headlines
+/// that the restamp may rewrite so the capture JSON can track them by line.
+pub(super) fn restamp_changed_timed_entries(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    before: &str,
+    after: String,
+    now: chrono::NaiveDateTime,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<Vec<PomodoroBlockRef>, CaptureError> {
+    let before_spans = line_spans(before);
+    let after_spans = line_spans(&after);
+    let before_lines = before_spans
+        .iter()
+        .map(|span| span.text)
+        .collect::<Vec<_>>();
+    let after_lines =
+        after_spans.iter().map(|span| span.text).collect::<Vec<_>>();
+    let (before_to_after, _) = line_maps(&before_lines, &after_lines);
+    let scan = capture_pomodoros::scan(before);
+    let mut restamp = Vec::new();
+    for entry in &scan.entries {
+        if entry.state != capture_pomodoros::PomodoroState::Open
+            || entry.time_range.is_none()
+        {
+            continue;
+        }
+        let before_index = entry.line.saturating_sub(1);
+        let Some(after_index) = before_to_after.get(&before_index).copied()
+        else {
+            continue;
+        };
+        let before_end =
+            crate::native::capture_task_toggle::child_block_end_line(
+                &before_spans,
+                before_index,
+            );
+        let after_end =
+            crate::native::capture_task_toggle::child_block_end_line(
+                &after_spans,
+                after_index,
+            );
+        let before_children = before_spans
+            .iter()
+            .skip(before_index + 1)
+            .take(before_end.saturating_sub(before_index))
+            .map(|span| span.text)
+            .collect::<Vec<_>>();
+        let after_children = after_spans
+            .iter()
+            .skip(after_index + 1)
+            .take(after_end.saturating_sub(after_index))
+            .map(|span| span.text)
+            .collect::<Vec<_>>();
+        if before_children != after_children {
+            restamp.push((before_index, after_index));
+        }
+    }
+
+    planner.stage(day_file, after)?;
+    let mut refs = Vec::with_capacity(restamp.len());
+    for (before_index, after_index) in restamp {
+        restamp_session_clock(
+            planner,
+            bob_dir,
+            day_file,
+            day_relative,
+            after_index + 1,
+            now,
+            warnings,
+        )?;
+        refs.push(PomodoroBlockRef::at(
+            PomodoroBlockRole::Changed,
+            before_index,
+            after_index,
+        ));
+    }
+    Ok(refs)
 }
 
 fn kept_notes_display_text(
@@ -521,6 +624,13 @@ fn flatten_block_wikilinks(text: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+
+    fn test_now() -> chrono::NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 14)
+            .expect("date")
+            .and_hms_opt(12, 0, 0)
+            .expect("time")
+    }
 
     fn settings() -> note_tasks::NoteTaskSettings {
         note_tasks::NoteTaskSettings {
@@ -643,6 +753,8 @@ mod tests {
             root,
             &day_absolute,
             &blocked,
+            test_now(),
+            &mut Vec::new(),
         )
         .expect("consume by resolved identity");
         let consumed = planner.take_consumed_links();
@@ -713,6 +825,8 @@ mod tests {
             root,
             &day_absolute,
             &blocked,
+            test_now(),
+            &mut Vec::new(),
         )
         .expect("consume shifted entry");
         assert_eq!(result.removed_links, 1);

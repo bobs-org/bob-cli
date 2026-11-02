@@ -125,7 +125,7 @@ fn capture_task_toggle_link_and_unlink_updates_notes_and_reports_json() {
         fs::read_to_string(&day_file).expect("read linked day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CODING\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CODING\n",
             "  - context\n",
             "  - [[cash#^goog-exit]]\n",
             "- [ ] () — LATER\n",
@@ -164,7 +164,7 @@ fn capture_task_toggle_link_and_unlink_updates_notes_and_reports_json() {
         fs::read_to_string(&day_file).expect("read relinked day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CODING\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CODING\n",
             "  - context\n",
             "- [ ] () — LATER\n",
         )
@@ -346,7 +346,7 @@ fn capture_task_toggle_can_edit_task_in_daily_note() {
         fs::read_to_string(&day_file).expect("read day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — DAILY\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — DAILY\n",
             "\t- [[day#^daily]]\n",
             "## Tasks\n",
             "- [*] #task Daily task [fresh:: 2026-07-10] ^daily\n",
@@ -580,8 +580,8 @@ fn capture_task_toggle_errors_are_actionable_without_writes() {
 
 #[test]
 fn capture_task_toggle_reports_inserted_link_block() {
-    // A link-direction toggle that inserts a fresh Task Link is
-    // auto-detected: no planner ref is pushed for toggles.
+    // A link-direction toggle that inserts a fresh Task Link records the
+    // changed Pomodoro explicitly so the restamped headline is rendered.
     let temp = TempDir::new("bob-cli-capture-toggle-blocks-insert");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");

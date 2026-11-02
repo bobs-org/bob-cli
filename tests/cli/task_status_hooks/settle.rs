@@ -107,6 +107,37 @@ fn settle_single_ended_off_clock_event() {
 }
 
 #[test]
+fn settled_meet_children_follow_the_note_indent_unit() {
+    for (label, indent) in [("tabs", "\t"), ("two-spaces", "  ")] {
+        let temp = TempDir::new(&format!("bob-cli-settle-indent-{label}"));
+        let vault = temp.path().join("vault");
+        let daily = vault.join("2026/20260716.md");
+        write_vault(
+            &daily,
+            &format!(
+                concat!(
+                    "# Daily\n\n",
+                    "## Events\n\n",
+                    "- [*] #task **1200-1300** Lunch #offclock [type:: MEET] ^lunch\n",
+                    "\n## Pomodoros\n\n",
+                    "- [ ] () — MEET\n",
+                    "{indent}- [[#^lunch]]\n",
+                ),
+                indent = indent,
+            ),
+        );
+
+        settle_json(&vault, &daily, "2026-07-16 13:00");
+        let after = fs::read_to_string(&daily).expect("settled daily note");
+        let expected = format!("{indent}- 🍅 ~~[[#^lunch]]~~");
+        assert!(after.contains(&expected), "expected {expected:?}:\n{after}");
+        if indent == "\t" {
+            assert!(!after.contains("  - 🍅 ~~[[#^lunch]]~~"), "{after}");
+        }
+    }
+}
+
+#[test]
 fn settle_back_to_back_cluster_and_trims_around_on_clock() {
     let temp = TempDir::new("bob-cli-settle-cluster-trim");
     let vault = temp.path().join("vault");

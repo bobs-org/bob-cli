@@ -656,10 +656,11 @@ pub(super) fn plan_pomodoro_merge_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
     spec: PomodoroMergeSpec,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     _task_theme_context: &mut CaptureTaskThemeContext,
-    _warnings: &mut Vec<CaptureWarning>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_merge_conflicts(&parsed, request)?;
     let day_file = pomodoro::day_file_for(&request.bob_dir);
@@ -835,6 +836,16 @@ pub(super) fn plan_pomodoro_merge_item(
     }
     let entry_line = src_zero + 1;
     planner.stage(&day_file, current.clone())?;
+    restamp_session_clock(
+        planner,
+        &request.bob_dir,
+        &day_file,
+        Path::new(&day_rel),
+        entry_line,
+        now,
+        warnings,
+    )?;
+    current = planner.read_existing(&day_file)?;
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
         .map(std::path::Path::to_path_buf)

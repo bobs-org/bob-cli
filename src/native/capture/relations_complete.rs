@@ -33,6 +33,7 @@ pub(super) fn plan_relation_completes(
     parsed: &ParsedCaptureText,
     updates: &mut [RelationUpdateJson],
     existing_owner: bool,
+    now: chrono::NaiveDateTime,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<RelationCompleteReports, CaptureError> {
     let configured: Vec<String> = ctx
@@ -67,6 +68,8 @@ pub(super) fn plan_relation_completes(
             updates,
             group,
             existing_owner,
+            now,
+            warnings,
         )? {
             if complete.effect == RelationCompleteEffect::Completed {
                 reports.pomodoro_refs.extend(
@@ -172,6 +175,8 @@ fn plan_source_complete(
     updates: &mut [RelationUpdateJson],
     group: &[ClosingEdge],
     existing_owner: bool,
+    now: chrono::NaiveDateTime,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<Option<PlannedSourceComplete>, CaptureError> {
     let bob_dir = &request.bob_dir;
     let first_source = updates[group[0].update_index].source.clone();
@@ -300,7 +305,15 @@ fn plan_source_complete(
             let raw = parsed.relations[group[0].typed_index].raw.clone();
             let note = note_token(&first_source.path);
             let outcome = complete_existing_task(
-                request, &raw, note, &block_id, ctx.today, planner, ctx,
+                request,
+                &raw,
+                note,
+                &block_id,
+                ctx.today,
+                now,
+                planner,
+                ctx,
+                warnings,
             )?;
             for edge in group {
                 updates[edge.update_index].complete_effect =

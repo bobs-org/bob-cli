@@ -72,6 +72,10 @@ pub(crate) fn plan_settle(
         return empty;
     }
     let now_min = now.hour() as i32 * 60 + now.minute() as i32;
+    let indent_unit = crate::native::capture::dominant_indent_unit(
+        &crate::native::capture::line_spans(daily_contents),
+    )
+    .unwrap_or("\t");
 
     let events = events_in_note(daily_contents, anchor);
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -468,7 +472,10 @@ pub(crate) fn plan_settle(
             ))
         });
         for event in &sorted {
-            insert.push(format!("  - 🍅 ~~[[#^{}]]~~", event.block_id));
+            insert.push(format!(
+                "{indent_unit}- 🍅 ~~[[#^{}]]~~",
+                event.block_id
+            ));
         }
         working.splice(at..at, insert.clone());
         created.push(CreatedPiece {

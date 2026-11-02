@@ -191,7 +191,7 @@ fn st2_consume_link_keep_session() {
     );
     assert!(
         day_after.contains("other context")
-            && day_after.contains("(1010-1035) — JOB"),
+            && day_after.contains("(**1010-1035** [t:: 25m]) — JOB"),
         "session kept:\n{day_after}"
     );
     assert_eq!(json["consumed_links"][0]["action"], "removed");
@@ -252,7 +252,7 @@ fn st4_notes_kept() {
         day_after,
         concat!(
             "## Pomodoros\n",
-            "- [ ] (1010-1035) — JOB\n",
+            "- [ ] (**1010-1035** [t:: 25m]) — JOB\n",
             "  - Cleanup with the walk\n",
             "    - authored work note\n",
             "- [ ] Unrelated placeholder\n",

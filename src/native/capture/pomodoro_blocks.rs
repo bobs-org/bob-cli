@@ -585,6 +585,33 @@ fn resolve_refs(
         .iter()
         .map(|entry| entry.line.saturating_sub(1))
         .collect::<std::collections::BTreeSet<_>>();
+    let pinned_after = refs
+        .iter()
+        .filter_map(|item| match (item.before, item.after) {
+            (PomodoroBlockBefore::At(before), Some(after))
+                if post_entries.contains(&after) =>
+            {
+                Some((before, after))
+            }
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    // A `Resolve` ref can share its post headline with a second, explicit
+    // ref that records the pre-write position of a restamped entry. Prefer
+    // that pinned identity when the headline bytes changed and the line map
+    // therefore cannot recover it.
+    let pinned_before = refs
+        .iter()
+        .filter_map(|item| match (item.before, item.after) {
+            (PomodoroBlockBefore::At(before), Some(after))
+                if pre_entries.contains(&before)
+                    && post_entries.contains(&after) =>
+            {
+                Some((after, before))
+            }
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut resolved = Vec::with_capacity(refs.len());
     for item in refs {
         match (item.before, item.after) {
@@ -616,12 +643,16 @@ fn resolve_refs(
                     );
                     continue;
                 }
-                match old_to_new.get(&before) {
-                    Some(mapped) if post_entries.contains(mapped) => {
+                match pinned_after
+                    .get(&before)
+                    .copied()
+                    .or_else(|| old_to_new.get(&before).copied())
+                {
+                    Some(mapped) if post_entries.contains(&mapped) => {
                         resolved.push(ResolvedBlockRef {
                             role: item.role,
                             before: PomodoroBlockBefore::At(before),
-                            after: *mapped,
+                            after: mapped,
                             force_unchanged: false,
                         });
                     }
@@ -653,11 +684,15 @@ fn resolve_refs(
                     );
                     continue;
                 }
-                match new_to_old.get(&after) {
-                    Some(mapped) if pre_entries.contains(mapped) => {
+                match pinned_before
+                    .get(&after)
+                    .copied()
+                    .or_else(|| new_to_old.get(&after).copied())
+                {
+                    Some(mapped) if pre_entries.contains(&mapped) => {
                         resolved.push(ResolvedBlockRef {
                             role: item.role,
-                            before: PomodoroBlockBefore::At(*mapped),
+                            before: PomodoroBlockBefore::At(mapped),
                             after,
                             force_unchanged: false,
                         });

@@ -224,6 +224,7 @@ pub(super) fn plan_item_relations(
     parsed: &ParsedCaptureText,
     owner: &RelationOwner,
     existing_owner: bool,
+    now: chrono::NaiveDateTime,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<ItemRelationReports, CaptureError> {
     let mut writes = plan_relation_writes(
@@ -242,6 +243,7 @@ pub(super) fn plan_item_relations(
         parsed,
         &mut writes.updates,
         existing_owner,
+        now,
         warnings,
     )?;
     Ok(ItemRelationReports { writes, close })
@@ -260,6 +262,7 @@ pub(super) fn plan_relation_close_effects(
     parsed: &ParsedCaptureText,
     updates: &mut [RelationUpdateJson],
     existing_owner: bool,
+    now: chrono::NaiveDateTime,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<RelationCloseReports, CaptureError> {
     // Load both lists once so overlap and complete-label warnings share
@@ -302,6 +305,7 @@ pub(super) fn plan_relation_close_effects(
         parsed,
         updates,
         existing_owner,
+        now,
         warnings,
     )?;
     plan_relation_successor_indications(

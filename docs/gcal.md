@@ -536,7 +536,9 @@ Google accepts a standalone off-clock alias anywhere in the title, or a
 **directive line** in the description. A directive line is one whose every
 token (split on whitespace or commas) is a directive: `@route`, an off-clock
 alias, `-N`/`-Nm` (ASCII or typographic minus), or `+M`/`+Mm`. Directives
-combine on one line or spread across several; HTML from Google's editor is
+combine on one line or spread across several. A plain-text list marker is
+stripped before checking the tokens, so `- #offclock` is a directive line,
+like an HTML `<li>` after normalization. HTML from Google's editor is
 normalized first (`<br>`, `<p>`, `<div>`, `<li>`, headings, list
 containers, table rows, and `<hr>` become line breaks, other tags are
 stripped, common entities are decoded). With a resolvable `love`

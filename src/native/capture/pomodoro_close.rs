@@ -2371,8 +2371,13 @@ pub(super) fn plan_pomodoro_close_link_item(
                 target_identity_path,
                 block_id.to_string(),
             )]);
-            let consumption =
-                consume_live_links(planner, &request.bob_dir, &identities)?;
+            let consumption = consume_live_links(
+                planner,
+                &request.bob_dir,
+                &identities,
+                now,
+                warnings,
+            )?;
             append_consumption_warning(warnings, consumption.removed_links);
             let promoted = promote_consume_plan(
                 dependency_ctx,

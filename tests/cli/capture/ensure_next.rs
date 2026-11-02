@@ -18,7 +18,7 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
         &day_file,
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
             "  - context\n",
             "- [ ] () — LATER\n",
             "  - [[cash#^goog-exit]]\n",
@@ -107,12 +107,13 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
                 "time_range": "0900-0930",
                 "status": "running",
                 "created": false,
-                "roles": ["linked"],
+                "roles": ["linked", "changed"],
                 "lines": [
                     {
                         "text": "- [ ] (**0900-0930** [t:: 30m]) — CURRENT",
                         "depth": 0,
-                        "change": "unchanged",
+                        "before": "- [ ] (**0900-0930**) — CURRENT",
+                        "change": "changed",
                     },
                     {
                         "text": "  - context",
@@ -402,7 +403,7 @@ fn capture_task_toggle_ensure_next_same_note_batch_and_rollback() {
         &day_file,
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — DAILY\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — DAILY\n",
             "- [ ] () — LATER\n",
             "  - [[day#^daily]]\n",
             "## Tasks\n",
@@ -426,7 +427,7 @@ fn capture_task_toggle_ensure_next_same_note_batch_and_rollback() {
         fs::read_to_string(&day_file).expect("day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — DAILY\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — DAILY\n",
             "  - [[day#^daily]]\n",
             "- [ ] () — LATER\n",
             "## Tasks\n",
@@ -472,7 +473,7 @@ fn capture_task_toggle_ensure_next_same_note_batch_and_rollback() {
         fs::read_to_string(&day_file).expect("day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**1330-1400**) — CURRENT\n",
+            "- [ ] (**1330-1400** [t:: 30m]) — CURRENT\n",
             "  - [[cash#^alpha]]\n",
             "  - [[cash#^beta]]\n",
             "- [ ] () — LATER\n",
@@ -525,7 +526,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         &day_file,
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
             "  - context\n",
             "- [ ] () — CODING\n",
             "- [ ] () — LATER\n",
@@ -558,7 +559,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         fs::read_to_string(&day_file).expect("dry day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
             "  - context\n",
             "- [ ] () — CODING\n",
             "- [ ] () — LATER\n",
@@ -604,7 +605,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
         fs::read_to_string(&day_file).expect("day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
             "  - context\n",
             "- [ ] () — CODING\n",
             "  - [[cash#^goog-exit]]\n",
@@ -697,7 +698,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
             "## Pomodoros\n",
             "- [x] (**0800-0830**) — DEEP WORK\n",
             "  - old\n",
-            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
             "- [ ] () — DEEP WORK\n",
             "  - [[cash#^goog-exit]]\n",
             "    - review notes\n",
@@ -845,7 +846,7 @@ fn capture_task_toggle_ensure_next_keeps_in_progress() {
         fs::read_to_string(&day_file).expect("day"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0900-0930**) — CURRENT\n",
+            "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
             "  - context\n",
             "  - [[cash#^busy]]\n",
             "- [ ] () — LATER\n",

@@ -112,7 +112,7 @@ fn next_completes_with_running_session_strike() {
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
-        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} CAPTURE\n  - ~~[[sase#^fix-flaky]]~~\n"
+        "## Pomodoros\n- [ ] (**0920-0950** [t:: 30m]) \u{2014} CAPTURE\n  - ~~[[sase#^fix-flaky]]~~\n"
     );
 }
 
@@ -138,7 +138,7 @@ fn placeholder_link_moves_to_running_entry_and_placeholder_is_removed() {
     assert_eq!(ledger["removed_placeholders"][0]["name"], "SASE");
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
-        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} CAPTURE\n  - [[sase#^other]]\n  - ~~[[sase#^mv1]]~~\n"
+        "## Pomodoros\n- [ ] (**0920-0950** [t:: 30m]) \u{2014} CAPTURE\n  - [[sase#^other]]\n  - ~~[[sase#^mv1]]~~\n"
     );
 }
 

@@ -14,6 +14,7 @@ pub(super) fn plan_ensure_next_capture(
     previous_status_name: String,
     task_description: String,
     previous_task_line: String,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     warnings: &mut Vec<CaptureWarning>,
     settings: &note_tasks::NoteTaskSettings,
@@ -72,8 +73,13 @@ pub(super) fn plan_ensure_next_capture(
                     target_identity_path,
                     block_id.to_string(),
                 )]);
-                let consumption =
-                    consume_live_links(planner, bob_dir, &identities)?;
+                let consumption = consume_live_links(
+                    planner,
+                    bob_dir,
+                    &identities,
+                    now,
+                    warnings,
+                )?;
                 append_consumption_warning(warnings, consumption.removed_links);
                 let removed_pomodoro_links = consumption.removed_links;
                 let promoted = promote_consume_plan(
@@ -205,9 +211,22 @@ pub(super) fn plan_ensure_next_capture(
     .map_err(|error| {
         relocation_plan_error(error, &block_link, route, block_id)
     })?;
-    if relocation.has_changes {
-        planner.stage(&day_file, relocation.content.clone())?;
-    }
+    let changed_pomodoro_refs = if relocation.has_changes {
+        let day_relative =
+            day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path());
+        restamp_changed_timed_entries(
+            planner,
+            bob_dir,
+            &day_file,
+            day_relative,
+            &day_contents,
+            relocation.content.clone(),
+            now,
+            warnings,
+        )?
+    } else {
+        Vec::new()
+    };
 
     let pomodoro_link_action = match relocation.action {
         capture_task_toggle::LinkRelocationAction::Moved => "moved",
@@ -237,6 +256,7 @@ pub(super) fn plan_ensure_next_capture(
             relocation.destination.line.saturating_sub(1),
         )
     }];
+    pomodoro_refs.extend(changed_pomodoro_refs);
     if relocation.action == capture_task_toggle::LinkRelocationAction::Moved {
         pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
             relocation.source.line.saturating_sub(1),

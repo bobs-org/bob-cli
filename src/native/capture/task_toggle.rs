@@ -9,6 +9,7 @@ pub(super) fn plan_task_toggle_capture(
     route: &str,
     block_id: &str,
     intent: TaskToggleIntent,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
@@ -40,6 +41,7 @@ pub(super) fn plan_task_toggle_capture(
             previous_status_name,
             task_description,
             previous_task_line,
+            now,
             today,
             warnings,
             &settings,
@@ -77,7 +79,18 @@ pub(super) fn plan_task_toggle_capture(
     let removal =
         capture_task_toggle::plan_link_removal(&day_contents, &block_link);
     if removal.has_changes {
-        planner.stage(&day_file, removal.content)?;
+        let day_relative =
+            day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path());
+        let pomodoro_refs = restamp_changed_timed_entries(
+            planner,
+            bob_dir,
+            &day_file,
+            day_relative,
+            &day_contents,
+            removal.content,
+            now,
+            warnings,
+        )?;
         return Ok((
             CaptureWritePlan {
                 placement: Placement::Toggled,
@@ -114,9 +127,7 @@ pub(super) fn plan_task_toggle_capture(
                     blocks_updates: Vec::new(),
                 }),
                 pomodoro_link: None,
-                // Two-way toggles rely on block auto-detection; see
-                // `PomodoroBlockTracker::track_item`.
-                pomodoro_refs: Vec::new(),
+                pomodoro_refs,
             },
             None,
         ));
@@ -168,8 +179,13 @@ pub(super) fn plan_task_toggle_capture(
                     target_identity_path,
                     block_id.to_string(),
                 )]);
-                let consumption =
-                    consume_live_links(planner, bob_dir, &identities)?;
+                let consumption = consume_live_links(
+                    planner,
+                    bob_dir,
+                    &identities,
+                    now,
+                    warnings,
+                )?;
                 append_consumption_warning(warnings, consumption.removed_links);
                 let promoted = promote_consume_plan(
                     ctx,
@@ -325,9 +341,22 @@ pub(super) fn plan_task_toggle_capture(
                     merged: None,
                 })
         });
-    if plan.has_changes {
-        planner.stage(&day_file, plan.content)?;
-    }
+    let pomodoro_refs = if plan.has_changes {
+        let day_relative =
+            day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path());
+        restamp_changed_timed_entries(
+            planner,
+            bob_dir,
+            &day_file,
+            day_relative,
+            &day_contents,
+            plan.content,
+            now,
+            warnings,
+        )?
+    } else {
+        Vec::new()
+    };
 
     Ok((
         CaptureWritePlan {
@@ -365,9 +394,7 @@ pub(super) fn plan_task_toggle_capture(
                 blocks_updates,
             }),
             pomodoro_link: None,
-            // Two-way toggles rely on block auto-detection; see
-            // `PomodoroBlockTracker::track_item`.
-            pomodoro_refs: Vec::new(),
+            pomodoro_refs,
         },
         None,
     ))

@@ -622,6 +622,7 @@ fn apply_existing_marker_after_gesture(
     marker_name: &str,
     marker_literal: bool,
     skip_relocation: bool,
+    now: chrono::NaiveDateTime,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<(), CaptureError> {
     planned.result.task_theme = Some(applied.summary.clone());
@@ -692,6 +693,7 @@ fn apply_existing_marker_after_gesture(
         block_id,
         &applied.type_key,
         &applied.type_name,
+        now,
         &mut planned.pomodoro_refs,
         warnings,
     )?
@@ -761,6 +763,7 @@ pub(super) fn plan_capture_item(
                 request,
                 &parsed,
                 &target,
+                now,
                 planner,
                 warnings,
                 dependency_ctx,
@@ -776,6 +779,7 @@ pub(super) fn plan_capture_item(
                 &marker.name,
                 marker.literal,
                 false,
+                now,
                 warnings,
             )?;
             return Ok(planned);
@@ -784,6 +788,7 @@ pub(super) fn plan_capture_item(
             request,
             &parsed,
             &target,
+            now,
             planner,
             warnings,
             dependency_ctx,
@@ -803,8 +808,10 @@ pub(super) fn plan_capture_item(
             &note,
             &block_id,
             today,
+            now,
             planner,
             dependency_ctx,
+            warnings,
         );
     }
     if let CaptureKind::PomodoroClose { spec } = parsed.kind.clone() {
@@ -860,6 +867,7 @@ pub(super) fn plan_capture_item(
             request,
             parsed,
             spec,
+            now,
             today,
             planner,
             task_theme_context,
@@ -871,6 +879,7 @@ pub(super) fn plan_capture_item(
             request,
             parsed,
             spec,
+            now,
             today,
             planner,
             task_theme_context,
@@ -946,6 +955,7 @@ pub(super) fn plan_capture_item(
             request,
             &parsed,
             &target,
+            now,
             planner,
             warnings,
             dependency_ctx,
@@ -985,6 +995,7 @@ pub(super) fn plan_capture_item(
             route,
             block_id,
             *intent,
+            now,
             today,
             warnings,
             dependency_ctx,
@@ -1123,6 +1134,7 @@ pub(super) fn plan_capture_item(
                 &marker.name,
                 marker.literal,
                 skip_relocation,
+                now,
                 warnings,
             )?;
         }
@@ -1215,6 +1227,7 @@ pub(super) fn plan_capture_item(
                 &marker.name,
                 marker.literal,
                 false,
+                now,
                 warnings,
             )?;
             return Ok(planned);
@@ -1795,6 +1808,7 @@ pub(super) fn plan_capture_item(
             request,
             parsed,
             parsed_item.index,
+            now,
             today,
             planner,
             warnings,
@@ -2001,6 +2015,7 @@ pub(super) fn plan_capture_item(
                 &block_id_owned,
                 &applied.type_key,
                 &applied.type_name,
+                now,
                 &mut note_plan.pomodoro_refs,
                 warnings,
             )?
@@ -2070,6 +2085,7 @@ pub(super) fn plan_capture_item(
                     dependency_ctx,
                     planner,
                     &request.bob_dir,
+                    now,
                     &DependentRef::from_route(&route, &block_id),
                     &parsed.dependencies,
                     warnings,
@@ -2106,6 +2122,7 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
             planner,
             &request.bob_dir,
+            now,
             &owner,
             &parsed.blocked_tasks,
             warnings,
@@ -2175,6 +2192,7 @@ pub(super) fn plan_capture_item(
             &parsed,
             &owner,
             existing_owner,
+            now,
             warnings,
         )?;
         let reports = staged.writes;
@@ -2991,6 +3009,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
     parsed_index: usize,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<CaptureWarning>,
@@ -3338,6 +3357,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                 &block_id_owned,
                 &applied.type_key,
                 &applied.type_name,
+                now,
                 &mut empty_refs,
                 warnings,
             )? {
@@ -3374,6 +3394,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
                 dependency_ctx,
                 planner,
                 &request.bob_dir,
+                now,
                 &DependentRef::from_route(&route_dep, &block_id_dep),
                 &parsed.dependencies,
                 warnings,
@@ -3417,6 +3438,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             dependency_ctx,
             planner,
             &request.bob_dir,
+            now,
             &owner,
             &parsed.blocked_tasks,
             warnings,
@@ -3475,6 +3497,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             &parsed,
             &owner,
             existing_owner,
+            now,
             warnings,
         )?;
         let reports = staged.writes;
