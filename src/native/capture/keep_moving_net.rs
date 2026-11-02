@@ -345,6 +345,7 @@ mod tests {
             trigger: "last_planned",
             hide_removed: false,
             offer: None,
+            relation: None,
         };
         assert_eq!(row_project(&row), "n.md");
         row.note_path = "elsewhere.md".to_string();

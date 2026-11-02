@@ -477,6 +477,10 @@ pub(super) fn plan_pomodoro_adjust_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -687,6 +691,10 @@ pub(super) fn plan_pomodoro_shift_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(

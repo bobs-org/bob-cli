@@ -38,9 +38,9 @@ pub(super) struct RelationSourceRead {
     pub(super) target_notes: Vec<(PathBuf, String)>,
 }
 
-/// Assemble relation input after the cheap gate. The current capture close
-/// callers are wired in a later phase; this adapter is independently tested
-/// here so that phase can pass one value to `plan_successors`.
+/// Assemble relation input after the cheap gate. `task_complete` passes the
+/// result to `plan_successors`; Pomodoro parked events stay on the parks
+/// phase.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn collect_relation_sources(
     ctx: &DependencyContext,

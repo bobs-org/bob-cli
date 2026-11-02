@@ -165,7 +165,6 @@ impl DependencyContext {
     /// caller passes the relation gate. When successor labels are enabled,
     /// the shared byte pass retains its results so dependency and relation
     /// consumers in either order do not read a note twice.
-    #[allow(dead_code)] // The capture integration phase wires this reader.
     pub(super) fn relation_sources_snapshot(&self) -> &DependentsSnapshot {
         self.note_bytes().relation_snapshot()
     }
@@ -173,7 +172,6 @@ impl DependencyContext {
     /// Valid UTF-8 text from the retained batch read. Relation targets use
     /// this as the planner preimage instead of reading an already-scanned
     /// catalog path a second time.
-    #[allow(dead_code)] // Used by the capture relation adapter.
     pub(super) fn cached_note_text(&self, relative: &Path) -> Option<String> {
         self.note_bytes().cached_text(relative)
     }
@@ -3524,6 +3522,10 @@ pub(super) fn plan_dependency_only_item(
             mirror_skipped,
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,

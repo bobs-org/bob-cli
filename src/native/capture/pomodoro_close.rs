@@ -506,6 +506,10 @@ pub(super) fn build_close_summary_json(
         next_pomodoro,
         unblocked: Vec::new(),
         keep_moving: Vec::new(),
+        relation_successors: Vec::new(),
+        relation_held: Vec::new(),
+        relation_check: None,
+        relation_groups: Vec::new(),
         still_blocked: Vec::new(),
         unblocked_check: "checked",
         project_folds: Vec::new(),
@@ -614,6 +618,10 @@ pub(super) fn stage_close_plan(
 struct CloseSuccessorOutcome {
     unblocked: Vec<TaskCompleteUnblockedJson>,
     keep_moving: Vec<TaskCompleteUnblockedJson>,
+    relation_successors: Vec<TaskCompleteUnblockedJson>,
+    relation_held: Vec<RelationHeldJson>,
+    relation_check: Option<&'static str>,
+    relation_groups: Vec<crate::native::task_complete::RelationOfferGroup>,
     still_blocked: Vec<TaskCompleteStillBlockedJson>,
     unblocked_check: &'static str,
     project_folds: Vec<crate::native::task_complete::ProjectFold>,
@@ -655,6 +663,7 @@ fn name_successor_continuation(
     let Some(link) = outcome
         .unblocked
         .iter()
+        .chain(outcome.relation_successors.iter())
         .chain(outcome.keep_moving.iter())
         .filter_map(|row| row.link.as_ref())
         .find(|link| link.entry_created)
@@ -700,6 +709,10 @@ fn plan_close_successors(
     let empty = |check: &'static str| CloseSuccessorOutcome {
         unblocked: Vec::new(),
         keep_moving: Vec::new(),
+        relation_successors: Vec::new(),
+        relation_held: Vec::new(),
+        relation_check: None,
+        relation_groups: Vec::new(),
         still_blocked: Vec::new(),
         unblocked_check: check,
         project_folds: Vec::new(),
@@ -928,46 +941,14 @@ fn plan_close_successors(
             },
         )
     };
-    let map_row =
-        |dependent: &engine::UnblockedRow| TaskCompleteUnblockedJson {
-            note_path: display_relative(&dependent.note_path),
-            block_id: dependent.block_id.clone(),
-            line: dependent.line,
-            text: clean_row_text(&dependent.text, &dependent.block_id),
-            previous_status_symbol: dependent.previous_status_symbol,
-            previous_status_name: status_name_for(
-                bob_dir,
-                dependent.previous_status_symbol,
-            ),
-            status_symbol: dependent.status_symbol,
-            status_name: status_name_for(bob_dir, dependent.status_symbol),
-            inbox: dependent.inbox,
-            unblocked_by: dependent
-                .unblocked_by
-                .iter()
-                .map(|cause| TaskCompleteUnblockedCauseJson {
-                    note_path: display_relative(&cause.note_path),
-                    block_id: cause.block_id.clone(),
-                    text: cause.text.clone(),
-                })
-                .collect(),
-            link: dependent.link.as_ref().map(|link| {
-                TaskCompleteSuccessorLinkJson {
-                    day_file: day_relative.to_string(),
-                    entry_name: link.entry_name.clone(),
-                    entry_line: link.entry_line,
-                    entry_created: link.entry_created,
-                    next_up: link.next_up,
-                    line: link.line,
-                    block_link: link.block_link.clone(),
-                    block_id_created: link.block_id_created,
-                }
-            }),
-            not_linked: dependent.not_linked.map(str::to_string),
-            trigger: dependent.trigger,
-            hide_removed: dependent.hide_removed,
-            offer: dependent.offer.as_ref().map(offer_json),
-        };
+    let map_row = |dependent: &engine::UnblockedRow| {
+        unblocked_row_json(
+            dependent,
+            bob_dir,
+            day_relative,
+            &settings.global_filter,
+        )
+    };
     let unblocked = successor_plan
         .unblocked
         .iter()
@@ -978,6 +959,23 @@ fn plan_close_successors(
         .iter()
         .map(&map_row)
         .collect::<Vec<_>>();
+    let relation_successors = successor_plan
+        .relation_successors
+        .iter()
+        .map(&map_row)
+        .collect::<Vec<_>>();
+    let relation_held = successor_plan
+        .relation_held
+        .iter()
+        .map(|held| {
+            relation_held_row_json(held, bob_dir, &settings.global_filter)
+        })
+        .collect::<Vec<_>>();
+    let relation_check = relation_check_json(
+        successor_plan.relation_check,
+        &relation_successors,
+        &relation_held,
+    );
     let still_blocked = successor_plan
         .still_blocked
         .iter()
@@ -1039,9 +1037,34 @@ fn plan_close_successors(
             },
         );
     }
+    for dependent in &successor_plan.relation_successors {
+        if dependent.link.is_none() {
+            continue;
+        }
+        let absolute_path = bob_dir.join(&dependent.note_path);
+        let rel = display_relative(&dependent.note_path);
+        let mut stem = dependent.note_path.clone();
+        stem.set_extension("");
+        super::task_complete::push_relation_successor_ref(
+            task_block_refs,
+            absolute_path,
+            rel,
+            display_relative(&stem),
+            dependent.line.saturating_sub(1),
+            if dependent.block_id.is_empty() {
+                None
+            } else {
+                Some(dependent.block_id.clone())
+            },
+        );
+    }
     Ok(CloseSuccessorOutcome {
         unblocked,
         keep_moving,
+        relation_successors,
+        relation_held,
+        relation_check,
+        relation_groups: successor_plan.relation_groups.clone(),
         still_blocked,
         unblocked_check,
         project_folds: successor_plan.project_folds.clone(),
@@ -1262,6 +1285,10 @@ fn plan_reset_link_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1419,6 +1446,10 @@ fn plan_reset_task_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1540,6 +1571,10 @@ fn plan_reset_whole_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1680,6 +1715,10 @@ pub(super) fn plan_pomodoro_close_item(
     name_successor_continuation(&mut summary, &successors);
     summary.unblocked = successors.unblocked;
     summary.keep_moving = successors.keep_moving;
+    summary.relation_successors = successors.relation_successors;
+    summary.relation_held = successors.relation_held;
+    summary.relation_check = successors.relation_check;
+    summary.relation_groups = successors.relation_groups;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
     summary.project_folds = successors.project_folds;
@@ -1782,6 +1821,10 @@ pub(super) fn plan_pomodoro_close_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -2425,6 +2468,10 @@ pub(super) fn plan_pomodoro_close_link_item(
     name_successor_continuation(&mut summary, &successors);
     summary.unblocked = successors.unblocked;
     summary.keep_moving = successors.keep_moving;
+    summary.relation_successors = successors.relation_successors;
+    summary.relation_held = successors.relation_held;
+    summary.relation_check = successors.relation_check;
+    summary.relation_groups = successors.relation_groups;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
     summary.project_folds = successors.project_folds;
@@ -2561,6 +2608,10 @@ pub(super) fn plan_pomodoro_close_link_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -2737,6 +2788,10 @@ pub(super) fn plan_pomodoro_close_task_item(
     name_successor_continuation(&mut summary, &successors);
     summary.unblocked = successors.unblocked;
     summary.keep_moving = successors.keep_moving;
+    summary.relation_successors = successors.relation_successors;
+    summary.relation_held = successors.relation_held;
+    summary.relation_check = successors.relation_check;
+    summary.relation_groups = successors.relation_groups;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
     summary.project_folds = successors.project_folds;
@@ -2903,6 +2958,10 @@ pub(super) fn plan_pomodoro_close_task_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,

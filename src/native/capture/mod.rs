@@ -81,7 +81,6 @@ mod pomodoro_start;
 mod project_deps;
 mod project_note;
 mod pull_in;
-#[allow(dead_code)] // Capture offer wiring belongs to later phases.
 mod relation_sources;
 mod relations;
 mod relations_cancel;

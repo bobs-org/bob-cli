@@ -71,20 +71,25 @@ pub(crate) enum RelationHeldReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelationHeldRow {
     pub(crate) source: RelationTarget,
+    pub(crate) source_line: usize,
+    pub(crate) status_symbol: char,
     pub(crate) reason: RelationHeldReason,
     pub(crate) triggering_targets: Vec<RelationTarget>,
+    pub(crate) label: String,
+    pub(crate) key: String,
+    pub(crate) event: RelationEventKind,
 }
 
 /// Optional relation-successor engine input for [`plan_successors`].
 ///
-/// Production capture callers currently pass `None` so capture output
-/// stays byte-identical; the integrate tests drive `Some` without any
-/// filesystem I/O. Source texts and the narrow target reader are derived
-/// from the planner's held snapshot (`snapshot` + `note_texts`); this
-/// struct supplies the remaining relation facts: effective labels,
-/// parked-only events (Done events are derived from `completed`),
-/// relation-snapshot completeness, previous-daily identity, and any
-/// targets to report as explicitly unavailable.
+/// Capture `!` and complete-label callers pass `Some` after the cheap
+/// gate; Pomodoro close still passes `None` until the parks phase.
+/// Source texts and the narrow target reader are derived from the
+/// planner's held snapshot (`snapshot` + `note_texts`); this struct
+/// supplies the remaining relation facts: effective labels, parked-only
+/// events (Done events are derived from `completed`), relation-snapshot
+/// completeness, previous-daily identity, and any targets to report as
+/// explicitly unavailable.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RelationSuccessorInput {
     pub(crate) labels: Vec<CancelLabel>,

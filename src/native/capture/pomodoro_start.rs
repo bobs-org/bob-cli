@@ -1118,6 +1118,10 @@ pub(super) fn plan_pomodoro_start_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -1354,6 +1358,10 @@ fn plan_override_restart_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -1949,6 +1957,10 @@ fn plan_override_swap_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![
@@ -2730,6 +2742,10 @@ fn plan_named_pomodoro_start_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef {

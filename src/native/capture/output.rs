@@ -240,6 +240,20 @@ pub(super) struct PomodoroCloseSummaryJson {
     /// Keep-moving offers (`docs/task-dependencies.md` §12.15), always
     /// present and possibly empty, in schema version 1.
     pub(super) keep_moving: Vec<TaskCompleteUnblockedJson>,
+    /// Relation-winning successor offers. Omitted when no relation event
+    /// or configured edge applies (`docs/task-dependencies.md` §12.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_successors: Vec<TaskCompleteUnblockedJson>,
+    /// Relation-held sources that never become offers. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_held: Vec<RelationHeldJson>,
+    /// `"checked"` or `"unavailable"` when the relation lookup ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation_check: Option<&'static str>,
+    /// Surviving relation groups, kept for the presentation phase.
+    #[serde(skip)]
+    pub(super) relation_groups:
+        Vec<crate::native::task_complete::RelationOfferGroup>,
     /// Open dependents of the completed tasks that stay blocked.
     pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
     /// `"checked"` when the dependents lookup ran or the `[id::]` gate
@@ -688,6 +702,17 @@ pub(super) struct CaptureItemResult {
     /// `@route` / `@route#section` header. Additive: omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) list: Option<ListContext>,
+    /// Item-level relation successor offers for future toggle-unlink.
+    /// Omitted when empty so existing items stay byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_successors: Vec<TaskCompleteUnblockedJson>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_held: Vec<RelationHeldJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation_check: Option<&'static str>,
+    #[serde(skip)]
+    pub(super) relation_groups:
+        Vec<crate::native::task_complete::RelationOfferGroup>,
 }
 
 /// Per-item drawer report: the matched or created drawer title, its key,
@@ -826,6 +851,19 @@ pub(super) struct TaskCompleteSummaryJson {
     pub(super) ledger: Option<TaskCompleteLedgerJson>,
     pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
     pub(super) keep_moving: Vec<TaskCompleteUnblockedJson>,
+    /// Relation-winning successor offers. Omitted when inapplicable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_successors: Vec<TaskCompleteUnblockedJson>,
+    /// Relation-held sources that never become offers. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_held: Vec<RelationHeldJson>,
+    /// `"checked"` or `"unavailable"` when the relation lookup ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation_check: Option<&'static str>,
+    /// Surviving relation groups, kept for the presentation phase.
+    #[serde(skip)]
+    pub(super) relation_groups:
+        Vec<crate::native::task_complete::RelationOfferGroup>,
     pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
     pub(super) unblocked_check: &'static str,
     /// Project-group folded counts from this item's successor plan.
@@ -909,6 +947,45 @@ pub(super) struct TaskCompleteRemovedPlaceholderJson {
     pub(super) name: String,
 }
 
+/// One relation target named on a successor or held row
+/// (`docs/task-dependencies.md` §12.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationTargetJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+/// Winning or second-reason relation metadata on an offered row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationMetaJson {
+    pub(super) label: String,
+    pub(super) key: String,
+    pub(super) event: &'static str,
+    pub(super) after: Vec<RelationTargetJson>,
+}
+
+/// A relation source that never becomes an offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationHeldJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) line: usize,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) waits_on: Option<Vec<RelationTargetJson>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) scheduled: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) waits_for: Option<Vec<RelationTargetJson>>,
+    pub(super) relation: RelationMetaJson,
+}
+
 /// One dependent unblocked by a `task_complete` item: linked into its
 /// predecessor's slot, or recovered with the reason it was not linked
 /// (`docs/task-dependencies.md` §12.5).
@@ -932,6 +1009,9 @@ pub(super) struct TaskCompleteUnblockedJson {
     pub(super) hide_removed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) offer: Option<TaskCompleteOfferJson>,
+    /// Winning or second-reason relation metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation: Option<RelationMetaJson>,
 }
 
 /// One predecessor behind an unblocked row.
@@ -966,6 +1046,9 @@ pub(super) struct TaskCompleteOfferJson {
     pub(super) block_id_needed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) project: Option<String>,
+    /// Group target for a relation offer (`note.md#^id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) after: Option<String>,
     pub(super) destination: TaskCompleteOfferDestinationJson,
     /// Crate-private draft order; never a JSON field.
     #[serde(skip)]
@@ -1923,6 +2006,181 @@ fn print_pull_in_hint(result: &CaptureResult) {
     }
 }
 
+fn relation_target_json(
+    target: &crate::native::task_complete::RelationTarget,
+) -> RelationTargetJson {
+    RelationTargetJson {
+        note_path: display_relative(&target.note_path),
+        block_id: target.block_id.clone(),
+        text: target.text.clone(),
+    }
+}
+
+fn relation_meta_json(
+    label: &str,
+    key: &str,
+    event: crate::native::task_complete::RelationEventKind,
+    after: &[crate::native::task_complete::RelationTarget],
+) -> RelationMetaJson {
+    RelationMetaJson {
+        label: label.to_string(),
+        key: key.to_string(),
+        event: event.as_str(),
+        after: after.iter().map(relation_target_json).collect(),
+    }
+}
+
+fn relation_meta_from_info(
+    info: &crate::native::task_complete::successors::RelationRowInfo,
+) -> RelationMetaJson {
+    relation_meta_json(&info.label, &info.key, info.event, &info.after)
+}
+
+/// Map a planner row into the shared unblocked JSON shape, including a
+/// winning or second-reason `relation` object when the engine attached one.
+pub(super) fn unblocked_row_json(
+    dependent: &crate::native::task_complete::UnblockedRow,
+    bob_dir: &Path,
+    day_relative: &str,
+    global_filter: &str,
+) -> TaskCompleteUnblockedJson {
+    let clean_text = note_tasks::clean_description(
+        &dependent.text,
+        global_filter,
+        if dependent.block_id.is_empty() {
+            None
+        } else {
+            Some(dependent.block_id.as_str())
+        },
+    );
+    TaskCompleteUnblockedJson {
+        note_path: display_relative(&dependent.note_path),
+        block_id: dependent.block_id.clone(),
+        line: dependent.line,
+        text: clean_text,
+        previous_status_symbol: dependent.previous_status_symbol,
+        previous_status_name: status_name_for(
+            bob_dir,
+            dependent.previous_status_symbol,
+        ),
+        status_symbol: dependent.status_symbol,
+        status_name: status_name_for(bob_dir, dependent.status_symbol),
+        inbox: dependent.inbox,
+        unblocked_by: dependent
+            .unblocked_by
+            .iter()
+            .map(|cause| TaskCompleteUnblockedCauseJson {
+                note_path: display_relative(&cause.note_path),
+                block_id: cause.block_id.clone(),
+                text: cause.text.clone(),
+            })
+            .collect(),
+        link: dependent.link.as_ref().map(|link| {
+            TaskCompleteSuccessorLinkJson {
+                day_file: day_relative.to_string(),
+                entry_name: link.entry_name.clone(),
+                entry_line: link.entry_line,
+                entry_created: link.entry_created,
+                next_up: link.next_up,
+                line: link.line,
+                block_link: link.block_link.clone(),
+                block_id_created: link.block_id_created,
+            }
+        }),
+        not_linked: dependent.not_linked.map(str::to_string),
+        trigger: dependent.trigger,
+        hide_removed: dependent.hide_removed,
+        offer: dependent.offer.as_ref().map(offer_json),
+        relation: dependent.relation.as_ref().map(relation_meta_from_info),
+    }
+}
+
+/// Held-row JSON, including label/event/source when no offer group exists.
+pub(super) fn relation_held_row_json(
+    held: &crate::native::task_complete::RelationHeldRow,
+    bob_dir: &Path,
+    global_filter: &str,
+) -> RelationHeldJson {
+    use crate::native::task_complete::RelationHeldReason;
+    let text = note_tasks::clean_description(
+        &held.source.text,
+        global_filter,
+        if held.source.block_id.is_empty() {
+            None
+        } else {
+            Some(held.source.block_id.as_str())
+        },
+    );
+    let mut waits_on = None;
+    let mut scheduled = None;
+    let mut project = None;
+    let mut waits_for = None;
+    let reason = match &held.reason {
+        RelationHeldReason::AlreadyPlanned => "already_planned",
+        RelationHeldReason::AlreadyStarted => "already_started",
+        RelationHeldReason::Hidden => "hidden",
+        RelationHeldReason::WaitsFor(targets) => {
+            waits_for =
+                Some(targets.iter().map(relation_target_json).collect());
+            "waits_for"
+        }
+        RelationHeldReason::Blocked {
+            waits_on: waiting,
+            scheduled: date,
+            project: project_path,
+        } => {
+            if !waiting.is_empty() {
+                waits_on =
+                    Some(waiting.iter().map(relation_target_json).collect());
+            }
+            scheduled = date.clone();
+            project = project_path.as_ref().map(|path| display_relative(path));
+            "blocked"
+        }
+        RelationHeldReason::Scheduled(date) => {
+            scheduled = Some(date.clone());
+            "blocked"
+        }
+        RelationHeldReason::Project => "blocked",
+    };
+    RelationHeldJson {
+        note_path: display_relative(&held.source.note_path),
+        block_id: held.source.block_id.clone(),
+        line: held.source_line.saturating_add(1),
+        text,
+        status_symbol: held.status_symbol,
+        status_name: status_name_for(bob_dir, held.status_symbol),
+        reason,
+        waits_on,
+        scheduled,
+        project,
+        waits_for,
+        relation: relation_meta_json(
+            &held.label,
+            &held.key,
+            held.event,
+            &held.triggering_targets,
+        ),
+    }
+}
+
+/// `"checked"` / `"unavailable"` when the lookup ran. An enabled
+/// edge-free gesture (checked, empty successors and held) stays silent.
+pub(super) fn relation_check_json(
+    check: Option<crate::native::task_complete::RelationCheck>,
+    successors: &[TaskCompleteUnblockedJson],
+    held: &[RelationHeldJson],
+) -> Option<&'static str> {
+    match check {
+        Some(crate::native::task_complete::RelationCheck::Checked)
+            if successors.is_empty() && held.is_empty() =>
+        {
+            None
+        }
+        other => other.map(crate::native::task_complete::RelationCheck::as_str),
+    }
+}
+
 /// Every successor row an item reports: whole-item `task_complete`, every
 /// nested `relation_completes` summary, then `pomodoro_close`. Used for
 /// draft-level numbering, probes, selection validation, pull-in, and
@@ -2043,14 +2301,58 @@ pub(super) fn all_keep_moving(
         )
 }
 
-/// Every successor offer row an item reports, unblocked then keep-moving,
-/// in the same per-summary order as [`all_unblocked`]. Used for
-/// draft-level numbering, probes, selection validation, pull-in counts,
-/// and refusal payloads (`docs/task-dependencies.md` §12.5, §12.15).
+/// Every relation-winning successor row an item reports: item-level
+/// toggle containers, whole-item `task_complete`, nested
+/// `relation_completes`, then `pomodoro_close`. Relation rows stay out
+/// of `unblocked[]` and `keep_moving[]`.
+pub(super) fn all_relation_successors(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &TaskCompleteUnblockedJson> {
+    item.relation_successors.iter().chain(
+        item.task_complete
+            .iter()
+            .flat_map(|summary| summary.relation_successors.iter())
+            .chain(item.relation_completes.iter().flat_map(|complete| {
+                complete.task_complete.relation_successors.iter()
+            }))
+            .chain(
+                item.pomodoro_close
+                    .iter()
+                    .flat_map(|summary| summary.relation_successors.iter()),
+            ),
+    )
+}
+
+/// Every successor offer row an item reports: unblocked, then relation,
+/// then keep-moving, in the same per-summary order as [`all_unblocked`].
+/// Used for draft-level numbering, probes, selection validation,
+/// pull-in counts, and refusal payloads (`docs/task-dependencies.md`
+/// §12.5, §12.15).
 pub(super) fn all_offer_rows(
     item: &CaptureItemResult,
 ) -> impl Iterator<Item = &TaskCompleteUnblockedJson> {
-    all_unblocked(item).chain(all_keep_moving(item))
+    all_unblocked(item)
+        .chain(all_relation_successors(item))
+        .chain(all_keep_moving(item))
+}
+
+/// Mutable access to every relation-successor vec an item reports, in
+/// the same order as [`all_relation_successors`].
+pub(super) fn relation_successors_vecs_mut(
+    item: &mut CaptureItemResult,
+) -> Vec<&mut Vec<TaskCompleteUnblockedJson>> {
+    let mut vecs = Vec::new();
+    vecs.push(&mut item.relation_successors);
+    if let Some(summary) = item.task_complete.as_mut() {
+        vecs.push(&mut summary.relation_successors);
+    }
+    for complete in &mut item.relation_completes {
+        vecs.push(&mut complete.task_complete.relation_successors);
+    }
+    if let Some(summary) = item.pomodoro_close.as_mut() {
+        vecs.push(&mut summary.relation_successors);
+    }
+    vecs
 }
 
 /// Mutable access to every keep-moving vec an item reports, in the same
@@ -4491,6 +4793,14 @@ fn is_keep_moving_row(row: &TaskCompleteUnblockedJson) -> bool {
         .is_some_and(|offer| offer.group == "keep_moving")
 }
 
+fn is_relation_row(row: &TaskCompleteUnblockedJson) -> bool {
+    row.trigger == "relation"
+        || row
+            .offer
+            .as_ref()
+            .is_some_and(|offer| offer.group == "relation")
+}
+
 /// Lane name for keep-moving human rows (`docs/task-dependencies.md`
 /// §12.15): Pending, Next, Ready, Blocked. Never a raw status symbol.
 fn keep_moving_lane_name(symbol: char) -> &'static str {
@@ -4890,11 +5200,13 @@ pub(super) fn print_capture_error(
                 let styler = Styler::detect();
                 // Keep-moving offers render as their own group, never
                 // under the dependency wording.
-                let (moving, dependents): (Vec<_>, Vec<_>) = error
+                let (moving, rest): (Vec<_>, Vec<_>) = error
                     .human_unblocked
                     .iter()
                     .cloned()
                     .partition(is_keep_moving_row);
+                let (relation, dependents): (Vec<_>, Vec<_>) =
+                    rest.into_iter().partition(is_relation_row);
                 print_human_successor_rows(&dependents, &[], false, &styler);
                 print_human_keep_moving_rows(
                     &moving,
@@ -4902,6 +5214,10 @@ pub(super) fn print_capture_error(
                     false,
                     &styler,
                 );
+                // Relation human copy belongs to the presentation phase;
+                // JSON refusal payloads still list the rows via
+                // `all_offer_rows`.
+                let _ = relation;
             }
         }
         OutputFormat::Json => {
@@ -5327,6 +5643,10 @@ mod tests {
             ledger: None,
             unblocked: Vec::new(),
             keep_moving: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
             still_blocked: Vec::new(),
             unblocked_check: "checked",
             project_folds: Vec::new(),
@@ -5367,9 +5687,11 @@ mod tests {
                     entry_role: "slot",
                     fallback: false,
                 },
+                after: None,
                 order_key: (0, (0, 0), 0, std::path::PathBuf::from("b.md"), 0),
                 settled_ordinal: None,
             }),
+            relation: None,
         }
     }
 
@@ -5450,6 +5772,10 @@ mod tests {
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         }
     }
 

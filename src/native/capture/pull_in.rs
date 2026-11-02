@@ -158,6 +158,16 @@ fn number_draft_offers(
                 }
             }
         }
+        for vec in super::output::relation_successors_vecs_mut(&mut item.result)
+        {
+            for row in vec.iter_mut() {
+                if let Some(offer) = row.offer.as_mut()
+                    && let Some(&n) = n_map.get(&offer.key)
+                {
+                    offer.n = n;
+                }
+            }
+        }
         for vec in super::output::keep_moving_vecs_mut(&mut item.result) {
             for row in vec.iter_mut() {
                 if let Some(offer) = row.offer.as_mut()
@@ -399,6 +409,19 @@ pub(super) fn offer_json(
         )
         .then(|| offer.project.as_ref().map(|path| display_relative(path)))
         .flatten(),
+        after: (offer.group == OfferGroup::Relation)
+            .then(|| {
+                offer.relation.as_ref().and_then(|info| {
+                    info.after.first().map(|target| {
+                        format!(
+                            "{}#^{}",
+                            display_relative(&target.note_path),
+                            target.block_id
+                        )
+                    })
+                })
+            })
+            .flatten(),
         destination: TaskCompleteOfferDestinationJson {
             day_file: display_relative(&offer.destination.day_file),
             entry_name: offer.destination.entry_name.clone(),

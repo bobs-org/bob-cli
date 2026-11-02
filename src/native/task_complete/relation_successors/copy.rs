@@ -15,6 +15,15 @@ pub(crate) enum EventKind {
     Done,
 }
 
+impl EventKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Parked => "parked",
+            Self::Done => "done",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)] // Used by the authoring and released-target presentation consumers.
 pub(crate) enum ReleaseState {

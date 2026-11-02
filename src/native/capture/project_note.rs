@@ -810,6 +810,7 @@ pub(super) fn plan_project_note_item(
                                     selected: offer.selected,
                                     block_id_needed: offer.block_id_needed,
                                     project: Some(basename.clone()),
+                                    after: None,
                                     destination:
                                         TaskCompleteOfferDestinationJson {
                                             day_file: day_relative
@@ -822,6 +823,7 @@ pub(super) fn plan_project_note_item(
                                     order_key: offer.order_key.clone(),
                                     settled_ordinal: offer.settled_ordinal,
                                 }),
+                                relation: None,
                             }
                         })
                         .collect()
@@ -854,6 +856,10 @@ pub(super) fn plan_project_note_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: project_merges

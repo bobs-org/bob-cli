@@ -22,6 +22,7 @@ pub(super) enum TaskBlockRole {
     Completed,
     Unblocked,
     KeepMoving,
+    RelationSuccessor,
     RelationSource,
 }
 

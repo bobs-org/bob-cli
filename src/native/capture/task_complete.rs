@@ -135,6 +135,10 @@ pub(super) fn plan_task_complete_item(
             mirror_skipped: Vec::new(),
             list: None,
             relation_label_hides: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: outcome.pomodoro_refs.clone(),
@@ -200,6 +204,10 @@ pub(super) fn complete_existing_task(
             ledger: None,
             unblocked: Vec::new(),
             keep_moving: Vec::new(),
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
             still_blocked: Vec::new(),
             unblocked_check: "checked",
             project_folds: Vec::new(),
@@ -412,7 +420,16 @@ pub(super) fn complete_existing_task(
             &held_notes,
             &tasks_settings,
         );
-    if gate.has_candidates || gate.needs_dependents || keep_moving_candidate {
+    // Cheap G0–G3: nonempty labels, link_unblocked, a Done event from C,
+    // and a target block ID. No catalog walk before this gate.
+    let relation_candidate = !dependency_ctx.successor_labels().is_empty()
+        && dependency_ctx.link_unblocked()
+        && predecessors.iter().any(|task| !task.block_id.is_empty());
+    if gate.has_candidates
+        || gate.needs_dependents
+        || keep_moving_candidate
+        || relation_candidate
+    {
         // Build the vault-wide snapshot only when legacy gates need it
         // or keep-moving dependency proof does. Otherwise only staged
         // project text is needed.
@@ -442,6 +459,27 @@ pub(super) fn complete_existing_task(
                     Some(staged_note_index(bob_dir, planner, dependency_ctx));
             }
             let index = note_index.as_ref().expect("index built above");
+            let mut relation = None;
+            if relation_candidate {
+                let done_events =
+                    engine::relation_events_for_planner(&predecessors, &[]);
+                if let Some(read) =
+                    super::relation_sources::collect_relation_sources(
+                        dependency_ctx,
+                        planner,
+                        bob_dir,
+                        &done_events,
+                        &[],
+                        &note_texts,
+                        &tasks_settings,
+                    )?
+                {
+                    overlay_note_texts(&mut note_texts, read.source_notes);
+                    overlay_note_texts(&mut note_texts, read.target_notes);
+                    overlay_note_texts(&mut note_texts, read.dependency_notes);
+                    relation = Some(read.input);
+                }
+            }
             successor_plan = engine::plan_successors(engine::SuccessorInput {
                 bob_dir: Some(bob_dir),
                 completed: predecessors,
@@ -457,7 +495,7 @@ pub(super) fn complete_existing_task(
                 link_unblocked: dependency_ctx.link_unblocked(),
                 keep_moving: dependency_ctx.keep_moving(),
                 snapshot_complete: unblocked_check != "unavailable",
-                relation: None,
+                relation,
                 selection: request.selection.clone(),
                 index,
             });
@@ -584,94 +622,41 @@ pub(super) fn complete_existing_task(
             },
         )
     };
+    let map_row = |dependent: &engine::UnblockedRow| {
+        unblocked_row_json(
+            dependent,
+            bob_dir,
+            &day_relative,
+            &settings.global_filter,
+        )
+    };
     let unblocked = successor_plan
         .unblocked
         .iter()
-        .map(|dependent| TaskCompleteUnblockedJson {
-            note_path: display_relative(&dependent.note_path),
-            block_id: dependent.block_id.clone(),
-            line: dependent.line,
-            text: clean_row_text(&dependent.text, &dependent.block_id),
-            previous_status_symbol: dependent.previous_status_symbol,
-            previous_status_name: status_name_for(
-                bob_dir,
-                dependent.previous_status_symbol,
-            ),
-            status_symbol: dependent.status_symbol,
-            status_name: status_name_for(bob_dir, dependent.status_symbol),
-            inbox: dependent.inbox,
-            unblocked_by: dependent
-                .unblocked_by
-                .iter()
-                .map(|cause| TaskCompleteUnblockedCauseJson {
-                    note_path: display_relative(&cause.note_path),
-                    block_id: cause.block_id.clone(),
-                    text: cause.text.clone(),
-                })
-                .collect(),
-            link: dependent.link.as_ref().map(|link| {
-                TaskCompleteSuccessorLinkJson {
-                    day_file: day_relative.clone(),
-                    entry_name: link.entry_name.clone(),
-                    entry_line: link.entry_line,
-                    entry_created: link.entry_created,
-                    next_up: link.next_up,
-                    line: link.line,
-                    block_link: link.block_link.clone(),
-                    block_id_created: link.block_id_created,
-                }
-            }),
-            not_linked: dependent.not_linked.map(str::to_string),
-            trigger: dependent.trigger,
-            hide_removed: dependent.hide_removed,
-            offer: dependent.offer.as_ref().map(offer_json),
-        })
+        .map(&map_row)
         .collect::<Vec<_>>();
-    let map_row =
-        |dependent: &engine::UnblockedRow| TaskCompleteUnblockedJson {
-            note_path: display_relative(&dependent.note_path),
-            block_id: dependent.block_id.clone(),
-            line: dependent.line,
-            text: clean_row_text(&dependent.text, &dependent.block_id),
-            previous_status_symbol: dependent.previous_status_symbol,
-            previous_status_name: status_name_for(
-                bob_dir,
-                dependent.previous_status_symbol,
-            ),
-            status_symbol: dependent.status_symbol,
-            status_name: status_name_for(bob_dir, dependent.status_symbol),
-            inbox: dependent.inbox,
-            unblocked_by: dependent
-                .unblocked_by
-                .iter()
-                .map(|cause| TaskCompleteUnblockedCauseJson {
-                    note_path: display_relative(&cause.note_path),
-                    block_id: cause.block_id.clone(),
-                    text: cause.text.clone(),
-                })
-                .collect(),
-            link: dependent.link.as_ref().map(|link| {
-                TaskCompleteSuccessorLinkJson {
-                    day_file: day_relative.clone(),
-                    entry_name: link.entry_name.clone(),
-                    entry_line: link.entry_line,
-                    entry_created: link.entry_created,
-                    next_up: link.next_up,
-                    line: link.line,
-                    block_link: link.block_link.clone(),
-                    block_id_created: link.block_id_created,
-                }
-            }),
-            not_linked: dependent.not_linked.map(str::to_string),
-            trigger: dependent.trigger,
-            hide_removed: dependent.hide_removed,
-            offer: dependent.offer.as_ref().map(offer_json),
-        };
     let keep_moving = successor_plan
         .keep_moving
         .iter()
         .map(&map_row)
         .collect::<Vec<_>>();
+    let relation_successors = successor_plan
+        .relation_successors
+        .iter()
+        .map(&map_row)
+        .collect::<Vec<_>>();
+    let relation_held = successor_plan
+        .relation_held
+        .iter()
+        .map(|held| {
+            relation_held_row_json(held, bob_dir, &settings.global_filter)
+        })
+        .collect::<Vec<_>>();
+    let relation_check = relation_check_json(
+        successor_plan.relation_check,
+        &relation_successors,
+        &relation_held,
+    );
     let still_blocked = successor_plan
         .still_blocked
         .iter()
@@ -711,6 +696,10 @@ pub(super) fn complete_existing_task(
         || successor_plan
             .keep_moving
             .iter()
+            .any(|row| row.link.is_some())
+        || successor_plan
+            .relation_successors
+            .iter()
             .any(|row| row.link.is_some());
     let top_day_file = day_changed.then(|| day_file.display().to_string());
     let summary = TaskCompleteSummaryJson {
@@ -726,6 +715,10 @@ pub(super) fn complete_existing_task(
         ledger: ledger_json,
         unblocked: unblocked.clone(),
         keep_moving: keep_moving.clone(),
+        relation_successors: relation_successors.clone(),
+        relation_held: relation_held.clone(),
+        relation_check,
+        relation_groups: successor_plan.relation_groups.clone(),
         still_blocked,
         unblocked_check,
         project_folds: successor_plan.project_folds.clone(),
@@ -782,6 +775,27 @@ pub(super) fn complete_existing_task(
         let mut stem = dependent.note_path.clone();
         stem.set_extension("");
         push_keep_moving_ref(
+            &mut task_block_refs,
+            absolute_path,
+            rel,
+            display_relative(&stem),
+            dependent.line.saturating_sub(1),
+            if dependent.block_id.is_empty() {
+                None
+            } else {
+                Some(dependent.block_id.clone())
+            },
+        );
+    }
+    for dependent in &successor_plan.relation_successors {
+        if dependent.link.is_none() {
+            continue;
+        }
+        let absolute_path = bob_dir.join(&dependent.note_path);
+        let rel = display_relative(&dependent.note_path);
+        let mut stem = dependent.note_path.clone();
+        stem.set_extension("");
+        push_relation_successor_ref(
             &mut task_block_refs,
             absolute_path,
             rel,
@@ -964,6 +978,24 @@ pub(super) fn push_keep_moving_ref(
         line,
         block_id,
         role: TaskBlockRole::KeepMoving,
+    });
+}
+
+pub(super) fn push_relation_successor_ref(
+    refs: &mut Vec<TaskBlockRef>,
+    absolute: PathBuf,
+    relative_target: String,
+    route: String,
+    line: usize,
+    block_id: Option<String>,
+) {
+    refs.push(TaskBlockRef {
+        target: absolute,
+        relative_target,
+        route,
+        line,
+        block_id,
+        role: TaskBlockRole::RelationSuccessor,
     });
 }
 
@@ -1205,6 +1237,18 @@ pub(super) fn apply_successor_net_post_pass(
             }
         }
         for vec in super::output::keep_moving_vecs_mut(&mut item.result) {
+            vec.retain(|row| {
+                keep_unblocked_row(
+                    row,
+                    &live,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                )
+            });
+        }
+        for vec in super::output::relation_successors_vecs_mut(&mut item.result)
+        {
             vec.retain(|row| {
                 keep_unblocked_row(
                     row,
@@ -1464,6 +1508,13 @@ pub(super) fn surviving_successor_link_reasons(
                         .is_some_and(|offer| offer.group == "keep_moving")
                 {
                     "keep_moving"
+                } else if row.trigger == "relation"
+                    || row
+                        .offer
+                        .as_ref()
+                        .is_some_and(|offer| offer.group == "relation")
+                {
+                    "relation"
                 } else {
                     "unblocked"
                 };
@@ -1472,6 +1523,21 @@ pub(super) fn surviving_successor_link_reasons(
         }
     }
     links
+}
+
+fn overlay_note_texts(
+    dest: &mut Vec<(PathBuf, String)>,
+    extra: Vec<(PathBuf, String)>,
+) {
+    for (path, contents) in extra {
+        if let Some(existing) =
+            dest.iter_mut().find(|(known, _)| known == &path)
+        {
+            existing.1 = contents;
+        } else {
+            dest.push((path, contents));
+        }
+    }
 }
 
 /// The batch's staged `.md` overlay keyed by vault-relative path

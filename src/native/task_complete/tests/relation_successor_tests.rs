@@ -2833,6 +2833,42 @@ fn integrate_snapshots_keep_legacy_recovery_safe() {
 }
 
 #[test]
+fn held_only_rows_keep_label_event_and_source_line() {
+    let data = vectors();
+    let mut world =
+        World::materialize(&data["base"], &Value::Null, &Value::Null);
+    rewrite_status(&mut world.notes, Path::new("agents.md"), "evaluate", '/');
+    let plan = run_planner(
+        &world,
+        Vec::new(),
+        parked_from_events(&world.events),
+        SuccessorSelection::All,
+        true,
+        true,
+        true,
+        true,
+        None,
+    );
+    assert!(
+        plan.relation_successors.is_empty(),
+        "pending source is held, not offered: {:?}",
+        plan.relation_successors
+    );
+    assert_eq!(plan.relation_held.len(), 1);
+    let held = &plan.relation_held[0];
+    assert_eq!(held.source.note_path, Path::new("agents.md"));
+    assert_eq!(held.source.block_id, "evaluate");
+    assert_eq!(held.source_line, 0);
+    assert_eq!(held.status_symbol, '/');
+    assert_eq!(held.label, "starts after");
+    assert_eq!(held.key, "starts after");
+    assert_eq!(held.event, RelationEventKind::Parked);
+    assert_eq!(held.triggering_targets.len(), 1);
+    assert_eq!(held.triggering_targets[0].block_id, "implement");
+    assert!(matches!(held.reason, RelationHeldReason::AlreadyStarted));
+}
+
+#[test]
 fn integrate_selection_keys_numbering_and_day_bytes() {
     let data = vectors();
     let world = World::materialize(&data["base"], &Value::Null, &Value::Null);

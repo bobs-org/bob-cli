@@ -78,6 +78,15 @@ pub(crate) enum RelationCheck {
     Unavailable,
 }
 
+impl RelationCheck {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Checked => "checked",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelationOfferRow {
     pub source: RelationTarget,
@@ -332,10 +341,21 @@ pub(crate) fn classify_relation_successors<R: TargetNoteReader>(
                         source_text: source_target.text.clone(),
                         reason: reason.clone(),
                     });
+                let label = input
+                    .labels
+                    .iter()
+                    .find(|label| label.key == first.label_key)
+                    .map(|label| label.name.clone())
+                    .unwrap_or_else(|| first.label_key.clone());
                 held.push(RelationHeldRow {
                     source: source_target,
+                    source_line: source.task.line_index,
+                    status_symbol: source.task.status,
                     reason,
                     triggering_targets,
+                    label,
+                    key: first.label_key.clone(),
+                    event: first.event.kind,
                 });
             }
             SourceClass::Offer { lane } => {
