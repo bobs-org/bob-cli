@@ -1438,6 +1438,9 @@ mod tests {
                         time_range: Some("0900-0907".to_string()),
                         line: 2,
                         links: Vec::new(),
+                        clock: crate::native::capture::SessionClock::Worked {
+                            minutes: 0,
+                        },
                         untracked: false,
                     },
                     super::super::index::PomodoroSession {
@@ -1447,6 +1450,10 @@ mod tests {
                         time_range: Some("0800-0825".to_string()),
                         line: 3,
                         links: Vec::new(),
+                        clock: crate::native::capture::SessionClock::OffClock {
+                            minutes: 0,
+                            stamped: true,
+                        },
                         untracked: true,
                     },
                 ],
@@ -1489,6 +1496,9 @@ mod tests {
                         line: 3,
                         embedded: false,
                     }],
+                    clock: crate::native::capture::SessionClock::Worked {
+                        minutes: 0,
+                    },
                     untracked: false,
                 }],
                 ..DailyNoteInputs::default()
@@ -1543,6 +1553,9 @@ mod tests {
                         time_range: Some("0800-0825".to_string()),
                         line: 2,
                         links: Vec::new(),
+                        clock: crate::native::capture::SessionClock::Worked {
+                            minutes: 0,
+                        },
                         untracked: false,
                     },
                     super::super::index::PomodoroSession {
@@ -1559,6 +1572,9 @@ mod tests {
                                 embedded: false,
                             },
                         ],
+                        clock: crate::native::capture::SessionClock::Worked {
+                            minutes: 0,
+                        },
                         untracked: false,
                     },
                 ],
@@ -1602,6 +1618,9 @@ mod tests {
                     time_range: None,
                     line: 2,
                     links: Vec::new(),
+                    clock: crate::native::capture::SessionClock::Worked {
+                        minutes: 0,
+                    },
                     untracked: false,
                 }],
                 ..DailyNoteInputs::default()
@@ -1952,6 +1971,9 @@ mod tests {
                     time_range: Some("2200-0100".to_string()),
                     line: 2,
                     links: Vec::new(),
+                    clock: crate::native::capture::SessionClock::Worked {
+                        minutes: 0,
+                    },
                     untracked: false,
                 }],
                 ..DailyNoteInputs::default()
@@ -1981,6 +2003,10 @@ mod tests {
                         time_range: Some("1200-1300".to_string()),
                         line: 2,
                         links: Vec::new(),
+                        clock: crate::native::capture::SessionClock::OffClock {
+                            minutes: 0,
+                            stamped: true,
+                        },
                         untracked: true,
                     },
                     super::super::index::PomodoroSession {
@@ -1990,6 +2016,9 @@ mod tests {
                         time_range: Some("1300-1325".to_string()),
                         line: 4,
                         links: Vec::new(),
+                        clock: crate::native::capture::SessionClock::Worked {
+                            minutes: 0,
+                        },
                         untracked: false,
                     },
                 ],

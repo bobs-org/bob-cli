@@ -214,7 +214,7 @@ fn agenda_events_golden() {
     assert!(human.contains("Calendar"), "{human}");
     assert!(human.contains("Standup"), "{human}");
     assert!(human.contains("Lunch with Kelly"), "{human}");
-    assert!(human.contains("untracked"), "{human}");
+    assert!(human.contains("off-clock"), "{human}");
 }
 
 #[test]

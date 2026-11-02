@@ -30,16 +30,16 @@ fn occurrence(
     time_label: &str,
     start_min: i32,
 ) -> PlannedOccurrence {
-    occurrence_untracked(event_id, title, task, time_label, start_min, false)
+    occurrence_off_clock(event_id, title, task, time_label, start_min, false)
 }
 
-fn occurrence_untracked(
+fn occurrence_off_clock(
     event_id: &str,
     title: &str,
     task: bool,
     time_label: &str,
     start_min: i32,
-    untracked: bool,
+    off_clock: bool,
 ) -> PlannedOccurrence {
     let html_link =
         Some(format!("https://calendar.google.com/event?eid={event_id}"));
@@ -48,7 +48,7 @@ fn occurrence_untracked(
         html_link.as_deref(),
         None,
         None,
-        untracked && task,
+        off_clock && task,
         buffer,
     );
     let mut spans = BTreeMap::new();
@@ -74,8 +74,8 @@ fn occurrence_untracked(
         qualifier: None,
         spans,
         needs_type: false,
-        untracked,
         buffer,
+        off_clock,
         link_phase: None,
         all_day: time_label == "all day",
         start_min,

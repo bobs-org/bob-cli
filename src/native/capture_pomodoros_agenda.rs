@@ -139,6 +139,8 @@ pub(crate) struct AgendaItemEvent {
     pub(crate) time_range: String,
     pub(crate) starts_at: String,
     pub(crate) ends_at: String,
+    pub(crate) off_clock: bool,
+    /// Deprecated f6 field, retained for one release train.
     pub(crate) untracked: bool,
     pub(crate) title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -209,6 +211,8 @@ pub(crate) struct AgendaEventRow {
     pub(crate) buffered_phase: Option<AgendaEventPhase>,
     pub(crate) status_symbol: Option<char>,
     pub(crate) status_type: Option<String>,
+    pub(crate) off_clock: bool,
+    /// Deprecated f6 field, retained for one release train.
     pub(crate) untracked: bool,
     pub(crate) root: Option<String>,
     pub(crate) home: Option<AgendaEventHome>,
@@ -275,6 +279,14 @@ pub(crate) struct CompletedSummary {
     pub(crate) minutes: u64,
     #[serde(skip_serializing_if = "is_zero")]
     pub(crate) untracked_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) off_clock: Option<OffClockSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct OffClockSummary {
+    pub(crate) count: usize,
+    pub(crate) minutes: u64,
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -908,7 +920,8 @@ pub(crate) fn agenda_events_payload(
             status_symbol: event.status,
             status_type: task
                 .map(|task| status_type_label(task.status_type).to_string()),
-            untracked: event.untracked,
+            off_clock: event.off_clock,
+            untracked: event.off_clock,
             root,
             home,
             join_url: markdown_link_target(raw_line, "📹"),
@@ -1310,7 +1323,8 @@ fn event_item_chips(
             time_range,
             starts_at,
             ends_at,
-            untracked: event.untracked,
+            off_clock: event.off_clock,
+            untracked: event.off_clock,
             title: event.title,
             buffer: agenda_event_buffer(date, span, event.buffer),
         };

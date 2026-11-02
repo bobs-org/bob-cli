@@ -244,6 +244,9 @@ impl PomodoroBlockTracker {
                 name: entry.name.clone(),
                 time_range: entry.time_range.clone(),
                 tracked: headline_is_tracked(pre_lines.get(*headline).copied()),
+                off_clock: !headline_is_tracked(
+                    pre_lines.get(*headline).copied(),
+                ),
                 status,
                 created: false,
                 removed: true,
@@ -518,6 +521,9 @@ impl PomodoroBlockTracker {
                 name: entry.name.clone(),
                 time_range: entry.time_range.clone(),
                 tracked: headline_is_tracked(
+                    final_lines.get(tracked.current).copied(),
+                ),
+                off_clock: !headline_is_tracked(
                     final_lines.get(tracked.current).copied(),
                 ),
                 status,
@@ -879,10 +885,12 @@ pub(super) struct PomodoroBlockJson {
     pub(super) name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) time_range: Option<String>,
-    /// False for an untracked session (a timed ledger without `[t::]`).
-    /// Omitted when true.
+    /// Deprecated f6 field, retained for one release train. Omitted when true.
     #[serde(skip_serializing_if = "is_true")]
     pub(super) tracked: bool,
+    /// Whether the ledger entry is off the work clock. Omitted when false.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) off_clock: bool,
     pub(super) status: PomodoroBlockStatus,
     pub(super) created: bool,
     #[serde(skip_serializing_if = "is_false")]
@@ -901,7 +909,7 @@ fn is_true(value: &bool) -> bool {
 
 fn headline_is_tracked(headline: Option<&str>) -> bool {
     !headline.is_some_and(|text| {
-        matches!(session_tracking(text), SessionTracking::Untracked)
+        matches!(session_clock(text), SessionClock::OffClock { .. })
     })
 }
 

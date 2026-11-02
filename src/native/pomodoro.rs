@@ -13,7 +13,7 @@ use super::{
     pomodoro_homes,
 };
 
-pub(crate) use capture::{session_tracking, SessionTracking};
+pub(crate) use capture::session_clock;
 
 #[derive(Debug)]
 pub(crate) struct Error {
@@ -767,9 +767,9 @@ open Pomodoro from no open Pomodoro.
 
 Pass --worked when a consumer wants today's worked time instead of empty output:
 whenever no status line would print, the command prints `[WORKED <minutes>m]`,
-the minutes in today's closed tracked Pomodoros (each row's recorded `[t:: ]`
-or stopwatch duration). Untracked sessions (timed rows without either) are
-omitted. A missing daily note reports `[WORKED 0m]`. --worked is
+the minutes in today's closed worked Pomodoros (each row's recorded `[t:: ]`
+or stopwatch duration). Off-clock rows (`[off:: Nm]`) are omitted; older bare
+timed rows keep their off-clock meaning. A missing daily note reports `[WORKED 0m]`. --worked is
 native-only; the `BOB_CLI_USE_SCRIPT` script fallback rejects it.
 
 environment:

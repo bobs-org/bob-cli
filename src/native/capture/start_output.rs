@@ -59,7 +59,7 @@ pub(super) fn print_human_pomodoro_start_success(
                 styler.dim(&format!(
                     "{name} takes over {range} ({}m{}) at line {}{}",
                     start.duration_minutes,
-                    untracked_label(start),
+                    off_clock_label(start),
                     start.pomodoro_line,
                     calendar_label(start),
                 ))
@@ -72,7 +72,7 @@ pub(super) fn print_human_pomodoro_start_success(
                     start.start,
                     start.end,
                     start.duration_minutes,
-                    untracked_label(start),
+                    off_clock_label(start),
                     start.pomodoro_line,
                     calendar_label(start),
                 ))
@@ -140,7 +140,7 @@ pub(super) fn print_human_pomodoro_start_success(
                 start.start,
                 start.end,
                 start.duration_minutes,
-                untracked_label(start),
+                off_clock_label(start),
                 start.pomodoro_line,
                 calendar_label(start),
             ))
@@ -154,7 +154,7 @@ pub(super) fn print_human_pomodoro_start_success(
                 start.start,
                 start.end,
                 start.duration_minutes,
-                untracked_label(start),
+                off_clock_label(start),
                 start.pomodoro_line,
                 calendar_label(start),
             ))
@@ -248,12 +248,12 @@ pub(super) fn print_human_pomodoro_start_success(
     }
 }
 
-/// ` · untracked` inside the duration parentheses of an untracked session.
-pub(super) fn untracked_label(start: &PomodoroStartSummary) -> &'static str {
-    if start.tracked {
+/// ` · off-clock` inside the duration parentheses of an off-clock session.
+pub(super) fn off_clock_label(start: &PomodoroStartSummary) -> &'static str {
+    if !start.off_clock {
         ""
     } else {
-        " · untracked"
+        " · off-clock"
     }
 }
 

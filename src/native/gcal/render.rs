@@ -25,8 +25,8 @@ pub(crate) struct TaskRowInput<'a> {
     pub location: Option<&'a str>,
     pub root: Option<&'a str>,
     pub needs_type: bool,
-    pub untracked: bool,
     pub buffer: EventBuffer,
+    pub off_clock: bool,
     /// Task checkbox: `*` (Next), `/` (In Progress), or ` ` (Ready).
     pub status: char,
 }
@@ -39,10 +39,9 @@ pub(crate) struct ContextRowInput<'a> {
     pub qualifier: Option<&'a str>,
 }
 
-/// Render `- [status] #task **HHMM-HHMM** title badges [#untracked]
-/// [buffer::] [root::] [type::] ^id`. The Google-owned badge run (badges,
-/// `#untracked`, `[buffer::]`) always precedes Bryan's `[root::]` /
-/// `[type::]`, so reroutes never split it.
+/// Render `- [status] #task **HHMM-HHMM** title badges [#offclock]
+/// [buffer::] [root::] [type::] ^id`. Google-owned badges, off-clock tag,
+/// and buffer precede Bryan's root and type fields.
 pub(crate) fn render_task_row(
     input: &TaskRowInput<'_>,
     block_id: &str,
@@ -54,8 +53,8 @@ pub(crate) fn render_task_row(
         escape_title(input.title),
     );
     row.push_str(&badges(input.html_link, input.join_link, input.location));
-    if input.untracked {
-        row.push_str(" #untracked");
+    if input.off_clock {
+        row.push_str(" #offclock");
     }
     if let Some(field) = input.buffer.field() {
         row.push_str(&format!(" {field}"));
@@ -67,7 +66,7 @@ pub(crate) fn render_task_row(
 /// Set `[root::]` (and add `[type:: MEET]` when asked) on a gcal Event
 /// Task row without disturbing the Google-owned run: an existing
 /// `[root::]` is replaced in place, otherwise the root is inserted after
-/// the badge run (`badges`, `#untracked`, `[buffer::]`) and before
+/// the badge run (badges, off-clock alias, `[buffer::]`) and before
 /// `[type::]` / `^id`; `[type:: MEET]` goes after the root. Tokens Bryan
 /// placed (his own fields, tags, and the block id) keep their text and
 /// order. Falls back to the shared setters when the row does not parse.
@@ -195,21 +194,18 @@ pub(crate) fn needs_meet_type(
 }
 
 /// The badge suffix for one row (` 📅 …`, ` 📹 …`, ` 📍 …`, plus
-/// ` #untracked` for untracked tasks and ` [buffer:: …]` for buffered
+/// ` #offclock` for off-clock tasks and ` [buffer:: …]` for buffered
 /// ones), shared by the row renderer and the journal span hashes.
-/// Unbuffered rows hash exactly as before, so existing journals stay
-/// valid; a newly tagged or buffered untouched row updates its badges
-/// span in place.
 pub(crate) fn badge_text(
     html_link: Option<&str>,
     join_link: Option<&str>,
     location: Option<&str>,
-    untracked: bool,
+    off_clock: bool,
     buffer: EventBuffer,
 ) -> String {
     let mut out = badges(html_link, join_link, location);
-    if untracked {
-        out.push_str(" #untracked");
+    if off_clock {
+        out.push_str(" #offclock");
     }
     if let Some(field) = buffer.field() {
         out.push_str(&format!(" {field}"));
@@ -341,8 +337,8 @@ mod tests {
             location: None,
             root,
             needs_type,
-            untracked: false,
             buffer: EventBuffer::default(),
+            off_clock: false,
             status,
         }
     }
@@ -370,6 +366,22 @@ mod tests {
         );
         assert!(!row.contains("[type::"), "{row}");
         assert!(row.ends_with(" ^standup"), "{row}");
+    }
+
+    #[test]
+    fn off_clock_task_rows_render_the_canonical_tag_before_root() {
+        let row = render_task_row(
+            &TaskRowInput {
+                off_clock: true,
+                ..task_input("Lunch", Some("love"), true, ' ')
+            },
+            "lunch",
+        );
+        assert!(
+            row.contains(" #offclock [root:: love] [type:: MEET]"),
+            "{row}"
+        );
+        assert!(!row.contains("#untracked"), "{row}");
     }
 
     #[test]
@@ -427,8 +439,8 @@ mod tests {
                 location: None,
                 root: Some("body"),
                 needs_type: true,
-                untracked: false,
                 buffer: EventBuffer::default(),
+                off_clock: false,
                 status: '*',
             },
             "party",
@@ -476,7 +488,7 @@ mod tests {
         let buffer = EventBuffer::parse("-30m +15m").expect("buffer");
         let row = render_task_row(
             &TaskRowInput {
-                untracked: true,
+                off_clock: true,
                 buffer,
                 ..task_input("Lunch with Kelly", Some("love"), true, '*')
             },
@@ -486,7 +498,7 @@ mod tests {
             row,
             "- [*] #task **0800-0830** Lunch with Kelly \
              [📅](https://www.google.com/calendar/event?eid=1 \
-             \"Open in Google Calendar\") #untracked [buffer:: -30m +15m] \
+             \"Open in Google Calendar\") #offclock [buffer:: -30m +15m] \
              [root:: love] [type:: MEET] ^lunch-with-kelly",
             "{row}"
         );
@@ -532,7 +544,7 @@ mod tests {
         let buffer = EventBuffer::parse("-30m +15m").expect("buffer");
         let before = render_task_row(
             &TaskRowInput {
-                untracked: true,
+                off_clock: true,
                 buffer,
                 ..task_input("Lunch", Some("love"), false, '*')
             },
@@ -541,7 +553,7 @@ mod tests {
         let rerouted = set_row_metadata(&before, Some("job"), false);
         assert!(
             rerouted.contains(
-                " #untracked [buffer:: -30m +15m] [root:: job] ^lunch"
+                " #offclock [buffer:: -30m +15m] [root:: job] ^lunch"
             ),
             "{rerouted}"
         );

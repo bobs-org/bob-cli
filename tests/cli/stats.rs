@@ -72,6 +72,28 @@ fn overview_json_is_ok_schema_one() {
 }
 
 #[test]
+fn current_stats_contract_stays_worked_only() {
+    let human = stats_command()
+        .args(["stats", "-r", RANGE])
+        .output()
+        .expect("run bob stats human output");
+    assert_success(&human);
+    assert!(!stdout(&human).contains("Off-clock"), "{}", stdout(&human));
+
+    let json = stats_command()
+        .args(["stats", "-r", RANGE, "-f", "json"])
+        .output()
+        .expect("run bob stats JSON");
+    assert_success(&json);
+    let value: Value =
+        serde_json::from_str(stdout(&json).trim()).expect("stats JSON");
+    assert!(value.get("clock").is_none(), "{value}");
+    for metric in value["metrics"].as_array().expect("metrics") {
+        assert!(metric.get("off_clock").is_none(), "{metric}");
+    }
+}
+
+#[test]
 fn overview_csv_has_tidy_header() {
     let output = stats_command()
         .args(["stats", "-r", RANGE, "-f", "csv"])

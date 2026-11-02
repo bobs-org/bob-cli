@@ -135,9 +135,8 @@ pub(crate) fn split_row_spans(line: &str) -> Option<RowSpans> {
         badges = middle.get(badge_at..)?.to_string();
         middle = middle.get(..badge_at)?;
     } else if let Some((head, run)) = split_trailing_google_run(middle) {
-        // `#untracked` and `[buffer::]` live in the badge span even when
-        // the row has no `📅` badge, so tag flips and buffer changes
-        // update the badges span in place.
+        // Off-clock aliases and `[buffer::]` live in the Google-owned badge
+        // span even without `📅`, so sync can track edits to both in place.
         badges = run;
         middle = head;
     }
@@ -183,8 +182,8 @@ fn split_suffix(middle: &str, task: bool) -> (&str, String) {
     (middle, String::new())
 }
 
-/// Split the trailing Google-owned run (`#untracked` and/or
-/// `[buffer:: …]` tokens) off `middle` when no `📅` badge is present.
+/// Split the trailing Google-owned run (an off-clock alias and/or
+/// `[buffer:: …]` field) off `middle` when no `📅` badge is present.
 /// Returns the head and the badge span (keeping one leading space). An
 /// empty run returns `None`, so unbuffered tracked rows parse exactly
 /// as before.
@@ -192,7 +191,7 @@ fn split_trailing_google_run(middle: &str) -> Option<(&str, String)> {
     let trimmed = middle.trim_end();
     let mut head = trimmed;
     loop {
-        let next = strip_trailing_untracked_token(head)
+        let next = strip_trailing_off_clock_token(head)
             .or_else(|| strip_trailing_buffer_token(head));
         match next {
             Some(rest) => head = rest.trim_end(),
@@ -206,18 +205,22 @@ fn split_trailing_google_run(middle: &str) -> Option<(&str, String)> {
     Some((head, format!(" {run}")))
 }
 
-/// Strip one trailing standalone `#untracked` token (case-insensitive,
+/// Strip one trailing standalone off-clock alias (case-insensitive,
 /// whitespace-bounded; trailing `.,;:!?` allowed) off `text`.
-fn strip_trailing_untracked_token(text: &str) -> Option<&str> {
-    let token_start = text.rfind([' ', '\t'])? + 1;
-    let token = text.get(token_start..)?;
+fn strip_trailing_off_clock_token(text: &str) -> Option<&str> {
+    let trimmed = text.trim_end();
+    let token_start = trimmed.rfind([' ', '\t'])? + 1;
+    let token = trimmed.get(token_start..)?;
     let stripped = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
-    if !stripped.eq_ignore_ascii_case("#untracked") {
+    if !["#offclock", "#off-clock", "#untracked"]
+        .iter()
+        .any(|tag| stripped.eq_ignore_ascii_case(tag))
+    {
         return None;
     }
     // The token must be standalone: preceded by whitespace (guaranteed by
     // the rfind) and followed only by the stripped punctuation/end.
-    Some(text.get(..token_start)?)
+    Some(trimmed.get(..token_start)?.trim_end())
 }
 
 /// Strip one trailing `[buffer:: …]` field off `text`. The field must be

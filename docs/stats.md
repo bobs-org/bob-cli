@@ -126,9 +126,11 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
 (`orange`, `violet`, `green`, `blue`, `gray`), never hex.
 
 - `pomodoro`: closed `[x]`/`[X]` ledger rows under `## Pomodoros`.
-  `measure: minutes` (default) uses each row's recorded `[t:: Nm]` or
-  legacy stopwatch; a timed row without either is an **untracked session**
-  and leaves minutes, counts, homes aggregates, and the Day strip.
+  `measure: minutes` (default) uses each worked row's recorded `[t:: Nm]` or
+  legacy stopwatch. `[off:: Nm]` rows retain their recorded duration for
+  ledger attribution but stay out of Worked minutes, counts, homes aggregates,
+  and the Day strip. A bare historical timed row is treated as off-clock;
+  when both keys appear, `[t::]` wins.
   Range-less rows stay `missing`. `measure: count` counts matching tracked
   rows. `themes` / `exclude_themes` filter uppercase composite
   components (`PLAN + SASE` splits its minutes across both parts, remainder to

@@ -1,44 +1,44 @@
 {
   "cases": [
     {
-      "id": "back-to-back-tracked-run",
+      "id": "back-to-back-worked-run",
       "now": "2026-11-01 10:55:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1100-1130** One ^one\n- [ ] #task **1130-1200** Two ^two\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^one]]\n  - [[#^two]]\n",
       "expected_day": "## Events\n- [ ] #task **1100-1130** One ^one\n- [ ] #task **1130-1200** Two ^two\n\n## Pomodoros\n- [ ] (**1100-1200** [t:: 60m]) — MEET\n  - [[#^one]]\n  - [[#^two]]\n",
-      "expected_tracked": true,
       "expected_span": "1100-1200",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
-      "id": "untracked-event-omits-t",
+      "id": "off-clock-event-stamps-key",
       "now": "2026-11-01 11:55:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300**) — MEET\n  - [[#^lunch]]\n",
-      "expected_tracked": false,
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300** [off:: 60m]) — MEET\n  - [[#^lunch]]\n",
       "expected_span": "1200-1300",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": true
     },
     {
-      "id": "untracked-run-breaks-at-tracked-event",
+      "id": "off-clock-run-breaks-at-worked-event",
       "now": "2026-11-01 11:55:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n- [ ] #task **1300-1330** Sync ^sync\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n  - [[#^sync]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n- [ ] #task **1300-1330** Sync ^sync\n\n## Pomodoros\n- [ ] (**1200-1300**) — MEET\n  - [[#^lunch]]\n  - [[#^sync]]\n",
-      "expected_tracked": false,
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n- [ ] #task **1300-1330** Sync ^sync\n\n## Pomodoros\n- [ ] (**1200-1300** [off:: 60m]) — MEET\n  - [[#^lunch]]\n  - [[#^sync]]\n",
       "expected_span": "1200-1300",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": true
     },
     {
-      "id": "tracked-run-breaks-at-untracked-event",
+      "id": "worked-run-breaks-at-off-clock-event",
       "now": "2026-11-01 10:55:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1100-1130** Sync ^sync\n- [ ] #task **1130-1230** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^sync]]\n  - [[#^lunch]]\n",
       "expected_day": "## Events\n- [ ] #task **1100-1130** Sync ^sync\n- [ ] #task **1130-1230** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1100-1130** [t:: 30m]) — MEET\n  - [[#^sync]]\n  - [[#^lunch]]\n",
-      "expected_tracked": true,
       "expected_span": "1100-1130",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "overlapping-events-share-a-run",
@@ -46,9 +46,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1100-1200** Big ^big\n- [ ] #task **1130-1215** Overlap ^overlap\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^big]]\n  - [[#^overlap]]\n",
       "expected_day": "## Events\n- [ ] #task **1100-1200** Big ^big\n- [ ] #task **1130-1215** Overlap ^overlap\n\n## Pomodoros\n- [ ] (**1100-1215** [t:: 75m]) — MEET\n  - [[#^big]]\n  - [[#^overlap]]\n",
-      "expected_tracked": true,
       "expected_span": "1100-1215",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "late-join-clamps-to-closed-session",
@@ -56,9 +56,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1300-1400** Review ^review\n\n## Pomodoros\n- [x] (**1250-1310** [t:: 20m]) — BOB\n- [ ] () — MEET\n  - [[#^review]]\n",
       "expected_day": "## Events\n- [ ] #task **1300-1400** Review ^review\n\n## Pomodoros\n- [x] (**1250-1310** [t:: 20m]) — BOB\n- [ ] (**1310-1400** [t:: 50m]) — MEET\n  - [[#^review]]\n",
-      "expected_tracked": true,
       "expected_span": "1310-1400",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "running-event-starts-at-its-own-start",
@@ -66,9 +66,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1300-1400** Review ^review\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^review]]\n",
       "expected_day": "## Events\n- [ ] #task **1300-1400** Review ^review\n\n## Pomodoros\n- [ ] (**1300-1400** [t:: 60m]) — MEET\n  - [[#^review]]\n",
-      "expected_tracked": true,
       "expected_span": "1300-1400",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "early-start-writes-future-start",
@@ -76,9 +76,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1300-1330** Standup ^standup\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n",
       "expected_day": "## Events\n- [ ] #task **1300-1330** Standup ^standup\n\n## Pomodoros\n- [ ] (**1300-1330** [t:: 30m]) — MEET\n  - [[#^standup]]\n",
-      "expected_tracked": true,
       "expected_span": "1300-1330",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "far-run-warns-with-escape-hatch",
@@ -86,10 +86,10 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1400-1430** Standup ^standup\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n",
       "expected_day": "## Events\n- [ ] #task **1400-1430** Standup ^standup\n\n## Pomodoros\n- [ ] (**1400-1430** [t:: 30m]) — MEET\n  - [[#^standup]]\n",
-      "expected_tracked": true,
       "expected_span": "1400-1430",
       "expected_source": "calendar",
-      "expected_warning": "pomodoro_event_run_later"
+      "expected_warning": "pomodoro_event_run_later",
+      "expected_off_clock": false
     },
     {
       "id": "ended-done-and-cancelled-events-are-skipped",
@@ -97,9 +97,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **0900-0930** Ended ^ended\n- [x] #task **1100-1130** Done ^done\n- [-] #task **1130-1200** Cancelled ^cancelled\n- [ ] #task **1200-1230** Live ^live\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^ended]]\n  - [[#^done]]\n  - [[#^cancelled]]\n  - [[#^live]]\n",
       "expected_day": "## Events\n- [ ] #task **0900-0930** Ended ^ended\n- [x] #task **1100-1130** Done ^done\n- [-] #task **1130-1200** Cancelled ^cancelled\n- [ ] #task **1200-1230** Live ^live\n\n## Pomodoros\n- [ ] (**1200-1230** [t:: 30m]) — MEET\n  - [[#^ended]]\n  - [[#^done]]\n  - [[#^cancelled]]\n  - [[#^live]]\n",
-      "expected_tracked": true,
       "expected_span": "1200-1230",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "no-lineup-events-keeps-the-default-pomodoro",
@@ -107,29 +107,29 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1300-1330** Standup ^standup\n\n## Pomodoros\n- [ ] () — MEET\n  - [[sase#^other]]\n",
       "expected_day": "## Events\n- [ ] #task **1300-1330** Standup ^standup\n\n## Pomodoros\n- [ ] (**1105-1130** [t:: 25m]) — MEET\n  - [[sase#^other]]\n",
-      "expected_tracked": true,
-      "expected_span": "1105-1130"
+      "expected_span": "1105-1130",
+      "expected_off_clock": false
     },
     {
-      "id": "counted-suffix-keeps-trackedness",
+      "id": "counted-suffix-keeps-clock-classification",
       "now": "2026-11-01 11:55:00",
       "token": "=5#meet",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1155-1220**) — MEET\n  - [[#^lunch]]\n",
-      "expected_tracked": false,
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1155-1220** [off:: 25m]) — MEET\n  - [[#^lunch]]\n",
       "expected_span": "1155-1220",
-      "expected_source": "explicit"
+      "expected_source": "explicit",
+      "expected_off_clock": true
     },
     {
       "id": "restart-rederives-the-run",
       "now": "2026-11-01 11:10:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1100-1125** [t:: 25m]) — MEET\n  - [[#^lunch]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300**) — MEET\n  - [[#^lunch]]\n",
-      "expected_tracked": false,
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300** [off:: 60m]) — MEET\n  - [[#^lunch]]\n",
       "expected_span": "1200-1300",
       "expected_source": "calendar",
-      "expected_warning": "pomodoro_event_run_later"
+      "expected_warning": "pomodoro_event_run_later",
+      "expected_off_clock": true
     },
     {
       "id": "drop-removes-an-event-from-the-run",
@@ -137,57 +137,57 @@
       "token": "=~1",
       "day": "## Events\n- [ ] #task **1100-1130** One ^one\n- [ ] #task **1130-1200** Two ^two\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^one]]\n  - [[#^two]]\n",
       "expected_day": "## Events\n- [ ] #task **1100-1130** One ^one\n- [ ] #task **1130-1200** Two ^two\n\n## Pomodoros\n- [ ] (**1130-1200** [t:: 30m]) — MEET\n  - [[#^two]]\n",
-      "expected_tracked": true,
       "expected_span": "1130-1200",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
-      "id": "kept-swap-into-untracked-meet-drops-t",
+      "id": "kept-swap-into-off-clock-meet-moves-key",
       "now": "2026-11-01 11:10:00",
       "token": "=meet",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1100-1125** [t:: 25m]) — BOB\n- [ ] () — MEET\n  - [[#^lunch]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1100-1125**) — MEET\n  - [[#^lunch]]\n- [ ] () — BOB\n",
-      "expected_tracked": false,
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1100-1125** [off:: 25m]) — MEET\n  - [[#^lunch]]\n- [ ] () — BOB\n",
       "expected_span": "1100-1125",
-      "expected_source": "explicit"
+      "expected_source": "explicit",
+      "expected_off_clock": true
     },
     {
-      "id": "kept-swap-out-of-untracked-meet-restores-t",
+      "id": "kept-swap-out-of-off-clock-meet-restores-worked-key",
       "now": "2026-11-01 12:10:00",
       "token": "=bob",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300**) — MEET\n  - [[#^lunch]]\n- [ ] () — BOB\n",
       "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300** [t:: 60m]) — BOB\n- [ ] () — MEET\n  - [[#^lunch]]\n",
-      "expected_tracked": true,
-      "expected_span": "1200-1300"
+      "expected_span": "1200-1300",
+      "expected_off_clock": false
     },
     {
       "id": "named-meet-start-uses-the-run",
       "now": "2026-11-01 11:55:00",
       "token": "=meet",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — BOB\n- [ ] () — MEET\n  - [[#^lunch]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300**) — MEET\n  - [[#^lunch]]\n- [ ] () — BOB\n",
-      "expected_tracked": false,
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1200-1300** [off:: 60m]) — MEET\n  - [[#^lunch]]\n- [ ] () — BOB\n",
       "expected_span": "1200-1300",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": true
     },
     {
-      "id": "non-meet-sessions-stay-tracked",
+      "id": "non-meet-sessions-stay-worked",
       "now": "2026-11-01 11:02:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — BOB\n  - [[#^lunch]]\n",
       "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1105-1130** [t:: 25m]) — BOB\n  - [[#^lunch]]\n",
-      "expected_tracked": true,
-      "expected_span": "1105-1130"
+      "expected_span": "1105-1130",
+      "expected_off_clock": false
     },
     {
       "id": "pre-buffer-starts-the-run-early",
       "now": "2026-11-01 11:25:00",
       "token": "=",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked [buffer:: -30m +15m] [root:: love] ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n",
-      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked [buffer:: -30m +15m] [root:: love] ^lunch\n\n## Pomodoros\n- [ ] (**1130-1315**) — MEET\n  - [[#^lunch]]\n",
-      "expected_tracked": false,
+      "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch #untracked [buffer:: -30m +15m] [root:: love] ^lunch\n\n## Pomodoros\n- [ ] (**1130-1315** [off:: 105m]) — MEET\n  - [[#^lunch]]\n",
       "expected_span": "1130-1315",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": true
     },
     {
       "id": "post-buffer-bridges-to-the-next-event",
@@ -195,9 +195,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** One on one ^one\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n  - [[#^one]]\n",
       "expected_day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** One on one ^one\n\n## Pomodoros\n- [ ] (**1000-1115** [t:: 75m]) — MEET\n  - [[#^standup]]\n  - [[#^one]]\n",
-      "expected_tracked": true,
       "expected_span": "1000-1115",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "buffer-never-bridges-trackedness",
@@ -205,9 +205,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n  - [[#^lunch]]\n",
       "expected_day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n- [ ] #task **1045-1115** Lunch #untracked ^lunch\n\n## Pomodoros\n- [ ] (**1000-1045** [t:: 45m]) — MEET\n  - [[#^standup]]\n  - [[#^lunch]]\n",
-      "expected_tracked": true,
       "expected_span": "1000-1045",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "now-inside-a-lead-out-keeps-the-run",
@@ -215,9 +215,9 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^standup]]\n",
       "expected_day": "## Events\n- [ ] #task **1000-1030** Standup [buffer:: +15m] ^standup\n\n## Pomodoros\n- [ ] (**1000-1045** [t:: 45m]) — MEET\n  - [[#^standup]]\n",
-      "expected_tracked": true,
       "expected_span": "1000-1045",
-      "expected_source": "calendar"
+      "expected_source": "calendar",
+      "expected_off_clock": false
     },
     {
       "id": "buffered-far-run-warns-from-the-buffered-start",
@@ -225,10 +225,10 @@
       "token": "=",
       "day": "## Events\n- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^lunch]]\n",
       "expected_day": "## Events\n- [ ] #task **1200-1300** Lunch [buffer:: -30m] ^lunch\n\n## Pomodoros\n- [ ] (**1130-1300** [t:: 90m]) — MEET\n  - [[#^lunch]]\n",
-      "expected_tracked": true,
       "expected_span": "1130-1300",
       "expected_source": "calendar",
-      "expected_warning": "pomodoro_event_run_later"
+      "expected_warning": "pomodoro_event_run_later",
+      "expected_off_clock": false
     }
   ]
 }

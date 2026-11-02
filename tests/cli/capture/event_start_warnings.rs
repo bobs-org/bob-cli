@@ -78,6 +78,7 @@ fn start_warns_with_fit_draft_and_event_conflict() {
                 "title": "Standup",
                 "time_range": "1200-1230",
                 "line": 2,
+                "off_clock": false,
                 "untracked": false
             },
             "overlap_minutes": 15,
@@ -92,12 +93,13 @@ fn start_warns_with_fit_draft_and_event_conflict() {
 }
 
 #[test]
-fn untracked_event_warns_like_any_other_open_event() {
+fn off_clock_event_warns_like_any_other_open_event() {
     let (_temp, vault, day_file) =
         write_day("bob-cli-event-warn-untracked", UNTRACKED_DAY);
     let json = capture_json(&vault, &day_file, "2026-11-01 11:50:00", &["="]);
     let conflict = &json["pomodoro_start"]["event_conflict"];
     assert_eq!(conflict["event"]["title"], "Lunch with Kelly");
+    assert_eq!(conflict["event"]["off_clock"], true);
     assert_eq!(conflict["event"]["untracked"], true);
     assert_eq!(conflict["fit"], "=2");
 }
@@ -405,6 +407,7 @@ fn start_running_into_a_lead_in_names_the_buffer_and_fits_to_its_start() {
                 "title": "Lunch",
                 "time_range": "1200-1300",
                 "line": 2,
+                "off_clock": false,
                 "untracked": false,
                 "buffer": lunch_buffer_json()
             },

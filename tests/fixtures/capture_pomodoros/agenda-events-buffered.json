@@ -35,6 +35,7 @@
         "kind": "task",
         "line": 3,
         "location": null,
+        "off_clock": false,
         "phase": "ended",
         "pomodoro": null,
         "qualifier": null,
@@ -63,6 +64,7 @@
         "kind": "task",
         "line": 4,
         "location": null,
+        "off_clock": true,
         "phase": "upcoming",
         "pomodoro": {
           "index": 1,
@@ -95,6 +97,7 @@
         "kind": "task",
         "line": 5,
         "location": null,
+        "off_clock": false,
         "phase": "upcoming",
         "pomodoro": {
           "index": 2,
@@ -196,6 +199,7 @@
               "time_range": "0910-1015"
             },
             "ends_at": "2026-08-28T10:00",
+            "off_clock": true,
             "starts_at": "2026-08-28T09:40",
             "time_range": "0940-1000",
             "title": "Lunch",
@@ -229,6 +233,7 @@
               "time_range": "1030-1115"
             },
             "ends_at": "2026-08-28T11:00",
+            "off_clock": false,
             "starts_at": "2026-08-28T10:30",
             "time_range": "1030-1100",
             "title": "Standup",

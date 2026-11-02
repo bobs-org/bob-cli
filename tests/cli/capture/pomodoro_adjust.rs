@@ -272,7 +272,7 @@ fn capture_pomodoro_adjust_preserves_metadata_crlf_and_fallbacks() {
     assert_eq!(json3["pomodoro_adjust"]["after_duration_minutes"], 35);
     assert_eq!(
         fs::read_to_string(&day3).expect("read fallback day"),
-        "## Pomodoros\n- [ ] (**0900-0935**) — PLAIN\n",
+        "## Pomodoros\n- [ ] (**0900-0935** [off:: 35m]) — PLAIN\n",
     );
 }
 

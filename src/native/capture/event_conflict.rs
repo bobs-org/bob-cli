@@ -110,6 +110,8 @@ pub(super) struct EventConflictEventJson {
     pub(super) title: String,
     pub(super) time_range: String,
     pub(super) line: usize,
+    pub(super) off_clock: bool,
+    /// Deprecated f6 field, retained for one release train.
     pub(super) untracked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) buffer: Option<EventBufferJson>,
@@ -267,7 +269,8 @@ pub(super) fn detect_event_conflict(
             title: first.title.clone(),
             time_range: span.text(),
             line: first.line_index + 1,
-            untracked: first.untracked,
+            off_clock: first.off_clock,
+            untracked: first.off_clock,
             buffer: EventBufferJson::new(span, first.buffer),
         },
         overlap_minutes: conflict.overlap_minutes,
@@ -512,7 +515,7 @@ mod tests {
             },
         )
         .expect("conflict");
-        assert!(conflict.event.untracked);
+        assert!(conflict.event.off_clock);
         assert_eq!(conflict.fit.as_deref(), Some("=2#bugs"));
     }
 
@@ -698,6 +701,7 @@ mod tests {
                 title: "Lunch".to_string(),
                 time_range: "1200-1300".to_string(),
                 line: 2,
+                off_clock: false,
                 untracked: false,
                 buffer: Some(lunch_buffer()),
             },

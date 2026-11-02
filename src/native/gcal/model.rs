@@ -23,6 +23,7 @@ pub(crate) struct GcalEvent {
     pub title_route_hint: Option<String>,
     pub untracked: bool,
     pub buffer: EventBuffer,
+    pub off_clock: bool,
     pub route_hint: Option<String>,
     pub location: Option<String>,
     pub html_link: Option<String>,
@@ -115,13 +116,13 @@ impl GcalEvent {
             .summary
             .filter(|summary| !summary.trim().is_empty())
             .unwrap_or_else(|| "(untitled event)".to_string());
-        let (title, title_untracked) = strip_untracked_tokens(&raw_title);
+        let (title, title_off_clock) = strip_off_clock_tokens(&raw_title);
         let directives = raw
             .description
             .as_deref()
             .map(description_directives)
             .unwrap_or_default();
-        let untracked = title_untracked || directives.untracked;
+        let off_clock = title_off_clock || directives.untracked;
         let title_route_hint =
             title.split_whitespace().last().and_then(parse_route_token);
         Ok(Self {
@@ -138,9 +139,10 @@ impl GcalEvent {
             status: raw.status.unwrap_or_else(|| "confirmed".to_string()),
             title,
             title_route_hint,
-            untracked,
+            untracked: off_clock,
             buffer: directives.buffer,
             route_hint: directives.route,
+            off_clock,
             location: raw.location,
             html_link: raw.html_link,
             join_link,
@@ -291,7 +293,7 @@ pub(crate) fn description_directives(
                 }
                 continue;
             }
-            if token.eq_ignore_ascii_case("#untracked") {
+            if is_off_clock_token(token) {
                 out.untracked = true;
                 continue;
             }
@@ -316,7 +318,7 @@ pub(crate) fn description_directives(
 
 fn is_directive_token(token: &str) -> bool {
     parse_route_token(token).is_some()
-        || token.eq_ignore_ascii_case("#untracked")
+        || is_off_clock_token(token)
         || parse_buffer_token(token).is_some()
 }
 
@@ -408,23 +410,29 @@ fn decode_numeric_entity(entity: &str) -> Option<char> {
     char::from_u32(digits)
 }
 
-/// A standalone `#untracked` token in a Google title (case-insensitive,
+/// A standalone off-clock spelling in a Google title (case-insensitive,
 /// whitespace-bounded, trailing `.,;:!?` allowed).
-fn is_untracked_token(token: &str) -> bool {
+fn is_off_clock_token(token: &str) -> bool {
     let stripped = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
-    stripped.eq_ignore_ascii_case("#untracked")
+    ["#offclock", "#off-clock", "#untracked"]
+        .iter()
+        .any(|tag| stripped.eq_ignore_ascii_case(tag))
 }
 
-/// Strip `#untracked` tokens from a Google title. Returns the cleaned
+/// Strip off-clock aliases from a Google title. Returns the cleaned
 /// title and whether any token was removed. When no token is present the
 /// title is returned unchanged so journal hashes stay stable.
-fn strip_untracked_tokens(title: &str) -> (String, bool) {
-    if !title.to_ascii_lowercase().contains("#untracked") {
+fn strip_off_clock_tokens(title: &str) -> (String, bool) {
+    let lower = title.to_ascii_lowercase();
+    if !["#offclock", "#off-clock", "#untracked"]
+        .iter()
+        .any(|tag| lower.contains(tag))
+    {
         return (title.to_string(), false);
     }
     let kept: Vec<&str> = title
         .split_whitespace()
-        .filter(|token| !is_untracked_token(token))
+        .filter(|token| !is_off_clock_token(token))
         .collect();
     if kept.len() == title.split_whitespace().count() {
         return (title.to_string(), false);
@@ -570,34 +578,28 @@ mod tests {
     }
 
     #[test]
-    fn title_untracked_and_route_combine_with_description_buffers() {
-        let parsed = event("Lunch @love #untracked", Some("-30 +15"));
-        assert_eq!(parsed.title, "Lunch @love");
-        assert_eq!(parsed.title_route_hint.as_deref(), Some("love"));
-        assert!(parsed.untracked);
-        assert_eq!(parsed.route_hint, None);
-        assert_eq!(
-            parsed.buffer,
-            EventBuffer {
-                before_min: 30,
-                after_min: 15,
-            }
-        );
+    fn title_aliases_are_stripped_before_route_parsing() {
+        for token in ["#offclock", "#OFFCLOCK.", "#off-clock", "#untracked!"] {
+            let parsed = event(&format!("Lunch @love {token}"), None);
+            assert_eq!(parsed.title, "Lunch @love", "token {token}");
+            assert_eq!(parsed.title_route_hint.as_deref(), Some("love"));
+            assert!(parsed.off_clock, "token {token}");
+            assert!(parsed.untracked, "legacy alias for {token}");
+        }
     }
 
     #[test]
-    fn combined_description_line_routes_untracks_and_buffers() {
-        let parsed = event("Lunch", Some("@love #untracked -30"));
-        assert_eq!(parsed.title, "Lunch");
+    fn description_aliases_and_buffers_combine_only_on_directive_lines() {
+        for token in ["#offclock", "#OFF-CLOCK", "#untracked"] {
+            let parsed =
+                event("Lunch", Some(&format!("Bring shoes\n {token} \n")));
+            assert!(parsed.off_clock, "token {token}");
+        }
+        let parsed = event("Lunch", Some("@love #off-clock -30 +15"));
         assert_eq!(parsed.route_hint.as_deref(), Some("love"));
-        assert!(parsed.untracked);
-        assert_eq!(
-            parsed.buffer,
-            EventBuffer {
-                before_min: 30,
-                after_min: 0,
-            }
-        );
-        assert!(parsed.buffer.field().unwrap().contains("-30m"));
+        assert!(parsed.off_clock);
+        assert_eq!(parsed.buffer.before_min, 30);
+        assert_eq!(parsed.buffer.after_min, 15);
+        assert!(!event("Lunch", Some("text #offclock")).off_clock);
     }
 }

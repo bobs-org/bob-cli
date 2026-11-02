@@ -2608,7 +2608,7 @@ pub(super) fn print_human_item_success(
                 start.start,
                 start.end,
                 start.duration_minutes,
-                untracked_label(start),
+                off_clock_label(start),
                 start.pomodoro_line,
                 calendar_label(start),
             ))

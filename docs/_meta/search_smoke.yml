@@ -100,6 +100,10 @@
   location: /reference/capture-syntax/#equals-named
 - query: "=name"
   location: /reference/capture-syntax/#equals-named
+- query: "=/[base][#type…]"
+  location: /reference/capture-syntax/#equals-split
+- query: "=*[source]#destination[#destination…]"
+  location: /reference/capture-syntax/#equals-merge
 - query: "~<K>"
   location: /reference/capture-syntax/#tilde-drop
 - query: "x"
@@ -130,10 +134,14 @@
   location: /reference/capture-syntax/#plus-child
 - query: "@route+block-id#section"
   location: /reference/capture-syntax/#plus-child-section
+- query: "@route+block-id#drawer"
+  location: /reference/capture-syntax/#plus-child-section
 - query: "@route+block-id with no other text"
   location: /reference/capture-syntax/#plus-ensure-next
 - query: "@route+block-id!"
   location: /reference/capture-syntax/#plus-toggle
+- query: "- #drawer with nested notes"
+  location: /reference/capture-syntax/#drawer-bullets
 - query: "%n"
   location: /reference/capture-syntax/#trailing-hash
 - query: "s:<N>"

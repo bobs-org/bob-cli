@@ -3112,41 +3112,38 @@ A session named `MEET` (the type [Google Calendar sync](gcal.md) files meetings
 under) takes its span from the Event Tasks in its lineup instead of the
 25-minute default. The **event run** of a MEET is its earliest open Event Task
 that has not ended, plus every following lineup Event Task that touches or
-overlaps it (`next.start ≤ run.end`) and shares its trackedness. Every span
-here is what the event _occupies_: an Event Task's `[buffer:: -30m +15m]`
-field (from a `-30 +15` [directive line](gcal.md#untracked-events) in its
-Google description) widens the meeting by a lead-in and a lead-out, so
-an event has not ended until its buffered end passes, runs sort and cluster by
-buffered span, and the run's start and end are the buffered ones. Bob computes
+overlaps it (`next.buffered_start ≤ run.end`) and shares its clock verdict.
+Every span here is what the event _occupies_: an Event Task's
+`[buffer:: -30m +15m]` field (from a `-30 +15` [directive line](gcal.md#buffers)
+in its Google description) widens the meeting by a lead-in and a lead-out,
+so candidates end after the buffered end, runs sort and cluster by buffered
+span, and the run's start and end are buffered. Bob computes
 it on the staged daily note at the moment of the start, so a `~<K>` drop and
 earlier items of the same draft already apply. Only plain same-note links
 (`[[#^id]]`) to Event Tasks count; other links, done or cancelled Event Tasks,
 and Event Tasks that already ended are skipped.
 
-| Start | Span written | `[t::]` |
+| Start | Span written | Clock key |
 | --- | --- | --- |
-| `=` or `=meet` (empty suffix) on a MEET, or `=` restarting a running MEET | The run's real span, for example `(**1100-1200** [t:: 60m])` | Omitted when the run is untracked |
-| `=5#meet`, `=3`, or any counted suffix | The explicit span | Omitted when the run is untracked |
+| `=` or `=meet` (empty suffix) on a MEET, or `=` restarting a running MEET | The run's real span, for example `(**1100-1200** [t:: 60m])` | `[off:: Nm]` when the run is off-clock |
+| `=5#meet`, `=3`, or any counted suffix | The explicit span | `[off:: Nm]` when the run is off-clock |
 | Kept-ledger swap (`=meet` while another session runs) | The running session's span bytes | Dropped or restored to match the run |
-| Link start (`@route:id#meet=`) | The written span | Omitted when the run is untracked |
+| Link start (`@route:id#meet=`) | The written span | `[off:: Nm]` when the run is off-clock |
 | Any non-MEET session, or a MEET with an empty run | Unchanged | Always written |
 
-An event run is **untracked** when its Event Tasks carry `#untracked`; the
-session then writes `(**1200-1300**)` with no `[t::]`, which every reader treats
-as on the calendar and off the clock (see [Untracked
-sessions](reference/vault-format.md)). A tracked event and an untracked one
-never share a run, so lunch at 1200-1300 followed by a 1300-1330 standup
-starts a 1200-1300 untracked MEET; capture `=` again after it closes to run
-the standup. A buffer inherits its event's trackedness, so it never bridges
-the two: a `+15` on the lunch does not pull the tracked standup into its run.
-
-A buffer widens a run without moving the meeting. Take lunch at 1200-1300
-with `[buffer:: -30m +15m]`: `=` at 1125 writes `(**1130-1315**)`, and
-lunch's meeting span stays `1200-1300`. A `+15` on a 1000-1030 standup
-bridges it to a 1045-1115 1:1, because the standup now occupies until 1045
-(`next.buffered_start ≤ run.end`), so the run is `1000-1115`. While you are
-still inside a lead-out the event still counts: at 1035 the standup's run
-continues to 1045.
+An event run is off-clock only when every linked Event Task is tagged
+`#offclock` (Google aliases `#off-clock` and `#untracked` are accepted). The
+session then writes `(**1200-1300** [off:: 60m])`, which remains on the ledger
+and outside Worked metrics (see [vault format](reference/vault-format.md)).
+A worked event and an off-clock event never share a run, so lunch at
+1200-1300 followed by a 1300-1330 standup starts an off-clock MEET; capture
+`=` again after it closes to run the standup. Buffers inherit their event's
+clock verdict and never bridge the two runs. A buffer widens the run without
+moving the meeting: lunch at 1200-1300 with `[buffer:: -30m +15m]` starts at
+1125 as `(**1130-1315** [off:: 105m])`, while the meeting span stays
+1200-1300. A `+15` on a 1000-1030 standup bridges it to a 1045-1115 1:1,
+because the standup occupies until 1045; while inside its lead-out, at 1035,
+the standup's run still continues to 1045.
 
 Two rules keep the ledger truthful:
 
@@ -3166,19 +3163,22 @@ Closing a session that has not started yet records a zero-length session at
 its own start (the end never moves before the start) and warns that `x0`
 resets it instead.
 
-Capture JSON is unversioned; these fields are additive.
-`pomodoro_start.tracked` is `false` for an
-untracked session and omitted otherwise, and `pomodoro_blocks[].tracked`
-mirrors it for the final block. `pomodoro_start.event_run` appears when a MEET
+Capture JSON is unversioned and additive. `pomodoro_start.off_clock` is `true`
+for an off-clock session and omitted otherwise; deprecated `tracked: false`
+and `pomodoro_blocks[].tracked` remain for compatibility, while
+`pomodoro_blocks[].off_clock` mirrors the new field. `pomodoro_start.event_run`
+appears when a MEET
 has a non-empty run:
 
 ```json
 "event_run": {
   "time_range": "1200-1300", "start": "1200", "end": "1300",
-  "untracked": true, "source": "calendar",
+  "off_clock": true, "untracked": true, "source": "calendar",
   "events": [{"index": 1, "title": "Lunch with Kelly",
               "time_range": "1200-1300", "line": 2,
-              "block_id": "lunch", "untracked": true}]
+              "block_id": "lunch", "off_clock": true, "untracked": true,
+              "buffer": {"before_minutes": 30, "after_minutes": 15,
+                         "time_range": "1130-1315"}}]
 }
 ```
 
@@ -3190,7 +3190,7 @@ gains an additive `buffer` object (omitted when there is none):
 ```json
 "events": [{"index": 1, "title": "Lunch with Kelly",
             "time_range": "1200-1300", "line": 2,
-            "block_id": "lunch", "untracked": true,
+            "block_id": "lunch", "off_clock": true, "untracked": true,
             "buffer": {"before_minutes": 30, "after_minutes": 15,
                        "time_range": "1130-1315"}}]
 ```
@@ -3198,9 +3198,9 @@ gains an additive `buffer` object (omitted when there is none):
 `source` is `calendar` when the written session follows that span and
 `explicit` when a counted suffix or a kept ledger set its own. Each event's
 `index` is its lineup number on the pre-drop lineup, so a drop leaves gaps. Human
-output appends the same facts: `MEET 1200-1300 (60m · untracked) at line 7 ·
-from your calendar: Lunch with Kelly`; a buffered event adds its meeting
-span and buffer, `from your calendar: Lunch with Kelly (1200-1300 −30m +15m)`.
+output appends the same facts: `MEET 1200-1300 (60m · off-clock) at line 7 ·
+from your calendar: Lunch with Kelly`; a buffered event adds its meeting span
+and buffer, `from your calendar: Lunch with Kelly (1200-1300 −30m +15m)`.
 Obsidian's `se<X>` + Tab mirrors the rule through the shared
 [`meet_event_run` vectors](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/meet_event_run/vectors.json).
 
@@ -3625,8 +3625,8 @@ timed entry, multiple open timed entries, or an unparseable target range
 fail without writing. The start stays fixed; `new_duration =
 max(0, old_duration + signed_units * 5)` with checked arithmetic and
 `new_end = (start + new_duration) modulo 24 hours`. Only that ledger line is
-rewritten in the same trackedness it already had: a tracked row stays
-`(**HHMM-HHMM** [t:: Nm])`, an untracked row stays `(**HHMM-HHMM**)`,
+rewritten with the same clock key it already had: a worked row stays
+`(**HHMM-HHMM** [t:: Nm])`, an off-clock row stays `(**HHMM-HHMM** [off:: Nm])`,
 preserving its checkbox, name, non-duration metadata, child bullets,
 newline style, and surrounding bytes. Subtraction clamps at zero and reports both requested
 units and actual applied minutes when clamping changes the delta.
@@ -3686,8 +3686,8 @@ translate modulo 24 hours (`new_start = (start + delta) mod 1440`,
 `new_end = (end + delta) mod 1440`), so shifts wrap across midnight and
 never clamp; a `++288` wraps a full day. There is no overlap check against
 neighbouring entries. Only that ledger line is rewritten, keeping its
-trackedness: a tracked row stays `(**HHMM-HHMM** [t:: Nm])` and an
-untracked row stays `(**HHMM-HHMM**)`, preserving its checkbox, name,
+clock key: a worked row stays `(**HHMM-HHMM** [t:: Nm])` and an
+off-clock row stays `(**HHMM-HHMM** [off:: Nm])`, preserving its checkbox, name,
 non-duration metadata, child bullets, newline style, and surrounding bytes.
 A `@@route` declaration never applies to shift items, and forced
 destination/task/section and clipboard options (`--route`, `--section`,
@@ -3720,23 +3720,18 @@ shifting (`++N`/`--N`) a **non-MEET** session warns when its new span newly
 conflicts with an open Event Task on today's note. The warning never blocks
 the write. `-N` and closes never warn.
 
-A new span `[S, E)` **conflicts** with an open Event Task when two things
-hold:
-
-1. It overlaps the event's _occupied_ span: the meeting plus its
-   `[buffer::]` lead-in and lead-out (for an event without a buffer, the
-   event's start lies in `[S, E)`, as it always has).
-2. The meeting is not already in progress at `S` (`start < S < end`).
-   Starting mid-meeting stays quiet, because a meeting you walked out of
-   early stays open after a timed close.
-
-It warns when the new span conflicts and the previous span did not (a fresh
-start has no previous span). With a buffer this covers four shapes: running
-into a lead-in, starting inside a lead-in and running into the meeting,
-starting inside a lead-out, and running from before the event through all of
-it. Events already in that session's own lineup are skipped. Done (`[x]`) and
-cancelled (`[-]`) rows never warn. Untracked Event Tasks (`#untracked`)
-warn like any other open Event Task: untracked means off the clock, not
+An open Event Task conflicts with a new span `[S, E)` when it overlaps the
+event's _occupied_ span (the meeting plus its `[buffer::]` lead-in and
+lead-out) and the meeting is not already in progress at `S` (`start < S <
+end`). Starting mid-meeting stays quiet, because a meeting you walked out of
+early stays open after a timed close. A conflict is new when the previous
+span did not conflict (a fresh start has no previous span). With a buffer
+this covers running into a lead-in, starting inside a lead-in and running
+into the meeting, starting inside a lead-out, and running through the whole
+event. Events already in that session's own lineup are skipped. Done (`[x]`)
+and cancelled (`[-]`) rows never warn. Off-clock Event Tasks (`#offclock`;
+Google also accepts `#off-clock` and `#untracked`) warn like any other open
+Event Task: off-clock means off the clock, not
 optional.
 
 MEET sessions are exempt: their span follows the [event
@@ -3775,7 +3770,7 @@ Capture JSON is unversioned; these fields are additive.
 "event_conflict": {
   "event": {
     "title": "Standup", "time_range": "1200-1230",
-    "line": 2, "untracked": false
+    "line": 2, "off_clock": false, "untracked": false
   },
   "overlap_minutes": 15, "fit": "=2"
 }
@@ -3817,7 +3812,8 @@ A MEET written with its event run's future start has not begun when `x` runs
 before that start. The close never moves the end before the start: it records
 a zero-length session (`1300-1300`, `0m`) and warns ``capture `x0` to reset it
 instead``. After the start, `x` shortens by whole five-minute units as always.
-An untracked session closes untracked: `(**1200-1230**)` stays without `[t::]`.
+A session's clock key is retained when it closes: an off-clock row stays
+`(**1200-1230** [off:: 30m])`, while a worked row keeps `[t::]`.
 
 #### Event Task links close by the clock
 
@@ -3944,8 +3940,8 @@ closed before its planned end is shortened to the stop time
 when `remaining ≥ 5`, `units = floor(remaining / 5)`,
 `new_duration = max(0, duration − 5·units)`,
 `new_end = (start + new_duration) mod 1440`, rewritten in the same
-trackedness `+N`/`-N` writes: tracked rows keep `[t:: Nm]`, untracked rows
-omit it. Otherwise the range bytes
+clock key `+N`/`-N` writes: worked rows keep `[t:: Nm]`, off-clock rows
+keep `[off:: Nm]`. Otherwise the range bytes
 are untouched; Bob never extends a session, and an overrun is reported
 (`ran 7m over`). Closed at `09:49` or later, `0920-0950` stays unchanged.
 
@@ -5923,8 +5919,8 @@ Field rules:
   omitted when the entry has none. When `removed` is true, `line` is the
   1-based headline in the item's pre-state day text, so an earlier edit
   in the same item (N linked above T's consumption) does not shift it.
-- `tracked` is `false` for an untracked session (a timed headline without
-  `[t::]`) and omitted when the session is tracked or an untimed placeholder.
+- `off_clock` is `true` for an off-clock session and omitted otherwise;
+  deprecated `tracked: false` remains for compatibility.
 - `status` is `"completed"` for a completed entry, `"running"` for an open
   entry with a time range, and `"queued"` for an open entry without one.
 - `created` is true when the entry did not exist before the batch.
@@ -7857,11 +7853,12 @@ untypeable slugs stay in the list with `selectable: false`.
 With `-t/--tasks`, `capture-pomodoros` resolves each listed entry's Task Links
 into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
 name or today) and `completed_summary` (`count` of completed ledger entries and
-their summed `minutes`: each tracked entry's recorded `[t:: Nm]` or
-stopwatch duration; untracked sessions (timed rows without either) contribute
-to neither count nor minutes). Its `untracked_count` counts those completed
-sessions and is omitted when zero. Each untracked timed entry adds
-`tracked: false`; the field is omitted for tracked entries and placeholders.
+their summed `minutes`: each worked entry's recorded `[t:: Nm]` or stopwatch
+duration; off-clock sessions contribute to neither Worked count nor minutes).
+Its deprecated `untracked_count` remains, and new `off_clock: {count, minutes}`
+reports completed off-clock sessions with their recorded durations. Each
+off-clock timed entry adds `off_clock: true` while retaining deprecated
+`tracked: false`; both flags are omitted for worked entries and placeholders.
 Each entry adds a derived `homes` object (the shared R9 shape from
 [Pomodoro homes](pomodoro-homes.md): `state`,
 `kind`, `label`, nullable `chip` and `hue`, and `parts`). Open entries are a
@@ -7898,17 +7895,17 @@ lines the line without indentation), relative `depth`, `kind` (`bullet`,
 `work`/`schedule`/`rotten` `log` tag on managed log markers and their subtrees.
 
 An item linked to an Event Task in today's daily note also carries `event` with
-its `time_range`, naive `starts_at`/`ends_at`, `untracked` flag, and clean
-`title`; buffered Event Tasks add `buffer` with `before_minutes`,
-`after_minutes`, the buffered `time_range`, and buffered naive `starts_at` and
-`ends_at`; other items omit this field.
+its `time_range`, naive `starts_at`/`ends_at`, `off_clock` and deprecated
+`untracked` flags, and clean `title`; buffered Event Tasks add `buffer` with
+`before_minutes`, `after_minutes`, the buffered `time_range`, and buffered
+naive `starts_at` and `ends_at`; other items omit this field.
 
 The top-level `events` object has `synced_at` (the Events stamp time or `null`),
 `all_day` context rows (`line`, `title`, and nullable `qualifier`), and timed
 `rows`. Event Task rows carry their `line`, nullable `block_id`, `kind`, nullable
 `qualifier`, `title`, `time_range`, naive `starts_at`/`ends_at`,
 `duration_minutes`, `phase` (`ended`, `running`, or `upcoming`), nullable task
-`status_symbol`/`status_type`, `untracked`, nullable `root`/`home`, nullable
+`status_symbol`/`status_type`, `off_clock` and deprecated `untracked`, nullable `root`/`home`, nullable
 `join_url`, `calendar_url`, and `location`, and nullable `pomodoro` attribution
 (`line`, `role`, and lineup `index`). Timed context rows use
 `kind: "timed_context"` and have no task status or Pomodoro attribution.

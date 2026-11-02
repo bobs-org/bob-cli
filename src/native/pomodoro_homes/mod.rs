@@ -20,6 +20,6 @@ pub(crate) use resolve::{
 #[cfg(test)]
 pub(crate) use session::session_links;
 pub(crate) use session::{
-    attribute_ledger_entry, attribute_session, prepare_session_scan,
-    session_links_from_scan, split_minutes, SessionHomes, SessionLink,
+    attribute_ledger_entry, attribute_session, counted_session_links_from_scan,
+    prepare_session_scan, split_minutes, SessionHomes, SessionLink,
 };

@@ -65,12 +65,12 @@ pub(crate) struct PlannedOccurrence {
     pub spans: BTreeMap<String, String>,
     /// Write `[type:: MEET]` (the PT13 suggestion is not MEET).
     pub needs_type: bool,
-    /// Google `#untracked` token (title or description). Context rows strip
-    /// it; task rows render ` #untracked` at the end of the badge run.
-    pub untracked: bool,
     /// Google `[buffer::]` field (description directives). Context rows
     /// never carry it; task rows render it at the end of the badge run.
     pub buffer: crate::native::event_task::EventBuffer,
+    /// Google off-clock alias (title or description). Context rows strip
+    /// it; task rows render canonical ` #offclock` in the badge run.
+    pub off_clock: bool,
     /// Phase at sync time; `None` for context rows.
     pub link_phase: Option<LinkPhase>,
     pub all_day: bool,
@@ -161,7 +161,7 @@ pub(crate) struct PlannedRow {
     pub source: Option<String>,
     pub time_label: String,
     pub title: String,
-    pub untracked: bool,
+    pub off_clock: bool,
     pub buffer: crate::native::event_task::EventBuffer,
 }
 
@@ -181,7 +181,7 @@ pub(crate) struct AdoptedRow {
     pub link_adopted: bool,
     pub time_label: String,
     pub title: String,
-    pub untracked: bool,
+    pub off_clock: bool,
     pub buffer: crate::native::event_task::EventBuffer,
 }
 
@@ -393,7 +393,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         link_adopted,
                         time_label: occurrence.time_label.clone(),
                         title: occurrence.title.clone(),
-                        untracked: occurrence.untracked,
+                        off_clock: occurrence.off_clock,
                         buffer: buffer_for_row(occurrence),
                     });
                     continue;
@@ -430,7 +430,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                     source: occurrence.source.clone(),
                     time_label: occurrence.time_label.clone(),
                     title: occurrence.title.clone(),
-                    untracked: occurrence.untracked,
+                    off_clock: occurrence.off_clock,
                     buffer: buffer_for_row(occurrence),
                 });
             }
@@ -513,32 +513,32 @@ fn apply_span_updates(
     }
     let current = spans.hashes();
     // Context rows strip the token, so only task rows hash the tag.
-    // The badges span covers `#untracked` and `[buffer::]`, so flips
+    // The badges span covers `#offclock` and `[buffer::]`, so flips
     // and buffer changes update in place while untouched.
     let fresh_badges = super::render::badge_text(
         occurrence.html_link.as_deref(),
         occurrence.join_link.as_deref(),
         occurrence.location.as_deref(),
-        occurrence.untracked && occurrence.task,
+        occurrence.off_clock && occurrence.task,
         buffer_for_row(occurrence),
     );
     // A tag flip on a worked row is reported once and left for a hand
     // edit: sync never retimes existing entries, and the ledger row keeps
-    // its trackedness until Bryan edits it.
-    let current_untracked =
-        crate::native::event_task::line_has_untracked_tag(&current_line);
+    // its clock classification until Bryan edits it.
+    let current_off_clock =
+        crate::native::event_task::line_has_off_clock_tag(&current_line);
     let untouched =
         row_untouched(&working.as_string(), line_index, &journaled.block_id);
-    let keep_untracked = occurrence.task
-        && current_untracked != occurrence.untracked
+    let keep_off_clock = occurrence.task
+        && current_off_clock != occurrence.off_clock
         && !untouched;
-    if keep_untracked {
-        let detail = if occurrence.untracked {
-            "kept your tracked row while Google now says #untracked; \
-             add #untracked by hand to go off the clock"
+    if keep_off_clock {
+        let detail = if occurrence.off_clock {
+            "kept your on-clock row while Google now says off-clock; \
+             add #offclock by hand to follow Google"
         } else {
-            "kept your untracked row while Google dropped #untracked; \
-             remove #untracked by hand to go back on the clock"
+            "kept your off-clock row while Google dropped its off-clock mark; \
+             remove #offclock by hand to go back on the clock"
         };
         push_kept_once(
             input,
@@ -547,7 +547,7 @@ fn apply_span_updates(
             &occurrence.event_id,
             occurrence.title.clone(),
             detail.to_string(),
-            "kept_untracked",
+            "kept_off_clock",
         );
     }
     let fresh = [
@@ -560,7 +560,7 @@ fn apply_span_updates(
     let mut hashes_changed = false;
     let mut updated = journaled.spans.clone();
     for (name, fresh_text) in fresh {
-        if name == "badges" && keep_untracked {
+        if name == "badges" && keep_off_clock {
             continue;
         }
         let fresh_hash = super::journal::span_hash(&fresh_text);
@@ -676,7 +676,7 @@ fn apply_span_updates(
         source,
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
-        untracked: occurrence.untracked,
+        off_clock: occurrence.off_clock,
         buffer: buffer_for_row(occurrence),
     });
 }
@@ -885,7 +885,7 @@ fn upgrade_context_row(
         source: occurrence.source.clone(),
         time_label: occurrence.time_label.clone(),
         title: occurrence.title.clone(),
-        untracked: occurrence.untracked,
+        off_clock: occurrence.off_clock,
         buffer: buffer_for_row(occurrence),
     });
     plan.extra_link_wants.push((
@@ -1176,7 +1176,7 @@ fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
                 location: occurrence.location.as_deref(),
                 root: occurrence.root.as_deref(),
                 needs_type: occurrence.needs_type,
-                untracked: occurrence.untracked,
+                off_clock: occurrence.off_clock,
                 buffer: buffer_for_row(occurrence),
                 status: status_for_phase(occurrence.link_phase),
             },
@@ -1628,8 +1628,8 @@ fn plan_meet_pomodoros(
             cluster.iter().map(|link| link.start_min).min().unwrap_or(0);
         let end_min =
             cluster.iter().map(|link| link.end_min).max().unwrap_or(0);
-        let untracked = cluster.first().is_some_and(|link| link.untracked);
-        let (span, time) = format_meet_span(start_min, end_min, untracked);
+        let off_clock = cluster.first().is_some_and(|link| link.off_clock);
+        let (span, time) = format_meet_span(start_min, end_min, off_clock);
         let line_text = format!("- [x] {span} — MEET");
         let at = closed_insert_at(&contents, start_min);
         let (updated, line_0) = insert_ledger_line(&contents, at, &line_text);
@@ -1707,9 +1707,9 @@ fn plan_meet_pomodoros(
             let end_min =
                 current.iter().map(|link| link.end_min).max().unwrap_or(0);
             // One running entry is allowed, so a mixed current run stays
-            // tracked; only an all-untracked run goes off the clock.
-            let untracked = current.iter().all(|link| link.untracked);
-            let (span, time) = format_meet_span(start_min, end_min, untracked);
+            // on-clock; only an all-off-clock run goes off the clock.
+            let off_clock = current.iter().all(|link| link.off_clock);
+            let (span, time) = format_meet_span(start_min, end_min, off_clock);
             let line_text = format!("- [ ] {span} — MEET");
             let at = running_insert_at(&contents);
             let (updated, line_0) =
@@ -1793,7 +1793,7 @@ struct WantedLink {
     start_min: i32,
     end_min: i32,
     title: String,
-    untracked: bool,
+    off_clock: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1940,7 +1940,7 @@ fn wanted_link(
         start_min,
         end_min,
         title: occurrence.title.clone(),
-        untracked: occurrence.untracked,
+        off_clock: occurrence.off_clock,
     }
 }
 
@@ -1968,12 +1968,12 @@ fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
         if let Some(last) = clusters.last_mut() {
             let cluster_end =
                 last.iter().map(|link| link.end_min).max().unwrap_or(0);
-            let cluster_untracked =
-                last.first().is_some_and(|link| link.untracked);
-            // Past clusters split by trackedness: two closed MEETs may
+            let cluster_off_clock =
+                last.first().is_some_and(|link| link.off_clock);
+            // Past clusters split by clock verdict: two closed MEETs may
             // overlap, and that is truthful (one on the clock, one off).
             if item.start_min <= cluster_end
-                && item.untracked == cluster_untracked
+                && item.off_clock == cluster_off_clock
             {
                 last.push(item);
                 continue;
@@ -1987,15 +1987,18 @@ fn cluster_past(mut items: Vec<WantedLink>) -> Vec<Vec<WantedLink>> {
 fn format_meet_span(
     start_min: i32,
     end_min: i32,
-    untracked: bool,
+    off_clock: bool,
 ) -> (String, String) {
     let duration = (end_min - start_min).max(0);
     let start_mod = start_min.rem_euclid(1440);
     let end_mod = end_min.rem_euclid(1440);
     let start = format!("{:02}{:02}", start_mod / 60, start_mod % 60);
     let end = format!("{:02}{:02}", end_mod / 60, end_mod % 60);
-    if untracked {
-        (format!("(**{start}-{end}**)"), format!("{start}-{end}"))
+    if off_clock {
+        (
+            format!("(**{start}-{end}** [off:: {duration}m])"),
+            format!("{start}-{end}"),
+        )
     } else {
         (
             format!("(**{start}-{end}** [t:: {duration}m])"),

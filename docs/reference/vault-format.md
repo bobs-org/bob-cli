@@ -328,9 +328,12 @@ parent: "[[day]]"
 ```
 
 Column-0 checkbox items are Pomodoro entries. A timespan is a timed
-session; `()` is a placeholder. A timed row with `[t:: Nm]` (or the legacy
-stopwatch) is tracked; a timed row without either is an **untracked
-session** — on the ledger, off the clock. An optional ` — NAME` suffix (em
+session; `()` is a placeholder. `[t:: Nm]` (or the legacy stopwatch) marks a
+worked session. `[off:: Nm]` records an off-clock Pomodoro: the time remains
+in the ledger but stays out of Worked metrics. A bare historical timed row
+without either key is classified from its span and receives `[off:: Nm]` when
+retimed. If both keys appear, `[t::]` wins and writers remove `[off::]`.
+An optional ` — NAME` suffix (em
 dash plus ALL-CAPS name) names it. Child bullets that are exactly one Task
 Link are that session's queued work. `bob capture` session operators (`=`,
 `+N`, `++N`, `x`) rewrite this section.
@@ -364,15 +367,16 @@ qualify too; Google Calendar is not required.
 The span is local to the daily note's `timezone:` (or the host timezone).
 Hours are `00`–`23` and minutes are `00`–`59`; when the end is earlier than
 the start, the event crosses midnight. Context rows have no checkbox, so they
-are not Event Tasks. A standalone `#untracked` tag (case-insensitive, not
-inside a Markdown link or code span) marks an untracked Event Task: the
-session that links it is a timed ledger row without `[t::]`, so `[root::]`
-attributes no minutes. An Event Task may carry `[root:: NOTE]` to attribute
-its Pomodoro time to that area or project; `[type:: MEET]` is needed only
-when the root's suggested task type is not already `MEET`. Link an Event
-Task with its local block link under a Pomodoro. Starting that `MEET` with an
-empty suffix writes the span of the linked Event Tasks and leaves `[t::]` off
-for an untracked run: [MEET starts follow the
+are not Event Tasks. A standalone `#offclock` tag (aliases `#off-clock` and
+`#untracked`, case-insensitive, not inside a Markdown link or code span)
+marks an off-clock Event Task. A session is off-clock only when it links at
+least one task and every link resolves to an Event Task with this tag;
+unresolved, unlinked, or mixed links stay worked. An Event Task may carry
+`[root:: NOTE]` to attribute its Pomodoro time to that area or project;
+`[type:: MEET]` is needed only when the root's suggested task type is not
+already `MEET`. Link an Event Task with its local block link under a Pomodoro.
+Starting that `MEET` writes the linked event span and records an off-clock run
+with `[off:: Nm]`: [MEET starts follow the
 calendar](../capture.md#meet-starts-follow-the-calendar).
 
 `bob gcal sync` writes rows in this shape, with a blank line between the
@@ -380,20 +384,21 @@ calendar](../capture.md#meet-starts-follow-the-calendar).
 Events stamp: which Google account last synced the section, and when. A written Event Task carries a
 `📅` identity badge (Google's event link, also the adoption key), an optional
 `📹` join badge, and an optional `📍` maps badge for a non-URL location, then
-` #untracked` for Google-untracked events, then `[buffer:: -30m +15m]` for
-buffered events (each side omitted when zero; no field without buffers),
-then `[root::]`, then `[type:: MEET]` only when needed, then a `^block-id`
-minted from the bare title and unique within the note. The buffer widens the
-span the event occupies (sync phases, MEET filing) while the bold span keeps
-the meeting time. A written context row carries
+` #offclock` for Google off-clock events (Google also accepts `#off-clock` and
+legacy `#untracked`), then `[buffer:: -30m +15m]` for buffered events (each
+side omitted when zero; no field without buffers), then `[root::]`, then
+`[type:: MEET]` only when needed, then a `^block-id` minted from the bare
+title and unique within the note. The buffer widens the span the event
+occupies (sync phases, MEET filing) while the bold span keeps the meeting
+time. A written context row carries
 the span (`**all day**` or `**HHMM-HHMM**`) plus optional `· *day N of M*`,
 `· *maybe*`, or `· *free*` tags and the `📅` badge, and never carries
-`#untracked` or `[buffer::]`. Event Tasks linked under
+an off-clock tag or `[buffer::]`. Event Tasks linked under
 an open MEET show `[*]`; a row first synced after its event ended shows
 `[/]` under a closed MEET. Titles are data: `#task`, trailing `^id`, `%%`, `::`, `🔁`, Tasks
 emoji, and leading markers are escaped or neutralized, and a resolved
-`@route` token is stripped from the title. `#untracked` is stripped before
-the route is read.
+`@route` token is stripped from the title. Off-clock aliases are stripped
+before the route is read.
 
 Contract: [Event Task](glossary.md#event-task), [Bob Gcal](../gcal.md#sync).
 

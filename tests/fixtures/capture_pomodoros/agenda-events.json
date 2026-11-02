@@ -2,6 +2,10 @@
   "completed_summary": {
     "count": 0,
     "minutes": 0,
+    "off_clock": {
+      "count": 1,
+      "minutes": 30
+    },
     "untracked_count": 1
   },
   "count": 3,
@@ -37,6 +41,7 @@
         "kind": "task",
         "line": 7,
         "location": "Office",
+        "off_clock": false,
         "phase": "upcoming",
         "pomodoro": {
           "index": 1,
@@ -62,6 +67,7 @@
         "kind": "timed_context",
         "line": 6,
         "location": null,
+        "off_clock": false,
         "phase": "upcoming",
         "pomodoro": null,
         "qualifier": "maybe",
@@ -83,6 +89,7 @@
         "kind": "task",
         "line": 8,
         "location": null,
+        "off_clock": true,
         "phase": "upcoming",
         "pomodoro": {
           "index": 2,
@@ -120,6 +127,7 @@
         "hue": null,
         "kind": "unlinked",
         "label": "",
+        "off_clock": true,
         "parts": [
           {
             "area": "@unlinked",
@@ -128,7 +136,7 @@
             "key": "@unlinked",
             "kind": "bucket",
             "label": "unlinked",
-            "minutes": 0,
+            "minutes": 30,
             "share": 100,
             "tasks": 0
           }
@@ -141,6 +149,7 @@
       "line": 11,
       "name": "UNTRACKED BREAK",
       "notes": [],
+      "off_clock": true,
       "placeholder": false,
       "ref": "11:f6189f36",
       "retired_link_count": 0,
@@ -237,6 +246,7 @@
           "block_link": "[[#^standup]]",
           "event": {
             "ends_at": "2026-08-28T10:00",
+            "off_clock": false,
             "starts_at": "2026-08-28T09:30",
             "time_range": "0930-1000",
             "title": "Standup",
@@ -263,6 +273,7 @@
           "block_link": "[[#^lunch]]",
           "event": {
             "ends_at": "2026-08-28T13:00",
+            "off_clock": true,
             "starts_at": "2026-08-28T12:00",
             "time_range": "1200-1300",
             "title": "Lunch with Kelly",

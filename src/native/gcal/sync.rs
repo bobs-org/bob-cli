@@ -82,6 +82,7 @@ struct ReportRow {
     title: String,
     root: Option<String>,
     source: Option<String>,
+    off_clock: bool,
     untracked: bool,
     buffer: crate::native::event_task::EventBuffer,
 }
@@ -414,13 +415,13 @@ fn build_occurrences(
         } else {
             false
         };
-        let untracked = event.event.untracked;
+        let off_clock = event.event.off_clock;
         let buffer = task_buffer(&event.event, task);
         let badges = render::badge_text(
             event.event.html_link.as_deref(),
             event.event.join_link.as_deref(),
             event.event.location.as_deref(),
-            untracked && task,
+            off_clock && task,
             buffer,
         );
         let mut spans = BTreeMap::new();
@@ -490,7 +491,7 @@ fn build_occurrences(
                 qualifier,
                 spans,
                 needs_type,
-                untracked,
+                off_clock,
                 buffer,
                 link_phase,
                 all_day,
@@ -747,7 +748,8 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: added.title.clone(),
             root: added.root.clone(),
             source: added.source.clone(),
-            untracked: added.untracked,
+            off_clock: added.off_clock,
+            untracked: added.off_clock,
             buffer: added.buffer,
         });
     }
@@ -763,7 +765,8 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: adopted.title.clone(),
             root: adopted.root.clone(),
             source: adopted.source.clone(),
-            untracked: adopted.untracked,
+            off_clock: adopted.off_clock,
+            untracked: adopted.off_clock,
             buffer: adopted.buffer,
         });
     }
@@ -775,6 +778,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: String::new(),
             root: None,
             source: None,
+            off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
         });
@@ -791,7 +795,8 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: updated.title.clone(),
             root: updated.root.clone(),
             source: updated.source.clone(),
-            untracked: updated.untracked,
+            off_clock: updated.off_clock,
+            untracked: updated.off_clock,
             buffer: updated.buffer,
         });
     }
@@ -803,6 +808,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: format!("{} ({})", cancelled.title, cancelled.reason),
             root: None,
             source: None,
+            off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
         });
@@ -815,6 +821,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: removed.reason.clone(),
             root: None,
             source: None,
+            off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
         });
@@ -827,7 +834,8 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: upgraded.title.clone(),
             root: upgraded.root.clone(),
             source: upgraded.source.clone(),
-            untracked: upgraded.untracked,
+            off_clock: upgraded.off_clock,
+            untracked: upgraded.off_clock,
             buffer: upgraded.buffer,
         });
     }
@@ -839,6 +847,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             title: learned.title.clone(),
             root: Some(learned.root.clone()),
             source: Some(format!("learned from your {} edit", learned.day)),
+            off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
         });
@@ -1158,6 +1167,7 @@ fn print_json(report: &SyncReport) {
                 "title": row.title,
                 "root": row.root,
                 "source": row.source,
+                "off_clock": row.off_clock,
                 "untracked": row.untracked,
                 "buffer": buffer_json(row.buffer),
             })

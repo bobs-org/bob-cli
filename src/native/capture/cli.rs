@@ -213,9 +213,10 @@ stays ordinary prose. `+0`/`-0` fail, and oversized magnitudes fail checked \
 arithmetic before any write. The adjustment selects the single open timed \
 entry in today's `## Pomodoros` section, keeps the start fixed, recomputes \
 `new_end = (start + new_duration) modulo 24 hours` with `new_duration = \
-max(0, old + signed_units*5)`, and rewrites only that ledger line to Bob's \
-canonical `(**HHMM-HHMM** [t:: Nm])` form, preserving other metadata, child \
-bullets, and newline style. A `@@` declaration still routes ordinary items \
+max(0, old + signed_units*5)`, and rewrites only that ledger line with its \
+clock key: worked rows use `[t:: Nm]`, off-clock rows use `[off:: Nm]`, bare \
+historical rows gain `[off:: Nm]`, and a conflict keeps `[t:: Nm]`, preserving \
+other metadata, child bullets, and newline style. A `@@` declaration still routes ordinary items \
 in the same draft but never turns an adjustment into a task. Forced \
 destination, task, section, and clipboard options (`--route`, `--section`, \
 `--task`, `--drawer`, `--clip`, `%`, `s:<N>`, `$<N>`) are rejected \

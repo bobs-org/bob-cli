@@ -186,6 +186,15 @@ pub(crate) enum BufferPart {
     After,
 }
 
+impl BufferPart {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+        }
+    }
+}
+
 /// One conflict between a session span and an open Event Task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EventSpanConflict {
@@ -208,6 +217,7 @@ pub(crate) struct EventTask {
     pub span: EventSpan,
     pub buffer: EventBuffer,
     pub untracked: bool,
+    pub off_clock: bool,
     pub status: char,
     pub block_id: Option<String>,
     pub title: String,
@@ -232,6 +242,7 @@ pub(crate) struct EventNoteRow {
     pub span: Option<EventSpan>,
     pub buffer: EventBuffer,
     pub untracked: bool,
+    pub off_clock: bool,
     pub status: Option<char>,
     pub block_id: Option<String>,
     pub title: String,
@@ -253,6 +264,7 @@ impl EventNoteRow {
             span: self.span?,
             buffer: self.buffer,
             untracked: self.untracked,
+            off_clock: self.off_clock,
             status: self.status?,
             block_id: self.block_id.clone(),
             title: self.title.clone(),
@@ -280,6 +292,55 @@ pub(crate) enum ClockClass {
     EndedBefore,
     EndedInside,
     Running,
+}
+
+/// Caller-resolved facts for the dedicated Task Links a session keeps.
+/// `None` means the link did not resolve to exactly one task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // The next phase wires caller-resolved facts into this core.
+pub(crate) struct LinkFact {
+    pub off_clock: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ClockReason {
+    Unlinked,
+    Mixed { first_on_clock: usize },
+    Unresolved { first: usize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ClockVerdict {
+    OffClock,
+    Worked { reason: ClockReason },
+}
+
+/// Decide the session clock from caller-resolved Task Link facts. An empty
+/// lineup, an unresolved link, or any resolved on-clock task keeps the whole
+/// session on the worked clock.
+#[allow(dead_code)]
+pub(crate) fn clock_verdict(links: &[LinkFact]) -> ClockVerdict {
+    if links.is_empty() {
+        return ClockVerdict::Worked {
+            reason: ClockReason::Unlinked,
+        };
+    }
+    if let Some(first) = links.iter().position(|link| link.off_clock.is_none())
+    {
+        return ClockVerdict::Worked {
+            reason: ClockReason::Unresolved { first },
+        };
+    }
+    if let Some(first_on_clock) =
+        links.iter().position(|link| link.off_clock == Some(false))
+    {
+        return ClockVerdict::Worked {
+            reason: ClockReason::Mixed { first_on_clock },
+        };
+    }
+    ClockVerdict::OffClock
 }
 
 impl ClockClass {
@@ -513,7 +574,8 @@ fn event_task_from_line(line_index: usize, line: &str) -> Option<EventTask> {
         line_index,
         span: parsed.span,
         buffer: parse_event_buffer(line),
-        untracked: line_has_untracked_tag(line),
+        untracked: line_has_off_clock_tag(line),
+        off_clock: line_has_off_clock_tag(line),
         status: parsed.status,
         block_id: collect_done::trailing_block_id_in_line(line),
         title: clean_event_title(parsed.after),
@@ -530,7 +592,8 @@ fn context_row_from_line(
         kind: parsed.kind,
         span: parsed.span,
         buffer: parse_event_buffer(line),
-        untracked: line_has_untracked_tag(line),
+        untracked: line_has_off_clock_tag(line),
+        off_clock: line_has_off_clock_tag(line),
         status: None,
         block_id: collect_done::trailing_block_id_in_line(line),
         title: clean_event_title(parsed.after),
@@ -606,6 +669,7 @@ pub(crate) fn events_in_note(
                 span: Some(task.span),
                 buffer: task.buffer,
                 untracked: task.untracked,
+                off_clock: task.off_clock,
                 status: Some(task.status),
                 block_id: task.block_id,
                 title: task.title,
@@ -861,13 +925,14 @@ fn start_rank(
 }
 
 /// Cluster items that touch or overlap (`next.start ≤ cluster.end`) while they
-/// share trackedness. Callers sort first when they need a stable tie-break.
+/// share their off-clock classification. Callers sort first when they need a
+/// stable tie-break.
 #[allow(dead_code)]
-pub(crate) fn cluster_by_trackedness<T>(
+pub(crate) fn cluster_by_off_clock<T>(
     mut items: Vec<T>,
     start_min: impl Fn(&T) -> i32,
     end_min: impl Fn(&T) -> i32,
-    untracked: impl Fn(&T) -> bool,
+    off_clock: impl Fn(&T) -> bool,
 ) -> Vec<Vec<T>> {
     items.sort_by(|left, right| {
         start_min(left)
@@ -878,9 +943,9 @@ pub(crate) fn cluster_by_trackedness<T>(
     for item in items {
         if let Some(last) = clusters.last_mut() {
             let cluster_end = last.iter().map(&end_min).max().unwrap_or(0);
-            let cluster_untracked = last.first().is_some_and(&untracked);
+            let cluster_off_clock = last.first().is_some_and(&off_clock);
             if start_min(&item) <= cluster_end
-                && untracked(&item) == cluster_untracked
+                && off_clock(&item) == cluster_off_clock
             {
                 last.push(item);
                 continue;
@@ -891,28 +956,29 @@ pub(crate) fn cluster_by_trackedness<T>(
     clusters
 }
 
-pub(crate) fn line_has_untracked_tag(line: &str) -> bool {
+pub(crate) fn line_has_off_clock_tag(line: &str) -> bool {
     let masked = mask_code_and_markdown_links(line);
     let lower = masked.to_ascii_lowercase();
-    let needle = "#untracked";
-    let mut search = 0;
-    while let Some(relative) = lower[search..].find(needle) {
-        let start = search + relative;
-        let end = start + needle.len();
-        let before = masked[..start].chars().next_back();
-        let after = masked.get(end..).and_then(|rest| rest.chars().next());
-        let left_ok = before.is_none_or(char::is_whitespace);
-        let right_ok = after.is_none_or(|ch| {
-            ch.is_whitespace()
-                || matches!(
-                    ch,
-                    ']' | ')' | '}' | ':' | '.' | ',' | ';' | '!' | '?'
-                )
-        });
-        if left_ok && right_ok {
-            return true;
+    for needle in ["#offclock", "#off-clock", "#untracked"] {
+        let mut search = 0;
+        while let Some(relative) = lower[search..].find(needle) {
+            let start = search + relative;
+            let end = start + needle.len();
+            let before = masked[..start].chars().next_back();
+            let after = masked.get(end..).and_then(|rest| rest.chars().next());
+            let left_ok = before.is_none_or(char::is_whitespace);
+            let right_ok = after.is_none_or(|ch| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        ']' | ')' | '}' | ':' | '.' | ',' | ';' | '!' | '?'
+                    )
+            });
+            if left_ok && right_ok {
+                return true;
+            }
+            search = start + 1;
         }
-        search = start + 1;
     }
     false
 }
@@ -991,7 +1057,7 @@ fn clean_event_title(after_span: &str) -> String {
     loop {
         let before = title.len();
         title = strip_trailing_inline_field(&title);
-        title = strip_trailing_untracked(&title);
+        title = strip_trailing_off_clock(&title);
         title = strip_trailing_markdown_link(&title);
         if title.len() == before {
             break;
@@ -1018,19 +1084,24 @@ fn strip_trailing_inline_field(title: &str) -> String {
     }
 }
 
-fn strip_trailing_untracked(title: &str) -> String {
+fn strip_trailing_off_clock(title: &str) -> String {
     let trimmed = title.trim_end();
-    let Some(start) = trimmed.to_ascii_lowercase().rfind("#untracked") else {
-        return trimmed.to_string();
-    };
-    if start + "#untracked".len() != trimmed.len() {
-        return trimmed.to_string();
+    let candidate = trimmed.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    let lower = candidate.to_ascii_lowercase();
+    for tag in ["#offclock", "#off-clock", "#untracked"] {
+        let Some(start) = lower.rfind(tag) else {
+            continue;
+        };
+        if start + tag.len() == candidate.len()
+            && candidate[..start]
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace)
+        {
+            return candidate[..start].trim_end().to_string();
+        }
     }
-    let before = trimmed[..start].chars().next_back();
-    if before.is_some_and(|ch| !ch.is_whitespace()) {
-        return trimmed.to_string();
-    }
-    trimmed[..start].trim_end().to_string()
+    trimmed.to_string()
 }
 
 fn strip_trailing_markdown_link(title: &str) -> String {
@@ -1162,7 +1233,7 @@ mod tests {
     }
 
     #[test]
-    fn events_in_note_orders_all_day_then_timed_and_reads_untracked() {
+    fn events_in_note_orders_all_day_then_timed_and_reads_off_clock_aliases() {
         let contents = events_note(concat!(
             "- [ ] #task **1000-1030** Standup [root:: job] ^standup\n",
             "- **all day** School holiday\n",
@@ -1176,7 +1247,7 @@ mod tests {
         assert_eq!(events[0].title, "School holiday");
         assert_eq!(events[1].kind, EventKind::Task);
         assert_eq!(events[1].title, "1:1");
-        assert!(events[1].untracked);
+        assert!(events[1].off_clock);
         assert_eq!(events[1].status, Some('*'));
         assert_eq!(events[1].block_id.as_deref(), Some("one-on-one"));
         assert!(events[1].is_open_task());
@@ -1184,28 +1255,81 @@ mod tests {
         assert!(task.is_open());
         assert_eq!(task.title, "1:1");
         assert_eq!(events[2].title, "Standup");
-        assert!(!events[2].untracked);
+        assert!(!events[2].off_clock);
         assert_eq!(events[3].kind, EventKind::TimedContext);
         assert_eq!(events[3].title, "Toddler class");
     }
 
     #[test]
-    fn line_has_untracked_tag_skips_code_spans_and_markdown_links() {
-        assert!(line_has_untracked_tag(
+    fn line_has_off_clock_tag_skips_code_spans_and_markdown_links() {
+        assert!(line_has_off_clock_tag(
             "- [*] #task **1200-1300** Lunch #untracked [root:: love]"
         ));
-        assert!(line_has_untracked_tag(
-            "- [*] #task **1200-1300** Lunch #UNTRACKED."
+        assert!(line_has_off_clock_tag(
+            "- [*] #task **1200-1300** Lunch #OFFCLOCK."
         ));
-        assert!(!line_has_untracked_tag(
+        assert!(line_has_off_clock_tag(
+            "- [*] #task **1200-1300** Lunch #Off-Clock)"
+        ));
+        assert!(!line_has_off_clock_tag(
             "- [*] #task **1200-1300** `#untracked` in code"
         ));
-        assert!(!line_has_untracked_tag(
+        assert!(!line_has_off_clock_tag(
             "- [*] #task **1200-1300** [see #untracked](https://example.com)"
         ));
-        assert!(!line_has_untracked_tag(
+        assert!(!line_has_off_clock_tag(
             "- [*] #task **1200-1300** lunch#untracked glued"
         ));
+        assert!(!line_has_off_clock_tag(
+            "- [*] #task **1200-1300** Lunch #offclock/nested"
+        ));
+    }
+
+    #[test]
+    fn clean_event_title_removes_each_off_clock_alias() {
+        for tag in ["#offclock", "#OFF-CLOCK.", "#untracked!"] {
+            assert_eq!(clean_event_title(&format!("Lunch {tag}")), "Lunch");
+        }
+    }
+
+    #[test]
+    fn clock_verdict_needs_a_resolved_nonempty_all_off_clock_lineup() {
+        assert_eq!(
+            clock_verdict(&[]),
+            ClockVerdict::Worked {
+                reason: ClockReason::Unlinked,
+            }
+        );
+        assert_eq!(
+            clock_verdict(&[LinkFact {
+                off_clock: Some(true)
+            }]),
+            ClockVerdict::OffClock
+        );
+        assert_eq!(
+            clock_verdict(&[
+                LinkFact {
+                    off_clock: Some(true)
+                },
+                LinkFact {
+                    off_clock: Some(false)
+                },
+            ]),
+            ClockVerdict::Worked {
+                reason: ClockReason::Mixed { first_on_clock: 1 },
+            }
+        );
+        assert_eq!(
+            clock_verdict(&[
+                LinkFact {
+                    off_clock: Some(true)
+                },
+                LinkFact { off_clock: None },
+            ]),
+            ClockVerdict::Worked {
+                reason: ClockReason::Unresolved { first: 1 },
+            }
+        );
     }
 
     #[test]
@@ -1234,37 +1358,37 @@ mod tests {
     }
 
     #[test]
-    fn cluster_by_trackedness_splits_on_mixed_trackedness() {
+    fn cluster_by_off_clock_splits_on_mixed_classification() {
         struct Item {
             start: i32,
             end: i32,
-            untracked: bool,
+            off_clock: bool,
             id: &'static str,
         }
-        let clusters = cluster_by_trackedness(
+        let clusters = cluster_by_off_clock(
             vec![
                 Item {
                     start: 10 * 60,
                     end: 11 * 60,
-                    untracked: false,
+                    off_clock: false,
                     id: "a",
                 },
                 Item {
                     start: 11 * 60,
                     end: 12 * 60,
-                    untracked: true,
+                    off_clock: true,
                     id: "b",
                 },
                 Item {
                     start: 11 * 60 + 30,
                     end: 12 * 60 + 30,
-                    untracked: true,
+                    off_clock: true,
                     id: "c",
                 },
             ],
             |item| item.start,
             |item| item.end,
-            |item| item.untracked,
+            |item| item.off_clock,
         );
         assert_eq!(clusters.len(), 2);
         assert_eq!(

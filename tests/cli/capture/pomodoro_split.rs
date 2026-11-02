@@ -111,7 +111,7 @@ fn capture_split_writes_real_commit_and_human_output() {
     let day = fs::read_to_string(vault.join("2026/20261101.md"))
         .expect("read day file");
     assert!(
-        day.contains("- [ ] (**0900-1000**) — BUILD + READ"),
+        day.contains("- [ ] (**0900-1000** [off:: 60m]) — BUILD + READ"),
         "{day}"
     );
     assert!(day.contains("- [ ] () — FIX"), "{day}");

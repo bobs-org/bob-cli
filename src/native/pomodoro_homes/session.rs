@@ -44,6 +44,22 @@ pub(crate) fn session_links(
     ))
 }
 
+/// The counted Task Links retained by a session. This deliberately shares
+/// the attribution parser: struck, embedded, and plain dedicated links count.
+pub(crate) fn counted_session_links(
+    contents: &str,
+    entry_index: usize,
+) -> Vec<SessionLink> {
+    session_links(contents, entry_index)
+}
+
+pub(crate) fn counted_session_links_from_scan(
+    scan: &PreparedSessionScan<'_>,
+    entry_index: usize,
+) -> Vec<SessionLink> {
+    session_links_from_scan(scan, entry_index)
+}
+
 pub(crate) fn session_links_from_scan(
     scan: &PreparedSessionScan<'_>,
     entry_index: usize,
@@ -87,17 +103,17 @@ pub(crate) fn attribute_ledger_entry<S: HomeSource>(
     daily_path: &Path,
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
-    let links = session_links(contents, entry_line.saturating_sub(1));
+    let links = counted_session_links(contents, entry_line.saturating_sub(1));
     let raw_line = contents
         .lines()
         .nth(entry_line.saturating_sub(1))
         .unwrap_or("");
-    let untracked = matches!(
-        crate::native::capture::session_tracking(raw_line),
-        crate::native::capture::SessionTracking::Untracked
+    let off_clock = matches!(
+        crate::native::capture::session_clock(raw_line),
+        crate::native::capture::SessionClock::OffClock { .. }
     );
     attribute_session(
-        name, &links, closed, minutes, untracked, daily_path, resolver,
+        name, &links, closed, minutes, off_clock, daily_path, resolver,
     )
 }
 
@@ -106,7 +122,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
     links: &[SessionLink],
     closed: bool,
     minutes: Option<u32>,
-    untracked: bool,
+    off_clock: bool,
     daily_path: &Path,
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
@@ -133,7 +149,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
                 label: String::new(),
                 chip: None,
                 hue: None,
-                untracked,
+                untracked: off_clock,
                 parts,
             },
             task_homes: Vec::new(),
@@ -233,7 +249,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
             label: display_label,
             chip: display_chip,
             hue: lead_hue,
-            untracked,
+            untracked: off_clock,
             parts,
         },
         task_homes,

@@ -1086,6 +1086,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         dropped: Vec::new(),
                         r#override: None,
                         tracked: true,
+                        off_clock: false,
                         event_run: None,
                         event_conflict: None,
                     };
@@ -1240,6 +1241,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     dropped: Vec::new(),
                     r#override: None,
                     tracked: true,
+                    off_clock: false,
                     event_run: None,
                     event_conflict: None,
                 };
@@ -1407,6 +1409,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     dropped: Vec::new(),
                     r#override: None,
                     tracked: true,
+                    off_clock: false,
                     event_run: None,
                     event_conflict: None,
                 };
@@ -1528,6 +1531,7 @@ pub(super) fn plan_pomodoro_link_with_start(
         dropped: Vec::new(),
         r#override: None,
         tracked: true,
+        off_clock: false,
         event_run: None,
         event_conflict: None,
     };

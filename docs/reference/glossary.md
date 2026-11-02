@@ -139,9 +139,9 @@ A checkbox `#task` row inside a canonical daily note's `## Events` section,
 whose description begins with a local `**HHMM-HHMM**` span. Hand-written
 rows qualify. Its `[root:: NOTE]` attributes meeting time to an area or
 project, and a Pomodoro Task Link under the daily note's ledger records the
-session. An `#untracked` tag keeps the session that links it off the clock
-(a timed ledger row without `[t::]`), so its `[root::]` attributes no
-minutes. On timed close, Bob compares the span with the session's start and
+session. An `#offclock` tag (alias `#untracked`) makes the session that links
+it an [Off-Clock Pomodoro](#off-clock-pomodoro), so its `[root::]` attributes off-clock minutes.
+On timed close, Bob compares the span with the session's start and
 close times: a meeting that ended inside is completed, one still running
 stays In Progress and carried, and one not started or ended before the
 session is deferred. Explicit numbered selections take precedence; wildcard
@@ -267,9 +267,15 @@ hides when nothing is due or Tasks is unavailable. `]s` notices and
 `bob freshness list` keep full tier names, and dashboard ROTTEN chips fold TICKLER
 into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered).
 
+### Off-Clock Pomodoro {#off-clock-pomodoro}
+
+*Aliases: off-clock session, untracked pomodoro, untracked session.*
+
+A [Pomodoro](#pomodoro) whose time Bob records but keeps off the work clock — lunch, the gym, school pickup. Its timespan carries `[off:: Nm]` where a worked session carries `[t:: Nm]`: `- [x] (**1200-1300** [off:: 60m]) — MEET`. A session goes off the clock exactly when it keeps at least one [Task Link](#task-link) and every one resolves to a task tagged `#offclock` (aliases `#untracked`, `#off-clock`); an unlinked session, an unresolved link, or one on-clock link keeps the whole session worked. Writers decide when they write the span (starts, closes, and `bob gcal sync` for an off-clock [Event Task](#event-task)); a closed row's key is history, and later tag edits are reported, never applied. Worked, Sessions, `bob pomodoro --worked`, and the [Day Strip](#day-strip) facts leave it out; its [Root Parent](#root-parent) still receives its minutes. Drawn dashed; `◌` in text. A bare closed `(**HHMM-HHMM**)` row is an older off-clock session counted by its span. Not a `()` placeholder, a Stats day before tracking began (`not_tracked`), or the tracked-task mark on a `#task` row.
+
 ### Pomodoro {#pomodoro}
 
-A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily file, representing one work session. Its body is either a timespan such as `(**0920-0950** [t:: 30m])` or an empty `()` placeholder; an optional ` — NAME` suffix (em dash plus ALL-CAPS name) makes it a named Pomodoro. Past Pomodoros are closed with timespans, current Pomodoros are open with timespans, and planned Pomodoros are open placeholders. Child bullets log the session's work, usually with a task link. On a sub-bullet, `N<ctrl+shift+m>` moves it and the next N siblings into another open Pomodoro, or into a new named one below.
+A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily file, representing one timed session, on the clock (`[t::]`) or off it (`[off::]`, an [Off-Clock Pomodoro](#off-clock-pomodoro)). Its body is either a timespan such as `(**0920-0950** [t:: 30m])` or an empty `()` placeholder; an optional ` — NAME` suffix (em dash plus ALL-CAPS name) makes it a named Pomodoro. Past Pomodoros are closed with timespans, current Pomodoros are open with timespans, and planned Pomodoros are open placeholders. Child bullets log the session's work, usually with a task link. On a sub-bullet, `N<ctrl+shift+m>` moves it and the next N siblings into another open Pomodoro, or into a new named one below.
 
 ### Project Note {#project-note}
 

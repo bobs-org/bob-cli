@@ -1,18 +1,17 @@
 //! Calendar-aware MEET starts: the event run a MEET session follows and the
-//! trackedness rule every start-family write applies.
+//! clock rule every start-family write applies.
 //!
 //! A MEET session's lineup holds same-note links to Event Tasks. The **event
 //! run** is the earliest open Event Task that has not ended plus every
 //! following one that touches or overlaps it (`next.start <= run.end`, the
-//! `cluster_by_trackedness` rule) and shares its trackedness. Every span here
-//! is the event's **buffered** span (`[buffer:: -30m +15m]` widens the
-//! meeting by its lead-in and lead-out): candidates end after now, sort,
-//! cluster, and the run's written span all use what the event occupies. An
-//! empty-suffix start writes the run's span; every MEET start (counted,
-//! kept-ledger, link) omits `[t::]` exactly when the run is non-empty and
-//! untracked. Every other session is tracked. The run is computed on the
-//! staged daily note, so drops (`~K`) and earlier items of the same draft are
-//! already applied.
+//! `cluster_by_clock` rule) and shares its clock verdict. Every span here is
+//! the event's **buffered** span (`[buffer:: -30m +15m]` widens the meeting
+//! by its lead-in and lead-out): candidates end after now, sort, cluster, and
+//! the run's written span all use what the event occupies. An empty-suffix
+//! start writes the run's span; every MEET start records `[off::]` exactly
+//! when the non-empty run is off-clock. Every other session stays on the
+//! worked clock. The run is computed on the staged daily note, so drops
+//! (`~K`) and earlier items of the same draft are already applied.
 
 use std::collections::HashSet;
 
@@ -49,7 +48,7 @@ impl RunEvent {
 pub(super) struct EventRun {
     pub(super) start_min: i32,
     pub(super) end_min: i32,
-    pub(super) untracked: bool,
+    pub(super) off_clock: bool,
     pub(super) events: Vec<RunEvent>,
 }
 
@@ -98,14 +97,14 @@ pub(super) fn compute_event_run(
     });
     let mut ordered = candidates.into_iter().map(|(_, item)| item);
     let first = ordered.next()?;
-    let untracked = first.event.untracked;
+    let off_clock = first.event.off_clock;
     let start_min = i32::from(first.buffered_span().start_min);
     let mut end_min = first.buffered_span().end_on_timeline();
     let mut events = vec![first];
     for next in ordered {
         let buffered = next.buffered_span();
         if i32::from(buffered.start_min) > end_min
-            || next.event.untracked != untracked
+            || next.event.off_clock != off_clock
         {
             break;
         }
@@ -115,7 +114,7 @@ pub(super) fn compute_event_run(
     Some(EventRun {
         start_min,
         end_min,
-        untracked,
+        off_clock,
         events,
     })
 }
@@ -177,6 +176,7 @@ pub(super) struct EventRunEventJson {
     pub(super) time_range: String,
     pub(super) line: usize,
     pub(super) block_id: Option<String>,
+    pub(super) off_clock: bool,
     pub(super) untracked: bool,
     /// The event's pre/post-event buffer; omitted when it has none.
     /// `time_range` above stays the meeting span.
@@ -195,6 +195,7 @@ pub(super) struct EventRunJson {
     pub(super) time_range: String,
     pub(super) start: String,
     pub(super) end: String,
+    pub(super) off_clock: bool,
     pub(super) untracked: bool,
     pub(super) source: &'static str,
     pub(super) events: Vec<EventRunEventJson>,
@@ -211,7 +212,8 @@ impl EventRunJson {
             time_range: format!("{start}-{end}"),
             start,
             end,
-            untracked: run.untracked,
+            off_clock: run.off_clock,
+            untracked: run.off_clock,
             source,
             events: run
                 .events
@@ -222,7 +224,8 @@ impl EventRunJson {
                     time_range: item.event.span.text(),
                     line: item.event.line_index + 1,
                     block_id: item.event.block_id.clone(),
-                    untracked: item.event.untracked,
+                    off_clock: item.event.off_clock,
+                    untracked: item.event.off_clock,
                     buffer: EventBufferJson::new(
                         item.event.span,
                         item.event.buffer,
@@ -240,7 +243,7 @@ pub(super) enum SpanRule {
     /// restart); a counted suffix keeps its explicit span.
     Calendar,
     /// The written span stays (kept-ledger swap, link start); only
-    /// trackedness follows the run.
+    /// clock classification follows the run.
     Written,
 }
 
@@ -265,6 +268,7 @@ pub(super) struct MeetFinish {
     pub(super) duration_minutes: Option<u64>,
     pub(super) offset_units: Option<u64>,
     pub(super) tracked: bool,
+    pub(super) off_clock: bool,
     pub(super) event_run: Option<EventRunJson>,
     pub(super) warnings: Vec<CaptureWarning>,
 }
@@ -292,6 +296,7 @@ impl MeetFinish {
             summary.offset_units = offset;
         }
         summary.tracked = self.tracked;
+        summary.off_clock = self.off_clock;
         summary.event_run = self.event_run;
         self.warnings
     }
@@ -334,8 +339,9 @@ pub(super) fn finalize_meet_start(
     else {
         return Ok(None);
     };
-    let ledger_tracked =
-        !matches!(session_tracking(headline), SessionTracking::Untracked);
+    let ledger_clock = session_clock(headline);
+    let ledger_stamp = clock_stamp(headline);
+    let ledger_tracked = matches!(ledger_clock, SessionClock::Worked { .. });
     let meet = is_meet_name(entry.name.as_deref());
     if !meet && ledger_tracked {
         return Ok(None);
@@ -354,17 +360,17 @@ pub(super) fn finalize_meet_start(
         None
     };
     let Some(run) = run else {
-        if ledger_tracked {
+        if ledger_tracked && ledger_stamp != ClockStamp::Conflict {
             return Ok(None);
         }
-        // A kept ledger from an untracked session lands on a session with
-        // no untracked run: restore the clock.
+        // A kept off-clock ledger lands on a session with no off-clock run:
+        // restore the worked clock.
         let ledger = read_session_ledger_bytes(headline).ok_or_else(|| {
             CaptureError::io(
                 "running Pomodoro timing could not be safely identified",
             )
         })?;
-        let restored = set_ledger_tracking(&ledger, true);
+        let restored = set_ledger_clock(&ledger, ClockKind::Worked);
         let updated =
             splice_session_ledger(contents, input.entry_index, &restored)?;
         return Ok(Some(MeetFinish {
@@ -375,12 +381,14 @@ pub(super) fn finalize_meet_start(
             duration_minutes: None,
             offset_units: None,
             tracked: true,
+            off_clock: false,
             event_run: None,
             warnings: Vec::new(),
         }));
     };
 
-    let tracked = !run.untracked;
+    let off_clock = run.off_clock;
+    let tracked = !off_clock;
     let calendar =
         input.span_rule == SpanRule::Calendar && input.spec.raw.is_empty();
     let closed_end = latest_closed_end(contents);
@@ -399,7 +407,7 @@ pub(super) fn finalize_meet_start(
         let time_range = if tracked {
             format!("(**{range}** [t:: {duration}m])")
         } else {
-            format!("(**{range}**)")
+            format!("(**{range}** [off:: {duration}m])")
         };
         let updated =
             splice_session_ledger(contents, input.entry_index, &time_range)?;
@@ -430,12 +438,20 @@ pub(super) fn finalize_meet_start(
             duration_minutes: Some(duration),
             offset_units: Some(0),
             tracked,
+            off_clock,
             event_run,
             warnings,
         }));
     }
 
-    if ledger_tracked == tracked {
+    let already_on_requested_clock = match (ledger_clock, off_clock) {
+        (SessionClock::Worked { .. }, false) => {
+            ledger_stamp != ClockStamp::Conflict
+        }
+        (SessionClock::OffClock { stamped: true, .. }, true) => true,
+        _ => false,
+    };
+    if already_on_requested_clock {
         return Ok(Some(MeetFinish {
             contents: contents.to_string(),
             time_range: None,
@@ -444,6 +460,7 @@ pub(super) fn finalize_meet_start(
             duration_minutes: None,
             offset_units: None,
             tracked,
+            off_clock,
             event_run,
             warnings,
         }));
@@ -453,7 +470,12 @@ pub(super) fn finalize_meet_start(
             "running Pomodoro timing could not be safely identified",
         )
     })?;
-    let retracked = set_ledger_tracking(&ledger, tracked);
+    let clock = if off_clock {
+        ClockKind::OffClock
+    } else {
+        ClockKind::Worked
+    };
+    let retracked = set_ledger_clock(&ledger, clock);
     let updated =
         splice_session_ledger(contents, input.entry_index, &retracked)?;
     Ok(Some(MeetFinish {
@@ -464,6 +486,7 @@ pub(super) fn finalize_meet_start(
         duration_minutes: None,
         offset_units: None,
         tracked,
+        off_clock,
         event_run,
         warnings,
     }))
@@ -488,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn run_extends_over_touching_events_of_the_same_trackedness() {
+    fn run_extends_over_touching_events_with_the_same_clock_classification() {
         let note = day(
             concat!(
                 "- [ ] #task **1100-1130** One ^one\n",
@@ -508,7 +531,7 @@ mod tests {
             compute_event_run(rel(), &note, meet_index(&note), None, 10 * 60)
                 .unwrap();
         assert_eq!((run.start_min, run.end_min), (11 * 60, 12 * 60));
-        assert!(!run.untracked);
+        assert!(!run.off_clock);
         let numbers: Vec<u32> =
             run.events.iter().map(|item| item.number).collect();
         assert_eq!(numbers, vec![1, 2]);
@@ -569,7 +592,7 @@ mod tests {
         let run =
             compute_event_run(rel(), &note, meet_index(&note), None, 10 * 60)
                 .unwrap();
-        assert!(run.untracked);
+        assert!(run.off_clock);
         assert_eq!((run.start_min, run.end_min), (12 * 60, 13 * 60));
         assert_eq!(run.events.len(), 1);
     }
@@ -665,7 +688,7 @@ mod tests {
             (later.start_min, later.end_min),
             (11 * 60 + 30, 12 * 60 + 30)
         );
-        assert!(later.untracked);
+        assert!(later.off_clock);
     }
 
     #[test]

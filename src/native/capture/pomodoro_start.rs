@@ -84,7 +84,7 @@ pub(super) fn plan_pomodoro_start(
             typed,
         )?;
     // A link start keeps its written span; a MEET start still follows its
-    // event run's trackedness.
+    // event run's clock classification.
     let (updated_day, finish) = apply_meet_rule(
         updated_day,
         &MeetStartInput {
@@ -109,7 +109,7 @@ pub(super) fn plan_pomodoro_start(
     Ok((updated_day, placement, summary, before))
 }
 
-/// [`plan_pomodoro_start`] before the MEET trackedness rule.
+/// [`plan_pomodoro_start`] before the MEET clock rule.
 fn plan_pomodoro_start_unruled(
     original_day: &str,
     block_link: &str,
@@ -207,6 +207,7 @@ fn plan_pomodoro_start_unruled(
                         dropped: Vec::new(),
                         r#override: None,
                         tracked: true,
+                        off_clock: false,
                         event_run: None,
                         event_conflict: None,
                     },
@@ -253,6 +254,7 @@ fn plan_pomodoro_start_unruled(
                         dropped: Vec::new(),
                         r#override: None,
                         tracked: true,
+                        off_clock: false,
                         event_run: None,
                         event_conflict: None,
                     },
@@ -294,6 +296,7 @@ fn plan_pomodoro_start_unruled(
                         dropped: Vec::new(),
                         r#override: None,
                         tracked: true,
+                        off_clock: false,
                         event_run: None,
                         event_conflict: None,
                     },
@@ -365,6 +368,7 @@ fn plan_pomodoro_start_unruled(
                 dropped: Vec::new(),
                 r#override: None,
                 tracked: true,
+                off_clock: false,
                 event_run: None,
                 event_conflict: None,
             },
@@ -396,6 +400,7 @@ fn plan_pomodoro_start_unruled(
             dropped: Vec::new(),
             r#override: None,
             tracked: true,
+            off_clock: false,
             event_run: None,
             event_conflict: None,
         },
@@ -462,6 +467,7 @@ fn plan_typed_pomodoro_start(
                     dropped: Vec::new(),
                     r#override: None,
                     tracked: true,
+                    off_clock: false,
                     event_run: None,
                     event_conflict: None,
                 },
@@ -495,6 +501,7 @@ fn plan_typed_pomodoro_start(
                     dropped: Vec::new(),
                     r#override: None,
                     tracked: true,
+                    off_clock: false,
                     event_run: None,
                     event_conflict: None,
                 },
@@ -1029,6 +1036,7 @@ pub(super) fn plan_pomodoro_start_item(
         dropped,
         r#override: None,
         tracked: true,
+        off_clock: false,
         event_run: None,
         event_conflict: None,
     };
@@ -1257,6 +1265,7 @@ fn plan_override_restart_item(
             close_first: format!("x {}", parsed.body),
         }),
         tracked: true,
+        off_clock: false,
         event_run: None,
         event_conflict: None,
     };
@@ -1828,6 +1837,7 @@ fn plan_override_swap_item(
             close_first: format!("x {}", parsed.body),
         }),
         tracked: true,
+        off_clock: false,
         event_run: None,
         event_conflict: None,
     };
@@ -2611,6 +2621,7 @@ fn plan_named_pomodoro_start_item(
         dropped,
         r#override: None,
         tracked: true,
+        off_clock: false,
         event_run: None,
         event_conflict: None,
     };

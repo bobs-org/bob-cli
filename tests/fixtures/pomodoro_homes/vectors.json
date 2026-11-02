@@ -707,7 +707,7 @@
         "sase.md",
         "bob.md"
       ],
-      "pomodoros": "- [x] (0800-0850 [t:: 50m])\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (0900-0950 50m) [t:: 40m]\n  - [[bob#^duration]]\n",
+      "pomodoros": "- [x] (0800-0850 [t:: 50m])\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (0900-0950 [t:: 40m])\n  - [[bob#^duration]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -774,12 +774,12 @@
       ]
     },
     {
-      "name": "untracked-zero-minutes",
+      "name": "off-clock-real-minutes",
       "daily_path": "2026/20261018.md",
       "expected_lead_homes": [
         "sase.md"
       ],
-      "pomodoros": "- [x] (1200-1300) \u2014 MEET\n  - [[sase#^a]]\n",
+      "pomodoros": "- [x] (**1200-1300** [off:: 42m]) \u2014 MEET\n  - [[sase#^a]]\n",
       "expected": [
         {
           "state": "attributed",
@@ -787,6 +787,7 @@
           "label": "sase",
           "chip": "sase",
           "hue": "blue",
+          "off_clock": true,
           "untracked": true,
           "parts": [
             {
@@ -798,7 +799,69 @@
               "hue": "blue",
               "tasks": 1,
               "share": 100,
-              "minutes": 0
+              "minutes": 42
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "off-clock-bare-span",
+      "daily_path": "2026/20261018.md",
+      "expected_lead_homes": [
+        "sase.md"
+      ],
+      "pomodoros": "- [x] (**1200-1300**) \u2014 MEET\n  - [[sase#^a]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "off_clock": true,
+          "untracked": true,
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 60
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "clock-conflict-worked",
+      "daily_path": "2026/20261018.md",
+      "expected_lead_homes": [
+        "sase.md"
+      ],
+      "pomodoros": "- [x] (**1200-1300** [t:: 25m] [off:: 42m]) \u2014 MEET\n  - [[sase#^a]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 25
             }
           ]
         }

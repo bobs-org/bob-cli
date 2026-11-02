@@ -7,8 +7,9 @@ summary:
   "A timed ledger row without [t::] is an untracked session; writers decide
   trackedness when they write a span and readers only look at the row."
 metadata:
-  status: accepted
+  status: superseded
   decided: 2026-11-01
+  superseded_by: decisions:off-clock-pomodoros-count-apart
 ---
 
 # Untracked Sessions Omit T Field
@@ -55,3 +56,7 @@ Evidence: `plan:202611/untracked_calendar_events.md`; `docs/gcal.md`
 [[decisions:synced-meetings-link-by-phase]]
 
 [[glossary:event-task]]
+
+[[decisions:off-clock-pomodoros-count-apart]] retires this decision: absence
+of `[t::]` no longer means off the clock; off-clock time is recorded and
+counted on its own clock.

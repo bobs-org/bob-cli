@@ -910,7 +910,7 @@ fn doctor_reports_malformed_journal_and_last_error() {
 }
 
 #[test]
-fn untracked_tag_flip_updates_untouched_row_in_place() {
+fn off_clock_tag_flip_updates_untouched_row_in_place() {
     let env = GcalEnv::new("bob-cli-gcal-lifecycle-untracked-touch");
     prepare(&env);
     let fake = FakeGog::new(&env, "fake-gog");
@@ -944,7 +944,7 @@ fn untracked_tag_flip_updates_untouched_row_in_place() {
     let row = dentist_row(&today_note(&env));
     assert!(row.contains("**1830-1900** Dentist "), "{row}");
     assert!(!row.contains("Dentist #untracked"), "{row}");
-    assert!(row.contains(" #untracked [root:: body]"), "{row}");
+    assert!(row.contains(" #offclock [root:: body]"), "{row}");
     assert!(
         stdout(&output).contains("~ task"),
         "tag flip updates in place: {}",
@@ -964,7 +964,7 @@ fn untracked_tag_flip_updates_untouched_row_in_place() {
 }
 
 #[test]
-fn untracked_tag_flip_on_worked_row_is_kept_once() {
+fn off_clock_tag_flip_on_worked_row_is_kept_once() {
     let env = GcalEnv::new("bob-cli-gcal-lifecycle-untracked-worked");
     prepare(&env);
     let fake = FakeGog::new(&env, "fake-gog");
@@ -998,7 +998,8 @@ fn untracked_tag_flip_on_worked_row_is_kept_once() {
     assert!(!row.contains("#untracked"), "worked row kept:\n{row}");
     let combined = format!("{}{}", stdout(&output), stderr(&output));
     assert!(
-        combined.contains("#untracked"),
+        combined
+            .contains("kept your on-clock row while Google now says off-clock"),
         "flip reported once: {combined}"
     );
 
@@ -1009,13 +1010,14 @@ fn untracked_tag_flip_on_worked_row_is_kept_once() {
     assert!(!row_again.contains("#untracked"), "{row_again}");
     let combined_again = format!("{}{}", stdout(&again), stderr(&again));
     assert!(
-        !combined_again.contains("#untracked"),
+        !combined_again
+            .contains("kept your on-clock row while Google now says off-clock"),
         "reported once only: {combined_again}"
     );
 }
 
 #[test]
-fn preexisting_untracked_title_migrates_both_spans_in_place() {
+fn preexisting_off_clock_title_migrates_both_spans_in_place() {
     use sha2::{Digest, Sha256};
     fn span_hash(text: &str) -> String {
         hex::encode(Sha256::digest(text.as_bytes()))[..16].to_string()
@@ -1087,7 +1089,7 @@ fn preexisting_untracked_title_migrates_both_spans_in_place() {
         .expect("lunch row");
     assert!(row.contains("**1200-1300** Lunch "), "{row}");
     assert!(!row.contains("Lunch #untracked"), "{row}");
-    assert!(row.contains(" #untracked [root:: meet]"), "{row}");
+    assert!(row.contains(" #offclock [root:: meet]"), "{row}");
 }
 
 fn dentist_with_description(description: &str) -> Value {
@@ -1183,12 +1185,12 @@ fn root_reroute_keeps_buffered_google_run() {
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
     let before = dentist_row(&today_note(&env));
     assert!(
-        before.contains(" #untracked [buffer:: -30m +15m] [root:: body]"),
+        before.contains(" #offclock [buffer:: -30m +15m] [root:: body]"),
         "{before}"
     );
 
     // Google reroutes to @job: the root swaps in place and the badges
-    // span (tag plus buffer) is untouched.
+    // span (off-clock marker plus buffer) is untouched.
     patch.insert("summary".to_string(), "Dentist @job #untracked".into());
     fake.events_json(&events_envelope(vec![dentist_event(&patch)]));
     let output = sync_output(&env, &fake, &[]);
@@ -1196,7 +1198,7 @@ fn root_reroute_keeps_buffered_google_run() {
     assert!(stdout(&output).contains("~ task"), "{}", stdout(&output));
     let row = dentist_row(&today_note(&env));
     assert!(
-        row.contains(" #untracked [buffer:: -30m +15m] [root:: job]"),
+        row.contains(" #offclock [buffer:: -30m +15m] [root:: job]"),
         "reroute keeps the Google run: {row}"
     );
 

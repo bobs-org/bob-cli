@@ -147,8 +147,10 @@ the first task in ledger order (8m over 3 tasks is 4/2/2; 5m is 3/1/1). Sum
 those shares by home. In an open session, parts instead use the number of
 distinct task links. A closed entry without a recorded duration is still
 attributed: its parts carry 0 minutes and task-based shares. A closed
-**untracked session** (timed, no `[t::]` or stopwatch) is attributed the same
-way with 0-minute parts and additive `untracked: true` on the homes object.
+A closed off-clock session (a timed row with `[off:: Nm]`) is attributed with
+its recorded minutes and `off_clock: true`; the deprecated `untracked: true`
+field remains on capture homes objects. Its minutes stay out of Worked
+metrics.
 
 Count-mode Stats assigns the whole session to its lead home: the home with the
 most distinct tasks, with ties decided by the first task in ledger order.
@@ -270,8 +272,8 @@ Every emitting surface uses this additive shape:
 
 `state` is `attributed` for every closed entry and `forecast` for every open
 entry; `kind` is `work` or
-`unlinked`. `untracked` is `true` on a closed untracked session and omitted
-otherwise. `label`, `chip`, and `hue` name root parents ([R7](#r7-labels-chips-and-dots))
+`unlinked`. Capture adds `off_clock: true` on a closed off-clock session and
+retains deprecated `untracked: true`; both are omitted otherwise. `label`, `chip`, and `hue` name root parents ([R7](#r7-labels-chips-and-dots))
 while `parts` stay per nearest home. `chip` and `hue` are nullable. Each part's kind is `project`,
 `area`, or `bucket`. `share` is a whole percentage: minute-based for attributed
 sessions with a duration, and task-based when a closed entry has no duration or
@@ -387,7 +389,9 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 | `ambiguous-basename` | duplicate basename resolves to `@unfiled`; the sole `rust_only` case |
 | `chips, forecast shares, empty forecasts, and session identity` | chip suppression by the root-label set, forecast and unlinked shapes, ties, named sessions |
 | `split-rounding-and-duration` | 50m across 3 tasks is 18/16/16; `[t:: 40m]` takes precedence over a 50m range |
-| `untracked-zero-minutes` | a timed row without `[t::]` attributes 0-minute parts and `untracked: true` |
+| `off-clock-real-minutes` | `[off:: 42m]` attributes 42-minute parts, sets `off_clock: true`, and retains deprecated `untracked: true` |
+| `off-clock-bare-span` | a historical bare timed row is classified off-clock from its span and receives its real minutes |
+| `clock-conflict-worked` | when both keys appear, `[t::]` wins and `[off::]` is dropped on rewrite |
 | `share-rounding` | equal task weights round to 34/33/33, giving the tied remainder to ledger order rather than the last part |
 | `gtd-root-across-days` | another day's rooted `^gtd` attributes to `gtd_daily`; an unrooted one is `@unfiled` |
 | `depth-and-parent-shapes` | direct child and grandchild homes, list/self parents stop, the depth cap is 16, and unquoted scalar `parent: [[x]]` resolves |

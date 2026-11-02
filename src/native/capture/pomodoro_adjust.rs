@@ -804,28 +804,99 @@ pub(crate) fn adjustment_duration_for_range(range: &AdjustRange) -> u64 {
     })
 }
 
-/// How a ledger line is counted. A timed row with `[t::]` or the legacy
-/// stopwatch is tracked; a timed row with neither is untracked; `()` is a
-/// placeholder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionTracking {
-    Tracked { minutes: u64 },
-    Untracked,
+/// Which clock a timed ledger row belongs to. Bare historical spans are
+/// off-clock and use their span as the recorded minutes until rewritten.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum SessionClock {
+    Worked {
+        minutes: u64,
+    },
+    OffClock {
+        minutes: u64,
+        stamped: bool,
+    },
+    #[default]
     Placeholder,
 }
 
-pub(crate) fn session_tracking(ledger_line: &str) -> SessionTracking {
-    if parse_adjustment_range(ledger_line).is_none() {
-        return SessionTracking::Placeholder;
+/// Diagnostic for the explicit clock metadata on a ledger row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClockStamp {
+    Keyed,
+    Bare,
+    Conflict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClockKind {
+    Worked,
+    OffClock,
+}
+
+pub(crate) fn clock_stamp(ledger_line: &str) -> ClockStamp {
+    let metadata = parse_adjustment_range(ledger_line)
+        .map(|range| range.metadata)
+        .unwrap_or_default();
+    let has_worked = duration_field_raw(&metadata, "t").is_some();
+    let has_off_clock = duration_field_raw(&metadata, "off").is_some();
+    match (has_worked, has_off_clock) {
+        (true, true) => ClockStamp::Conflict,
+        (true, false) | (false, true) => ClockStamp::Keyed,
+        (false, false) if legacy_stopwatch_value(&metadata).is_some() => {
+            ClockStamp::Keyed
+        }
+        (false, false) => ClockStamp::Bare,
     }
-    match duration_from_range_text(ledger_line) {
-        Some(minutes) => SessionTracking::Tracked { minutes },
-        None => SessionTracking::Untracked,
+}
+
+pub(crate) fn session_clock(ledger_line: &str) -> SessionClock {
+    let Some(range) = parse_adjustment_range(ledger_line) else {
+        return SessionClock::Placeholder;
+    };
+    let span_minutes = normalize_minutes(
+        range.end_minutes as i64 - range.start_minutes as i64,
+    );
+    let metadata = range.metadata.as_str();
+    let worked_value = duration_field_raw(metadata, "t");
+    let off_clock_value = duration_field_raw(metadata, "off");
+    let worked_minutes = worked_value
+        .as_deref()
+        .and_then(parse_adjustment_duration)
+        .or_else(|| {
+            legacy_stopwatch_value(metadata)
+                .and_then(|value| parse_adjustment_duration(&value))
+        });
+    let off_clock_minutes = off_clock_value
+        .as_deref()
+        .and_then(parse_adjustment_duration);
+
+    if worked_value.is_some() {
+        return SessionClock::Worked {
+            minutes: worked_minutes.unwrap_or(span_minutes),
+        };
+    }
+    if off_clock_value.is_some() {
+        return SessionClock::OffClock {
+            minutes: off_clock_minutes.unwrap_or(span_minutes),
+            stamped: true,
+        };
+    }
+    if let Some(minutes) = worked_minutes {
+        return SessionClock::Worked { minutes };
+    }
+    SessionClock::OffClock {
+        minutes: span_minutes,
+        stamped: false,
     }
 }
 
 pub(crate) fn duration_from_range_text(range_text: &str) -> Option<u64> {
     if let Some(value) = duration_field_value(range_text)
+        && let Some(minutes) = parse_adjustment_duration(&value)
+    {
+        return Some(minutes);
+    }
+    if let Some(value) = off_clock_duration_field_value(range_text)
         && let Some(minutes) = parse_adjustment_duration(&value)
     {
         return Some(minutes);
@@ -839,10 +910,21 @@ pub(crate) fn duration_from_range_text(range_text: &str) -> Option<u64> {
 }
 
 pub(super) fn duration_field_value(range_text: &str) -> Option<String> {
+    duration_field_raw(range_text, "t")
+}
+
+pub(super) fn off_clock_duration_field_value(
+    range_text: &str,
+) -> Option<String> {
+    duration_field_raw(range_text, "off")
+}
+
+fn duration_field_raw(range_text: &str, key: &str) -> Option<String> {
+    let needle = format!("[{key}::");
     let lower = range_text.to_ascii_lowercase();
-    let relative = lower.find("[t::")?;
+    let relative = lower.find(&needle)?;
     let open = relative;
-    let after = open + "[t::".len();
+    let after = open + needle.len();
     let relative_close = range_text[after..].find(']')?;
     let close = after + relative_close;
     Some(range_text[after..close].to_string())
@@ -1015,10 +1097,19 @@ pub(super) fn remove_bracket_duration_fields(metadata: &str) -> String {
     let mut index = 0;
     let lower = metadata.to_ascii_lowercase();
     while index < metadata.len() {
-        if let Some(relative) = lower[index..].find("[t::") {
+        let t_relative = lower[index..].find("[t::");
+        let off_relative = lower[index..].find("[off::");
+        if let Some(relative) =
+            [t_relative, off_relative].into_iter().flatten().min()
+        {
             let open = index + relative;
             output.push_str(&metadata[index..open]);
-            let after = open + "[t::".len();
+            let key_width = if lower[open..].starts_with("[off::") {
+                "[off::".len()
+            } else {
+                "[t::".len()
+            };
+            let after = open + key_width;
             if let Some(relative_close) = metadata[after..].find(']') {
                 index = after + relative_close + 1;
                 continue;
@@ -1074,18 +1165,25 @@ pub(crate) fn format_adjusted_range(
 ) -> String {
     let start = format!("{:02}{:02}", start_minutes / 60, start_minutes % 60);
     let end = format!("{:02}{:02}", end_minutes / 60, end_minutes % 60);
-    let tracked = duration_from_range_text(metadata).is_some();
-    let rest = remove_adjustment_duration_metadata(metadata);
-    if !tracked {
-        if rest.is_empty() {
-            format!("(**{start}-{end}**)")
-        } else {
-            format!("(**{start}-{end}** {rest})")
-        }
-    } else if rest.is_empty() {
-        format!("(**{start}-{end}** [t:: {duration_minutes}m])")
+    let has_t = duration_field_raw(metadata, "t").is_some();
+    let has_off = duration_field_raw(metadata, "off").is_some();
+    let legacy_worked = legacy_stopwatch_value(metadata).is_some();
+    let key = if has_t {
+        "t"
+    } else if has_off {
+        "off"
+    } else if legacy_worked {
+        "t"
     } else {
-        format!("(**{start}-{end}** [t:: {duration_minutes}m] {rest})")
+        // The off-clock key is canonical for old bare spans and conflicts
+        // have already selected the worked key above.
+        "off"
+    };
+    let rest = remove_adjustment_duration_metadata(metadata);
+    if rest.is_empty() {
+        format!("(**{start}-{end}** [{key}:: {duration_minutes}m])")
+    } else {
+        format!("(**{start}-{end}** [{key}:: {duration_minutes}m] {rest})")
     }
 }
 
@@ -1093,30 +1191,39 @@ pub(crate) fn normalize_minutes(value: i64) -> u64 {
     value.rem_euclid(1440) as u64
 }
 
-/// Re-render a parenthesized session ledger (`(**HHMM-HHMM** …)`) as tracked
-/// or untracked, keeping the span and every other metadata byte. Tracking an
-/// untracked ledger writes `[t::]` from the span; untracking drops `[t::]`
-/// and the legacy stopwatch. A ledger already in the requested state, and
-/// text that holds no ledger, come back unchanged.
-pub(crate) fn set_ledger_tracking(ledger: &str, tracked: bool) -> String {
+/// Move a parenthesized session ledger between clocks, preserving its
+/// recorded minutes and other metadata. A bare row takes its span as minutes.
+pub(crate) fn set_ledger_clock(ledger: &str, clock: ClockKind) -> String {
     let Some(range) = parse_adjustment_range(ledger) else {
         return ledger.to_string();
     };
-    let currently_tracked = duration_from_range_text(ledger).is_some();
-    if currently_tracked == tracked {
+    let current = session_clock(ledger);
+    if matches!(
+        (current, clock),
+        (SessionClock::Worked { .. }, ClockKind::Worked)
+            | (
+                SessionClock::OffClock { stamped: true, .. },
+                ClockKind::OffClock
+            )
+    ) && clock_stamp(ledger) != ClockStamp::Conflict
+    {
         return ledger.to_string();
     }
     let rest = remove_adjustment_duration_metadata(&range.metadata);
     let (start, end) = (range.start_minutes, range.end_minutes);
-    let (end_minutes, duration) = (
-        u16::try_from(end).unwrap_or(0),
-        normalize_minutes(end as i64 - start as i64),
-    );
-    let metadata = if tracked {
-        format!("[t:: {duration}m] {rest}")
-    } else {
-        rest
+    let duration = match current {
+        SessionClock::Worked { minutes }
+        | SessionClock::OffClock { minutes, .. } => minutes,
+        SessionClock::Placeholder => {
+            normalize_minutes(end as i64 - start as i64)
+        }
     };
+    let end_minutes = u16::try_from(end).unwrap_or(0);
+    let key = match clock {
+        ClockKind::Worked => "t",
+        ClockKind::OffClock => "off",
+    };
+    let metadata = format!("[{key}:: {duration}m] {rest}");
     let formatted = format_adjusted_range(
         start,
         end_minutes,
@@ -1135,47 +1242,84 @@ mod tests {
     use super::*;
 
     #[test]
-    fn set_ledger_tracking_toggles_duration_and_keeps_metadata() {
+    fn set_ledger_clock_moves_the_recorded_duration_between_keys() {
         assert_eq!(
-            set_ledger_tracking("(**1200-1300** [t:: 60m])", false),
-            "(**1200-1300**)"
+            set_ledger_clock("(**1200-1300** [t:: 60m])", ClockKind::OffClock),
+            "(**1200-1300** [off:: 60m])"
         );
         assert_eq!(
-            set_ledger_tracking("(**1200-1300**)", true),
+            set_ledger_clock("(**1200-1300**)", ClockKind::Worked),
             "(**1200-1300** [t:: 60m])"
         );
         assert_eq!(
-            set_ledger_tracking("(**1200-1300** [t:: 45m] extra)", false),
-            "(**1200-1300** extra)"
+            set_ledger_clock(
+                "(**1200-1300** [off:: 45m] extra)",
+                ClockKind::Worked
+            ),
+            "(**1200-1300** [t:: 45m] extra)"
         );
         assert_eq!(
-            set_ledger_tracking("(**2330-0030** extra)", true),
-            "(**2330-0030** [t:: 60m] extra)"
+            set_ledger_clock("(**2330-0030** extra)", ClockKind::OffClock),
+            "(**2330-0030** [off:: 60m] extra)"
         );
         assert_eq!(
-            set_ledger_tracking("(**1200-1300** [t:: 60m])", true),
+            set_ledger_clock(
+                "(**1200-1300** [t:: 60m] [off:: 30m])",
+                ClockKind::Worked
+            ),
             "(**1200-1300** [t:: 60m])"
         );
-        assert_eq!(set_ledger_tracking("()", true), "()");
+        assert_eq!(set_ledger_clock("()", ClockKind::Worked), "()");
     }
 
     #[test]
-    fn session_tracking_classifies_tracked_untracked_and_placeholder() {
+    fn session_clock_classifies_worked_off_clock_conflict_and_placeholder() {
         assert_eq!(
-            session_tracking("- [x] (**1100-1130** [t:: 30m]) — MEET"),
-            SessionTracking::Tracked { minutes: 30 }
+            session_clock("- [x] (**1100-1130** [t:: 30m]) — MEET"),
+            SessionClock::Worked { minutes: 30 }
         );
         assert_eq!(
-            session_tracking("- [x] (**1200-1300**) — MEET"),
-            SessionTracking::Untracked
+            session_clock("- [x] (**1200-1300**) — MEET"),
+            SessionClock::OffClock {
+                minutes: 60,
+                stamped: false
+            }
         );
         assert_eq!(
-            session_tracking("- [ ] () — MEET"),
-            SessionTracking::Placeholder
+            session_clock("- [x] (**1200-1300** [off:: 42m]) — MEET"),
+            SessionClock::OffClock {
+                minutes: 42,
+                stamped: true
+            }
         );
         assert_eq!(
-            session_tracking("- [x] (**0900-0930** ⏱ 25m) — FOCUS"),
-            SessionTracking::Tracked { minutes: 25 }
+            session_clock("- [x] (**1200-1300** [t:: 25m] [off:: 60m]) — MEET"),
+            SessionClock::Worked { minutes: 25 }
+        );
+        assert_eq!(session_clock("- [ ] () — MEET"), SessionClock::Placeholder);
+        assert_eq!(
+            session_clock("- [x] (**0900-0930** ⏱ 25m) — FOCUS"),
+            SessionClock::Worked { minutes: 25 }
+        );
+        assert_eq!(
+            session_clock("(**1200-1300** [off:: 42m] ⏱ 30m)"),
+            SessionClock::OffClock {
+                minutes: 42,
+                stamped: true,
+            }
+        );
+        assert_eq!(clock_stamp("(**1200-1300** [T:: 60m])"), ClockStamp::Keyed);
+        assert_eq!(clock_stamp("(**1200-1300** )"), ClockStamp::Bare);
+        assert_eq!(
+            clock_stamp("(**1200-1300** [t:: 60m] [off:: 60m])"),
+            ClockStamp::Conflict
+        );
+        assert_eq!(
+            session_clock("(**1200-1230** [OFF:: 1h 30m])"),
+            SessionClock::OffClock {
+                minutes: 90,
+                stamped: true,
+            }
         );
     }
 
@@ -1183,7 +1327,7 @@ mod tests {
     fn format_adjusted_range_preserves_missing_duration() {
         assert_eq!(
             format_adjusted_range(12 * 60, 13 * 60, 60, ""),
-            "(**1200-1300**)"
+            "(**1200-1300** [off:: 60m])"
         );
         assert_eq!(
             format_adjusted_range(12 * 60, 12 * 60 + 45, 45, " [t:: 60m]"),
@@ -1191,7 +1335,11 @@ mod tests {
         );
         assert_eq!(
             format_adjusted_range(9 * 60, 9 * 60 + 55, 55, " extra"),
-            "(**0900-0955** extra)"
+            "(**0900-0955** [off:: 55m] extra)"
+        );
+        assert_eq!(
+            format_adjusted_range(12 * 60, 13 * 60, 42, " [off:: 42m] ⏱ 30m"),
+            "(**1200-1300** [off:: 42m])"
         );
     }
 }

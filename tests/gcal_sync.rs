@@ -1238,7 +1238,7 @@ fn current_meeting_reconcile_then_clock_close() {
 }
 
 #[test]
-fn untracked_token_splits_clusters_and_reports() {
+fn off_clock_aliases_split_clusters_and_report() {
     let env = GcalEnv::new("bob-cli-gcal-sync-untracked");
     prepare(&env);
     let fake = FakeGog::new(&env, "fake-gog");
@@ -1307,14 +1307,14 @@ fn untracked_token_splits_clusters_and_reports() {
         .expect("lunch row");
     assert!(lunch.contains("**0815-0900** Lunch "), "{lunch}");
     assert!(!lunch.contains("Lunch #untracked"), "{lunch}");
-    assert!(lunch.contains(" #untracked [root::"), "{lunch}");
+    assert!(lunch.contains(" #offclock [root::"), "{lunch}");
     // Description-only token also marks the row.
     let gym = note
         .lines()
         .find(|line| line.contains("^gym"))
         .expect("gym row");
     assert!(gym.contains("**0900-0930** Gym "), "{gym}");
-    assert!(gym.contains(" #untracked"), "{gym}");
+    assert!(gym.contains(" #offclock"), "{gym}");
     // @route is read after the tag is stripped.
     let team = note
         .lines()
@@ -1323,7 +1323,7 @@ fn untracked_token_splits_clusters_and_reports() {
     assert!(team.contains("**1100-1130** Team Lunch "), "{team}");
     assert!(!team.contains("@job"), "{team}");
     assert!(team.contains("[root:: job]"), "{team}");
-    assert!(team.contains(" #untracked [root:: job]"), "{team}");
+    assert!(team.contains(" #offclock [root:: job]"), "{team}");
     // Tracked rows carry no tag.
     let standup = note
         .lines()
@@ -1331,29 +1331,28 @@ fn untracked_token_splits_clusters_and_reports() {
         .expect("standup row");
     assert!(!standup.contains("#untracked"), "{standup}");
 
-    // Mixed past cluster splits by trackedness: one tracked MEET and one
-    // untracked MEET that overlap.
+    // Mixed past cluster splits by clock verdict: one worked MEET and one
+    // off-clock MEET that overlap.
     let pomodoros = &note[note.find("## Pomodoros").expect("Pomodoros")..];
     assert!(
         pomodoros.contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
         "{pomodoros}"
     );
     assert!(
-        pomodoros.contains("- [x] (**0815-0930** ) — MEET")
-            || pomodoros.contains("- [x] (**0815-0930**) — MEET"),
-        "lunch+gym share one untracked cluster:\n{pomodoros}"
+        pomodoros.contains("- [x] (**0815-0930** [off:: 75m]) — MEET"),
+        "lunch+gym share one off-clock cluster:\n{pomodoros}"
     );
     assert!(
         !pomodoros.contains("(**0815-0930** [t::"),
-        "untracked cluster omits [t::]:\n{pomodoros}"
+        "off-clock cluster uses [off::]:\n{pomodoros}"
     );
-    // All-untracked current run creates a running MEET without [t::].
+    // An all-off-clock current run creates a running MEET with [off::].
     assert!(
-        pomodoros.contains("- [ ] (**1130-1230**) — MEET"),
-        "running untracked MEET:\n{pomodoros}"
+        pomodoros.contains("- [ ] (**1130-1230** [off:: 60m]) — MEET"),
+        "running off-clock MEET:\n{pomodoros}"
     );
 
-    // Sync JSON rows carry untracked.
+    // Sync JSON rows carry the new and deprecated fields.
     let report: Value =
         serde_json::from_str(&stdout(&output)).expect("JSON report");
     let rows = report["rows"].as_array().expect("rows");
@@ -1361,11 +1360,13 @@ fn untracked_token_splits_clusters_and_reports() {
         .iter()
         .find(|row| row["title"] == "Lunch")
         .expect("lunch json");
+    assert_eq!(lunch_json["off_clock"], true);
     assert_eq!(lunch_json["untracked"], true);
     let standup_json = rows
         .iter()
         .find(|row| row["title"] == "Standup")
         .expect("standup json");
+    assert_eq!(standup_json["off_clock"], false);
     assert_eq!(standup_json["untracked"], false);
 
     // List JSON and VAULT report the flag.
@@ -1381,18 +1382,20 @@ fn untracked_token_splits_clusters_and_reports() {
         .iter()
         .find(|row| row["title"] == "Lunch")
         .expect("lunch list");
+    assert_eq!(lunch_list["off_clock"], true);
     assert_eq!(lunch_list["untracked"], true);
     assert!(
         lunch_list["vault"]
             .as_str()
             .unwrap_or_default()
-            .contains("untracked"),
+            .contains("off-clock"),
         "VAULT shows the flag: {lunch_list}"
     );
     let standup_list = events
         .iter()
         .find(|row| row["title"] == "Standup")
         .expect("standup list");
+    assert_eq!(standup_list["off_clock"], false);
     assert_eq!(standup_list["untracked"], false);
 }
 
@@ -1490,7 +1493,7 @@ fn buffered_rows_render_update_and_report() {
     assert!(lunch.starts_with("- [*] #task"), "{lunch}");
     assert!(lunch.contains("Lunch with Kelly "), "{lunch}");
     assert!(
-        lunch.contains(" #untracked [buffer:: -30m +15m] [root:: job]"),
+        lunch.contains(" #offclock [buffer:: -30m +15m] [root:: job]"),
         "{lunch}"
     );
     assert!(lunch.ends_with("^lunch-kelly"), "{lunch}");
@@ -1502,15 +1505,15 @@ fn buffered_rows_render_update_and_report() {
     assert!(!dentist.contains("#untracked"), "{dentist}");
 
     // Lunch is current on its buffered span (1130 ≤ now < 1315), so the
-    // running MEET it opens carries the buffered span, untracked.
+    // running MEET it opens carries the buffered span as off-clock.
     let pomodoros = &note[note.find("## Pomodoros").expect("Pomodoros")..];
     assert!(
-        pomodoros.contains("- [ ] (**1130-1315**) — MEET"),
+        pomodoros.contains("- [ ] (**1130-1315** [off:: 105m]) — MEET"),
         "running lead-in MEET:\n{pomodoros}"
     );
     assert!(
         !pomodoros.contains("(**1130-1315** [t::"),
-        "untracked run omits [t::]:\n{pomodoros}"
+        "off-clock run omits [t::]:\n{pomodoros}"
     );
 
     // Sync JSON rows carry the buffer object; unbuffered rows carry null.
@@ -1714,7 +1717,7 @@ fn buffered_spans_drive_meet_phases_and_clusters() {
     let lunch = event_row(&note, "**1200-1300**");
     assert!(lunch.starts_with("- [*] #task"), "{lunch}");
     assert!(
-        lunch.contains(" #untracked [buffer:: -30m +15m] [root:: meet]"),
+        lunch.contains(" #offclock [buffer:: -30m +15m] [root:: meet]"),
         "{lunch}"
     );
 
@@ -1732,8 +1735,8 @@ fn buffered_spans_drive_meet_phases_and_clusters() {
         "tracked lead-out cluster:\n{pomodoros}"
     );
     assert!(
-        pomodoros.contains("- [x] (**0830-0900**) — MEET"),
-        "untracked cluster omits [t::]:\n{pomodoros}"
+        pomodoros.contains("- [x] (**0830-0900** [off:: 30m]) — MEET"),
+        "off-clock cluster records its elapsed span:\n{pomodoros}"
     );
     // The current pair shares one buffered running MEET, tracked.
     assert!(

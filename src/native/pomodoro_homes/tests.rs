@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::native::{
-    capture::{session_tracking, SessionTracking},
+    capture::{session_clock, SessionClock},
     capture_pomodoros::{self, PomodoroState},
     vault_links::NoteIndex,
 };
@@ -760,15 +760,15 @@ fn evaluate_case<S: HomeSource>(
                 .lines()
                 .nth(entry.line.saturating_sub(1))
                 .unwrap_or("");
-            let tracking = session_tracking(raw_line);
-            let untracked = matches!(tracking, SessionTracking::Untracked);
+            let clock = session_clock(raw_line);
+            let untracked = matches!(clock, SessionClock::OffClock { .. });
             let minutes = if entry.state == PomodoroState::Completed {
-                match tracking {
-                    SessionTracking::Tracked { minutes } => {
+                match clock {
+                    SessionClock::Worked { minutes }
+                    | SessionClock::OffClock { minutes, .. } => {
                         u32::try_from(minutes).ok()
                     }
-                    SessionTracking::Untracked => Some(0),
-                    SessionTracking::Placeholder => None,
+                    SessionClock::Placeholder => None,
                 }
             } else {
                 None
@@ -783,7 +783,12 @@ fn evaluate_case<S: HomeSource>(
                 &mut resolver,
             );
             leads.push(homes.lead_home.as_ref().map(|home| home.key.clone()));
-            serde_json::to_value(homes.homes).expect("homes JSON value")
+            let mut value =
+                serde_json::to_value(homes.homes).expect("homes JSON value");
+            if untracked {
+                value["off_clock"] = serde_json::Value::Bool(true);
+            }
+            value
         })
         .collect();
     (actual, resolver.health().clone(), leads)

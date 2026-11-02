@@ -1,4 +1,4 @@
-//! MEET starts follow their next event run and the untracked rule.
+//! MEET starts follow their next event run and the off-clock rule.
 
 use crate::support::*;
 use serde_json::Value;
@@ -49,10 +49,14 @@ fn capture_start_matches_shared_meet_event_run_vectors() {
             "{id}: {json}"
         );
         let start = &json["pomodoro_start"];
-        let tracked = start.get("tracked").is_none_or(|tracked| {
-            tracked.as_bool().expect("tracked is a bool")
-        });
-        assert_eq!(tracked, case["expected_tracked"], "{id}: {start}");
+        assert_eq!(
+            start
+                .get("off_clock")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            case["expected_off_clock"],
+            "{id}: {start}"
+        );
         assert_eq!(
             format!(
                 "{}-{}",
@@ -112,20 +116,22 @@ fn lunch_vault(
 }
 
 #[test]
-fn start_json_reports_the_event_run_and_untracked_block() {
+fn start_json_reports_the_event_run_and_off_clock_block() {
     let (_temp, vault, day_file) = lunch_vault("bob-cli-meet-run-json");
     let json = run_start(&vault, &day_file, "2026-11-01 11:55:00", "=");
     let start = &json["pomodoro_start"];
-    assert_eq!(start["time_range"], "(**1200-1300**)");
+    assert_eq!(start["time_range"], "(**1200-1300** [off:: 60m])");
     assert_eq!(start["duration_minutes"], 60);
     assert_eq!(start["offset_units"], 0);
     assert_eq!(start["tracked"], false);
+    assert_eq!(start["off_clock"], true);
     assert_eq!(
         start["event_run"],
         serde_json::json!({
             "time_range": "1200-1300",
             "start": "1200",
             "end": "1300",
+            "off_clock": true,
             "untracked": true,
             "source": "calendar",
             "events": [{
@@ -134,6 +140,7 @@ fn start_json_reports_the_event_run_and_untracked_block() {
                 "time_range": "1200-1300",
                 "line": 2,
                 "block_id": "lunch",
+                "off_clock": true,
                 "untracked": true
             }]
         })
@@ -144,6 +151,7 @@ fn start_json_reports_the_event_run_and_untracked_block() {
         .find(|block| block["name"] == "MEET")
         .expect("MEET block");
     assert_eq!(meet["tracked"], false, "{meet}");
+    assert_eq!(meet["off_clock"], true, "{meet}");
     assert_eq!(meet["time_range"], "1200-1300");
 }
 
@@ -165,7 +173,7 @@ fn tracked_start_omits_tracked_and_event_run_without_events() {
 }
 
 #[test]
-fn human_start_names_untracked_and_the_calendar_events() {
+fn human_start_names_off_clock_and_the_calendar_events() {
     let (_temp, vault, day_file) = lunch_vault("bob-cli-meet-run-human");
     let output = bob_command()
         .arg("capture")
@@ -181,7 +189,7 @@ fn human_start_names_untracked_and_the_calendar_events() {
     let rendered = stdout(&output);
     assert!(
         rendered.contains(
-            "MEET 1200-1300 (60m · untracked) at line 7 · from your calendar: Lunch with Kelly"
+            "MEET 1200-1300 (60m · off-clock) at line 7 · from your calendar: Lunch with Kelly"
         ),
         "{rendered}"
     );
@@ -206,8 +214,12 @@ fn dry_run_reports_the_same_span_and_writes_nothing() {
     assert_success(&output);
     let json: Value =
         serde_json::from_str(stdout(&output).trim()).expect("dry JSON");
-    assert_eq!(json["pomodoro_start"]["time_range"], "(**1200-1300**)");
+    assert_eq!(
+        json["pomodoro_start"]["time_range"],
+        "(**1200-1300** [off:: 60m])"
+    );
     assert_eq!(json["pomodoro_start"]["tracked"], false);
+    assert_eq!(json["pomodoro_start"]["off_clock"], true);
     assert_eq!(fs::read_to_string(&day_file).expect("day"), LUNCH_DAY);
 }
 
@@ -228,7 +240,7 @@ fn far_run_warning_names_the_event_and_the_escape_hatch() {
 }
 
 #[test]
-fn link_start_into_an_untracked_meet_omits_the_clock() {
+fn link_start_into_an_off_clock_meet_stamps_the_clock() {
     let temp = TempDir::new("bob-cli-meet-run-link");
     let vault = temp.path().join("vault");
     let day_file = vault.join("2026/20261101.md");
@@ -251,7 +263,11 @@ fn link_start_into_an_untracked_meet_omits_the_clock() {
         serde_json::from_str(stdout(&output).trim()).expect("link JSON");
     assert_eq!(json["pomodoro_start"]["tracked"], false, "{json}");
     let day = fs::read_to_string(&day_file).expect("day");
-    assert!(day.contains("- [ ] (**1105-1130**) — MEET"), "{day}");
+    assert!(
+        day.contains("- [ ] (**1105-1130** [off:: 25m]) — MEET"),
+        "{day}"
+    );
+    assert_eq!(json["pomodoro_start"]["off_clock"], true);
     assert!(!day.contains("[t:: 25m]) — MEET"), "{day}");
 }
 
@@ -310,7 +326,7 @@ fn start_json_reports_the_buffered_run_and_each_events_buffer() {
     write_file(&day_file, BUFFERED_LUNCH_DAY);
     let json = run_start(&vault, &day_file, "2026-11-01 11:25:00", "=");
     let start = &json["pomodoro_start"];
-    assert_eq!(start["time_range"], "(**1130-1315**)");
+    assert_eq!(start["time_range"], "(**1130-1315** [off:: 105m])");
     assert_eq!(start["duration_minutes"], 105);
     assert_eq!(start["tracked"], false);
     assert_eq!(
@@ -319,6 +335,7 @@ fn start_json_reports_the_buffered_run_and_each_events_buffer() {
             "time_range": "1130-1315",
             "start": "1130",
             "end": "1315",
+            "off_clock": true,
             "untracked": true,
             "source": "calendar",
             "events": [{
@@ -327,6 +344,7 @@ fn start_json_reports_the_buffered_run_and_each_events_buffer() {
                 "time_range": "1200-1300",
                 "line": 2,
                 "block_id": "lunch",
+                "off_clock": true,
                 "untracked": true,
                 "buffer": {
                     "before_minutes": 30,
@@ -364,7 +382,7 @@ fn human_start_labels_a_buffered_event_with_its_span_and_buffer() {
     let rendered = stdout(&output);
     assert!(
         rendered.contains(
-            "MEET 1130-1315 (105m · untracked) at line 6 · from your calendar: Lunch with Kelly (1200-1300 −30m +15m)"
+            "MEET 1130-1315 (105m · off-clock) at line 6 · from your calendar: Lunch with Kelly (1200-1300 −30m +15m)"
         ),
         "{rendered}"
     );
@@ -425,7 +443,10 @@ fn dry_run_reports_the_buffered_span_and_writes_nothing() {
     assert_success(&output);
     let json: Value =
         serde_json::from_str(stdout(&output).trim()).expect("dry JSON");
-    assert_eq!(json["pomodoro_start"]["time_range"], "(**1130-1315**)");
+    assert_eq!(
+        json["pomodoro_start"]["time_range"],
+        "(**1130-1315** [off:: 105m])"
+    );
     assert_eq!(
         json["pomodoro_start"]["event_run"]["events"][0]["buffer"]
             ["before_minutes"],

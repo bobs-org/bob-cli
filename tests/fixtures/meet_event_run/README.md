@@ -1,7 +1,7 @@
 # MEET event-run vectors
 
 `vectors.json` is the shared Rust/Obsidian contract for how a MEET start follows
-its event run and which sessions are tracked. The Rust test
+its event run and which sessions are off-clock. The Rust test
 (`tests/cli/capture/meet_event_run.rs`) runs every case through
 `bob capture -f json`. The Obsidian mirror lives at
 `plugins/bob-ledger-tools/scripts/fixtures/meet_event_run/vectors.json` in
@@ -12,8 +12,9 @@ inside the target `()` (a restart replaces the running range with `(se)`); the
 
 Each case gives the whole daily note (`day`, path `2026/20261101.md`), the
 clock (`now`), the capture `token`, and the expected note after the start
-(`expected_day`), whether the written session is tracked (`expected_tracked`,
-false means the ledger has no `[t::]`), and the written span (`expected_span`).
+(`expected_day`), whether the written session is off-clock
+(`expected_off_clock`), and the written span (`expected_span`). Off-clock spans
+carry `[off:: Nm]`; worked spans carry `[t:: Nm]`.
 `expected_source` is the `pomodoro_start.event_run.source` the JSON reports
 (`calendar` when the span follows the run, `explicit` when a counted suffix or a
 kept ledger set it, absent when the MEET has no run). `expected_warning` is a

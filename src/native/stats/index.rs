@@ -88,6 +88,7 @@ pub(crate) struct PomodoroSession {
     pub(crate) time_range: Option<String>,
     pub(crate) line: u32,
     pub(crate) links: Vec<pomodoro_homes::SessionLink>,
+    pub(crate) clock: crate::native::capture::SessionClock,
     pub(crate) untracked: bool,
 }
 
@@ -583,15 +584,15 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 .checked_sub(1)
                 .and_then(|line| lines.get(line).copied())
                 .unwrap_or("");
-            let tracking = crate::native::pomodoro::session_tracking(raw_line);
+            let clock = crate::native::pomodoro::session_clock(raw_line);
             let untracked = matches!(
-                tracking,
-                crate::native::pomodoro::SessionTracking::Untracked
+                clock,
+                crate::native::capture::SessionClock::OffClock { .. }
             );
-            let recorded = match tracking {
-                crate::native::pomodoro::SessionTracking::Tracked {
-                    minutes,
-                } => u32::try_from(minutes).ok(),
+            let recorded = match clock {
+                crate::native::capture::SessionClock::Worked { minutes } => {
+                    u32::try_from(minutes).ok()
+                }
                 _ => None,
             };
             let range = entry
@@ -605,10 +606,11 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 range_minutes: range,
                 time_range: entry.time_range.clone(),
                 line: u32::try_from(entry.line).unwrap_or(u32::MAX),
-                links: pomodoro_homes::session_links_from_scan(
+                links: pomodoro_homes::counted_session_links_from_scan(
                     &prepared,
                     entry.line.saturating_sub(1),
                 ),
+                clock,
                 untracked,
             }
         })
@@ -1116,6 +1118,9 @@ mod tests {
                 time_range: Some("0800-0825".to_string()),
                 line: 12,
                 links: Vec::new(),
+                clock: crate::native::capture::SessionClock::Worked {
+                    minutes: 0,
+                },
                 untracked: false,
             }],
             frontmatter_fields: BTreeMap::from([(

@@ -23,7 +23,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [Calendars](#calendars)
 - [List](#list)
 - [Sync](#sync)
-- [Untracked events](#untracked-events)
+- [Off-clock events](#off-clock-events)
 - [Buffers](#buffers)
 - [Reconciling Google-side changes](#reconciling-google-side-changes)
 - [Where it runs](#where-it-runs)
@@ -320,8 +320,8 @@ snapshot.
 The table shows local time, title, RSVP, selected root, and the VAULT column:
 what sync did, or would do, with the event — `task · MEET`, `task`,
 `context`, `waiting for note`, or `removed by you`, each with
-` · untracked` appended for Google-untracked tasks
-(`task · MEET · untracked`). The TIME column appends the buffer label for
+` · off-clock` appended for Google off-clock tasks
+(`task · MEET · off-clock`). The TIME column appends the buffer label for
 buffered tasks (`12:00-13:00 −30m +15m`, dimmed on a TTY); see
 [Buffers](#buffers). Omitted events keep their
 omission reason. `-a` also shows omitted events. Counts include omitted events
@@ -331,9 +331,9 @@ else `never synced`.
 
 JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
 `last_sync`, and `past_open` fields. Each event reports `time`, `title`,
-`answer`, `inclusion`, `reason`, `untracked`, `buffer`
-(`{"before_minutes", "after_minutes"}`, or `null` when the row carries no
-buffer), `vault`, and `root.value`, `root.source`,
+`answer`, `inclusion`, `reason`, `off_clock`, deprecated `untracked`,
+`buffer` (`{"before_minutes", "after_minutes"}`, or `null` when the row
+carries no buffer), `vault`, and `root.value`, `root.source`,
 and `root.warnings`. Descriptions and attendee details are omitted. A root
 may be null when no candidate is valid; warnings explain each rejected
 candidate and its fix. `past_open` lists the open Event Tasks still sitting
@@ -375,7 +375,7 @@ upgraded in place) is linked by phase, on any day:
 
 | Phase at sync time | Pomodoro | Link line | Row checkbox |
 | --- | --- | --- | --- |
-| Past: the buffered span ended (buffered end ≤ now) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry, or `(**SSSS-EEEE**)` without `[t::]` for an untracked cluster | `🍅 [[#^id]]` | `[/]` |
+| Past: the buffered span ended (buffered end ≤ now) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry for worked events or `(**SSSS-EEEE** [off:: Nm])` for an off-clock cluster | `🍅 [[#^id]]` | `[/]` |
 | Current: buffered start ≤ now < buffered end, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
 | Future: the buffered span has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
 
@@ -384,12 +384,12 @@ each row keeps its meeting span: the bold `**HHMM-HHMM**`, its journal
 hash, and Google ownership of the time never widen. Back-to-back or
 overlapping past meetings share one closed MEET whose span is
 the cluster (next buffered start ≤ cluster end; a `+15` lead-out bridges a
-gap to the next meeting), split by trackedness: a mixed
-trackedness run becomes two closed MEETs that may overlap — one with
-`[t::]`, one without. All current meetings share one
+gap to the next meeting), split by clock verdict: a mixed run becomes two
+closed MEETs that may overlap — one with `[t::]`, one with `[off::]`. All
+current meetings share one
 running MEET, and all future meetings share one placeholder. A created
-running MEET is untracked (no `[t::]`) only when every current event is
-untracked; mixed current events stay tracked. The run never
+running MEET is off-clock only when every current event is off-clock; mixed
+current events stay worked. The run never
 leaves a second open MEET: current meetings with no running Pomodoro reuse
 an existing MEET placeholder if one is open, otherwise they create a running
 MEET; future meetings go under the running MEET when that running entry is
@@ -416,8 +416,9 @@ success, no-op, or waiting.
 
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
-(`action`, `kind`, `time`, `title`, `root`, `source`, `untracked`, `buffer`
-as `{"before_minutes", "after_minutes"}` or `null`), `pomodoro`
+(`action`, `kind`, `time`, `title`, `root`, `source`, `off_clock`, deprecated
+`untracked`, and `buffer` as `{"before_minutes", "after_minutes"}` or
+`null`), `pomodoro`
 (`entry_line`, `created`, `links_added`, `entries`), `warnings`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). Human rows append the buffer label to the time
@@ -470,7 +471,7 @@ account, or set `gcal.account` to the stamp's account.
 | --- | --- | --- |
 | Checkbox | You | Never changed, except cancelling an untouched task (see below) |
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
-| `#untracked` | Google until you edit it | Follows Google's token while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_untracked` |
+| `#offclock` (Google aliases `#off-clock`, `#untracked`) | Google until you edit it | Follows Google's token while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
 | `[buffer::]` | Google until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
@@ -489,35 +490,45 @@ alone and reports it once. `[/]` rows count in the Pending lane and show in
 placeholders and running MEET entries are created only in the same write
 that adds their first link, so sync never leaves a second open MEET.
 
-## Untracked events
+<a id="off-clock-events"></a><a id="untracked-events"></a>
 
-Tag a Google Calendar event `#untracked` (lunch, school pickup, the gym) so
-it still lands in the day as an Event Task with a Pomodoro Task Link, but its
-session stays on the calendar and off the clock: the closed MEET omits
-`[t::]`, and stats, homes, `bob pomodoro --worked`, and the agenda skip its
-minutes and counts.
+## Off-clock events
 
-In Google Calendar, write a standalone `#untracked` token anywhere in the
-title (case-insensitive), or a **directive line** in the description. A
-directive line is one whose every token (split on whitespace or commas) is
-a directive: `@route`, `#untracked` (case-insensitive), `-N`/`-Nm` (ASCII
-or typographic minus), or `+M`/`+Mm`. Directives combine on one line or
-spread across several; HTML from Google's editor is normalized first
-(`<br>`, `<p>`, `<div>`, `<li>` become line breaks, other tags are
-stripped, common entities are decoded). With a resolvable `love` root,
-`@love<br>#untracked` sets `[root:: love]` and marks the Event Task untracked;
-the task stays in the daily note. A line with any other token — a phone
-number, a 4-digit value, a sentence — is ignored whole. Sync strips the
-title token from the displayed title, the way a resolved `@route` is
-stripped: the tag is removed first, then the title-ending `@route` is
-read, so `Lunch @love #untracked` gets the same root and displays as `Lunch`.
+Tag a Google Calendar event `#offclock` (lunch, school pickup, the gym) so it
+still lands in the day as an Event Task with a Pomodoro Task Link, but its
+session stays on the calendar and off the Worked clock. The closed MEET uses
+`[off:: Nm]` with the event's real duration; Worked stats and
+`bob pomodoro --worked` leave those minutes out, while homes can attribute
+them. The aliases `#off-clock` and legacy `#untracked` mean the same thing.
 
-On the Event Task, sync writes ` #untracked` at the end of the badge run,
+Google accepts a standalone off-clock alias anywhere in the title, or a
+**directive line** in the description. A directive line is one whose every
+token (split on whitespace or commas) is a directive: `@route`, an off-clock
+alias, `-N`/`-Nm` (ASCII or typographic minus), or `+M`/`+Mm`. Directives
+combine on one line or spread across several; HTML from Google's editor is
+normalized first (`<br>`, `<p>`, `<div>`, `<li>` become line breaks, other
+tags are stripped, common entities are decoded). With a resolvable `love`
+root, `@love<br>#offclock -30` sets `[root:: love]`, marks the Event Task
+off-clock, and adds a 30-minute lead-in. A line with any other token — a
+phone number, a 4-digit value, a sentence — is ignored whole. Sync strips
+the title alias from the displayed title before reading a title-ending
+`@route`, so `Lunch @love #off-clock` gets the same root and displays as
+`Lunch`.
+
+Google accepts standalone `#offclock`, `#off-clock`, and legacy `#untracked`
+tokens (case-insensitive) anywhere in the title, or on a description
+directive line, alone or combined with a route or buffer. Sync writes the
+canonical `#offclock` tag to the Event Task and
+strips all aliases from the displayed title, the way a resolved `@route` is
+stripped: aliases are removed first, then the title-ending `@route` is read,
+so `Lunch @love #off-clock` routes to `love` and displays as `Lunch`.
+
+On the Event Task, sync writes ` #offclock` at the end of the badge run,
 before `[root::]`:
 
 ```markdown
 - [*] #task **1200-1300** Lunch with Kelly [📅](… "Open in Google Calendar")
-  #untracked [root:: love] [type:: MEET] ^lunch-with-kelly
+  #offclock [root:: love] [type:: MEET] ^lunch-with-kelly
 ```
 
 The tag is Google-owned exactly like the badges: updated in place while the
@@ -528,18 +539,19 @@ is reported once and left for a hand edit — sync never retimes existing MEET
 entries. Rows synced before this feature migrate on the next sync: the title
 and badge spans both still match Bob's last write, so both update in place.
 
-`list` shows `task · MEET · untracked` in VAULT and `untracked` in JSON;
-`sync -f json` rows carry `untracked`.
+`list` shows `task · MEET · off-clock` in VAULT; JSON carries `off_clock`
+and deprecated `untracked`. `sync -f json` rows carry both fields.
 
 ## Buffers
 
-Write `-30` and/or `+15` as [directive lines](#untracked-events) in a
+Write `-30` and/or `+15` as [directive lines](#off-clock-events) in a
 Google Calendar event's description to reserve 30 minutes before and 15
 minutes after the event (travel, prep, wind-down). Each side takes 1–3
 digits with an optional `m` suffix and an ASCII or typographic minus, is
 capped at 720 (12h), and the first value per side wins. The tokens combine
-with `@route` and `#untracked` on one line or spread over several, so
-`@love #untracked -30` routes, untracks, and buffers at once. Numbers in
+with `@route` and the off-clock aliases (`#offclock`, `#off-clock`,
+`#untracked`) on one line or spread over several, so `@love #offclock -30`
+routes, marks off-clock, and buffers at once. Numbers in
 titles are never buffers: `Q4 +1` and `Room -2` stay titles. Bob reads
 buffers from the description only.
 
@@ -551,13 +563,13 @@ meeting keeps its real time:
 | --- | --- |
 | Sync phases (past/current/future) | Timed close classification (`ended_inside`/`running`/…) |
 | The MEET clusters and spans sync writes | The bold span text, its journal hash, and Google ownership of the time |
-| The TIME label and `buffer` JSON in `list` and `sync` output | Row titles, `#untracked`, roots |
+| The TIME label and `buffer` JSON in `list` and `sync` output | Row titles, `#offclock`, roots |
 
 Sync writes one Google-owned field at the end of the badge run, after
-`#untracked` and before `[root::]`:
+`#offclock` and before `[root::]`:
 
 ```markdown
-- [*] #task **1200-1300** Lunch with Kelly [📅](… "Open in Google Calendar") #untracked
+- [*] #task **1200-1300** Lunch with Kelly [📅](… "Open in Google Calendar") #offclock
   [buffer:: -30m +15m] [root:: love] [type:: MEET] ^lunch-with-kelly
 ```
 
@@ -651,7 +663,7 @@ Timed multi-day events appear as context on each date they overlap.
 For Event Tasks, Bob tries these candidates in order and writes the first valid
 one: the series memory of your earlier `[root::]` edit on another occurrence
 of the same recurring event, a title-ending `@route` or a description
-directive line (combinable and HTML-safe, so `@love #untracked -30` on one
+directive line (combinable and HTML-safe, so `@love #offclock -30` on one
 line routes), `gcal.colors` by event colour, the calendar's
 `root`, then `gcal.root` (default `meet`). A root must resolve relative to
 the daily note, be an area at any depth or a root project, and must not be
@@ -659,8 +671,8 @@ the daily note, be an area at any depth or a root project, and must not be
 
 Invalid candidates fall through to the next source with a warning that includes
 the R11 reason and fix. If a title route resolves, Bob removes the final token
-from the displayed title. `#untracked` is stripped before the route is read,
-so `Lunch @love #untracked` routes to `love`. An unknown route stays in the title and is reported.
+from the displayed title. Off-clock aliases are stripped before the route is
+read, so `Lunch @love #off-clock` routes to `love`. An unknown route stays in the title and is reported.
 If the default root also fails, list shows no root and `doctor` reports the
 invalid default. Root sources are reported as `learned from your 2026-10-29
 edit`, `@body`, `colour tomato`, `calendar Health`, or `default`. The VAULT
@@ -707,7 +719,8 @@ including the `last_sync` check.
 
 `list -f json`: `day`, configured `calendars`, classified `events`,
 `counts`, and `last_sync`. `-a` adds omitted event rows. Each event contains
-no provider description or attendee list, and carries `untracked` and the `vault` state.
+no provider description or attendee list, and carries `off_clock`, deprecated
+`untracked`, and the `vault` state.
 
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
 `warnings`, and `stamp`. `stamp` is `{account, synced_at, refreshed}` or
@@ -749,11 +762,11 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 - Consent screens left in Testing expire in 7 days; publish them.
 - A closed or running MEET built from calendar spans may overlap a session
   already logged; sync does not clip it.
-- Past clusters split by trackedness, so two closed MEETs may overlap; that
+- Past clusters split by clock verdict, so two closed MEETs may overlap; that
   is truthful. One running entry is allowed, so mixed current events stay
-  tracked.
-- A `#untracked` flip after the session closed is left for a hand edit and
-  reported once.
+  worked.
+- An off-clock tag flip after the session closed is left for a hand edit and
+  reported once as `kept_off_clock`.
 - Buffers stop at midnight: a pre-buffer never crosses into the previous
   day, and the total stays below 24h. The first value per side wins. A
   description you cannot edit cannot take a Google-owned buffer: a

@@ -150,7 +150,7 @@ fn past_open_meetings(
 
 /// What sync did, or would do, with one event: `task · MEET`, `task`,
 /// `context`, `waiting for note`, or `removed by you`, each with
-/// ` · untracked` appended for Google-untracked tasks. Omitted events
+/// ` · off-clock` appended for Google off-clock tasks. Omitted events
 /// keep their omission reason.
 fn vault_status(
     event: &ListedEvent,
@@ -175,11 +175,11 @@ fn vault_status(
     if state.is_some_and(|state| state.gone) {
         return "removed by you".to_string();
     }
-    // Context rows strip the token, so only tasks report trackedness here;
-    // the JSON `untracked` field still carries Google's flag for every row.
-    let untracked_suffix =
-        if event.event.untracked && event.inclusion == Inclusion::Task {
-            " · untracked"
+    // Context rows strip the token, so only tasks show the off-clock mark;
+    // both JSON fields carry Google's flag for compatibility.
+    let off_clock_suffix =
+        if event.event.off_clock && event.inclusion == Inclusion::Task {
+            " · off-clock"
         } else {
             ""
         };
@@ -199,15 +199,15 @@ fn vault_status(
                     return "removed by you".to_string();
                 }
                 if meet_link_present(lines, &row.block_id) {
-                    return format!("task · MEET{untracked_suffix}");
+                    return format!("task · MEET{off_clock_suffix}");
                 }
-                return format!("task{untracked_suffix}");
+                return format!("task{off_clock_suffix}");
             }
             match adopted_block_id(lines, event_url(event)) {
                 Some(block_id) if meet_link_present(lines, &block_id) => {
-                    format!("task · MEET{untracked_suffix}")
+                    format!("task · MEET{off_clock_suffix}")
                 }
-                _ => format!("task{untracked_suffix}"),
+                _ => format!("task{off_clock_suffix}"),
             }
         }
     }
@@ -397,7 +397,8 @@ fn print_json(
                 "answer": event.event.my_answer.as_str(),
                 "inclusion": event.inclusion.name(),
                 "reason": event.inclusion.reason(),
-                "untracked": event.event.untracked,
+                "off_clock": event.event.off_clock,
+                "untracked": event.event.off_clock,
                 "buffer": buffer_json(event),
                 "root": {
                     "value": root.and_then(|root| root.value.as_deref()),

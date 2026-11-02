@@ -17,8 +17,8 @@ use serde_json::json;
 use super::{
     capture::{
         leading_spaces_or_tabs_len, line_spans, list_item_body,
-        nearest_shallower_list_item_parent, session_tracking, LineSpan,
-        SessionTracking,
+        nearest_shallower_list_item_parent, session_clock, LineSpan,
+        SessionClock,
     },
     capture_drawers, capture_language, capture_pomodoro_close,
     capture_pomodoros_agenda, config, env as bob_env, markdown, note_tasks,
@@ -83,7 +83,7 @@ link counts, and the current entry's numbered Task Link count for picker callers
 --all to include completed entries. A missing daily note or missing \
 Pomodoros section returns a successful empty list with a warning.\n\n\
 With --tasks, each listed entry also carries its agenda payload: the entry \
-role, naive start/end datetimes, trackedness, the retired-link count, session \
+role, naive start/end datetimes, clock classification, the retired-link count, session \
 notes, the resolved Task Link lineup with operator numbers, clean titles, \
 statuses, task-block lines, event chips for links to today's Event Tasks, and \
 ledger notes, and a derived homes object from those Task Links. When the day \
@@ -241,9 +241,25 @@ struct CapturePomodorosOutputEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     items: Option<Vec<capture_pomodoros_agenda::AgendaItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    homes: Option<pomodoro_homes::Homes>,
+    homes: Option<CapturePomodoroHomes>,
+    #[serde(skip_serializing_if = "is_false")]
+    off_clock: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     tracked: Option<bool>,
+}
+
+/// Capture-pomodoros adds the new clock field while `Homes` keeps its
+/// deprecated `untracked` wire field for stats compatibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CapturePomodoroHomes {
+    #[serde(flatten)]
+    homes: pomodoro_homes::Homes,
+    #[serde(skip_serializing_if = "is_false")]
+    off_clock: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn list_capture_pomodoros(
@@ -259,6 +275,7 @@ fn list_capture_pomodoros(
                 count: 0,
                 minutes: 0,
                 untracked_count: 0,
+                off_clock: None,
             },
         )
     };
@@ -399,7 +416,7 @@ fn list_capture_pomodoros(
         let agenda_entry =
             agenda.as_ref().and_then(|entries| entries.get(position));
         let homes = homes_resolver.as_mut().map(|resolver| {
-            pomodoro_homes::attribute_ledger_entry(
+            let homes = pomodoro_homes::attribute_ledger_entry(
                 &contents,
                 entry.line,
                 entry.name.as_deref(),
@@ -408,7 +425,18 @@ fn list_capture_pomodoros(
                 &daily_path,
                 resolver,
             )
-            .homes
+            .homes;
+            let raw_line = contents
+                .lines()
+                .nth(entry.line.saturating_sub(1))
+                .unwrap_or("");
+            CapturePomodoroHomes {
+                off_clock: matches!(
+                    session_clock(raw_line),
+                    SessionClock::OffClock { .. }
+                ),
+                homes,
+            }
         });
         let themes = entry
             .name
@@ -419,15 +447,17 @@ fn list_capture_pomodoros(
                     .map(|catalog| catalog.theme_refs_for_name(name))
             })
             .unwrap_or_default();
-        let tracked = if request.include_tasks {
+        let (tracked, off_clock) = if request.include_tasks {
             let raw_line = contents
                 .lines()
                 .nth(entry.line.saturating_sub(1))
                 .unwrap_or("");
-            matches!(session_tracking(raw_line), SessionTracking::Untracked)
-                .then_some(false)
+            match session_clock(raw_line) {
+                SessionClock::OffClock { .. } => (Some(false), true),
+                _ => (None, false),
+            }
         } else {
-            None
+            (None, false)
         };
         pomodoros.push(CapturePomodorosOutputEntry {
             entry,
@@ -442,6 +472,7 @@ fn list_capture_pomodoros(
             items: agenda_entry.map(|agenda| agenda.items.clone()),
             homes,
             tracked,
+            off_clock,
         });
     }
 
@@ -469,10 +500,10 @@ fn attributed_minutes(entry: &PomodoroEntry, contents: &str) -> Option<u32> {
         .checked_sub(1)
         .and_then(|index| contents.lines().nth(index))
         .unwrap_or("");
-    match session_tracking(raw_line) {
-        SessionTracking::Tracked { minutes } => u32::try_from(minutes).ok(),
-        SessionTracking::Untracked => Some(0),
-        SessionTracking::Placeholder => None,
+    match session_clock(raw_line) {
+        SessionClock::Worked { minutes }
+        | SessionClock::OffClock { minutes, .. } => u32::try_from(minutes).ok(),
+        SessionClock::Placeholder => None,
     }
 }
 
@@ -484,6 +515,8 @@ pub(crate) fn completed_summary_for(
     let mut count = 0;
     let mut minutes = 0;
     let mut untracked_count = 0;
+    let mut off_clock_count = 0;
+    let mut off_clock_minutes = 0;
     for entry in entries {
         if entry.state != PomodoroState::Completed {
             continue;
@@ -493,16 +526,17 @@ pub(crate) fn completed_summary_for(
             .checked_sub(1)
             .and_then(|index| ledger_lines.get(index).copied())
             .unwrap_or("");
-        match session_tracking(raw_line) {
-            SessionTracking::Untracked => {
+        match session_clock(raw_line) {
+            SessionClock::OffClock { minutes, .. } => {
                 untracked_count += 1;
-                continue;
+                off_clock_count += 1;
+                off_clock_minutes += minutes;
             }
-            SessionTracking::Tracked { minutes: duration } => {
+            SessionClock::Worked { minutes: duration } => {
                 count += 1;
                 minutes += duration;
             }
-            SessionTracking::Placeholder => {
+            SessionClock::Placeholder => {
                 count += 1;
             }
         }
@@ -511,6 +545,12 @@ pub(crate) fn completed_summary_for(
         count,
         minutes,
         untracked_count,
+        off_clock: (off_clock_count > 0).then_some(
+            capture_pomodoros_agenda::OffClockSummary {
+                count: off_clock_count,
+                minutes: off_clock_minutes,
+            },
+        ),
     }
 }
 
@@ -1244,8 +1284,8 @@ fn human_events_block(
             .map(|label| format!(" {}", styler.dim(&label)))
             .unwrap_or_default();
         let mut detail = format!("{marker} {time}{buffer_label} {}", row.title);
-        if row.untracked {
-            detail.push_str(" · untracked");
+        if row.off_clock {
+            detail.push_str(" · off-clock");
         }
         if events.focus == Some(index)
             && let Some(hint) = events.start_hint.as_deref()
@@ -1317,7 +1357,10 @@ fn human_agenda_entry(
     let entry = &item.entry;
     let name = entry.name.as_deref().unwrap_or("unnamed");
     let time = agenda_time_label(entry.time_range.as_deref());
-    let chip = homes_chip_suffix(item.homes.as_ref(), styler);
+    let chip = homes_chip_suffix(
+        item.homes.as_ref().map(|homes| &homes.homes),
+        styler,
+    );
     let mut output = match item.role {
         Some(AgendaRole::Current) => format!(
             "  {} {name}{chip} {time} {}\n",
@@ -1878,6 +1921,7 @@ mod tests {
                 notes: None,
                 items: None,
                 homes: None,
+                off_clock: false,
                 tracked: None,
             }],
             warnings: Vec::new(),
@@ -1915,6 +1959,7 @@ mod tests {
             "notes",
             "items",
             "homes",
+            "off_clock",
             "tracked",
         ] {
             assert!(
@@ -1993,6 +2038,7 @@ mod tests {
                     notes: None,
                     items: None,
                     homes: None,
+                    off_clock: false,
                     tracked: None,
                 },
                 CapturePomodorosOutputEntry {
@@ -2021,6 +2067,7 @@ mod tests {
                     notes: None,
                     items: None,
                     homes: None,
+                    off_clock: false,
                     tracked: None,
                 },
             ],
@@ -2328,22 +2375,28 @@ mod tests {
             .find(|item| item.entry.name.as_deref() == Some("EARLY"))
             .expect("early entry");
         let early_homes = early.homes.as_ref().expect("early homes");
-        assert_eq!(early_homes.state, pomodoro_homes::SessionState::Attributed);
-        assert_eq!(early_homes.kind, pomodoro_homes::SessionKind::Work);
-        assert_eq!(early_homes.label, "sase");
-        assert_eq!(early_homes.chip.as_deref(), Some("sase"));
-        assert_eq!(early_homes.hue, Some(pomodoro_homes::Hue::Orange));
-        assert!(!early_homes.untracked);
-        assert_eq!(early_homes.parts[0].minutes, Some(30));
+        assert_eq!(
+            early_homes.homes.state,
+            pomodoro_homes::SessionState::Attributed
+        );
+        assert_eq!(early_homes.homes.kind, pomodoro_homes::SessionKind::Work);
+        assert_eq!(early_homes.homes.label, "sase");
+        assert_eq!(early_homes.homes.chip.as_deref(), Some("sase"));
+        assert_eq!(early_homes.homes.hue, Some(pomodoro_homes::Hue::Orange));
+        assert!(!early_homes.homes.untracked);
+        assert_eq!(early_homes.homes.parts[0].minutes, Some(30));
         let named = result
             .pomodoros
             .iter()
             .find(|item| item.entry.name.as_deref() == Some("FIX"))
             .expect("named entry");
         let named_homes = named.homes.as_ref().expect("named homes");
-        assert_eq!(named_homes.state, pomodoro_homes::SessionState::Forecast);
-        assert_eq!(named_homes.chip.as_deref(), Some("sase"));
-        assert!(named_homes.parts[0].minutes.is_none());
+        assert_eq!(
+            named_homes.homes.state,
+            pomodoro_homes::SessionState::Forecast
+        );
+        assert_eq!(named_homes.homes.chip.as_deref(), Some("sase"));
+        assert!(named_homes.homes.parts[0].minutes.is_none());
         let unnamed = result
             .pomodoros
             .iter()
@@ -2354,6 +2407,7 @@ mod tests {
                 .homes
                 .as_ref()
                 .expect("unnamed homes")
+                .homes
                 .chip
                 .as_deref(),
             Some("sase")

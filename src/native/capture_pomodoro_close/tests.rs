@@ -232,20 +232,54 @@ fn nothing_carried_with_later_entry_creates_nothing() {
 }
 
 #[test]
-fn untracked_close_keeps_the_row_untracked() {
+fn bare_close_stamps_the_legacy_off_clock_duration() {
     let contents = note(&["## Pomodoros", "- [ ] (**1200-1300**) — MEET"]);
     let plan = close_at(&contents, 12, 37);
     assert!(
-        plan.contents.contains("- [x] (**1200-1240**) — MEET"),
+        plan.contents
+            .contains("- [x] (**1200-1240** [off:: 40m]) — MEET"),
         "{}",
         plan.contents
     );
     assert!(!plan.contents.contains("[t::]"), "{}", plan.contents);
+    assert!(plan.contents.contains("[off:: 40m]"), "{}", plan.contents);
     let timing = plan.timing.expect("timing");
     assert_eq!(timing.planned_duration, 60);
     assert_eq!(timing.closed_duration, 40);
     assert_eq!(timing.decremented_minutes, 20);
-    assert_eq!(timing.new_range_text.as_deref(), Some("(**1200-1240**)"));
+    assert_eq!(
+        timing.new_range_text.as_deref(),
+        Some("(**1200-1240** [off:: 40m])")
+    );
+}
+
+#[test]
+fn keyed_off_clock_close_preserves_the_recorded_minutes() {
+    let contents =
+        note(&["## Pomodoros", "- [ ] (**1200-1300** [off:: 60m]) — MEET"]);
+    let plan = close_at(&contents, 12, 37);
+    assert!(
+        plan.contents
+            .contains("- [x] (**1200-1240** [off:: 40m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn conflicting_close_keeps_worked_key_and_drops_off_clock_key() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**1200-1300** [t:: 60m] [off:: 30m]) — MEET",
+    ]);
+    let plan = close_at(&contents, 12, 37);
+    assert!(
+        plan.contents
+            .contains("- [x] (**1200-1240** [t:: 40m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(!plan.contents.contains("[off::"), "{}", plan.contents);
 }
 
 #[test]
@@ -499,7 +533,10 @@ fn close_before_the_start_clamps_to_a_zero_length_session() {
     let untracked = timing_for("- [ ] (**1300-1333**) — MEET", 12, 59);
     assert_eq!(untracked.closed_end, 13 * 60);
     assert_eq!(untracked.closed_duration, 0);
-    assert_eq!(untracked.new_range_text.as_deref(), Some("(**1300-1300**)"));
+    assert_eq!(
+        untracked.new_range_text.as_deref(),
+        Some("(**1300-1300** [off:: 0m])")
+    );
 }
 
 #[test]

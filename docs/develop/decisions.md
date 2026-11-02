@@ -517,6 +517,49 @@ activation boundary and trial-extension reopening condition only.
 
 Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.
 
+## Ended Off-Clock Events Settle Into Closed Sessions {#ended-off-clock-events-settle}
+
+**Status:** Accepted
+
+Reconcile settles ended off-clock Event Tasks left under an unstarted placeholder into closed sessions and completes their task rows.
+
+# Ended Off-Clock Events Settle Into Closed Sessions
+
+**Applies to.** bob-cli and the vault.
+
+**Claim.** `bob task reconcile` settles each ended, open off-clock Event Task
+still linked under an unstarted placeholder into a closed `[off:: Nm]` MEET,
+trimmed so it does not overlap an on-clock session. The Event Task is completed
+with `[x]` and its completion date, using the same completion behavior as a
+timed close for a meeting that ended inside the session. The operation is
+idempotent.
+
+**Why.** The off-clock clock needs the time even when nobody starts the MEET.
+Reconcile already runs periodically and can record it without asking for a
+separate gesture. Completing the row matches a timed close that covers an
+ended meeting; leaving it `[/]` would keep a lunch in Pending.
+
+Rejected alternatives:
+
+- **Settle in `bob gcal sync`.** Sync is on demand and usually does not run
+  after an event ends.
+- **Settle at capture time.** That requires another user gesture after the
+  event and misses events nobody starts.
+- **Do not settle.** An ended off-clock event nobody started would never be
+  recorded on the Off-clock clock.
+- **Leave the event `[/]`.** The selected completed status avoids parking
+  settled events in Pending.
+
+**Cost.** The calendar is not proof of attendance; a skipped event is counted
+unless it is cancelled before it ends. The task row is completed during
+settlement.
+
+**Reopens when.** Attendance becomes knowable, or settling should also cover
+running sessions.
+
+Evidence: `plan:202611/off_clock_pomodoros.md`; `docs/task-status-hooks.md`;
+`docs/gcal.md` § Off-clock events.
+
 ## Event Buffers Widen The Occupied Span {#event-buffers-widen-the-span}
 
 **Status:** Accepted
@@ -971,6 +1014,57 @@ parser-safe as a tag.
 Superseded: `#now` is retired — see [Next And Pending Are Sticky Lanes; Only Blocked Is Derived](#task-lanes-are-sticky) and
 [Today Is Read From The Ledger, Never Written To Tasks](#today-is-read-from-the-ledger). The Next lane now holds this week's
 commitments.
+
+## Off-Clock Pomodoros Are Recorded And Counted Apart {#off-clock-pomodoros-count-apart}
+
+**Status:** Accepted
+
+A timed row with [off:: Nm] records off-clock minutes; separate clock views keep those minutes out of Worked metrics.
+
+# Off-Clock Pomodoros Are Recorded And Counted Apart
+
+**Applies to.** bob-cli and the vault.
+
+**Claim.** A timed ledger row with `[off:: Nm]` is an Off-Clock Pomodoro.
+Writers stamp it by the counted-links rule at start, close, sync, and settling.
+Closed rows are history: later tag edits are reported as drift and never
+rewrite the key. Worked, Sessions, `bob pomodoro --worked`, the Day strip, and
+the agenda summary exclude off-clock minutes (`untracked_counts = exclude`
+continues to govern Worked). The Off-clock and Total clocks count them. A bare
+closed span keeps the earlier off-clock meaning and is flagged unstamped.
+
+The counted-links rule uses the Task Links the session keeps: it is off-clock
+only when at least one remains and every link resolves to a task whose own
+line has the standalone `#offclock` tag or an alias. An unlinked, unresolved,
+or mixed session is Worked in full.
+
+**Why.** The `[off::]` key records the clock choice and its minutes with the
+session, so later changes to task tags cannot silently move closed time.
+Keeping Off-clock separate gives a way to see where that time went while
+preserving Worked as the work signal. Bare spans retain the established f6
+meaning until they can be restamped, and the diagnostic makes missing keys
+visible.
+
+Rejected alternatives:
+
+- **Derive the clock from current task tags on every read.** Later tag edits
+  would change historical metrics and require each reader to resolve links.
+- **Split mixed sessions across clocks by task.** The session is one timed
+  event; a mixed lineup stays Worked until per-task minute accounting exists.
+- **Treat a bare span as Worked.** This would change the meaning of existing
+  f6 rows and hide missing clock stamps.
+
+**Cost.** Mixed sessions count as Worked in full. Closed history is frozen at
+write time, so later tag changes appear as drift. Total sums sessions and can
+double-count overlapping spans.
+
+**Reopens when.** Per-task minute accounting is needed, or off-clock time
+should come from an area property instead of a task tag.
+
+Evidence: `plan:202611/off_clock_pomodoros.md`;
+`research:202611/off_clock_pomodoro_stats/off_clock_pomodoro_stats.md`;
+`docs/reference/vault-format.md`; `docs/stats.md`; and the pomodoro-homes and
+meet-event-run vectors.
 
 ## Open PDF Writes Are Coordinated {#open-pdf-writes-are-coordinated}
 
@@ -2738,7 +2832,7 @@ offer. See [Unblocked Tasks Are Offered, Never Auto-Linked](#unblocked-tasks-are
 
 ## Untracked Sessions Omit T Field {#untracked-sessions-omit-t-field}
 
-**Status:** Accepted
+**Status:** Superseded by [Off-Clock Pomodoros Are Recorded And Counted Apart](#off-clock-pomodoros-count-apart)
 
 A timed ledger row without [t::] is an untracked session; writers decide trackedness when they write a span and readers only look at the row.
 
@@ -2786,3 +2880,7 @@ Evidence: `plan:202611/untracked_calendar_events.md`; `docs/gcal.md`
 [Synced Meetings Are Linked By Phase At Birth](#synced-meetings-link-by-phase)
 
 [Event Task](../reference/glossary.md#event-task)
+
+[Off-Clock Pomodoros Are Recorded And Counted Apart](#off-clock-pomodoros-count-apart) retires this decision: absence
+of `[t::]` no longer means off the clock; off-clock time is recorded and
+counted on its own clock.
