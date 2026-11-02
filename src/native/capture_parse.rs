@@ -18,8 +18,9 @@ use super::{
         AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
         EditorParseOptions, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
-        PomodoroShiftSpec, PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
-        RelationEntry, ResolvedTypeName, Severity, Span,
+        PomodoroMergeSpec, PomodoroShiftSpec, PomodoroSplitSpec,
+        PomodoroStartSpec, ProjectTaskId, RelationDirection, RelationEntry,
+        ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -183,7 +184,7 @@ component spans, every authored sub-bullet's normalized body plus depth, \
 an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` \
 start suffix (including the short `=name` suffix, e.g. `@work:outline=bugs`), an optional pomodoro_adjust object for a whole-item `+[N]`/`-[N]` \
 adjustment, an optional pomodoro_shift object for a whole-item `++[N]`/`--[N]` \
-shift, an optional pomodoro_split object for a whole-item `=/` split, an optional pomodoro_close object for a `=x` link close suffix or \
+shift, an optional pomodoro_split object for a whole-item `=/` split, an optional pomodoro_merge object for a whole-item `=*` merge, an optional pomodoro_close object for a `=x` link close suffix or \
 whole-item close, and structured diagnostics. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
@@ -223,7 +224,7 @@ purely lexical and never guesses current ledger times. A whole-item \
 minutes later, `--` moves it 5 minutes earlier) reports mode \
 'pomodoro_shift' with a `pomodoro_shift` object (`raw`, direction as \
 `later`, and 5-minute `units` defaulting to 1) and a `pomodoro_shift` span \
-covering only the operator token. A whole-item `=/` split (for example `=/` splits the current merged Pomodoro, `=/build` splits the merged entry whose base is build, `=/build#fix` splits only FIX out) reports mode 'pomodoro_split' with a `pomodoro_split` object (`raw`, optional `base`, and ordered `selectors`) plus a `pomodoro_split` span over `=/` and `pomodoro_name` spans over the base and each selector; a trailing `#` needs `pomodoro_split_type`. A `@@` declaration still routes ordinary \
+covering only the operator token. A whole-item `=/` split (for example `=/` splits the current merged Pomodoro, `=/build` splits the merged entry whose base is build, `=/build#fix` splits only FIX out) reports mode 'pomodoro_split' with a `pomodoro_split` object (`raw`, optional `base`, and ordered `selectors`) plus a `pomodoro_split` span over `=/` and `pomodoro_name` spans over the base and each selector; a trailing `#` needs `pomodoro_split_type`. A whole-item `=*` merge (for example `=*#fix` merges FIX into the current Pomodoro, `=*build#fix` merges FIX into BUILD) reports mode 'pomodoro_merge' with a `pomodoro_merge` object (`raw`, optional `src`, and ordered `dests`) plus a `pomodoro_merge` span over `=*` and `pomodoro_name` spans over the source and each dest; a dest-less token needs `pomodoro_merge_dest`. Digit and marker `=*` forms (`=*1`, `=*!2`, `=**`) stay retired-close teaching errors. A `@@` declaration still routes ordinary \
 items in the same draft but never turns an operator into a task or changes \
 its destination. Invalid standalone counts (`+0`, `++0`, overflow) and \
 malformed operator-first items (extra text, markers, or child lines) report \
@@ -326,7 +327,7 @@ twice); a chain whose `x` is not last nests its item ranges, so they never \
 partially overlap. Other `x` tokens (`xx`, `xa`, `x-ray`, a capitalized `X…`), other \
 doubled and bare starts followed by prose (`== foo`, `= foo`), and mid-body \
 `x` stay ordinary prose. The retired \
-`=x…`, `=*…`, and `=!…` whole-item spellings report 'pomodoro_close' plus an \
+`=x…` and `=!…` whole-item spellings, plus digit and marker `=*` forms (`=*1`, `=*!2`, `=**`), report 'pomodoro_close' plus an \
 `invalid_pomodoro_close` diagnostic that names the bare `x…` rewrite. On \
 link items the `=x…` suffix (the `=` separates it from the block ID) spans the same four span kinds after the route \
 and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' (or \
@@ -617,6 +618,10 @@ struct CaptureParseResult {
     /// older input.
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_split: Option<PomodoroSplitSpec>,
+    /// Validated additive whole-item `=*` merge spec. Omitted for every
+    /// older input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_merge: Option<PomodoroMergeSpec>,
     /// Validated additive `=x` link close suffix: the typed `=x…` text as `raw`.
     /// Omitted for every older input, so schema version 1 is unchanged
     /// for inputs without a close. Purely lexical and never guesses
@@ -738,6 +743,8 @@ struct CaptureParseItem {
     pomodoro_shift: Option<PomodoroShiftSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_split: Option<PomodoroSplitSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_merge: Option<PomodoroMergeSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSpec>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1055,6 +1062,7 @@ impl CaptureParseResult {
             pomodoro_adjust: parse.pomodoro_adjust,
             pomodoro_shift: parse.pomodoro_shift,
             pomodoro_split: parse.pomodoro_split,
+            pomodoro_merge: parse.pomodoro_merge,
             pomodoro_close: parse.pomodoro_close,
             dependencies: parse_dependencies(&parse.dependencies),
             blocked_tasks: parse_dependencies(&parse.blocked_tasks),
@@ -1224,6 +1232,7 @@ impl CaptureParseResult {
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
                     pomodoro_split: None,
+                    pomodoro_merge: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1256,6 +1265,7 @@ impl CaptureParseResult {
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
                     pomodoro_split: None,
+                    pomodoro_merge: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1421,6 +1431,7 @@ impl CaptureParseResult {
             pomodoro_adjust: parsed.pomodoro_adjust,
             pomodoro_shift: parsed.pomodoro_shift,
             pomodoro_split: parsed.pomodoro_split,
+            pomodoro_merge: parsed.pomodoro_merge,
             pomodoro_close: parsed.pomodoro_close,
             dependencies: parse_dependencies(&parsed.dependencies),
             blocked_tasks: parse_dependencies(&parsed.blocked_tasks),
@@ -2116,6 +2127,7 @@ fn empty_wire_item() -> CaptureParseItem {
         pomodoro_adjust: None,
         pomodoro_shift: None,
         pomodoro_split: None,
+        pomodoro_merge: None,
         pomodoro_close: None,
         dependencies: Vec::new(),
         blocked_tasks: Vec::new(),
@@ -2199,6 +2211,7 @@ fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
         pomodoro_adjust: item.pomodoro_adjust.clone(),
         pomodoro_shift: item.pomodoro_shift.clone(),
         pomodoro_split: item.pomodoro_split.clone(),
+        pomodoro_merge: item.pomodoro_merge.clone(),
         pomodoro_close: item.pomodoro_close.clone(),
         dependencies: parse_dependencies(&item.dependencies),
         blocked_tasks: parse_dependencies(&item.blocked_tasks),
@@ -2355,6 +2368,9 @@ fn print_human_success_with_styler(
     }
     if let Some(split) = result.pomodoro_split.as_ref() {
         print_field(styler, "split", &format_pomodoro_split(split));
+    }
+    if let Some(merge) = result.pomodoro_merge.as_ref() {
+        print_field(styler, "merge", &format_pomodoro_merge(merge));
     }
     if let Some(close) = result.pomodoro_close.as_ref() {
         print_field(styler, "close", &format_pomodoro_close(close));
@@ -2528,6 +2544,28 @@ fn format_pomodoro_shift(shift: &PomodoroShiftSpec) -> String {
     )
 }
 
+fn format_pomodoro_merge(merge: &PomodoroMergeSpec) -> String {
+    let dests = merge
+        .dests
+        .iter()
+        .map(|dest| {
+            if dest.literal {
+                format!("#\"{}\"", dest.text)
+            } else {
+                format!("#{}", dest.text)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    if let Some(src) = merge.src.as_deref() {
+        format!("=*{src}{dests}")
+    } else if dests.is_empty() {
+        "=*".to_string()
+    } else {
+        format!("=*{dests}")
+    }
+}
+
 fn format_pomodoro_split(split: &PomodoroSplitSpec) -> String {
     if split.selectors.is_empty() {
         if let Some(base) = split.base.as_deref() {
@@ -2535,13 +2573,18 @@ fn format_pomodoro_split(split: &PomodoroSplitSpec) -> String {
         }
         return "=/ (all merged-in types)".to_string();
     }
-    let selectors = split.selectors.iter().map(|selector| {
-        if selector.literal {
-            format!("#\"{}\"", selector.text)
-        } else {
-            format!("#{}", selector.text)
-        }
-    }).collect::<Vec<_>>().join("");
+    let selectors = split
+        .selectors
+        .iter()
+        .map(|selector| {
+            if selector.literal {
+                format!("#\"{}\"", selector.text)
+            } else {
+                format!("#{}", selector.text)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
     if let Some(base) = split.base.as_deref() {
         format!("=/{}{}", base, selectors)
     } else {

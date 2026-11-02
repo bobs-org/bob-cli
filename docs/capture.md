@@ -225,9 +225,14 @@ anything is written, and any failure rolls the whole batch back.
 | `=/build#fix` | Split only FIX out of BUILD + FIX + READ (target must have ≥3 types) |
 | `=/#fix` | Same, on the current Pomodoro |
 | `=/build foo` | Error: a split item must contain only the token; remove extra text, markers, or child lines |
+| `=*build#fix` | Merge planned FIX into BUILD |
+| `=*#fix` | Merge planned FIX into the current Pomodoro |
+| `=*build#fix#read` | Merge planned FIX and READ into BUILD, in that order |
+| `=*` / `=*build` | Incomplete merge: type a destination after `#` (and the message still names `x*` for parking every link) |
+| `=*1`, `=*!2`, `=**` | Unchanged retired-close teaching errors |
 | `= foo` | Ordinary task text; a bare `=` followed by prose stays prose |
 | `=xx`, `=xa`, `=xmas`, `=Bugs` | Named start (`=xx`/`=xa` were documented prose; that row changes), exactly like `=#xx` |
-| `=x`, `=X`, `=x2!1`, `=*`, `=!`, `=x wired the lexer` | Unchanged retired-close teaching errors |
+| `=x`, `=X`, `=x2!1`, `=*1`, `=!`, `=x wired the lexer` | Unchanged retired-close teaching errors |
 | `=x#bugs` | Unchanged retired error, now teaching `x =bugs` |
 | `xx`, `xa`, `x.`, `x-ray`, `xylophone` | Ordinary prose; only a plain `x` or a selection-shaped `x…` token closes |
 | `Plan x` | Ordinary task text; a mid-body `x` stays prose |
@@ -3353,6 +3358,22 @@ Inputs are the target entry (an open merged Pomodoro) and the split set (non-emp
 
 The bytes contract matches the start family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. JSON kind `pomodoro_split` keeps schema version 1 with `pomodoro_split: {path, entry_line, before, after, base, created: [{type, line, name, moved_links}], stayed_links}` and `pomodoro_blocks` refs for the source and every created entry (including zero-link entries). Human output prints `split BEFORE → AFTER · path line N` plus `↓ TYPE new Pomodoro · N links` rows (`no links` when empty).
 
+### Merging Pomodoros
+
+Capture a whole-item `=*` token to merge planned Pomodoros into a source. The token is `=*` plus an optional source plus `#dest` selectors (`#name` or `#"Literal"`):
+
+```bash
+bob capture '=*#fix'
+bob capture '=*build#fix'
+bob capture '=*build#fix#read'
+```
+
+`=*#fix` merges the planned FIX Pomodoro into the current Pomodoro (running, else the next planned a bare `=` would start). `=*build#fix` merges planned FIX into the open BUILD entry. Several `#dest` selectors append in typed order. A dest-less `=*` or `=*<src>` is incomplete (`capture-parse` needs `pomodoro_merge_dest`); the execute error also names `x*` so the retired parking-every-link hint survives. Digit and marker forms (`=*1`, `=*!2`, `=**`) stay retired-close teaching errors. Link suffixes `^bob:stop=*` stay retired aliases (`=x*`). `==*` keeps its "not a close" error.
+
+Each dest must be an untimed planned entry other than the source. Children of each dest append under the source; a dest Task Link whose trimmed line already sits as a top-level child of the source (or of an earlier dest) is dropped as a duplicate. The source keeps its checkbox, timespan, and position; dest entries are removed. The survivor's name is the R5 join (`BUILD + FIX + READ`). Guards (timed dest, MEET, same Pomodoro, dest already part of the source, repeated dest, missing target) each produce a precise teaching refusal with stable codes (`merge_timed_pomodoro`, `merge_meet`, `merge_same_pomodoro`, `merge_already_part`, `merge_dest_repeated`, `merge_target_missing`). A timed dest teaches the swap (`=*fix#build` when FIX is running).
+
+The bytes contract matches the split family: checkbox, timespan, position, separators, indentation, nested content, and neighboring sections are preserved. Dry-run computes the same result without writing, and any failure rolls the whole batch back. JSON kind `pomodoro_merge` keeps schema version 1 with `pomodoro_merge: {path, entry_line, before, after, absorbed: [{name, from_line, moved_lines, dropped_duplicates}]}` and `pomodoro_blocks` refs for the survivor and every removed dest. Human output prints `merged FIX, READ → BUILD + FIX + READ · path line N · N links moved`.
+
 ### Overriding the running Pomodoro
 
 A whole-item `=` / `=<X>` restarts the single running session with fresh
@@ -3799,8 +3820,10 @@ names the shed types on the next line,
 
 #### Retired close spellings
 
-Whole-item `=x…`, `=*…`, and `=!…` are claimed teaching errors. They write
-nothing. Each message names the typed token and the exact bare-`x` rewrite.
+Whole-item `=x…` and `=!…`, plus digit and marker `=*` forms (`=*1`,
+`=*!2`, `=**`), are claimed teaching errors. They write nothing. Each
+message names the typed token and the exact bare-`x` rewrite. Letter,
+`#`, and quote `=*` forms merge instead (see [Merging Pomodoros](#merging-pomodoros)).
 Link and task suffixes keep `=x…`; only the short `=*` / `=!` aliases on
 those suffixes retire, rewriting to `=x*` / `=x!`.
 
@@ -3811,7 +3834,6 @@ those suffixes retire, rewriting to `=x*` / `=x!`.
 | `=x2!1` | `` `=x2!1` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x2!1` `` |
 | `=x wired the lexer` | `` `=x` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x wired the lexer` `` |
 | `=x#bugs` | `` `=x#bugs` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x =bugs` `` |
-| `=*` | `` `=*` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x*` `` |
 | `=*1` | `` `=*1` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x*1` `` |
 | `=*!2` | `` `=*!2` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x*!2` `` |
 | `=!` | `` `=!` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x!` `` |

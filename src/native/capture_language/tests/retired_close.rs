@@ -27,12 +27,11 @@ fn retired_whole_item_closes_fail_with_the_bare_rewrite_in_both_parsers() {
         ("=X2", "=X2", "x2"),
         ("=x1,3!2", "=x1,3!2", "x1,3!2"),
         ("=x@2", "=x@2", "x@2"),
-        ("=*", "=*", "x*"),
         ("=!", "=!", "x!"),
         ("=*1", "=*1", "x*1"),
         ("=!2", "=!2", "x!2"),
         ("=*!2", "=*!2", "x*!2"),
-        ("=*abc", "=*abc", "x*abc"),
+        ("=**", "=**", "x**"),
         ("=x#bugs", "=x#bugs", "x =bugs"),
         ("=X#bugs", "=X#bugs", "x =bugs"),
         ("=x1,", "=x1,", "x1,"),
@@ -107,16 +106,24 @@ fn retired_closes_inside_chains_fail_on_their_own_range() {
     );
     assert_eq!(parse.items[1].diagnostics[0].range, Some((3, 8)));
 
-    // A bare `x` next to a retired token keeps its own valid parse.
+    // A bare `x` next to a dest-less merge keeps its own valid parse.
     let parse = parse_for_editor("x =*");
     assert_eq!(parse.items.len(), 2);
     assert!(parse.items[0].diagnostics.is_empty());
     assert!(parse.items[0].pomodoro_close.is_some());
+    assert_eq!(parse.items[1].mode, EditorMode::PomodoroMerge);
+    assert_eq!(parse.items[1].needs, vec![Need::PomodoroMergeDest]);
+    assert!(parse.items[1].diagnostics.is_empty());
+    assert_eq!(parse.items[1].spans[0].kind, SpanKind::PomodoroMerge);
+
+    // Digit `=*` forms stay retired closes inside a chain.
+    let parse = parse_for_editor("x =*1");
+    assert_eq!(parse.items.len(), 2);
     assert_eq!(
         parse.items[1].diagnostics[0].message,
-        retired_message("=*", "x*")
+        retired_message("=*1", "x*1")
     );
-    assert_eq!(parse.items[1].diagnostics[0].range, Some((2, 4)));
+    assert_eq!(parse.items[1].diagnostics[0].range, Some((2, 5)));
 
     // An inline owner carries the retired token and its entry.
     let parse = parse_for_editor("=x wired the lexer =");

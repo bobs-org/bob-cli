@@ -1904,7 +1904,8 @@ pub(crate) fn resolve_execution_ownership(
         }
         CaptureKind::PomodoroAdjust { .. }
         | CaptureKind::PomodoroShift { .. }
-        | CaptureKind::PomodoroSplit { .. } => Err(
+        | CaptureKind::PomodoroSplit { .. }
+        | CaptureKind::PomodoroMerge { .. } => Err(
             unsupported_target_relation_error("Pomodoro session-operator", sigil),
         ),
         CaptureKind::PomodoroClose { .. } => {

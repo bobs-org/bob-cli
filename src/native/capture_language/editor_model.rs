@@ -28,6 +28,7 @@ pub(crate) enum SpanKind {
     PomodoroAdjust,
     PomodoroShift,
     PomodoroSplit,
+    PomodoroMerge,
     SubBulletRoute,
     SubBulletBlockId,
     Drawer,
@@ -100,6 +101,7 @@ impl SpanKind {
             Self::PomodoroAdjust => "pomodoro_adjust",
             Self::PomodoroShift => "pomodoro_shift",
             Self::PomodoroSplit => "pomodoro_split",
+            Self::PomodoroMerge => "pomodoro_merge",
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::Drawer => "drawer",
@@ -207,6 +209,7 @@ pub(crate) enum EditorMode {
     PomodoroAdjust,
     PomodoroShift,
     PomodoroSplit,
+    PomodoroMerge,
     PomodoroLink,
     PomodoroClose,
     /// Whole-item `=`/`=<X>` start.
@@ -235,6 +238,7 @@ impl EditorMode {
             Self::PomodoroAdjust => "pomodoro_adjust",
             Self::PomodoroShift => "pomodoro_shift",
             Self::PomodoroSplit => "pomodoro_split",
+            Self::PomodoroMerge => "pomodoro_merge",
             Self::PomodoroLink => "pomodoro_link",
             Self::PomodoroClose => "pomodoro_close",
             Self::PomodoroStart => "pomodoro_start",
@@ -287,6 +291,8 @@ pub(crate) enum Need {
     TaskComplete,
     /// A `=/` split is still open: a trailing `#` needs a task type.
     PomodoroSplitType,
+    /// A `=*` merge is still open: a destination after `#` is missing.
+    PomodoroMergeDest,
     /// A template draft still needs a row to expand.
     TemplateRow,
 }
@@ -320,6 +326,7 @@ impl Need {
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",
             Self::PomodoroSplitType => "pomodoro_split_type",
+            Self::PomodoroMergeDest => "pomodoro_merge_dest",
             Self::TemplateRow => "template_row",
         }
     }
@@ -462,6 +469,9 @@ pub(crate) struct EditorParse {
     /// Validated additive whole-item `=/` split spec, when the item is an
     /// exact split token. `None` for every older input.
     pub(crate) pomodoro_split: Option<PomodoroSplitSpec>,
+    /// Validated additive whole-item `=*` merge spec, when the item is an
+    /// exact merge token. `None` for every older input.
+    pub(crate) pomodoro_merge: Option<PomodoroMergeSpec>,
     /// Validated additive `=x` close suffix, when the resolved marker or
     /// whole item carries one. `None` for every older input, so
     /// version-tolerant readers see no change. Purely lexical.
@@ -522,6 +532,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
     pub(crate) pomodoro_shift: Option<PomodoroShiftSpec>,
     pub(crate) pomodoro_split: Option<PomodoroSplitSpec>,
+    pub(crate) pomodoro_merge: Option<PomodoroMergeSpec>,
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
     /// Complete `&note:block-id` modifiers on this item, in source order.
     pub(crate) dependencies: Vec<DependencyEntry>,

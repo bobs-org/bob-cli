@@ -32,7 +32,7 @@ pub(super) fn extract_line_range<'a>(
     &contents[start..lines[end_line].end]
 }
 
-pub(super) fn remove_line_range(
+pub(crate) fn remove_line_range(
     contents: &str,
     lines: &[LineSpan<'_>],
     start_line: usize,

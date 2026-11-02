@@ -1130,6 +1130,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::PomodoroAdjust { .. } => EditorMode::PomodoroAdjust,
             CaptureKind::PomodoroShift { .. } => EditorMode::PomodoroShift,
             CaptureKind::PomodoroSplit { .. } => EditorMode::PomodoroSplit,
+            CaptureKind::PomodoroMerge { .. } => EditorMode::PomodoroMerge,
             CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
             CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,

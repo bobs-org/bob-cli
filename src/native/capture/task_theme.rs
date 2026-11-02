@@ -703,11 +703,9 @@ impl CaptureTaskThemeContext {
                 {
                     warnings.push(CaptureWarning::Text(message));
                 }
-                return Ok(None);
+                Ok(None)
             }
-            routing::LandOutcome::Consistent => {
-                return Ok(None);
-            }
+            routing::LandOutcome::Consistent => Ok(None),
             routing::LandOutcome::Merge { name } => {
                 let (Some(key), Some(display_name)) =
                     (effective_key, effective_name)
@@ -732,7 +730,7 @@ impl CaptureTaskThemeContext {
                 let Some(dest_index) = dest_index else {
                     return Ok(None);
                 };
-                return Ok(Some(AppliedLanding {
+                Ok(Some(AppliedLanding {
                     task_line: source_line.to_string(),
                     theme: None,
                     merge: Some(AppliedMerge {
@@ -741,31 +739,29 @@ impl CaptureTaskThemeContext {
                         added,
                         dest_index,
                     }),
-                }));
+                }))
             }
             routing::LandOutcome::Set { name, key } => {
                 let change = ThemeChange::Set { name, key };
-                return self.apply_theme_change(
+                self.apply_theme_change(
                     planner,
                     target,
                     block_id,
                     source_line,
                     change,
                     inherited,
-                );
+                )
             }
             routing::LandOutcome::Clear => match field {
-                TaskThemeState::None => return Ok(None),
-                _ => {
-                    return self.apply_theme_change(
-                        planner,
-                        target,
-                        block_id,
-                        source_line,
-                        ThemeChange::Clear,
-                        inherited,
-                    );
-                }
+                TaskThemeState::None => Ok(None),
+                _ => self.apply_theme_change(
+                    planner,
+                    target,
+                    block_id,
+                    source_line,
+                    ThemeChange::Clear,
+                    inherited,
+                ),
             },
         }
     }

@@ -52,6 +52,7 @@ mod pomodoro_close_retired;
 mod pomodoro_close_selection;
 mod pomodoro_close_successors;
 mod pomodoro_link;
+mod pomodoro_merge;
 mod pomodoro_name;
 mod pomodoro_override;
 mod pomodoro_reset;

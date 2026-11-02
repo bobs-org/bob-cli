@@ -118,6 +118,8 @@ fn build_result_inner(
             | CompletionContext::Directive
             | CompletionContext::PomodoroSplitBase
             | CompletionContext::PomodoroSplitType
+            | CompletionContext::PomodoroMergeSrc
+            | CompletionContext::PomodoroMergeDest
             | CompletionContext::WikilinkTask => {
                 unreachable!("link field context")
             }
@@ -585,6 +587,24 @@ fn build_result_inner(
         CompletionContext::PomodoroSplitType => {
             let (candidates, warnings) =
                 super::pomodoros::pomodoro_split_type_candidates(
+                    bob_dir,
+                    raw_text,
+                    cursor,
+                    &field.query,
+                )?;
+            (candidates, warnings)
+        }
+        CompletionContext::PomodoroMergeSrc => {
+            let (candidates, warnings) =
+                super::pomodoros::pomodoro_merge_src_candidates(
+                    bob_dir,
+                    &field.query,
+                )?;
+            (candidates, warnings)
+        }
+        CompletionContext::PomodoroMergeDest => {
+            let (candidates, warnings) =
+                super::pomodoros::pomodoro_merge_dest_candidates(
                     bob_dir,
                     raw_text,
                     cursor,

@@ -9,6 +9,7 @@ use super::editor_parse::*;
 use super::item::*;
 use super::markers::*;
 use super::model::*;
+use super::pomodoro_literal::opens_exact_name;
 use super::start_selection::*;
 use super::tokens::*;
 
@@ -144,6 +145,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
             pomodoro_adjust,
             pomodoro_shift,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -190,6 +192,7 @@ pub(super) fn editor_operator_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -239,6 +242,7 @@ pub(super) fn editor_start_invalid_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -779,6 +783,7 @@ fn editor_named_valid_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -825,6 +830,7 @@ fn editor_start_drop_incomplete_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -870,6 +876,7 @@ fn editor_start_timing_incomplete_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -1006,6 +1013,7 @@ fn editor_named_incomplete_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -1348,6 +1356,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
                     pomodoro_split: None,
+                    pomodoro_merge: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1385,6 +1394,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
                     pomodoro_split: None,
+                    pomodoro_merge: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1491,7 +1501,10 @@ pub(super) fn parse_editor_split_item<'a>(
     // quotes) gets a `pomodoro_name` span. Empty selectors get no name
     // span; the need below teaches the type.
     let mut cursor = offset;
-    let first = parent_trimmed.split_whitespace().next().unwrap_or(parent_trimmed);
+    let first = parent_trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or(parent_trimmed);
     for selector in &selectors {
         // Find the `#` for this selector from the cursor in trimmed
         // coordinates, then map to absolute.
@@ -1516,22 +1529,23 @@ pub(super) fn parse_editor_split_item<'a>(
             // first token at this selector's `#`.
             let rel = cursor - token_start;
             let after_hash = first.get(rel..).unwrap_or("");
-            if let Some(lex) = super::pomodoro_literal::lex_exact_name_after_hash(
-                after_hash,
-                after_hash.len(),
-            ) {
-                if lex.complete {
-                    spans.push(Span {
-                        start: cursor,
-                        end: cursor + lex.literal_len,
-                        kind: SpanKind::PomodoroName,
-                        project_note: None,
-                        title: None,
-                        key: None,
-                    });
-                    cursor += lex.literal_len;
-                    continue;
-                }
+            if let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+                && lex.complete
+            {
+                spans.push(Span {
+                    start: cursor,
+                    end: cursor + lex.literal_len,
+                    kind: SpanKind::PomodoroName,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+                cursor += lex.literal_len;
+                continue;
             }
             spans.push(Span {
                 start: cursor,
@@ -1579,7 +1593,8 @@ pub(super) fn parse_editor_split_item<'a>(
             }
             continue;
         }
-        if !selector.literal && !is_pomodoro_selector_component(&selector.text) {
+        if !selector.literal && !is_pomodoro_selector_component(&selector.text)
+        {
             let message = crate::native::capture_language::markers::pomodoro_split_selector_error(
                 first,
                 &selector.text,
@@ -1637,6 +1652,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
                 pomodoro_split: Some(spec),
+                pomodoro_merge: None,
                 pomodoro_close: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
@@ -1689,6 +1705,7 @@ pub(super) fn parse_editor_split_item<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: Some(spec),
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -1704,6 +1721,334 @@ pub(super) fn parse_editor_split_item<'a>(
         },
         declarations: Vec::new(),
     })
+}
+
+/// Whole-item `=*` merge for the live editor. Mirrors the merge branch
+/// of [`parse_pomodoro_equals_item`] but never fails: an exact token
+/// reports `pomodoro_merge` with its spec, a `pomodoro_merge` span over
+/// `=*` plus `pomodoro_name` spans over the source and each dest name,
+/// while a dest-less `=*` / `=*<src>` or a trailing `#` reports
+/// `pomodoro_merge` needing `pomodoro_merge_dest`. Extra text, child
+/// lines, or malformed selectors report `pomodoro_merge` plus one
+/// `invalid_pomodoro_merge` diagnostic. Purely lexical.
+pub(super) fn parse_editor_merge_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    src: Option<String>,
+    dests: Vec<PomodoroSplitSelector>,
+    len: usize,
+) -> Option<EditorItemOutcome<'a>> {
+    if !parent_trimmed.starts_with("=*") {
+        return None;
+    }
+    let parent = item.lines.first().expect("nonempty item");
+    let parent_text = parent.raw.text;
+    let leading = parent_text.len() - parent_text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let mut spans = vec![Span {
+        start: token_start,
+        end: token_start + 2,
+        kind: SpanKind::PomodoroMerge,
+        project_note: None,
+        title: None,
+        key: None,
+    }];
+    let mut offset = token_start + 2;
+    let first = parent_trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or(parent_trimmed);
+    if let Some(src_name) = src.as_deref() {
+        if !src_name.is_empty() {
+            let rel = offset - token_start;
+            let after_sigil = first.get(rel..).unwrap_or("");
+            if opens_exact_name(after_sigil)
+                && let Some(lex) =
+                    super::pomodoro_literal::lex_exact_name_after_hash(
+                        after_sigil,
+                        after_sigil.len(),
+                    )
+            {
+                spans.push(Span {
+                    start: offset,
+                    end: offset + lex.literal_len,
+                    kind: SpanKind::PomodoroName,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+                offset += lex.literal_len;
+            } else {
+                spans.push(Span {
+                    start: offset,
+                    end: offset + src_name.len(),
+                    kind: SpanKind::PomodoroName,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+                offset += src_name.len();
+            }
+        } else if opens_exact_name(first.get(2..).unwrap_or(""))
+            && let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    first.get(2..).unwrap_or(""),
+                    first.len().saturating_sub(2),
+                )
+        {
+            offset += lex.literal_len;
+        }
+    }
+    let mut cursor = offset;
+    for dest in &dests {
+        cursor += 1;
+        if dest.text.is_empty() {
+            if dest.literal {
+                let rest = first.len().saturating_sub(cursor - token_start);
+                cursor += rest;
+            }
+            continue;
+        }
+        if dest.literal {
+            let rel = cursor - token_start;
+            let after_hash = first.get(rel..).unwrap_or("");
+            if let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+                && lex.complete
+            {
+                spans.push(Span {
+                    start: cursor,
+                    end: cursor + lex.literal_len,
+                    kind: SpanKind::PomodoroName,
+                    project_note: None,
+                    title: None,
+                    key: None,
+                });
+                cursor += lex.literal_len;
+                continue;
+            }
+            spans.push(Span {
+                start: cursor,
+                end: cursor + dest.text.len(),
+                kind: SpanKind::PomodoroName,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+            cursor += dest.text.len();
+        } else {
+            spans.push(Span {
+                start: cursor,
+                end: cursor + dest.text.len(),
+                kind: SpanKind::PomodoroName,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+            cursor += dest.text.len();
+        }
+    }
+    let single_token_parent = parent_trimmed == first && first.len() == len;
+    let exact = single_token_parent && item.lines.len() == 1;
+    for (index, dest) in dests.iter().enumerate() {
+        let is_last = index + 1 == dests.len();
+        if dest.text.is_empty() {
+            if dest.literal || !is_last || !first.ends_with('#') {
+                let message = crate::native::capture_language::markers::pomodoro_merge_selector_error(
+                    first, "",
+                );
+                return Some(editor_merge_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    spans,
+                    message,
+                    None,
+                ));
+            }
+            continue;
+        }
+        if !dest.literal && !is_pomodoro_selector_component(&dest.text) {
+            let message = crate::native::capture_language::markers::pomodoro_merge_selector_error(
+                first,
+                &dest.text,
+            );
+            return Some(editor_merge_invalid_outcome(
+                item,
+                parent_trimmed,
+                spans,
+                message,
+                None,
+            ));
+        }
+    }
+    if let Some(src_name) = src.as_deref()
+        && (src_name.is_empty()
+            || (!src_name.contains(char::is_whitespace)
+                && !is_pomodoro_selector_component(src_name)))
+    {
+        let message = crate::native::capture_language::markers::pomodoro_merge_selector_error(
+            first, src_name,
+        );
+        return Some(editor_merge_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            None,
+        ));
+    }
+    let needs_dest = dests.is_empty()
+        || dests.last().is_some_and(|last| last.text.is_empty());
+    if needs_dest {
+        let spec = PomodoroMergeSpec {
+            raw: first.to_string(),
+            src,
+            dests: dests
+                .iter()
+                .filter(|dest| !dest.text.is_empty())
+                .cloned()
+                .collect(),
+        };
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: parent_trimmed.to_string(),
+                mode: EditorMode::PomodoroMerge,
+                route: None,
+                section: None,
+                block_id: None,
+                needs: vec![Need::PomodoroMergeDest],
+                ref_listen: false,
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_split: None,
+                pomodoro_merge: Some(spec),
+                pomodoro_close: None,
+                dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
+                relations: Vec::new(),
+                dependency_target: None,
+                task_complete: None,
+                spans,
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+                has_local_destination: false,
+                local_destination_markers: Vec::new(),
+                drawer_bullet_target: None,
+            },
+            declarations: Vec::new(),
+        });
+    }
+    if !exact {
+        let message = crate::native::capture_language::markers::pomodoro_merge_shape_error(
+            first,
+        );
+        let range = extra_text_range(token_start, parent_trimmed, len);
+        return Some(editor_merge_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            Some(range),
+        ));
+    }
+    let spec = PomodoroMergeSpec {
+        raw: first.to_string(),
+        src,
+        dests,
+    };
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::PomodoroMerge,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: Some(spec),
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            spans,
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+        },
+        declarations: Vec::new(),
+    })
+}
+
+/// Build a merge near-miss outcome: `pomodoro_merge` mode, the spans typed
+/// so far, and one `invalid_pomodoro_merge` diagnostic, with no spec.
+fn editor_merge_invalid_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    spans: Vec<Span>,
+    message: String,
+    range: Option<(usize, usize)>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::PomodoroMerge,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            spans,
+            diagnostics: vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_merge",
+                message,
+                range,
+            }],
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+        },
+        declarations: Vec::new(),
+    }
 }
 
 /// Build a split near-miss outcome: `pomodoro_split` mode, the spans typed
@@ -1733,6 +2078,7 @@ fn editor_split_invalid_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -1853,6 +2199,15 @@ pub(super) fn parse_editor_close_item<'a>(
                 parent_trimmed,
                 base,
                 selectors,
+                len,
+            );
+        }
+        EqualsToken::Merge { src, dests, len } => {
+            return parse_editor_merge_item(
+                item,
+                parent_trimmed,
+                src,
+                dests,
                 len,
             );
         }
@@ -2713,6 +3068,7 @@ fn editor_close_outcome<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),

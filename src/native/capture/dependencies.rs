@@ -3240,6 +3240,7 @@ pub(super) fn plan_dependency_only_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update,

@@ -26,7 +26,7 @@ fn retired_whole_item_closes_name_the_bare_rewrite_and_write_nothing() {
         ("=x", "=x", "x"),
         ("=X", "=X", "x"),
         ("=x2!1", "=x2!1", "x2!1"),
-        ("=*", "=*", "x*"),
+        ("=*1", "=*1", "x*1"),
         ("=!2", "=!2", "x!2"),
         ("=*!2", "=*!2", "x*!2"),
         ("=x wired the lexer", "=x", "x wired the lexer"),

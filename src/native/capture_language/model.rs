@@ -170,6 +170,13 @@ pub(crate) enum CaptureKind {
     PomodoroSplit {
         spec: PomodoroSplitSpec,
     },
+    /// A whole-item `=*` Pomodoro merge: absorb planned dest Pomodoros
+    /// into a source. The item must contain only the merge token and
+    /// have exactly one physical line; any extra text, markers, or
+    /// child lines are refused with a teaching error, never a task.
+    PomodoroMerge {
+        spec: PomodoroMergeSpec,
+    },
 }
 
 /// Which sigil spelled a solo Pomodoro-link item.
@@ -424,6 +431,21 @@ pub(crate) struct PomodoroSplitSpec {
     /// Ordered split selectors after the base, in typed order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) selectors: Vec<PomodoroSplitSelector>,
+}
+
+/// Whole-item `=*` merge specification: the optional source plus the
+/// ordered `#dest` selectors. `raw` is the trimmed token exactly as typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PomodoroMergeSpec {
+    /// Trimmed merge token exactly as typed (for example `=*build#fix`).
+    pub(crate) raw: String,
+    /// Optional source name after `=*`. `None` selects the current
+    /// Pomodoro (`=*#fix`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) src: Option<String>,
+    /// Ordered destination selectors after the source, in typed order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) dests: Vec<PomodoroSplitSelector>,
 }
 
 /// How a marker-only `@route+block-id` capture should change an existing task.

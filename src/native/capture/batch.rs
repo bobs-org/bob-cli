@@ -334,6 +334,11 @@ pub(super) fn plan_capture_to_target(
                 "pomodoro split capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroMerge { .. } => {
+            return Err(CaptureError::io(
+                "pomodoro merge capture invariant failed: wrong write planner",
+            ));
+        }
         CaptureKind::PomodoroLink { .. } => {
             return Err(CaptureError::io(
                 "pomodoro link capture invariant failed: wrong write planner",
@@ -622,6 +627,29 @@ pub(super) struct PomodoroSplitSummary {
     pub(super) base: crate::native::pomodoro_themes::ThemeRef,
     pub(super) created: Vec<PomodoroSplitCreated>,
     pub(super) stayed_links: usize,
+}
+
+/// One absorbed dest entry from a `=*` merge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroMergeAbsorbed {
+    pub(super) name: String,
+    pub(super) from_line: usize,
+    pub(super) moved_lines: usize,
+    pub(super) dropped_duplicates: usize,
+}
+
+/// `=*` merge report: the survivor before/after and every absorbed dest
+/// in selector order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroMergeSummary {
+    pub(super) path: String,
+    pub(super) entry_line: usize,
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) absorbed: Vec<PomodoroMergeAbsorbed>,
+    /// Task Links actually moved onto the survivor; used by human output.
+    #[serde(skip)]
+    pub(super) moved_links: usize,
 }
 
 #[derive(Debug)]

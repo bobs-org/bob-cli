@@ -593,6 +593,8 @@ pub(super) const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `x` cannot 
 
 pub(crate) const POMODORO_SPLIT_FORCED_ERROR: &str = "Pomodoro split `=/` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the split alone";
 
+pub(crate) const POMODORO_MERGE_FORCED_ERROR: &str = "Pomodoro merge `=*` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the merge alone";
+
 /// Whole-item split shape error, formatted with the typed token.
 pub(super) fn pomodoro_split_shape_error(token: &str) -> String {
     format!(
@@ -601,7 +603,10 @@ pub(super) fn pomodoro_split_shape_error(token: &str) -> String {
 }
 
 /// Split selector errors: empty, incomplete literal, or invalid characters.
-pub(super) fn pomodoro_split_selector_error(token: &str, selector: &str) -> String {
+pub(super) fn pomodoro_split_selector_error(
+    token: &str,
+    selector: &str,
+) -> String {
     if selector.is_empty() {
         if token.ends_with('#') {
             return format!(
@@ -614,6 +619,42 @@ pub(super) fn pomodoro_split_selector_error(token: &str, selector: &str) -> Stri
     }
     format!(
         "Pomodoro split selector `{selector}` in `{token}` may contain only A-Z, a-z, 0-9 or `& ' ( ) + , . / -`; write spaces as `-`"
+    )
+}
+
+/// Whole-item merge shape error, formatted with the typed token.
+pub(super) fn pomodoro_merge_shape_error(token: &str) -> String {
+    format!(
+        "Pomodoro merge `{token}` must be the whole capture item; remove extra text, markers, or child lines"
+    )
+}
+
+/// Dest-less `=*` / `=*<src>` incomplete merge: teach `#dest` and keep the
+/// retired `x*` close hint.
+pub(super) fn pomodoro_merge_incomplete_error(token: &str) -> String {
+    let example = format!("{token}#fix");
+    format!(
+        "`{token}` is incomplete: type a destination after `#` (for example `{example}`); to close parking every link, write `x*`"
+    )
+}
+
+/// Merge dest selector errors: empty, incomplete literal, or invalid characters.
+pub(super) fn pomodoro_merge_selector_error(
+    token: &str,
+    selector: &str,
+) -> String {
+    if selector.is_empty() {
+        if token.ends_with('#') {
+            return format!(
+                "`{token}` is incomplete: type a destination after `#` (for example `{token}fix`)"
+            );
+        }
+        return format!(
+            "Pomodoro merge `{token}` has an empty `#` selector; type a destination after each `#` (for example `=*build#fix`)"
+        );
+    }
+    format!(
+        "Pomodoro merge selector `{selector}` in `{token}` may contain only A-Z, a-z, 0-9 or `& ' ( ) + , . / -`; write spaces as `-`"
     )
 }
 

@@ -24,9 +24,10 @@ use super::{
         CaptureParseOptions, ClipRequest, DrawerSelector, ParsedCaptureItem,
         ParsedCaptureText, ParsedDependencyTarget, ParsedDependencyTargetKind,
         ParsedRelation, PomodoroAdjustSpec, PomodoroCloseSpec,
-        PomodoroShiftSpec, PomodoroSplitSpec, PomodoroStartSpec, ProjectNoteForm,
-        RelationDirection, SubBulletTarget, TaskToggleIntent,
-        POMODORO_CLOSE_INTERNAL_BULLETS_ERROR, POMODORO_START_FORCED_ERROR,
+        PomodoroMergeSpec, PomodoroShiftSpec, PomodoroSplitSpec,
+        PomodoroStartSpec, ProjectNoteForm, RelationDirection, SubBulletTarget,
+        TaskToggleIntent, POMODORO_CLOSE_INTERNAL_BULLETS_ERROR,
+        POMODORO_START_FORCED_ERROR,
     },
     capture_pomodoro_close, capture_pomodoro_start, capture_pomodoros,
     capture_project_note, capture_schedule_log, capture_task_toggle,
@@ -71,10 +72,11 @@ mod output;
 mod plan;
 mod pomodoro_adjust;
 mod pomodoro_blocks;
-mod pomodoro_split;
 mod pomodoro_close;
 mod pomodoro_insert;
 mod pomodoro_link;
+mod pomodoro_merge;
+mod pomodoro_split;
 mod pomodoro_start;
 mod project_deps;
 mod project_note;
@@ -115,9 +117,10 @@ use plan::*;
 use pomodoro_adjust::*;
 use pomodoro_blocks::*;
 use pomodoro_close::*;
-use pomodoro_split::*;
 use pomodoro_insert::*;
 use pomodoro_link::*;
+use pomodoro_merge::*;
+use pomodoro_split::*;
 use pomodoro_start::*;
 use project_deps::*;
 use project_note::*;
@@ -137,7 +140,6 @@ use task_theme::*;
 use task_toggle::*;
 
 pub(crate) use batch::{CaptureBatchPlanner, StagedTextFile};
-pub(crate) use task_theme::CaptureTaskThemeContext;
 pub(crate) use block_diff::block_depths;
 pub(crate) use commit::{validate_target_parent, write_staged_files};
 pub(crate) use existing_task_link::{
@@ -166,6 +168,7 @@ pub(crate) use sub_bullet::{
     nearest_shallower_list_item_parent, parse_managed_task_log_marker,
     ManagedTaskLogKind, MANAGED_TASK_LOG_LABELS,
 };
+pub(crate) use task_theme::CaptureTaskThemeContext;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();

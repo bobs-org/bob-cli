@@ -67,6 +67,10 @@ pub(crate) enum CompletionContext {
     PomodoroSplitBase,
     /// A `=/` split `#type` field: the target's merged-in types.
     PomodoroSplitType,
+    /// A `=*` merge source field: today's open Pomodoros.
+    PomodoroMergeSrc,
+    /// A `=*` merge `#dest` field: untimed planned entries other than src.
+    PomodoroMergeDest,
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
@@ -1022,7 +1026,10 @@ fn pomodoro_split_field_at(
         } else {
             name_start_abs + selector.text.len()
         };
-        if cursor > name_start_abs - 1 && cursor <= name_end_abs && cursor >= name_start_abs {
+        if cursor > name_start_abs - 1
+            && cursor <= name_end_abs
+            && cursor >= name_start_abs
+        {
             // Cursor just after `#` through the end of the name.
             let typed_len = cursor - name_start_abs;
             let query = if selector.literal {
@@ -1043,7 +1050,11 @@ fn pomodoro_split_field_at(
                 })
                 .unwrap_or_default()
             } else {
-                selector.text.get(..typed_len).unwrap_or_default().to_string()
+                selector
+                    .text
+                    .get(..typed_len)
+                    .unwrap_or_default()
+                    .to_string()
             };
             // An empty decoded query still completes (unfiltered list).
             return Some(CompletionField {
@@ -1076,7 +1087,141 @@ fn pomodoro_split_field_at(
         }
         selector_index += 1;
     }
-    return None;
+    None
+}
+
+/// Completion field for a `=*` merge source or `#dest` selector. The
+/// cursor just after `=*` (including a dest-less token) completes the
+/// source; a cursor just after `#` through a dest name completes that
+/// dest. Neither sigil is inside the replacement.
+fn pomodoro_merge_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let parent = item.lines.first()?;
+    let text = parent.raw.text;
+    let trimmed = text.trim();
+    let super::item::EqualsToken::Merge { src, dests, len } =
+        super::item::session_equals_token(trimmed)?
+    else {
+        return None;
+    };
+    let _ = len;
+    let leading = text.len() - text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let src_start = token_start + 2;
+    let first = trimmed.split_whitespace().next().unwrap_or(trimmed);
+    let src_len = if src.as_deref().is_some_and(|name| !name.is_empty()) {
+        let after_sigil = first.get(2..).unwrap_or("");
+        if super::pomodoro_literal::opens_exact_name(after_sigil)
+            && let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_sigil,
+                    after_sigil.len(),
+                )
+        {
+            lex.literal_len
+        } else {
+            src.as_deref().unwrap_or_default().len()
+        }
+    } else {
+        0
+    };
+    let src_end = src_start + src_len;
+    if cursor >= src_start && cursor <= src_end {
+        let rel = cursor - token_start;
+        if first.as_bytes().get(rel) == Some(&b'#') {
+            // fall through to dest handling
+        } else {
+            let query = src
+                .as_deref()
+                .unwrap_or_default()
+                .get(..cursor.saturating_sub(src_start))
+                .unwrap_or_default()
+                .to_string();
+            return Some(CompletionField {
+                context: CompletionContext::PomodoroMergeSrc,
+                route: None,
+                block_id: None,
+                query,
+                replacement: (src_start, src_end),
+                bare_name: true,
+            });
+        }
+    }
+    let mut rel = src_end - token_start;
+    let mut dest_index = 0;
+    while rel < first.len() && first.as_bytes()[rel] == b'#' {
+        let after_hash = &first[rel + 1..];
+        let dest = dests.get(dest_index)?;
+        let name_start_abs = token_start + rel + 1;
+        let name_end_abs = if dest.literal {
+            if let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+            {
+                if lex.complete {
+                    name_start_abs + lex.literal_len
+                } else {
+                    token_start + first.len()
+                }
+            } else {
+                name_start_abs
+            }
+        } else {
+            name_start_abs + dest.text.len()
+        };
+        if cursor >= name_start_abs && cursor <= name_end_abs {
+            let typed_len = cursor - name_start_abs;
+            let query = if dest.literal {
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+                .map(|_lex| {
+                    let typed = &after_hash[..typed_len.min(after_hash.len())];
+                    super::pomodoro_literal::decode_partial_literal_text(
+                        typed
+                            .strip_prefix('"')
+                            .or_else(|| typed.strip_prefix('“'))
+                            .unwrap_or(typed),
+                    )
+                })
+                .unwrap_or_default()
+            } else {
+                dest.text.get(..typed_len).unwrap_or_default().to_string()
+            };
+            return Some(CompletionField {
+                context: CompletionContext::PomodoroMergeDest,
+                route: None,
+                block_id: None,
+                query,
+                replacement: (name_start_abs, name_end_abs),
+                bare_name: false,
+            });
+        }
+        if cursor == name_start_abs - 1 {
+            return None;
+        }
+        if dest.literal {
+            if let Some(lex) =
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after_hash,
+                    after_hash.len(),
+                )
+            {
+                rel += 1 + lex.literal_len;
+            } else {
+                rel += 1;
+            }
+        } else {
+            rel += 1 + dest.text.len();
+        }
+        dest_index += 1;
+    }
+    None
 }
 
 /// For a `pomodoro_start_name` field, whether a swap would keep the
@@ -1191,6 +1336,11 @@ pub(crate) fn completion_field_at(
     // task-type markers.
     if line_index == 0
         && let Some(field) = pomodoro_split_field_at(item, cursor)
+    {
+        return Some(field);
+    }
+    if line_index == 0
+        && let Some(field) = pomodoro_merge_field_at(item, cursor)
     {
         return Some(field);
     }

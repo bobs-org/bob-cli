@@ -510,6 +510,9 @@ fn refuse_clip_on_incompatible_kind(
         CaptureKind::PomodoroSplit { .. } => {
             "Pomodoro split `=/` cannot be combined with %c; capture the split alone"
         }
+        CaptureKind::PomodoroMerge { .. } => {
+            "Pomodoro merge `=*` cannot be combined with %c; capture the merge alone"
+        }
         CaptureKind::PomodoroClose { .. } => {
             "Pomodoro close `x` cannot be combined with %c; capture the close alone"
         }
@@ -1628,6 +1631,14 @@ pub(crate) enum EqualsToken {
         selectors: Vec<PomodoroSplitSelector>,
         len: usize,
     },
+    /// A whole-item `=*` Pomodoro merge: `src` is the optional bare or
+    /// quoted source after `=*`, `dests` are the ordered `#name` parts,
+    /// and `len` is the token's byte length including the sigil.
+    Merge {
+        src: Option<String>,
+        dests: Vec<PomodoroSplitSelector>,
+        len: usize,
+    },
     /// A leading bare lowercase `x`, one of its claimed selection/hash near
     /// misses, or a retired `=x`/`=X`/`=*`/`=!` spelling. The retired
     /// spellings stay claimed so they fail with a teaching error instead of
@@ -1779,6 +1790,101 @@ fn lex_split_after_slash(
     (base, selectors, token_len)
 }
 
+/// Whether the text after `=*` is a merge (letter, `#`, quote, or empty)
+/// rather than a retired close (`=*1`, `=*!2`, `=**`, `=*@`, `=*~`, `=*,`).
+fn merge_star_rest_is_merge(after_star: &str) -> bool {
+    after_star.is_empty()
+        || after_star.starts_with('“')
+        || matches!(
+            after_star.as_bytes().first(),
+            Some(byte) if byte.is_ascii_alphabetic() || *byte == b'#' || *byte == b'"'
+        )
+}
+
+/// Lex the text after `=*` (the `*` already stripped) into an optional
+/// source plus ordered `#dest` selectors. Quoted sources (`=*"NAME"#fix`)
+/// run through the exact-name lexer. `sigil_len` is 1 for the single `=`
+/// sigil. The returned length includes `=*`, the source, and every `#`
+/// part.
+fn lex_merge_after_star(
+    after_star: &str,
+    sigil_len: usize,
+) -> (Option<String>, Vec<PomodoroSplitSelector>, usize) {
+    let mut token_len = sigil_len + 1;
+    let mut src: Option<String> = None;
+    let mut pos = 0;
+    if opens_exact_name(after_star)
+        && let Some(lex) =
+            lex_exact_name_after_hash(after_star, after_star.len())
+    {
+        if lex.complete {
+            src = Some(
+                canonicalize_exact_name(&lex.decoded).unwrap_or(lex.decoded),
+            );
+        } else {
+            src = Some(String::new());
+        }
+        pos += lex.literal_len;
+        token_len += lex.literal_len;
+    } else if let Some(name_len) = split_base_len(after_star) {
+        src = Some(after_star[..name_len].to_string());
+        pos += name_len;
+        token_len += name_len;
+    }
+    let mut dests = Vec::new();
+    let bytes_len = after_star.len();
+    while pos < bytes_len && after_star.as_bytes()[pos] == b'#' {
+        let after_hash = &after_star[pos + 1..];
+        if after_hash.is_empty() {
+            dests.push(PomodoroSplitSelector {
+                text: String::new(),
+                literal: false,
+            });
+            token_len += 1;
+            break;
+        }
+        if opens_exact_name(after_hash)
+            && let Some(lex) =
+                lex_exact_name_after_hash(after_hash, after_hash.len())
+        {
+            if lex.complete {
+                dests.push(PomodoroSplitSelector {
+                    text: canonicalize_exact_name(&lex.decoded)
+                        .unwrap_or(lex.decoded),
+                    literal: true,
+                });
+                token_len += 1 + lex.literal_len;
+                pos += 1 + lex.literal_len;
+            } else {
+                dests.push(PomodoroSplitSelector {
+                    text: String::new(),
+                    literal: true,
+                });
+                token_len += 1 + lex.literal_len;
+                pos += 1 + lex.literal_len;
+            }
+            continue;
+        }
+        let name_len = split_selector_extent(after_hash);
+        if name_len == 0 {
+            dests.push(PomodoroSplitSelector {
+                text: String::new(),
+                literal: false,
+            });
+            token_len += 1;
+            pos += 1;
+            continue;
+        }
+        dests.push(PomodoroSplitSelector {
+            text: after_hash[..name_len].to_string(),
+            literal: false,
+        });
+        token_len += 1 + name_len;
+        pos += 1 + name_len;
+    }
+    (src, dests, token_len)
+}
+
 /// Claim a bare lowercase close at the first whitespace-delimited token, or
 /// lex the `=`-family token at the start of trimmed item text, mirroring
 /// [`session_operator_token`]. Returns `None` for ordinary prose. A retired
@@ -1803,6 +1909,20 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     let first = text.split_whitespace().next().unwrap_or(text);
     if classify_whole_item_close(first).is_some() || first.starts_with("x#") {
         return Some(EqualsToken::Close);
+    }
+    // Merge-shaped `=*` (letter, `#`, quote, or bare) claims the token
+    // before retired close, so `=*build#fix` merges and `=*1` still
+    // teaches `x*1`. `retired_whole_item_close_rewrite("=*")` stays Some
+    // so `==*` remains the doubled-close teaching error.
+    if let Some(after_star) = first.strip_prefix("=*")
+        && merge_star_rest_is_merge(after_star)
+    {
+        let (src, dests, merge_len) = lex_merge_after_star(after_star, 1);
+        return Some(EqualsToken::Merge {
+            src,
+            dests,
+            len: merge_len,
+        });
     }
     // Retired `=x`/`=X`/`=*`/`=!`/`=x#…` closes claim the token; other
     // `=x…` shapes (`=xx`, `=xmas`) fall through to start lexing.
@@ -2021,6 +2141,7 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
             len == token.len() || counted
         }
         Some(EqualsToken::Split { len, .. }) => len == token.len(),
+        Some(EqualsToken::Merge { len, .. }) => len == token.len(),
         Some(EqualsToken::Close) => {
             // A `==`-prefixed close tail (`==x`, `==X1`, `==*`, `==!2`) is
             // a claimed teaching near miss, so it chains like any other
@@ -2496,9 +2617,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             // or malformed selector, never a task.
             for selector in &selectors {
                 if selector.text.is_empty() {
-                    return Err(pomodoro_split_selector_error(
-                        first, "",
-                    ));
+                    return Err(pomodoro_split_selector_error(first, ""));
                 }
                 if !selector.literal
                     && !is_pomodoro_selector_component(&selector.text)
@@ -2514,7 +2633,8 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             {
                 return Err(pomodoro_split_selector_error(first, base_name));
             }
-            let single_token_parent = parent_trimmed == first && first.len() == len;
+            let single_token_parent =
+                parent_trimmed == first && first.len() == len;
             if !single_token_parent || item.lines.len() != 1 {
                 return Err(pomodoro_split_shape_error(first));
             }
@@ -2526,7 +2646,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 base,
                 selectors,
             };
-            return Ok(Some(parsed_capture_item_outcome(
+            Ok(Some(parsed_capture_item_outcome(
                 item,
                 ParsedCaptureText {
                     body: first.to_string(),
@@ -2544,7 +2664,71 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 },
                 Vec::new(),
                 None,
-            )));
+            )))
+        }
+        EqualsToken::Merge { src, dests, len } => {
+            let Some(first) = parent_trimmed.split_whitespace().next() else {
+                return Ok(None);
+            };
+            if !parent_trimmed.starts_with("=*") {
+                return Ok(None);
+            }
+            for dest in &dests {
+                if dest.text.is_empty() {
+                    return Err(pomodoro_merge_selector_error(first, ""));
+                }
+                if !dest.literal && !is_pomodoro_selector_component(&dest.text)
+                {
+                    return Err(pomodoro_merge_selector_error(
+                        first, &dest.text,
+                    ));
+                }
+            }
+            if let Some(src_name) = src.as_deref()
+                && (src_name.is_empty()
+                    || (!src_name.contains(char::is_whitespace)
+                        && !is_pomodoro_selector_component(src_name)))
+            {
+                return Err(pomodoro_merge_selector_error(first, src_name));
+            }
+            let single_token_parent =
+                parent_trimmed == first && first.len() == len;
+            if dests.is_empty() {
+                if !single_token_parent || item.lines.len() != 1 {
+                    return Err(pomodoro_merge_shape_error(first));
+                }
+                return Err(pomodoro_merge_incomplete_error(first));
+            }
+            if !single_token_parent || item.lines.len() != 1 {
+                return Err(pomodoro_merge_shape_error(first));
+            }
+            if forced_route.is_some() || forced_section.is_some() {
+                return Err(POMODORO_MERGE_FORCED_ERROR.to_string());
+            }
+            let spec = PomodoroMergeSpec {
+                raw: first.to_string(),
+                src,
+                dests,
+            };
+            Ok(Some(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body: first.to_string(),
+                    clip: None,
+                    route: None,
+                    kind: CaptureKind::PomodoroMerge { spec },
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                    dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
+                    dependency_target: None,
+                    type_marker: None,
+                },
+                Vec::new(),
+                None,
+            )))
         }
         EqualsToken::Close => {
             let Some(first) = parent_trimmed.split_whitespace().next() else {

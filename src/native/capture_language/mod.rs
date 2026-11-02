@@ -133,6 +133,7 @@ pub(crate) use self::model::ParsedRelation;
 pub(crate) use self::model::PomodoroAdjustSpec;
 pub(crate) use self::model::PomodoroCloseSpec;
 pub(crate) use self::model::PomodoroLinkSpelling;
+pub(crate) use self::model::PomodoroMergeSpec;
 pub(crate) use self::model::PomodoroShiftSpec;
 pub(crate) use self::model::PomodoroSplitSpec;
 pub(crate) use self::model::PomodoroStartSpec;

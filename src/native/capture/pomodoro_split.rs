@@ -186,7 +186,8 @@ fn top_level_child_indices(
     entry_index: usize,
 ) -> Vec<usize> {
     let end = crate::native::capture_task_toggle::child_block_end_line(
-        lines, entry_index,
+        lines,
+        entry_index,
     );
     let parent_indent = leading_spaces_or_tabs_len(lines[entry_index].text);
     let mut first_indent: Option<usize> = None;
@@ -225,13 +226,8 @@ fn top_level_child_indices(
     out
 }
 
-fn subtree_end_for(
-    lines: &[LineSpan<'_>],
-    child_index: usize,
-) -> usize {
-    crate::native::capture_task_toggle::child_block_end_line(
-        lines, child_index,
-    )
+fn subtree_end_for(lines: &[LineSpan<'_>], child_index: usize) -> usize {
+    crate::native::capture_task_toggle::child_block_end_line(lines, child_index)
 }
 
 fn resolve_task_type_key(
@@ -298,7 +294,8 @@ pub(super) fn plan_pomodoro_split_item(
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_split_conflicts(&parsed, request)?;
     let day_file = pomodoro::day_file_for(&request.bob_dir);
-    let day_rel = capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
+    let day_rel =
+        capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
     if !planner.currently_exists(&day_file)? {
         return Err(CaptureError::io(format!(
             "Bob daily note does not exist: {}",
@@ -383,12 +380,13 @@ pub(super) fn plan_pomodoro_split_item(
             return Err(split_target_missing_error(&scan, &sources, &day_rel));
         }
     };
-    let target = scan.entries.get(target_index).ok_or_else(|| {
-        split_target_missing_error(&scan, &sources, &day_rel)
-    })?;
+    let target = scan
+        .entries
+        .get(target_index)
+        .ok_or_else(|| split_target_missing_error(&scan, &sources, &day_rel))?;
     let target_name = target.name.clone().unwrap_or_default();
-    let target_open = target.state
-        == crate::native::capture_pomodoros::PomodoroState::Open;
+    let target_open =
+        target.state == crate::native::capture_pomodoros::PomodoroState::Open;
     let entry_line = target.line;
     if entry_line == 0 {
         return Err(CaptureError::io(
@@ -396,8 +394,7 @@ pub(super) fn plan_pomodoro_split_item(
         ));
     }
     let spans = line_spans(&staged);
-    let line_texts: Vec<&str> =
-        spans.iter().map(|span| span.text).collect();
+    let line_texts: Vec<&str> = spans.iter().map(|span| span.text).collect();
     let entry_index = entry_line.checked_sub(1).ok_or_else(|| {
         CaptureError::io(
             "Pomodoro split invariant failed: target entry is out of range",
@@ -409,14 +406,14 @@ pub(super) fn plan_pomodoro_split_item(
         ));
     }
     let top_indices = top_level_child_indices(&spans, entry_index);
-    let fenced =
-        markdown::fenced_lines(&line_texts, 0..line_texts.len());
+    let fenced = markdown::fenced_lines(&line_texts, 0..line_texts.len());
     let range = if top_indices.is_empty() {
         entry_index + 1..entry_index + 1
     } else {
         let start = *top_indices.first().unwrap_or(&(entry_index + 1));
         let end = crate::native::capture_task_toggle::child_block_end_line(
-            &spans, entry_index,
+            &spans,
+            entry_index,
         ) + 1;
         start..end.min(line_texts.len())
     };
@@ -482,12 +479,11 @@ pub(super) fn plan_pomodoro_split_item(
         split_selectors,
         sources: &sources,
     };
-    let plan = match crate::native::pomodoro_themes::merged::split_plan(
-        &plan_input,
-    ) {
-        Ok(plan) => plan,
-        Err(error) => return Err(split_guard_error(&error, &target_name)),
-    };
+    let plan =
+        match crate::native::pomodoro_themes::merged::split_plan(&plan_input) {
+            Ok(plan) => plan,
+            Err(error) => return Err(split_guard_error(&error, &target_name)),
+        };
     let before_name = target_name.clone();
     let after_name = plan.remaining_name.clone();
     let Some(renamed) =
@@ -566,8 +562,7 @@ pub(super) fn plan_pomodoro_split_item(
                 tops.iter().copied().collect();
             let mut moved = false;
             for link in numbered_now {
-                let zero =
-                    link.line.checked_sub(1).unwrap_or(usize::MAX);
+                let zero = link.line.checked_sub(1).unwrap_or(usize::MAX);
                 if !top_now.contains(&zero) {
                     continue;
                 }
@@ -578,26 +573,25 @@ pub(super) fn plan_pomodoro_split_item(
                     &link.path_part,
                     &link.block_id,
                 );
-                let key = resolved.as_ref().and_then(|(task_line, residence)| {
-                    resolve_task_type_key(
-                        task_theme_context,
-                        planner,
-                        residence,
-                        task_line,
-                        warnings,
-                    )
-                });
-                let wanted =
-                    crate::native::plan_budget::normalize_component(
-                        &created.name,
-                    );
+                let key =
+                    resolved.as_ref().and_then(|(task_line, residence)| {
+                        resolve_task_type_key(
+                            task_theme_context,
+                            planner,
+                            residence,
+                            task_line,
+                            warnings,
+                        )
+                    });
+                let wanted = crate::native::plan_budget::normalize_component(
+                    &created.name,
+                );
                 if key.as_deref().is_some_and(|key| {
                     crate::native::plan_budget::normalize_component(key)
                         == wanted
                 }) {
                     let dest_entry_index = {
-                        let scan_now =
-                            capture_pomodoros::scan(&current);
+                        let scan_now = capture_pomodoros::scan(&current);
                         scan_now
                             .entries
                             .iter()
@@ -606,12 +600,8 @@ pub(super) fn plan_pomodoro_split_item(
                                     && entry.name.as_deref()
                                         == Some(created.name.as_str())
                             })
-                            .and_then(|entry| {
-                                entry.line.checked_sub(1)
-                            })
-                            .unwrap_or_else(|| {
-                                entry_index + 1
-                            })
+                            .and_then(|entry| entry.line.checked_sub(1))
+                            .unwrap_or_else(|| entry_index + 1)
                     };
                     let sub_end = subtree_end_for(&spans_now, zero);
                     match crate::native::capture_task_toggle::move_subtree_to_entry(
@@ -651,17 +641,15 @@ pub(super) fn plan_pomodoro_split_item(
             if tops.is_empty() {
                 0
             } else {
-                let fenced_final = markdown::fenced_lines(
-                    &texts_final,
-                    0..texts_final.len(),
-                );
+                let fenced_final =
+                    markdown::fenced_lines(&texts_final, 0..texts_final.len());
                 let start = *tops.first().unwrap();
-                let src_end_final = crate::native::capture_task_toggle::child_block_end_line(
-                    &spans_final,
-                    src_idx,
-                );
-                let end =
-                    (src_end_final + 1).min(texts_final.len());
+                let src_end_final =
+                    crate::native::capture_task_toggle::child_block_end_line(
+                        &spans_final,
+                        src_idx,
+                    );
+                let end = (src_end_final + 1).min(texts_final.len());
                 let links_final = crate::native::capture_pomodoro_close::number_task_links_in_range(
                     &texts_final,
                     &fenced_final,
@@ -720,9 +708,8 @@ pub(super) fn plan_pomodoro_split_item(
     let base_ref = catalog.theme_ref(&base_key, &base_name);
     let mut created_json = Vec::new();
     for (created_index, created) in plan.created.iter().enumerate() {
-        let key = crate::native::plan_budget::normalize_component(
-            &created.name,
-        );
+        let key =
+            crate::native::plan_budget::normalize_component(&created.name);
         let type_ref = catalog.theme_ref(&key, &created.name);
         let line = final_created_lines
             .get(created_index)
@@ -744,11 +731,8 @@ pub(super) fn plan_pomodoro_split_item(
         created: created_json,
         stayed_links: stayed,
     };
-    let source_line_text = current
-        .lines()
-        .nth(entry_index)
-        .unwrap_or("")
-        .to_string();
+    let source_line_text =
+        current.lines().nth(entry_index).unwrap_or("").to_string();
     let mut refs = Vec::new();
     refs.push(PomodoroBlockRef::at(
         PomodoroBlockRole::Split,
@@ -757,10 +741,7 @@ pub(super) fn plan_pomodoro_split_item(
     ));
     for line in final_created_lines.iter() {
         let after = line.checked_sub(1).unwrap_or(*line);
-        refs.push(PomodoroBlockRef::created(
-            PomodoroBlockRole::Split,
-            after,
-        ));
+        refs.push(PomodoroBlockRef::created(PomodoroBlockRole::Split, after));
     }
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -817,6 +798,7 @@ pub(super) fn plan_pomodoro_split_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: Some(summary),
+            pomodoro_merge: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,

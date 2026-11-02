@@ -1075,6 +1075,7 @@ fn is_template_session_kind(kind: &CaptureKind) -> bool {
         CaptureKind::PomodoroAdjust { .. }
         | CaptureKind::PomodoroShift { .. }
         | CaptureKind::PomodoroSplit { .. }
+        | CaptureKind::PomodoroMerge { .. }
         | CaptureKind::PomodoroStart { .. }
         | CaptureKind::PomodoroClose { .. } => true,
         CaptureKind::Pomodoro { start, close, .. }

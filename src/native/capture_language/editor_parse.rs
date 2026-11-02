@@ -359,6 +359,7 @@ pub(crate) fn parse_for_editor_with(
             if item.mode == EditorMode::PomodoroAdjust
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroSplit
+                || item.mode == EditorMode::PomodoroMerge
                 || item.mode == EditorMode::PomodoroClose
                 || item.mode == EditorMode::PomodoroStart
                 || item.mode == EditorMode::Ref
@@ -398,6 +399,7 @@ pub(crate) fn parse_for_editor_with(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -423,6 +425,7 @@ pub(crate) fn parse_for_editor_with(
     let pomodoro_adjust = first.pomodoro_adjust.clone();
     let pomodoro_shift = first.pomodoro_shift.clone();
     let pomodoro_split = first.pomodoro_split.clone();
+    let pomodoro_merge = first.pomodoro_merge.clone();
     let pomodoro_close = first.pomodoro_close.clone();
     let dependencies = first.dependencies.clone();
     let blocked_tasks = first.blocked_tasks.clone();
@@ -452,6 +455,7 @@ pub(crate) fn parse_for_editor_with(
         pomodoro_adjust,
         pomodoro_shift,
         pomodoro_split,
+        pomodoro_merge,
         pomodoro_close,
         dependencies,
         blocked_tasks,
@@ -654,9 +658,10 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
             "project-note"
         }
         EditorMode::PomodoroNote => "Pomodoro-note",
-        EditorMode::PomodoroAdjust | EditorMode::PomodoroShift | EditorMode::PomodoroSplit => {
-            "Pomodoro session-operator"
-        }
+        EditorMode::PomodoroAdjust
+        | EditorMode::PomodoroShift
+        | EditorMode::PomodoroSplit
+        | EditorMode::PomodoroMerge => "Pomodoro session-operator",
         EditorMode::PomodoroClose => "Pomodoro-close",
         EditorMode::PomodoroStart => "Pomodoro-start",
         EditorMode::TaskComplete => "task-complete",
@@ -797,6 +802,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -848,6 +854,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -911,6 +918,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
@@ -1085,6 +1093,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             dependencies: found.dependency_entries(),
             blocked_tasks: found.blocked_task_entries(),
@@ -1169,6 +1178,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
                 pomodoro_split: None,
+                pomodoro_merge: None,
                 pomodoro_close: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
@@ -1226,6 +1236,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_adjust: None,
                 pomodoro_shift: None,
                 pomodoro_split: None,
+                pomodoro_merge: None,
                 pomodoro_close: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
@@ -1762,6 +1773,11 @@ fn attach_clip_incompatible_kind(parsed: &mut EditorItemParse) {
             "Pomodoro split `=/` cannot be combined with %c; capture the split alone"
                 .to_string(),
         ),
+        EditorMode::PomodoroMerge => (
+            "invalid_pomodoro_merge",
+            "Pomodoro merge `=*` cannot be combined with %c; capture the merge alone"
+                .to_string(),
+        ),
         EditorMode::PomodoroAdjust => (
             "invalid_pomodoro_adjust",
             "Pomodoro adjustment `+N`/`-N` cannot be combined with %c; capture the adjustment alone"
@@ -1868,6 +1884,9 @@ fn type_marker_subject_for_editor(
         }
         EditorMode::PomodoroSplit => {
             Some(super::type_marker::TypeMarkerSubject::Split)
+        }
+        EditorMode::PomodoroMerge => {
+            Some(super::type_marker::TypeMarkerSubject::Merge)
         }
         EditorMode::PomodoroAdjust => {
             Some(super::type_marker::TypeMarkerSubject::Adjust)
@@ -3310,6 +3329,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close,
             dependencies: item_dependencies.dependency_entries(),
             blocked_tasks: item_dependencies.blocked_task_entries(),

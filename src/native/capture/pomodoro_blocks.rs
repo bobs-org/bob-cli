@@ -18,6 +18,7 @@ pub(super) enum PomodoroBlockRole {
     Adjusted,
     Shifted,
     Split,
+    Merge,
     Started,
     Closed,
     Reset,

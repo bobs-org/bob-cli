@@ -5,10 +5,7 @@ use std::fs;
 
 fn write_vault(vault: &std::path::Path, day_name: &str, day_body: &str) {
     fs::create_dir_all(vault.join("2026")).expect("create vault year");
-    write_file(
-        &vault.join(format!("2026/{day_name}")),
-        day_body,
-    );
+    write_file(&vault.join(format!("2026/{day_name}")), day_body);
     write_file(
         &vault.join("tasks.md"),
         concat!(
@@ -113,7 +110,10 @@ fn capture_split_writes_real_commit_and_human_output() {
     assert_success(&output);
     let day = fs::read_to_string(vault.join("2026/20261101.md"))
         .expect("read day file");
-    assert!(day.contains("- [ ] (**0900-1000**) — BUILD + READ"), "{day}");
+    assert!(
+        day.contains("- [ ] (**0900-1000**) — BUILD + READ"),
+        "{day}"
+    );
     assert!(day.contains("- [ ] () — FIX"), "{day}");
     assert!(day.contains("[[tasks#^a2]]"), "{day}");
     let human = bob_command()
@@ -157,7 +157,10 @@ fn capture_split_guards_teach_precisely() {
         .env("BOB_NOW", "2026-11-01 09:30")
         .output()
         .expect("run two-type explicit split");
-    assert!(!two_type.status.success(), "explicit type on two-type must fail");
+    assert!(
+        !two_type.status.success(),
+        "explicit type on two-type must fail"
+    );
     let err_json: serde_json::Value =
         serde_json::from_str(stdout(&two_type).trim())
             .expect("split guard JSON");

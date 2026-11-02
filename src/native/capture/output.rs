@@ -590,6 +590,8 @@ pub(super) struct CaptureItemResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_split: Option<PomodoroSplitSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_merge: Option<PomodoroMergeSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_close: Option<PomodoroCloseSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_reset: Option<PomodoroResetSummaryJson>,
@@ -2416,7 +2418,24 @@ pub(super) fn print_human_item_success(
     }
     if let Some(split) = result.pomodoro_split.as_ref() {
         print_human_pomodoro_split_success(
-            result, split, &styler, &prefix, &ordinal, &target_label,
+            result,
+            split,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        print_consumed_links(result, &styler);
+        return;
+    }
+    if let Some(merge) = result.pomodoro_merge.as_ref() {
+        print_human_pomodoro_merge_success(
+            result,
+            merge,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
         );
         print_consumed_links(result, &styler);
         return;
@@ -3152,7 +3171,11 @@ pub(super) fn print_human_pomodoro_split_success(
     ordinal: &str,
     target_label: &str,
 ) {
-    let verb = if result.dry_run { "would split" } else { "split" };
+    let verb = if result.dry_run {
+        "would split"
+    } else {
+        "split"
+    };
     println!("{prefix} {verb}  {ordinal}{target_label}");
     let detail = format!(
         "{} \u{2192} {} \u{00B7} {} line {}",
@@ -3175,6 +3198,41 @@ pub(super) fn print_human_pomodoro_split_success(
             )),
         );
     }
+    println!("  {}", styler.dim(&result.task_line));
+}
+
+pub(super) fn print_human_pomodoro_merge_success(
+    result: &CaptureItemResult,
+    merge: &PomodoroMergeSummary,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would merge"
+    } else {
+        "merged"
+    };
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    let absorbed = merge
+        .absorbed
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let links = if merge.moved_links == 0 {
+        "no links moved".to_string()
+    } else if merge.moved_links == 1 {
+        "1 link moved".to_string()
+    } else {
+        format!("{} links moved", merge.moved_links)
+    };
+    let detail = format!(
+        "{absorbed} \u{2192} {} \u{00B7} {} line {} \u{00B7} {links}",
+        merge.after, merge.path, merge.entry_line,
+    );
+    println!("  {}", styler.dim(&detail));
     println!("  {}", styler.dim(&result.task_line));
 }
 
@@ -5288,6 +5346,7 @@ mod tests {
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_split: None,
+            pomodoro_merge: None,
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,

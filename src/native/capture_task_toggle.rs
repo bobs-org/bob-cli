@@ -45,4 +45,5 @@ pub(crate) use task_update::{
 };
 pub(crate) use text::{
     child_block_end_line, insert_line_after, insert_line_before,
+    remove_line_range,
 };
