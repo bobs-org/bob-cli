@@ -62,6 +62,7 @@ pub(crate) enum RelationCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelationOfferRow {
     pub source: RelationTarget,
+    pub source_line: usize,
     pub lane: &'static str,
     pub triggering_targets: Vec<RelationTarget>,
     pub suffix: Option<String>,
@@ -70,6 +71,7 @@ pub(crate) struct RelationOfferRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelationOfferGroup {
     pub target: RelationTarget,
+    pub target_line: usize,
     pub label: String,
     pub label_key: String,
     pub event: RelationEventKind,
@@ -161,7 +163,6 @@ struct ValidEvent {
 struct GroupKey {
     order: (usize, usize),
     path: PathBuf,
-    block_id: String,
     line: usize,
     label_key: String,
 }
@@ -278,7 +279,6 @@ pub(crate) fn classify_relation_successors<R: TargetNoteReader>(
         let group_key = GroupKey {
             order: first.order,
             path: first.event.target.note_path.clone(),
-            block_id: first.event.target.block_id.clone(),
             line: first.target_line,
             label_key: first.label_key.clone(),
         };
@@ -325,6 +325,7 @@ pub(crate) fn classify_relation_successors<R: TargetNoteReader>(
                     .collect::<Vec<_>>();
                 offers.entry(group_key).or_default().push(RelationOfferRow {
                     source: source_target,
+                    source_line: source.task.line_index,
                     lane,
                     triggering_targets,
                     suffix: copy::trigger_suffix(&texts),
@@ -339,11 +340,11 @@ pub(crate) fn classify_relation_successors<R: TargetNoteReader>(
             lane_order(left.lane)
                 .cmp(&lane_order(right.lane))
                 .then(left.source.note_path.cmp(&right.source.note_path))
-                .then(left.source.block_id.cmp(&right.source.block_id))
+                .then(left.source_line.cmp(&right.source_line))
         });
         let Some(event) = valid.iter().find(|item| {
             item.event.target.note_path == key.path
-                && item.event.target.block_id == key.block_id
+                && item.target_line == key.line
         }) else {
             continue;
         };
@@ -356,9 +357,18 @@ pub(crate) fn classify_relation_successors<R: TargetNoteReader>(
         ));
     }
     groups.sort_by(|left, right| {
-        group_order_of(&group_order, &left.target, &left.label_key).cmp(
-            &group_order_of(&group_order, &right.target, &right.label_key),
+        group_order_of(
+            &group_order,
+            &left.target,
+            left.target_line,
+            &left.label_key,
         )
+        .cmp(&group_order_of(
+            &group_order,
+            &right.target,
+            right.target_line,
+            &right.label_key,
+        ))
     });
 
     RelationClassifyResult {
@@ -574,11 +584,23 @@ fn classify_source<R: TargetNoteReader>(
     post: Option<&DayView>,
     baseline: Option<&DayView>,
 ) -> SourceClass {
-    let key = identity_key(
+    let key = source_identity_key(
         &source.path,
-        source.task.block_id.as_deref().unwrap_or(""),
+        source.task.block_id.as_deref(),
+        source.task.line_index,
     );
-    let recovery = input.recovered.get(&key).cloned().unwrap_or_default();
+    let recovery = input.recovered.get(&key).cloned().unwrap_or_else(|| {
+        // Legacy callers keyed missing-ID tasks by bare path; fall back
+        // so older overlays still apply.
+        input
+            .recovered
+            .get(&identity_key(
+                &source.path,
+                source.task.block_id.as_deref().unwrap_or(""),
+            ))
+            .cloned()
+            .unwrap_or_default()
+    });
 
     if is_archive_path(&source.path)
         || input
@@ -624,6 +646,9 @@ fn classify_source<R: TargetNoteReader>(
     match source.task.status {
         '*' => SourceClass::Offer { lane: "Next" },
         ' ' => SourceClass::Offer { lane: "Ready" },
+        '?' if recovery.recovered_prerequisites => {
+            SourceClass::Offer { lane: "Ready" }
+        }
         _ => SourceClass::Skip,
     }
 }
@@ -792,23 +817,27 @@ fn group_sort_keys(
             let order = live
                 .map(|(entry, line, _, _)| (*entry, *line))
                 .unwrap_or((usize::MAX, usize::MAX));
-            (order, item.event.clone())
+            (order, item.event.clone(), item.target_line)
         })
         .collect::<Vec<_>>();
     keys.sort_by(|left, right| {
         left.0
             .cmp(&right.0)
             .then(left.1.target.note_path.cmp(&right.1.target.note_path))
+            .then(left.2.cmp(&right.2))
             .then(left.1.target.block_id.cmp(&right.1.target.block_id))
     });
-    keys
+    keys.into_iter()
+        .map(|(order, event, _)| (order, event))
+        .collect()
 }
 
 fn group_order_of(
     group_order: &[((usize, usize), RelationEvent)],
     target: &RelationTarget,
+    target_line: usize,
     label_key: &str,
-) -> (usize, usize, PathBuf, String, String) {
+) -> (usize, usize, PathBuf, usize, String) {
     let order = group_order
         .iter()
         .find(|(_, event)| {
@@ -821,7 +850,7 @@ fn group_order_of(
         order.0,
         order.1,
         target.note_path.clone(),
-        target.block_id.clone(),
+        target_line,
         label_key.to_string(),
     )
 }
@@ -867,6 +896,7 @@ fn build_group(
     }
     RelationOfferGroup {
         target: event.event.target.clone(),
+        target_line: event.target_line,
         label: label.clone(),
         label_key: key.label_key.clone(),
         event: event.event.kind,
@@ -912,6 +942,17 @@ fn identity_key(path: &Path, block_id: &str) -> String {
         display_path(path)
     } else {
         format!("{}#^{}", display_path(path), block_id)
+    }
+}
+
+fn source_identity_key(
+    path: &Path,
+    block_id: Option<&str>,
+    line: usize,
+) -> String {
+    match block_id {
+        Some(id) if !id.is_empty() => identity_key(path, id),
+        _ => format!("{}@{line}", display_path(path)),
     }
 }
 

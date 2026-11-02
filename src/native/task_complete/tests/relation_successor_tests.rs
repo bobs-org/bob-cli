@@ -2372,3 +2372,139 @@ fn integrate_capture_compatibility_stays_byte_identical_without_relation() {
     assert_eq!(base.changed_files, again.changed_files);
     assert_eq!(base.new_day_text, again.new_day_text);
 }
+
+#[test]
+fn classifier_orders_same_lane_by_source_line() {
+    let data = vectors();
+    let mut world =
+        World::materialize(&data["base"], &Value::Null, &Value::Null);
+    world.notes.insert(
+        PathBuf::from("sources.md"),
+        concat!(
+            "- [ ] #task First source ^z-first\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+            "- [ ] #task Second source ^a-second\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+        )
+        .to_string(),
+    );
+    let result = world.classify();
+    let ids = result.groups[0]
+        .rows
+        .iter()
+        .filter(|row| row.source.note_path == Path::new("sources.md"))
+        .map(|row| row.source.block_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["z-first", "a-second"]);
+}
+
+#[test]
+fn planner_numbers_next_before_ready_across_notes() {
+    let data = vectors();
+    let mut world =
+        World::materialize(&data["base"], &Value::Null, &Value::Null);
+    world.notes.insert(
+        PathBuf::from("later.md"),
+        concat!(
+            "- [*] #task Next source ^next\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+        )
+        .to_string(),
+    );
+    let parked = parked_from_events(&world.events);
+    let plan = run_planner(
+        &world,
+        Vec::new(),
+        parked,
+        SuccessorSelection::None,
+        true,
+        true,
+        true,
+        true,
+        None,
+    );
+    let next = plan
+        .relation_successors
+        .iter()
+        .find(|row| row.block_id == "next")
+        .unwrap();
+    let ready = plan
+        .relation_successors
+        .iter()
+        .find(|row| row.block_id == "evaluate")
+        .unwrap();
+    assert!(
+        next.offer.as_ref().unwrap().n < ready.offer.as_ref().unwrap().n,
+        "Next n={} Ready n={}",
+        next.offer.as_ref().unwrap().n,
+        ready.offer.as_ref().unwrap().n
+    );
+}
+
+#[test]
+fn recovered_blocked_direct_dependent_keeps_relation_reason() {
+    let (mut world, completed, parked) = planner_world("SA14");
+    insert_token(
+        &mut world.notes,
+        Path::new("agents.md"),
+        "evaluate",
+        "[dependsOn:: implement]",
+    );
+    rewrite_status(&mut world.notes, Path::new("agents.md"), "implement", 'x');
+    rewrite_status(&mut world.notes, Path::new("agents.md"), "evaluate", '?');
+    let plan = run_planner(
+        &world,
+        completed,
+        parked,
+        SuccessorSelection::All,
+        false,
+        true,
+        true,
+        true,
+        None,
+    );
+    let row = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "evaluate")
+        .unwrap();
+    assert!(
+        row.relation.is_some(),
+        "recovered direct dependent lost relation metadata: {row:?}"
+    );
+}
+
+#[test]
+fn missing_id_selects_the_exact_source_row() {
+    let data = vectors();
+    let mut world =
+        World::materialize(&data["base"], &Value::Null, &Value::Null);
+    world.notes.insert(
+        PathBuf::from("sources.md"),
+        concat!(
+            "- [ ] #task Same description\n",
+            "- [ ] #task Same description\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+        )
+        .to_string(),
+    );
+    let parked = parked_from_events(&world.events);
+    let plan = run_planner(
+        &world,
+        Vec::new(),
+        parked,
+        SuccessorSelection::All,
+        true,
+        true,
+        true,
+        true,
+        None,
+    );
+    let updated = plan.changed_files.get(Path::new("sources.md")).unwrap();
+    assert!(
+        updated.starts_with(
+            "- [ ] #task Same description\n- [*] #task Same description"
+        ),
+        "{updated}"
+    );
+}

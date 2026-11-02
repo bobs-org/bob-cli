@@ -75,13 +75,13 @@ pub(crate) enum SuccessorSelection {
     Keys(BTreeSet<String>),
 }
 
-/// Draft-list sort key: group, anchor (entry, bullet), note path, lane, line.
+/// Draft-list sort key: group, anchor/target order, lane, note path, line.
 /// Lane is 0 for existing groups so their relative order is unchanged;
 /// keep-moving uses Pending → Next → Ready (`keep_moving_lane`);
-/// relation rows use Next → Ready (`lane_order`) so rows within one
-/// relation group stay lane-first while the tuple shape keeps legacy
-/// ordering stable when no relation offers exist.
-pub(crate) type OfferOrderKey = (u8, (usize, usize), PathBuf, u8, usize);
+/// relation rows use Next → Ready (`lane_order`) lane-first within one
+/// relation group, with the anchor carrying the triggering target group
+/// order so placement never determines relation group order.
+pub(crate) type OfferOrderKey = (u8, (usize, usize), u8, PathBuf, usize);
 
 /// Offer group (`docs/task-dependencies.md` §12.2 ORDER).
 /// Precedence is `hand_off > relation > project > project_finished >
@@ -118,6 +118,7 @@ pub(crate) struct RelationRowInfo {
     pub(crate) key: String,
     pub(crate) event: super::relation_successors::RelationEventKind,
     pub(crate) after: Vec<super::relation_successors::RelationTarget>,
+    pub(crate) group_order: usize,
 }
 
 /// Where a picked offer's successor bullet lands.
@@ -804,10 +805,17 @@ fn empty_paths() -> &'static BTreeSet<PathBuf> {
     EMPTY.get_or_init(BTreeSet::new)
 }
 
-fn relation_identity_key(path: &Path, block_id: &str) -> String {
+fn relation_identity_key(
+    path: &Path,
+    block_id: &str,
+    line: Option<usize>,
+) -> String {
     let display = path.to_string_lossy().replace('\\', "/");
     if block_id.is_empty() {
-        display
+        match line {
+            Some(line) => format!("{display}@{line}"),
+            None => display,
+        }
     } else {
         format!("{display}#^{block_id}")
     }
@@ -828,6 +836,7 @@ fn relation_recovered_map(
         let key = relation_identity_key(
             &file.relative_path,
             task.block_id.as_deref().unwrap_or(""),
+            Some(task.line_index),
         );
         let recovered = match verdict.kind {
             VerdictKind::StillBlockedWaitsOn
@@ -861,20 +870,35 @@ fn relation_recovered_map(
 fn find_file_task_for_relation_source(
     files: &[FileScan],
     source: &super::relation_successors::RelationTarget,
+    source_line: Option<usize>,
 ) -> Option<(usize, usize)> {
     for (file_index, file) in files.iter().enumerate() {
         if file.relative_path != source.note_path {
             continue;
         }
-        for (task_index, task) in file.tasks.iter().enumerate() {
-            if task.block_id.as_deref() == Some(source.block_id.as_str()) {
-                return Some((file_index, task_index));
+        // Real block IDs match by identity; provisional missing-ID keys
+        // must never resolve by description text.
+        if !source.block_id.contains('@') {
+            for (task_index, task) in file.tasks.iter().enumerate() {
+                if task.block_id.as_deref() == Some(source.block_id.as_str()) {
+                    return Some((file_index, task_index));
+                }
             }
         }
-        for (task_index, task) in file.tasks.iter().enumerate() {
-            if task.block_id.is_none() && task.description == source.text {
-                return Some((file_index, task_index));
+        if let Some(line) = source_line {
+            for (task_index, task) in file.tasks.iter().enumerate() {
+                if task.line_index == line && task.description == source.text {
+                    return Some((file_index, task_index));
+                }
             }
+            // Fall back to line-only when the description was cleaned
+            // differently between classifier and planner.
+            for (task_index, task) in file.tasks.iter().enumerate() {
+                if task.line_index == line {
+                    return Some((file_index, task_index));
+                }
+            }
+            return None;
         }
         return None;
     }
@@ -885,8 +909,9 @@ fn find_verdict_for_relation_source(
     verdicts: &[DependentVerdict],
     files: &[FileScan],
     source: &super::relation_successors::RelationTarget,
+    source_line: Option<usize>,
 ) -> Option<usize> {
-    find_file_task_for_relation_source(files, source).and_then(
+    find_file_task_for_relation_source(files, source, source_line).and_then(
         |(file, task)| {
             verdicts.iter().position(|verdict| {
                 verdict.file == file && verdict.task == task
@@ -916,7 +941,7 @@ fn integrate_relation_offers(
     pre_day: Option<&str>,
     post_day: Option<&str>,
     day_relative: &Path,
-    _index: &NoteIndex,
+    index: &NoteIndex,
     today: NaiveDate,
     tasks_settings: &TasksSettings,
     anchors: &[Option<SlotAnchor>],
@@ -944,9 +969,13 @@ fn integrate_relation_offers(
     for file in files {
         source_texts.insert(file.relative_path.clone(), file.contents.clone());
     }
-    let known_paths: Vec<PathBuf> = files
-        .iter()
-        .map(|file| file.relative_path.clone())
+    // Use the complete caller-supplied note index for resolution so
+    // ambiguity from a known-but-unheld note is detectable and an
+    // unavailable target in the index does not silently disappear.
+    // Source texts remain the held files; staged texts override snapshots.
+    let known_paths: Vec<PathBuf> = index
+        .relative_paths()
+        .map(|path| path.to_path_buf())
         .collect();
     let archive_paths: Vec<PathBuf> = known_paths
         .iter()
@@ -992,7 +1021,7 @@ fn integrate_relation_offers(
             ((task.relative_path.clone(), task.block_id.clone()), index)
         })
         .collect();
-    for group in &result.groups {
+    for (group_order, group) in result.groups.iter().enumerate() {
         let label_key = group.label_key.clone();
         for row in &group.rows {
             let info = RelationRowInfo {
@@ -1000,10 +1029,14 @@ fn integrate_relation_offers(
                 key: label_key.clone(),
                 event: group.event,
                 after: row.triggering_targets.clone(),
+                group_order,
             };
-            if let Some(position) =
-                find_verdict_for_relation_source(verdicts, files, &row.source)
-            {
+            if let Some(position) = find_verdict_for_relation_source(
+                verdicts,
+                files,
+                &row.source,
+                Some(row.source_line),
+            ) {
                 let existing_group =
                     verdicts[position].offer.as_ref().map(|offer| offer.group);
                 match existing_group {
@@ -1077,7 +1110,11 @@ fn integrate_relation_offers(
                 continue;
             }
             let Some((file_index, task_index)) =
-                find_file_task_for_relation_source(files, &row.source)
+                find_file_task_for_relation_source(
+                    files,
+                    &row.source,
+                    Some(row.source_line),
+                )
             else {
                 continue;
             };
@@ -1146,8 +1183,13 @@ fn integrate_relation_offers(
     for group in result.groups {
         let mut rows = Vec::new();
         for row in group.rows {
+            let source_line = row.source_line;
             let Some((file_index, task_index)) =
-                find_file_task_for_relation_source(files, &row.source)
+                find_file_task_for_relation_source(
+                    files,
+                    &row.source,
+                    Some(source_line),
+                )
             else {
                 continue;
             };
@@ -1962,6 +2004,10 @@ fn offer_order_key(
         Some(OfferGroup::KeepMoving) => 4,
         None => 5,
     };
+    let is_relation = verdict
+        .offer
+        .as_ref()
+        .is_some_and(|offer| offer.group == OfferGroup::Relation);
     let lane = if verdict
         .offer
         .as_ref()
@@ -1970,17 +2016,21 @@ fn offer_order_key(
         super::keep_moving::keep_moving_lane(
             files[verdict.file].tasks[verdict.task].status,
         )
-    } else if verdict
-        .offer
-        .as_ref()
-        .is_some_and(|offer| offer.group == OfferGroup::Relation)
-    {
+    } else if is_relation {
         relation_lane(files[verdict.file].tasks[verdict.task].status)
     } else {
         0
     };
     let ((entry, bullet), path, line) = successor_order_key(verdict, files);
-    (group, (entry, bullet), path, lane, line)
+    if is_relation {
+        let order = verdict
+            .relation
+            .as_ref()
+            .map(|info| info.group_order)
+            .unwrap_or(0);
+        return (group, (order, 0), lane, path, line);
+    }
+    (group, (entry, bullet), lane, path, line)
 }
 
 fn relation_lane(status: char) -> u8 {
@@ -2073,7 +2123,7 @@ fn make_offer(
         placement_refusal: None,
         placement_routed: false,
         n: 0,
-        order_key: (5, (usize::MAX, usize::MAX), PathBuf::new(), 0, 0),
+        order_key: (5, (usize::MAX, usize::MAX), 0, PathBuf::new(), 0),
     }
 }
 

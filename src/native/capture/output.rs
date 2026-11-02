@@ -5321,7 +5321,7 @@ mod tests {
                     entry_role: "slot",
                     fallback: false,
                 },
-                order_key: (0, (0, 0), std::path::PathBuf::from("b.md"), 0, 0),
+                order_key: (0, (0, 0), 0, std::path::PathBuf::from("b.md"), 0),
                 settled_ordinal: None,
             }),
         }
