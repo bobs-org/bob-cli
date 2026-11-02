@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use super::{
     classify::{self, Inclusion},
     config::GcalConfig,
+    description::bullets::render_bullets,
     gog::Gog,
     journal::{self, OccurrenceState},
     lifecycle::{AbsentVerdict, LifecycleItem},
@@ -86,6 +87,8 @@ struct ReportRow {
     off_clock: bool,
     untracked: bool,
     buffer: crate::native::event_task::EventBuffer,
+    /// Bullet lines this run wrote for the row, 0 otherwise.
+    description_lines: usize,
 }
 
 struct SyncReport {
@@ -165,9 +168,9 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         })?;
     let now = bob_env::current_datetime();
     let mut occurrences = Vec::new();
-    for (occurrence, warning) in
-        build_occurrences(&snapshot, &vault, &daily_rel, is_today, &now)
-    {
+    for (occurrence, warning) in build_occurrences(
+        &snapshot, &config, &vault, &daily_rel, is_today, &now,
+    ) {
         if let Some(warning) = warning {
             warnings.push(warning);
         }
@@ -390,10 +393,12 @@ fn journal_warnings(vault: &std::path::Path) -> Result<Vec<String>, GcalError> {
 }
 
 /// Build time-ordered plan occurrences from the snapshot, deciding
-/// roots, the `[type:: MEET]` field, badges, span hashes, and MEET
-/// eligibility. Returns each occurrence with its root warnings.
+/// roots, the `[type:: MEET]` field, badges, span hashes, description
+/// bullets, and MEET eligibility. Returns each occurrence with its root
+/// warnings.
 fn build_occurrences(
     snapshot: &snapshot::DaySnapshot,
+    config: &GcalConfig,
     vault: &std::path::Path,
     daily_rel: &std::path::Path,
     is_today: bool,
@@ -453,6 +458,18 @@ fn build_occurrences(
         } else {
             None
         };
+        // Task occurrences in `bullets` mode carry their rendered,
+        // capped bullets (`Some` even when empty); context rows and
+        // `off` mode carry none.
+        let description = if task && config.description_bullets() {
+            Some(render_bullets(
+                &event.event.description,
+                config.description_lines(),
+                event.event.html_link.as_deref(),
+            ))
+        } else {
+            None
+        };
         let warnings = event
             .root
             .as_ref()
@@ -500,6 +517,7 @@ fn build_occurrences(
                 needs_type,
                 off_clock,
                 buffer,
+                description,
                 link_phase,
                 all_day,
                 start_min,
@@ -741,6 +759,15 @@ fn context_qualifier(reason: Option<&str>) -> Option<String> {
     }
 }
 
+/// Bullet lines one inserted row wrote this run: the journaled line
+/// count for a `Tracked` record, 0 otherwise.
+fn written_description_lines(state: &journal::DescriptionState) -> usize {
+    match state {
+        journal::DescriptionState::Tracked { lines, .. } => *lines,
+        _ => 0,
+    }
+}
+
 fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
     let mut rows = Vec::new();
     for added in &plan.rows_added {
@@ -758,6 +785,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: added.off_clock,
             untracked: added.off_clock,
             buffer: added.buffer,
+            description_lines: written_description_lines(&added.description),
         });
     }
     for adopted in &plan.rows_adopted {
@@ -775,6 +803,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: adopted.off_clock,
             untracked: adopted.off_clock,
             buffer: adopted.buffer,
+            description_lines: 0,
         });
     }
     for _ in &plan.rows_gone {
@@ -788,6 +817,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
+            description_lines: 0,
         });
     }
     for updated in &plan.rows_updated {
@@ -805,6 +835,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: updated.off_clock,
             untracked: updated.off_clock,
             buffer: updated.buffer,
+            description_lines: 0,
         });
     }
     for cancelled in &plan.rows_cancelled {
@@ -818,6 +849,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
+            description_lines: 0,
         });
     }
     for removed in &plan.rows_removed {
@@ -831,6 +863,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
+            description_lines: 0,
         });
     }
     for upgraded in &plan.rows_upgraded {
@@ -844,6 +877,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: upgraded.off_clock,
             untracked: upgraded.off_clock,
             buffer: upgraded.buffer,
+            description_lines: written_description_lines(&upgraded.description),
         });
     }
     for learned in &plan.learned {
@@ -857,6 +891,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: false,
             untracked: false,
             buffer: crate::native::event_task::EventBuffer::default(),
+            description_lines: 0,
         });
     }
     rows
@@ -878,6 +913,7 @@ fn append_row_record(
     spans: &BTreeMap<String, String>,
     root: Option<&str>,
     source: Option<&str>,
+    description: &journal::DescriptionState,
 ) -> Result<(), GcalError> {
     journal::append_row(
         vault,
@@ -895,6 +931,7 @@ fn append_row_record(
             spans: spans.clone(),
             root: root.map(str::to_string),
             source: source.map(str::to_string),
+            description: description.clone(),
         },
     )
     .map(|_| ())
@@ -962,6 +999,7 @@ fn append_journal(
             &added.spans,
             added.root.as_deref(),
             added.source.as_deref(),
+            &added.description,
         )?;
     }
     for adopted in &plan.rows_adopted {
@@ -980,6 +1018,7 @@ fn append_journal(
             &adopted.spans,
             adopted.root.as_deref(),
             adopted.source.as_deref(),
+            &adopted.description,
         )?;
     }
     for updated in &plan.rows_updated {
@@ -998,6 +1037,7 @@ fn append_journal(
             &updated.spans,
             updated.root.as_deref(),
             updated.source.as_deref(),
+            &updated.description,
         )?;
     }
     for upgraded in &plan.rows_upgraded {
@@ -1016,6 +1056,7 @@ fn append_journal(
             &upgraded.spans,
             upgraded.root.as_deref(),
             upgraded.source.as_deref(),
+            &upgraded.description,
         )?;
     }
     for adopted in &plan.rows_adopted {
@@ -1177,6 +1218,7 @@ fn print_json(report: &SyncReport) {
                 "off_clock": row.off_clock,
                 "untracked": row.untracked,
                 "buffer": buffer_json(row.buffer),
+                "description_lines": row.description_lines,
             })
         })
         .collect();
@@ -1265,7 +1307,12 @@ fn print_human(report: &SyncReport) {
             "removed" => format!("removed ({})", row.title),
             _ => format!("{time}  {}{root}{source}", row.title),
         };
-        println!("  {sigil} {:<7} {detail}", row.kind);
+        let bullets = if row.description_lines > 0 {
+            styler.dim(&format!(" ≡ {}", row.description_lines))
+        } else {
+            String::new()
+        };
+        println!("  {sigil} {:<7} {detail}{bullets}", row.kind);
     }
     for entry in &report.entries {
         println!("  {}", meet_human_line(entry));

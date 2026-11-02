@@ -354,6 +354,7 @@ qualify too; Google Calendar is not required.
 *↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*
 - [/] #task **0800-0830** Product interview [root:: job] [type:: MEET] ^product-interview
 - [*] #task **1830-1900** Dentist [root:: body] [type:: MEET] ^dentist
+	- Bring insurance card
 - **all day** School holiday
 - **0915-1000** Toddler class · *maybe*
 
@@ -389,9 +390,11 @@ Events stamp: which Google account last synced the section, and when. A written 
 legacy `#untracked`), then `[buffer:: -30m +15m]` for buffered events (each
 side omitted when zero; no field without buffers), then `[root::]`, then
 `[type:: MEET]` only when needed, then a `^block-id` minted from the bare
-title and unique within the note. The buffer widens the span the event
-occupies (sync phases, MEET filing) while the bold span keeps the meeting
-time. A written context row carries
+title and unique within the note. When the Google event has a human
+description, sync writes it as flat first-child bullets under the row (see
+[Description bullets](../gcal.md#description-bullets)). The buffer widens
+the span the event occupies (sync phases, MEET filing) while the bold span
+keeps the meeting time. A written context row carries
 the span (`**all day**` or `**HHMM-HHMM**`) plus optional `· *day N of M*`,
 `· *maybe*`, or `· *free*` tags and the `📅` badge, and never carries
 an off-clock tag or `[buffer::]`. Event Tasks linked under

@@ -1279,6 +1279,9 @@ fn maybe_upgrade_gains_buffer_field() {
         "{row}"
     );
     assert!(row.contains(" [buffer:: -15m] [root:: meet]"), "{row}");
+    // The upgrade also writes the description bullet for "Stretch"
+    // (`-15` is a directive); the rerun below proves it is stable.
+    assert!(note.contains("\t- Stretch"), "{note}");
     assert!(note.contains("[[#^evening-class]]"), "{note}");
 
     let again = sync_output(&env, &fake, &[]);

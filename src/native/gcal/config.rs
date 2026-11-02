@@ -8,6 +8,10 @@ use super::GcalError;
 
 pub(crate) const DEFAULT_ROOT: &str = "meet";
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 60;
+/// Most bullet lines per Event Task, overflow line included.
+pub(crate) const DEFAULT_DESCRIPTION_LINES: u64 = 8;
+/// One content line plus the overflow line.
+pub(crate) const MIN_DESCRIPTION_LINES: u64 = 2;
 pub(crate) const GOG_ENV_VAR: &str = "BOB_GCAL_GOG";
 pub(crate) const ASSUME_TTY_ENV: &str = "BOB_GCAL_ASSUME_TTY";
 
@@ -22,7 +26,16 @@ pub(crate) struct GcalConfig {
     colors: BTreeMap<String, String>,
     #[allow(dead_code)]
     tentative: bob_config::GcalTentative,
+    description: bob_config::GcalDescriptionMode,
+    description_lines: usize,
     timeout_secs: u64,
+}
+
+impl Default for GcalConfig {
+    fn default() -> Self {
+        Self::from_settings(bob_config::GcalSettings::default())
+            .expect("default gcal config resolves")
+    }
 }
 
 impl GcalConfig {
@@ -82,6 +95,26 @@ impl GcalConfig {
                 "gcal.calendars must not be empty".to_string(),
             ));
         }
+        let description_lines = settings
+            .description_lines
+            .unwrap_or(DEFAULT_DESCRIPTION_LINES);
+        if description_lines < MIN_DESCRIPTION_LINES {
+            return Err(GcalError::setup(
+                "config",
+                format!(
+                    "gcal.description_lines must be an integer >= {MIN_DESCRIPTION_LINES}; got {description_lines}"
+                ),
+            ));
+        }
+        let description_lines_usize = usize::try_from(description_lines)
+            .map_err(|_| {
+                GcalError::setup(
+                    "config",
+                    format!(
+                        "gcal.description_lines must be an integer >= {MIN_DESCRIPTION_LINES}; got {description_lines}"
+                    ),
+                )
+            })?;
         Ok(Self {
             account: settings.account,
             writer: settings.writer,
@@ -91,6 +124,8 @@ impl GcalConfig {
             tentative: settings
                 .tentative
                 .unwrap_or(bob_config::GcalTentative::Context),
+            description: settings.description.unwrap_or_default(),
+            description_lines: description_lines_usize,
             timeout_secs,
         })
     }
@@ -119,6 +154,14 @@ impl GcalConfig {
     #[allow(dead_code)]
     pub(crate) fn tentative(&self) -> bob_config::GcalTentative {
         self.tentative
+    }
+
+    pub(crate) fn description_lines(&self) -> usize {
+        self.description_lines
+    }
+
+    pub(crate) fn description_bullets(&self) -> bool {
+        self.description == bob_config::GcalDescriptionMode::Bullets
     }
 
     pub(crate) fn timeout(&self) -> Duration {
@@ -187,22 +230,29 @@ pub(crate) fn stdin_is_tty() -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn defaults_when_block_is_missing() {
-        let config = GcalConfig::from_settings(bob_config::GcalSettings {
+    fn settings() -> bob_config::GcalSettings {
+        bob_config::GcalSettings {
             account: None,
             writer: None,
             root: None,
             calendars: None,
             colors: BTreeMap::new(),
             tentative: None,
+            description: None,
+            description_lines: None,
             timeout_secs: None,
-        })
-        .expect("defaults");
+        }
+    }
+
+    #[test]
+    fn defaults_when_block_is_missing() {
+        let config = GcalConfig::from_settings(settings()).expect("defaults");
         assert_eq!(config.root(), "meet");
         assert_eq!(config.calendars().len(), 1);
         assert_eq!(config.calendars()[0].id, "primary");
         assert_eq!(config.timeout(), Duration::from_secs(60));
+        assert!(config.description_bullets());
+        assert_eq!(config.description_lines(), 8);
         assert!(config.syncs("primary", true));
         assert!(config.syncs("you@example.com", true));
         assert!(!config.syncs("work", false));
@@ -212,15 +262,29 @@ mod tests {
     fn rejects_account_without_at() {
         let error = GcalConfig::from_settings(bob_config::GcalSettings {
             account: Some("not-an-email".to_string()),
-            writer: None,
-            root: None,
-            calendars: None,
-            colors: BTreeMap::new(),
-            tentative: None,
-            timeout_secs: None,
+            ..settings()
         })
         .expect_err("bad email");
         assert_eq!(error.exit_code(), 2);
         assert!(error.message().contains("gcal.account"));
+    }
+
+    #[test]
+    fn description_keys_resolve_and_reject() {
+        let config = GcalConfig::from_settings(bob_config::GcalSettings {
+            description: Some(bob_config::GcalDescriptionMode::Off),
+            description_lines: Some(3),
+            ..settings()
+        })
+        .expect("explicit description keys");
+        assert!(!config.description_bullets());
+        assert_eq!(config.description_lines(), 3);
+        let error = GcalConfig::from_settings(bob_config::GcalSettings {
+            description_lines: Some(1),
+            ..settings()
+        })
+        .expect_err("one line is not enough for content plus overflow");
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.message().contains("gcal.description_lines"));
     }
 }

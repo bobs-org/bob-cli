@@ -583,13 +583,28 @@ fn sync_json_reports_rows_and_pomodoro() {
     assert_eq!(dentist["time"], "1830-1900");
     assert_eq!(dentist["root"], "body");
     assert_eq!(dentist["source"], "@body");
+    // The fixture dentist description now yields one bullet, counted.
+    assert_eq!(dentist["description_lines"], 1);
+    assert!(
+        today_note(&env).contains("\t- Bring insurance card"),
+        "{}",
+        today_note(&env)
+    );
     assert_eq!(report["stamp"]["account"], "you@example.com");
     assert_eq!(report["stamp"]["synced_at"], "2026-10-30T12:00");
     assert_eq!(report["stamp"]["refreshed"], true);
     assert!(
         !stdout(&output).contains("Main St Dental\"],")
-            && !stdout(&output).contains("attendees"),
+            && !stdout(&output).contains("attendees")
+            && !stdout(&output).contains("Bring insurance card"),
         "no descriptions or attendees leak"
+    );
+    let journal_text =
+        fs::read_to_string(env.vault().join(".bob/gcal/test-host.jsonl"))
+            .expect("journal file");
+    assert!(
+        !journal_text.contains("Bring insurance card"),
+        "no description text in the journal"
     );
 }
 
@@ -1408,6 +1423,8 @@ fn off_clock_aliases_split_clusters_and_report() {
         .expect("gym row");
     assert!(gym.contains("**0900-0930** Gym "), "{gym}");
     assert!(gym.contains(" #offclock"), "{gym}");
+    // The human line becomes a bullet; the directive line writes none.
+    assert!(note.contains("\t- Bring shoes"), "{note}");
     // @route is read after the tag is stripped.
     let team = note
         .lines()
@@ -1849,4 +1866,539 @@ fn buffered_spans_drive_meet_phases_and_clusters() {
     let report: Value =
         serde_json::from_str(&stdout(&again)).expect("JSON report");
     assert_eq!(report["status"], "unchanged");
+}
+
+fn desc_event(
+    id: &str,
+    summary: &str,
+    description: &str,
+    start: &str,
+    end: &str,
+) -> Value {
+    serde_json::json!({
+        "id": id,
+        "summary": summary,
+        "description": description,
+        "status": "confirmed",
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+        "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+        "attendees": [{"self": true, "responseStatus": "accepted"}]
+    })
+}
+
+fn desc_envelope(events: Vec<Value>) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "events": events,
+        "nextPageToken": serde_json::Value::Null,
+    }))
+    .expect("envelope")
+}
+
+fn write_love_area(env: &GcalEnv) {
+    fs::write(
+        env.vault().join("love.md"),
+        "---\ntype: area\n---\n# Love\n",
+    )
+    .expect("write love area");
+}
+
+#[test]
+fn descriptions_become_bullets_in_every_phase() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-phases");
+    prepare(&env);
+    write_love_area(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![
+        desc_event(
+            "swings",
+            "Swings!",
+            "And retainers!\n\n@love #offclock",
+            "2026-10-30T08:00:00-04:00",
+            "2026-10-30T08:15:00-04:00",
+        ),
+        desc_event(
+            "lunch",
+            "Lunch",
+            "Bring laptop & ID",
+            "2026-10-30T11:30:00-04:00",
+            "2026-10-30T12:30:00-04:00",
+        ),
+        desc_event(
+            "dentist",
+            "Dentist @body",
+            "Bring insurance card",
+            "2026-10-30T18:30:00-04:00",
+            "2026-10-30T19:00:00-04:00",
+        ),
+    ]));
+
+    let output = sync_at(&env, &fake, &[], "2026-10-30 12:00:00");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+
+    // The motivating case: the directive line still drives `#offclock`
+    // and `[root:: love]`, and the human line becomes the bullet.
+    let swings = note
+        .lines()
+        .find(|line| line.contains("^swings"))
+        .expect("swings row");
+    assert!(swings.starts_with("- [/] #task"), "{swings}");
+    assert!(swings.contains(" #offclock [root:: love]"), "{swings}");
+    // The past row works from birth under a closed MEET.
+    assert!(note.contains("\t- And retainers!"), "{note}");
+    let lunch = note
+        .lines()
+        .find(|line| line.contains("^lunch"))
+        .expect("lunch row");
+    assert!(lunch.starts_with("- [*] #task"), "{lunch}");
+    assert!(note.contains("\t- Bring laptop & ID"), "{note}");
+    let dentist = note
+        .lines()
+        .find(|line| line.contains("^dentist"))
+        .expect("dentist row");
+    assert!(dentist.starts_with("- [*] #task"), "{dentist}");
+    assert!(dentist.contains("[root:: body]"), "{dentist}");
+    assert!(note.contains("\t- Bring insurance card"), "{note}");
+
+    // Human rows end with a dim `≡ N` when the run wrote N bullet lines.
+    let out = stdout(&output);
+    assert_eq!(out.matches("≡ 1").count(), 3, "{out}");
+    assert!(out.contains("Swings!  ● love  via @love ≡ 1"), "{out}");
+
+    // The journal carries only the hash and line count, never the text.
+    let journal_text =
+        fs::read_to_string(env.vault().join(".bob/gcal/test-host.jsonl"))
+            .expect("journal file");
+    assert!(!journal_text.contains("retainers"), "no text leaks");
+    assert!(!journal_text.contains("insurance"), "no text leaks");
+    for line in journal_lines(&env) {
+        if line["kind"] == "gcal.row" {
+            assert_eq!(line["description"]["lines"], 1, "{line}");
+        }
+    }
+}
+
+#[test]
+fn sync_json_rows_carry_description_lines() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-json");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![
+        desc_event(
+            "swings",
+            "Swings!",
+            "And retainers!",
+            "2026-10-30T08:00:00-04:00",
+            "2026-10-30T08:15:00-04:00",
+        ),
+        desc_event(
+            "lunch",
+            "Lunch",
+            "",
+            "2026-10-30T11:30:00-04:00",
+            "2026-10-30T12:30:00-04:00",
+        ),
+    ]));
+    let output = sync_at(&env, &fake, &["-f", "json"], "2026-10-30 12:00:00");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let json_text = stdout(&output);
+    let report: Value = serde_json::from_str(&json_text).expect("JSON report");
+    assert_eq!(report["schema_version"], 1);
+    let rows = report["rows"].as_array().expect("rows");
+    let swings = rows
+        .iter()
+        .find(|row| row["title"] == "Swings!")
+        .expect("swings row");
+    assert_eq!(swings["description_lines"], 1);
+    let lunch = rows
+        .iter()
+        .find(|row| row["title"] == "Lunch")
+        .expect("lunch row");
+    assert_eq!(lunch["description_lines"], 0);
+    assert!(
+        !json_text.contains("retainers"),
+        "no description text leaks"
+    );
+}
+
+#[test]
+fn second_run_with_bullets_is_a_no_op() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-noop");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "swings",
+        "Swings!",
+        "And retainers!",
+        "2026-10-30T08:00:00-04:00",
+        "2026-10-30T08:15:00-04:00",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let before = today_note(&env);
+    assert!(before.contains("\t- And retainers!"), "{before}");
+    let journal_count = journal_lines(&env).len();
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("unchanged"), "{}", stdout(&output));
+    assert_eq!(today_note(&env), before);
+    assert_eq!(journal_lines(&env).len(), journal_count);
+}
+
+#[test]
+fn dry_run_diff_shows_the_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-dry");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "swings",
+        "Swings!",
+        "And retainers!",
+        "2026-10-30T08:00:00-04:00",
+        "2026-10-30T08:15:00-04:00",
+    )]));
+    let output = sync_output(&env, &fake, &["-d"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("\t- And retainers!"),
+        "{}",
+        stdout(&output)
+    );
+    // Nothing was written.
+    assert!(!today_note(&env).contains("And retainers!"));
+}
+
+#[test]
+fn description_off_writes_no_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-off");
+    prepare(&env);
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  description: off\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "swings",
+        "Swings!",
+        "And retainers!",
+        "2026-10-30T08:00:00-04:00",
+        "2026-10-30T08:15:00-04:00",
+    )]));
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(!note.contains("And retainers!"), "{note}");
+    assert!(!stdout(&output).contains("≡"), "{}", stdout(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    assert_eq!(report["rows"][0]["description_lines"], 0);
+    // The kill switch records `Absent`: the key is omitted entirely.
+    for line in journal_lines(&env) {
+        if line["kind"] == "gcal.row" {
+            assert!(line.get("description").is_none(), "{line}");
+        }
+    }
+}
+
+#[test]
+fn space_indented_note_gets_space_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-spaces");
+    prepare(&env);
+    fs::write(
+        env.vault().join("2026/20261030.md"),
+        "# Friday 2026-10-30\n\n## Pomodoros\n\n- [ ] 1200-1300 — Focus\n  - my setup note\n",
+    )
+    .expect("seed space-indented note");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "swings",
+        "Swings!",
+        "And retainers!",
+        "2026-10-30T08:00:00-04:00",
+        "2026-10-30T08:15:00-04:00",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(note.contains("  - And retainers!"), "{note}");
+    assert!(!note.contains("\t- And retainers!"), "{note}");
+}
+
+#[test]
+fn new_row_lands_after_the_previous_rows_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-order");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![
+        desc_event(
+            "early",
+            "Early standup",
+            "First point\nSecond point",
+            "2026-10-30T08:00:00-04:00",
+            "2026-10-30T08:30:00-04:00",
+        ),
+        desc_event(
+            "later",
+            "Later review",
+            "",
+            "2026-10-30T09:00:00-04:00",
+            "2026-10-30T09:30:00-04:00",
+        ),
+    ]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let early = note.find("^early-standup").expect("early row");
+    let first_bullet = note.find("\t- First point").expect("first bullet");
+    let second_bullet = note.find("\t- Second point").expect("second bullet");
+    let later = note.find("^later-review").expect("later row");
+    assert!(
+        early < first_bullet
+            && first_bullet < second_bullet
+            && second_bullet < later,
+        "{note}"
+    );
+}
+
+#[test]
+fn context_rows_never_get_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-context");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![serde_json::json!({
+        "id": "klass",
+        "summary": "Toddler class",
+        "description": "Bring shoes",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T09:15:00-04:00"},
+        "end": {"dateTime": "2026-10-30T10:00:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=klass",
+        "attendees": [{"self": true, "responseStatus": "tentative"}]
+    })]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(
+        note.contains("- **0915-1000** Toddler class · *maybe*"),
+        "{note}"
+    );
+    assert!(!note.contains("Bring shoes"), "{note}");
+    assert!(!stdout(&output).contains("≡"), "{}", stdout(&output));
+}
+
+#[test]
+fn upgrade_lands_bullets_above_existing_notes() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-upgrade");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let tentative = serde_json::json!({
+        "id": "klass",
+        "summary": "Evening class",
+        "description": "Stretch\n-15",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T20:00:00-04:00"},
+        "end": {"dateTime": "2026-10-30T21:00:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=klass",
+        "attendees": [{"self": true, "responseStatus": "tentative"}]
+    });
+    fake.events_json(&desc_envelope(vec![tentative]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    // Bryan adds a note under the Maybe row before it goes Yes.
+    let first = today_note(&env);
+    let mut noted: Vec<String> = first.lines().map(str::to_string).collect();
+    let at = noted
+        .iter()
+        .position(|line| line.contains("Evening class"))
+        .expect("context row");
+    noted.insert(at + 1, "  - my note".to_string());
+    fs::write(
+        env.vault().join("2026/20261030.md"),
+        noted.join("\n") + "\n",
+    )
+    .expect("hand note");
+    let accepted = serde_json::json!({
+        "id": "klass",
+        "summary": "Evening class",
+        "description": "Stretch\n-15",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T20:00:00-04:00"},
+        "end": {"dateTime": "2026-10-30T21:00:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=klass",
+        "attendees": [{"self": true, "responseStatus": "accepted"}]
+    });
+    fake.events_json(&desc_envelope(vec![accepted]));
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("^evening-class"))
+        .expect("upgraded row");
+    assert!(row.contains(" [buffer:: -15m]"), "{row}");
+    let row_at = note.find(row).expect("row");
+    let bullet_at = note.find("  - Stretch").expect("bullet");
+    let note_at = note.find("  - my note").expect("hand note");
+    assert!(row_at < bullet_at && bullet_at < note_at, "{note}");
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    let upgraded = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["action"] == "upgraded")
+        .expect("upgraded row");
+    assert_eq!(upgraded["description_lines"], 1);
+}
+
+#[test]
+fn long_description_caps_at_eight_with_an_overflow_line() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-cap");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let description = (1..=10)
+        .map(|n| format!("Line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "talk",
+        "Long talk",
+        &description,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    for n in 1..=7 {
+        assert!(note.contains(format!("\t- Line {n}").as_str()), "{note}");
+    }
+    assert!(!note.contains("\t- Line 8"), "{note}");
+    assert!(
+        note.contains(
+            "\t- *…3 more lines in [Google Calendar](https://calendar.google.com/event?eid=talk)*"
+        ),
+        "{note}"
+    );
+    assert!(stdout(&output).contains("≡ 8"), "{}", stdout(&output));
+    let journal = journal_lines(&env);
+    let latest = journal
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.row" && line["key"]["event_id"] == "talk"
+        })
+        .last()
+        .expect("talk row record");
+    assert_eq!(latest["description"]["lines"], 8, "{latest}");
+}
+
+#[test]
+fn teams_only_description_writes_nothing() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-teams");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![serde_json::json!({
+        "id": "review",
+        "summary": "Sprint review",
+        "description": "Microsoft Teams meeting\nJoin on your computer\nhttps://teams.microsoft.com/l/meetup-join/19%3Ameeting_FAKE123\nMeeting ID: 234 567 890\nPasscode: AbC123",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T18:00:00-04:00"},
+        "end": {"dateTime": "2026-10-30T19:00:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=review",
+        "conferenceData": {"entryPoints": [{"entryPointType": "video", "uri": "https://teams.microsoft.com/l/meetup-join/19%3Ameeting_FAKE123"}]},
+        "attendees": [{"self": true, "responseStatus": "accepted"}]
+    })]));
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    let row = note
+        .lines()
+        .find(|line| line.contains("^sprint-review"))
+        .expect("review row");
+    assert!(row.contains("[📹]("), "{row}");
+    // The row looks exactly as it does today: no bullets.
+    let events = &note[note.find("## Events").expect("Events")
+        ..note.find("## Pomodoros").expect("Pomodoros")];
+    assert!(
+        events.lines().all(|line| !line.starts_with([' ', '\t'])),
+        "{note}"
+    );
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    assert_eq!(report["rows"][0]["description_lines"], 0);
+    assert!(!stdout(&output).contains("≡"), "{}", stdout(&output));
+}
+
+#[test]
+fn deleted_row_with_overflow_bullet_is_tombstoned_not_adopted() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-tombstone");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let description = (1..=10)
+        .map(|n| format!("Line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "talk",
+        "Long talk",
+        &description,
+        "2026-10-30T18:00:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    // The overflow bullet carries the event URL. Deleting only the row
+    // must tombstone it: the bullet is never mistaken for the row.
+    let epilogue = today_note(&env)
+        .lines()
+        .filter(|line| {
+            !line.contains("^long-talk") || line.contains("[[#^long-talk]]")
+        })
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert!(epilogue.contains("eid=talk"), "overflow bullet kept");
+    fs::write(env.vault().join("2026/20261030.md"), &epilogue)
+        .expect("delete row");
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("removed"), "{}", stdout(&output));
+    assert!(
+        !today_note(&env).contains("^long-talk "),
+        "never re-added:\n{}",
+        today_note(&env)
+    );
+}
+
+#[test]
+fn title_update_keeps_the_description_record() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-birth-carry");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "dentist",
+        "Dentist",
+        "Bring insurance card",
+        "2026-10-30T18:30:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    fake.events_json(&desc_envelope(vec![desc_event(
+        "dentist",
+        "Dentist deep clean",
+        "Bring insurance card",
+        "2026-10-30T18:30:00-04:00",
+        "2026-10-30T19:00:00-04:00",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains("~ task"), "{}", stdout(&output));
+    let journal = journal_lines(&env);
+    let latest = journal
+        .iter()
+        .filter(|line| {
+            line["kind"] == "gcal.row" && line["key"]["event_id"] == "dentist"
+        })
+        .last()
+        .expect("dentist row record");
+    assert_eq!(latest["description"]["lines"], 1, "{latest}");
 }

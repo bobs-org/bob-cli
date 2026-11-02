@@ -23,7 +23,7 @@ pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use gcal::{
     color_id_for_key, color_name_for_id, load_gcal_config,
-    GcalCalendarSettings, GcalSettings, GcalTentative,
+    GcalCalendarSettings, GcalDescriptionMode, GcalSettings, GcalTentative,
 };
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
 // Relation-successor authoring consumers use `LabelEffect`; this phase

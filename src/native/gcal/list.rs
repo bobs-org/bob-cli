@@ -7,7 +7,9 @@ use serde_json::{json, Value};
 use super::{
     classify::{self, Inclusion},
     config::GcalConfig,
+    description::bullets::render_bullets,
     journal,
+    lifecycle::split_row_spans,
     model::MyAnswer,
     plan::journaled_title,
     snapshot::{self, SnapshotEvent},
@@ -82,6 +84,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
     if args.format.is_json() {
         print_json(
             day,
+            &config,
             &visible_calendars,
             events,
             &counts,
@@ -95,6 +98,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
     } else {
         print_table(
             day,
+            &config,
             &visible_calendars,
             events,
             &counts,
@@ -217,8 +221,25 @@ fn event_url(event: &ListedEvent) -> Option<&str> {
     event.event.html_link.as_deref()
 }
 
+/// Bullet lines sync would write for one event: the rendered, capped
+/// count for Task inclusions in `bullets` mode, 0 otherwise. JSON
+/// carries only this count, never description text.
+fn description_lines(config: &GcalConfig, event: &ListedEvent) -> usize {
+    if event.inclusion != Inclusion::Task || !config.description_bullets() {
+        return 0;
+    }
+    render_bullets(
+        &event.event.description,
+        config.description_lines(),
+        event.event.html_link.as_deref(),
+    )
+    .bullets
+    .len()
+}
+
 /// A row is present when its journaled `^block_id` matches, or its
-/// `📅` URL appears in the note.
+/// `📅` URL appears on a top-level row. An indented description bullet
+/// carrying the event URL (the overflow line) never counts.
 fn row_present(
     lines: &[&str],
     block_id: &str,
@@ -235,16 +256,20 @@ fn row_present(
             return true;
         }
     }
-    url.filter(|url| !url.is_empty())
-        .is_some_and(|url| lines.iter().any(|line| line.contains(url)))
+    url.filter(|url| !url.is_empty()).is_some_and(|url| {
+        lines
+            .iter()
+            .any(|line| line.contains(url) && split_row_spans(line).is_some())
+    })
 }
 
-/// The `^block_id` of the note line carrying `url`, for unjournaled rows.
+/// The `^block_id` of the top-level note line carrying `url`, for
+/// unjournaled rows.
 fn adopted_block_id(lines: &[&str], url: Option<&str>) -> Option<String> {
     let url = url.filter(|url| !url.is_empty())?;
     lines
         .iter()
-        .find(|line| line.contains(url))
+        .find(|line| line.contains(url) && split_row_spans(line).is_some())
         .and_then(|line| trailing_block_id(line))
 }
 
@@ -373,6 +398,7 @@ fn counts(events: &[ListedEvent]) -> Counts {
 #[allow(clippy::too_many_arguments)]
 fn print_json(
     day: NaiveDate,
+    config: &GcalConfig,
     calendars: &[Value],
     events: &[ListedEvent],
     counts: &Counts,
@@ -400,6 +426,7 @@ fn print_json(
                 "off_clock": event.event.off_clock,
                 "untracked": event.event.off_clock,
                 "buffer": buffer_json(event),
+                "description_lines": description_lines(config, event),
                 "root": {
                     "value": root.and_then(|root| root.value.as_deref()),
                     "source": root.and_then(|root| root.source.as_deref()),
@@ -432,6 +459,7 @@ fn print_json(
 #[allow(clippy::too_many_arguments)]
 fn print_table(
     day: NaiveDate,
+    config: &GcalConfig,
     calendars: &[Value],
     events: &[ListedEvent],
     counts: &Counts,
@@ -475,9 +503,15 @@ fn print_table(
             Some(label) => format!("{} {label}", event.time),
             None => event.time.clone(),
         };
+        // The bullet count rides plain here so column widths are
+        // computed before styling, the way `buffer_label` does.
+        let title = match description_lines(config, event) {
+            0 => event.event.title.clone(),
+            lines => format!("{} ≡ {lines}", event.event.title),
+        };
         rows.push([
             time,
-            event.event.title.clone(),
+            title,
             answer_label(
                 event.event.my_answer,
                 event.event.organizer_or_no_guests,
@@ -509,6 +543,16 @@ fn print_table(
         let mut cells = row.clone();
         if let Some(label) = buffer_label(event) {
             cells[0] = format!("{} {}", event.time, styler.dim(&label));
+        }
+        match description_lines(config, event) {
+            0 => {}
+            lines => {
+                cells[1] = format!(
+                    "{} {}",
+                    event.event.title,
+                    styler.dim(&format!("≡ {lines}"))
+                );
+            }
         }
         if let Some(root) = event.root.as_ref()
             && let Some(value) = root.value.as_deref()

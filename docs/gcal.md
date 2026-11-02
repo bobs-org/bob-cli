@@ -25,6 +25,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [Sync](#sync)
 - [Off-clock events](#off-clock-events)
 - [Buffers](#buffers)
+- [Description bullets](#description-bullets)
 - [Reconciling Google-side changes](#reconciling-google-side-changes)
 - [Where it runs](#where-it-runs)
 - [Event inclusion](#event-inclusion)
@@ -97,6 +98,8 @@ gcal:
     #   root: body
   colors: {} # e.g. {tomato: job, sage: body}
   tentative: context # context | task
+  description: bullets # bullets | off
+  description_lines: 8 # most bullet lines per Event Task, overflow line included
   timeout_secs: 60
 ```
 
@@ -123,6 +126,12 @@ gcal:
   mapped root is checked against the vault for each event.
 - `tentative` controls whether a busy Maybe event is context (default) or an
   Event Task (`task`).
+- `description` controls whether sync copies each event's human description
+  as bullets under its Event Task (`bullets`, default) or writes none
+  (`off`, the kill switch).
+- `description_lines` caps the bullet lines per Event Task at an integer of
+  at least 2 (default 8), overflow line included. A wrong type or a value
+  below 2 is a setup error (exit 2) that names the key.
 - The host label is the same slug vault-sync uses in commit subjects.
   `doctor` prints it. Unset `writer` means this host may write; a mismatch
   fails the writer check.
@@ -323,7 +332,9 @@ what sync did, or would do, with the event — `task · MEET`, `task`,
 ` · off-clock` appended for Google off-clock tasks
 (`task · MEET · off-clock`). The TIME column appends the buffer label for
 buffered tasks (`12:00-13:00 −30m +15m`, dimmed on a TTY); see
-[Buffers](#buffers). Omitted events keep their
+[Buffers](#buffers). The EVENT column appends a dim `≡ N` after the title
+of each Event Task with N bullet lines sync would write; see
+[Description bullets](#description-bullets). Omitted events keep their
 omission reason. `-a` also shows omitted events. Counts include omitted events
 even when their rows are hidden. The header carries the last sync: `synced
 3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
@@ -333,7 +344,8 @@ JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
 `last_sync`, and `past_open` fields. Each event reports `time`, `title`,
 `answer`, `inclusion`, `reason`, `off_clock`, deprecated `untracked`,
 `buffer` (`{"before_minutes", "after_minutes"}`, or `null` when the row
-carries no buffer), `vault`, and `root.value`, `root.source`,
+carries no buffer), `description_lines` (bullet lines sync would write, 0
+otherwise), `vault`, and `root.value`, `root.source`,
 and `root.warnings`. Descriptions and attendee details are omitted. A root
 may be null when no candidate is valid; warnings explain each rejected
 candidate and its fix. `past_open` lists the open Event Tasks still sitting
@@ -418,19 +430,24 @@ once on a concurrent edit before failing. The journal (`.bob/gcal/<host>.jsonl`)
 appends only after the note write succeeds, and host-local status
 (`$XDG_STATE_HOME/bob/gcal/status.json`) records the run for `list` and
 `doctor`. Commits are left to vault-sync, as with capture. `-d` prints the
-exact unified diff of the plan and writes nothing. `-q` prints nothing on
+exact unified diff of the plan and writes nothing; the diff shows the exact
+description bullets, and is the only place description text appears in
+command output. `-q` prints nothing on
 success, no-op, or waiting.
 
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
 (`action`, `kind`, `time`, `title`, `root`, `source`, `off_clock`, deprecated
-`untracked`, and `buffer` as `{"before_minutes", "after_minutes"}` or
-`null`), `pomodoro`
+`untracked`, `buffer` as `{"before_minutes", "after_minutes"}` or
+`null`, and `description_lines`, the bullet lines this run wrote for the
+row, 0 otherwise), `pomodoro`
 (`entry_line`, `created`, `links_added`, `links_sorted`, `entries`),
 `warnings`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). Human rows append the buffer label to the time
-(`~ task 12:00–13:00 −30m +15m  Lunch …`), and MEET lines show buffered
+(`~ task 12:00–13:00 −30m +15m  Lunch …`), and a dim `≡ N` when the run
+wrote N [description bullets](#description-bullets) for the row
+(`+ task  08:00–08:15  Swings!  ● love  via @love ≡ 1`). MEET lines show buffered
 spans. `pomodoro.entries` lists each MEET this run
 created or appended links into (`state` `closed`/`running`/`planned`,
 1-based `line`, `time` as `HHMM-HHMM` or null, `created`, `links`) in
@@ -484,6 +501,7 @@ account, or set `gcal.account` to the stamp's account.
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
 | `#offclock` (Google aliases `#off-clock`, `#untracked`) | Google until you edit it | Follows Google's token while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
 | `[buffer::]` | Google until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
+| Description bullets | Bob, at birth | Written with the created or upgraded Event Task; not rewritten afterwards |
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Child bullets (meeting notes) | You | Never touched |
@@ -602,6 +620,54 @@ The field is Google-owned exactly like the badges: it updates in place
 while the row is untouched, and a vault edit wins and is reported once.
 Rows synced before this feature migrate on the next sync. Context rows
 (Maybe/free) carry no buffer; a Maybe row upgraded to a task renders it.
+
+## Description bullets
+
+Whatever you write in a Google event's description, except Bob's directive
+lines and video-call boilerplate, appears as bullets at the top of that
+meeting's Event Task when sync creates it.
+
+Copied: the human lines of the description — plain paragraphs, list items,
+headings, table rows, and links. Dropped: [directive
+lines](#off-clock-events) (they drive `@route`, `#offclock`, and buffers
+instead), recognized conferencing blocks (Meet, Zoom, Teams, Webex),
+separators, blank lines, and lines that only repeat the `📹` or `📍` target.
+A Teams or Zoom invite whose description is only vendor boilerplate writes
+nothing: the row looks exactly as it does today. `Bring shoes #offclock`
+stays prose: the directive grammar does not change, so a line with any
+non-directive token is never a directive.
+
+The shape is flat: first children of the Event Task, with one nesting level
+for a list under its lead-in (`Agenda:`) and native `1.` items for ordered
+lists. Managed first children (CANCEL LOG, Depends-On, LINKS, Schedule and
+Work logs) stay above the bullets; your own notes go below them. Every
+bullet shares the row's existing child indentation.
+
+Description text is inert data: organizer prose can never mint a tag, task,
+drawer, checkbox, embed, link, or managed log. A few examples:
+
+| Description line | Bullet written |
+| --- | --- |
+| ``Run `$= dv.el("b", 1)` now`` | ``Run \`$= dv.el("b", 1)\` now`` |
+| `- [ ] RSVP #task by Friday` | `RSVP \#task by Friday` |
+| `TBD` | `**TBD**` |
+| `Bring 🍅 salad` | `Bring &#127813; salad` (still shows 🍅) |
+
+At most `gcal.description_lines` bullet lines per Event Task (default 8,
+minimum 2, overflow line included). The overflow line reads *…N more lines
+in [Google Calendar](https://calendar.google.com/event?eid=abc)* and links
+the event. A description above 64 KiB
+writes one fallback bullet linking Google Calendar instead.
+`gcal.description: off` is the kill switch: sync writes no bullets and
+records nothing.
+
+Bullets land with every Event Task sync creates, and with every Maybe→Yes
+upgrade (directly under the upgraded row, above your notes there). Context
+rows never get bullets. Later Google edits do not rewrite bullets after
+birth. Human `sync` rows end with a dim `≡ N` when the run wrote N bullet
+lines; `sync -d` shows the exact bullets in its diff — the only place
+description text appears in command output. JSON carries only
+`description_lines`, never description text.
 
 ## Reconciling Google-side changes
 
@@ -774,6 +840,8 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 ## Known limits
 
 - One writer: `gcal.writer` pins the single host allowed to sync.
+- Description bullets are written once, with the created or upgraded Event
+  Task; later Google edits leave them alone.
 - Google-side changes apply only to spans you have not edited; your edits
   are kept and reported once.
 - Google forbids Calendar scopes on the device-code flow; over SSH, login

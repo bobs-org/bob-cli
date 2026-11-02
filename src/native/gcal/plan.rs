@@ -20,7 +20,10 @@ use std::{
 use chrono::{NaiveDate, NaiveDateTime};
 
 use crate::native::{
-    capture::line_spans,
+    capture::{
+        dominant_indent_unit, first_child_indentation, leading_whitespace,
+        line_spans,
+    },
     capture_pomodoros::{self, PomodoroEntry, PomodoroState},
     capture_task_toggle::{
         child_block_end_line, insert_line_after, insert_line_before,
@@ -31,7 +34,8 @@ use crate::native::{
 };
 
 use super::{
-    journal::{occurrence_key, OccurrenceState},
+    description::bullets::{bullets_hash, DescriptionBullets},
+    journal::{occurrence_key, DescriptionState, OccurrenceState},
     lifecycle::{
         cancel_task_row, line_root, remove_childless_untimed_meet,
         remove_meet_link, row_untouched, split_row_spans, status_char,
@@ -70,6 +74,10 @@ pub(crate) struct PlannedOccurrence {
     /// Google `[buffer::]` field (description directives). Context rows
     /// never carry it; task rows render it at the end of the badge run.
     pub buffer: crate::native::event_task::EventBuffer,
+    /// Rendered, capped description bullets for task occurrences in
+    /// `bullets` mode (`Some` even when the block is empty). `None`
+    /// for context rows and in `off` mode.
+    pub description: Option<DescriptionBullets>,
     /// Google off-clock alias (title or description). Context rows strip
     /// it; task rows render canonical ` #offclock` in the badge run.
     pub off_clock: bool,
@@ -165,6 +173,10 @@ pub(crate) struct PlannedRow {
     pub title: String,
     pub off_clock: bool,
     pub buffer: crate::native::event_task::EventBuffer,
+    /// The `gcal.row` description record for this row. Every construction
+    /// site sets it: there is no `Default`, so the compiler flags any
+    /// site a later phase adds.
+    pub description: DescriptionState,
 }
 
 /// One adopted crash-recovery row, for the journal and the report.
@@ -185,6 +197,9 @@ pub(crate) struct AdoptedRow {
     pub title: String,
     pub off_clock: bool,
     pub buffer: crate::native::event_task::EventBuffer,
+    /// Adoptions record `Absent` in this phase; adoption matching
+    /// arrives in `live-bullets`.
+    pub description: DescriptionState,
 }
 
 /// One tombstoned journal row, for the journal and the report.
@@ -399,6 +414,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         title: occurrence.title.clone(),
                         off_clock: occurrence.off_clock,
                         buffer: buffer_for_row(occurrence),
+                        description: DescriptionState::Absent,
                     });
                     continue;
                 }
@@ -420,7 +436,17 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                     occurrence.all_day,
                     occurrence.start_min,
                 );
-                working.insert_row(slot, &text);
+                // A new task row and its materialized bullets go into the
+                // note in one block, in the same write as the MEET link.
+                // New context rows record `Absent`.
+                let mut block = vec![text];
+                if occurrence.task {
+                    let (depth1, unit) = fresh_bullet_indents(&working);
+                    if let Some(description) = occurrence.description.as_ref() {
+                        block.extend(description.materialize(&depth1, &unit));
+                    }
+                }
+                working.insert_block(slot, &block);
                 plan.rows_added.push(PlannedRow {
                     calendar_id: occurrence.calendar_id.clone(),
                     event_id: occurrence.event_id.clone(),
@@ -436,6 +462,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                     title: occurrence.title.clone(),
                     off_clock: occurrence.off_clock,
                     buffer: buffer_for_row(occurrence),
+                    description: tracked_state(occurrence.description.as_ref()),
                 });
             }
         }
@@ -692,6 +719,9 @@ fn apply_span_updates(
         title: occurrence.title.clone(),
         off_clock: occurrence.off_clock,
         buffer: buffer_for_row(occurrence),
+        // A title update or root reroute keeps the description record
+        // forward unchanged, so the next phase never backfills twice.
+        description: journaled.description.clone(),
     });
 }
 
@@ -886,6 +916,15 @@ fn upgrade_context_row(
     );
     used.insert(block_id.clone());
     working.lines[line_index] = render_occurrence(occurrence, &block_id);
+    // The bullets land directly under the upgraded row, above any notes
+    // Bryan already has there.
+    if let Some(description) = occurrence.description.as_ref() {
+        let (depth1, unit) = child_bullet_indents(working, line_index);
+        let bullets = description.materialize(&depth1, &unit);
+        if !bullets.is_empty() {
+            working.insert_block(Some(line_index), &bullets);
+        }
+    }
     plan.rows_upgraded.push(PlannedRow {
         calendar_id: occurrence.calendar_id.clone(),
         event_id: occurrence.event_id.clone(),
@@ -901,6 +940,7 @@ fn upgrade_context_row(
         title: occurrence.title.clone(),
         off_clock: occurrence.off_clock,
         buffer: buffer_for_row(occurrence),
+        description: tracked_state(occurrence.description.as_ref()),
     });
     plan.extra_link_wants.push((
         occurrence.calendar_id.clone(),
@@ -1284,16 +1324,6 @@ impl WorkingNote {
         self.lines = updated;
     }
 
-    fn insert_row(&mut self, slot: Option<usize>, text: &str) {
-        match slot {
-            Some(after) => self.lines.insert(after + 1, text.to_string()),
-            None => {
-                let index = self.events_top_index();
-                self.lines.insert(index, text.to_string());
-            }
-        }
-    }
-
     fn insert_block(&mut self, slot: Option<usize>, block: &[String]) {
         match slot {
             Some(after) => {
@@ -1379,9 +1409,85 @@ fn trailing_block_id(line: &str) -> String {
     parse_trailing_block_id(line).unwrap_or_default()
 }
 
+/// The journal description record for freshly materialized bullets:
+/// `Tracked` with the rendered hash and line count (even when the block
+/// is empty), or `Absent` for context rows and `off` mode.
+fn tracked_state(description: Option<&DescriptionBullets>) -> DescriptionState {
+    match description {
+        Some(bullets) => DescriptionState::Tracked {
+            hash: bullets_hash(
+                bullets
+                    .bullets
+                    .iter()
+                    .map(|bullet| (bullet.depth, bullet.body.as_str())),
+            ),
+            lines: bullets.bullets.len(),
+        },
+        None => DescriptionState::Absent,
+    }
+}
+
+/// Bullet indentation for a brand-new row: the row has no children yet,
+/// so depth 1 is the row indent (column 0) plus the note's dominant
+/// indent unit, falling back to TAB.
+fn fresh_bullet_indents(working: &WorkingNote) -> (String, String) {
+    let unit = dominant_indent_unit(&line_spans(&working.as_string()))
+        .unwrap_or("\t")
+        .to_string();
+    (unit.clone(), unit)
+}
+
+/// Bullet indentation under an existing row: depth 1 reuses the row's
+/// first direct child indent when one exists, else the row indent plus
+/// the note's dominant unit (TAB fallback). The depth-2 unit is the
+/// depth-1 indent minus the row indent.
+fn child_bullet_indents(
+    working: &WorkingNote,
+    line_index: usize,
+) -> (String, String) {
+    let fallback = || fresh_bullet_indents(working);
+    let Some(row) = working.lines.get(line_index) else {
+        return fallback();
+    };
+    let row_indent = leading_whitespace(row).to_string();
+    let contents = working.as_string();
+    let spans = line_spans(&contents);
+    if line_index >= spans.len() {
+        return fallback();
+    }
+    let end_line =
+        child_block_end_line(&spans, line_index).min(spans.len() - 1);
+    let end_offset = spans[end_line].end;
+    let depth1 =
+        first_child_indentation(&spans, line_index, end_offset, &row_indent)
+            .unwrap_or_else(|| {
+                format!(
+                    "{row_indent}{}",
+                    dominant_indent_unit(&spans).unwrap_or("\t")
+                )
+            });
+    let mut unit = depth1
+        .strip_prefix(row_indent.as_str())
+        .unwrap_or("")
+        .to_string();
+    if unit.is_empty() {
+        unit = "\t".to_string();
+    }
+    (depth1, unit)
+}
+
+/// Whether `line` is a top-level Events row: only lines that
+/// `split_row_spans` parses (column-0 `- ` rows) count. Indented
+/// description bullets — including the overflow line that carries the
+/// event's URL, or a bullet starting with `**HHMM-HHMM**` — never do.
+fn is_top_level_row(line: &str) -> bool {
+    split_row_spans(line).is_some()
+}
+
 /// Find a row line inside the Events section: a task matches its
 /// journaled `^block_id` first, then its `📅` URL; a context row
 /// matches its `📅` URL, or its full rendered text when it has none.
+/// URL and text matching consider only top-level lines.
 fn find_row_line(
     lines: &[String],
     events_range: Option<Range<usize>>,
@@ -1404,14 +1510,18 @@ fn find_row_line(
     }
     if let Some(url) = url.filter(|url| !url.is_empty()) {
         for index in range.clone() {
-            if lines.get(index).is_some_and(|line| line.contains(url)) {
+            if lines.get(index).is_some_and(|line| {
+                line.contains(url) && is_top_level_row(line)
+            }) {
                 return Some(index);
             }
         }
     }
     if let Some(text) = text_match.filter(|text| !text.is_empty()) {
         for index in range {
-            if lines.get(index).is_some_and(|line| line.trim_end() == text) {
+            if lines.get(index).is_some_and(|line| {
+                line.trim_end() == text && is_top_level_row(line)
+            }) {
                 return Some(index);
             }
         }
@@ -1447,6 +1557,9 @@ fn insert_slot(
     for index in range {
         let line = &working.lines[index];
         if line.trim().is_empty() {
+            continue;
+        }
+        if !is_top_level_row(line) {
             continue;
         }
         let Some(row_key) = row_sort_key(line) else {

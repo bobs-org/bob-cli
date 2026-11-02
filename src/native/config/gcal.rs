@@ -12,6 +12,8 @@ pub(crate) struct GcalSettings {
     pub(crate) calendars: Option<Vec<GcalCalendarSettings>>,
     pub(crate) colors: BTreeMap<String, String>,
     pub(crate) tentative: Option<GcalTentative>,
+    pub(crate) description: Option<GcalDescriptionMode>,
+    pub(crate) description_lines: Option<u64>,
     pub(crate) timeout_secs: Option<u64>,
 }
 
@@ -27,6 +29,14 @@ pub(crate) struct GcalCalendarSettings {
 pub(crate) enum GcalTentative {
     Context,
     Task,
+}
+
+/// Whether `bob gcal sync` copies event descriptions as Event Task bullets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum GcalDescriptionMode {
+    #[default]
+    Bullets,
+    Off,
 }
 
 pub(crate) fn load_gcal_config(
@@ -88,6 +98,11 @@ fn parse_gcal_value(
         calendars: parse_calendars(get("calendars"), path)?,
         colors: parse_colors(get("colors"), path)?,
         tentative: parse_tentative(get("tentative"), path)?,
+        description: parse_description_mode(get("description"), path)?,
+        description_lines: parse_description_lines(
+            get("description_lines"),
+            path,
+        )?,
         timeout_secs: parse_timeout(get("timeout_secs"), path)?,
     })
 }
@@ -194,6 +209,83 @@ fn parse_tentative(
             path.display()
         ))),
     }
+}
+
+fn parse_description_mode(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<GcalDescriptionMode>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let serde_yaml::Value::String(text) = value else {
+        return Err(ConfigError::Invalid(format!(
+            "gcal.description in {} must be bullets or off; got {}",
+            path.display(),
+            render_scalar(&value)
+        )));
+    };
+    match text.trim() {
+        "bullets" => Ok(Some(GcalDescriptionMode::Bullets)),
+        "off" => Ok(Some(GcalDescriptionMode::Off)),
+        other => Err(ConfigError::Invalid(format!(
+            "gcal.description in {} must be bullets or off; got {other:?}",
+            path.display()
+        ))),
+    }
+}
+
+fn parse_description_lines(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<u64>, ConfigError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let number = match &value {
+        serde_yaml::Value::Number(number) => {
+            if let Some(int) = number.as_i64() {
+                int
+            } else if let Some(uint) = number.as_u64() {
+                i64::try_from(uint).map_err(|_| {
+                    ConfigError::Invalid(format!(
+                        "gcal.description_lines in {} must be an integer >= 2; got {value:?}",
+                        path.display()
+                    ))
+                })?
+            } else {
+                return Err(ConfigError::Invalid(format!(
+                    "gcal.description_lines in {} must be an integer >= 2; got {value:?}",
+                    path.display()
+                )));
+            }
+        }
+        other => {
+            return Err(ConfigError::Invalid(format!(
+                "gcal.description_lines in {} must be an integer >= 2; got {}",
+                path.display(),
+                render_scalar(other)
+            )));
+        }
+    };
+    if number < 2 {
+        return Err(ConfigError::Invalid(format!(
+            "gcal.description_lines in {} must be an integer >= 2; got {number}",
+            path.display()
+        )));
+    }
+    u64::try_from(number).map(Some).map_err(|_| {
+        ConfigError::Invalid(format!(
+            "gcal.description_lines in {} must be an integer >= 2; got {number}",
+            path.display()
+        ))
+    })
 }
 
 fn parse_colors(
@@ -462,6 +554,41 @@ mod tests {
         );
         assert_eq!(settings.tentative, Some(GcalTentative::Task));
         assert_eq!(settings.timeout_secs, Some(90));
+    }
+
+    #[test]
+    fn description_keys_default_to_bullets_and_eight_lines() {
+        let settings = parse("gcal:\n  account: you@example.com\n")
+            .expect("description keys optional");
+        assert_eq!(settings.description, None);
+        assert_eq!(settings.description_lines, None);
+        let settings =
+            parse("gcal:\n  description: bullets\n  description_lines: 8\n")
+                .expect("explicit values");
+        assert_eq!(settings.description, Some(GcalDescriptionMode::Bullets));
+        assert_eq!(settings.description_lines, Some(8));
+        let settings =
+            parse("gcal:\n  description: off\n").expect("kill switch");
+        assert_eq!(settings.description, Some(GcalDescriptionMode::Off));
+    }
+
+    #[test]
+    fn rejects_bad_description_values() {
+        for text in [
+            "gcal:\n  description: sometimes\n",
+            "gcal:\n  description: 1\n",
+            "gcal:\n  description_lines: many\n",
+            "gcal:\n  description_lines: 1\n",
+            "gcal:\n  description_lines: 0\n",
+            "gcal:\n  description_lines: -3\n",
+            "gcal:\n  description_lines: 1.5\n",
+        ] {
+            let error = parse(text).expect_err(text);
+            assert!(
+                error.message().contains("gcal.description"),
+                "{text} names the key: {error}"
+            );
+        }
     }
 
     #[test]

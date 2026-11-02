@@ -48,9 +48,24 @@ pub(crate) struct RowRecord {
     pub source: Option<String>,
     pub series_id: Option<String>,
     pub url: Option<String>,
+    pub description: DescriptionState,
     pub ts: DateTime<FixedOffset>,
     pub host: String,
     pub path: String,
+}
+
+/// What Bob last wrote for one row's description bullets: a sibling of
+/// `spans` in each `gcal.row` record. Older binaries read fields with
+/// `object.get` and ignore it, so a downgrade is safe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DescriptionState {
+    /// The row predates the feature, or was synced while `off`.
+    Absent,
+    /// What Bob last wrote: the hash over `(depth, body)` pairs (which
+    /// ignores indent characters) and the bullet line count.
+    Tracked { hash: String, lines: usize },
+    /// Never touched: `null`, or a malformed value some other writer left.
+    HandsOff,
 }
 
 /// One learned series root: a vault edit on one occurrence teaches the
@@ -80,6 +95,7 @@ pub(crate) struct NewRow {
     /// The `📅` identity URL, when the event has one: the match key for
     /// block-less context rows.
     pub url: Option<String>,
+    pub description: DescriptionState,
 }
 
 /// A new `gcal.link` or `gcal.gone` to append.
@@ -224,6 +240,7 @@ fn parse_record(event: &StoredEvent) -> Option<(String, String, Update)> {
                 .get("url")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            description: parse_description_state(object.get("description")),
             ts: event.ts,
             host: event.host.clone(),
             path: object
@@ -435,13 +452,40 @@ fn parse_series_root(
     ))
 }
 
+/// Parse one `gcal.row` description record: absent, a `{hash, lines}`
+/// object, or `null`. Any malformed value parses as hands-off (never
+/// touched) rather than as absent, so the row stays valid and never
+/// triggers a backfill.
+fn parse_description_state(value: Option<&Value>) -> DescriptionState {
+    let Some(value) = value else {
+        return DescriptionState::Absent;
+    };
+    if value.is_null() {
+        return DescriptionState::HandsOff;
+    }
+    let object = value.as_object();
+    let hash = object
+        .and_then(|object| object.get("hash"))
+        .and_then(Value::as_str);
+    let lines = object
+        .and_then(|object| object.get("lines"))
+        .and_then(Value::as_u64);
+    match (hash, lines) {
+        (Some(hash), Some(lines)) => DescriptionState::Tracked {
+            hash: hash.to_string(),
+            lines: usize::try_from(lines).unwrap_or(usize::MAX),
+        },
+        _ => DescriptionState::HandsOff,
+    }
+}
+
 /// Append one `gcal.row` record with a single `O_APPEND` write.
 pub(crate) fn append_row(
     vault: &Path,
     host: &str,
     row: &NewRow,
 ) -> std::io::Result<String> {
-    let line = serde_json::to_string(&json!({
+    let mut value = json!({
         "v": 1,
         "ts": pref_journal::event_timestamp()
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
@@ -457,8 +501,18 @@ pub(crate) fn append_row(
         "row": row.row_kind,
         "spans": row.spans,
         "root": {"value": row.root, "source": row.source},
-    }))
-    .unwrap_or_else(|_| "{}".to_string())
+    });
+    match &row.description {
+        DescriptionState::Absent => {}
+        DescriptionState::HandsOff => {
+            value["description"] = Value::Null;
+        }
+        DescriptionState::Tracked { hash, lines } => {
+            value["description"] = json!({"hash": hash, "lines": lines});
+        }
+    }
+    let line = serde_json::to_string(&value)
+        .unwrap_or_else(|_| "{}".to_string())
         + "\n";
     pref_journal::append_line(vault, NAMESPACE, host, &line)?;
     Ok(line)
@@ -628,6 +682,7 @@ mod tests {
                 )]),
                 root: Some("job".to_string()),
                 source: Some("colour tomato".to_string()),
+                description: DescriptionState::Absent,
             },
         )
         .expect("row");

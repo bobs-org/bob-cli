@@ -3,7 +3,10 @@ use chrono::{FixedOffset, NaiveDate, NaiveDateTime, TimeZone};
 use std::collections::{BTreeMap, HashSet};
 
 use crate::native::gcal::{
-    journal::{occurrence_key, span_hash, OccurrenceState, RowRecord},
+    description::bullets::{Bullet, DescriptionBullets},
+    journal::{
+        occurrence_key, span_hash, DescriptionState, OccurrenceState, RowRecord,
+    },
     render,
     root::RootSourceKind,
     stamp,
@@ -76,11 +79,29 @@ fn occurrence_off_clock(
         needs_type: false,
         buffer,
         off_clock,
+        description: None,
         link_phase: None,
         all_day: time_label == "all day",
         start_min,
         end_min,
     }
+}
+
+/// Bullets for one occurrence, as `build_occurrences` renders them.
+fn with_description(
+    mut occurrence: PlannedOccurrence,
+    bodies: &[&str],
+) -> PlannedOccurrence {
+    occurrence.description = Some(DescriptionBullets {
+        bullets: bodies
+            .iter()
+            .map(|body| Bullet {
+                depth: 1,
+                body: (*body).to_string(),
+            })
+            .collect(),
+    });
+    occurrence
 }
 
 fn end_min_from_label(time_label: &str, start_min: i32) -> i32 {
@@ -153,6 +174,8 @@ fn journal_from_added(
             record.root.clone_from(&row.root);
             record.source.clone_from(&row.source);
             record.series_id.clone_from(&row.series_id);
+            record.row_kind.clone_from(&row.row_kind);
+            record.description.clone_from(&row.description);
         }
         journal.insert(key, state);
     }
@@ -174,6 +197,7 @@ fn overlay_updated(
             record.spans.clone_from(&row.spans);
             record.root.clone_from(&row.root);
             record.source.clone_from(&row.source);
+            record.description.clone_from(&row.description);
         }
     }
     for notice in &plan.kept {
@@ -696,6 +720,7 @@ fn journal_task(
                 source: None,
                 series_id: None,
                 url: url.map(str::to_string),
+                description: DescriptionState::Absent,
                 ts,
                 host: "test".to_string(),
                 path: "2026/20261030.md".to_string(),
@@ -1096,6 +1121,7 @@ fn upgraded_ended_maybe_gets_closed_meet() {
                 source: None,
                 series_id: None,
                 url: occ.html_link.clone(),
+                description: DescriptionState::Absent,
                 ts,
                 host: "test".to_string(),
                 path: "2026/20261030.md".to_string(),
@@ -1136,6 +1162,198 @@ fn upgraded_ended_maybe_gets_closed_meet() {
     );
     assert_eq!(plan.rows_upgraded.len(), 1);
     assert_eq!(plan.links_added.len(), 1);
+}
+
+#[test]
+fn new_task_row_carries_its_bullets_and_tracks_them() {
+    let occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let plan = run(empty_ledger(), vec![occ]);
+    assert_eq!(plan.rows_added.len(), 1);
+    let row = row_line(&plan.contents, &plan.rows_added[0].block_id);
+    assert!(row.contains("**0800-0815** Swings!"), "{row}");
+    let lines: Vec<&str> = plan.contents.lines().collect();
+    let row_index = lines
+        .iter()
+        .position(|line| line.contains("**0800-0815**"))
+        .expect("row");
+    assert_eq!(
+        lines[row_index + 1],
+        "\t- And retainers!",
+        "{}",
+        plan.contents
+    );
+    let DescriptionState::Tracked { hash, lines: count } =
+        &plan.rows_added[0].description
+    else {
+        panic!(
+            "insert records Tracked: {:?}",
+            plan.rows_added[0].description
+        );
+    };
+    assert_eq!(*count, 1);
+    assert_eq!(
+        *hash,
+        crate::native::gcal::description::bullets::bullets_hash([(
+            1,
+            "- And retainers!"
+        )])
+    );
+}
+
+#[test]
+fn empty_bullet_block_tracks_zero_lines_and_stays_put() {
+    let mut occ = occurrence("standup", "Standup", true, "0800-0830", 480);
+    occ.description = Some(DescriptionBullets {
+        bullets: Vec::new(),
+    });
+    let plan = run(empty_ledger(), vec![occ]);
+    assert_eq!(plan.rows_added.len(), 1);
+    assert_eq!(
+        plan.rows_added[0].description,
+        DescriptionState::Tracked {
+            hash: crate::native::gcal::description::bullets::bullets_hash(
+                std::iter::empty()
+            ),
+            lines: 0,
+        }
+    );
+    let journal = journal_from_added(&plan);
+    let second = run_with_journal(
+        &plan.contents,
+        vec![{
+            let mut occ =
+                occurrence("standup", "Standup", true, "0800-0830", 480);
+            occ.description = Some(DescriptionBullets {
+                bullets: Vec::new(),
+            });
+            occ
+        }],
+        &journal,
+    );
+    assert_eq!(second.contents, plan.contents);
+    assert!(!second.changed);
+}
+
+#[test]
+fn context_rows_record_absent_and_write_no_bullets() {
+    let occ = occurrence("klass", "Toddler class", false, "0915-1000", 555);
+    let plan = run(empty_ledger(), vec![occ]);
+    assert_eq!(plan.rows_added.len(), 1);
+    assert_eq!(plan.rows_added[0].row_kind, "context");
+    assert_eq!(plan.rows_added[0].description, DescriptionState::Absent);
+    assert!(
+        plan.contents
+            .lines()
+            .all(|line| !line.starts_with([' ', '\t'])),
+        "no bullets for context rows:\n{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn upgrade_lands_bullets_above_existing_notes() {
+    let occ = occurrence("klass", "Evening class", false, "2000-2100", 1200);
+    let first = run(empty_ledger(), vec![occ.clone()]);
+    assert_eq!(first.rows_added[0].row_kind, "context");
+    let journal = journal_from_added(&first);
+    // Bryan adds a note under the Maybe row before it goes Yes.
+    let mut noted_lines: Vec<String> =
+        first.contents.lines().map(str::to_string).collect();
+    let row_at = noted_lines
+        .iter()
+        .position(|line| line.contains("Evening class"))
+        .expect("context row");
+    noted_lines.insert(row_at + 1, "  - my note".to_string());
+    let noted = noted_lines.join("\n") + "\n";
+    let yes = with_description(
+        occurrence("klass", "Evening class", true, "2000-2100", 1200),
+        &["- Stretch"],
+    );
+    let plan = run_with_journal(&noted, vec![yes], &journal);
+    assert_eq!(plan.rows_upgraded.len(), 1);
+    let lines: Vec<&str> = plan.contents.lines().collect();
+    let row_index = lines
+        .iter()
+        .position(|line| {
+            line.contains(&format!("^{}", plan.rows_upgraded[0].block_id))
+        })
+        .expect("upgraded row");
+    assert_eq!(lines[row_index + 1], "  - Stretch", "{}", plan.contents);
+    assert_eq!(lines[row_index + 2], "  - my note", "{}", plan.contents);
+    let DescriptionState::Tracked { lines: count, .. } =
+        &plan.rows_upgraded[0].description
+    else {
+        panic!("upgrade records Tracked");
+    };
+    assert_eq!(*count, 1);
+}
+
+#[test]
+fn update_carries_the_description_record_forward() {
+    let occ = with_description(
+        occurrence("dentist", "Dentist", true, "1830-1900", 1110),
+        &["- Bring insurance card"],
+    );
+    let first = run(empty_ledger(), vec![occ]);
+    let journal = journal_from_added(&first);
+    let recorded = first.rows_added[0].description.clone();
+    // Google retitles the event: the appended row keeps the record.
+    let renamed = with_description(
+        occurrence("dentist", "Dentist!!", true, "1830-1900", 1110),
+        &["- Bring insurance card"],
+    );
+    let plan = run_with_journal(&first.contents, vec![renamed], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].description, recorded);
+}
+
+#[test]
+fn overflow_url_bullet_is_never_adopted_as_a_row() {
+    // Only an indented overflow bullet carries the event URL: without a
+    // real row, sync must insert one, never adopt the bullet.
+    let url = "https://calendar.google.com/event?eid=late";
+    let input = format!(
+        "## Events\n\n*stamp*\n\t- *…3 more lines in [Google Calendar]({url})*\n\n## Pomodoros\n"
+    );
+    let occ = with_description(
+        occurrence("late", "Late meeting", true, "1900-1930", 1140),
+        &["- *…3 more lines in [Google Calendar](https://example.test/x)*"],
+    );
+    let plan = run(&input, vec![occ]);
+    assert_eq!(plan.rows_added.len(), 1, "{:?}", plan.rows_adopted);
+    assert!(plan.rows_adopted.is_empty());
+}
+
+#[test]
+fn bold_span_bullet_never_moves_the_insert_slot() {
+    // A child bullet starting with `**HHMM-HHMM**` must not sort: the
+    // 0830 row lands after the whole 0800 block, not mid-block.
+    let input = concat!(
+        "## Events\n\n",
+        "*stamp*\n",
+        "- [ ] #task **0800-0830** Standup ^standup\n",
+        "\t- **0815-0830** Early recap\n",
+        "\t- my note\n",
+        "\n## Pomodoros\n",
+    );
+    let plan = run(
+        input,
+        vec![occurrence("dentist", "Dentist", true, "0830-0900", 510)],
+    );
+    assert_eq!(plan.rows_added.len(), 1);
+    let lines: Vec<&str> = plan.contents.lines().collect();
+    let note_at = lines
+        .iter()
+        .position(|line| *line == "\t- my note")
+        .expect("note");
+    let row_at = lines
+        .iter()
+        .position(|line| line.contains("^dentist"))
+        .expect("new row");
+    assert!(row_at > note_at, "{}", plan.contents);
 }
 
 #[test]

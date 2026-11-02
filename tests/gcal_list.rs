@@ -54,11 +54,30 @@ fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
         .expect("route token stripped from title");
     assert_eq!(dentist["root"]["value"], "body");
     assert_eq!(dentist["root"]["source"], "@body");
+    // The fixture dentist description yields one bullet: JSON carries
+    // only the count, never the text.
+    assert_eq!(dentist["description_lines"], 1);
+    for row in rows {
+        if row["title"] != "Dentist" {
+            assert_eq!(row["description_lines"], 0, "{row}");
+        }
+    }
     assert!(rows.iter().any(|row| {
         row["title"] == "Late call" && row["time"] == "18:30-19:00"
     }));
     assert!(!stdout(&output).contains("Bring insurance card"));
     assert!(!stdout(&output).contains("attendees"));
+
+    // The table shows a dim `≡ N` after the EVENT title.
+    let mut table = env.command();
+    fake.install(&mut table).args(["gcal"]);
+    let table_out = table.output().expect("run table list");
+    assert_eq!(table_out.status.code(), Some(0), "{}", stderr(&table_out));
+    assert!(
+        stdout(&table_out).contains("Dentist ≡ 1"),
+        "{}",
+        stdout(&table_out)
+    );
 
     let events_call = fake
         .calls()
