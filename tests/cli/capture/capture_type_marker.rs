@@ -454,27 +454,31 @@ fn vocabulary_is_authoritative_and_history_is_the_fallback() {
 
 #[test]
 fn named_pomodoro_conflict_refuses_before_any_write() {
-    let (temp, vault, day_file, config) = fixture(
+    let (_temp, vault, day_file, config) = fixture(
         "bob-capture-type-marker-conflict",
         &project(Some("WRITE"), ""),
         "## Pomodoros\n- [ ] () — BUILD\n",
     );
-    let before = snapshot_files(temp.path());
-    let (_, json) = capture_error_json(
+    let (_, json) = capture_json(
         &vault,
         &day_file,
         &config,
         &["First @sase:first-1#BUILD #build\n\nSecond @sase:second-1#BUILD #fix"],
+        false,
     );
-    assert_eq!(json["ok"], false, "{json}");
-    assert_eq!(json["code"], "type_marker_conflict", "{json}");
+    assert_eq!(json["ok"], true, "{json}");
+    // The first item lands consistently in BUILD; the second merges FIX.
+    let items = json["captures"].as_array().expect("batch captures");
+    assert_eq!(items.len(), 2, "{json}");
     assert!(
-        json["error"].as_str().unwrap().contains("Pomodoro BUILD"),
+        items[0].get("pomodoro_link_destination").is_some(),
         "{json}"
     );
-    // The first item's successful plan cannot write when the second
-    // item's resolved destination conflicts.
-    assert_eq!(snapshot_files(temp.path()), before);
+    let merged = &items[1]["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "BUILD", "{json}");
+    assert_eq!(merged["after"], "BUILD + FIX", "{json}");
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("— BUILD + FIX"), "{day}");
 }
 
 #[test]
@@ -502,15 +506,20 @@ fn named_destination_prefixes_are_checked_after_resolution() {
         &project(Some("WRITE"), ""),
         "## Pomodoros\n- [ ] () — BUILD\n",
     );
-    let (_, json) = capture_error_json(
+    let (_, json) = capture_json(
         &vault,
         &day_file,
         &config,
         &["Fix it @sase:prefix-1#bui #fix"],
+        false,
     );
-    assert_eq!(json["code"], "type_marker_conflict", "{json}");
-    assert!(json["error"].as_str().unwrap().contains("Pomodoro BUILD"));
-    assert!(json["error"].as_str().unwrap().contains("task BUILD"));
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "BUILD", "{json}");
+    assert_eq!(merged["after"], "BUILD + FIX", "{json}");
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("— BUILD + FIX"), "{day}");
 }
 
 #[test]

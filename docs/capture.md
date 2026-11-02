@@ -1191,16 +1191,20 @@ Cancelled, nested, and fenced lookalikes are not anchors. Multiple open timed
 entries remain an invariant error when a new named entry would need the
 current-Pomodoro anchor.
 
-An explicit `#NAME` choice also retypes the task to agree with the
-destination Pomodoro. For a new task, the type comes from its staged
-line and destination note. For an existing task, its current task field
-is compared with the type it inherits from its destination note. Bob
-writes `[type:: X]` for the chosen type component of the resolved name
-(the authored selector's slug or prefix, else the first non-exempt type
-component), or clears the field when X is the inherited type. PLAN is a
-legal result. A container name such as `#later` or `#snack` keeps the
-task's type and warns. A guarded link or a no-op leaves the line
-alone. The field edit joins the routed note and daily-note transaction.
+An explicit `#NAME` choice lands by merging (R2): the task keeps its
+type and the destination Pomodoro gains it. For a new task, the type comes
+from its staged line and destination note (a free `#<type>` marker sets X
+first). For an existing task, its staged pre-edit line and destination note
+resolve the effective type. When that type is missing from the resolved name,
+Bob renames the destination to `D + T` in catalog spelling and reports
+`merged: {before, after, added}` on the destination endpoint; human output
+appends ` · merged T` to the destination row. No task field is written, so
+`task_theme` stays omitted. A container name such as `#later` or `#snack`
+keeps the task's type and warns. A consistent landing, a guarded link, or a
+no-op leaves both the line and the name alone. The rename joins the routed
+note and daily-note transaction, and later batch items resolve against the
+merged name, so two captures landing BUILD in BUGS append it once. MEET
+destinations still take the retype path and never grow.
 
 The routed note and daily note are both parsed and validated before either is
 replaced. A missing daily note or Pomodoros section, no eligible unnamed target,
@@ -1281,12 +1285,14 @@ are rejected with messages naming the `@route^block-id@` project-note and
 `^` item. Body-bearing `<text> @route:block-id[#name][=<X>]` keeps its exact
 current new-task meaning.
 
-An explicit Pomodoro name on a whole-item existing-task link also applies the
-retype rule described above. This includes the `^route:block-id` active-task
+An explicit Pomodoro name on a whole-item existing-task link also lands by
+merging as described above. This includes the `^route:block-id` active-task
 spelling and the equivalent `=name` shorthands. A separate `#<type>` token on a
 marker-only `@route+id` item is the type marker for Ensure Next, not a Pomodoro
-selector. The type is evaluated from the task's staged pre-edit line and its
-destination note; the field edit is staged with the task and ledger changes.
+selector. A `#<type>` marker combined with a named destination sets X first,
+then merges a disagreeing destination. The merge is evaluated from the task's
+staged line and destination note; the rename is staged with the task and
+ledger changes and reported the same way.
 
 The existing task resolves with the task-toggle lookup, so missing notes,
 missing IDs (with a close-match suggestion plus a hint to add text for a new
@@ -2977,13 +2983,16 @@ chosen and not running), `named` (an existing entry matched by `#NAME`),
 or `created` (a new entry). Destinations Bob placed by type add a `type`
 object `{theme, source, label}` with the task's effective type, the
 cascade source, and the human label (`from dev`, `default type`); legacy
-and named destinations omit it, and the `role` values are unchanged. New
+and named destinations omit it, and the `role` values are unchanged.
+Destinations that gained a type on landing add a `merged` object
+`{before, after, added}` with the pre-merge name, the merged name, and the
+appended `ThemeRef` entries; consistent landings omit it. New
 `<text> @route:id[#NAME]` Pomodoro-task captures report
 `pomodoro_link_destination`, `pomodoro_name`, and `creates_pomodoro`
 too, and human output names the landing spot: `→ into running GOALS
 (0945-1015)`, `→ under GOALS (next up)`, `→ under GOALS (named)`, or
 `→ new Pomodoro BOB`, each with ` · <label>` appended when Bob placed
-by type.
+by type and ` · merged T` appended when the landing merged.
 
 ### Starting the next Pomodoro
 

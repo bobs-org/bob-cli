@@ -587,10 +587,10 @@ fn offer_named_pomodoro_is_created_only_when_a_pick_lands_there() {
     );
     let note = &one.snapshot()["cash_pkt.md"];
     assert!(
-        note.contains(&format!("[type:: ADMIN] [created::2026-09-20] ^{id}")),
+        note.contains(&format!("[created::2026-09-20] ^{id}")),
         "{note}"
     );
-    assert_eq!(note.matches("[type:: ADMIN]").count(), 1, "{note}");
+    assert_eq!(note.matches("[type:: ADMIN]").count(), 0, "{note}");
 }
 
 #[test]

@@ -850,8 +850,10 @@ and matching daily entries. On a write with no explicit destination,
 otherwise it uses the shared placement planner to choose an open matching
 entry or create the canonical named entry. A live link already under an
 open entry stays there. `-p` and `-P` remain explicit destinations and use
-the shared retype rule. The additive `capture.task_theme` reports a task
-type set or cleared by that explicit retype; default placement never changes
+the shared landing rule: a disagreeing destination merges the reading task's
+type into its name (R2), reporting `merged` on the capture destination, while
+MEET destinations still retype. The additive `capture.task_theme` reports a
+task type set or cleared only for MEET retypes; default placement never changes
 the task's type field.
 
 ```json

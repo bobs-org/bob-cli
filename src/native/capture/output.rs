@@ -1586,6 +1586,29 @@ pub(super) fn format_placed_type_suffix(
         .unwrap_or_default()
 }
 
+/// Additive R2 suffix for a destination that gained types on landing:
+/// ` · merged FIX` (comma-joined when several types landed at once).
+pub(super) fn format_merged_suffix(
+    destination: &PomodoroLinkEndpoint,
+) -> String {
+    destination
+        .merged
+        .as_ref()
+        .map_or_else(String::new, |merged| {
+            let names = merged
+                .added
+                .iter()
+                .map(|theme| theme.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            if names.is_empty() {
+                String::new()
+            } else {
+                format!(" · merged {names}")
+            }
+        })
+}
+
 /// Destination arrow for `<text> @route:id[#NAME]` Pomodoro-task
 /// captures: where the new Task Link landed.
 pub(super) fn format_pomodoro_task_destination(
@@ -1596,7 +1619,11 @@ pub(super) fn format_pomodoro_task_destination(
         .as_deref()
         .map(str::to_string)
         .unwrap_or_else(|| format_pomodoro_endpoint(destination));
-    let suffix = format_placed_type_suffix(destination);
+    let suffix = format!(
+        "{}{}",
+        format_placed_type_suffix(destination),
+        format_merged_suffix(destination)
+    );
     match destination.role {
         Some("created") => format!("→ new Pomodoro {target}{suffix}"),
         Some("current") => match destination.time_range.as_deref() {
@@ -3640,8 +3667,13 @@ pub(super) fn print_human_task_toggle_success(
                 let suffix = result
                     .pomodoro_link_destination
                     .as_ref()
-                    .map(format_placed_type_suffix)
-                    .unwrap_or_default();
+                    .map_or_else(String::new, |destination| {
+                        format!(
+                            "{}{}",
+                            format_placed_type_suffix(destination),
+                            format_merged_suffix(destination)
+                        )
+                    });
                 format!(" · under {}{}", styler.cyan(name), styler.dim(&suffix))
             })
             .unwrap_or_default();
@@ -3705,11 +3737,16 @@ pub(super) fn print_human_ensure_next_ledger(
                 .as_ref()
                 .map(format_pomodoro_endpoint)
                 .unwrap_or_else(|| "current/next".to_string());
-            let suffix = result
-                .pomodoro_link_destination
-                .as_ref()
-                .map(format_placed_type_suffix)
-                .unwrap_or_default();
+            let suffix = result.pomodoro_link_destination.as_ref().map_or_else(
+                String::new,
+                |endpoint| {
+                    format!(
+                        "{}{}",
+                        format_placed_type_suffix(endpoint),
+                        format_merged_suffix(endpoint)
+                    )
+                },
+            );
             println!(
                 "  {} moved Task Link {} → {}{}",
                 styler.green("↗"),
@@ -3896,6 +3933,12 @@ pub(crate) fn format_human_pomodoro_link_details(
             .as_ref()
             .map(format_placed_type_suffix)
             .unwrap_or_default();
+        let merged_suffix = result
+            .pomodoro_link_destination
+            .as_ref()
+            .map(format_merged_suffix)
+            .unwrap_or_default();
+        let suffix = format!("{placed_suffix}{merged_suffix}");
         match result.pomodoro_link_action {
             Some("moved") => {
                 let source = result
@@ -3917,7 +3960,7 @@ pub(crate) fn format_human_pomodoro_link_details(
                     "  {}\n",
                     styler.dim(&format!(
                         "Moved Task Link {source} → \
-                        {destination}{placed_suffix}{created}"
+                        {destination}{suffix}{created}"
                     ))
                 ));
             }
@@ -3929,9 +3972,7 @@ pub(crate) fn format_human_pomodoro_link_details(
                     .unwrap_or_else(|| "current/next".to_string());
                 out.push_str(&format!(
                     "  {}\n",
-                    styler.dim(&format!(
-                        "Linked under {destination}{placed_suffix}"
-                    ))
+                    styler.dim(&format!("Linked under {destination}{suffix}"))
                 ));
                 if result.creates_pomodoro == Some(true) {
                     out.push_str(&format!(
@@ -4919,6 +4960,7 @@ mod tests {
             time_range: None,
             role: Some("created"),
             placed_type: None,
+            merged: None,
         };
         let refs = BTreeMap::from([(
             "bob".to_string(),

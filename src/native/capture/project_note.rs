@@ -400,9 +400,9 @@ pub(super) fn plan_project_note_item(
     let (
         day_file,
         pomodoro_link_placement,
-        canonical_pomodoro_name,
+        mut canonical_pomodoro_name,
         creates_pomodoro,
-        first_link_destination,
+        mut first_link_destination,
         day_relative,
     ) = if !need_day {
         (None, None, None, None, None, None)
@@ -592,17 +592,19 @@ pub(super) fn plan_project_note_item(
         })
         .collect::<Vec<_>>();
     let mut task_theme = None;
+    let mut project_merges: Vec<super::task_theme::AppliedMerge> = Vec::new();
     if project_link_guard.is_none()
-        && let Some(destination) = canonical_pomodoro_name.as_deref()
+        && let Some(initial_destination) = canonical_pomodoro_name.clone()
         && let Some(selector) = pomodoro_name.as_deref()
     {
+        let mut current_destination = initial_destination;
         for task in &linked {
             if let Some(applied) = task_theme_context.apply_new_task(
                 planner,
                 &new_target,
                 note_route,
                 &task.block_id,
-                Some(destination),
+                Some(current_destination.as_str()),
                 Some(selector),
                 warnings,
             )? {
@@ -613,8 +615,30 @@ pub(super) fn plan_project_note_item(
                     link.task_line = applied.task_line.clone();
                 }
                 if task_theme.is_none() {
-                    task_theme = Some(applied.summary);
+                    task_theme = applied.theme;
                 }
+                if let Some(merge) = applied.merge {
+                    current_destination = merge.after.clone();
+                    project_merges.push(merge);
+                }
+            }
+        }
+        if !project_merges.is_empty() {
+            // The destination gained each missing type once, in link order.
+            let before = project_merges[0].before.clone();
+            let after = project_merges[project_merges.len() - 1].after.clone();
+            let added = project_merges
+                .iter()
+                .map(|merge| merge.added.clone())
+                .collect::<Vec<_>>();
+            canonical_pomodoro_name = Some(after.clone());
+            if let Some(destination) = first_link_destination.as_mut() {
+                destination.name = Some(after.clone());
+                destination.merged = Some(super::batch::MergedPomodoro {
+                    before,
+                    after,
+                    added,
+                });
             }
         }
     }
@@ -829,7 +853,16 @@ pub(super) fn plan_project_note_item(
             relation_label_hides: Vec::new(),
         },
         clip_plan: None,
-        pomodoro_refs: Vec::new(),
+        pomodoro_refs: project_merges
+            .iter()
+            .map(|merge| {
+                super::PomodoroBlockRef::at(
+                    super::PomodoroBlockRole::Changed,
+                    merge.dest_index,
+                    merge.dest_index,
+                )
+            })
+            .collect(),
         task_block_refs: Vec::new(),
     })
 }

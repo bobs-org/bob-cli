@@ -3,8 +3,8 @@
 use super::*;
 use crate::native::{
     capture_language::{
-        replacement_for, resolve_accepted_type_name, resolve_exact_type_name,
-        unmatched_type_display, TypeMarker,
+        replacement_for, resolve_accepted_type_name, unmatched_type_display,
+        TypeMarker,
     },
     config::themes::ThemeSources,
     plan_budget::{normalize_component, split_components},
@@ -50,6 +50,25 @@ pub(super) struct CloseTypes {
 pub(super) struct AppliedTaskTheme {
     pub(super) task_line: String,
     pub(super) summary: CaptureTaskThemeChange,
+}
+
+/// One R2 merge staged on the destination entry: the task kept its type
+/// and the Pomodoro gained it. `dest_index` is the 0-based headline index
+/// of the renamed entry (rename is in-place, so before and after share it).
+pub(super) struct AppliedMerge {
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) added: ThemeRef,
+    pub(super) dest_index: usize,
+}
+
+/// Result of landing a task in a named Pomodoro (R2): an optional task
+/// field edit plus an optional destination merge. A merge never writes a
+/// task field, and a MEET retype never merges.
+pub(super) struct AppliedLanding {
+    pub(super) task_line: String,
+    pub(super) theme: Option<CaptureTaskThemeChange>,
+    pub(super) merge: Option<AppliedMerge>,
 }
 
 pub(super) struct ExistingTypeMarkerApplication {
@@ -125,7 +144,7 @@ impl CaptureTaskThemeContext {
         destination_name: Option<&str>,
         selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
-    ) -> Result<Option<AppliedTaskTheme>, CaptureError> {
+    ) -> Result<Option<AppliedLanding>, CaptureError> {
         let Some(destination_name) = destination_name else {
             return Ok(None);
         };
@@ -263,59 +282,16 @@ impl CaptureTaskThemeContext {
     /// Check a marker against the destination selected by the normal ledger
     /// resolver. Call after selection has been staged so prefix selectors are
     /// compared with the complete resolved name.
+    /// R2 landing retired the `type_marker_conflict` refusal: a `#<type>`
+    /// marker sets X first, then the link lands with the new type and
+    /// merges a disagreeing named destination. Always succeeds.
     pub(super) fn validate_type_marker_agreement(
         &self,
-        marker_name: &str,
-        marker_literal: bool,
-        destination: Option<&str>,
+        _marker_name: &str,
+        _marker_literal: bool,
+        _destination: Option<&str>,
     ) -> Result<(), CaptureError> {
-        let fallback_sources = config::load_theme_sources();
-        let sources = self
-            .catalog
-            .as_ref()
-            .map(Catalog::theme_sources)
-            .unwrap_or(fallback_sources);
-        let configured = sources
-            .themes
-            .as_ref()
-            .map(|themes| themes.entries.as_slice());
-        let resolved = resolve_exact_type_name(
-            configured,
-            &|key| {
-                self.catalog
-                    .as_ref()
-                    .and_then(|catalog| catalog.get(key))
-                    .map(|record| record.name.clone())
-            },
-            marker_name,
-            marker_literal,
-        );
-        let x_key = resolved
-            .as_ref()
-            .map(|found| found.key.clone())
-            .unwrap_or_else(|| {
-                normalize_component(&unmatched_type_display(marker_name))
-            });
-        let x_name = resolved
-            .map(|found| found.name)
-            .unwrap_or_else(|| unmatched_type_display(marker_name));
-        let components = routing::type_components(destination, &sources);
-        let is_container = components.is_empty()
-            || components.iter().all(|component| !component.is_type);
-        if is_container
-            || components
-                .iter()
-                .any(|component| component.is_type && component.key == x_key)
-        {
-            return Ok(());
-        }
-        let destination_name = destination.unwrap_or("(unnamed)").trim();
-        Err(CaptureError::usage_code(
-            format!(
-                "`#{marker_name}` disagrees with Pomodoro {destination_name}: drop `#{destination_name}` to link under {x_name}, or drop `#{marker_name}` to type the task {destination_name}"
-            ),
-            "type_marker_conflict",
-        ))
+        Ok(())
     }
 
     pub(super) fn apply_existing_task(
@@ -328,7 +304,7 @@ impl CaptureTaskThemeContext {
         destination_name: Option<&str>,
         selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
-    ) -> Result<Option<AppliedTaskTheme>, CaptureError> {
+    ) -> Result<Option<AppliedLanding>, CaptureError> {
         let Some(destination_name) = destination_name else {
             return Ok(None);
         };
@@ -665,7 +641,7 @@ impl CaptureTaskThemeContext {
         destination_name: &str,
         selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
-    ) -> Result<Option<AppliedTaskTheme>, CaptureError> {
+    ) -> Result<Option<AppliedLanding>, CaptureError> {
         self.refresh_residence_snapshot(planner);
         if !self.load_config(warnings) || !self.load_catalog(warnings) {
             return Ok(None);
@@ -704,6 +680,9 @@ impl CaptureTaskThemeContext {
         let inherited_key =
             inherited.as_ref().map(|item| item.theme.key.as_str());
         let sources = catalog.theme_sources();
+        // R2 landing: links merge by default, never retype. Only MEET
+        // destinations and explicit Obsidian Alt+Enter retypes take the
+        // Set/Clear path; capture always lands with `retype: false`.
         let outcome = routing::land(
             &routing::LandInput {
                 field: &field,
@@ -712,12 +691,12 @@ impl CaptureTaskThemeContext {
                 inherited_key,
                 destination: destination_name,
                 selector,
-                retype: true,
+                retype: false,
                 tab_pick: None,
             },
             &sources,
         );
-        let change = match outcome {
+        match outcome {
             routing::LandOutcome::Container => {
                 if let Some(message) =
                     label_keep_warning(destination_name, &sources)
@@ -726,19 +705,82 @@ impl CaptureTaskThemeContext {
                 }
                 return Ok(None);
             }
-            routing::LandOutcome::Consistent
-            | routing::LandOutcome::Merge { .. } => {
+            routing::LandOutcome::Consistent => {
                 return Ok(None);
             }
+            routing::LandOutcome::Merge { name } => {
+                let (Some(key), Some(display_name)) =
+                    (effective_key, effective_name)
+                else {
+                    return Ok(None);
+                };
+                let display = catalog.display_name(key, display_name);
+                let added = catalog.theme_ref(key, &display);
+                let before = destination_name.to_string();
+                let after = name;
+                let mut dest_index = None;
+                if before != after {
+                    match self
+                        .stage_merge_rename(planner, block_id, &before, &after)
+                    {
+                        Ok(index) => dest_index = index,
+                        Err(error) => warnings.push(CaptureWarning::Text(
+                            format!("merge Pomodoro rename failed: {error:?}"),
+                        )),
+                    }
+                }
+                let Some(dest_index) = dest_index else {
+                    return Ok(None);
+                };
+                return Ok(Some(AppliedLanding {
+                    task_line: source_line.to_string(),
+                    theme: None,
+                    merge: Some(AppliedMerge {
+                        before,
+                        after,
+                        added,
+                        dest_index,
+                    }),
+                }));
+            }
             routing::LandOutcome::Set { name, key } => {
-                ThemeChange::Set { name, key }
+                let change = ThemeChange::Set { name, key };
+                return self.apply_theme_change(
+                    planner,
+                    target,
+                    block_id,
+                    source_line,
+                    change,
+                    inherited,
+                );
             }
             routing::LandOutcome::Clear => match field {
                 TaskThemeState::None => return Ok(None),
-                _ => ThemeChange::Clear,
+                _ => {
+                    return self.apply_theme_change(
+                        planner,
+                        target,
+                        block_id,
+                        source_line,
+                        ThemeChange::Clear,
+                        inherited,
+                    );
+                }
             },
-        };
+        }
+    }
 
+    fn apply_theme_change(
+        &self,
+        planner: &mut CaptureBatchPlanner,
+        target: &Path,
+        block_id: &str,
+        source_line: &str,
+        change: ThemeChange,
+        inherited: Option<ThemeSuggestion>,
+    ) -> Result<Option<AppliedLanding>, CaptureError> {
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        let field = parse_task_theme(source_line);
         let previous = valid_previous_theme(&field, catalog);
         let (action, theme, task_line) = match &change {
             ThemeChange::Set { key, name } => {
@@ -766,7 +808,72 @@ impl CaptureTaskThemeContext {
             previous,
             inherited,
         };
-        Ok(Some(AppliedTaskTheme { task_line, summary }))
+        Ok(Some(AppliedLanding {
+            task_line,
+            theme: Some(summary),
+            merge: None,
+        }))
+    }
+
+    /// Stage an R2 destination rename for `block_id`'s landing entry.
+    /// The link is already staged, so the entry is found by the block ID
+    /// it now contains; later batch items then resolve against the merged
+    /// name and append each missing type once.
+    fn stage_merge_rename(
+        &self,
+        planner: &mut CaptureBatchPlanner,
+        block_id: &str,
+        before: &str,
+        after: &str,
+    ) -> Result<Option<usize>, CaptureError> {
+        let day_file = crate::native::pomodoro::day_file_for(&self.root);
+        let day_contents = planner.read_existing(&day_file)?;
+        let scan = crate::native::capture_pomodoros::scan(&day_contents);
+        if !scan.has_section {
+            return Ok(None);
+        }
+        let needle = format!("#^{block_id}]]");
+        let link_line = day_contents
+            .lines()
+            .position(|line| line.contains(needle.as_str()));
+        let Some(link_line) = link_line else {
+            return Ok(None);
+        };
+        let link_one_based = link_line + 1;
+        // Own the destination: the nearest open headline at or above the
+        // staged link (entries scan in document order).
+        let mut owner: Option<
+            &crate::native::capture_pomodoros::PomodoroEntry,
+        > = None;
+        for entry in &scan.entries {
+            if entry.line <= link_one_based
+                && entry.state
+                    == crate::native::capture_pomodoros::PomodoroState::Open
+            {
+                owner = Some(entry);
+            }
+        }
+        let Some(entry) = owner else {
+            return Ok(None);
+        };
+        // Skip when another batch item already merged this entry past
+        // `before` (stale destination): the caller resolved against staged
+        // state, so a mismatch means the rename already landed.
+        if entry.name.as_deref() != Some(before) {
+            return Ok(None);
+        }
+        let entry_index = entry.line.saturating_sub(1);
+        let Some(updated) =
+            crate::native::pomodoro_themes::relocation_apply::rename_entry(
+                &day_contents,
+                entry.line,
+                after,
+            )
+        else {
+            return Ok(None);
+        };
+        planner.stage(&day_file, updated)?;
+        Ok(Some(entry_index))
     }
 
     fn write_task_field(
@@ -987,6 +1094,68 @@ impl CaptureTaskThemeContext {
             },
             refs,
         })
+    }
+
+    /// R2 merge for a `#<type>` marker that lands in a named Pomodoro:
+    /// the marker sets X first, then a disagreeing destination gains it.
+    /// Stages the destination rename (found by `block_id`) and returns the
+    /// merge record. Returns `None` when the destination already contains
+    /// X, is a container, or is MEET.
+    pub(super) fn merge_named_destination(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        block_id: &str,
+        destination_before: &str,
+        x_key: &str,
+        x_name: &str,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Result<Option<AppliedMerge>, CaptureError> {
+        self.refresh_residence_snapshot(planner);
+        if !self.load_config(warnings) || !self.load_catalog(warnings) {
+            return Ok(None);
+        }
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        let sources = catalog.theme_sources();
+        if routing::is_meet_name(Some(destination_before)) {
+            return Ok(None);
+        }
+        let components =
+            routing::type_components(Some(destination_before), &sources);
+        if components.is_empty()
+            || components.iter().all(|component| !component.is_type)
+        {
+            return Ok(None);
+        }
+        if components
+            .iter()
+            .any(|component| component.is_type && component.key == x_key)
+        {
+            return Ok(None);
+        }
+        let display = catalog.display_name(x_key, x_name);
+        let added = catalog.theme_ref(x_key, &display);
+        let before = destination_before.to_string();
+        let after = format!("{} + {display}", destination_before.trim());
+        if before == after {
+            return Ok(None);
+        }
+        let dest_index =
+            match self.stage_merge_rename(planner, block_id, &before, &after) {
+                Ok(Some(index)) => index,
+                Ok(None) => return Ok(None),
+                Err(error) => {
+                    warnings.push(CaptureWarning::Text(format!(
+                        "merge Pomodoro rename failed: {error:?}"
+                    )));
+                    return Ok(None);
+                }
+            };
+        Ok(Some(AppliedMerge {
+            before,
+            after,
+            added,
+            dest_index,
+        }))
     }
 
     /// Shared D8 relocation for an explicit `#type` retype: after the gesture,

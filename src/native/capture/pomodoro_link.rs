@@ -184,6 +184,7 @@ pub(super) fn endpoint_json(
         time_range: endpoint.time_range.clone(),
         role: None,
         placed_type: None,
+        merged: None,
     }
 }
 
@@ -205,6 +206,7 @@ pub(super) fn destination_json(
             endpoint.time_range.as_deref(),
         )),
         placed_type: None,
+        merged: None,
     }
 }
 
@@ -666,6 +668,7 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
         task_theme_context.as_deref_mut(),
     )?;
     let mut task_theme = None;
+    let mut landing_merge: Option<super::task_theme::AppliedMerge> = None;
     if !skip_named_retype
         && link_guard.is_none()
         && !matches!(
@@ -687,13 +690,43 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
         )?;
         if let Some(applied) = applied {
             link.task_line = applied.task_line;
-            task_theme = Some(applied.summary);
+            task_theme = applied.theme;
+            if let Some(merge) = applied.merge {
+                link.pomodoro_name = Some(merge.after.clone());
+                if let Some(destination) =
+                    link.pomodoro_link_destination.as_mut()
+                {
+                    destination.name = Some(merge.after.clone());
+                    destination.merged = Some(super::batch::MergedPomodoro {
+                        before: merge.before.clone(),
+                        after: merge.after.clone(),
+                        added: vec![merge.added.clone()],
+                    });
+                }
+                // Pin the destination ref with an explicit before so the
+                // block tracker resolves the renamed headline, and record
+                // the rename itself.
+                for item in note_plan.pomodoro_refs.iter_mut() {
+                    if item.after == Some(merge.dest_index)
+                        && matches!(item.before, PomodoroBlockBefore::Resolve)
+                    {
+                        item.before = PomodoroBlockBefore::At(merge.dest_index);
+                    }
+                }
+                note_plan.pomodoro_refs.push(PomodoroBlockRef::at(
+                    PomodoroBlockRole::Changed,
+                    merge.dest_index,
+                    merge.dest_index,
+                ));
+                landing_merge = Some(merge);
+            }
         }
     }
     let mut planned = planned_item_from_pomodoro_link_plan(
         note_plan, link_guard, route, target, dry_run, today,
     )?;
     planned.result.task_theme = task_theme;
+    let _ = landing_merge;
     Ok(planned)
 }
 
@@ -1091,6 +1124,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                                 time_range: source_endpoint.time_range.clone(),
                                 role: None,
                                 placed_type: None,
+                                merged: None,
                             }),
                             pomodoro_link_destination: Some(dest_json),
                             removed_scheduled,
@@ -1246,6 +1280,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                             time_range: source_endpoint.time_range.clone(),
                             role: None,
                             placed_type: None,
+                            merged: None,
                         }),
                         pomodoro_link_destination: Some(dest_json),
                         removed_scheduled,
@@ -1412,6 +1447,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                             time_range: source_endpoint.time_range.clone(),
                             role: None,
                             placed_type: None,
+                            merged: None,
                         }),
                         pomodoro_link_destination: Some(dest_json),
                         removed_scheduled,
@@ -1539,6 +1575,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 time_range: source_endpoint.time_range.clone(),
                 role: None,
                 placed_type: None,
+                merged: None,
             }),
             pomodoro_link_destination: Some(dest_json),
             removed_scheduled,

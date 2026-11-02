@@ -260,7 +260,7 @@ fn today_matches_unnamed_capture_and_named_capture_remembers_theme() {
     let right_task =
         fs::read_to_string(named_right.vault.join("sase.md")).expect("right");
     assert!(!left_task.contains("[theme::"), "{left_task}");
-    assert!(right_task.contains("[type:: BUGS]"), "{right_task}");
+    assert!(!right_task.contains("[type::"), "{right_task}");
     assert_eq!(
         fs::read_to_string(&named_left.day_file).expect("left day"),
         fs::read_to_string(&named_right.day_file).expect("right day")
@@ -413,7 +413,7 @@ fn named_prefix_selects_bugs() {
     let vault = TodayVault::new("bob-cli-ref-today-prefix", ready_task(), day);
     let (output, json) = run_today_json(&vault, &["attention", "-p", "bu"]);
     assert_success(&output);
-    assert_eq!(json["capture"]["pomodoro_name"], "BUGS");
+    assert_eq!(json["capture"]["pomodoro_name"], "BUGS + READ");
     assert_eq!(json["capture"]["creates_pomodoro"], false);
 }
 
@@ -445,7 +445,7 @@ fn exact_name_reuses_whole_slug() {
         run_today_json(&vault, &["attention", "-p", "reading", "-e"]);
     assert_success(&output);
     assert_eq!(json["capture"]["creates_pomodoro"], false);
-    assert_eq!(json["capture"]["pomodoro_name"], "READING");
+    assert_eq!(json["capture"]["pomodoro_name"], "READING + READ");
 }
 
 #[test]
@@ -561,11 +561,11 @@ fn moving_q_creates_the_named_destination() {
     assert_eq!(json["capture"]["pomodoro_link_action"], "moved");
     assert_eq!(json["capture"]["creates_pomodoro"], true);
     let day_after = fs::read_to_string(&vault.day_file).expect("day");
-    assert!(day_after.contains("— FOCUS\n"), "{day_after}");
+    assert!(day_after.contains("— FOCUS + READ\n"), "{day_after}");
     assert!(day_after.contains("[[sase#^ref-attention]]"), "{day_after}");
     let current_children = day_after
         .split_once("— CURRENT\n")
-        .and_then(|(_, rest)| rest.split_once("— FOCUS\n"))
+        .and_then(|(_, rest)| rest.split_once("— FOCUS + READ\n"))
         .map(|(children, _)| children)
         .expect("current children");
     assert!(
@@ -573,7 +573,7 @@ fn moving_q_creates_the_named_destination() {
         "{day_after}"
     );
     let focus_children = day_after
-        .split_once("— FOCUS\n")
+        .split_once("— FOCUS + READ\n")
         .and_then(|(_, rest)| rest.split_once("— READING"))
         .map(|(children, _)| children)
         .expect("focus children");
@@ -885,7 +885,7 @@ fn ledger_and_resolution_refusals() {
         run_today_json(&empty, &["attention", "-p", "focus"]);
     assert_success(&created_out);
     assert_eq!(created["capture"]["creates_pomodoro"], true);
-    assert_eq!(created["capture"]["pomodoro_name"], "FOCUS");
+    assert_eq!(created["capture"]["pomodoro_name"], "FOCUS + READ");
 
     let no_type = TodayVault::new(
         "bob-cli-ref-today-no-type",

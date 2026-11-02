@@ -2,9 +2,7 @@
 
 use crate::support::*;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 const NOW: &str = "2026-10-28 09:15:00";
 
@@ -295,31 +293,17 @@ fn named_form_conflict_refuses_before_any_write() {
     );
     let before_task = fs::read_to_string(vault.join("sase.md")).unwrap();
     let before_day = fs::read_to_string(&day_file).unwrap();
-    let mut command = bob_command();
-    command
-        .arg("capture")
-        .arg("-b")
-        .arg(&vault)
-        .arg("--no-clip")
-        .arg("-f")
-        .arg("json")
-        .arg("-d")
-        .args(["^sase:fix-c#BUILD", "#fix"])
-        .env("BOB_DIR", &vault)
-        .env("BOB_DAY_FILE", &day_file)
-        .env("BOB_CONFIG_FILE", &config)
-        .env("BOB_NOW", NOW);
-    let output = command.output().expect("run conflicting retype");
-    assert!(!output.status.success(), "{}", format_output(&output));
-    let json: Value = serde_json::from_str(stdout(&output).trim())
-        .expect("parse conflict JSON");
-    assert!(
-        json["error"]
-            .as_str()
-            .unwrap()
-            .contains("disagrees with Pomodoro"),
-        "{json}"
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["^sase:fix-c#BUILD", "#fix"],
+        true,
     );
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "BUILD", "{json}");
+    assert_eq!(merged["after"], "BUILD + FIX", "{json}");
     assert_eq!(
         fs::read_to_string(vault.join("sase.md")).unwrap(),
         before_task
@@ -510,80 +494,26 @@ fn already_queued_link_retype_relocates_the_ledger() {
     );
 }
 
-fn snapshot_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    let mut pending = vec![root.to_path_buf()];
-    let mut files = BTreeMap::new();
-    while let Some(path) = pending.pop() {
-        for entry in fs::read_dir(path).expect("read snapshot directory") {
-            let path = entry.expect("snapshot entry").path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
-                files.insert(
-                    path.clone(),
-                    fs::read(path).expect("snapshot file"),
-                );
-            }
-        }
-    }
-    files
-}
-
-fn capture_error_json(
-    vault: &Path,
-    day_file: &Path,
-    config: &Path,
-    args: &[&str],
-) -> (std::process::Output, Value) {
-    let mut command = bob_command();
-    command
-        .arg("capture")
-        .arg("-b")
-        .arg(vault)
-        .arg("--no-clip")
-        .arg("-f")
-        .arg("json")
-        .args(args)
-        .env("BOB_DIR", vault)
-        .env("BOB_DAY_FILE", day_file)
-        .env("BOB_CONFIG_FILE", config)
-        .env("BOB_NOW", NOW);
-    let output = command.output().expect("run refused capture");
-    assert!(!output.status.success(), "{}", format_output(&output));
-    let json =
-        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
-            panic!(
-                "parse capture error JSON: {error}\n{}",
-                format_output(&output)
-            )
-        });
-    (output, json)
-}
-
 #[test]
 fn named_destination_prefixes_are_checked_after_resolution() {
-    let (temp, vault, day_file, config) = fixture(
+    let (_temp, vault, day_file, config) = fixture(
         "bob-type-existing-prefix-conflict",
         &project(Some("WRITE"), "- [ ] #task Fix parser ^fix-p\n"),
         "## Pomodoros\n- [ ] () — BUILD\n- [ ] () — FIX\n",
     );
-    let before = snapshot_files(temp.path());
-    let (_, json) = capture_error_json(
+    let (_, json) = capture_json(
         &vault,
         &day_file,
         &config,
         &["^sase:fix-p#bui #fix"],
+        false,
     );
-    assert_eq!(json["code"], "type_marker_conflict", "{json}");
-    assert!(
-        json["error"].as_str().unwrap().contains("Pomodoro BUILD"),
-        "{json}"
-    );
-    assert!(
-        json["error"].as_str().unwrap().contains("task BUILD"),
-        "{json}"
-    );
-    assert_eq!(snapshot_files(temp.path()), before);
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "BUILD", "{json}");
+    assert_eq!(merged["after"], "BUILD + FIX", "{json}");
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("— BUILD + FIX"), "{day}");
 }
 
 #[test]

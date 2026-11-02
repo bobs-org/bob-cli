@@ -1156,6 +1156,7 @@ fn plan_reset_link_item(
         time_range: None,
         role: Some("current"),
         placed_type: None,
+        merged: None,
     };
     let block_link = format!("[[{route}#^{block_id}]]");
     let day_file_label = day_file.display().to_string();
@@ -1301,6 +1302,7 @@ fn plan_reset_task_item(
         time_range: None,
         role: Some("current"),
         placed_type: None,
+        merged: None,
     };
     let relative_target_path = relative_target(Some(route));
     let target_path = request.bob_dir.join(&relative_target_path);
@@ -1949,6 +1951,7 @@ pub(super) fn link_existing_task_into_running(
                 time_range: running.time_range.clone(),
                 role: Some("current"),
                 placed_type: None,
+                merged: None,
             };
             return Ok((
                 day_contents.to_string(),
@@ -1964,6 +1967,7 @@ pub(super) fn link_existing_task_into_running(
             time_range: source.owner.time_range.clone(),
             role: None,
             placed_type: None,
+            merged: None,
         };
         let (moved_day, placement) =
             capture_task_toggle::move_subtree_to_entry(
@@ -1983,6 +1987,7 @@ pub(super) fn link_existing_task_into_running(
             time_range: running.time_range.clone(),
             role: Some("current"),
             placed_type: None,
+            merged: None,
         };
         let placement = Some(match placement {
             capture_task_toggle::LinkPlacement::Inserted => Placement::Inserted,
@@ -2004,6 +2009,7 @@ pub(super) fn link_existing_task_into_running(
         time_range: running.time_range.clone(),
         role: Some("current"),
         placed_type: None,
+        merged: None,
     };
     Ok((updated_day, "linked", None, dest, Some(placement)))
 }
@@ -2751,6 +2757,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             )),
             role: Some("current"),
             placed_type: None,
+            merged: None,
         })
         .unwrap_or(PomodoroLinkEndpoint {
             line: summary.pomodoro_line,
@@ -2761,6 +2768,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             )),
             role: Some("current"),
             placed_type: None,
+            merged: None,
         });
     let relative_target_path = relative_target(Some(route));
     let target_path = request.bob_dir.join(&relative_target_path);

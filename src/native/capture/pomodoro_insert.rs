@@ -100,6 +100,7 @@ pub(super) fn insert_pomodoro_block_link(
                     base.time_range.as_deref(),
                 )),
                 placed_type: None,
+                merged: None,
             }
         })
         .ok_or_else(|| {
@@ -200,6 +201,7 @@ fn insert_typed_pomodoro_block_link(
                     base.time_range.as_deref(),
                 )),
                 placed_type: None,
+                merged: None,
             }
         })
         .ok_or_else(|| {

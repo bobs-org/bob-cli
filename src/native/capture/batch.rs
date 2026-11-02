@@ -682,6 +682,18 @@ pub(super) struct PomodoroLinkEndpoint {
     /// leave this unset.
     #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
     pub(super) placed_type: Option<PlacedType>,
+    /// A merged-Pomodoro landing (R2): the destination gained the task's
+    /// type. Additive: omitted when the landing was consistent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) merged: Option<MergedPomodoro>,
+}
+
+/// Additive R2 merge record on a link destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct MergedPomodoro {
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) added: Vec<super::super::pomodoro_themes::ThemeRef>,
 }
 
 /// Additive D7 typed-placement record on a link destination.

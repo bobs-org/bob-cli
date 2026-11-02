@@ -620,34 +620,33 @@ consumed as trailing metadata, and overlapping removals from adjacent
 fields stay safe. Catalog spelling is used for X; a semantic no-op
 (exactly one valid field already holding X's key) never rewrites bytes.
 
-### Named captures retype the task
+### Named captures merge types
 
-Capture `#NAME`, `#"NAME"`, and `=name` always take the retype Enter
-path. Bob resolves the destination Pomodoro name D, then chooses one
-type component X of D: the authored selector's slug or prefix match,
-else the first non-exempt type component, else the first type
-component.
+Capture `#NAME`, `#"NAME"`, and `=name` land by merging (R2): the task
+keeps its type and the destination Pomodoro gains it. Bob resolves the
+destination Pomodoro name D, then applies the landing rule:
 
 1. D is a container (no type components): the task keeps its type, and
    capture warns `LATER is a label · tasks keep their own types` or
    `SNACK isn't one of your types; tasks here keep their own types`.
-2. The task's type is already a component of D: consistent, nothing
-   written.
-3. X equals the inherited type: clear every type field (no-op if
-   absent).
-4. Otherwise set catalog-spelled `[type:: X]`. PLAN is a legal result;
-   there is no suggestion-shown guard and no
-   single-non-exempt-component guard.
+2. The task has no effective type, or its type is already a component of
+   D: consistent, nothing changes.
+3. D is MEET: take the retype path (`Set MEET` or `Clear`); MEET names
+   never grow.
+4. Otherwise merge: D gains ` + T`, where T is the task's effective type
+   in catalog spelling. No task field is written. Several links landing
+   at once append each missing type once, in link order, deduped by key.
 
 Forms: a new Pomodoro-linked task (`<text> @route:id#NAME`), a
 whole-item existing-task link (`@route:id#NAME` or `^route:id#NAME`),
-the equivalent `=name` shorthands, and
+the equivalent `=name` shorthands,
 project-note ` :<id>` bullets (and picked project offers) under a `#NAME`
-after the seal. Link guards,
-unnamed links, ordinary toggles, close gestures, and `bob ref today`
-never write this field. A batch re-evaluates suggestions against its
-staged note snapshot, and the task field is committed with that
-capture's task and ledger edits.
+after the seal, and `bob ref today -p/-P` (through the shared link
+planner). Link guards,
+unnamed links, ordinary toggles, and close gestures never merge. A batch
+re-evaluates against its staged note snapshot, so two captures landing
+BUILD in BUGS append it once, and the destination rename joins the same
+task-and-ledger transaction.
 
 Capture JSON omits `task_theme` on an unchanged write unless the capture
 has an explicit `#<type>` marker. A marker always reports the result, including
@@ -674,10 +673,10 @@ on a body-bearing `@route+id` child (with or without a drawer) retypes the
 Link with the existing relocation and leaving lanes untouched. A free-standing bare
 `#` at an item edge is an incomplete marker: add a type (`#fix`) or write
 `\#` to keep a literal `#`. `#` plus a digit, `##…`, `#-…`, mid-line `#`,
-and glued hashes stay ordinary prose. The marker is the
-authority over any `#NAME` retype: a container destination accepts X, a
-matching component accepts that explicit pick, otherwise the capture
-refuses with `type_marker_conflict`. With `types:` configured, only configured
+and glued hashes stay ordinary prose. The marker sets X first, then lands
+with the new type: a container destination accepts X, a matching component
+stays consistent, and a disagreeing named destination merges (`type_marker_conflict`
+is retired and never emitted). With `types:` configured, only configured
 entries are accepted; without it, only types in Pomodoro history are accepted,
 excluding inventory labels. Unknown names fail with `type_not_configured`
 before any write. Type-only changes stamp no freshness, change no lane, and

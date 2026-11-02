@@ -604,7 +604,7 @@ fn apply_existing_marker_after_gesture(
     skip_relocation: bool,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<(), CaptureError> {
-    planned.result.task_theme = Some(applied.summary);
+    planned.result.task_theme = Some(applied.summary.clone());
     planned.result.previous_task_line = Some(original_line);
     if named_selector.is_some() {
         let resolved = planned
@@ -612,12 +612,57 @@ fn apply_existing_marker_after_gesture(
             .pomodoro_link_destination
             .as_ref()
             .and_then(|destination| destination.name.as_deref())
-            .or(planned.result.pomodoro_name.as_deref());
+            .or(planned.result.pomodoro_name.as_deref())
+            .map(str::to_string);
         task_theme_context.validate_type_marker_agreement(
             marker_name,
             marker_literal,
-            resolved,
+            resolved.as_deref(),
         )?;
+        // R2: the marker sets X first, then a disagreeing named destination
+        // merges. Stage the rename before D8, which then sees agreement.
+        if let Some(before) = resolved
+            && let Some(merge) = task_theme_context.merge_named_destination(
+                planner,
+                block_id,
+                &before,
+                &applied.type_key,
+                &applied.type_name,
+                warnings,
+            )?
+        {
+            planned.result.pomodoro_name = Some(merge.after.clone());
+            if let Some(destination) =
+                planned.result.pomodoro_link_destination.as_mut()
+            {
+                destination.name = Some(merge.after.clone());
+                destination.merged = Some(super::batch::MergedPomodoro {
+                    before: merge.before.clone(),
+                    after: merge.after.clone(),
+                    added: vec![merge.added.clone()],
+                });
+            }
+            for item in planned.pomodoro_refs.iter_mut() {
+                if item.after == Some(merge.dest_index)
+                    && matches!(
+                        item.before,
+                        crate::native::capture::PomodoroBlockBefore::Resolve
+                    )
+                {
+                    item.before =
+                        crate::native::capture::PomodoroBlockBefore::At(
+                            merge.dest_index,
+                        );
+                }
+            }
+            planned.pomodoro_refs.push(
+                crate::native::capture::PomodoroBlockRef::at(
+                    crate::native::capture::PomodoroBlockRole::Changed,
+                    merge.dest_index,
+                    merge.dest_index,
+                ),
+            );
+        }
     }
     if skip_relocation {
         return Ok(());
@@ -1152,8 +1197,21 @@ pub(super) fn plan_capture_item(
                 pomodoro_name.as_deref(),
                 warnings,
             )? {
-                planned.result.task_line = applied.task_line;
-                planned.result.task_theme = Some(applied.summary);
+                planned.result.task_line = applied.task_line.clone();
+                if let Some(theme) = applied.theme {
+                    planned.result.task_theme = Some(theme);
+                }
+                if let Some(merge) = applied.merge
+                    && let Some(destination) =
+                        planned.result.pomodoro_link_destination.as_mut()
+                {
+                    destination.name = Some(merge.after.clone());
+                    destination.merged = Some(super::batch::MergedPomodoro {
+                        before: merge.before,
+                        after: merge.after,
+                        added: vec![merge.added],
+                    });
+                }
             }
         }
         return Ok(planned);
@@ -2136,17 +2194,12 @@ pub(super) fn plan_capture_item(
             details.parent_line = task.line_index + 1;
         }
     }
-    // An explicit `#type` marker is the authority: its staged field stands,
-    // and the named-retype path below must not overwrite or clear it.
+    // An explicit `#type` marker is the authority: its staged field stands.
     // A SubBullet retype reports its own summary; the parent's staged line
-    // already carries the field.
+    // already carries the field. A marker followed by a named destination
+    // still lands (R2): the marker sets X first, then the link merges.
+    let mut landing_merge: Option<super::task_theme::AppliedMerge> = None;
     let task_theme = if let Some(summary) = sub_bullet_task_theme {
-        Some(summary)
-    } else if let Some(summary) = marker_theme {
-        // The staged line already carries the marker field through
-        // `block_first_line`; refresh it in case later steps rewrote it.
-        // (The `capture_line` edit above flows through flipped/augmented
-        // lines into `block_first_line`.)
         Some(summary)
     } else {
         match &parsed.kind {
@@ -2166,25 +2219,82 @@ pub(super) fn plan_capture_item(
                 let destination_name = note_plan
                     .pomodoro
                     .as_ref()
-                    .and_then(|edit| edit.details.pomodoro_name.as_deref());
-                task_theme_context
-                    .apply_new_task(
-                        planner,
-                        &target,
-                        route,
-                        block_id,
-                        destination_name,
-                        Some(selector.as_str()),
-                        warnings,
-                    )?
-                    .map(|applied| {
-                        block_first_line = applied.task_line;
-                        applied.summary
-                    })
+                    .and_then(|edit| edit.details.pomodoro_name.as_deref())
+                    .map(str::to_string);
+                let landing = task_theme_context.apply_new_task(
+                    planner,
+                    &target,
+                    route,
+                    block_id,
+                    destination_name.as_deref(),
+                    Some(selector.as_str()),
+                    warnings,
+                )?;
+                if let Some(landing) = landing {
+                    if landing.merge.is_some() && marker_theme.is_some() {
+                        // Marker authority: keep the marker's field report.
+                        if let Some(merge) = landing.merge {
+                            if let Some(edit) = note_plan.pomodoro.as_mut() {
+                                edit.details.pomodoro_name =
+                                    Some(merge.after.clone());
+                            }
+                            landing_merge = Some(merge);
+                        }
+                        marker_theme
+                    } else {
+                        if let Some(merge) = landing.merge {
+                            if let Some(edit) = note_plan.pomodoro.as_mut() {
+                                edit.details.pomodoro_name =
+                                    Some(merge.after.clone());
+                            }
+                            landing_merge = Some(merge);
+                        }
+                        if landing.theme.is_some() {
+                            block_first_line = landing.task_line;
+                            landing.theme
+                        } else {
+                            marker_theme
+                        }
+                    }
+                } else {
+                    marker_theme
+                }
             }
-            _ => None,
+            _ => marker_theme,
         }
     };
+    if let Some(merge) = landing_merge.as_ref() {
+        if let Some(edit) = note_plan.pomodoro.as_mut()
+            && let Some(dest) = edit.details.pomodoro_link_destination.as_mut()
+        {
+            dest.name = Some(merge.after.clone());
+            dest.merged = Some(super::batch::MergedPomodoro {
+                before: merge.before.clone(),
+                after: merge.after.clone(),
+                added: vec![merge.added.clone()],
+            });
+        }
+        // Pin the renamed headline for the block tracker (in-place rename).
+        // `pomodoro_refs` was taken from `note_plan` before landing, so pin
+        // the local vec that the final item returns.
+        let dest_index = merge.dest_index;
+        for item in pomodoro_refs.iter_mut() {
+            if item.after == Some(dest_index)
+                && matches!(
+                    item.before,
+                    crate::native::capture::PomodoroBlockBefore::Resolve
+                )
+            {
+                item.before =
+                    crate::native::capture::PomodoroBlockBefore::At(dest_index);
+            }
+        }
+        pomodoro_refs.push(crate::native::capture::PomodoroBlockRef::at(
+            crate::native::capture::PomodoroBlockRole::Changed,
+            dest_index,
+            dest_index,
+        ));
+    }
     let (dependency_update, dependency_updates) =
         fold_dependency_updates(dependency_summaries);
     dependency_block_refs = relocate_task_block_refs(

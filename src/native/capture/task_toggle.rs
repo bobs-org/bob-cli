@@ -322,6 +322,7 @@ pub(super) fn plan_task_toggle_capture(
                         destination.time_range.as_deref(),
                     )),
                     placed_type: Some(placed.clone()),
+                    merged: None,
                 })
         });
     if plan.has_changes {

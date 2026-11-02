@@ -123,16 +123,19 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
         &["Draft a fix @sase:new-fix#fi"],
         true,
     );
-    assert_eq!(dry["task_theme"]["action"], "set", "{dry}");
-    assert_eq!(dry["task_theme"]["theme"]["name"], "FIX", "{dry}");
-    assert_eq!(dry["task_theme"]["previous"], Value::Null, "{dry}");
-    assert_eq!(dry["task_theme"]["inherited"]["source"], "note", "{dry}");
-    assert_eq!(dry["task_theme"]["inherited"]["theme"]["name"], "WRITE");
+    assert!(dry.get("task_theme").is_none(), "{dry}");
+    let merged = &dry["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "FIX", "{dry}");
+    assert_eq!(merged["after"], "FIX + WRITE", "{dry}");
     assert!(
         dry["task_line"]
             .as_str()
             .unwrap()
-            .contains("[type:: FIX] [created::2026-10-28] ^new-fix"),
+            .contains("[created::2026-10-28] ^new-fix"),
+        "{dry}"
+    );
+    assert!(
+        !dry["task_line"].as_str().unwrap().contains("[type::"),
         "{dry}"
     );
     assert_eq!(
@@ -156,7 +159,7 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
         .expect("dry-run capture human output");
     assert_success(&human);
     assert!(
-        stdout(&human).contains("  type  would set type →"),
+        stdout(&human).contains("merged WRITE"),
         "{}",
         format_output(&human)
     );
@@ -168,15 +171,17 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
         &["Draft a fix @sase:new-fix#fi"],
         false,
     );
-    assert_eq!(written["task_theme"], dry["task_theme"]);
+    assert!(written.get("task_theme").is_none(), "{written}");
     assert_eq!(written["task_line"], dry["task_line"]);
     assert_eq!(
         fs::read_to_string(vault.join("sase.md")).unwrap(),
         concat!(
             "---\ntype: [[project]]\ntheme: WRITE\n---\n# Sase\n\n## Tasks\n\n",
-            "- [*] #task Draft a fix [type:: FIX] [created::2026-10-28] ^new-fix\n",
+            "- [*] #task Draft a fix [created::2026-10-28] ^new-fix\n",
         )
     );
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("— FIX + WRITE"), "{day}");
 }
 
 #[test]
@@ -193,13 +198,17 @@ fn new_named_capture_uses_the_staged_task_field() {
         &["Draft a fix [type:: BUILD] @sase:new-fix#fi"],
         false,
     );
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["previous"]["name"], "BUILD", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    assert!(json.get("task_theme").is_none(), "{json}");
     assert!(
-        json["task_line"].as_str().unwrap().contains("[type:: FIX]"),
+        json["task_line"]
+            .as_str()
+            .unwrap()
+            .contains("[type:: BUILD]"),
         "{json}"
     );
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "FIX", "{json}");
+    assert_eq!(merged["after"], "FIX + BUILD", "{json}");
 }
 
 #[test]
@@ -223,16 +232,10 @@ fn new_named_capture_uses_the_global_default_after_note_defaults() {
         &["Draft a fix @sase:new-fix#fi"],
         false,
     );
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
-    assert_eq!(
-        json["task_theme"]["inherited"]["source"], "default",
-        "{json}"
-    );
-    assert_eq!(
-        json["task_theme"]["inherited"]["theme"]["name"], "CHORE",
-        "{json}"
-    );
+    assert!(json.get("task_theme").is_none(), "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "FIX", "{json}");
+    assert_eq!(merged["after"], "FIX + CHORE", "{json}");
 }
 
 #[test]
@@ -249,30 +252,37 @@ fn a_two_item_batch_stages_and_reports_both_task_theme_writes() {
     let (_, dry) = capture_json_stdin(&vault, &day_file, &config, draft, true);
     let captures = dry["captures"].as_array().expect("bulk captures");
     assert_eq!(captures.len(), 2, "{dry}");
-    assert_eq!(captures[0]["task_theme"]["action"], "set");
-    assert_eq!(captures[0]["task_theme"]["theme"]["name"], "FIX");
-    assert_eq!(captures[1]["task_theme"]["action"], "set");
-    assert_eq!(captures[1]["task_theme"]["theme"]["name"], "BUILD");
+    assert!(captures[0].get("task_theme").is_none(), "{dry}");
+    assert!(captures[1].get("task_theme").is_none(), "{dry}");
+    assert_eq!(
+        captures[0]["pomodoro_link_destination"]["merged"]["after"],
+        "FIX + WRITE",
+        "{dry}"
+    );
+    assert_eq!(
+        captures[1]["pomodoro_link_destination"]["merged"]["after"],
+        "BUILD + WRITE",
+        "{dry}"
+    );
     assert_eq!(fs::read_to_string(vault.join("sase.md")).unwrap(), before);
 
     let (_, json) =
         capture_json_stdin(&vault, &day_file, &config, draft, false);
     let captures = json["captures"].as_array().expect("bulk captures");
     assert_eq!(captures.len(), 2, "{json}");
-    assert_eq!(captures[0]["task_theme"]["action"], "set");
-    assert_eq!(captures[0]["task_theme"], dry["captures"][0]["task_theme"]);
-    assert_eq!(captures[1]["task_theme"], dry["captures"][1]["task_theme"]);
+    assert!(captures[0].get("task_theme").is_none(), "{json}");
+    assert!(captures[1].get("task_theme").is_none(), "{json}");
     assert!(
-        fs::read_to_string(vault.join("sase.md"))
+        !fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("Draft a fix [type:: FIX]"),
-        "first task theme should be committed"
+            .contains("[type:: FIX]"),
+        "first task keeps its inherited type under merge"
     );
     assert!(
-        fs::read_to_string(vault.join("sase.md"))
+        !fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("Build a thing [type:: BUILD]"),
-        "second task theme should be committed"
+            .contains("[type:: BUILD]"),
+        "second task keeps its inherited type under merge"
     );
 }
 
@@ -315,14 +325,35 @@ fn named_capture_writes_a_type_without_a_shown_suggestion() {
     );
     let (_, json) =
         capture_json(&vault, &day_file, &config, &["^sase:work#FIX"], false);
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    assert!(json.get("task_theme").is_none(), "{json}");
     assert!(
-        fs::read_to_string(vault.join("sase.md"))
+        !fs::read_to_string(vault.join("sase.md"))
             .unwrap()
             .contains("[type:: FIX]"),
-        "an explicit #FIX still writes when the cascade has no suggestion"
+        "a typeless task landing in FIX stays typeless under merge (R2 Consistent)"
     );
+}
+
+#[test]
+fn named_link_merges_the_task_type_into_the_destination() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-merge",
+        &project(None, "- [ ] #task Work [type:: BUILD] ^work\n"),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    let (_, json) =
+        capture_json(&vault, &day_file, &config, &["^sase:work#FIX"], false);
+    assert!(json.get("task_theme").is_none(), "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "FIX", "{json}");
+    assert_eq!(merged["after"], "FIX + BUILD", "{json}");
+    assert_eq!(merged["added"][0]["name"], "BUILD", "{json}");
+    let task_note = fs::read_to_string(vault.join("sase.md")).unwrap();
+    assert!(task_note.contains("[type:: BUILD]"), "{task_note}");
+    assert!(!task_note.contains("[type:: FIX]"), "{task_note}");
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("— FIX + BUILD"), "{day}");
+    assert!(day.contains("[[sase#^work]]"), "{day}");
 }
 
 #[test]
@@ -405,24 +436,14 @@ fn ref_today_named_selection_retypes_to_the_explicit_destination() {
     assert_success(&output);
     let json: Value =
         serde_json::from_slice(&output.stdout).expect("ref today JSON");
-    assert_eq!(json["capture"]["task_theme"]["action"], "set", "{json}");
-    assert_eq!(
-        json["capture"]["task_theme"]["theme"]["name"], "WRITE",
-        "{json}"
-    );
-    assert_eq!(
-        json["capture"]["task_theme"]["previous"]["name"], "FIX",
-        "{json}"
-    );
-    assert_eq!(
-        json["capture"]["task_theme"]["inherited"]["theme"]["name"], "READ",
-        "{json}"
-    );
+    assert!(json["capture"].get("task_theme").is_none(), "{json}");
+    let merged = &json["capture"]["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "WRITE", "{json}");
+    assert_eq!(merged["after"], "WRITE + FIX", "{json}");
     let task_after = fs::read_to_string(vault.join("sase.md")).unwrap();
     assert!(
-        task_after.contains("[type:: WRITE]")
-            && !task_after.contains("[theme::"),
-        "ref-today retypes the task to its explicit destination: {task_after}"
+        task_after.contains("[theme:: FIX]"),
+        "ref-today merges instead of retyping: {task_after}"
     );
 }
 
@@ -454,14 +475,15 @@ fn inherited_build_plus_hash_fix_writes_type_fix() {
     );
     let (_, json) =
         capture_json(&vault, &day_file, &config, &["^sase:work#fix"], false);
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
-    assert_eq!(json["task_theme"]["inherited"]["theme"]["name"], "BUILD");
+    assert!(json.get("task_theme").is_none(), "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "FIX", "{json}");
+    assert_eq!(merged["after"], "FIX + BUILD", "{json}");
     assert!(
-        fs::read_to_string(vault.join("sase.md"))
+        !fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("[type:: FIX]"),
-        "inherited BUILD plus #fix writes [type:: FIX]"
+            .contains("[type::"),
+        "inherited BUILD landing in FIX merges instead of retyping"
     );
 }
 
@@ -474,13 +496,12 @@ fn hash_build_clears_a_fix_field() {
     );
     let (_, json) =
         capture_json(&vault, &day_file, &config, &["^sase:work#build"], false);
-    assert_eq!(json["task_theme"]["action"], "cleared", "{json}");
-    assert_eq!(json["task_theme"]["theme"], Value::Null, "{json}");
+    assert!(json.get("task_theme").is_none(), "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "BUILD", "{json}");
+    assert_eq!(merged["after"], "BUILD + FIX", "{json}");
     let line = json["task_line"].as_str().unwrap();
-    assert!(
-        !line.contains("[type::") && !line.contains("[theme::"),
-        "{line}"
-    );
+    assert!(line.contains("[type:: FIX]"), "{line}");
 }
 
 #[test]
@@ -492,13 +513,15 @@ fn hash_plan_writes_an_exempt_type() {
     );
     let (_, json) =
         capture_json(&vault, &day_file, &config, &["^sase:work#plan"], false);
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "PLAN", "{json}");
+    assert!(json.get("task_theme").is_none(), "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "PLAN", "{json}");
+    assert_eq!(merged["after"], "PLAN + BUILD", "{json}");
     assert!(
-        fs::read_to_string(vault.join("sase.md"))
+        !fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("[type:: PLAN]"),
-        "PLAN is a legal retype result"
+            .contains("[type::"),
+        "PLAN landing merges instead of retyping"
     );
 }
 
@@ -552,13 +575,15 @@ fn hash_fix_into_build_plus_fix_keeps_fix_and_retypes_write() {
     );
     let (_, retyped) =
         capture_json(&vault, &day_file, &config, &["^sase:other#fix"], false);
-    assert_eq!(retyped["task_theme"]["action"], "set", "{retyped}");
-    assert_eq!(retyped["task_theme"]["theme"]["name"], "FIX", "{retyped}");
+    assert!(retyped.get("task_theme").is_none(), "{retyped}");
+    let merged = &retyped["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "FIX", "{retyped}");
+    assert_eq!(merged["after"], "FIX + WRITE", "{retyped}");
     assert!(
         fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("[type:: FIX]"),
-        "WRITE under BUILD + FIX plus #fix becomes FIX"
+            .contains("[type:: WRITE]"),
+        "WRITE landing in FIX merges instead of retyping"
     );
 }
 
@@ -577,17 +602,16 @@ fn named_project_note_bullets_retype_linked_tasks() {
         false,
     );
     assert_eq!(json["kind"], "project_note", "{json}");
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    assert!(json.get("task_theme").is_none(), "{json}");
     let line = json["project_note"]["task_links"][0]["task_line"]
         .as_str()
         .unwrap();
-    assert!(line.contains("[type:: FIX]"), "{json}");
+    assert!(!line.contains("[type::"), "{json}");
     assert!(
-        fs::read_to_string(vault.join("sase_exit.md"))
+        !fs::read_to_string(vault.join("sase_exit.md"))
             .unwrap()
-            .contains("[type:: FIX]"),
-        "named project-note bullets retype each linked task"
+            .contains("[type::"),
+        "named project-note bullets merge instead of retyping"
     );
 }
 
@@ -602,13 +626,12 @@ fn active_existing_task_link_start_shorthand_uses_the_resolved_name() {
     let (output, json) =
         capture_json(&vault, &day_file, &config, &["^sase:work=fix"], false);
     assert_success(&output);
-    assert_eq!(json["task_theme"]["action"], "set", "{json}");
-    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    assert!(json.get("task_theme").is_none(), "{json}");
     assert!(json.get("pomodoro_start").is_some(), "{json}");
     assert!(
         fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("[type:: FIX]"),
-        "the task line should carry the selected theme"
+            .contains("[theme:: BUILD]"),
+        "the task line keeps its theme under merge"
     );
 }
