@@ -4308,6 +4308,18 @@ fn is_keep_moving_row(row: &TaskCompleteUnblockedJson) -> bool {
         .is_some_and(|offer| offer.group == "keep_moving")
 }
 
+/// Lane name for keep-moving human rows (`docs/task-dependencies.md`
+/// §12.15): Pending, Next, Ready, Blocked. Never a raw status symbol.
+fn keep_moving_lane_name(symbol: char) -> &'static str {
+    match symbol {
+        '/' => "Pending",
+        '*' => "Next",
+        ' ' => "Ready",
+        '?' => "Blocked",
+        _ => "Ready",
+    }
+}
+
 /// Human keep-moving groups (`docs/task-dependencies.md` §12.15): one
 /// header per leaf project that leads with why and says the rows are not
 /// dependents, the offered rows in the shared offer numbering, and the
@@ -4421,7 +4433,7 @@ fn print_human_keep_moving_row(
     row: &TaskCompleteUnblockedJson,
     stem: &str,
     dry_run: bool,
-    styler: &Styler,
+    _styler: &Styler,
 ) {
     let Some(offer) = row.offer.as_ref() else {
         return;
@@ -4434,9 +4446,8 @@ fn print_human_keep_moving_row(
     };
     if let Some(link) = row.link.as_ref() {
         let verb = if dry_run { "would link" } else { "linked" };
-        let previous =
-            style_task_status_marker(styler, row.previous_status_symbol);
-        let current = style_task_status_marker(styler, row.status_symbol);
+        let previous = keep_moving_lane_name(row.previous_status_symbol);
+        let current = keep_moving_lane_name(row.status_symbol);
         let minted = link
             .block_link
             .rsplit_once('^')
@@ -4451,7 +4462,7 @@ fn print_human_keep_moving_row(
             successor_destination(link),
         );
     } else {
-        let marker = style_task_status_marker(styler, row.status_symbol);
+        let lane = keep_moving_lane_name(row.status_symbol);
         // A real run says an unpicked row was not pulled in; a dry run
         // shows the `-p` hint instead.
         let reason = row
@@ -4461,7 +4472,7 @@ fn print_human_keep_moving_row(
             .map(|reason| format!(" \u{b7} {}", not_linked_reason(reason)))
             .unwrap_or_default();
         println!(
-            "  offer {}  {marker}{text}  {locator} \u{2192} {}{reason}",
+            "  offer {}  {lane}{text}  {locator} \u{2192} {}{reason}",
             offer.n,
             offer_destination_label(&offer.destination),
         );

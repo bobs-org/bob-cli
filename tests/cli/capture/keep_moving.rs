@@ -418,6 +418,141 @@ fn km30_require_choice_refuses_write_free() {
     assert_eq!(vault_bytes(&vault), before);
 }
 
+// Repair 1: same-note dependent on completed T plus external q must not
+// recover or link from an incomplete graph. D carries
+// `[dependsOn:: t,q]` with q open in q.md; the poisoned snapshot makes the
+// dependents data unavailable. Old code offered D as a legacy hand-off
+// while hiding its row. New code suppresses all legacy writes while KM31
+// keep-moving rows survive: A offers and applies, D folds blocked.
+#[test]
+fn km31_same_note_dependent_suppressed_while_safe_rows_offer() {
+    let (_t1, v1, d1) = vault("bob-cli-km31-legacy");
+    write_file(&v1.join("dev.md"), &area());
+    write_file(&v1.join("sase.md"), &top_project());
+    let badges_before = concat!(
+        "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+        "- [ ] #task Draft the badge spec [id:: t] ^t\n",
+        "- [ ] #task #prj Badges ^prj\n",
+        "- [ ] #task Write badge docs [id:: a] ^a\n",
+        "- [?] #task Needs both [dependsOn:: t,q] [id:: d] ^d\n",
+    );
+    write_file(&v1.join("sase_badges.md"), badges_before);
+    write_file(
+        &v1.join("q.md"),
+        "- [ ] #task External prereq [id:: q] ^q\n",
+    );
+    write_file(
+        &v1.join("other.md"),
+        "- [?] #task Outside follows [dependsOn:: t] [id:: f] ^f\n",
+    );
+    write_file(
+        &d1,
+        "## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[sase_badges#^t]]\n",
+    );
+    poison_snapshot(&v1);
+    let d_line = "- [?] #task Needs both [dependsOn:: t,q] [id:: d] ^d";
+    let dry = capture_json(&v1, &d1, &["--dry-run"], "!sase_badges:t");
+    assert_eq!(dry["task_complete"]["unblocked_check"], "unavailable");
+    assert_eq!(dry["task_complete"]["unblocked"], serde_json::json!([]));
+    assert_eq!(dry["task_complete"]["still_blocked"], serde_json::json!([]));
+    let moving = dry["task_complete"]["keep_moving"]
+        .as_array()
+        .expect("keep_moving");
+    assert_eq!(moving.len(), 1, "{moving:?}");
+    assert_eq!(moving[0]["block_id"], "a");
+    let groups = dry["pull_in"]["groups"].as_array().expect("groups");
+    let fold = groups
+        .iter()
+        .find(|group| group["group"] == "keep_moving")
+        .expect("keep-moving group");
+    assert_eq!(fold["folded"]["blocked"], 1, "{fold}");
+    assert!(!dry.to_string().contains("\"block_id\":\"d\""), "{dry}");
+    assert!(!dry.to_string().contains("\"block_id\":\"f\""), "{dry}");
+    let real = capture_json(&v1, &d1, &[], "!sase_badges:t");
+    assert_eq!(real["task_complete"]["unblocked_check"], "unavailable");
+    assert_eq!(
+        real["task_complete"]["keep_moving"],
+        dry["task_complete"]["keep_moving"]
+    );
+    let note = fs::read_to_string(v1.join("sase_badges.md")).unwrap();
+    assert!(note.contains(d_line), "{note}");
+    assert!(!note.contains("[fresh::"), "{note}");
+    let day = fs::read_to_string(&d1).unwrap();
+    assert!(!day.contains("sase_badges#^d"), "{day}");
+    assert!(!day.contains("other#^f"), "{day}");
+    let (_t2, v2, d2) = vault("bob-cli-km31-pick");
+    write_file(&v2.join("dev.md"), &area());
+    write_file(&v2.join("sase.md"), &top_project());
+    write_file(&v2.join("sase_badges.md"), badges_before);
+    write_file(
+        &v2.join("q.md"),
+        "- [ ] #task External prereq [id:: q] ^q\n",
+    );
+    write_file(
+        &v2.join("other.md"),
+        "- [?] #task Outside follows [dependsOn:: t] [id:: f] ^f\n",
+    );
+    write_file(
+        &d2,
+        "## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[sase_badges#^t]]\n",
+    );
+    poison_snapshot(&v2);
+    let dry_all =
+        capture_json(&v2, &d2, &["--dry-run", "-p", "all"], "!sase_badges:t");
+    assert_eq!(dry_all["task_complete"]["unblocked_check"], "unavailable");
+    let real_all = capture_json(&v2, &d2, &["-p", "all"], "!sase_badges:t");
+    assert_eq!(
+        dry_all["task_complete"]["keep_moving"],
+        real_all["task_complete"]["keep_moving"]
+    );
+    assert_eq!(dry_all["pull_in"], real_all["pull_in"]);
+    let note2 = fs::read_to_string(v2.join("sase_badges.md")).unwrap();
+    assert!(note2.contains(d_line), "{note2}");
+    assert!(note2.contains("- [*] #task Write badge docs"), "{note2}");
+    let day2 = fs::read_to_string(&d2).unwrap();
+    assert!(day2.contains("sase_badges#^a"), "{day2}");
+    assert!(!day2.contains("sase_badges#^d"), "{day2}");
+    let (_t3, v3, d3) = vault("bob-cli-km31-pomo");
+    write_file(&v3.join("dev.md"), &area());
+    write_file(&v3.join("sase.md"), &top_project());
+    write_file(&v3.join("sase_badges.md"), badges_before);
+    write_file(
+        &v3.join("q.md"),
+        "- [ ] #task External prereq [id:: q] ^q\n",
+    );
+    write_file(
+        &d3,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase_badges#^t]]\n- [ ] () \u{2014} FIX\n",
+    );
+    poison_snapshot(&v3);
+    let pomo = capture_json(&v3, &d3, &["--dry-run"], "x!");
+    assert_eq!(pomo["pomodoro_close"]["unblocked_check"], "unavailable");
+    assert_eq!(pomo["pomodoro_close"]["unblocked"], serde_json::json!([]));
+    assert_eq!(
+        pomo["pomodoro_close"]["still_blocked"],
+        serde_json::json!([])
+    );
+    let (_t4, v4, d4) = vault("bob-cli-km31-pullin");
+    write_file(&v4.join("dev.md"), &area());
+    write_file(
+        &v4.join("solo.md"),
+        "---\ntype: [[project]]\nparent: [[dev]]\nstatus: wip\n---\n- [ ] #task Solo work [id:: t] ^t\n- [ ] #task #prj Solo ^prj\n",
+    );
+    write_file(
+        &d4,
+        "## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[solo#^t]]\n",
+    );
+    poison_snapshot(&v4);
+    let solo = capture_json(&v4, &d4, &["--dry-run"], "!solo:t");
+    assert_eq!(solo["task_complete"]["unblocked_check"], "unavailable");
+    assert_eq!(solo["task_complete"]["unblocked"], serde_json::json!([]));
+    assert_eq!(
+        solo["task_complete"]["still_blocked"],
+        serde_json::json!([])
+    );
+    assert_eq!(solo["task_complete"]["keep_moving"], serde_json::json!([]));
+}
+
 // KM31: a marker-positive invalid-UTF-8 note makes the dependents
 // snapshot unavailable; safe rows still offer while the
 // dependency-bearing candidate folds blocked.
@@ -1052,15 +1187,15 @@ fn human_dry_run_leads_with_why_and_folds() {
         .unwrap_or_else(|| panic!("header missing:\n{out}"));
     assert_eq!(
         lines[header + 1],
-        "  offer 1  [/] Ship the badge renderer  sase_badges.md ^p \u{2192} FIX"
+        "  offer 1  Pending Ship the badge renderer  sase_badges.md ^p \u{2192} FIX"
     );
     assert_eq!(
         lines[header + 2],
-        "  offer 2  [*] Wire badges into the README  sase_badges.md ^b \u{2192} FIX"
+        "  offer 2  Next Wire badges into the README  sase_badges.md ^b \u{2192} FIX"
     );
     assert_eq!(
         lines[header + 3],
-        "  offer 3  [ ] Write badge docs  sase_badges.md ^a \u{2192} FIX"
+        "  offer 3  Ready Write badge docs  sase_badges.md ^a \u{2192} FIX"
     );
     assert_eq!(
         lines[header + 4],
@@ -1070,6 +1205,16 @@ fn human_dry_run_leads_with_why_and_folds() {
     // The group never borrows dependency wording or the unlock glyph.
     assert!(!out.contains("unblocked"), "{out}");
     assert!(!out.contains('\u{1f513}'), "{out}");
+    // Keep-moving rows use lane names, never raw marks (ordinary completion
+    // keeps its own `[ ] → [x]` formatting).
+    for line in &lines[header + 1..=header + 3] {
+        assert!(!line.contains("[/]"), "{line}");
+        assert!(!line.contains("[*]"), "{line}");
+        assert!(!line.contains("[ ]"), "{line}");
+    }
+    assert!(out.contains("Pending"), "{out}");
+    assert!(out.contains("Next"), "{out}");
+    assert!(out.contains("Ready"), "{out}");
 }
 
 #[test]
@@ -1115,7 +1260,7 @@ fn human_pick_suffix_and_not_pulled_in() {
     assert!(out.starts_with("\u{2713} completed"), "{out}");
     assert!(
         out.contains(
-            "linked [ ] \u{2192} [*] Write badge docs  sase_badges.md ^a \u{2192} FIX (next up) \u{b7} keeps sase_badges moving"
+            "linked Ready \u{2192} Next Write badge docs  sase_badges.md ^a \u{2192} FIX (next up) \u{b7} keeps sase_badges moving"
         ),
         "{out}"
     );
@@ -1127,6 +1272,15 @@ fn human_pick_suffix_and_not_pulled_in() {
         "{out}"
     );
     assert!(!out.contains("unblocked"), "{out}");
+    // Keep-moving picked rows use lane names; ordinary completion keeps its
+    // own `[ ] → [x]` mark on the first line.
+    for line in out.lines().filter(|line| line.contains("keeps ")) {
+        assert!(!line.contains("[ ]"), "{line}");
+        assert!(!line.contains("[*]"), "{line}");
+        assert!(!line.contains("[/]"), "{line}");
+    }
+    assert!(out.contains("Ready"), "{out}");
+    assert!(out.contains("Next"), "{out}");
 
     // A partial pick marks the rest as not pulled in; an explicit none
     // writes no task fields and prints no link.
@@ -1176,11 +1330,17 @@ fn human_pomodoro_close_and_caption_for_several_predecessors() {
     );
     assert!(
         out.contains(
-            "  offer 1  [/] Ship the badge renderer  sase_badges.md ^p"
+            "  offer 1  Pending Ship the badge renderer  sase_badges.md ^p"
         ),
         "{out}"
     );
     assert!(!out.contains("unblocked"), "{out}");
+    // Keep-moving offer lines use lane names; ordinary close keeps its marks.
+    for line in out.lines().filter(|line| line.contains("offer 1")) {
+        assert!(!line.contains("[/]"), "{line}");
+        assert!(!line.contains("[*]"), "{line}");
+        assert!(!line.contains("[ ]"), "{line}");
+    }
 }
 
 #[test]
@@ -1229,11 +1389,20 @@ fn human_mixed_hand_off_refusal_never_labels_keep_moving_unblocked() {
         .find("  Keep sase_badges moving \u{b7} Draft the badge spec was its last task planned today (ready tasks, not dependents)\n")
         .expect("keep-moving group");
     assert!(hand_offs < keep, "{out}");
-    for line in out.lines() {
-        if line.contains("sase_badges.md") {
-            assert!(!line.contains("unblocked"), "{line}");
-        }
+    // Keep-moving rows (offer lines under the Keep header) use lane names,
+    // never raw marks or unblocked wording. Ordinary completion and legacy
+    // hand-off rows keep their own formatting.
+    let keep_section = &out[keep..];
+    for line in keep_section.lines().filter(|line| line.contains("offer")) {
+        assert!(!line.contains("unblocked"), "{line}");
+        assert!(!line.contains("[/]"), "{line}");
+        assert!(!line.contains("[*]"), "{line}");
+        assert!(!line.contains("[ ]"), "{line}");
     }
+    // Keep-moving rows carry lane names.
+    assert!(keep_section.contains("Pending"), "{out}");
+    assert!(keep_section.contains("Next"), "{out}");
+    assert!(keep_section.contains("Ready"), "{out}");
     assert!(
         out.contains(
             "offer 1  unblocked [?] \u{2192} [ ] Follows badges  other.md ^f"

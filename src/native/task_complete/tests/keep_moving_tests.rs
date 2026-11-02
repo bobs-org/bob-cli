@@ -13,8 +13,12 @@ use super::super::keep_moving::{
 use super::super::successors::{
     plan_successors, ClosingContext, ClosingContinuation, CompletedTask,
     EntryRole, OfferGroup, SuccessorInput, SuccessorPlan, SuccessorSelection,
+    ROUTING_LOAD_COUNT,
 };
 use super::*;
+use crate::native::pomodoro_themes::scan::{
+    FULL_ROOT_SCAN_COUNT, NARROW_ROOT_SCAN_COUNT,
+};
 
 fn today() -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(2026, 10, 5).expect("date")
@@ -1121,4 +1125,324 @@ fn pick_preserves_pending_and_mints_idless_ready() {
         .expect("edited");
     assert!(updated.contains("[fresh:: 2026-10-05]"));
     assert!(updated.contains("- [/] #task Ship it"));
+}
+
+// Repair 1: unavailable snapshots suppress all legacy writes while KM31
+// keep-moving rows survive. D depends on completed T plus external q,
+// which is absent from the incomplete snapshot. Old code classified D as
+// a legacy hand-off (q missing looks closed) and wrote it while hiding
+// its row. New code suppresses legacy entirely: no unblocked,
+// still_blocked, project folds, changed_files, or day writes escape,
+// except legitimate keep-moving picks for A.
+#[test]
+fn unavailable_snapshot_suppresses_all_legacy_writes() {
+    let tree = leaf_tree();
+    let badges = concat!(
+        "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+        "- [x] #task Draft the badge spec [id:: t] ^t\n",
+        "- [ ] #task #prj Badges ^prj\n",
+        "- [ ] #task Write badge docs [id:: a] ^a\n",
+        "- [?] #task Needs both [dependsOn:: t,q] [id:: d] ^d\n",
+    );
+    let q_note = "- [ ] #task External prereq [id:: q] ^q\n";
+    let other = "- [?] #task Follows badges [dependsOn:: t] [id:: f] ^f\n";
+    let mut snapshot = leaf_snapshot(badges, &tree);
+    snapshot.push(("q.md", q_note));
+    snapshot.push(("other.md", other));
+    let mut paths = leaf_paths().to_vec();
+    paths.push("q.md");
+    paths.push("other.md");
+    let day = day_link("sase_badges#^t");
+    let completed =
+        vec![pred("sase_badges.md", "t", "t", "Draft the badge spec")];
+
+    // Unavailable: no legacy rows, no legacy files, no day text.
+    let none = run_km_full(
+        completed.clone(),
+        &snapshot,
+        Some(&day),
+        None,
+        None,
+        &paths,
+        true,
+        true,
+        false,
+        SuccessorSelection::None,
+    );
+    assert!(
+        none.unblocked.is_empty(),
+        "legacy suppressed: {:?}",
+        none.unblocked
+    );
+    assert!(
+        none.still_blocked.is_empty(),
+        "legacy suppressed: {:?}",
+        none.still_blocked
+    );
+    assert!(none.project_folds.is_empty());
+    assert!(
+        none.changed_files.is_empty(),
+        "no legacy writes escape: {:?}",
+        none.changed_files.keys().collect::<Vec<_>>()
+    );
+    assert!(none.new_day_text.is_none());
+    // Keep-moving survives: A offers, D folds blocked.
+    assert_eq!(km_keys(&none), ["a"], "KM31 safe row");
+    assert_eq!(none.keep_moving_folds[0].blocked, 1);
+
+    // Picks apply only to safe keep-moving rows.
+    let picked = run_km_full(
+        completed.clone(),
+        &snapshot,
+        Some(&day),
+        None,
+        None,
+        &paths,
+        true,
+        true,
+        false,
+        SuccessorSelection::All,
+    );
+    assert!(picked.unblocked.is_empty());
+    assert!(picked.still_blocked.is_empty());
+    let updated = picked
+        .changed_files
+        .get(&PathBuf::from("sase_badges.md"))
+        .expect("keep-moving pick writes A");
+    assert!(updated.contains("- [*] #task Write badge docs"));
+    assert!(updated
+        .contains("- [?] #task Needs both [dependsOn:: t,q] [id:: d] ^d"));
+    assert!(!updated.contains("[unblocked::"));
+    assert!(!picked
+        .changed_files
+        .contains_key(&PathBuf::from("other.md")));
+    assert!(!picked.changed_files.contains_key(&PathBuf::from("q.md")));
+
+    // Complete-snapshot controls: with proof, legacy still works.
+    let complete = run_km_full(
+        completed,
+        &snapshot,
+        Some(&day),
+        None,
+        None,
+        &paths,
+        true,
+        true,
+        true,
+        SuccessorSelection::None,
+    );
+    // D waits on open q, F is a legacy hand-off candidate.
+    assert!(
+        complete.still_blocked.iter().any(|row| row.block_id == "d"),
+        "complete snapshot blocks D on q: {:?}",
+        complete.still_blocked
+    );
+    assert!(
+        complete.unblocked.iter().any(|row| row.block_id == "f")
+            || complete.still_blocked.iter().any(|row| row.block_id == "f"),
+        "complete snapshot sees outside dependent: {:?} {:?}",
+        complete.unblocked,
+        complete.still_blocked
+    );
+}
+
+// Repair 2: routing is lazy and narrow. Nontriggering closes build no
+// routing context and pay no full root scan; triggering closes build one
+// narrow context with no full root scan, across direct, Pomodoro, and
+// nested-style calls. Typed keep-moving residents sharing FIX with a
+// legacy hand-off keep stable keys, lane order, and Pending.
+#[test]
+fn routing_is_lazy_and_narrow_with_shared_destination() {
+    use std::sync::atomic::Ordering;
+    ROUTING_LOAD_COUNT.store(0, Ordering::SeqCst);
+    FULL_ROOT_SCAN_COUNT.store(0, Ordering::SeqCst);
+    NARROW_ROOT_SCAN_COUNT.store(0, Ordering::SeqCst);
+
+    let dir = tempfile::tempdir().expect("temp vault");
+    let root = dir.path();
+    for (name, contents) in [
+        ("dev.md", area(None)),
+        ("sase.md", project(Some("dev"), "", "Sase")),
+        (
+            "sase_badges.md",
+            concat!(
+                "---\ntype: [[project]]\nparent: [[sase]]\nstatus: wip\n---\n",
+                "- [x] #task Draft the badge spec [id:: t] ^t\n",
+                "- [ ] #task #prj Badges ^prj\n",
+                "- [/] #task Ship it [type:: chore] [id:: p] ^p\n",
+                "- [*] #task Wire it [id:: b] ^b\n",
+                "- [ ] #task Write it [id:: a] ^a\n",
+            )
+            .to_string(),
+        ),
+        (
+            "other.md",
+            "- [?] #task Follows badges [dependsOn:: t] [id:: f] ^f\n"
+                .to_string(),
+        ),
+    ] {
+        std::fs::write(root.join(name), contents).expect("write vault file");
+    }
+    let paths = [
+        "dev.md",
+        "sase.md",
+        "sase_badges.md",
+        "other.md",
+        "20261005.md",
+    ];
+    let vault_index = index(&paths);
+    let settings = test_settings();
+    let day = day_link("sase_badges#^t");
+    let completed =
+        vec![pred("sase_badges.md", "t", "t", "Draft the badge spec")];
+    let snapshot = [
+        (
+            PathBuf::from("dev.md"),
+            std::fs::read_to_string(root.join("dev.md")).unwrap(),
+        ),
+        (
+            PathBuf::from("sase.md"),
+            std::fs::read_to_string(root.join("sase.md")).unwrap(),
+        ),
+        (
+            PathBuf::from("sase_badges.md"),
+            std::fs::read_to_string(root.join("sase_badges.md")).unwrap(),
+        ),
+        (
+            PathBuf::from("other.md"),
+            std::fs::read_to_string(root.join("other.md")).unwrap(),
+        ),
+    ];
+
+    // Nontriggering: plain chore outside any project, no offers, no routing.
+    let plain_snapshot = [(
+        PathBuf::from("plain.md"),
+        "- [x] #task Done [id:: t] ^t\n".to_string(),
+    )];
+    let plain_index = index(&["plain.md", "20261005.md"]);
+    let plain = plan_successors(SuccessorInput {
+        bob_dir: Some(root),
+        completed: vec![pred("plain.md", "t", "t", "Done")],
+        snapshot: plain_snapshot.to_vec(),
+        note_texts: plain_snapshot.to_vec(),
+        pre_day: Some(day_link("plain#^t")),
+        post_day: None,
+        closing: None,
+        day_relative: PathBuf::from("20261005.md"),
+        today: today(),
+        tasks_settings: &settings,
+        note_settings: &settings,
+        link_unblocked: true,
+        keep_moving: true,
+        snapshot_complete: true,
+        selection: SuccessorSelection::None,
+        index: &plain_index,
+    });
+    assert!(plain.keep_moving.is_empty());
+    assert!(plain.unblocked.is_empty());
+    assert_eq!(ROUTING_LOAD_COUNT.load(Ordering::SeqCst), 0);
+    assert_eq!(FULL_ROOT_SCAN_COUNT.load(Ordering::SeqCst), 0);
+
+    // Triggering direct (!): hand_off F plus typed keep-moving P/B/A share FIX.
+    let direct = plan_successors(SuccessorInput {
+        bob_dir: Some(root),
+        completed: completed.clone(),
+        snapshot: snapshot.to_vec(),
+        note_texts: snapshot.to_vec(),
+        pre_day: Some(day.clone()),
+        post_day: None,
+        closing: None,
+        day_relative: PathBuf::from("20261005.md"),
+        today: today(),
+        tasks_settings: &settings,
+        note_settings: &settings,
+        link_unblocked: true,
+        keep_moving: true,
+        snapshot_complete: true,
+        selection: SuccessorSelection::None,
+        index: &vault_index,
+    });
+    assert_eq!(ROUTING_LOAD_COUNT.load(Ordering::SeqCst), 1);
+    assert_eq!(FULL_ROOT_SCAN_COUNT.load(Ordering::SeqCst), 0);
+    // Mixed groups share FIX slot: hand_off first, keep-moving after.
+    assert_eq!(direct.unblocked.len(), 1);
+    assert_eq!(
+        direct.unblocked[0].offer.as_ref().unwrap().group,
+        OfferGroup::HandOff
+    );
+    let keys: Vec<String> = direct
+        .unblocked
+        .iter()
+        .filter_map(|row| row.offer.as_ref().map(|offer| offer.key.clone()))
+        .chain(direct.keep_moving.iter().filter_map(|row| {
+            row.offer.as_ref().map(|offer| offer.key.clone())
+        }))
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(keys.len(), sorted.len(), "stable keys");
+    let lanes: Vec<char> = direct
+        .keep_moving
+        .iter()
+        .map(|row| row.status_symbol)
+        .collect();
+    assert_eq!(lanes, vec!['/', '*', ' '], "lane order Pending/Next/Ready");
+    // Typed and untyped keep-moving residents share the legacy hand-off's
+    // destination through the same D7 routing. Keys stay stable across the
+    // shared numbering.
+    let legacy_dest = direct.unblocked[0]
+        .offer
+        .as_ref()
+        .unwrap()
+        .destination
+        .entry_name
+        .clone();
+    let dests: Vec<(String, String)> = direct
+        .keep_moving
+        .iter()
+        .map(|row| {
+            (
+                row.block_id.clone(),
+                row.offer.as_ref().unwrap().destination.entry_name.clone(),
+            )
+        })
+        .collect();
+    assert!(
+        dests.iter().any(|(_, dest)| dest == &legacy_dest),
+        "keep-moving shares {legacy_dest} with legacy: {dests:?}"
+    );
+
+    // Pending preservation on pick-all, plus second triggering call
+    // (Pomodoro-style closing) still pays no full scan.
+    let picked = plan_successors(SuccessorInput {
+        bob_dir: Some(root),
+        completed: completed.clone(),
+        snapshot: snapshot.to_vec(),
+        note_texts: snapshot.to_vec(),
+        pre_day: Some(day.clone()),
+        post_day: Some(day.clone()),
+        closing: Some(ClosingContext {
+            continuation_name: "BOB".to_string(),
+            closed_line: 0,
+            continuation: None,
+        }),
+        day_relative: PathBuf::from("20261005.md"),
+        today: today(),
+        tasks_settings: &settings,
+        note_settings: &settings,
+        link_unblocked: true,
+        keep_moving: true,
+        snapshot_complete: true,
+        selection: SuccessorSelection::All,
+        index: &vault_index,
+    });
+    assert_eq!(ROUTING_LOAD_COUNT.load(Ordering::SeqCst), 2);
+    assert_eq!(FULL_ROOT_SCAN_COUNT.load(Ordering::SeqCst), 0);
+    let pending = picked
+        .keep_moving
+        .iter()
+        .find(|row| row.block_id == "p")
+        .expect("pending");
+    assert_eq!(pending.status_symbol, '/');
 }

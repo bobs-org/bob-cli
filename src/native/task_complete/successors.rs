@@ -841,7 +841,13 @@ fn plan_successors_inner(
         .iter()
         .map(|(path, _)| path.clone())
         .collect();
-    let pull_ins = if mode.is_cancel_recovery() {
+    // Safety boundary for unavailable snapshots: legacy dependency
+    // recovery, project-member recovery, and project-finished pull-ins
+    // must not run against incomplete data. Keep-moving has its own
+    // KM31 handling and stays eligible. Cancellation keeps its path.
+    let legacy_suppressed =
+        !input.snapshot_complete && !mode.is_cancel_recovery();
+    let pull_ins = if mode.is_cancel_recovery() || legacy_suppressed {
         Vec::new()
     } else {
         detect_pull_ins(
@@ -926,34 +932,103 @@ fn plan_successors_inner(
             .collect::<Vec<_>>()
     };
 
-    // Classify every open direct dependent of C.
+    // Classify every open direct dependent of C. Suppressed entirely
+    // when the snapshot is unavailable: incomplete data must not drive
+    // legacy recovery, pull-ins, or day writes. Keep-moving runs below.
     let pull_in_by_task: BTreeMap<(usize, usize), &PullInCandidate> = pull_ins
         .iter()
         .map(|candidate| ((candidate.file, candidate.task), candidate))
         .collect();
     let mut verdicts = Vec::new();
-    for (file_index, file) in files.iter().enumerate() {
-        if in_done_archive(&file.relative_path) {
-            continue;
-        }
-        for (task_index, task) in file.tasks.iter().enumerate() {
-            if !task.status_recognized || !task.status_type.is_open() {
+    if !legacy_suppressed {
+        for (file_index, file) in files.iter().enumerate() {
+            if in_done_archive(&file.relative_path) {
                 continue;
             }
-            let mut preds = Vec::new();
-            for (position, completed) in input.completed.iter().enumerate() {
-                if completed.task_id.is_empty() {
+            for (task_index, task) in file.tasks.iter().enumerate() {
+                if !task.status_recognized || !task.status_type.is_open() {
                     continue;
                 }
-                if task.depends_on.contains(&completed.task_id) {
-                    preds.push(position);
+                let mut preds = Vec::new();
+                for (position, completed) in input.completed.iter().enumerate()
+                {
+                    if completed.task_id.is_empty() {
+                        continue;
+                    }
+                    if task.depends_on.contains(&completed.task_id) {
+                        preds.push(position);
+                    }
                 }
-            }
-            if let Some(candidate) =
-                pull_in_by_task.get(&(file_index, task_index))
-            {
-                // §12.10 pull-in: one row per R; the pull-in replaces R's
-                // SL11 `project_task` / `hidden` row.
+                if let Some(candidate) =
+                    pull_in_by_task.get(&(file_index, task_index))
+                {
+                    // §12.10 pull-in: one row per R; the pull-in replaces R's
+                    // SL11 `project_task` / `hidden` row.
+                    let open_count = blocking_open_dependency_ids(
+                        file,
+                        task,
+                        states
+                            .get(&(file_index, task_index))
+                            .map(|state| state.open_dependency_ids.as_slice())
+                            .unwrap_or(&[]),
+                    )
+                    .len();
+                    let surface = surfaces[file_index]
+                        .as_ref()
+                        .expect("pull-in candidate has a surface");
+                    let live_before =
+                        task.block_id.as_ref().is_some_and(|id| {
+                            day.live.contains_key(&(
+                                file.relative_path.clone(),
+                                id.clone(),
+                            ))
+                        });
+                    let inherited = project_states
+                        .get(file_index)
+                        .and_then(|state| state.inherited.clone());
+                    let class = classify_pull_in(
+                        surface,
+                        open_count,
+                        live_before,
+                        earliest_anchor(&candidate.preds, &anchors),
+                        input.link_unblocked,
+                        input.today,
+                        inherited,
+                    );
+                    let (kind, anchor) = match class {
+                        PullInClass::StillBlockedWaitsOn => {
+                            (VerdictKind::StillBlockedWaitsOn, None)
+                        }
+                        PullInClass::StillBlockedScheduled => {
+                            (VerdictKind::StillBlockedScheduled, None)
+                        }
+                        PullInClass::StillBlockedProject => {
+                            (VerdictKind::StillBlockedProject, None)
+                        }
+                        PullInClass::Recover(reason) => {
+                            (VerdictKind::Recover(reason), None)
+                        }
+                        PullInClass::Offer { anchor } => {
+                            (VerdictKind::Offer, anchor)
+                        }
+                    };
+                    verdicts.push(DependentVerdict {
+                        file: file_index,
+                        task: task_index,
+                        preds: candidate.preds.clone(),
+                        anchor,
+                        kind,
+                        open_count,
+                        pull_in: true,
+                        offer: None,
+                        muted_project: None,
+                        keep_moving: false,
+                    });
+                    continue;
+                }
+                if preds.is_empty() {
+                    continue;
+                }
                 let open_count = blocking_open_dependency_ids(
                     file,
                     task,
@@ -963,125 +1038,69 @@ fn plan_successors_inner(
                         .unwrap_or(&[]),
                 )
                 .len();
-                let surface = surfaces[file_index]
-                    .as_ref()
-                    .expect("pull-in candidate has a surface");
-                let live_before = task.block_id.as_ref().is_some_and(|id| {
+                let kind = if open_count > 0 {
+                    VerdictKind::StillBlockedWaitsOn
+                } else if task.scheduled.is_some_and(|date| date > input.today)
+                {
+                    VerdictKind::StillBlockedScheduled
+                } else if project_still_blocks(
+                    file_index,
+                    task,
+                    &project_states,
+                )
+                .is_some()
+                {
+                    // PDC1 (§13.16): own reasons gone, project reasons remain.
+                    VerdictKind::StillBlockedProject
+                } else if task
+                    .block_id
+                    .as_deref()
+                    .is_some_and(|id| is_project_task_id(Some(id)))
+                {
+                    // PDC5 (§13.16): a tagged `^prj` inherits its block from
+                    // an ancestor, so losing its last own prerequisite
+                    // leaves it `[?]` with no `project_task` recover and no
+                    // PDC2/PDC3 for its residents.
+                    if has_prj_is_blocked_tag(&raw_task_line(
+                        &file.contents,
+                        task.line_index,
+                    )) {
+                        VerdictKind::StillBlockedProject
+                    } else {
+                        VerdictKind::Recover("project_task")
+                    }
+                } else if has_hide_tag(&raw_task_line(
+                    &file.contents,
+                    task.line_index,
+                )) {
+                    VerdictKind::Recover("hidden")
+                } else if task.block_id.as_ref().is_some_and(|id| {
                     day.live
                         .contains_key(&(file.relative_path.clone(), id.clone()))
-                });
-                let inherited = project_states
-                    .get(file_index)
-                    .and_then(|state| state.inherited.clone());
-                let class = classify_pull_in(
-                    surface,
-                    open_count,
-                    live_before,
-                    earliest_anchor(&candidate.preds, &anchors),
-                    input.link_unblocked,
-                    input.today,
-                    inherited,
-                );
-                let (kind, anchor) = match class {
-                    PullInClass::StillBlockedWaitsOn => {
-                        (VerdictKind::StillBlockedWaitsOn, None)
-                    }
-                    PullInClass::StillBlockedScheduled => {
-                        (VerdictKind::StillBlockedScheduled, None)
-                    }
-                    PullInClass::StillBlockedProject => {
-                        (VerdictKind::StillBlockedProject, None)
-                    }
-                    PullInClass::Recover(reason) => {
-                        (VerdictKind::Recover(reason), None)
-                    }
-                    PullInClass::Offer { anchor } => {
-                        (VerdictKind::Offer, anchor)
-                    }
+                }) {
+                    VerdictKind::Recover("already_planned")
+                } else if !input.link_unblocked {
+                    VerdictKind::Recover("disabled")
+                } else {
+                    VerdictKind::Offer
+                };
+                let anchor = match kind {
+                    VerdictKind::Offer => earliest_anchor(&preds, &anchors),
+                    _ => None,
                 };
                 verdicts.push(DependentVerdict {
                     file: file_index,
                     task: task_index,
-                    preds: candidate.preds.clone(),
+                    preds,
                     anchor,
                     kind,
                     open_count,
-                    pull_in: true,
+                    pull_in: false,
                     offer: None,
                     muted_project: None,
                     keep_moving: false,
                 });
-                continue;
             }
-            if preds.is_empty() {
-                continue;
-            }
-            let open_count = blocking_open_dependency_ids(
-                file,
-                task,
-                states
-                    .get(&(file_index, task_index))
-                    .map(|state| state.open_dependency_ids.as_slice())
-                    .unwrap_or(&[]),
-            )
-            .len();
-            let kind = if open_count > 0 {
-                VerdictKind::StillBlockedWaitsOn
-            } else if task.scheduled.is_some_and(|date| date > input.today) {
-                VerdictKind::StillBlockedScheduled
-            } else if project_still_blocks(file_index, task, &project_states)
-                .is_some()
-            {
-                // PDC1 (§13.16): own reasons gone, project reasons remain.
-                VerdictKind::StillBlockedProject
-            } else if task
-                .block_id
-                .as_deref()
-                .is_some_and(|id| is_project_task_id(Some(id)))
-            {
-                // PDC5 (§13.16): a tagged `^prj` inherits its block from
-                // an ancestor, so losing its last own prerequisite
-                // leaves it `[?]` with no `project_task` recover and no
-                // PDC2/PDC3 for its residents.
-                if has_prj_is_blocked_tag(&raw_task_line(
-                    &file.contents,
-                    task.line_index,
-                )) {
-                    VerdictKind::StillBlockedProject
-                } else {
-                    VerdictKind::Recover("project_task")
-                }
-            } else if has_hide_tag(&raw_task_line(
-                &file.contents,
-                task.line_index,
-            )) {
-                VerdictKind::Recover("hidden")
-            } else if task.block_id.as_ref().is_some_and(|id| {
-                day.live
-                    .contains_key(&(file.relative_path.clone(), id.clone()))
-            }) {
-                VerdictKind::Recover("already_planned")
-            } else if !input.link_unblocked {
-                VerdictKind::Recover("disabled")
-            } else {
-                VerdictKind::Offer
-            };
-            let anchor = match kind {
-                VerdictKind::Offer => earliest_anchor(&preds, &anchors),
-                _ => None,
-            };
-            verdicts.push(DependentVerdict {
-                file: file_index,
-                task: task_index,
-                preds,
-                anchor,
-                kind,
-                open_count,
-                pull_in: false,
-                offer: None,
-                muted_project: None,
-                keep_moving: false,
-            });
         }
     }
 
@@ -1224,7 +1243,14 @@ fn plan_successors_inner(
             .collect();
     }
 
-    if !mode.is_cancel_recovery()
+    // Lazy routing: skip catalog/home setup when no verdict has an
+    // offer. Nontriggering closes pay no routing cost; triggering closes
+    // pay one narrow load without a root-area scan.
+    let needs_routing = !mode.is_cancel_recovery()
+        && verdicts.iter().any(|verdict| {
+            verdict.offer.is_some() || verdict.kind == VerdictKind::Offer
+        });
+    if needs_routing
         && let Some(root) = input.bob_dir
         && let Some(mut type_routing) =
             SuccessorTypeRouting::load(root, input.today)
@@ -1939,11 +1965,27 @@ struct SuccessorTypeRouting {
     resolver: HomeResolver<DiskHomeSource>,
 }
 
+/// Test-only counter for the routing regression: how many narrow routing
+/// contexts were built. Nontriggering closes must build none; triggering
+/// closes build one narrow context with no full root scan.
+#[cfg(test)]
+pub(crate) static ROUTING_LOAD_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 impl SuccessorTypeRouting {
     fn load(root: &Path, today: NaiveDate) -> Option<Self> {
+        #[cfg(test)]
+        {
+            ROUTING_LOAD_COUNT
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         Some(Self {
             config: config::load_plan_config(&config::config_path()).ok()?,
-            catalog: Catalog::load(root, today, false).ok()?,
+            // Narrow routing context: D7 needs config, known spelling,
+            // sources, and exclusions, but no root-area hue scan. Using
+            // the no-areas load avoids the second root-note pass that
+            // keep-moving triggering previously paid on every close.
+            catalog: Catalog::load_without_areas(root, today, false).ok()?,
             resolver: HomeResolver::new(DiskHomeSource::new(root)),
         })
     }

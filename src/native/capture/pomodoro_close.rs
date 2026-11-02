@@ -858,7 +858,7 @@ fn plan_close_successors(
         ));
     }
     let index = note_index.as_ref().expect("index built above");
-    let mut successor_plan = engine::plan_successors(engine::SuccessorInput {
+    let successor_plan = engine::plan_successors(engine::SuccessorInput {
         bob_dir: Some(bob_dir),
         completed: predecessors,
         snapshot,
@@ -880,13 +880,9 @@ fn plan_close_successors(
         selection: request.selection.clone(),
         index,
     });
-    if unblocked_check == "unavailable" {
-        // KM31: suppress legacy recovery against incomplete data while
-        // keeping independently safe keep-moving rows.
-        successor_plan.unblocked.clear();
-        successor_plan.still_blocked.clear();
-        successor_plan.project_folds.clear();
-    }
+    // The engine enforces the unavailable-snapshot boundary itself:
+    // legacy verdicts are suppressed before writes, while KM31
+    // keep-moving rows survive. No caller-side clearing.
     for (relative_path, text) in &successor_plan.changed_files {
         planner.stage(&bob_dir.join(relative_path), text.clone())?;
     }

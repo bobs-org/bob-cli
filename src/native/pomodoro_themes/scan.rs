@@ -18,6 +18,16 @@ use crate::native::{
     stats::index::canonical_daily_date,
 };
 
+/// Test-only read counters for the keep-moving routing regression: full
+/// root scans (unrestricted) versus narrow key-restricted scans. The
+/// successor router must never pay a full scan.
+#[cfg(test)]
+pub(crate) static FULL_ROOT_SCAN_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static NARROW_ROOT_SCAN_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FileTheme {
     pub(crate) key: String,
@@ -164,6 +174,16 @@ fn scan_root_areas_matching(
     vault: &Path,
     keys: Option<&std::collections::BTreeSet<String>>,
 ) -> BTreeMap<String, Hue> {
+    #[cfg(test)]
+    {
+        if keys.is_none() {
+            FULL_ROOT_SCAN_COUNT
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        } else {
+            NARROW_ROOT_SCAN_COUNT
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
     let mut areas = BTreeMap::new();
     if keys.is_some_and(|keys| keys.is_empty()) {
         return areas;

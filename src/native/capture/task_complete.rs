@@ -457,13 +457,9 @@ pub(super) fn complete_existing_task(
                 selection: request.selection.clone(),
                 index,
             });
-            if unblocked_check == "unavailable" {
-                // KM31: suppress legacy recovery against incomplete data
-                // while keeping independently safe keep-moving rows.
-                successor_plan.unblocked.clear();
-                successor_plan.still_blocked.clear();
-                successor_plan.project_folds.clear();
-            }
+            // The engine enforces the unavailable-snapshot boundary itself:
+            // legacy verdicts are suppressed before writes, while KM31
+            // keep-moving rows survive. No caller-side clearing.
             for (relative_path, text) in &successor_plan.changed_files {
                 let absolute_path = bob_dir.join(relative_path);
                 planner.stage(&absolute_path, text.clone())?;

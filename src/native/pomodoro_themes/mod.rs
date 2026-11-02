@@ -29,7 +29,7 @@ mod rank;
 pub(crate) mod relocation_apply;
 pub(crate) mod rename;
 pub(crate) mod routing;
-mod scan;
+pub(crate) mod scan;
 mod similar;
 pub(crate) mod split;
 pub(crate) mod suggest;

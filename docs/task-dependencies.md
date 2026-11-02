@@ -2491,15 +2491,15 @@ dependents above is the point.
 ✓ completed [*] → [x] Draft the badge spec  sase_badges.md ^draft-spec
   ledger  Task Link struck in FIX · 2026/20261101.md
   Keep sase_badges moving · Draft the badge spec was its last task planned today (ready tasks, not dependents)
-  offer 1  [/] Ship the badge renderer  sase_badges.md ^ship-renderer → FIX
-  offer 2  [*] Wire badges into the README  sase_badges.md ^readme-badges → FIX
-  offer 3  [ ] Write badge docs  sase_badges.md → FIX
+  offer 1  Pending Ship the badge renderer  sase_badges.md ^ship-renderer → FIX
+  offer 2  Next Wire badges into the README  sase_badges.md ^readme-badges → FIX
+  offer 3  Ready Write badge docs  sase_badges.md → FIX
   not offered  2 blocked · 1 scheduled later · 1 hidden
 ```
 
 The existing dry-run hint (`-p 1,2 · -p all`) and the real-run "not
 pulled in" line keep working. A pick prints
-`linked [ ] → [*] Write badge docs  sase_badges.md ^write-badge-docs → FIX · keeps sase_badges moving · added ^write-badge-docs`.
+`linked Ready → Next Write badge docs  sase_badges.md ^write-badge-docs → FIX (next up) · keeps sase_badges moving · added ^write-badge-docs`.
 
 **Bob Mac Capture Pull-In card:**
 
