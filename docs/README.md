@@ -18,7 +18,8 @@ For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md),
 Obsidian interface, read [Dashboard navigation](dashboard.md) (including
 the STATS page), the [Task Card](projects.md#task-card),
 [task date marks](date-marks.md), [task tag marks](task-tag-marks.md),
-[task link marks](task-link-marks.md), and [Today marks](today-marks.md).
+[task link marks](task-link-marks.md), [Today marks](today-marks.md), and
+[blocked-reason marks](blocked-marks.md).
 
 For reading, start with the [reference-library guide](ref.md). Import material
 with [`bob ref create`](highlights-create.md), or save bare links with
@@ -37,6 +38,7 @@ queued intake; full scans also synchronize annotations. The
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
 | [dashboard.md](dashboard.md) | Dashboard Review / Work / Browse navigation and collection pages |
 | [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates and recurrence rules |
+| [blocked-marks.md](blocked-marks.md) | Blocked-reason marks: display contract for the reason a Blocked checkbox shows, plus conformance vectors |
 | [freshness.md](freshness.md) | Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14 |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gcal.md](gcal.md) | `bob gcal` Google Calendar events as daily-note Event Tasks |

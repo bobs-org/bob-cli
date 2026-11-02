@@ -59,7 +59,8 @@ Contract: [Task type suggestions](../task-types.md#pt13-task-type-suggestions),
 [Task date marks](../date-marks.md),
 [Task tag marks](../task-tag-marks.md),
 [Task link marks](../task-link-marks.md),
-[Today marks](../today-marks.md).
+[Today marks](../today-marks.md),
+[Blocked-reason marks](../blocked-marks.md).
 
 ## Checkboxes and lanes
 
@@ -536,5 +537,6 @@ Contract: [Reference library default paths](../highlights-ref-sync.md#default-pa
 - [Today marks](../today-marks.md)
 - [Task link marks](../task-link-marks.md)
 - [Date marks](../date-marks.md)
+- [Blocked-reason marks](../blocked-marks.md)
 - [Pomodoro homes](../pomodoro-homes.md)
 - [Reference library](../ref.md)

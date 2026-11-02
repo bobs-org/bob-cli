@@ -247,6 +247,9 @@ when `whenDone`, else `Next date follows the schedule`.
 `relabelRenderedDateMarks` already skips repeat marks because
 `dateMarkModel` returns `null` for `repeat`. `api.dateMarks` v1 stays
 dates-only: `fields` is unchanged and `model("repeat", …)` is `null`.
+The blocked-reason `repeat` checkbox shares this loop mask, so the
+checkbox loop matches the `⟲ daily` mark on the same line
+(`docs/blocked-marks.md`).
 
 ## Surfaces and interaction
 

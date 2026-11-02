@@ -520,7 +520,9 @@ consumption of links to Blocked tasks are in
 [task-dependencies.md §13](task-dependencies.md#13-project-dependencies). This combined
 state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`), including
 Pomodoro promotion for a task inherited from a scheduled project. A task
-already `[?]` remains Blocked until every reason is gone. Only then does it
+already `[?]` remains Blocked until every reason is gone. The rendered
+checkbox shows which reason holds
+(`docs/blocked-marks.md`), while storage stays `[?]`. Only then does it
 return to the stronger of the active and recovery-only ranks: Next when
 directly recent, In Progress only when a stronger eligible dependency path
 requests it, or Ready when unreachable. Every automatic Blocked-to-Ready

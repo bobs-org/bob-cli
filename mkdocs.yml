@@ -99,6 +99,7 @@ plugins:
           - plugins.md
           - dashboard.md
           - date-marks.md
+          - blocked-marks.md
           - freshness.md
           - plan.md
           - projects.md
@@ -291,6 +292,7 @@ nav:
           - "Tasks and projects":
               - "Dashboard navigation and child pages": dashboard.md
               - "Task date marks": date-marks.md
+              - "Blocked-reason marks": blocked-marks.md
               - "Task freshness": freshness.md
               - "Plan budget, Today, and lanes": plan.md
               - "Project Task Sync": projects.md

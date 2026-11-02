@@ -471,6 +471,9 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
   hidden when it is absent.
 - Putting the cursor on the line reveals the raw Markdown. Source mode
   stays raw.
+- A Blocked prerequisite or dependent chip draws its own miniature
+  block mark and reason (`docs/blocked-marks.md`), so the chip shows
+  whether the critical path is waiting on work or on a date.
 
 ### 7.4 Implementation requirements
 

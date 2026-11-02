@@ -332,7 +332,10 @@ the machine-owned Sub-projects child is skipped on reverse conversion. A blocked
 source (`[?]`) is accepted and seeds a Ready project unless a carried open
 prerequisite or a future inline date still blocks it. If the new project is
 blocked, its open residents are tagged `#prj_is_blocked` and their live links
-are removed from today's open Pomodoros.
+are removed from today's open Pomodoros. While blocked-reason marks
+are on, a resident whose block mark is `prj` folds that tag pill to
+zero width, since the chevron box already says the project is blocked
+(`docs/blocked-marks.md`).
 
 ### Promotion successors
 
@@ -712,6 +715,12 @@ sit inside `code`, `pre`, `.dataview.inline-field`,
 `.bob-priority-mark`, or `.bob-fresh-mark`. Anything else is left
 alone (a Dataview pill or raw text).
 
+While blocked-reason marks are on, a row whose block mark is a digit
+(`p1`–`p4`) folds its priority mark to zero width instead: the box
+already says the priority, so the bars would repeat it
+(`docs/blocked-marks.md`). The cursor and click still reveal the raw
+field, and Tasks results hide the row's glyph the same way.
+
 **Repair flag.** While marks are on, any leftover `priority`
 Dataview pill in Live Preview is non-canonical: uppercase values,
 `P2`, `urgent`, duplicates, mismatched brackets, fields on non-task
@@ -787,7 +796,7 @@ across re-renders and costly; CSS on Tasks' own
 | #    | Input                                                      | Expected                                                                               |
 | ---- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | PM1  | `- [ ] #task A [priority:: high] ^a`                       | 4 bars · `P1 · High priority⏎Rolls 2–7 days ahead⏎Ctrl+Shift+P to change` · fold space |
-| PM2  | `- [?] #task B [priority::medium] [scheduled::2026-10-22]` | 3 bars · `P2 · Medium priority⏎Rolls 8–30 days ahead⏎…`                                |
+| PM2  | `- [?] #task B [priority::medium] [scheduled::2026-10-22]` | 3 bars · `P2 · Medium priority⏎Rolls 8–30 days ahead⏎…` · not a digit row under blocked-reason marks with a 2026-11-01 today (the date is past), so the bars stay |
 | PM3  | `- [ ] #task C (priority:: low)`                           | 2 bars · P3, 31–90                                                                     |
 | PM4  | `- [ ] #task D [ priority:: lowest ]`                      | 1 bar · P4, 91–365                                                                     |
 | PM5  | `- [ ] #task E [priority:: highest]`                       | urgent · `Highest priority⏎Not on the P1–P4 ladder⏎Ctrl+Shift+P to change`             |
@@ -803,6 +812,8 @@ across re-renders and costly; CSS on Tasks' own
 | PM15 | `- [x] #task K [priority:: high]`                          | 4 bars, resting tone (CSS)                                                             |
 | PM16 | `> - [ ] #task L [priority:: medium]`                      | 3 bars (quote-aware)                                                                   |
 | PM17 | `- [ ] #task M x[priority:: low]`                          | 2 bars, no fold space                                                                  |
+| PM18 | `- [?] #task N [priority:: medium] [scheduled:: 2026-11-20]` with block marks on | folded to zero width (block mark `p2` says it)                    |
+| PM19 | the same row with block marks off                             | 3 bars · `P2 · Medium priority⏎Rolls 8–30 days ahead⏎…`                                |
 
 **Live verification (Bryan, in Obsidian)** — still pending:
 

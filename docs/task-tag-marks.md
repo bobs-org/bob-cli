@@ -109,6 +109,12 @@ bordered monospace chip the glyph never reads as. Defined on `body`:
 The theme hook `--bob-task-tag-color` is unset by default and still
 wins when set.
 
+Red now also carries the Blocked ink ramp
+(`docs/blocked-marks.md`), an ordinal red-to-grey ramp for the
+blocked-reason checkbox marks; and on `prj` rows the
+`#prj_is_blocked` pill folds to zero width, since the chevron box
+already says the project is blocked.
+
 When the task has an explicit type, that teal is replaced by the type
 ink for the type's hue slot. Defined on `.theme-light` and
 `.theme-dark` for each of the eight palette slots:
