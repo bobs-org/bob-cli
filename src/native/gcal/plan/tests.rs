@@ -1308,6 +1308,602 @@ fn update_carries_the_description_record_forward() {
     let plan = run_with_journal(&first.contents, vec![renamed], &journal);
     assert_eq!(plan.rows_updated.len(), 1);
     assert_eq!(plan.rows_updated[0].description, recorded);
+    assert_eq!(plan.rows_updated[0].wrote_description_lines, 0);
+}
+
+fn with_empty_description(
+    mut occurrence: PlannedOccurrence,
+) -> PlannedOccurrence {
+    occurrence.description = Some(DescriptionBullets {
+        bullets: Vec::new(),
+    });
+    occurrence
+}
+
+fn with_bullets(
+    mut occurrence: PlannedOccurrence,
+    bullets: &[(u8, &str)],
+) -> PlannedOccurrence {
+    occurrence.description = Some(DescriptionBullets {
+        bullets: bullets
+            .iter()
+            .map(|(depth, body)| Bullet {
+                depth: *depth,
+                body: (*body).to_string(),
+            })
+            .collect(),
+    });
+    occurrence
+}
+
+fn child_lines_under<'a>(contents: &'a str, block_id: &str) -> Vec<&'a str> {
+    let needle = format!("^{block_id}");
+    let lines: Vec<&str> = contents.lines().collect();
+    let row = lines
+        .iter()
+        .position(|line| line.contains(&needle))
+        .unwrap_or_else(|| panic!("no row {needle} in:\n{contents}"));
+    let row_indent = lines[row]
+        .chars()
+        .take_while(|ch| *ch == ' ' || *ch == '\t')
+        .count();
+    let mut children = Vec::new();
+    for line in &lines[row + 1..] {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line
+            .chars()
+            .take_while(|ch| *ch == ' ' || *ch == '\t')
+            .count();
+        if indent <= row_indent {
+            break;
+        }
+        children.push(*line);
+    }
+    children
+}
+
+#[test]
+fn google_edit_rewrites_the_block_in_place() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let updated = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let plan = run_with_journal(&first.contents, vec![updated], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].wrote_description_lines, 1);
+    let children = child_lines_under(&plan.contents, &block_id);
+    assert_eq!(children, vec!["\t- Bring the case"], "{}", plan.contents);
+    assert!(
+        !plan.contents.contains("And retainers!"),
+        "{}",
+        plan.contents
+    );
+    let DescriptionState::Tracked { lines: count, .. } =
+        &plan.rows_updated[0].description
+    else {
+        panic!("rewritten block is Tracked");
+    };
+    assert_eq!(*count, 1);
+}
+
+#[test]
+fn google_clearing_the_description_removes_the_block() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let cleared = with_empty_description(occurrence(
+        "swings",
+        "Swings!",
+        true,
+        "0800-0815",
+        480,
+    ));
+    let plan = run_with_journal(&first.contents, vec![cleared], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert!(
+        child_lines_under(&plan.contents, &block_id).is_empty(),
+        "{}",
+        plan.contents
+    );
+    assert_eq!(
+        plan.rows_updated[0].description,
+        DescriptionState::Tracked {
+            hash: crate::native::gcal::description::bullets::bullets_hash(
+                std::iter::empty()
+            ),
+            lines: 0,
+        }
+    );
+}
+
+#[test]
+fn bryan_edit_is_kept_silently_then_reported_once() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let edited = first
+        .contents
+        .replace("\t- And retainers!", "\t- And retainers! (packed)");
+    let same = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let silent = run_with_journal(&edited, vec![same], &journal);
+    assert!(silent.kept.is_empty(), "{:?}", silent.kept);
+    assert!(
+        silent.contents.contains("\t- And retainers! (packed)"),
+        "{}",
+        silent.contents
+    );
+    assert!(!silent.changed || silent.rows_updated.is_empty());
+
+    let google_changed = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let reported =
+        run_with_journal(&edited, vec![google_changed.clone()], &journal);
+    assert_eq!(reported.kept.len(), 1, "{:?}", reported.kept);
+    assert_eq!(reported.kept[0].flag, "kept_description");
+    assert!(
+        reported.contents.contains("\t- And retainers! (packed)"),
+        "{}",
+        reported.contents
+    );
+    assert!(
+        !reported.contents.contains("Bring the case"),
+        "{}",
+        reported.contents
+    );
+
+    let journal = overlay_updated(journal, &reported);
+    let again =
+        run_with_journal(&reported.contents, vec![google_changed], &journal);
+    assert!(
+        again
+            .kept
+            .iter()
+            .all(|notice| notice.flag != "kept_description"),
+        "{:?}",
+        again.kept
+    );
+}
+
+#[test]
+fn deleted_block_is_never_re_added() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let deleted = first.contents.replace("\t- And retainers!\n", "");
+    let same = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let plan = run_with_journal(&deleted, vec![same], &journal);
+    assert!(
+        child_lines_under(&plan.contents, &block_id).is_empty(),
+        "{}",
+        plan.contents
+    );
+    assert!(plan.kept.is_empty(), "{:?}", plan.kept);
+
+    let changed = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let later = run_with_journal(&plan.contents, vec![changed], &journal);
+    assert!(
+        child_lines_under(&later.contents, &block_id).is_empty(),
+        "{}",
+        later.contents
+    );
+    assert_eq!(later.kept[0].flag, "kept_description");
+}
+
+#[test]
+fn nested_note_hands_the_block_to_bryan() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let nested = first.contents.replace(
+        "\t- And retainers!",
+        "\t- And retainers!\n\t\t- asked about the case",
+    );
+    let changed = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let plan = run_with_journal(&nested, vec![changed], &journal);
+    assert!(
+        plan.contents.contains("\t- And retainers!"),
+        "{}",
+        plan.contents
+    );
+    assert!(
+        plan.contents.contains("\t\t- asked about the case"),
+        "{}",
+        plan.contents
+    );
+    assert!(
+        !plan.contents.contains("Bring the case"),
+        "{}",
+        plan.contents
+    );
+    assert_eq!(plan.kept[0].flag, "kept_description");
+}
+
+#[test]
+fn sibling_notes_and_work_log_do_not_hide_the_block() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let row = row_line(&first.contents, &block_id);
+    let with_siblings = first.contents.replace(
+        &format!("{row}\n\t- And retainers!"),
+        &format!(
+            "{row}\n\t- 🛠️ **WORK LOG**\n\t\t- *12:00* — started\n\t- And retainers!\n\t- my note"
+        ),
+    );
+    let changed = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let plan = run_with_journal(&with_siblings, vec![changed], &journal);
+    let children = child_lines_under(&plan.contents, &block_id);
+    assert!(
+        children.contains(&"\t- Bring the case"),
+        "{children:?}\n{}",
+        plan.contents
+    );
+    assert!(children.contains(&"\t- my note"), "{children:?}");
+    assert!(
+        children.iter().any(|line| line.contains("WORK LOG")),
+        "{children:?}"
+    );
+    assert!(
+        !plan.contents.contains("And retainers!"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn depends_on_above_the_block_does_not_hide_it() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let row = row_line(&first.contents, &block_id);
+    let with_dep = first.contents.replace(
+        &format!("{row}\n\t- And retainers!"),
+        &format!(
+            "{row}\n\t- ⛓️ **DEPENDS ON:** [[#^prep]]\n\t- And retainers!"
+        ),
+    );
+    let changed = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let plan = run_with_journal(&with_dep, vec![changed], &journal);
+    let children = child_lines_under(&plan.contents, &block_id);
+    assert_eq!(
+        children,
+        vec!["\t- ⛓️ **DEPENDS ON:** [[#^prep]]", "\t- Bring the case",],
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn time_change_reslots_the_row_with_its_bullets() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0900-0915", 540),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let moved = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let plan = run_with_journal(&first.contents, vec![moved], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].wrote_description_lines, 0);
+    let lines: Vec<&str> = plan.contents.lines().collect();
+    let row_at = lines
+        .iter()
+        .position(|line| line.contains("**0800-0815** Swings!"))
+        .expect("moved row");
+    assert_eq!(lines[row_at + 1], "\t- And retainers!", "{}", plan.contents);
+}
+
+#[test]
+fn title_and_description_change_share_one_updated_row() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let both = with_description(
+        occurrence("swings", "Swings!!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let plan = run_with_journal(&first.contents, vec![both], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].wrote_description_lines, 1);
+    assert!(
+        plan.contents.contains("**0800-0815** Swings!!"),
+        "{}",
+        plan.contents
+    );
+    assert!(
+        plan.contents.contains("\t- Bring the case"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn pre_feature_row_backfills_once() {
+    let seed = occurrence("swings", "Swings!", true, "0800-0815", 480);
+    let first = run(empty_ledger(), vec![seed]);
+    assert_eq!(first.rows_added[0].description, DescriptionState::Absent);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let fresh = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let plan = run_with_journal(&first.contents, vec![fresh.clone()], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].wrote_description_lines, 1);
+    assert_eq!(
+        child_lines_under(&plan.contents, &block_id),
+        vec!["\t- And retainers!"],
+        "{}",
+        plan.contents
+    );
+    let journal = overlay_updated(journal, &plan);
+    let again = run_with_journal(&plan.contents, vec![fresh], &journal);
+    assert!(!again.changed);
+}
+
+#[test]
+fn absent_matching_window_is_adopted_without_writing() {
+    let seed = occurrence("swings", "Swings!", true, "0800-0815", 480);
+    let first = run(empty_ledger(), vec![seed]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let row = row_line(&first.contents, &block_id);
+    let copied = first
+        .contents
+        .replace(&row, &format!("{row}\n\t- And retainers!"));
+    let fresh = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let plan = run_with_journal(&copied, vec![fresh], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].wrote_description_lines, 0);
+    assert_eq!(
+        copied.matches("And retainers!").count(),
+        plan.contents.matches("And retainers!").count()
+    );
+    let DescriptionState::Tracked { lines: count, .. } =
+        &plan.rows_updated[0].description
+    else {
+        panic!("adopted matching window is Tracked");
+    };
+    assert_eq!(*count, 1);
+}
+
+#[test]
+fn absent_empty_description_appends_no_record() {
+    let seed = occurrence("swings", "Swings!", true, "0800-0815", 480);
+    let first = run(empty_ledger(), vec![seed.clone()]);
+    let journal = journal_from_added(&first);
+    let again = run_with_journal(&first.contents, vec![seed], &journal);
+    assert!(!again.changed);
+    assert!(again.rows_updated.is_empty());
+}
+
+#[test]
+fn crash_adoption_records_matching_bullets_without_writing() {
+    let occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![occ.clone()]);
+    let adopted = run(&first.contents, vec![occ]);
+    assert_eq!(adopted.rows_adopted.len(), 1);
+    assert!(adopted.rows_added.is_empty());
+    let DescriptionState::Tracked { lines: count, .. } =
+        &adopted.rows_adopted[0].description
+    else {
+        panic!(
+            "matching adoption is Tracked: {:?}",
+            adopted.rows_adopted[0].description
+        );
+    };
+    assert_eq!(*count, 1);
+    assert_eq!(
+        first.contents.matches("And retainers!").count(),
+        adopted.contents.matches("And retainers!").count(),
+        "{}",
+        adopted.contents
+    );
+}
+
+#[test]
+fn crash_adoption_without_matching_window_is_hands_off() {
+    let input = concat!(
+        "## Events\n\n",
+        "- [ ] #task **0800-0815** Swings! [📅](https://calendar.google.com/event?eid=swings \"Open in Google Calendar\") ^swings\n",
+        "\n## Pomodoros\n",
+    );
+    let occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let plan = run(input, vec![occ]);
+    assert_eq!(plan.rows_adopted.len(), 1);
+    assert_eq!(plan.rows_adopted[0].description, DescriptionState::HandsOff);
+    assert!(
+        !plan.contents.contains("And retainers!"),
+        "adoption never writes:\n{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn crash_adoption_of_empty_render_is_tracked() {
+    let input = concat!(
+        "## Events\n\n",
+        "- [ ] #task **0800-0815** Swings! [📅](https://calendar.google.com/event?eid=swings \"Open in Google Calendar\") ^swings\n",
+        "\n## Pomodoros\n",
+    );
+    let occ = with_empty_description(occurrence(
+        "swings",
+        "Swings!",
+        true,
+        "0800-0815",
+        480,
+    ));
+    let plan = run(input, vec![occ]);
+    assert_eq!(plan.rows_adopted.len(), 1);
+    assert_eq!(
+        plan.rows_adopted[0].description,
+        DescriptionState::Tracked {
+            hash: crate::native::gcal::description::bullets::bullets_hash(
+                std::iter::empty()
+            ),
+            lines: 0,
+        }
+    );
+}
+
+#[test]
+fn hands_off_journal_is_never_rewritten() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let mut journal = journal_from_added(&first);
+    let key = (
+        occurrence_key("primary", "swings"),
+        "2026-10-30".to_string(),
+    );
+    if let Some(record) =
+        journal.get_mut(&key).and_then(|state| state.row.as_mut())
+    {
+        record.description = DescriptionState::HandsOff;
+    }
+    let changed = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- Bring the case"],
+    );
+    let plan = run_with_journal(&first.contents, vec![changed], &journal);
+    assert!(
+        plan.contents.contains("\t- And retainers!"),
+        "{}",
+        plan.contents
+    );
+    assert!(
+        !plan.contents.contains("Bring the case"),
+        "{}",
+        plan.contents
+    );
+    assert!(plan
+        .kept
+        .iter()
+        .all(|notice| notice.flag != "kept_description"));
+}
+
+#[test]
+fn off_mode_leaves_existing_bullets_and_carries_the_record() {
+    let first_occ = with_description(
+        occurrence("swings", "Swings!", true, "0800-0815", 480),
+        &["- And retainers!"],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let recorded = first.rows_added[0].description.clone();
+    // `None` is off mode: skip the block, carry the record on a title
+    // update so a later bullets-mode run does not backfill twice.
+    let mut renamed = occurrence("swings", "Swings!!", true, "0800-0815", 480);
+    renamed.description = None;
+    let plan = run_with_journal(&first.contents, vec![renamed], &journal);
+    assert_eq!(plan.rows_updated.len(), 1);
+    assert_eq!(plan.rows_updated[0].description, recorded);
+    assert!(
+        plan.contents.contains("\t- And retainers!"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn nested_google_list_rewrites_in_place() {
+    let first_occ = with_bullets(
+        occurrence("onsite", "Onsite", true, "1400-1500", 840),
+        &[(1, "- **Agenda:**"), (2, "- Intros"), (1, "- Bring laptop")],
+    );
+    let first = run(empty_ledger(), vec![first_occ]);
+    let journal = journal_from_added(&first);
+    let block_id = first.rows_added[0].block_id.clone();
+    let updated = with_bullets(
+        occurrence("onsite", "Onsite", true, "1400-1500", 840),
+        &[
+            (1, "- **Agenda:**"),
+            (2, "- Intros"),
+            (2, "- System design"),
+            (1, "- Bring laptop"),
+        ],
+    );
+    let plan = run_with_journal(&first.contents, vec![updated], &journal);
+    assert_eq!(
+        child_lines_under(&plan.contents, &block_id),
+        vec![
+            "\t- **Agenda:**",
+            "\t\t- Intros",
+            "\t\t- System design",
+            "\t- Bring laptop",
+        ],
+        "{}",
+        plan.contents
+    );
 }
 
 #[test]

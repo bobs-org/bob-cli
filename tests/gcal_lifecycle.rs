@@ -145,7 +145,8 @@ fn span_updates_rewrite_clean_spans_and_reslot() {
     assert!(row.contains("query=New%20Venue"), "{row}");
     assert!(!row.contains("Main%20St%20Dental"), "{row}");
     assert!(note.contains("[[#^dentist]]"), "{note}");
-    // The earlier time re-slots the row ahead of the 0800 interview.
+    // The earlier time re-slots the row ahead of the 0800 interview,
+    // together with its description bullets.
     let events_at = note.find("## Events").expect("Events");
     let section =
         &note[events_at..note.find("## Pomodoros").expect("Pomodoros")];
@@ -153,6 +154,11 @@ fn span_updates_rewrite_clean_spans_and_reslot() {
     let dentist_at = section.find("^dentist").expect("dentist");
     let interview_at = section.find("Product interview").expect("interview");
     assert!(dentist_at < interview_at, "{section}");
+    let bullet_at = section.find("Bring insurance card").expect("bullet");
+    assert!(
+        dentist_at < bullet_at && bullet_at < interview_at,
+        "bullets move with the reslotted row:\n{section}"
+    );
     assert!(
         stdout(&output).contains("~ task"),
         "updated row reported: {}",
@@ -244,9 +250,9 @@ fn declined_event_cancels_untouched_task() {
     assert!(entry_at > cancel_at, "{note}");
     assert!(
         note.contains(
-            "\t- ❌ **CANCEL LOG**\n\t\t- *2026-10-30* — Declined in Google Calendar\n"
+            "\t- ❌ **CANCEL LOG**\n\t\t- *2026-10-30* — Declined in Google Calendar\n\t- Bring insurance card\n"
         ),
-        "childless cancel log uses TAB indent:\n{note}"
+        "cancel log lands first; description bullets stay as history:\n{note}"
     );
     // Sibling meetings keep their links and the MEET entry.
     assert!(note.contains("[[#^late-meeting]]"), "{note}");
@@ -1290,5 +1296,329 @@ fn maybe_upgrade_gains_buffer_field() {
         stdout(&again).contains("unchanged"),
         "upgrade is stable: {}",
         stdout(&again)
+    );
+}
+
+#[test]
+fn google_description_edit_rewrites_untouched_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-edit");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(today_note(&env).contains("\t- Bring insurance card"));
+
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring floss too",
+    )]));
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(note.contains("\t- Bring floss too"), "{note}");
+    assert!(!note.contains("Bring insurance card"), "{note}");
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("JSON report");
+    let updated = report["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .find(|row| row["action"] == "updated")
+        .expect("updated row");
+    assert_eq!(updated["description_lines"], 1);
+    assert!(
+        !stdout(&output).contains("floss"),
+        "no description text in JSON: {}",
+        stdout(&output)
+    );
+
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(stdout(&again).contains("unchanged"), "{}", stdout(&again));
+}
+
+#[test]
+fn google_clearing_description_removes_the_block() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-clear");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    fake.events_json(&events_envelope(vec![dentist_with_description("")]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(!note.contains("Bring insurance card"), "{note}");
+    assert!(note.contains("^dentist"), "{note}");
+}
+
+#[test]
+fn edited_description_is_kept_silently_then_reported_once() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-kept");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let edited = today_note(&env).replace(
+        "\t- Bring insurance card",
+        "\t- Bring insurance card (and a book)",
+    );
+    write_today(&env, &edited);
+
+    let silent = sync_output(&env, &fake, &[]);
+    assert_eq!(silent.status.code(), Some(0), "{}", stderr(&silent));
+    let combined = format!("{}{}", stdout(&silent), stderr(&silent));
+    assert!(!combined.contains("kept_description"), "{combined}");
+    assert!(!combined.contains("edited description"), "{combined}");
+    assert!(
+        today_note(&env).contains("and a book"),
+        "{}",
+        today_note(&env)
+    );
+
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring floss too",
+    )]));
+    let reported = sync_output(&env, &fake, &[]);
+    assert_eq!(reported.status.code(), Some(0), "{}", stderr(&reported));
+    let combined = format!("{}{}", stdout(&reported), stderr(&reported));
+    assert!(
+        combined.contains("kept your edited description bullets"),
+        "kept once: {combined}"
+    );
+    assert!(
+        today_note(&env).contains("and a book"),
+        "{}",
+        today_note(&env)
+    );
+    assert!(!today_note(&env).contains("floss"), "{}", today_note(&env));
+
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let combined = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(!combined.contains("edited description"), "{combined}");
+}
+
+#[test]
+fn deleted_description_block_is_never_re_added() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-deleted");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let stripped = today_note(&env).replace("\t- Bring insurance card\n", "");
+    write_today(&env, &stripped);
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(
+        !today_note(&env).contains("Bring insurance card"),
+        "{}",
+        today_note(&env)
+    );
+
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring floss too",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(!today_note(&env).contains("floss"), "{}", today_note(&env));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("kept your edited description bullets"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn pre_feature_row_backfills_on_the_next_sync() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-backfill");
+    prepare(&env);
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  description: off\n  colors:\n    tomato: job\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(
+        !today_note(&env).contains("Bring insurance card"),
+        "{}",
+        today_note(&env)
+    );
+
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  colors:\n    tomato: job\n",
+    );
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        today_note(&env).contains("\t- Bring insurance card"),
+        "{}",
+        today_note(&env)
+    );
+    let journal_count = journal_lines(&env).len();
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(stdout(&again).contains("unchanged"), "{}", stdout(&again));
+    assert_eq!(journal_lines(&env).len(), journal_count);
+}
+
+#[test]
+fn crash_adoption_matching_bullets_does_not_duplicate() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-adopt");
+    prepare(&env);
+    let hand = concat!(
+        "# Friday 2026-10-30\n\n## Events\n\n",
+        "- [*] #task **1830-1900** Dentist [📅](https://calendar.google.com/event?eid=dentist \"Open in Google Calendar\") [📍](https://www.google.com/maps/search/?api=1&query=Main%20St%20Dental \"Main St Dental\") [root:: body] [type:: MEET] ^dentist\n",
+        "\t- Bring insurance card\n",
+        "\n## Pomodoros\n\n- [ ] () — MEET\n\t- [[#^dentist]]\n",
+    );
+    fs::write(env.vault().join("2026/20261030.md"), hand).expect("hand row");
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert_eq!(
+        note.matches("Bring insurance card").count(),
+        1,
+        "never duplicated:\n{note}"
+    );
+    let latest = last_row_for(&journal_lines(&env), "dentist");
+    assert_eq!(latest["description"]["lines"], 1, "{latest}");
+}
+
+#[test]
+fn malformed_description_record_is_hands_off() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-malformed");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let path = env.vault().join(".bob/gcal/test-host.jsonl");
+    let text = fs::read_to_string(&path).expect("journal");
+    let mut rewritten = String::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut value: Value =
+            serde_json::from_str(line).expect("journal JSON");
+        if value["kind"] == "gcal.row" && value["key"]["event_id"] == "dentist"
+        {
+            value["description"] = Value::String("bogus".to_string());
+        }
+        rewritten.push_str(&value.to_string());
+        rewritten.push('\n');
+    }
+    fs::write(&path, rewritten).expect("write malformed journal");
+
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring floss too",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        today_note(&env).contains("\t- Bring insurance card"),
+        "{}",
+        today_note(&env)
+    );
+    assert!(!today_note(&env).contains("floss"), "{}", today_note(&env));
+}
+
+#[test]
+fn tomato_in_description_does_not_count_as_worked() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-tomato");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring 🍅 salad",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let note = today_note(&env);
+    assert!(note.contains("&#127813;"), "{note}");
+    assert!(!note.contains('🍅'), "{note}");
+
+    fake.events_json(&decline_dentist_fixture());
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let after = today_note(&env);
+    assert!(
+        dentist_row(&after).starts_with("- [-] #task"),
+        "tomato bullet is not worked:\n{after}"
+    );
+    assert!(after.contains("CANCEL LOG"), "{after}");
+}
+
+#[test]
+fn description_off_leaves_existing_bullets_alone() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-off-carry");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  description: off\n  colors:\n    tomato: job\n",
+    );
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring floss too",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        today_note(&env).contains("\t- Bring insurance card"),
+        "{}",
+        today_note(&env)
+    );
+    assert!(!today_note(&env).contains("floss"), "{}", today_note(&env));
+    let latest = last_row_for(&journal_lines(&env), "dentist");
+    assert_eq!(latest["description"]["lines"], 1, "{latest}");
+}
+
+#[test]
+fn context_rows_still_never_get_description_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-desc-context");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let mut class = serde_json::json!({
+        "id": "class",
+        "status": "confirmed",
+        "summary": "Toddler class",
+        "description": "Bring shoes",
+        "eventType": "default",
+        "start": {"dateTime": "2026-10-30T09:15:00-04:00"},
+        "end": {"dateTime": "2026-10-30T10:00:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=class",
+        "attendees": [{"self": true, "responseStatus": "tentative"}]
+    });
+    fake.events_json(&events_envelope(vec![class.clone()]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let note = today_note(&env);
+    assert!(note.contains("Toddler class"), "{note}");
+    assert!(!note.contains("Bring shoes"), "{note}");
+
+    class["attendees"] =
+        serde_json::json!([{"self": true, "responseStatus": "declined"}]);
+    fake.events_json(&events_envelope(vec![class]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        !today_note(&env).contains("Toddler class"),
+        "declined context row is removed:\n{}",
+        today_note(&env)
     );
 }

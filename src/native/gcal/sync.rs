@@ -835,7 +835,7 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             off_clock: updated.off_clock,
             untracked: updated.off_clock,
             buffer: updated.buffer,
-            description_lines: 0,
+            description_lines: updated.wrote_description_lines,
         });
     }
     for cancelled in &plan.rows_cancelled {

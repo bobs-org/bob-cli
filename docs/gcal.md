@@ -501,10 +501,10 @@ account, or set `gcal.account` to the stamp's account.
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
 | `#offclock` (Google aliases `#off-clock`, `#untracked`) | Google until you edit it | Follows Google's token while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
 | `[buffer::]` | Google until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
-| Description bullets | Bob, at birth | Written with the created or upgraded Event Task; not rewritten afterwards |
+| Description bullets | Google until you edit them | Rewritten in place while they still match what Bob last wrote; your edit, nested note, or deletion makes them yours, reported once only if Google later changes |
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
-| Child bullets (meeting notes) | You | Never touched |
+| Other child bullets (your notes) | You | Never touched |
 | MEET Task Link | Bob, once | Never re-added; kept in Event Task time order within its entry, so a hand reorder is undone; removed only by a cancel |
 | MEET Pomodoro entries | Bob, once | Created only in the write that adds their first link; never started, closed, retimed, renamed, or moved afterwards |
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
@@ -625,7 +625,8 @@ Rows synced before this feature migrate on the next sync. Context rows
 
 Whatever you write in a Google event's description, except Bob's directive
 lines and video-call boilerplate, appears as bullets at the top of that
-meeting's Event Task when sync creates it.
+meeting's Event Task, and keeps following Google until you edit those
+bullets.
 
 Copied: the human lines of the description — plain paragraphs, list items,
 headings, table rows, and links. Dropped: [directive
@@ -658,13 +659,19 @@ minimum 2, overflow line included). The overflow line reads *…N more lines
 in [Google Calendar](https://calendar.google.com/event?eid=abc)* and links
 the event. A description above 64 KiB
 writes one fallback bullet linking Google Calendar instead.
-`gcal.description: off` is the kill switch: sync writes no bullets and
-records nothing.
+`gcal.description: off` is the kill switch: sync writes no new bullets,
+leaves existing ones alone, and carries their journal records forward.
 
 Bullets land with every Event Task sync creates, and with every Maybe→Yes
 upgrade (directly under the upgraded row, above your notes there). Context
-rows never get bullets. Later Google edits do not rewrite bullets after
-birth. Human `sync` rows end with a dim `≡ N` when the run wrote N bullet
+rows never get bullets. While the block still matches what Bob last wrote,
+a later Google edit rewrites it in place, and clearing the description
+removes it. Your edit, a nested note under a Google bullet, or deleting
+the block makes the bullets yours: they are never re-added, and a
+`kept_description` warning fires once only if Google's description later
+changes. Rows synced before this feature get their bullets on the next
+sync of their day; matching existing content is adopted, never duplicated.
+Human `sync` rows end with a dim `≡ N` when the run wrote N bullet
 lines; `sync -d` shows the exact bullets in its diff — the only place
 description text appears in command output. JSON carries only
 `description_lines`, never description text.
@@ -683,6 +690,14 @@ render of its event:
   gains `[type:: MEET]` when the line has none; an existing `[type::]`
   stays. A `[root::]` you edited is kept and reported once as a
   `kept_root` warning when Google later routes elsewhere.
+- Description bullets follow Google until you edit them. A block that
+  still matches what Bob last wrote is rewritten in place (or removed
+  when Google clears the description). Your edit, a nested note, or a
+  deletion makes them yours: they are never re-added, and a
+  `kept_description` warning fires once only if Google's description
+  later changes. Rows synced before this feature get their bullets on
+  the next sync of their day; matching existing content is adopted,
+  never duplicated.
 - A Maybe context row whose RSVP went Yes upgrades in place to an Event
   Task and is filed under a MEET by phase. A Yes task row whose RSVP went
   Maybe stays a task and is reported once.
@@ -840,8 +855,9 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
 ## Known limits
 
 - One writer: `gcal.writer` pins the single host allowed to sync.
-- Description bullets are written once, with the created or upgraded Event
-  Task; later Google edits leave them alone.
+- Description bullets are a flat first-child block. A nested note under a
+  Google bullet, or deleting the block, makes them yours; Bob never
+  re-adds them. Sibling notes and managed lines above or below do not.
 - Google-side changes apply only to spans you have not edited; your edits
   are kept and reported once.
 - Google forbids Calendar scopes on the device-code flow; over SSH, login

@@ -177,6 +177,9 @@ pub(crate) struct PlannedRow {
     /// site sets it: there is no `Default`, so the compiler flags any
     /// site a later phase adds.
     pub description: DescriptionState,
+    /// Bullet lines this run wrote for the row, 0 when the block was
+    /// left alone or adopted without writing.
+    pub wrote_description_lines: usize,
 }
 
 /// One adopted crash-recovery row, for the journal and the report.
@@ -197,8 +200,10 @@ pub(crate) struct AdoptedRow {
     pub title: String,
     pub off_clock: bool,
     pub buffer: crate::native::event_task::EventBuffer,
-    /// Adoptions record `Absent` in this phase; adoption matching
-    /// arrives in `live-bullets`.
+    /// Crash recovery: `Tracked` when a window matches the fresh
+    /// render (an empty render always matches), else `HandsOff`.
+    /// Context rows and `off` mode stay `Absent`. Adoption never
+    /// writes bullets.
     pub description: DescriptionState,
 }
 
@@ -340,6 +345,14 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         journaled,
                         line_index,
                     );
+                    let description = apply_description_update(
+                        input,
+                        &mut working,
+                        &mut plan,
+                        occurrence,
+                        journaled,
+                        line_index,
+                    );
                     apply_span_updates(
                         input,
                         &mut working,
@@ -347,6 +360,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         occurrence,
                         journaled,
                         line_index,
+                        description,
                     );
                 } else if occurrence.task {
                     // A Maybe context row went Yes: upgrade it in place.
@@ -414,7 +428,11 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         title: occurrence.title.clone(),
                         off_clock: occurrence.off_clock,
                         buffer: buffer_for_row(occurrence),
-                        description: DescriptionState::Absent,
+                        description: adopt_description(
+                            &working.lines,
+                            line_index,
+                            occurrence,
+                        ),
                     });
                     continue;
                 }
@@ -463,6 +481,11 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                     off_clock: occurrence.off_clock,
                     buffer: buffer_for_row(occurrence),
                     description: tracked_state(occurrence.description.as_ref()),
+                    wrote_description_lines: occurrence
+                        .description
+                        .as_ref()
+                        .map(|bullets| bullets.bullets.len())
+                        .unwrap_or(0),
                 });
             }
         }
@@ -526,6 +549,157 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
     plan
 }
 
+/// Outcome of the description-bullet three-way for one journaled row.
+struct DescriptionUpdate {
+    state: DescriptionState,
+    wrote_lines: usize,
+    changed: bool,
+}
+
+fn empty_bullets_hash() -> String {
+    bullets_hash(std::iter::empty())
+}
+
+fn bullets_tracked(description: &DescriptionBullets) -> DescriptionState {
+    DescriptionState::Tracked {
+        hash: bullets_hash(
+            description
+                .bullets
+                .iter()
+                .map(|bullet| (bullet.depth, bullet.body.as_str())),
+        ),
+        lines: description.bullets.len(),
+    }
+}
+
+/// Three-way update of one journaled task row's description bullets.
+/// Edits only lines below the row, so `line_index` stays valid for a
+/// later span update / re-slot. `Absent` is an empty tracked block
+/// (backfill); `HandsOff`, context rows, Maybe rows, and `off` mode
+/// skip. A matching window is rewritten in place; Bryan's edit, a
+/// nested note, or a deletion keeps the old record and reports
+/// `kept_description` once only when Google's text also changed.
+fn apply_description_update(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan: &mut SyncPlan,
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+    line_index: usize,
+) -> DescriptionUpdate {
+    let noop = DescriptionUpdate {
+        state: journaled.description.clone(),
+        wrote_lines: 0,
+        changed: false,
+    };
+    if journaled.row_kind != "task" || !occurrence.task {
+        return noop;
+    }
+    let Some(fresh) = occurrence.description.as_ref() else {
+        return noop;
+    };
+    if matches!(journaled.description, DescriptionState::HandsOff) {
+        return noop;
+    }
+    let fresh_state = bullets_tracked(fresh);
+    let (fresh_hash, fresh_lines) = match &fresh_state {
+        DescriptionState::Tracked { hash, lines } => (hash.clone(), *lines),
+        _ => return noop,
+    };
+
+    // Backfill guard: an Absent row whose child block already matches
+    // the fresh render (a hand copy or a crash) is adopted without
+    // writing, so a later run never inserts a duplicate.
+    if matches!(journaled.description, DescriptionState::Absent)
+        && fresh_lines > 0
+        && super::bullet_block::find_block(
+            &working.lines,
+            line_index,
+            &fresh_hash,
+            fresh_lines,
+        )
+        .is_some()
+    {
+        return DescriptionUpdate {
+            state: fresh_state,
+            wrote_lines: 0,
+            changed: true,
+        };
+    }
+
+    let (recorded_hash, recorded_lines) = match &journaled.description {
+        DescriptionState::Absent => (empty_bullets_hash(), 0usize),
+        DescriptionState::Tracked { hash, lines } => (hash.clone(), *lines),
+        DescriptionState::HandsOff => return noop,
+    };
+    let Some(window) = super::bullet_block::find_block(
+        &working.lines,
+        line_index,
+        &recorded_hash,
+        recorded_lines,
+    ) else {
+        if fresh_hash != recorded_hash {
+            push_kept_once(
+                input,
+                plan,
+                &occurrence.calendar_id,
+                &occurrence.event_id,
+                occurrence.title.clone(),
+                "kept your edited description bullets; \
+                 Google's description changed"
+                    .to_string(),
+                "kept_description",
+            );
+        }
+        return noop;
+    };
+    if fresh_hash == recorded_hash {
+        return noop;
+    }
+    let (depth1, unit) = child_bullet_indents(working, line_index);
+    let materialized = fresh.materialize(&depth1, &unit);
+    super::bullet_block::replace_window(
+        &mut working.lines,
+        window,
+        &materialized,
+    );
+    DescriptionUpdate {
+        state: fresh_state,
+        wrote_lines: fresh_lines,
+        changed: true,
+    }
+}
+
+/// Crash-recovery description record: `Tracked` when a window matches
+/// the fresh render (empty always matches), else `HandsOff`. Context
+/// rows and `off` mode stay `Absent`. Never writes.
+fn adopt_description(
+    lines: &[String],
+    line_index: usize,
+    occurrence: &PlannedOccurrence,
+) -> DescriptionState {
+    let Some(bullets) = occurrence.description.as_ref() else {
+        return DescriptionState::Absent;
+    };
+    if bullets.bullets.is_empty() {
+        return DescriptionState::Tracked {
+            hash: empty_bullets_hash(),
+            lines: 0,
+        };
+    }
+    let state = bullets_tracked(bullets);
+    let DescriptionState::Tracked { hash, lines: count } = &state else {
+        return DescriptionState::HandsOff;
+    };
+    if super::bullet_block::find_block(lines, line_index, hash, *count)
+        .is_some()
+    {
+        state
+    } else {
+        DescriptionState::HandsOff
+    }
+}
+
 /// Three-way update of one still-included row: re-render the time,
 /// title, and badge spans and replace each span whose current text
 /// still matches the journal hash. A span that differs from both the
@@ -543,6 +717,7 @@ fn apply_span_updates(
     occurrence: &PlannedOccurrence,
     journaled: &super::journal::RowRecord,
     line_index: usize,
+    description: DescriptionUpdate,
 ) {
     let current_line =
         working.lines.get(line_index).cloned().unwrap_or_default();
@@ -668,7 +843,7 @@ fn apply_span_updates(
     let apply_spans =
         edited.is_empty() && (hashes_changed || qualifier_changed);
     let apply_root = matches!(root_action, RootAction::Reroute { .. });
-    if !apply_spans && !apply_root {
+    if !apply_spans && !apply_root && !description.changed {
         return;
     }
     let mut line = if apply_spans {
@@ -720,8 +895,13 @@ fn apply_span_updates(
         off_clock: occurrence.off_clock,
         buffer: buffer_for_row(occurrence),
         // A title update or root reroute keeps the description record
-        // forward unchanged, so the next phase never backfills twice.
-        description: journaled.description.clone(),
+        // unless this run also rewrote or adopted the bullet block.
+        description: if description.changed {
+            description.state
+        } else {
+            journaled.description.clone()
+        },
+        wrote_description_lines: description.wrote_lines,
     });
 }
 
@@ -941,6 +1121,11 @@ fn upgrade_context_row(
         off_clock: occurrence.off_clock,
         buffer: buffer_for_row(occurrence),
         description: tracked_state(occurrence.description.as_ref()),
+        wrote_description_lines: occurrence
+            .description
+            .as_ref()
+            .map(|bullets| bullets.bullets.len())
+            .unwrap_or(0),
     });
     plan.extra_link_wants.push((
         occurrence.calendar_id.clone(),

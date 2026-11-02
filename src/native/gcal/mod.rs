@@ -4,6 +4,7 @@
 //! `sync` writes the rows above today's Pomodoros, idempotently.
 
 mod account;
+mod bullet_block;
 mod calendars;
 mod classify;
 pub(crate) mod cli;
