@@ -226,7 +226,7 @@ miniature `render` element uses `role="img"`.
 | Reading view, embeds, hover previews, Dataview `TASK` views | markdown post-processor sets the same attributes on `li.task-list-item[data-task="?"]` |
 | Priority bars / `#prj_is_blocked` pill                      | folded where the box already says it                                                   |
 | Tasks query results                                         | CSS on Tasks' own row attributes                                                       |
-| `DEPENDS ON` / `BLOCKS` chips                               | miniature box through the shared element builder                                       |
+| `DEPENDS ON` / `BLOCKS` chips                               | miniature box through the shared element builder; the box also keeps a CSS fallback `?` so toggling off restores the plain glyph immediately. The chip tooltip and aria gain the target's reason line (tooltip line 1 only). Reading-view chip tooltips keep that reason text until the view re-renders. |
 | Task Card                                                   | `api.blockMarks` v1 in bob-navigation-hotkeys                                          |
 
 Row attributes (identical on every JS surface):
@@ -320,7 +320,8 @@ results. `#prj_is_blocked_old` is not a project token.
   viewport changes, Live Preview or file switches, and a block-marks
   refresh effect. Dispatch that effect on the Tasks `cache-update`
   fan-out, the toggle, ladder config changes, the date-marks midnight
-  rollover, and app resume (`visibilitychange`). Never rebuild on
+  rollover, and app resume (`visibilitychange`). The same refresh also
+  rebuilds Live Preview `DEPENDS ON` and `BLOCKS` chips. Never rebuild on
   selection alone. Reading view re-classifies in place on the same
   triggers.
 - **Stability.** Line decorations carry stable attribute values, so
@@ -431,12 +432,13 @@ stay unmarked. Live Preview tooltip attachment has a `requestMeasure`
 write-pass after rebuild; an unscanned collect does not restore
 mouseover bindings.
 
-Verified 114/114 in an isolated scratch vault (light and dark, Live
-Preview and reading view) with screenshots reviewed against the
-accepted mockup. Quoted Live Preview and quoted reading source forms
-that the host does not render as a checkbox still carry the `p4` row
-mark; reading view paints a `4` on the quoted task when a checkbox
-exists.
+Verified in an isolated scratch vault (light and dark, Live Preview and
+reading view) with screenshots reviewed against the accepted mockup:
+`scripts/obsidian-block-marks-e2e.cjs` **161/161** (0 failed, 0 skipped),
+including 27 chip-mark cases.
+Quoted Live Preview and quoted reading source forms that the host does
+not render as a checkbox still carry the `p4` row mark; reading view
+paints a `4` on the quoted task when a checkbox exists.
 
 - every applicable BM row renders its mark in both views and both themes,
   including a standalone P3 row, with owned checkbox paint per key except
@@ -469,8 +471,20 @@ exists.
   clock, not a midnight observation)
 - family paint remains after the scratch snippet is disabled through
   `app.customCss.setCssEnabledStatus` and the style node is absent
+- folds: digit-row priority bars on BM1 are folded and BM8/BM9 bars stay
+  shown; the `#prj_is_blocked` pill on BM7 is folded and BM19 keeps it
+  (`collectFolds` in `obsidian-block-marks-e2e.cjs`)
+- chips: a separate `chip-marks.md` note with a `DEPENDS ON` line targeting
+  `p2`, `dep`, and `prj` rows, plus a Blocked dependent so a `BLOCKS` chip
+  is marked; Live Preview and reading view assert the miniature key, the
+  reason line with no `Ctrl+Shift` hint, equal chip-row height on and off,
+  and that toggling off restores a visible `?`
+- Task Card: reason header and teaching digit are verified by the
+  bob-navigation-hotkeys node view/model suites, not by this e2e
 
-Still pending for the parent visual-review phase: a real reconcile
-turning a row `stale` and then clear, iOS glyph rendering, third-party
-checkbox packs, human scrolling checks, and a 100-task project note
-scroll. Tasks-results CSS marks (BM24) are verified in the e2e.
+**Pending (Bryan, in Obsidian)**
+
+- iOS glyph rendering
+- Style Settings and third-party checkbox packs
+- a 100-task project note scrolling smoothly
+- a real reconcile turning a row `stale` and then clear
