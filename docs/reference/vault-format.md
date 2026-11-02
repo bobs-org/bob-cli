@@ -30,7 +30,7 @@ Rendered line (canonical Markdown has no callout markers):
 | 3 | `Review the intake queue` | Description. Wikilinks and other tags may follow. |
 | 4 | `[fresh:: 2026-10-13]` | Last human confirmation date. Absence means never confirmed (NEW). |
 | 5 | `[refresh:: 7]` | Per-task review interval in days. |
-| 6 | `[keeps:: 2]` | Keep streak on due Ready reviews. Absence means 0. |
+| 6 | `[keeps:: 2]` | Keep streak on the current rung (WIP, Next, or Ready). Absence means 0. |
 | 7 | `[unblocked:: 2026-10-12]` | Date of an automatic Blocked → Ready recovery. |
 | 8 | `[scheduled:: 2026-10-20]` | Tasks scheduled date. Future dates keep the task Blocked. |
 | 9 | `[created:: 2026-10-01]` | Capture date. Written by capture; not a freshness stamp. |
@@ -103,7 +103,7 @@ Edit the human-owned inputs. Reconciliation and capture project the rest.
 | `dependsOn` | `[dependsOn:: a, b]` | Derived from the Depends-On line. |
 | `fresh` | `[fresh:: YYYY-MM-DD]` | Human confirmation only. Creation and automation never stamp it. |
 | `refresh` | `[refresh:: N]` | Optional per-task interval, 1–365 days. |
-| `keeps` | `[keeps:: N]` | Human keep streak, 1–999. Automation never increments it. |
+| `keeps` | `[keeps:: N]` | Human keep streak on the current rung, 1–999. Reconcile lane raises clear it; automation never increments it. |
 | `unblocked` | `[unblocked:: YYYY-MM-DD]` | Machine WRITE on automatic Blocked → Ready recovery, unless a skip applies. |
 | `repeat` | `[repeat:: every day when done]` | Authored Tasks recurrence rule that must start with `every`; PRE/POST checklist rows need `when done`; rendered as a [recurrence mark](../date-marks.md#recurrence-not-a-date). |
 | `type` (`theme` legacy) | `[type:: NAME]` or `(type:: NAME)` (`[theme:: NAME]` / `(theme:: NAME)` still read) | Authored deliberate exception to the suggested type. Exactly one valid field across both keys sets the task; duplicates or an invalid value fall back to inheritance with a `repair` marker. Closed tasks keep the field as history. |

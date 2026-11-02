@@ -80,12 +80,17 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
     assert_eq!(value["config"]["next_interval"], 1);
     assert!(value["config"]["rotten_daily_budget"].is_null());
+    assert_eq!(value["config"]["decay"]["enabled"], true);
+    assert_eq!(value["config"]["decay"]["keeps"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["pending"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["next"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["ready"], 3);
 
     let counts = &value["counts"];
     // NEW: New capture, Bad date, Future stamp. NEXT: the
@@ -548,7 +553,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +657,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -859,12 +864,15 @@ fn list_reports_keeps_and_decide_per_schema_9() {
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
+    assert_eq!(value["config"]["decay"]["limits"]["pending"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["next"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["ready"], 3);
     let decay = value["config"]["decay"].as_object().expect("decay object");
-    assert_eq!(decay.len(), 3, "decay has exactly enabled/keeps/enter");
+    assert_eq!(decay.len(), 4, "decay has enabled/keeps/enter/limits");
     assert!(!decay.contains_key("active_from"));
     assert!(!decay.contains_key("active"));
 
@@ -913,7 +921,7 @@ fn list_decides_on_early_dates() {
     let temp = keeps_vault("bob-cli-freshness-keeps-early");
     for now in ["2026-10-04", NOW, "2026-10-18", "2026-10-19", "2026-10-20"] {
         let value = keeps_list_json(&temp, now, &[]);
-        assert_eq!(value["schema_version"], 14, "{now}");
+        assert_eq!(value["schema_version"], 15, "{now}");
         assert_eq!(value["counts"]["decide"], 1, "{now}");
         let queue = value["queue"].as_array().expect("queue array");
         let at_limit = queue
@@ -966,7 +974,24 @@ fn list_decay_off_and_zero_limit() {
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("off JSON");
     assert_eq!(value["config"]["decay"]["enabled"], false);
+    assert_eq!(value["config"]["decay"]["limits"]["pending"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["next"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["ready"], 3);
     assert_eq!(value["counts"]["decide"], 0);
+    let off_human = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-20")
+        .output()
+        .expect("run decay-off human");
+    assert_success(&off_human);
+    let off_text = stdout(&off_human);
+    assert!(
+        off_text.contains("keeps 3") && off_text.contains("decay off"),
+        "decay-off header:\n{off_text}"
+    );
 
     // A zero limit asks on every due Ready re-confirmation.
     write_file(&config, "freshness:\n  decay:\n    keeps: 0\n");
@@ -984,12 +1009,119 @@ fn list_decay_off_and_zero_limit() {
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("zero JSON");
     assert_eq!(value["config"]["decay"]["keeps"], 0);
+    assert_eq!(value["config"]["decay"]["limits"]["pending"], 0);
+    assert_eq!(value["config"]["decay"]["limits"]["next"], 0);
+    assert_eq!(value["config"]["decay"]["limits"]["ready"], 0);
     let queue = value["queue"].as_array().expect("queue array");
     let plain = queue
         .iter()
         .find(|entry| entry["text"] == "No streak")
         .expect("no-streak row");
     assert_eq!(plain["decide"], true);
+    let zero_human = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-20")
+        .output()
+        .expect("run zero-keeps human");
+    assert_success(&zero_human);
+    let zero_text = stdout(&zero_human);
+    assert!(
+        zero_text.contains("keeps 0 · asks every review"),
+        "zero-limit header:\n{zero_text}"
+    );
+}
+
+#[test]
+fn list_reports_per_rung_limits_mixed_header_and_lane_decide() {
+    let temp = TempDir::new("bob-cli-freshness-rung-limits");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("a.md"),
+        "- [ ] #task Ready at limit [fresh:: 2026-09-20] [keeps:: 2]\n\
+         - [*] #task Next at limit [fresh:: 2026-09-20] [keeps:: 3]\n\
+         - [/] #task Pending at limit [fresh:: 2026-09-20] [keeps:: 2]\n\
+         - [*] #task Next below [fresh:: 2026-09-20] [keeps:: 2]\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "freshness:\n  decay:\n    pending_keeps: 2\n    next_keeps: 3\n    ready_keeps: 2\n",
+    );
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-20")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run mixed-rung json");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("mixed JSON");
+    assert_eq!(value["schema_version"], 15);
+    assert_eq!(value["config"]["decay"]["keeps"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["pending"], 2);
+    assert_eq!(value["config"]["decay"]["limits"]["next"], 3);
+    assert_eq!(value["config"]["decay"]["limits"]["ready"], 2);
+    let queue = value["queue"].as_array().expect("queue array");
+    let row_of = |text: &str| {
+        queue
+            .iter()
+            .find(|entry| entry["text"] == text)
+            .unwrap_or_else(|| panic!("missing row {text}:\n{value}"))
+    };
+    let ready = row_of("Ready at limit");
+    assert_eq!(ready["tier"], "rotten");
+    assert_eq!(ready["keeps"], 2);
+    assert_eq!(ready["decide"], true);
+    let next = row_of("Next at limit");
+    assert_eq!(next["tier"], "next");
+    assert_eq!(next["keeps"], 3);
+    assert_eq!(next["decide"], true);
+    let pending = row_of("Pending at limit");
+    assert_eq!(pending["tier"], "pending");
+    assert_eq!(pending["keeps"], 2);
+    assert_eq!(pending["decide"], true);
+    let below = row_of("Next below");
+    assert_eq!(below["tier"], "next");
+    assert_eq!(below["decide"], false);
+
+    let human = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-20")
+        .output()
+        .expect("run mixed-rung human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(
+        text.contains("keeps WIP 2 · Next 3 · Ready 2"),
+        "mixed header:\n{text}"
+    );
+
+    write_file(&config, "freshness:\n  decay:\n    next_keeps: false\n");
+    let off_rung = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-20")
+        .output()
+        .expect("run false-rung human");
+    assert_success(&off_rung);
+    let off_text = stdout(&off_rung);
+    assert!(
+        off_text.contains("keeps WIP 3 · Next off · Ready 3"),
+        "false-rung header:\n{off_text}"
+    );
 }
 
 #[test]
@@ -1020,7 +1152,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1097,7 +1229,7 @@ fn list_tracker_intervals_and_hide_gate() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     assert_eq!(value["config"]["project_interval"], 1);
     assert!(value["config"].get("reference_interval").is_none());
     // Both visible projects walk, whatever their notes hold; the
@@ -1194,7 +1326,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     let tiers: Vec<&str> = value["queue"]
         .as_array()
         .expect("queue array")
@@ -1332,7 +1464,7 @@ fn list_json_and_human_cover_checklist_tiers() {
     let temp = checklist_vault("bob-cli-freshness-checklist");
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
 
     let queue = value["queue"].as_array().expect("queue array");
     let texts: Vec<&str> = queue
@@ -1484,7 +1616,7 @@ fn list_json_and_human_cover_recurring_tier() {
     let temp = recurring_vault("bob-cli-freshness-recurring");
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
 
     let queue = value["queue"].as_array().expect("queue array");
     let tier_of = |text: &str| {
@@ -1638,7 +1770,7 @@ fn list_hidden_reference_stays_out_while_visible_walks() {
 }
 
 /// UB1/UB10/UB11: `bob freshness list` reports the unblock tickler
-/// with its return source (schema 14).
+/// with its return source (schema 15).
 #[test]
 fn list_unblocked_tickler_reports_return_source() {
     let temp = TempDir::new("bob-cli-freshness-unblocked");
@@ -1652,7 +1784,7 @@ fn list_unblocked_tickler_reports_return_source() {
     );
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 14);
+    assert_eq!(value["schema_version"], 15);
     let queue = value["queue"].as_array().expect("queue array");
     let row_of = |text: &str| {
         queue

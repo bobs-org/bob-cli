@@ -8,7 +8,9 @@ use super::{
     ChecklistKind, Counts, FreshState, FreshnessRow, IntervalSource, Lane,
     ReturnedBy, Tier, TrackerKind,
 };
-use crate::native::config::freshness::{DecayConfig, FreshnessConfig};
+use crate::native::config::freshness::{
+    parse_freshness_config, DecayConfig, DecayLimit, FreshnessConfig,
+};
 use crate::native::freshness::placement::{stamp_fresh, Refusal};
 
 fn today() -> NaiveDate {
@@ -778,6 +780,9 @@ fn decay_config(keeps: u16, enabled: bool) -> FreshnessConfig {
         decay: DecayConfig {
             enabled,
             keeps,
+            pending: DecayLimit::AskAt(keeps),
+            next: DecayLimit::AskAt(keeps),
+            ready: DecayLimit::AskAt(keeps),
             enter: None,
         },
     }
@@ -847,8 +852,8 @@ fn decide_covers_tickler_but_never_new() {
     assert!(!new.decide);
 }
 
-/// D6/D7/D8: a zero limit asks on every due Ready re-confirmation;
-/// `decay: false` never asks; lane rows never decide.
+/// D6/D7: a zero limit asks on every due Ready re-confirmation;
+/// `decay: false` never asks.
 #[test]
 fn decide_zero_off_and_lane_rows() {
     let rotten = kept_row(0);
@@ -858,13 +863,66 @@ fn decide_zero_off_and_lane_rows() {
     let off = evaluate(&kept_row(9), active_day(), &decay_config(3, false));
     assert_eq!(off.tier, Some(Tier::Rotten));
     assert!(!off.decide);
-    let lane = evaluate(
-        &lane_row("c.md", 1, '*', Some("2026-09-20"), None),
-        active_day(),
-        &decay_config(3, true),
-    );
-    assert_eq!(lane.tier, Some(Tier::Next));
-    assert!(!lane.decide);
+}
+
+/// D8+: PENDING and NEXT due rows decide at the rung limit.
+#[test]
+fn decide_lane_rows_at_limit() {
+    let config = decay_config(3, true);
+    let mut next = lane_row("c.md", 1, '*', Some("2026-09-20"), None);
+    next.raw_line =
+        "- [*] #task Walk [fresh:: 2026-09-20] [keeps:: 3]".to_string();
+    let evaluated = evaluate(&next, active_day(), &config);
+    assert_eq!(evaluated.tier, Some(Tier::Next));
+    assert_eq!(evaluated.keeps, 3);
+    assert!(evaluated.decide);
+    next.raw_line =
+        "- [*] #task Walk [fresh:: 2026-09-20] [keeps:: 2]".to_string();
+    let below = evaluate(&next, active_day(), &config);
+    assert_eq!(below.tier, Some(Tier::Next));
+    assert!(!below.decide);
+
+    let mut pending = lane_row("c.md", 1, '/', Some("2026-09-20"), None);
+    pending.raw_line =
+        "- [/] #task Walk [fresh:: 2026-09-20] [keeps:: 3]".to_string();
+    let evaluated = evaluate(&pending, active_day(), &config);
+    assert_eq!(evaluated.tier, Some(Tier::Pending));
+    assert!(evaluated.decide);
+}
+
+/// Today-linked lane rows never decide, even at the keep limit.
+#[test]
+fn decide_today_linked_lane_never_decides() {
+    let config = decay_config(3, true);
+    let mut next = lane_row("c.md", 1, '*', Some("2026-09-20"), None);
+    next.is_today = true;
+    next.raw_line =
+        "- [*] #task Walk [fresh:: 2026-09-20] [keeps:: 9]".to_string();
+    let evaluated = evaluate(&next, active_day(), &config);
+    assert!(!evaluated.decide);
+    assert!(!super::decide_for(
+        Some(Lane::Next),
+        Some(Tier::Next),
+        9,
+        None,
+        true,
+        &config,
+    ));
+}
+
+/// A per-rung `false` never asks; the other rungs still use fallback.
+#[test]
+fn decide_per_rung_false_and_fallback() {
+    let mut config = decay_config(2, true);
+    config.decay.next = DecayLimit::NeverAsk;
+    let mut next = lane_row("c.md", 1, '*', Some("2026-09-20"), None);
+    next.raw_line =
+        "- [*] #task Walk [fresh:: 2026-09-20] [keeps:: 9]".to_string();
+    let evaluated = evaluate(&next, active_day(), &config);
+    assert_eq!(evaluated.tier, Some(Tier::Next));
+    assert!(!evaluated.decide);
+    let ready = evaluate(&kept_row(2), active_day(), &config);
+    assert!(ready.decide);
 }
 
 /// Project trackers retain their dedicated lane. References use the
@@ -877,6 +935,7 @@ fn tracking_projects_tier_and_counts() {
     let evaluated = evaluate(&empty_prj, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::New));
     assert_eq!(evaluated.tier, Some(Tier::Projects));
+    assert!(!evaluated.decide);
 
     // A stamp today removes it from the queue (fresh, no tier).
     let mut stamped = row("- [ ] #task Project [fresh:: 2026-10-08] ^prj");
@@ -926,6 +985,7 @@ fn tracking_projects_tier_and_counts() {
     assert_eq!(evaluated.tier, Some(Tier::Projects));
     assert_eq!(evaluated.interval_days, 7);
     assert_eq!(evaluated.interval_source, IntervalSource::Default);
+    assert!(!evaluated.decide);
 
     // Counts preserve ordinary reference state and tier totals.
     let report = counts(&[empty_prj, visible_ref, lane_prj], today(), &config);
@@ -939,6 +999,78 @@ fn tracking_projects_tier_and_counts() {
         report.by_tier.sum(),
         "walk sums the tier histogram"
     );
+}
+
+/// Shared D vectors pin `decide_for` against the fixture configs.
+#[test]
+fn keeps_fixture_decide_vectors_match_rust() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freshness_keeps/vectors.json");
+    let text = std::fs::read_to_string(&path).expect("read keeps fixture");
+    let fixture: serde_json::Value =
+        serde_json::from_str(&text).expect("parse keeps fixture");
+    let configs = fixture["config"].as_array().expect("config array");
+    let mut by_id = std::collections::BTreeMap::new();
+    for vector in configs {
+        let id = vector["id"].as_str().expect("config id").to_string();
+        by_id.insert(id, vector.clone());
+    }
+    let vectors = fixture["decide"].as_array().expect("decide array");
+    assert!(!vectors.is_empty(), "fixture must carry decide vectors");
+    for vector in vectors {
+        let id = vector["id"].as_str().unwrap_or("?");
+        let runners: Vec<&str> = vector["runners"]
+            .as_array()
+            .expect("runners array")
+            .iter()
+            .map(|runner| runner.as_str().expect("runner string"))
+            .collect();
+        if !runners.contains(&"rust") {
+            continue;
+        }
+        let config_id = vector["config"].as_str().expect("config id");
+        let yaml = by_id[config_id]["yaml"].as_str().expect("yaml");
+        let config =
+            parse_freshness_config(yaml, std::path::Path::new("/config.yml"))
+                .unwrap_or_else(|error| {
+                    panic!("{id}: parse {config_id}: {error:?}")
+                });
+        let lane = match vector["lane"].as_str().expect("lane") {
+            "ready" => Some(Lane::Ready),
+            "pending" => Some(Lane::Pending),
+            "next" => Some(Lane::Next),
+            other => panic!("{id}: unknown lane {other}"),
+        };
+        let tier = match vector["tier"].as_str().expect("tier") {
+            "new" => Some(Tier::New),
+            "pending" => Some(Tier::Pending),
+            "next" => Some(Tier::Next),
+            "tickler" => Some(Tier::Tickler),
+            "rotten" => Some(Tier::Rotten),
+            "projects" => Some(Tier::Projects),
+            other => panic!("{id}: unknown tier {other}"),
+        };
+        let keeps = vector["keeps"].as_u64().expect("keeps") as u32;
+        let is_today = vector["is_today"].as_bool().unwrap_or(false);
+        let returned_by = match vector["returned_by"].as_str() {
+            Some("unblocked") => Some(ReturnedBy::Unblocked),
+            Some("scheduled") => Some(ReturnedBy::Scheduled),
+            _ => None,
+        };
+        let decided = super::decide_for(
+            lane,
+            tier,
+            keeps,
+            returned_by,
+            is_today,
+            &config,
+        );
+        assert_eq!(
+            decided,
+            vector["decide"].as_bool().expect("decide"),
+            "{id}"
+        );
+    }
 }
 
 /// Counts carry `decide` over the full queue input.

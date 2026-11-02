@@ -7,7 +7,7 @@
 use chrono::NaiveDate;
 
 use super::placement::read_freshness;
-use crate::native::config::freshness::FreshnessConfig;
+use crate::native::config::freshness::{DecayLimit, FreshnessConfig};
 
 /// A task's freshness state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -257,7 +257,8 @@ pub(crate) struct Evaluated {
     /// The valid `[keeps:: N]` semantic count (0 when absent).
     pub(crate) keeps: u32,
     /// A choice is due — not permission to execute an action:
-    /// `enabled && lane ready && tier rotten/tickler && keeps >= limit`.
+    /// `enabled && limit(lane) is ask-at L && keeps >= L && due
+    /// tier for that lane`.
     pub(crate) decide: bool,
     /// The return source for RESURFACED rows; `None` otherwise.
     pub(crate) returned_by: Option<ReturnedBy>,
@@ -266,25 +267,53 @@ pub(crate) struct Evaluated {
     pub(crate) lints: Vec<String>,
 }
 
-/// Whether a decision is due for a Ready-lane row in `tier` with
-/// `keeps` counted keeps under `config`. An unblock tickler never
-/// decides: a keep there neither increments nor resets the streak
-/// (`unblock_keeps`), so no choice is ever due for it.
+/// Whether a decision is due for a row in `lane`/`tier` with `keeps`
+/// counted keeps under `config`.
+///
+/// The predicate is `enabled && limit(lane) is "ask at L" &&
+/// keeps >= L && due tier for that lane`: PENDING for pending, NEXT
+/// for next, ROTTEN/TICKLER for ready. Unblock ticklers, PROJECTS,
+/// recurring, and checklist overlays never decide. Today-linked
+/// rows never decide either, even if they could carry a due tier.
 pub(crate) fn decide_for(
     lane: Option<Lane>,
     tier: Option<Tier>,
     keeps: u32,
     returned_by: Option<ReturnedBy>,
+    is_today: bool,
     config: &FreshnessConfig,
 ) -> bool {
     if returned_by == Some(ReturnedBy::Unblocked) {
         return false;
     }
-    let due_tier = matches!(tier, Some(Tier::Rotten) | Some(Tier::Tickler));
-    config.decay.enabled
-        && lane == Some(Lane::Ready)
-        && due_tier
-        && keeps >= u32::from(config.decay.keeps)
+    if is_today {
+        return false;
+    }
+    if matches!(
+        tier,
+        Some(Tier::Projects)
+            | Some(Tier::Pre)
+            | Some(Tier::Post)
+            | Some(Tier::Recurring)
+            | Some(Tier::New)
+    ) {
+        return false;
+    }
+    if !config.decay.enabled {
+        return false;
+    }
+    let limit = match (lane, tier) {
+        (Some(Lane::Pending), Some(Tier::Pending)) => config.decay.pending,
+        (Some(Lane::Next), Some(Tier::Next)) => config.decay.next,
+        (Some(Lane::Ready), Some(Tier::Rotten) | Some(Tier::Tickler)) => {
+            config.decay.ready
+        }
+        _ => return false,
+    };
+    match limit {
+        DecayLimit::AskAt(threshold) => keeps >= u32::from(threshold),
+        DecayLimit::NeverAsk => false,
+    }
 }
 
 /// Exact whole-token tag match, case-insensitive. `#gtd/pre` is not
@@ -613,10 +642,12 @@ fn evaluate_without_checklist(
         None
     };
 
-    // A choice is due — never permission to act — for Ready due
-    // rows at or over the keep limit. Unblock ticklers never decide.
+    // A choice is due — never permission to act — for a due row at
+    // or over its rung's keep limit. Unblock ticklers, PROJECTS,
+    // recurring, checklist, and Today-linked rows never decide.
     let keeps = read.keeps;
-    let decide = decide_for(lane, tier, keeps, returned_by, config);
+    let decide =
+        decide_for(lane, tier, keeps, returned_by, row.is_today, config);
 
     // Per-row dates: lane rows use the lane due date; Ready rows use
     // the state due date. Lane tracker rows keep their actual lane

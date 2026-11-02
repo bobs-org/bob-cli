@@ -1147,3 +1147,141 @@ fn parenthesized_repeat_skips_unblocked_write() {
     assert!(written.is_empty(), "UB5: no [unblocked::] on recurring");
     assert_eq!(stripped.len(), 1);
 }
+
+fn rewrite_status(
+    file: &FileScan,
+    task: &TaskLine,
+    replacement: Option<char>,
+    transition: Transition,
+) -> String {
+    let context = ProjectContext::for_note(file);
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let lines = logical_lines(&file.contents);
+    plan_task_line_rewrite(
+        file,
+        task,
+        lines[task.line_index],
+        replacement,
+        &context,
+        &ProjectBlockReasons::default(),
+        &[],
+        transition,
+        date(2026, 7, 16),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("status rewrite")
+}
+
+// Lane raises strip `[keeps::]` so a Ready streak cannot leak into
+// Next or WIP. Unblock(Ready) keeps the streak (`unblock_keeps`).
+#[test]
+fn lane_raises_strip_keeps_and_ready_unblock_preserves_them() {
+    let settings = test_settings();
+    let next_contents =
+        "- [ ] #task Work [fresh:: 2026-07-16] [keeps:: 2] ^work\n".to_string();
+    let next_file = FileScan {
+        path: PathBuf::from("tasks.md"),
+        relative_path: PathBuf::from("tasks.md"),
+        tasks: parse_tasks(&next_contents, &settings),
+        contents: next_contents,
+    };
+    assert_eq!(
+        rewrite_status(
+            &next_file,
+            &next_file.tasks[0],
+            Some('*'),
+            Transition::MarkNext,
+        ),
+        "- [*] #task Work [fresh:: 2026-07-16] ^work"
+    );
+
+    let pending_contents =
+        "- [ ] #task Work [fresh:: 2026-07-16] [keeps:: 2] ^work\n".to_string();
+    let pending_file = FileScan {
+        path: PathBuf::from("tasks.md"),
+        relative_path: PathBuf::from("tasks.md"),
+        tasks: parse_tasks(&pending_contents, &settings),
+        contents: pending_contents,
+    };
+    assert_eq!(
+        rewrite_status(
+            &pending_file,
+            &pending_file.tasks[0],
+            Some('/'),
+            Transition::MarkInProgress,
+        ),
+        "- [/] #task Work [fresh:: 2026-07-16] ^work"
+    );
+
+    let unblock_next_contents =
+        "- [?] #task Work [fresh:: 2026-07-16] [keeps:: 2] ^work\n".to_string();
+    let unblock_next_file = FileScan {
+        path: PathBuf::from("tasks.md"),
+        relative_path: PathBuf::from("tasks.md"),
+        tasks: parse_tasks(&unblock_next_contents, &settings),
+        contents: unblock_next_contents,
+    };
+    assert_eq!(
+        rewrite_status(
+            &unblock_next_file,
+            &unblock_next_file.tasks[0],
+            Some('*'),
+            Transition::Unblock(RankedStatus::Next),
+        ),
+        "- [*] #task Work [fresh:: 2026-07-16] ^work"
+    );
+
+    let unblock_pending_contents =
+        "- [?] #task Work [fresh:: 2026-07-16] [keeps:: 2] ^work\n".to_string();
+    let unblock_pending_file = FileScan {
+        path: PathBuf::from("tasks.md"),
+        relative_path: PathBuf::from("tasks.md"),
+        tasks: parse_tasks(&unblock_pending_contents, &settings),
+        contents: unblock_pending_contents,
+    };
+    assert_eq!(
+        rewrite_status(
+            &unblock_pending_file,
+            &unblock_pending_file.tasks[0],
+            Some('/'),
+            Transition::Unblock(RankedStatus::InProgress),
+        ),
+        "- [/] #task Work [fresh:: 2026-07-16] ^work"
+    );
+
+    let file = project_file(
+        "proj.md",
+        "- [ ] #task #prj Ship ^prj\n- [?] #task Resident [fresh:: 2026-07-16] [keeps:: 2] #prj_is_blocked ^r1\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let resident = &file.tasks[1];
+    let lines = logical_lines(&file.contents);
+    let rewritten = plan_task_line_rewrite(
+        &file,
+        resident,
+        lines[resident.line_index],
+        Some(' '),
+        &context,
+        &ProjectBlockReasons::default(),
+        &[],
+        Transition::Unblock(RankedStatus::Ready),
+        date(2026, 7, 16),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("ready unblock preserves keeps");
+    assert_eq!(
+        rewritten,
+        "- [ ] #task Resident [fresh:: 2026-07-16] [keeps:: 2] [unblocked:: 2026-07-16] ^r1"
+    );
+}

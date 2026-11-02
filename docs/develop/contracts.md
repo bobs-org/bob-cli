@@ -27,7 +27,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Dashboard navigation and child pages](../dashboard.md) — Dashboard Review / Work / Browse navigation and collection pages
 - [Task date marks](../date-marks.md) — Task date marks: calendar-label display contract for canonical task dates and recurrence rules
 - [Blocked-reason marks](../blocked-marks.md) — Blocked-reason marks: display contract for the reason a Blocked checkbox shows, plus conformance vectors
-- [Task freshness](../freshness.md) — Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14
+- [Task freshness](../freshness.md) — Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 15
 - [Plan budget, Today, and lanes](../plan.md) — Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples
 - [Project Task Sync](../projects.md) — `bob projects` `^prj` lifecycle and schedules
 - [Pomodoro homes](../pomodoro-homes.md) — Derived Pomodoro homes, labels, chips, hues, and JSON contract

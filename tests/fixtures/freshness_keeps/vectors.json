@@ -191,6 +191,114 @@
     "js"
    ],
    "yaml": "freshness:\n  decay:\n    enter: 2\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 3,
+    "limits": {
+     "next": 3,
+     "pending": 2,
+     "ready": 3
+    }
+   },
+   "id": "C14-pending-override",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    pending_keeps: 2\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 2,
+    "limits": {
+     "next": 5,
+     "pending": 2,
+     "ready": 2
+    }
+   },
+   "id": "C15-fallback-plus-next",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    keeps: 2\n    next_keeps: 5\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 3,
+    "limits": {
+     "next": false,
+     "pending": 0,
+     "ready": 999
+    }
+   },
+   "id": "C16-zero-false-999",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    pending_keeps: 0\n    next_keeps: false\n    ready_keeps: 999\n"
+  },
+  {
+   "decay": {
+    "enabled": true,
+    "enter": null,
+    "keeps": 3,
+    "limits": {
+     "next": 2,
+     "pending": 3,
+     "ready": 3
+    }
+   },
+   "id": "C17-null-rung-fallback",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    pending_keeps:\n    next_keeps: 2\n"
+  },
+  {
+   "error": true,
+   "id": "C18-pending-negative",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    pending_keeps: -1\n"
+  },
+  {
+   "error": true,
+   "id": "C19-next-above-range",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    next_keeps: 1000\n"
+  },
+  {
+   "error": true,
+   "id": "C20-ready-fractional",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    ready_keeps: 2.5\n"
+  },
+  {
+   "error": true,
+   "id": "C21-pending-true",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "yaml": "freshness:\n  decay:\n    pending_keeps: true\n"
   }
  ],
  "decide": [
@@ -295,7 +403,7 @@
   {
    "config": "C1-absent",
    "date": "2026-10-20",
-   "decide": false,
+   "decide": true,
    "id": "D8-lane",
    "keeps": 9,
    "lane": "next",
@@ -304,7 +412,149 @@
     "js"
    ],
    "tier": "next",
-   "why": "lane rows never decide"
+   "why": "an at-limit Next due row decides"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": true,
+   "id": "D9-pending-at-limit",
+   "keeps": 3,
+   "lane": "pending",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "pending",
+   "why": "keeps >= limit on a due WIP task"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D10-next-below",
+   "keeps": 2,
+   "lane": "next",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "next",
+   "why": "below the Next limit: stamp, no card"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D11-pending-below",
+   "keeps": 2,
+   "lane": "pending",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "pending",
+   "why": "below the WIP limit: stamp, no card"
+  },
+  {
+   "config": "C16-zero-false-999",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D12-next-false",
+   "keeps": 9,
+   "lane": "next",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "next",
+   "why": "next_keeps: false never asks"
+  },
+  {
+   "config": "C16-zero-false-999",
+   "date": "2026-10-20",
+   "decide": true,
+   "id": "D13-pending-zero",
+   "keeps": 0,
+   "lane": "pending",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "pending",
+   "why": "pending_keeps: 0 asks on every due WIP keep"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D14-today-linked",
+   "is_today": true,
+   "keeps": 9,
+   "lane": "next",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "next",
+   "why": "Today-linked lane rows never decide"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D15-projects",
+   "keeps": 9,
+   "lane": "ready",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "projects",
+   "why": "PROJECTS never decide"
+  },
+  {
+   "config": "C1-absent",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D16-unblocked",
+   "keeps": 9,
+   "lane": "ready",
+   "returned_by": "unblocked",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "tickler",
+   "why": "unblock ticklers never decide"
+  },
+  {
+   "config": "C15-fallback-plus-next",
+   "date": "2026-10-20",
+   "decide": true,
+   "id": "D17-fallback-next-at",
+   "keeps": 5,
+   "lane": "next",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "next",
+   "why": "next_keeps override of 5 decides at 5"
+  },
+  {
+   "config": "C15-fallback-plus-next",
+   "date": "2026-10-20",
+   "decide": false,
+   "id": "D18-fallback-next-below",
+   "keeps": 4,
+   "lane": "next",
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "tier": "next",
+   "why": "next_keeps override of 5 stays quiet at 4"
   }
  ],
  "doc": "docs/freshness.md",

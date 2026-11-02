@@ -294,6 +294,13 @@ pub(crate) fn prune_unblocked(line: &str, today: NaiveDate) -> Option<String> {
     }
 }
 
+/// Strip every `keeps` field from `line` without touching `fresh`,
+/// `refresh`, `unblocked`, or the Tasks suffix. Reconcile lane raises
+/// use this so a Ready streak cannot leak into Next or WIP.
+pub(crate) fn clear_keeps(line: &str) -> String {
+    remove_named_field(line, "keeps")
+}
+
 /// The first valid `[scheduled:: YYYY-MM-DD]` date on `line` in line
 /// order, approximating what both Rust Tasks parsers extract from a
 /// well-formed line. `mark_unblocked` only needs the UB3 comparison,
@@ -307,7 +314,14 @@ fn first_valid_scheduled(line: &str) -> Option<NaiveDate> {
 /// Remove every `unblocked` field from `text`, collapsing the
 /// whitespace each removal leaves to a single space.
 fn remove_unblocked_field(text: &str) -> String {
-    let mut ranges: Vec<(usize, usize)> = inline_fields(text, "unblocked")
+    remove_named_field(text, "unblocked")
+}
+
+/// Remove every field named `key` from `text`, collapsing the
+/// whitespace each removal leaves to a single space. Placement of
+/// other freshness and Tasks fields is unchanged.
+fn remove_named_field(text: &str, key: &str) -> String {
+    let mut ranges: Vec<(usize, usize)> = inline_fields(text, key)
         .iter()
         .map(|field| (field.start, field.end))
         .collect();
@@ -336,6 +350,11 @@ fn remove_unblocked_field(text: &str) -> String {
         cursor = next;
     }
     output.push_str(&text[cursor..]);
+    if text[cursor..].chars().all(|c| c == ' ' || c == '\t') {
+        while output.ends_with([' ', '\t']) {
+            output.pop();
+        }
+    }
     output
 }
 

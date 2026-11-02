@@ -5,8 +5,9 @@
 use chrono::NaiveDate;
 
 use super::{
-    mark_unblocked, prune_unblocked, read_freshness, set_refresh, stamp_fresh,
-    stamp_fresh_preserve_keeps, tasks_suffix_start, Refusal, UnblockScope,
+    clear_keeps, mark_unblocked, prune_unblocked, read_freshness, set_refresh,
+    stamp_fresh, stamp_fresh_preserve_keeps, tasks_suffix_start, Refusal,
+    UnblockScope,
 };
 use crate::native::config::freshness::FreshnessConfig;
 
@@ -636,6 +637,22 @@ fn generic_stamps_clear_keeps_including_same_day() {
         stamp("- [ ] #task Buy milk [fresh:: 2026-10-08] [keeps:: 2]");
     assert_eq!(stamped.line, "- [ ] #task Buy milk [fresh:: 2026-10-08]");
     assert!(stamped.changed);
+
+    let cleared = clear_keeps(
+        "- [ ] #task Work [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2] [unblocked:: 2026-10-08] [created:: 2026-09-29] ^t",
+    );
+    assert_eq!(
+        cleared,
+        "- [ ] #task Work [fresh:: 2026-10-01] [refresh:: 14] [unblocked:: 2026-10-08] [created:: 2026-09-29] ^t"
+    );
+    assert_eq!(
+        clear_keeps(
+            "- [ ] #task Work [fresh:: 2026-10-01] [keeps:: 2] [keeps:: 9]"
+        ),
+        "- [ ] #task Work [fresh:: 2026-10-01]"
+    );
+    let unchanged = "- [ ] #task Work [fresh:: 2026-10-01]";
+    assert_eq!(clear_keeps(unchanged), unchanged);
     let stamped = stamp("- [ ] #task Buy milk [fresh:: 2026-10-01] [keeps:: 1] [created::2026-09-29]");
     assert_eq!(
         stamped.line,

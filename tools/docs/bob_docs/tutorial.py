@@ -445,8 +445,8 @@ def _checkpoint_review_listed(sandbox: BobSandbox) -> None:
     records = _records_for_id(freshness, "seed-packet")
     if not records:
         raise DocsError("bob freshness list -f json omitted the unfinished inbox task ^seed-packet")
-    if not isinstance(freshness, dict) or freshness.get("schema_version") != 14:
-        raise DocsError("bob freshness list JSON did not match schema_version 14")
+    if not isinstance(freshness, dict) or freshness.get("schema_version") != 15:
+        raise DocsError("bob freshness list JSON did not match schema_version 15")
     inbox_record = records[0]
     if inbox_record.get("path") != "mac_inbox.md" or inbox_record.get("tier") != "new":
         raise DocsError("freshness JSON should place the unfinished inbox task in NEW")

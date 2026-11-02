@@ -189,11 +189,15 @@ accepts an interval or `null` to inherit the Ready cadence.
 | `freshness.next_interval` | Integer, 1–365, or `false` | `1` | Review cadence for Next (`[*]`) tasks; false disables that lane's walk. |
 | `freshness.project_interval` | Integer, 1–365, or `null` | `null` | Explicit cadence for `^prj` tasks; null inherits the existing Ready chain. |
 | `freshness.rotten_daily_budget` | Positive integer or `null` | `null` (off) | Optional daily allowance for Rotten keep decisions; it never hides tasks. |
-| `freshness.decay` | Mapping, `true`, `false`, or `null` | Enabled; 3 keeps | Approved-decay settings for repeatedly kept due Ready tasks. |
-| `freshness.decay.keeps` | Integer, 0–999 | `3` | Keeps before a decision is offered; `0` offers on each due Ready re-confirmation. |
+| `freshness.decay` | Mapping, `true`, `false`, or `null` | Enabled; 3 keeps | Task-decay settings for repeatedly kept due tasks on each rung. |
+| `freshness.decay.keeps` | Integer, 0–999 | `3` | Fallback keeps before a decision is offered on a rung; `0` offers on each due re-confirmation. |
+| `freshness.decay.pending_keeps` | Integer, 0–999, or `false` | `keeps`, else `3` | WIP (`[/]`) allowance; `false` counts and displays but never asks. |
+| `freshness.decay.next_keeps` | Integer, 0–999, or `false` | `keeps`, else `3` | Next (`[*]`) allowance; `false` counts and displays but never asks. |
+| `freshness.decay.ready_keeps` | Integer, 0–999, or `false` | `keeps`, else `3` | Ready (`[ ]`) and P-level allowance; `false` counts and displays but never asks. |
 | `freshness.decay.enter` | Nonempty priority label or `null` | `null` | Priority value to enter on an approved decay decision; null uses the interval-aware entry. |
 
-`decay: false` disables asking while retaining keep counts and display. The
+`decay: false` disables asking while retaining keep counts and display. A
+rung's effective allowance is its `*_keeps` key, then `keeps`, then 3. The
 removed `stale_daily_budget` key is accepted only as a deprecated input for a
 transition period; use `rotten_daily_budget`. The freshness consumer has its
 own parser, so its validation and defaults are independent of the other

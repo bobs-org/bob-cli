@@ -118,6 +118,41 @@ fn reconcile_status_only_flips_skip_quiet_period_but_structural_edits_wait() {
 }
 
 #[test]
+fn reconcile_raises_ready_with_keeps_to_next_without_keeps() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-keeps-raise");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &daily,
+        "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - [[tasks#^work]]\n",
+    );
+    write_file(
+        &tasks,
+        "- [ ] #task Work [fresh:: 2026-07-01] [keeps:: 2] ^work\n",
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let applied = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("raise Ready with keeps");
+    assert_success(&applied);
+    let after = fs::read_to_string(&tasks).unwrap();
+    assert!(
+        after.lines().any(|line| {
+            line.contains("- [*]")
+                && line.contains("^work")
+                && !line.contains("[keeps::")
+        }),
+        "Ready with keeps becomes Next without keeps:\n{after}"
+    );
+}
+
+#[test]
 fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     let temp = TempDir::new("bob-cli-task-status-hooks-sync");
     let vault = temp.path().join("vault");

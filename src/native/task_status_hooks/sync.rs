@@ -5,7 +5,7 @@ use super::super::capture_dependency_tasks::{
     has_hide_tag, has_prj_is_blocked_tag,
 };
 use super::super::freshness::placement::{
-    mark_unblocked, prune_unblocked, UnblockScope,
+    clear_keeps, mark_unblocked, prune_unblocked, UnblockScope,
 };
 use super::super::project_dependencies::{
     blocking_open_dependency_ids, effective_block_reasons,
@@ -1242,6 +1242,18 @@ pub(super) fn plan_task_line_rewrite(
                 .unwrap_or_else(|| anchor.to_string()),
         });
         line = pruned;
+    }
+    // Lane raises clear the keep streak so a Ready count cannot leak
+    // into Next or WIP and open a false decay card. Unblock(Ready)
+    // preserves it (`unblock_keeps`).
+    if matches!(
+        transition,
+        Transition::MarkNext
+            | Transition::MarkInProgress
+            | Transition::Unblock(RankedStatus::Next)
+            | Transition::Unblock(RankedStatus::InProgress)
+    ) {
+        line = clear_keeps(&line);
     }
     (line != raw_line).then_some(line)
 }

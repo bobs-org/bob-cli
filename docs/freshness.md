@@ -68,7 +68,7 @@ as NEW until a human confirms it.
 | ------------------------------ | ---------------------------------------------- | ---------------------------------------- |
 | `[fresh:: YYYY-MM-DD]`         | task line, before the trailing Tasks suffix    | optional; absence means "never confirmed" |
 | `[refresh:: N]`                | task line, immediately after `fresh`           | optional integer days, 1–365             |
-| `[keeps:: N]`                  | task line, immediately after `refresh`         | optional streak of due-Ready keeps, 1–999; absence means 0 (§2a) |
+| `[keeps:: N]`                  | task line, immediately after `refresh`         | optional keep streak on the current rung, 1–999; absence means 0 (§2a) |
 | `[unblocked:: YYYY-MM-DD]`     | task line, immediately after `keeps`           | optional recorded date of an automatic Blocked → Ready recovery; absence means none (§4) |
 | `task_refresh: N`              | frontmatter of the note containing the task    | optional integer days, 1–365             |
 | `freshness.interval`           | `~/.config/bob/config.yml`                     | integer days, 1–365, default 7           |
@@ -117,22 +117,23 @@ exits 2 for an invalid `freshness:` block. The mobile/missing-file
 fallback carries neither tracker override and cannot see Bryan's
 desktop settings.
 
-## 2a. Keep streaks and approved-decay policy
+## 2a. Keep streaks and task decay
 
-**Storage.** `[keeps:: N]` is a streak of due-Ready bare keeps: how
-many times in a row a due Ready task was confirmed without any other
-change. It is a decimal integer 1–999; absence means 0 and writers
-omit zero. Increment saturates at 999 and never wraps. Readers
-accept existing bracket or paren field syntax, select the first
-valid value, and emit `keeps_invalid` and `keeps_duplicate` as
-appropriate; if none is valid, they report 0. `fresh_misplaced` also
-covers `keeps` and `unblocked` inside the Tasks suffix. A successful keep
+**Storage.** `[keeps:: N]` is a streak of due keeps on the current
+rung (WIP `[/]`, Next `[*]`, or Ready `[ ]`): how many times in a
+row a due task on that rung was confirmed without any other change.
+It is a decimal integer 1–999; absence means 0 and writers omit
+zero. Increment saturates at 999 and never wraps. Readers accept
+existing bracket or paren field syntax, select the first valid
+value, and emit `keeps_invalid` and `keeps_duplicate` as appropriate;
+if none is valid, they report 0. `fresh_misplaced` also covers
+`keeps` and `unblocked` inside the Tasks suffix. A successful keep
 canonicalizes and repairs malformed/duplicate placement. Generic
-stamps remove all `keeps` fields and all `unblocked` fields. An uncounted keep preserves the
-valid semantic value while canonicalizing it. Do not introduce a
-second lifetime counter or alias: the Rotten Log entry count below
-is display-only history, counted from dated entries at read time and
-never stored as a field.
+stamps remove all `keeps` fields and all `unblocked` fields. An
+uncounted keep preserves the valid semantic value while
+canonicalizing it. Do not introduce a second lifetime counter or
+alias: the Rotten Log entry count below is display-only history,
+counted from dated entries at read time and never stored as a field.
 
 Canonical form:
 
@@ -173,7 +174,7 @@ uncounted old stamper. The event table:
 - A repeated same-day keep preserves the streak and is byte-identical.
 - Every other supported human stamp clears the streak, even same-day.
 - Close/cancel preserves the streak on the closed line.
-- Automation, hooks, randomize, and seed neither increment nor reset.
+- Automation, randomize, and seed neither increment nor reset.
 - Recurring and closed targets are refused.
 - PROJECTS trackers never `decide` and their explicit keeps are uncounted.
   Due Ready references use ordinary keep counting and can reach the
@@ -183,6 +184,14 @@ uncounted old stamper. The event table:
   nor resets `[keeps::]`, and `decide_for` never opens the decision
   card for it (`unblock_keeps`). The row is still due and still
   stamps `[fresh:: today]`, which clears `[unblocked::]`.
+- Reconcile lane raises strip every `[keeps::]`: `MarkNext`,
+  `MarkInProgress`, and `Unblock` to Next or In Progress clear the
+  streak in the same write so a Ready count cannot leak into a
+  higher rung. `Unblock` to Ready preserves it.
+
+Lane keep counting (due PENDING and NEXT) lands with the later
+nav-keeps phase. Until then, due WIP and Next rows can `decide` at
+their rung limit while counting still authorizes only due Ready.
 
 What Rust guarantees today:
 
@@ -190,17 +199,24 @@ What Rust guarantees today:
   including same-day stamps) clears `keeps`;
 - refusals (not a task, recurring, closed) write nothing, so the
   streak stays on the closed line;
-- automation, hooks, randomize, and the seed neither increment nor
-  reset — `seed.rs::stamp_change` stamps through the private
-  preserve-mode primitive, so the cutover never silently resets a
-  streak;
+- randomize and the seed neither increment nor reset —
+  `seed.rs::stamp_change` stamps through the private preserve-mode
+  primitive, so the cutover never silently resets a streak;
 - capture's existing `stamp_fresh` consumers clear `keeps` through
-  the same default.
+  the same default;
+- reconcile lane raises (`MarkNext`, `MarkInProgress`,
+  `Unblock(Next|InProgress)`) strip `keeps` through `clear_keeps`;
+  `Unblock(Ready)` preserves the streak.
 
 No backfill: seeded dates, captured dates, and old `fresh` stamps are
 not evidence of keeps. Git sync may lose an increment during conflict
 recovery; this scalar is not an exact global event counter. Cache
 uncertainty under-counts. Hand editing remains unobserved.
+
+**Rotten Log and the decay card.** The ladder's rung-aware card,
+always-logged Rotten Log grammar, and due WIP/Next counting land in
+later phases. Until then the shipped Ready card and optional Next
+reason prompt below still apply.
 
 **Rotten Log.** Every counted keep — Alt+F/Ctrl+Alt+F on an exact due
 Ready ROTTEN or scheduled TICKLER row, or the decay card's Keep — first
@@ -228,23 +244,30 @@ tiers, lanes, Today, schedule, priority, or freshness. Grammar lives in
 ```yaml
 freshness:
   decay:
-    keeps: 3
-    # enter: P2
+    keeps: 3          # fallback for every rung; default 3
+    pending_keeps: 2  # WIP [/]; integer 0–999 or false
+    next_keeps: 2     # Next [*]; integer 0–999 or false
+    ready_keeps: 2    # Ready [ ] and every P-level; integer 0–999 or false
+    # enter: P1
 ```
 
-`decay` absent, null, `true`, or `{}` means enabled with 3 keeps.
-`false` keeps counting/display but never asks or skips. `keeps`
-accepts an integer 0–999; 0 asks on every due Ready re-confirmation,
-never NEW. `enter` is an optional nonempty configured priority
+`decay` absent, null, `true`, or `{}` means enabled with 3 keeps on
+every rung. `false` keeps counting/display but never asks or skips.
+`keeps` is the fallback allowance (integer 0–999). A rung's
+effective allowance is its `pending_keeps` / `next_keeps` /
+`ready_keeps` key, then `keeps`, then 3. `false` on one rung means
+count and display that rung but never ask. `0` asks on every due
+keep for that rung, never NEW. Unknown keys are ignored.
+`enter` is an optional nonempty configured priority
 label; absent/null uses interval-aware entry (first ladder level whose
 `min_days` is at least the effective refresh interval, so Bryan's
 `interval: 3` and P1 `min_days: 3` enter P1, and the documented
 interval-7 example still enters P2). Invalid scalar types,
-fractional/negative/out-of-range values, and malformed blocks follow
-the current freshness config failure contract: Rust exit 2; plugin
-defaults with `invalid` diagnostics. Priority config validity is
-resolved against the existing priority loader, not a second
-hard-coded P1–P4 table.
+fractional/negative/out-of-range values, `true` on a rung key, and
+malformed blocks follow the current freshness config failure
+contract: Rust exit 2; plugin defaults with `invalid` diagnostics.
+Priority config validity is resolved against the existing priority
+loader, not a second hard-coded P1–P4 table.
 
 **Availability.** Decay decisions are available as soon as decay is
 enabled and compatible plugins are loaded. There is no calendar gate,
@@ -260,17 +283,21 @@ count and show pips, without cards or decision skips. New navigation
 with an older ledger falls back to counted keeps; new ledger with
 older or missing navigation shows pips without a card promise.
 
-**Read-time decision flag.** `decide = enabled && lane
-ready && tier rotten/tickler && keeps >= limit`. The annotation
-means a choice is due, not permission to execute an action. The shared
-approved-decay action planner (`planFreshnessDecayCard` in
-bob-navigation-hotkeys) turns that flag into stable previewed decisions —
-P0 entry, a non-cancelling Not now, Less often steps, and dated
-review-decision entries with `· kept N×` tails — as specified in
-`docs/projects.md` ("Approved-decay decision planner"); the card interaction
-itself (`FreshnessDecayCardModal` plus guarded commit adapters, batch
+**Read-time decision flag.** `decide = enabled && limit(lane) is
+"ask at L" && keeps >= L && due tier for that lane`, where the due
+tier is PENDING for pending, NEXT for next, and ROTTEN/TICKLER for
+ready. Unblock ticklers, PROJECTS, recurring, checklist overlays,
+and Today-linked rows never decide. The annotation means a choice is
+due, not permission to execute an action. The shared approved-decay
+action planner (`planFreshnessDecayCard` in bob-navigation-hotkeys)
+turns that flag into stable previewed decisions — P0 entry, a
+non-cancelling Not now, Less often steps, and dated review-decision
+entries with `· kept N×` tails — as specified in `docs/projects.md`
+("Approved-decay decision planner"); the card interaction itself
+(`FreshnessDecayCardModal` plus guarded commit adapters, batch
 skipping, the leaf, and the capability guard) landed with the
-decision-card phase.
+decision-card phase. The rung-aware card that steps WIP → Next →
+Ready → P1…P4 lands in a later phase.
 
 ## 3. Placement rule
 
@@ -518,9 +545,9 @@ null.
 
 Reference conformance compares tag-only #ref and legacy ^ref tasks against an otherwise-identical ordinary task: interval/source, state, bucket, tier, due date, overdue days, keeps, and decision eligibility match. An unstamped Ready ref is NEW; a resurfaced ref is TICKLER; an expired Ready ref is ROTTEN and can decide at the keep limit. Lane refs use PENDING/NEXT cadence with null state/bucket; disabled lanes suppress them like ordinary lane tasks. Hidden, blocked, Today-linked, daily-note, template/conflict, and future-scheduled refs remain excluded. ^prj remains the only freshness tracker exception and keeps its project cadence and PROJECTS tier.
 
-**Machine vocabulary (schema 14).** Human and machine output use the nine current groups PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. The current JSON contract is schema 14. Queue rows gain `returned_by` (`scheduled` | `unblocked`) and, when present, `unblocked_on`. It contains no reference cadence, interval source, tier, or convenience counter. The histogram has exactly these nine keys, including zero values; walk equals the sum of by_tier before --limit. References remain ordinary tasks in the existing state and tier counts.
+**Machine vocabulary (schema 15).** Human and machine output use the nine current groups PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. The current JSON contract is schema 15. `config.decay` reports `enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` (each an integer or `false`). `decide` can be true on due PENDING and NEXT rows as well as due Ready ROTTEN/TICKLER. Queue rows gain `returned_by` (`scheduled` | `unblocked`) and, when present, `unblocked_on`. It contains no reference cadence, interval source, tier, or convenience counter. The histogram has exactly these nine keys, including zero values; walk equals the sum of by_tier before --limit. References remain ordinary tasks in the existing state and tier counts.
 
-Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 14 adds `returned_by` / `unblocked_on` for the unblock tickler. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
+Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 15 adds per-rung decay limits and lane `decide`. Schema 14 adds `returned_by` / `unblocked_on` for the unblock tickler. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
 
 Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 12. The current namespace advertises trackerReview, recurringTier, checklistTiers, and `markUnblockedLine`; it no longer advertises referenceReview or refTagIdentity. JS writers call `api.freshness.markUnblockedLine` (namespace ≥ v12). When it is missing, they recover without the field and `console.warn`. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
 
@@ -804,10 +831,11 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
   `returned_by` is `unblocked`, else `scheduled YYYY-MM-DD`. There is
   no reason suffix: the reason is not stored.
 - A disabled lane shows `pending off` in the header.
-- The header always shows the keep threshold: `keeps 3` when enabled,
-  `keeps 3 · decay off` with decay off, and `keeps 0 · asks every
-  review` for a zero threshold. Only a capable installed card
-  promises `next review asks`.
+- The header always shows the keep threshold: `keeps 3` when every
+  rung uses the same allowance, `keeps WIP 2 · Next 3 · Ready 2`
+  when they differ, `off` for a `false` rung, `keeps 3 · decay off`
+  with decay off, and `keeps 0 · asks every review` when every rung
+  is zero. Only a capable installed card promises `next review asks`.
 - Human rows show `kept N×` when the streak is nonzero and
   `· decide` where the read-time choice is due.
 - Each tier heading carries its count and is omitted when empty.
@@ -827,7 +855,7 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The current JSON contract is schema_version 14. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, and normalized decay; counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, decide, `returned_by`, and `unblocked_on` when present; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
+The current JSON contract is schema_version 15. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, and normalized decay (`enabled`, `keeps`, `enter`, and `limits: {pending, next, ready}` as integer or `false`); counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, decide (true on due PENDING, NEXT, and Ready ROTTEN/TICKLER at the rung limit), `returned_by`, and `unblocked_on` when present; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
 
 Seed options: -d/--dry-run, -F/--force, -f/--format human|json. Ready tasks without a valid `fresh` are grouped by note
 and bin-packed largest-note-first into 7 buckets; a note bigger than
@@ -853,7 +881,7 @@ differently under either Rust parser. A writing run then re-reads all touched
 files before the first write and refuses if one changed; `--dry-run` stops
 after planning and parse validation, without that file recheck. Each file is
 written through a temp file plus rename. The JSON contract is
-`schema_version: 14` with `ok`, `date`, `dry_run`,
+`schema_version: 15` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
@@ -878,7 +906,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| bob freshness | fresh-cli: schema 14 tiered walk PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, approved-decay policy, and `[unblocked::]` ticklers. |
+| bob freshness | fresh-cli: schema 15 tiered walk PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, per-rung decay limits, lane `decide`, and `[unblocked::]` ticklers. |
 | `bob capture` | capture-stamps (landed: plan_task_link + `x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; a `*` edit to T stamps T the same way; capture never stamps trackers, a new N, or an existing owner's target-ID and lane edits) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView` and the compact `api.quickRoll` preview in its hint slot) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback; `]s` landing notices append the Alt+P recommended-roll preview; additive `api.quickRoll` v1) |
@@ -1194,17 +1222,24 @@ increment API; the JS side runs the increment vectors through
 
 Config vectors C1–C13 pin `decay` normalization (absent, null,
 `true`, `{}`, `false`, `keeps: 0`, fixed `enter`, and each invalid
-shape). Decide vectors D1–D8 pin `decide`: at-limit Ready due rows
-on every local day, below-limit Ready rows, TICKLER coverage, NEW
-never, `keeps: 0` asking on every due Ready re-confirmation,
-`decay: false` never asking, and lane rows never deciding. Boundary
-vectors B1–B5 pin immediate availability on 2026-10-04, 2026-10-08,
-2026-10-18, 2026-10-19, and 2026-10-20. Rows have carried
-`keeps`/`decide` since schema 4, and the current schema is 14; counts
-carry `decide`; `config.decay` reports normalized `enabled`,
-`keeps`, and `enter`. CLI human rows show `kept N×` and `· decide`
-where true; the header explains the threshold or the off state.
-Counts cover the full queue regardless of `--limit`.
+shape) and stay byte-stable. C14–C21 pin per-rung `pending_keeps` /
+`next_keeps` / `ready_keeps` (override, `keeps` fallback, 0 / `false`
+/ 999, null fallback, and invalid shapes). Decide vectors D1–D8 pin
+`decide`: at-limit Ready due rows on every local day, below-limit
+Ready rows, TICKLER coverage, NEW never, `keeps: 0` asking on every
+due Ready re-confirmation, `decay: false` never asking, and at-limit
+Next due rows deciding. D9–D18 pin PENDING at/below the limit,
+Next below, `next_keeps: false`, `pending_keeps: 0`, Today-linked
+never, PROJECTS never, unblock ticklers never, and the `keeps`
+fallback plus Next override. Boundary vectors B1–B5 pin immediate
+availability on 2026-10-04, 2026-10-08, 2026-10-18, 2026-10-19, and
+2026-10-20. Rows have carried `keeps`/`decide` since schema 4, and
+the current schema is 15; counts carry `decide`; `config.decay`
+reports normalized `enabled`, `keeps`, `enter`, and `limits`. CLI
+human rows show `kept N×` and `· decide` where true; the header
+collapses equal rungs to `keeps N` and spells mixed rungs as
+`keeps WIP X · Next Y · Ready Z`. Counts cover the full queue
+regardless of `--limit`.
 
 ## 10b. UB — unblocked vectors
 
@@ -1582,6 +1617,9 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-11-01: Next keeps ask why they stay in Next; blank Enter stamps only,
   while a typed reason writes `· kept in Next` without changing `[keeps::]`
   (bob-navigation-hotkeys 2.64.0; bob-ledger-tools 1.81.0).
+- 2026-11-02: schema 15 adds per-rung decay limits
+  (`config.decay.limits`) and lets `decide` be true on due PENDING
+  and NEXT rows. Reconcile lane raises strip `[keeps::]`.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

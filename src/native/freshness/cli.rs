@@ -14,6 +14,7 @@ use clap::{
 use serde_json::json;
 
 use super::super::{
+    config::freshness::DecayLimit,
     env as bob_env,
     style::{pad_right, Styler},
 };
@@ -34,20 +35,22 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 14 adds the `[unblocked::]` tickler: queue rows gain
-/// `returned_by` (`scheduled` | `unblocked`) and, when present,
-/// `unblocked_on`. Schema 13 removes reference cadence, tier, and
-/// count fields; references now use ordinary freshness and review
-/// groups. Schema 12 re-keyed ref identity while reference-specific
-/// review was active. Schemas 7–12 historically carried a REFERENCES
-/// tier; schema 13 removes it.
+/// Schema 15 adds per-rung decay limits (`config.decay.limits`) and
+/// lets `decide` be true on due PENDING and NEXT rows. Schema 14
+/// adds the `[unblocked::]` tickler: queue rows gain `returned_by`
+/// (`scheduled` | `unblocked`) and, when present, `unblocked_on`.
+/// Schema 13 removes reference cadence, tier, and count fields;
+/// references now use ordinary freshness and review groups. Schema 12
+/// re-keyed ref identity while reference-specific review was active.
+/// Schemas 7–12 historically carried a REFERENCES tier; schema 13
+/// removes it.
 ///
 /// Schema 11 adds recurring review, schema 10 renames returned to tickler,
 /// and schema 9 adds PRE/POST checklist tiers. Schema 8 removes the decay
 /// calendar gate. Earlier versions introduced project tracking and decoupled
 /// state totals from tier totals. The seed envelope shares this constant;
 /// seed contents are otherwise unchanged.
-const SCHEMA_VERSION: u32 = 14;
+const SCHEMA_VERSION: u32 = 15;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -330,6 +333,9 @@ struct ListReport {
     budget: Option<u32>,
     decay_enabled: bool,
     decay_keeps: u16,
+    decay_pending: DecayLimit,
+    decay_next: DecayLimit,
+    decay_ready: DecayLimit,
     decay_enter: Option<String>,
     counts: Counts,
     rows: Vec<ListedRow>,
@@ -467,6 +473,9 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         budget: config.rotten_daily_budget,
         decay_enabled: config.decay.enabled,
         decay_keeps: config.decay.keeps,
+        decay_pending: config.decay.pending,
+        decay_next: config.decay.next,
+        decay_ready: config.decay.ready,
         decay_enter: config.decay.enter.clone(),
         counts,
         rows,
@@ -517,16 +526,38 @@ fn lane_meter(interval: Option<u16>) -> String {
     }
 }
 
+fn format_decay_limit(limit: DecayLimit) -> String {
+    match limit {
+        DecayLimit::AskAt(n) => n.to_string(),
+        DecayLimit::NeverAsk => "off".to_string(),
+    }
+}
+
 /// The keep-streak threshold segment of the human header: the
 /// threshold always shows; the off state says so explicitly instead
-/// of promising a decision.
+/// of promising a decision. Equal rungs collapse to `keeps N`; mixed
+/// rungs spell each one.
 fn decay_meter(report: &ListReport) -> String {
+    let pending = report.decay_pending;
+    let next = report.decay_next;
+    let ready = report.decay_ready;
+    let equal = pending == next && next == ready;
+    let threshold = if equal {
+        format!("keeps {}", format_decay_limit(pending))
+    } else {
+        format!(
+            "keeps WIP {} · Next {} · Ready {}",
+            format_decay_limit(pending),
+            format_decay_limit(next),
+            format_decay_limit(ready),
+        )
+    };
     if !report.decay_enabled {
-        format!("keeps {} · decay off", report.decay_keeps)
-    } else if report.decay_keeps == 0 {
+        format!("{threshold} · decay off")
+    } else if equal && pending == DecayLimit::AskAt(0) {
         "keeps 0 · asks every review".to_string()
     } else {
-        format!("keeps {}", report.decay_keeps)
+        threshold
     }
 }
 
@@ -750,6 +781,13 @@ fn tracker_json(interval: Option<u16>) -> serde_json::Value {
     }
 }
 
+fn decay_limit_json(limit: DecayLimit) -> serde_json::Value {
+    match limit {
+        DecayLimit::AskAt(n) => json!(n),
+        DecayLimit::NeverAsk => json!(false),
+    }
+}
+
 fn json_list(report: &ListReport) -> serde_json::Value {
     json!({
         "ok": true,
@@ -765,6 +803,11 @@ fn json_list(report: &ListReport) -> serde_json::Value {
                 "enabled": report.decay_enabled,
                 "keeps": report.decay_keeps,
                 "enter": report.decay_enter,
+                "limits": {
+                    "pending": decay_limit_json(report.decay_pending),
+                    "next": decay_limit_json(report.decay_next),
+                    "ready": decay_limit_json(report.decay_ready),
+                },
             },
         },
         "counts": {

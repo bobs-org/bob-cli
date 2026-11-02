@@ -2,17 +2,29 @@ use std::path::Path;
 
 use super::ConfigError;
 
+/// Per-rung keep allowance: ask at N, or never ask (`false`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecayLimit {
+    AskAt(u16),
+    NeverAsk,
+}
+
 /// Normalized `freshness.decay` configuration (`docs/freshness.md`).
 ///
-/// `decay` absent, null, `true`, or `{}` means enabled with 3 keeps.
-/// `false` keeps counting and display but never asks or skips.
-/// `keeps` accepts an integer 0–999 (0 asks on every due Ready
-/// re-confirmation, never NEW); `enter` is an optional nonempty
+/// `decay` absent, null, `true`, or `{}` means enabled with 3 keeps
+/// on every rung. `false` keeps counting and display but never asks
+/// or skips. `keeps` is the fallback allowance (integer 0–999; 0
+/// asks on every due re-confirmation for that rung, never NEW).
+/// `pending_keeps` / `next_keeps` / `ready_keeps` override one rung
+/// (integer 0–999 or `false`). `enter` is an optional nonempty
 /// configured priority label (absent/null uses interval-aware entry).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DecayConfig {
     pub(crate) enabled: bool,
     pub(crate) keeps: u16,
+    pub(crate) pending: DecayLimit,
+    pub(crate) next: DecayLimit,
+    pub(crate) ready: DecayLimit,
     pub(crate) enter: Option<String>,
 }
 
@@ -21,6 +33,9 @@ impl Default for DecayConfig {
         Self {
             enabled: true,
             keeps: 3,
+            pending: DecayLimit::AskAt(3),
+            next: DecayLimit::AskAt(3),
+            ready: DecayLimit::AskAt(3),
             enter: None,
         }
     }
@@ -109,7 +124,7 @@ fn freshness_value(
     Ok(config.freshness)
 }
 
-fn parse_freshness_config(
+pub(crate) fn parse_freshness_config(
     text: &str,
     path: &Path,
 ) -> Result<FreshnessConfig, ConfigError> {
@@ -215,11 +230,12 @@ fn parse_freshness_config(
 }
 
 /// Normalize the `freshness.decay` value: absent, null, `true`, or an
-/// empty mapping means enabled with 3 keeps; `false` disables asking
-/// while keeping counting and display; a mapping may set `keeps`
-/// (integer 0–999) and `enter` (a nonempty priority label).
-/// Anything else is a config error under the current freshness
-/// failure contract.
+/// empty mapping means enabled with 3 keeps on every rung; `false`
+/// disables asking while keeping counting and display; a mapping may
+/// set `keeps` (integer 0–999), per-rung `pending_keeps` /
+/// `next_keeps` / `ready_keeps` (integer 0–999 or `false`), and
+/// `enter` (a nonempty priority label). Anything else is a config
+/// error under the current freshness failure contract.
 fn parse_decay_config(
     value: Option<&serde_yaml::Value>,
     path_display: &str,
@@ -254,8 +270,26 @@ fn parse_decay_config(
     if let Some(raw) = get("keeps")
         && !raw.is_null()
     {
-        keeps = parse_decay_keeps(&raw, path_display)?;
+        keeps = parse_decay_keeps(&raw, "freshness.decay.keeps", path_display)?;
     }
+    let pending = parse_rung_keeps(
+        get("pending_keeps"),
+        keeps,
+        "freshness.decay.pending_keeps",
+        path_display,
+    )?;
+    let next = parse_rung_keeps(
+        get("next_keeps"),
+        keeps,
+        "freshness.decay.next_keeps",
+        path_display,
+    )?;
+    let ready = parse_rung_keeps(
+        get("ready_keeps"),
+        keeps,
+        "freshness.decay.ready_keeps",
+        path_display,
+    )?;
     let mut enter = None;
     if let Some(raw) = get("enter")
         && !raw.is_null()
@@ -277,17 +311,50 @@ fn parse_decay_config(
     Ok(DecayConfig {
         enabled: true,
         keeps,
+        pending,
+        next,
+        ready,
         enter,
     })
 }
 
-/// Parse `freshness.decay.keeps`: an integer 0–999. Fractional,
-/// negative, out-of-range, and non-numeric values are config errors.
+/// Parse one rung override: absent/null uses `fallback`; `false`
+/// means never ask; an integer 0–999 is "ask at N". `true` and every
+/// other shape follow the `keeps` error contract.
+fn parse_rung_keeps(
+    raw: Option<serde_yaml::Value>,
+    fallback: u16,
+    key: &str,
+    path_display: &str,
+) -> Result<DecayLimit, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(DecayLimit::AskAt(fallback));
+    };
+    if raw.is_null() {
+        return Ok(DecayLimit::AskAt(fallback));
+    }
+    if let serde_yaml::Value::Bool(flag) = raw {
+        if !flag {
+            return Ok(DecayLimit::NeverAsk);
+        }
+        return Err(ConfigError::Invalid(format!(
+            "{key} in {path_display} must be an integer 0-999 or false; got {flag}"
+        )));
+    }
+    Ok(DecayLimit::AskAt(parse_decay_keeps(
+        &raw,
+        key,
+        path_display,
+    )?))
+}
+
+/// Parse a keep allowance: an integer 0–999. Fractional, negative,
+/// out-of-range, and non-numeric values are config errors.
 fn parse_decay_keeps(
     value: &serde_yaml::Value,
+    key: &str,
     path_display: &str,
 ) -> Result<u16, ConfigError> {
-    let key = "freshness.decay.keeps";
     let number = match value {
         serde_yaml::Value::Number(number) => {
             if let Some(int) = number.as_i64() {
@@ -574,6 +641,9 @@ mod tests {
             assert_eq!(config.decay, DecayConfig::default(), "for {text:?}");
             assert!(config.decay.enabled);
             assert_eq!(config.decay.keeps, 3);
+            assert_eq!(config.decay.pending, DecayLimit::AskAt(3));
+            assert_eq!(config.decay.next, DecayLimit::AskAt(3));
+            assert_eq!(config.decay.ready, DecayLimit::AskAt(3));
             assert_eq!(config.decay.enter, None);
         }
     }
@@ -587,6 +657,9 @@ mod tests {
         .expect("decay false parses");
         assert!(!config.decay.enabled);
         assert_eq!(config.decay.keeps, 3);
+        assert_eq!(config.decay.pending, DecayLimit::AskAt(3));
+        assert_eq!(config.decay.next, DecayLimit::AskAt(3));
+        assert_eq!(config.decay.ready, DecayLimit::AskAt(3));
         assert_eq!(config.decay.enter, None);
     }
 
@@ -599,13 +672,60 @@ mod tests {
         .expect("keeps 0 parses");
         assert!(config.decay.enabled);
         assert_eq!(config.decay.keeps, 0);
+        assert_eq!(config.decay.pending, DecayLimit::AskAt(0));
+        assert_eq!(config.decay.next, DecayLimit::AskAt(0));
+        assert_eq!(config.decay.ready, DecayLimit::AskAt(0));
         let config = parse_freshness_config(
             "freshness:\n  decay:\n    keeps: 2\n    enter: P1\n",
             Path::new("/config.yml"),
         )
         .expect("fixed entry parses");
         assert_eq!(config.decay.keeps, 2);
+        assert_eq!(config.decay.pending, DecayLimit::AskAt(2));
+        assert_eq!(config.decay.next, DecayLimit::AskAt(2));
+        assert_eq!(config.decay.ready, DecayLimit::AskAt(2));
         assert_eq!(config.decay.enter, Some("P1".to_string()));
+    }
+
+    #[test]
+    fn decay_parses_per_rung_overrides_and_fallback() {
+        let config = parse_freshness_config(
+            "freshness:\n  decay:\n    pending_keeps: 2\n",
+            Path::new("/config.yml"),
+        )
+        .expect("pending override");
+        assert_eq!(config.decay.keeps, 3);
+        assert_eq!(config.decay.pending, DecayLimit::AskAt(2));
+        assert_eq!(config.decay.next, DecayLimit::AskAt(3));
+        assert_eq!(config.decay.ready, DecayLimit::AskAt(3));
+
+        let config = parse_freshness_config(
+            "freshness:\n  decay:\n    keeps: 2\n    next_keeps: 5\n",
+            Path::new("/config.yml"),
+        )
+        .expect("fallback plus next override");
+        assert_eq!(config.decay.keeps, 2);
+        assert_eq!(config.decay.pending, DecayLimit::AskAt(2));
+        assert_eq!(config.decay.next, DecayLimit::AskAt(5));
+        assert_eq!(config.decay.ready, DecayLimit::AskAt(2));
+
+        let config = parse_freshness_config(
+            "freshness:\n  decay:\n    pending_keeps: 0\n    next_keeps: false\n    ready_keeps: 999\n",
+            Path::new("/config.yml"),
+        )
+        .expect("0, false, and 999");
+        assert_eq!(config.decay.pending, DecayLimit::AskAt(0));
+        assert_eq!(config.decay.next, DecayLimit::NeverAsk);
+        assert_eq!(config.decay.ready, DecayLimit::AskAt(999));
+
+        let config = parse_freshness_config(
+            "freshness:\n  decay:\n    pending_keeps:\n    next_keeps: 2\n",
+            Path::new("/config.yml"),
+        )
+        .expect("null rung falls back");
+        assert_eq!(config.decay.pending, DecayLimit::AskAt(3));
+        assert_eq!(config.decay.next, DecayLimit::AskAt(2));
+        assert_eq!(config.decay.ready, DecayLimit::AskAt(3));
     }
 
     #[test]
@@ -621,6 +741,12 @@ mod tests {
             "freshness:\n  decay:\n    enter: ''\n",
             "freshness:\n  decay:\n    enter: '   '\n",
             "freshness:\n  decay:\n    enter: 2\n",
+            "freshness:\n  decay:\n    pending_keeps: -1\n",
+            "freshness:\n  decay:\n    next_keeps: 1000\n",
+            "freshness:\n  decay:\n    ready_keeps: 2.5\n",
+            "freshness:\n  decay:\n    pending_keeps: true\n",
+            "freshness:\n  decay:\n    next_keeps: soon\n",
+            "freshness:\n  decay:\n    ready_keeps: [1]\n",
         ] {
             let error = parse_freshness_config(text, Path::new("/config.yml"))
                 .expect_err("invalid decay must fail");
@@ -853,6 +979,76 @@ mod tests {
             let error = parse_freshness_config(text, path)
                 .expect_err("freshness loader must still reject the mistyped block");
             assert!(matches!(error, ConfigError::Invalid(_)));
+        }
+    }
+
+    fn expected_limit(value: &serde_json::Value, keeps: u16) -> DecayLimit {
+        match value {
+            serde_json::Value::Bool(false) => DecayLimit::NeverAsk,
+            serde_json::Value::Number(number) => {
+                DecayLimit::AskAt(number.as_u64().expect("limit int") as u16)
+            }
+            serde_json::Value::Null => DecayLimit::AskAt(keeps),
+            other => panic!("unexpected limit {other}"),
+        }
+    }
+
+    /// Shared C vectors: per-rung allowances, fallback, and invalid
+    /// shapes (`docs/freshness.md` §10a).
+    #[test]
+    fn keeps_fixture_config_vectors_match_rust() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/freshness_keeps/vectors.json");
+        let text = std::fs::read_to_string(&path).expect("read keeps fixture");
+        let fixture: serde_json::Value =
+            serde_json::from_str(&text).expect("parse keeps fixture");
+        let vectors = fixture["config"].as_array().expect("config array");
+        assert!(!vectors.is_empty(), "fixture must carry config vectors");
+        for vector in vectors {
+            let id = vector["id"].as_str().unwrap_or("?");
+            let runners: Vec<&str> = vector["runners"]
+                .as_array()
+                .expect("runners array")
+                .iter()
+                .map(|runner| runner.as_str().expect("runner string"))
+                .collect();
+            if !runners.contains(&"rust") {
+                continue;
+            }
+            let yaml = vector["yaml"].as_str().expect("yaml");
+            if vector["error"].as_bool() == Some(true) {
+                parse_freshness_config(yaml, Path::new("/config.yml"))
+                    .expect_err("{id}: invalid decay must fail");
+                continue;
+            }
+            let config = parse_freshness_config(yaml, Path::new("/config.yml"))
+                .unwrap_or_else(|error| panic!("{id}: parse: {error:?}"));
+            let decay = &vector["decay"];
+            assert_eq!(
+                config.decay.enabled,
+                decay["enabled"].as_bool().expect("enabled"),
+                "{id}: enabled"
+            );
+            let keeps = decay["keeps"].as_u64().expect("keeps") as u16;
+            assert_eq!(config.decay.keeps, keeps, "{id}: keeps");
+            let enter = decay["enter"].as_str().map(str::to_string);
+            assert_eq!(config.decay.enter, enter, "{id}: enter");
+            let limits = &decay["limits"];
+            assert_eq!(
+                config.decay.pending,
+                expected_limit(&limits["pending"], keeps),
+                "{id}: pending"
+            );
+            assert_eq!(
+                config.decay.next,
+                expected_limit(&limits["next"], keeps),
+                "{id}: next"
+            );
+            assert_eq!(
+                config.decay.ready,
+                expected_limit(&limits["ready"], keeps),
+                "{id}: ready"
+            );
         }
     }
 }

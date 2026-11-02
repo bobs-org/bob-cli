@@ -132,6 +132,99 @@ fn reconcile_consumes_blocked_resident_links_and_keeps_the_entry() {
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
 }
 
+// Adjustment 1: a prerequisite raised because a Blocked dependent was
+// linked today is not re-raised after that link is consumed and the
+// prerequisite is hand-set back to Ready.
+#[test]
+fn reconcile_does_not_reraise_hand_set_ready_after_blocked_consume() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-consume-adj1");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let tasks = vault.join("tasks.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[tasks#^blocked]]\n",
+            "  - [[tasks#^other]]\n",
+        ),
+    );
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task Prerequisite [fresh:: 2026-07-01] [id:: tasks__pre] ^pre\n",
+            "- [?] #task Blocked work [dependsOn:: tasks__pre] ^blocked\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
+            "- [ ] #task Other work ^other\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let applied = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("consume blocked link and raise prerequisite");
+    assert_success(&applied);
+    let daily_after = fs::read_to_string(&daily).unwrap();
+    let open_section =
+        daily_after.split("- [x]").next().unwrap_or(&daily_after);
+    assert!(
+        !open_section.contains("[[tasks#^blocked]]"),
+        "blocked dependent's Task Link is consumed:\n{daily_after}"
+    );
+    assert!(
+        open_section.contains("[[tasks#^other]]"),
+        "unrelated live link stays:\n{daily_after}"
+    );
+    let tasks_after = fs::read_to_string(&tasks).unwrap();
+    assert!(
+        tasks_after
+            .lines()
+            .any(|line| line.contains("- [*]") && line.contains("^pre")),
+        "prerequisite is raised to Next:\n{tasks_after}"
+    );
+
+    let hand_set: String = tasks_after
+        .lines()
+        .map(|line| {
+            if line.contains("^pre") {
+                line.replacen("- [*]", "- [ ]", 1)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    write_file(&tasks, &hand_set);
+    assert!(
+        hand_set
+            .lines()
+            .any(|line| line.contains("- [ ]") && line.contains("^pre")),
+        "hand-set Ready:\n{hand_set}"
+    );
+
+    let second = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("second reconcile after hand-set Ready");
+    assert_success(&second);
+    let tasks_final = fs::read_to_string(&tasks).unwrap();
+    assert!(
+        tasks_final
+            .lines()
+            .any(|line| line.contains("- [ ]") && line.contains("^pre")),
+        "hand-set Ready prerequisite stays Ready:\n{tasks_final}"
+    );
+}
+
 // PDL2: the consumed link was the entry's last child — entry deleted.
 #[test]
 fn reconcile_deletes_a_pomodoro_emptied_by_blocked_consumption() {
