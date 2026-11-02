@@ -256,13 +256,58 @@ today.
 
 Tasks query result rows get CSS-only marks from Tasks' own row
 attributes: no pip, no tooltip (accepted; the row attributes carry no
-reason text). A project-tagged row shows `prj` first, because Tasks
-rows can't see open prerequisites; document that as a known limit.
-Otherwise a future `data-task-scheduled` plus a ladder
-`data-task-priority` shows the digit, else a future date shows hollow
-`?` (or `⟲` only if Tasks' recurring marker proves usable in the
-prototype), else `&` by elimination. The toggle restores Tasks
-results.
+reason text). The real-Obsidian e2e confirmed the Tasks 8.4.0
+contract against the installed 8.6.0 `renderTaskLine` /
+`taskToHtml`:
+
+- `li.plugin-tasks-list-item.task-list-item` with a direct-child
+  checkbox; `data-task` is the status symbol, written last, and is
+  the completion signal.
+- `data-line` is the **query result index**, never the source line.
+  Classification never reads it, and never infers status from
+  `input.checked`.
+- `data-task-scheduled` is `today`, `future-Nd` / `future-far`, or
+  `past-Nd` / `past-far` (7-day near window). Hidden date components
+  still write the attribute on the `li`.
+- `data-task-priority` is the lowercase stored name (`highest` /
+  `high` / `medium` / `low` / `lowest` / `normal`) and is always
+  present, including under `hide priority`.
+- Description tags carry `data-tag-name` (and usually `href`) from
+  Tasks' `addInternalClasses`.
+- Recurrence is a child `span.task-recurring` with **no** data
+  attribute. That marker is usable, so a future scheduled row with
+  `.task-recurring` and no ladder priority draws the shared repeat
+  mask (`⟲`).
+- Short mode adds `tasks-layout-short-mode` on
+  `ul.plugin-tasks-query-result`; the `li` attributes are unchanged.
+- Paint is scoped to
+  `ul.plugin-tasks-query-result li.plugin-tasks-list-item[data-task="?"]`.
+  Tasks' markdown post-processor also marks source-note reading-view
+  `li`s with `plugin-tasks-list-item`; those rows keep JS marks and
+  BM19's kept `#prj_is_blocked` pill.
+
+Cascade, gated by `body.bob-block-marks`, later rules winning:
+
+1. A project-tagged row
+   (`:has(.tag[data-tag-name="#prj_is_blocked"])` or
+   `:has(.tag[href="#prj_is_blocked"])`) shows `prj`. This comes
+   first because Tasks rows can't see open prerequisites: BM19's
+   `dep`+`prj` source row shows `prj` here.
+2. Else a future `data-task-scheduled` plus
+   `data-task-priority` in `high|medium|low|lowest` shows the digit
+   (BM24: `medium` + future → CSS `2`). Off-ladder `highest` and
+   default `normal` do not digit.
+3. Else a future date plus `.task-recurring` shows the loop.
+4. Else a future date shows hollow `?`.
+5. Else `&` by elimination: today/past/missing dates, unresolved
+   ids, closed deps, and `stale` all look like `&` because Tasks
+   cannot prove those cases.
+
+Digit rows clip `.task-priority` (the same clip pattern priority
+marks already use, never `display: none`). `prj` rows clip the
+`#prj_is_blocked` tag the same way and keep their bars, because the
+box is a chevron, not a digit. The session toggle restores Tasks
+results. `#prj_is_blocked_old` is not a project token.
 
 ## Reliability and invalidation
 
@@ -410,8 +455,10 @@ exists.
   checkbox mark; this Dataview build does not emit a file path or file
   link, so the harness injects a proven origin on BM4 and the adapter
   recovers canonical text from the Tasks cache; unprovable Dataview rows
-  stay neutral; Tasks query rows stay unmarked by JS (their CSS marks
-  belong to a later phase)
+  stay neutral; Tasks query rows stay unmarked by JS and take their
+  CSS marks from Tasks' own attributes (BM24: `medium` + future
+  scheduled → CSS `2`; short mode and `hide priority` keep the same
+  `li` attributes; the toggle restores the snippet `?`)
 - fenced code stays neutral; quoted tasks mark in both views
 - a targeted BMClick edit that adds an open `dependsOn` changes that
   row's key; BM6 empties then restores the Tasks cache through
@@ -425,5 +472,5 @@ exists.
 
 Still pending for the parent visual-review phase: a real reconcile
 turning a row `stale` and then clear, iOS glyph rendering, third-party
-checkbox packs, human scrolling checks, a 100-task project note scroll,
-and the Tasks-results CSS marks (BM24).
+checkbox packs, human scrolling checks, and a 100-task project note
+scroll. Tasks-results CSS marks (BM24) are verified in the e2e.
