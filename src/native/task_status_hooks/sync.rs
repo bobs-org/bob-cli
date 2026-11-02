@@ -483,16 +483,72 @@ pub(super) fn sync_task_statuses(
         &structurally_updated_daily,
         &pomodoro_model,
     );
-    let normalized_daily = apply_empty_pomodoro_plan(
+    let mut normalized_daily = apply_empty_pomodoro_plan(
         &structurally_updated_daily,
         &empty_pomodoro_plan,
     );
-    let updated_lines = logical_lines(&normalized_daily);
-    let updated_section =
+    let mut updated_lines = logical_lines(&normalized_daily);
+    let mut updated_section =
         native_pomodoro::pomodoros_section_range(&updated_lines)
             .expect("the structural rewrite preserves the Pomodoros section");
-    let updated_pomodoro_model =
-        scan_pomodoros(&updated_lines, updated_section);
+    let mut updated_pomodoro_model =
+        scan_pomodoros(&updated_lines, updated_section.clone());
+    // Settle ended off-clock Event Tasks into closed off-clock MEETs.
+    // Runs on the structurally normalized ledger at now, before status
+    // derivation, so completed rows and new MEETs flow through the rest
+    // of this pass. Same-note links resolve locally; explicit paths to
+    // the daily note resolve too.
+    let mut settled_events: Vec<SettledEvent> = Vec::new();
+    let mut settle_removed_empty: Vec<RemovedEmptyPomodoro> = Vec::new();
+    if let Some(daily_rel) = daily_relative {
+        let daily_rel_buf = daily_rel.to_path_buf();
+        let daily_stem = daily_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let daily_no_ext = daily_rel
+            .to_string_lossy()
+            .trim_end_matches(".md")
+            .to_string();
+        let mut settle_resolved: BTreeMap<RawReference, ResolvedReference> =
+            BTreeMap::new();
+        for reference in &updated_pomodoro_model.all_references {
+            let target = reference.target.trim();
+            if target.is_empty()
+                || target == daily_stem
+                || target == daily_no_ext
+            {
+                settle_resolved.insert(
+                    reference.clone(),
+                    ResolvedReference {
+                        path: daily_rel_buf.clone(),
+                        statuses: Vec::new(),
+                    },
+                );
+            }
+        }
+        let now_dt = bob_env::current_datetime();
+        let settle = plan_settle(
+            &normalized_daily,
+            &daily_rel_buf,
+            anchor,
+            now_dt,
+            &settle_resolved,
+            &settings.global_filter,
+        );
+        if !settle.settled.is_empty() || settle.contents != normalized_daily {
+            normalized_daily = settle.contents;
+            settled_events = settle.settled;
+            settle_removed_empty = settle.removed_empty;
+            updated_lines = logical_lines(&normalized_daily);
+            updated_section =
+                native_pomodoro::pomodoros_section_range(&updated_lines)
+                    .expect("settle preserves the Pomodoros section");
+            updated_pomodoro_model =
+                scan_pomodoros(&updated_lines, updated_section.clone());
+        }
+    }
     let mut files = files;
     let canonical_daily_path = daily_path.canonicalize().ok();
     if let Some(file) = files.iter_mut().find(|file| {
@@ -964,6 +1020,7 @@ pub(super) fn sync_task_statuses(
             &project_task_identities,
         );
     let mut removed_empty_pomodoros = empty_pomodoro_plan.removed;
+    removed_empty_pomodoros.extend(settle_removed_empty);
     removed_empty_pomodoros.extend(consumed_empty_pomodoros);
     let apply_report = if request.dry_run {
         ApplyReport::default()
@@ -1037,6 +1094,7 @@ pub(super) fn sync_task_statuses(
         unblocked_fields_written,
         unblocked_fields_pruned,
         plan_budget,
+        settled: settled_events,
     })
 }
 

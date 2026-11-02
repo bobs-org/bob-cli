@@ -29,6 +29,10 @@ In practice it:
   completed references, removes canceled-task bullets, consumes live Task
   Links to effectively Blocked tasks under today's open Pomodoros, deletes
   childless Pomodoros, and repairs `🍅` markers
+- Settles ended off-clock Event Tasks still parked under an unstarted `()`
+  placeholder into closed `[off:: Nm]` MEETs, trimmed around on-clock
+  sessions, and completes their task rows (see
+  [Settled off-clock events](#settled-off-clock-events))
 
 The latest existing earlier daily note is a read-only recent-activity source:
 it supplies the rank an otherwise-unblocked Blocked task recovers to and the
@@ -220,6 +224,29 @@ invocation, while retaining an entry that receives a moved child.
 Dry-run reports the same deterministic removals without changing the vault.
 Live runs write through the normal guarded snapshot, recovery, and retry path.
 A second run after a successful cleanup is a no-op.
+
+### Settled off-clock events
+
+During structural cleanup, the command settles ended off-clock Event
+Tasks still parked under an unstarted `()` placeholder. Every open Event Task
+carrying `#offclock` (or `#off-clock` / `#untracked`) whose span has ended
+and whose only Task Link sits under an open untimed `()` MEET placeholder
+settles: back-to-back events cluster (`next.start ≤ cluster end`), every
+on-clock timed session's span (closed or running) is subtracted, and each
+remaining piece of at least 5 minutes becomes a closed
+`- [x] (**SSSS-EEEE** [off:: Nm]) — MEET` in time order, linking
+`🍅 ~~[[#^id]]~~` for each event it overlaps. The placeholder links move out
+(the empty-Pomodoro rule then deletes a childless placeholder), and each
+settled event row is completed (`[x]` plus its done date) through the same
+completion path a timed close uses for a meeting that ended inside the
+session. A cluster fully covered by on-clock sessions does not settle.
+Cancelled, done, and unlinked rows never settle. Settling is idempotent, and
+`--dry-run` previews it.
+
+Human output prints `◌ settled {title} {span} off the clock` per event
+(`would settle` under `--dry-run`); JSON adds a `settled[]` array with the
+event `title`, one-based `line_number`, `span`, `block_id`, created
+`entry_line`, and `minutes`.
 
 ### Plugin keymap cleanup
 
@@ -974,7 +1001,8 @@ the exact staggered crontab this project runs.
 
 Human output lists every Next promotion, In-Progress promotion, daily-note
 Next clear, Blocked transition, unblock, duplicate line removal,
-empty Pomodoro removal, retired reference, move, and marker repair, plus every
+empty Pomodoro removal, retired reference, move, marker repair, and settled
+off-clock event, plus every
 canceled-reference list-item trigger, followed by a summary. The legacy
 `cleared in progress` section is retained but always empty, and the kept line
 (`kept X already next · Y in progress`) counts only daily-note Next grace
@@ -1178,6 +1206,16 @@ JSON mode prints one object on stdout with these stable fields:
       "line": "- [ ] () — PLAN"
     }
   ],
+  "settled": [
+    {
+      "title": "Lunch with Kelly",
+      "line_number": 5,
+      "span": "1200-1300",
+      "block_id": "lunch-with-kelly",
+      "entry_line": 9,
+      "minutes": 60
+    }
+  ],
   "grouped_task_sections": [
     {
       "path": "Projects/Alpha.md",
@@ -1346,7 +1384,9 @@ Consumption-pass deletions (emptied after blocked-link removal) report
 the composed daily-note text after that first rewrite pass. Compatibility
 counters such as
 `open_pomodoros` and `references` keep their input-count meaning and are not
-decremented by this cleanup. Each unresolved reference
+decremented by this cleanup. `settled` contains one item per settled
+off-clock Event Task with its `title`, one-based event `line_number`, `span`,
+`block_id`, created closed-MEET `entry_line`, and `minutes`. Each unresolved reference
 contains `target`, `block_id`, and `reason`; marker-reference entries contain
 `target`, `block_id`, and the owning `pomodoro` line.
 `grouped_task_sections` contains only containers whose bytes changed for

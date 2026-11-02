@@ -42,7 +42,8 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.blocks_line_updates.len()
         + result.minted_dependent_block_ids.len()
         + result.linked_from_line_updates.len()
-        + result.minted_relation_source_block_ids.len();
+        + result.minted_relation_source_block_ids.len()
+        + result.settled.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -149,6 +150,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_consumed_blocked_section(result);
     print_duplicate_line_section(result);
     print_empty_pomodoro_section(result);
+    print_settled_section(result);
     print_dependency_projection_sections(&styler, result);
     print_blocks_line_sections(&styler, result);
     print_relation_line_sections(&styler, result);
@@ -195,7 +197,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         );
     }
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions, {} settled",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -224,8 +226,37 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.prj_is_blocked_tags_stripped.len(),
         result.unblocked_fields_written.len(),
         result.unblocked_fields_pruned.len(),
-        result.consumed_blocked_references.len()
+        result.consumed_blocked_references.len(),
+        result.settled.len()
     );
+}
+
+pub(super) fn print_settled_section(result: &SyncResult) {
+    if result.settled.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} off-clock events",
+        if result.dry_run {
+            "would settle"
+        } else {
+            "settled"
+        }
+    );
+    for item in &result.settled {
+        if result.dry_run {
+            println!(
+                "    \u{25cc} would settle {} {} off the clock",
+                item.title, item.span
+            );
+        } else {
+            println!(
+                "    \u{25cc} settled {} {} off the clock",
+                item.title, item.span
+            );
+        }
+    }
 }
 
 pub(super) fn print_blocks_line_sections(styler: &Styler, result: &SyncResult) {

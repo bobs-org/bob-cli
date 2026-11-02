@@ -293,6 +293,7 @@ mod tests {
             unblocked_fields_written: Vec::new(),
             unblocked_fields_pruned: Vec::new(),
             plan_budget: None,
+            settled: Vec::new(),
         }
     }
 

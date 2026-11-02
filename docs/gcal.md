@@ -542,6 +542,11 @@ and badge spans both still match Bob's last write, so both update in place.
 `list` shows `task · MEET · off-clock` in VAULT; JSON carries `off_clock`
 and deprecated `untracked`. `sync -f json` rows carry both fields.
 
+An ended `#offclock` Event Task nobody started settles into a closed
+`[off:: Nm]` MEET on the next `bob task reconcile` (see
+[Settled off-clock events](task-status-hooks.md#settled-off-clock-events)).
+Cancel the row before it ends to keep it off the record.
+
 ## Buffers
 
 Write `-30` and/or `+15` as [directive lines](#off-clock-events) in a
@@ -774,3 +779,5 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
   hand-added `[buffer::]` is your edit — kept and reported once.
 - R9 may clear `[*]` Event Tasks on a future day's note until that day is
   today.
+- An off-clock event ending after the last reconcile before midnight does not
+  settle.

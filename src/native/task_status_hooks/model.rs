@@ -318,6 +318,19 @@ pub(super) struct SyncResult {
     pub(super) unblocked_fields_written: Vec<UnblockedFieldChange>,
     pub(super) unblocked_fields_pruned: Vec<UnblockedFieldChange>,
     pub(super) plan_budget: Option<plan_budget::PlanReport>,
+    pub(super) settled: Vec<SettledEvent>,
+}
+
+/// One settled off-clock Event Task: the completed event row plus the
+/// closed off-clock MEET created for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct SettledEvent {
+    pub(crate) title: String,
+    pub(crate) line_number: usize,
+    pub(crate) span: String,
+    pub(crate) block_id: String,
+    pub(crate) entry_line: usize,
+    pub(crate) minutes: u64,
 }
 
 #[derive(Debug, Clone)]

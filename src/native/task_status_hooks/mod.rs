@@ -264,6 +264,7 @@ mod references;
 mod relations;
 mod retry;
 mod settings;
+mod settle;
 mod structure;
 mod sync;
 #[cfg(test)]
@@ -304,13 +305,15 @@ pub(crate) use model::{
     BlockedLinkAction, DeduplicatedCompletedReference, EmptyPomodoroPlan,
     FileScan, LinkBullet, LinkOccurrence, MovedCompletedReference,
     PomodoroEntry, PomodoroModel, RawReference, RemovedEmptyPomodoro,
-    ResolvedReference, StruckCompletedReference, StructuralPlan, TaskLine,
+    ResolvedReference, SettledEvent, StruckCompletedReference, StructuralPlan,
+    TaskLine,
 };
 pub(crate) use parse::parse_tasks;
 pub(crate) use pomodoro::{
     apply_empty_pomodoro_plan, plan_empty_pomodoro_removals,
     plan_empty_pomodoro_removals_with_options, scan_pomodoros,
 };
+pub(crate) use settle::plan_settle;
 pub(crate) use structure::{
     apply_blocked_consumption, apply_blocked_consumption_with_options,
     apply_structural_plan, plan_structural_changes, BlockedConsumptionOptions,
