@@ -2,11 +2,12 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
     path::Path,
 };
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 use super::{
     clock::StatsClock,
@@ -21,14 +22,15 @@ use super::{
 };
 use crate::native::{
     capture::ClockStamp,
-    collect_done::trailing_block_id_in_line,
     event_task::{
-        clock_verdict, line_has_off_clock_tag, ClockVerdict, LinkFact,
+        clock_verdict, event_task_by_id, line_has_off_clock_tag, ClockVerdict,
+        LinkFact,
     },
+    note_tasks::{self, BlockIdLookup, NoteTaskScan, NoteTaskSettings},
     pomodoro_homes::{
-        attribute_session, is_checkbox_line, path_string, unfiled_home,
-        unlinked_home, Home, HomeKind, HomeResolver, Hue, IndexedHomeSource,
-        NoteKind, ResolverHealth, SessionHomes, SessionKind,
+        attribute_session, path_string, unfiled_home, unlinked_home, Home,
+        HomeKind, HomeResolver, Hue, IndexedHomeSource, NoteKind,
+        ResolverHealth, SessionHomes, SessionKind, SessionLink,
     },
     vault_links::LinkResolution,
 };
@@ -115,6 +117,7 @@ impl<'a> HomesEngine<'a> {
         end: NaiveDate,
         collect_sessions: bool,
         clock: StatsClock,
+        bob_dir: &Path,
     ) -> (
         BTreeMap<String, HomeCatalogEntry>,
         HomesHealthReport,
@@ -203,12 +206,13 @@ impl<'a> HomesEngine<'a> {
         }
         health.hue_collisions = collisions;
 
-        // Current task lines by (note path, block id) for drift checks.
-        // Duplicate block ids resolve to no line, matching `by_block_id`.
-        let task_lines = index_task_lines(&index.buffers);
+        // Writer-matching lookup facts from the already indexed buffers:
+        // `note_tasks` scans (ordinary vs embedded) plus same-note events.
+        let task_lookup =
+            ClockTaskLookup::from_buffers(&index.buffers, bob_dir);
 
         let mut sessions = Vec::new();
-        let mut intervals: Vec<(NaiveDate, u32, u32, u32)> = Vec::new();
+        let mut intervals: Vec<OverlapSpan> = Vec::new();
         for (date, note) in &index.daily_notes {
             if *date < start || *date > end {
                 continue;
@@ -240,7 +244,7 @@ impl<'a> HomesEngine<'a> {
                         if session_drifted(
                             session,
                             daily_path,
-                            &task_lines,
+                            &task_lookup,
                             &mut resolver,
                         ) {
                             health.clock_drift =
@@ -250,12 +254,13 @@ impl<'a> HomesEngine<'a> {
                     if let Some((overlap_start, overlap_end)) =
                         parse_session_interval(session.time_range.as_deref())
                     {
-                        intervals.push((
-                            *date,
-                            session.line,
-                            overlap_start,
-                            overlap_end,
-                        ));
+                        intervals.push(OverlapSpan {
+                            date: *date,
+                            path: note.path.clone(),
+                            line: session.line,
+                            start: overlap_start,
+                            end: overlap_end,
+                        });
                     }
                 }
                 let minutes = session.counted_minutes();
@@ -718,48 +723,82 @@ fn add_named(parts: &mut Vec<(String, i64)>, key: &str, value: i64) {
     }
 }
 
-/// Current checkbox task lines by (vault-relative note path, block id).
-/// A block id found on more than one line resolves to no line, matching
-/// `note_tasks::by_block_id`: drift needs exactly one current task line.
-fn index_task_lines(
-    buffers: &[(String, String)],
-) -> HashMap<(String, String), String> {
-    let mut lines: HashMap<(String, String), String> = HashMap::new();
-    let mut duplicates: HashSet<(String, String)> = HashSet::new();
-    for (path, contents) in buffers {
-        for line in contents.lines() {
-            let Some(block_id) = trailing_block_id_in_line(line) else {
-                continue;
-            };
-            if !is_checkbox_line(line) {
-                continue;
-            }
-            let key = (path.clone(), block_id);
-            if duplicates.contains(&key) {
-                continue;
-            }
-            if lines.contains_key(&key) {
-                lines.remove(&key);
-                duplicates.insert(key);
-            } else {
-                lines.insert(key, line.to_string());
-            }
+/// In-memory task lookup matching the counted-link writer's
+/// `resolve_clock_fact`: ordinary vs embedded `note_tasks` scans over the
+/// already indexed buffers, plus same-note Event Tasks. Frontmatter and
+/// fenced examples are not tasks. Duplicate block ids resolve to no line.
+struct ClockTaskLookup<'a> {
+    contents: HashMap<String, &'a str>,
+    ordinary: RefCell<HashMap<String, NoteTaskScan>>,
+    embedded: RefCell<HashMap<String, NoteTaskScan>>,
+    settings: NoteTaskSettings,
+    all_settings: NoteTaskSettings,
+}
+
+impl<'a> ClockTaskLookup<'a> {
+    fn from_buffers(buffers: &'a [(String, String)], bob_dir: &Path) -> Self {
+        let settings = note_tasks::read_settings(bob_dir);
+        let mut all_settings = settings.clone();
+        all_settings.global_filter.clear();
+        Self {
+            contents: buffers
+                .iter()
+                .map(|(path, contents)| (path.clone(), contents.as_str()))
+                .collect(),
+            ordinary: RefCell::new(HashMap::new()),
+            embedded: RefCell::new(HashMap::new()),
+            settings,
+            all_settings,
         }
     }
-    lines
+
+    fn contents(&self, path: &str) -> Option<&'a str> {
+        self.contents.get(path).copied()
+    }
+
+    fn task_off_clock(
+        &self,
+        path: &str,
+        block_id: &str,
+        embedded: bool,
+    ) -> Option<bool> {
+        let contents = self.contents(path)?;
+        let settings = if embedded {
+            &self.all_settings
+        } else {
+            &self.settings
+        };
+        let cache = if embedded {
+            &self.embedded
+        } else {
+            &self.ordinary
+        };
+        let mut cache = cache.borrow_mut();
+        let scan = cache
+            .entry(path.to_string())
+            .or_insert_with(|| note_tasks::scan(contents, settings));
+        match scan.by_block_id(block_id) {
+            BlockIdLookup::Found(task) => {
+                let line = contents.lines().nth(task.line_index)?;
+                Some(line_has_off_clock_tag(line))
+            }
+            BlockIdLookup::NotATask { .. }
+            | BlockIdLookup::Duplicate(_)
+            | BlockIdLookup::Missing => None,
+        }
+    }
 }
 
 /// Whether a keyed row's key disagrees with the verdict recomputed from its
 /// counted Task Links. Closed rows are history: later tag edits are
-/// reported here and never applied. Only fully resolved non-empty lineups
-/// can drift; unresolved or ambiguous links keep their existing resolver
-/// diagnostics, and empty lineups follow the shared Unlinked verdict with
-/// no task evidence to disagree with. Bare rows carry no key, and
+/// reported here and never applied. Fully resolved lineups, including the
+/// empty Unlinked lineup, can drift; unresolved or ambiguous links keep
+/// their existing resolver diagnostics. Bare rows carry no key, and
 /// conflicts already surface through `clock_conflicts`.
 fn session_drifted(
     session: &PomodoroSession,
     daily_path: &Path,
-    task_lines: &HashMap<(String, String), String>,
+    lookup: &ClockTaskLookup<'_>,
     resolver: &mut HomeResolver<IndexedHomeSource<'_>>,
 ) -> bool {
     let Some(row_clock) = session.stats_clock() else {
@@ -772,16 +811,13 @@ fn session_drifted(
             continue;
         }
         let Some(off_clock) =
-            resolve_link_clock(link, daily_path, task_lines, resolver)
+            resolve_link_clock(link, daily_path, lookup, resolver)
         else {
             return false;
         };
         facts.push(LinkFact {
             off_clock: Some(off_clock),
         });
-    }
-    if facts.is_empty() {
-        return false;
     }
     match clock_verdict(&facts) {
         ClockVerdict::OffClock => row_clock == StatsClock::Worked,
@@ -792,12 +828,13 @@ fn session_drifted(
 /// Resolve one counted Task Link to its current task line and read the
 /// `#offclock` tag there. `None` means the link does not pin to exactly
 /// one task: no block id, an ambiguous or missing note, or a missing or
-/// duplicated block id. Same-note blocks resolve through the daily note,
-/// and archived tasks resolve wherever the note index finds them.
+/// duplicated block id. Same-note empty targets try Event Tasks first,
+/// then the writer `note_tasks` lookup (embedded links ignore the global
+/// filter). Archived tasks resolve wherever the note index finds them.
 fn resolve_link_clock(
-    link: &crate::native::pomodoro_homes::SessionLink,
+    link: &SessionLink,
     daily_path: &Path,
-    task_lines: &HashMap<(String, String), String>,
+    lookup: &ClockTaskLookup<'_>,
     resolver: &mut HomeResolver<IndexedHomeSource<'_>>,
 ) -> Option<bool> {
     if link.block_id.is_empty() {
@@ -808,8 +845,14 @@ fn resolve_link_clock(
     else {
         return None;
     };
-    let line = task_lines.get(&(path_string(&path), link.block_id.clone()))?;
-    Some(line_has_off_clock_tag(line))
+    let path_key = path_string(&path);
+    if link.target.is_empty()
+        && let Some(contents) = lookup.contents(&path_key)
+        && let Some(event) = event_task_by_id(&path, contents, &link.block_id)
+    {
+        return Some(event.off_clock);
+    }
+    lookup.task_off_clock(&path_key, &link.block_id, link.embedded)
 }
 
 /// Parse a ledger time range into half-open minutes for overlap checks.
@@ -846,66 +889,156 @@ fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
 /// the cap; only the detail sample is bounded.
 const MAX_OVERLAP_DETAILS: usize = 50;
 
+/// One closed timed session as a half-open interval on its ledger date.
+/// Overnight ends are already normalized past midnight (`end` may exceed
+/// 1440); absolute coordinates then let the next day's early session
+/// overlap this one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OverlapSpan {
+    date: NaiveDate,
+    path: String,
+    line: u32,
+    start: u32,
+    end: u32,
+}
+
+impl OverlapSpan {
+    fn abs_start(&self) -> i64 {
+        abs_minutes(self.date, self.start)
+    }
+
+    fn abs_end(&self) -> i64 {
+        abs_minutes(self.date, self.end)
+    }
+}
+
+fn abs_minutes(date: NaiveDate, minutes: u32) -> i64 {
+    i64::from(date.num_days_from_ce()) * 24 * 60 + i64::from(minutes)
+}
+
+/// Ranked overlap detail for a max-heap of the 50 smallest pairs.
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct RankedOverlap(OverlapReport);
+
+impl Ord for RankedOverlap {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .date
+            .cmp(&other.0.date)
+            .then_with(|| self.0.lines.cmp(&other.0.lines))
+            .then_with(|| self.0.minutes.cmp(&other.0.minutes))
+            .then_with(|| self.0.paths.cmp(&other.0.paths))
+    }
+}
+
+impl PartialOrd for RankedOverlap {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn overlap_pair(
+    left: &OverlapSpan,
+    right: &OverlapSpan,
+) -> Option<OverlapReport> {
+    let shared = left
+        .abs_end()
+        .min(right.abs_end())
+        .saturating_sub(left.abs_start().max(right.abs_start()));
+    if shared <= 0 {
+        return None;
+    }
+    let (first, second) = if (left.date, left.line, left.path.as_str())
+        <= (right.date, right.line, right.path.as_str())
+    {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let paths = (first.path != second.path)
+        .then(|| vec![first.path.clone(), second.path.clone()]);
+    Some(OverlapReport {
+        date: first.date,
+        lines: vec![first.line, second.line],
+        minutes: u32::try_from(shared).unwrap_or(u32::MAX),
+        paths,
+    })
+}
+
 /// Sweep closed timed sessions for overlap using actual timed intervals,
-/// independent of keyed minute overrides. Comparisons stay per date inside
-/// the displayed window, never quadratic over all history. The aggregate
-/// is the union covered by two or more sessions, so a triple overlap
-/// contributes its shared minutes once even though the pairwise detail
-/// lists every pair. Clock totals never subtract this value.
+/// independent of keyed minute overrides. Intervals use date-aware minute
+/// coordinates so an overnight session can overlap the next day's early
+/// session. Nonoverlapping rows skip in start order. The aggregate is the
+/// union covered by two or more sessions, so a triple overlap contributes
+/// its shared minutes once even though the pairwise detail lists every
+/// pair. At most 50 details are kept during traversal (the 50 that would
+/// sort first by date, lines, minutes, then paths). Clock totals never
+/// subtract this value.
 fn detect_overlaps(
-    intervals: Vec<(NaiveDate, u32, u32, u32)>,
+    mut intervals: Vec<OverlapSpan>,
 ) -> (u32, Vec<OverlapReport>) {
-    let mut by_date: BTreeMap<NaiveDate, Vec<(u32, u32, u32)>> =
-        BTreeMap::new();
-    for (date, line, start, end) in intervals {
-        by_date.entry(date).or_default().push((line, start, end));
+    if intervals.is_empty() {
+        return (0, Vec::new());
     }
+    let mut events: Vec<(i64, i32)> = Vec::with_capacity(intervals.len() * 2);
+    for span in &intervals {
+        events.push((span.abs_start(), 1));
+        events.push((span.abs_end(), -1));
+    }
+    events.sort_by(|left, right| {
+        left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
+    });
     let mut total = 0u32;
-    let mut details = Vec::new();
-    for (date, mut spans) in by_date {
-        spans.sort();
-        let mut events: Vec<(u32, i32)> = Vec::with_capacity(spans.len() * 2);
-        for (_, start, end) in &spans {
-            events.push((*start, 1));
-            events.push((*end, -1));
+    let mut depth = 0i32;
+    let mut covered_from = 0i64;
+    for (at, delta) in events {
+        let covered = depth >= 2;
+        depth += delta;
+        if covered && depth < 2 {
+            total = total.saturating_add(
+                u32::try_from(at.saturating_sub(covered_from)).unwrap_or(0),
+            );
+        } else if !covered && depth >= 2 {
+            covered_from = at;
         }
-        events.sort_by(|left, right| {
-            left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
-        });
-        let mut depth = 0i32;
-        let mut covered_from = 0u32;
-        for (at, delta) in events {
-            let covered = depth >= 2;
-            depth += delta;
-            if covered && depth < 2 {
-                total = total.saturating_add(at.saturating_sub(covered_from));
-            } else if !covered && depth >= 2 {
-                covered_from = at;
+    }
+
+    intervals.sort_by(|left, right| {
+        left.abs_start()
+            .cmp(&right.abs_start())
+            .then_with(|| left.date.cmp(&right.date))
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let mut kept: BinaryHeap<RankedOverlap> = BinaryHeap::new();
+    for (index, left) in intervals.iter().enumerate() {
+        for right in &intervals[index + 1..] {
+            if right.abs_start() >= left.abs_end() {
+                break;
             }
-        }
-        for (first, rest) in spans.iter().enumerate() {
-            for other in &spans[first + 1..] {
-                let shared =
-                    rest.2.min(other.2).saturating_sub(rest.1.max(other.1));
-                if shared > 0 {
-                    let mut lines = vec![rest.0, other.0];
-                    lines.sort();
-                    details.push(OverlapReport {
-                        date,
-                        lines,
-                        minutes: shared,
-                    });
-                }
+            let Some(detail) = overlap_pair(left, right) else {
+                continue;
+            };
+            if kept.len() < MAX_OVERLAP_DETAILS {
+                kept.push(RankedOverlap(detail));
+            } else if kept
+                .peek()
+                .is_some_and(|worst| RankedOverlap(detail.clone()) < *worst)
+            {
+                kept.pop();
+                kept.push(RankedOverlap(detail));
             }
         }
     }
+    let mut details: Vec<OverlapReport> =
+        kept.into_iter().map(|ranked| ranked.0).collect();
     details.sort_by(|left, right| {
         left.date
             .cmp(&right.date)
             .then_with(|| left.lines.cmp(&right.lines))
             .then_with(|| left.minutes.cmp(&right.minutes))
+            .then_with(|| left.paths.cmp(&right.paths))
     });
-    details.truncate(MAX_OVERLAP_DETAILS);
     (total, details)
 }
 
@@ -1813,15 +1946,32 @@ mod tests {
         assert_eq!(super::parse_session_interval(Some("25:00-2600")), None);
     }
 
+    fn span(
+        date: NaiveDate,
+        path: &str,
+        line: u32,
+        start: u32,
+        end: u32,
+    ) -> super::OverlapSpan {
+        super::OverlapSpan {
+            date,
+            path: path.to_string(),
+            line,
+            start,
+            end,
+        }
+    }
+
     #[test]
     fn overlap_sweep_counts_shared_minutes_once_for_triple_overlaps() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 9).expect("fixture date");
+        let note = "2026/20261009.md";
         // A 08:00-09:00, B 08:30-09:30, C 08:45-09:15: the union covered
         // twice is 08:30-09:15 (45m) even though three pairs overlap.
         let (total, details) = super::detect_overlaps(vec![
-            (day, 9, 480, 540),
-            (day, 10, 510, 570),
-            (day, 11, 525, 555),
+            span(day, note, 9, 480, 540),
+            span(day, note, 10, 510, 570),
+            span(day, note, 11, 525, 555),
         ]);
         assert_eq!(total, 45);
         assert_eq!(details.len(), 3);
@@ -1832,53 +1982,129 @@ mod tests {
         assert_eq!(details[2].lines, vec![10, 11]);
         assert_eq!(details[2].minutes, 30);
         assert!(details.iter().all(|detail| detail.date == day));
+        assert!(details.iter().all(|detail| detail.paths.is_none()));
     }
 
     #[test]
     fn overlap_ignores_touching_endpoints_and_normalizes_overnight() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 9).expect("fixture date");
+        let note = "2026/20261009.md";
         // Adjacent sessions share an endpoint but never overlap.
         let (total, details) = super::detect_overlaps(vec![
-            (day, 9, 480, 510),
-            (day, 10, 510, 540),
+            span(day, note, 9, 480, 510),
+            span(day, note, 10, 510, 540),
         ]);
         assert_eq!(total, 0);
         assert!(details.is_empty());
         // Two overnight spans overlap past midnight after normalization.
         let (total, details) = super::detect_overlaps(vec![
-            (day, 9, 1380, 1500),
-            (day, 10, 1320, 1410),
+            span(day, note, 9, 1380, 1500),
+            span(day, note, 10, 1320, 1410),
         ]);
         assert_eq!(total, 30);
         assert_eq!(details.len(), 1);
         assert_eq!(details[0].lines, vec![9, 10]);
         assert_eq!(details[0].minutes, 30);
+        assert!(details[0].paths.is_none());
+    }
+
+    #[test]
+    fn overlap_cross_note_overnight_pair_uses_earlier_date_and_paths() {
+        let ninth = NaiveDate::from_ymd_opt(2026, 10, 9).expect("oct 9");
+        let tenth = NaiveDate::from_ymd_opt(2026, 10, 10).expect("oct 10");
+        // 23:30-00:30 on Oct 9 and 00:15-00:45 on Oct 10 share 15 minutes.
+        let (total, details) = super::detect_overlaps(vec![
+            span(ninth, "2026/20261009.md", 12, 1410, 1470),
+            span(tenth, "2026/20261010.md", 4, 15, 45),
+        ]);
+        assert_eq!(total, 15);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].date, ninth);
+        assert_eq!(details[0].lines, vec![12, 4]);
+        assert_eq!(details[0].minutes, 15);
+        assert_eq!(
+            details[0].paths,
+            Some(vec![
+                "2026/20261009.md".to_string(),
+                "2026/20261010.md".to_string(),
+            ])
+        );
     }
 
     #[test]
     fn overlap_details_cap_at_fifty_while_the_aggregate_stays_exact() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 9).expect("fixture date");
-        let intervals = (1..=61u32).map(|line| (day, line, 480, 540)).collect();
+        let note = "2026/20261009.md";
+        let intervals = (1..=61u32)
+            .map(|line| span(day, note, line, 480, 540))
+            .collect();
         let (total, details) = super::detect_overlaps(intervals);
         assert_eq!(total, 60);
         assert_eq!(details.len(), 50);
         assert_eq!(details[0].lines, vec![1, 2]);
+        assert_eq!(details[49].lines, vec![1, 51]);
+        assert!(details.iter().all(|detail| detail.paths.is_none()));
     }
 
     #[test]
-    fn duplicate_block_ids_resolve_to_no_task_line() {
-        let buffers = vec![(
-            "tasks.md".to_string(),
-            "- [ ] #task One ^t\n- [ ] #task Two ^t\n- [ ] #task Three ^u\n"
+    fn overlap_skips_many_nonoverlapping_rows_on_one_day() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 9).expect("fixture date");
+        let note = "2026/20261009.md";
+        // 80 adjacent 15-minute sessions: touching endpoints, no overlap.
+        let intervals = (0..80u32)
+            .map(|index| {
+                let start = 8 * 60 + index * 15;
+                span(day, note, index + 1, start, start + 15)
+            })
+            .collect();
+        let (total, details) = super::detect_overlaps(intervals);
+        assert_eq!(total, 0);
+        assert!(details.is_empty());
+    }
+
+    #[test]
+    fn parsed_task_lookup_skips_fences_frontmatter_and_duplicates() {
+        let dir = TempDir::new().unwrap();
+        let buffers = vec![
+            (
+                "tasks.md".to_string(),
+                concat!(
+                    "---\n",
+                    "- [ ] #task Ghost #offclock ^ghost\n",
+                    "---\n",
+                    "- [ ] #task One ^t\n",
+                    "- [ ] #task Two ^t\n",
+                    "- [ ] #task Three ^u\n",
+                    "```\n",
+                    "- [ ] #task Fenced #offclock ^off1\n",
+                    "```\n",
+                    "- [ ] #task Real ^off1\n",
+                    "- [ ] checkbox only ^plain\n",
+                )
                 .to_string(),
-        )];
-        let lines = super::index_task_lines(&buffers);
-        assert!(lines
-            .get(&("tasks.md".to_string(), "t".to_string()))
-            .is_none());
+            ),
+            (
+                "done/old.md".to_string(),
+                "- [x] #task Archived #offclock [created:: 2026-10-01] [completion:: 2026-10-09] ^arch1\n"
+                    .to_string(),
+            ),
+        ];
+        let lookup = super::ClockTaskLookup::from_buffers(&buffers, dir.path());
+        assert!(lookup.task_off_clock("tasks.md", "t", false).is_none());
+        assert_eq!(lookup.task_off_clock("tasks.md", "u", false), Some(false));
+        assert!(lookup.task_off_clock("tasks.md", "ghost", false).is_none());
         assert_eq!(
-            lines.get(&("tasks.md".to_string(), "u".to_string())),
-            Some(&"- [ ] #task Three ^u".to_string())
+            lookup.task_off_clock("tasks.md", "off1", false),
+            Some(false)
+        );
+        assert!(lookup.task_off_clock("tasks.md", "plain", false).is_none());
+        assert_eq!(
+            lookup.task_off_clock("tasks.md", "plain", true),
+            Some(false)
+        );
+        assert_eq!(
+            lookup.task_off_clock("done/old.md", "arch1", false),
+            Some(true)
         );
     }
 }

@@ -176,6 +176,7 @@ pub(crate) fn compute(
         health_end,
         collect_sessions,
         request.clock,
+        &request.vault,
     );
 
     let mut metrics = Vec::with_capacity(selected.len());
@@ -2111,6 +2112,159 @@ stats:
         assert_eq!(health_json["off_clock_sessions"], 1);
         assert_eq!(health_json["untracked_sessions"], 1);
         assert_eq!(health_json["unstamped_sessions"], 1);
+    }
+
+    #[test]
+    fn clock_diagnostics_repair_empty_lineups_parsed_tasks_and_cross_note_overlap(
+    ) {
+        let workspace = TempDir::new().unwrap();
+        let vault = workspace.path().join("vault");
+        copy_tree(&fixture_vault(), &vault);
+        for dir in ["a", "b"] {
+            let note = vault.join(dir).join("dup.md");
+            std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+            std::fs::write(
+                &note,
+                "- [x] #task Dup task [created:: 2026-10-09] [completion:: 2026-10-09] ^t\n",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            vault.join("embed.md"),
+            "- [ ] checkbox only #offclock ^plain\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(vault.join("done")).unwrap();
+        std::fs::write(
+            vault.join("done/old.md"),
+            "- [x] #task Archived #offclock [created:: 2026-10-01] [completion:: 2026-10-09] ^arch1\n",
+        )
+        .unwrap();
+        let tasks = vault.join("tasks.md");
+        let mut task_text = std::fs::read_to_string(&tasks).unwrap();
+        task_text = format!(
+            concat!(
+                "---\n",
+                "- [ ] #task Ghost #offclock ^ghost\n",
+                "---\n",
+                "{task_text}",
+                "- [ ] #task Off-clock errand #offclock [created:: 2026-10-09] ^off1\n",
+                "- [x] #task On-clock chore [created:: 2026-10-09] [completion:: 2026-10-09] ^on1\n",
+                "- [ ] #task Walk #off-clock [created:: 2026-10-09] ^walk\n",
+                "- [ ] #task Cook #untracked [created:: 2026-10-09] ^cook\n",
+                "- [ ] #task One ^dup\n",
+                "- [ ] #task Two ^dup\n",
+                "```\n",
+                "- [ ] #task Fenced ghost #offclock ^fence1\n",
+                "```\n",
+                "- [ ] #task Real fence target [created:: 2026-10-09] ^fence1\n",
+            ),
+            task_text = task_text
+        );
+        std::fs::write(&tasks, task_text).unwrap();
+
+        let oct8 = vault.join("2026/20261008.md");
+        let mut oct8_text = std::fs::read_to_string(&oct8).unwrap();
+        oct8_text.push_str(
+            "\n## Pomodoros\n- [x] (**23:45 - 00:30** [t:: 45m]) — PREV\n",
+        );
+        std::fs::write(&oct8, oct8_text).unwrap();
+
+        let oct9 = vault.join("2026/20261009.md");
+        let mut oct9_text = std::fs::read_to_string(&oct9).unwrap();
+        oct9_text.push_str(concat!(
+            "- [x] (**14:00 - 14:25** [t:: 25m]) — LATE\n  - [[TASKS#^off1]]\n",
+            "- [x] (**15:00 - 15:20** [off:: 20m]) — EARLY\n  - [[tasks#^on1]]\n",
+            "- [x] (**16:00 - 16:10** [off:: 10m]) — LOST\n  - [[missing#^x1]]\n",
+            "- [x] (**16:20 - 16:30** [off:: 10m]) — TWICE\n  - [[dup#^t]]\n",
+            "- [x] (**16:40 - 16:50** [off:: 10m]) — NOBLOCK\n  - [[tasks#^nope]]\n",
+            "- [x] (**17:00 - 17:10** [off:: 10m]) — DUPID\n  - [[tasks#^dup]]\n",
+            "- [x] (**17:20 - 17:30** [off:: 10m]) — GHOST\n  - [[tasks#^ghost]]\n",
+            "- [x] (**17:40 - 17:50** [off:: 10m]) — FENCE\n  - [[tasks#^fence1]]\n",
+            "- [x] (**18:00 - 18:20** [off:: 20m]) — ALIAS\n  - [[tasks#^walk]]\n  - [[tasks#^cook]]\n",
+            "- [x] (**18:30 - 18:40** [off:: 10m]) — ARCH\n  - [[old#^arch1]]\n",
+            "- [x] (**18:50 - 19:00** [off:: 10m]) — EMBED\n  - ![[embed#^plain]]\n",
+            "- [x] (**19:10 - 19:35** [off:: 25m]) — EMPTY\n",
+            "- [x] (**19:40 - 20:00** [t:: 20m]) — EMPTYWORK\n",
+            "- [x] (**20:10 - 20:30** [off:: 20m]) — DEFER\n  - LINKS [[tasks#^off1]]\n",
+            "- [x] (**21:00 - 21:30** [off:: 30m]) — NIGHT\n  - [[#^night]]\n",
+            "- [x] (**23:30 - 00:30** [t:: 60m]) — NIGHTSHIFT\n",
+            "\n## Events\n- [ ] #task **2100-2130** Night #untracked ^night\n",
+        ));
+        std::fs::write(&oct9, oct9_text).unwrap();
+
+        let oct10 = vault.join("2026/20261010.md");
+        let mut oct10_text = std::fs::read_to_string(&oct10).unwrap();
+        oct10_text.push_str("- [x] (**00:15 - 00:45** [t:: 30m]) — DAWN\n");
+        std::fs::write(&oct10, oct10_text).unwrap();
+
+        let config = write_config(&workspace, "stats:\n");
+        let vault_hash = tree_hash(&vault);
+        let config_hash = {
+            let mut hasher = DefaultHasher::new();
+            std::fs::read(&config).unwrap().hash(&mut hasher);
+            hasher.finish()
+        };
+
+        let mut request =
+            StatsRequest::at(vault.clone(), config.clone(), fixed_now());
+        request.selection =
+            MetricSelection::Explicit(vec!["worked".to_string()]);
+        request.range = Some("2026-10-09..2026-10-10".to_string());
+        request.grouping = Grouping::Day;
+        let worked = compute(&request).expect("worked diagnostics");
+        let mut off_request = request.clone();
+        off_request.clock = StatsClock::OffClock;
+        let off = compute(&off_request).expect("off-clock diagnostics");
+        let mut total_request = request.clone();
+        total_request.clock = StatsClock::Total;
+        let total = compute(&total_request).expect("total diagnostics");
+
+        for report in [&worked, &off, &total] {
+            let health = &report.health.homes;
+            // LATE, EARLY, FENCE (resolved on-clock), EMPTY, DEFER.
+            assert_eq!(health.clock_drift, 5, "{:?}", report.clock.value);
+            // PREV on Oct 8 is outside the ledger-date window.
+            assert_eq!(health.overlap_minutes, 15, "{:?}", report.clock.value);
+            assert_eq!(health.overlaps.len(), 1);
+            assert_eq!(health.overlaps[0].date, day(9));
+            assert_eq!(health.overlaps[0].minutes, 15);
+            assert_eq!(
+                health.overlaps[0].paths,
+                Some(vec![
+                    "2026/20261009.md".to_string(),
+                    "2026/20261010.md".to_string(),
+                ])
+            );
+            assert_eq!(health.overlaps[0].lines.len(), 2);
+        }
+
+        let overlap_json =
+            serde_json::to_value(&worked.health.homes.overlaps[0])
+                .expect("overlap JSON");
+        assert_eq!(overlap_json["date"], "2026-10-09");
+        assert_eq!(
+            overlap_json["paths"],
+            serde_json::json!(["2026/20261009.md", "2026/20261010.md"])
+        );
+
+        // Overlap is diagnostic-only: clock totals still sum recorded keys.
+        let options = &worked.clock.options;
+        assert_eq!(options[0].value, "worked");
+        assert_eq!(options[1].value, "off-clock");
+        assert_eq!(options[2].minutes, options[0].minutes + options[1].minutes);
+        assert!(options[0].minutes > 0);
+        assert!(options[1].minutes > 0);
+        assert_eq!(options[0].minutes, off.clock.options[0].minutes);
+        assert_eq!(options[1].minutes, total.clock.options[1].minutes);
+
+        assert_eq!(tree_hash(&vault), vault_hash);
+        let config_after = {
+            let mut hasher = DefaultHasher::new();
+            std::fs::read(&config).unwrap().hash(&mut hasher);
+            hasher.finish()
+        };
+        assert_eq!(config_after, config_hash);
     }
 
     #[test]

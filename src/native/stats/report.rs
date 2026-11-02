@@ -375,10 +375,11 @@ pub(crate) struct HomesHealthReport {
     /// subtract this; it only describes the overlap.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub(crate) overlap_minutes: u32,
-    /// Bounded detail sample of overlapping pairs (at most 50). The
-    /// aggregate `overlap_minutes` stays exact when details are capped:
-    /// it sweeps the union covered twice, so a triple overlap never
-    /// inflates it the way a pairwise listing would.
+    /// Bounded detail sample of overlapping pairs (at most 50, kept
+    /// during the sweep). The aggregate `overlap_minutes` stays exact
+    /// when details are capped: it sweeps the union covered twice, so a
+    /// triple overlap never inflates it the way a pairwise listing would.
+    /// Cross-note pairs add `paths` aligned with `lines`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) overlaps: Vec<OverlapReport>,
     pub(crate) unfiled_links: u32,
@@ -401,13 +402,17 @@ pub(crate) struct HomeLintReport {
 }
 
 /// One overlapping pair of closed timed sessions. At most 50 entries are
-/// reported; see `HomesHealthReport::overlaps`.
+/// reported; see `HomesHealthReport::overlaps`. `date` is the earlier
+/// source note's ledger date. `paths` is present only for a cross-note
+/// pair and is aligned with `lines`, ordered by source date then line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct OverlapReport {
     #[serde(serialize_with = "iso_date")]
     pub(crate) date: NaiveDate,
     pub(crate) lines: Vec<u32>,
     pub(crate) minutes: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

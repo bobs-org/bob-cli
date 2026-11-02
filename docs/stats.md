@@ -270,7 +270,14 @@ duration key (`unstamped_sessions`), rows with both keys
 recomputed from their fully resolved counted Task Links (`clock_drift`),
 and minutes covered by two or more closed timed sessions
 (`overlap_minutes`, computed from the real time ranges, so a triple overlap
-never inflates it; clock totals never subtract it). Stats never rewrites a
+never inflates it; clock totals never subtract it). An empty fully resolved
+lineup uses the shared Unlinked verdict, so a keyed off-clock row with no
+counted links drifts and a keyed Worked row does not. Drift resolves the
+same tasks the writers do: `note_tasks` scans skip frontmatter and fenced
+examples, ordinary links honor the global filter, embedded links do not,
+and same-note Event Tasks win for empty targets. Overlap uses date-aware
+coordinates, so an overnight session can overlap the next day's early
+session when both ledger dates fall in the window. Stats never rewrites a
 row. See [Health](#data-model-and-quality) for the keys and warning codes.
 
 ## `stats:` config
@@ -430,8 +437,11 @@ counts with the latest timestamp and day), and `health.homes` (in-window
 `(path, line)`). The clock diagnostics add `off_clock_sessions` (deprecated
 `untracked_sessions` stays equal to it during the compatibility window),
 `unstamped_sessions`, `clock_conflicts`, `clock_drift`, `overlap_minutes`, and
-an `overlaps` list of `{date, lines, minutes}` pairs (at most 50 entries;
-the aggregate stays exact when the list is capped); zero counts and empty
+an `overlaps` list of `{date, lines, minutes}` pairs (at most 50 entries
+collected during the sweep, the 50 that sort first; the aggregate stays
+exact when the list is capped). `date` is the earlier source note's ledger
+date. Same-note pairs omit `paths`; a cross-note pair adds `paths` aligned
+with `lines`, ordered by source date then line. Zero counts and empty
 lists are omitted. Matching
 `warning <message>  <code>` lines use `area_color_invalid`,
 `area_hue_collision`, `root_field_invalid`,

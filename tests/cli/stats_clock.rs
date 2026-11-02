@@ -746,3 +746,75 @@ fn clock_reports_never_write_the_vault() {
     }
     assert_eq!(before, snapshot(&vault));
 }
+
+fn run_capture(vault: &Path, day_file: &Path, now: &str, token: &str) -> Value {
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(token)
+        .env("BOB_DAY_FILE", day_file)
+        .env("BOB_NOW", now)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run capture");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
+}
+
+#[test]
+fn writer_stamped_off_clock_row_agrees_with_stats_until_the_task_drifts() {
+    let temp = TempDir::new().expect("tempdir");
+    let vault = temp.path().join("vault");
+    copy_dir(&fixture_vault(), &vault);
+    let tasks = vault.join("tasks.md");
+    let mut text = fs::read_to_string(&tasks).expect("tasks note");
+    text.push_str(
+        "- [ ] #task Walk the dog #offclock [created:: 2026-10-08] ^walk\n",
+    );
+    fs::write(&tasks, text).expect("write tasks");
+    let day_file = vault.join("2026/20261008.md");
+    let mut daily = fs::read_to_string(&day_file).expect("oct 8");
+    daily.push_str(
+        "\n## Pomodoros\n- [ ] (**1600-1630**) — WALK\n  - [[tasks#^walk]]\n- [ ] () — PLAN\n",
+    );
+    fs::write(&day_file, daily).expect("write oct 8");
+
+    let close = run_capture(&vault, &day_file, "2026-10-08 16:30:00", "x");
+    let day_after = fs::read_to_string(&day_file).expect("closed day");
+    assert!(
+        day_after.contains("[off::"),
+        "close writer stamps off-clock: {close}\n{day_after}"
+    );
+    assert!(
+        day_after.contains("- [x]"),
+        "close writer completes the row: {day_after}"
+    );
+
+    let before = snapshot(&vault);
+    let report = run_json(
+        &vault,
+        &["stats", "-r", "2026-10-08..2026-10-11", "-k", "total"],
+    );
+    assert_eq!(report["health"]["homes"].get("clock_drift"), None);
+    let walk = report["sessions"]
+        .as_array()
+        .expect("sessions")
+        .iter()
+        .find(|session| session["name"] == "WALK")
+        .expect("WALK session");
+    assert_eq!(walk["off_clock"], true);
+    assert_eq!(before, snapshot(&vault));
+
+    let mut tasks_text = fs::read_to_string(&tasks).expect("tasks after");
+    tasks_text = tasks_text.replace(" #offclock", "");
+    fs::write(&tasks, tasks_text).expect("retag task");
+    let drifted = run_json(
+        &vault,
+        &["stats", "-r", "2026-10-08..2026-10-11", "-k", "worked"],
+    );
+    assert_eq!(drifted["health"]["homes"]["clock_drift"], 1);
+}
