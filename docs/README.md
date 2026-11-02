@@ -63,6 +63,7 @@ queued intake; full scans also synchronize annotations. The
 | [task-link-marks.md](task-link-marks.md) | Task link marks: status rings on links that point to tasks, in Live Preview and Reading view |
 | [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE` |
 | [today-marks.md](today-marks.md) | Today marks: a display-only tomato on task lines linked under today's open Pomodoros |
+| [frees-marks.md](frees-marks.md) | Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal |
 | [command-catalog.md](command-catalog.md) | Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage |
 <!-- END GENERATED: contract table -->

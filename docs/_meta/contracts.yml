@@ -10,7 +10,7 @@ groups:
         reader: guides/add-prerequisites.md
       - stem: command-catalog
         summary: "Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage"
-        order: 33
+        order: 34
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3
@@ -101,6 +101,9 @@ groups:
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
         order: 31
         reader: concepts/today-and-the-pomodoro-ledger.md
+      - stem: frees-marks
+        summary: "Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks"
+        order: 32
   - title: "References"
     entries:
       - stem: dataview
@@ -122,5 +125,5 @@ groups:
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 32
+        order: 33
         reader: guides/sync-vault-across-machines.md

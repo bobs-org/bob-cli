@@ -114,6 +114,7 @@ plugins:
           - task-link-marks.md
           - task-tag-marks.md
           - today-marks.md
+          - frees-marks.md
           - dataview.md
           - ref.md
           - ref-jobs.md
@@ -307,6 +308,7 @@ nav:
               - "Task link marks": task-link-marks.md
               - "Task tag marks": task-tag-marks.md
               - "Today marks": today-marks.md
+              - "Frees marks": frees-marks.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md

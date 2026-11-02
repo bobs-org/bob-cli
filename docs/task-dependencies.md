@@ -4023,6 +4023,8 @@ JS twin and pinned by the same vectors.
 - **Implementation.** Write new fragments with an explicit relation
   direction. Never reuse the incoming row's `waiting on` copy, action
   callbacks, or aria labels from 140, 150, or 280.
+- **Ledger echo.** The same 🔑 set drives the frees mark after Task Links in today's
+  ledger ([Frees marks](frees-marks.md)).
 
 ### 14.10 Kill switch
 
