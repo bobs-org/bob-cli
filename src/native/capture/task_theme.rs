@@ -38,6 +38,15 @@ pub(super) struct CaptureTaskThemeContext {
     warned_suggestions: BTreeSet<(String, Option<String>)>,
 }
 
+/// Pre-close type inputs for R6 close names: the theme vocabulary, each
+/// Task Link's effective type, and the running name's refs for JSON.
+pub(super) struct CloseTypes {
+    pub(super) naming: capture_pomodoro_close::CloseNaming,
+    /// Refs for the running entry's name components, so the close JSON can
+    /// report the shed types with their hues.
+    pub(super) refs: Vec<ThemeRef>,
+}
+
 pub(super) struct AppliedTaskTheme {
     pub(super) task_line: String,
     pub(super) summary: CaptureTaskThemeChange,
@@ -876,6 +885,107 @@ impl CaptureTaskThemeContext {
         Some(PlacementType {
             suggestion,
             exempt: sources.exempt.into_iter().collect(),
+        })
+    }
+
+    /// Resolve the pre-close types R6 names a close with. Reads every Task
+    /// Link under the running entry through the staged snapshot _before_
+    /// the close stages anything, because a closed task stops suggesting.
+    ///
+    /// Returns `None` when no naming can apply (no running entry, an
+    /// unnamed, MEET, or single-type name, or an unreadable config or
+    /// catalog), so plain closes pay for no catalog load and never rename.
+    pub(super) fn close_types(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        vault: &pomodoro_close::SnapshotCloseVault,
+        day_file: &Path,
+        day_contents: &str,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Option<CloseTypes> {
+        use capture_pomodoro_close::CloseVault;
+        let running =
+            capture_pomodoro_close::find_running_pomodoro(day_contents).ok()?;
+        let name = running.name.as_deref()?;
+        if split_components(name).len() < 2 || routing::is_meet_name(Some(name))
+        {
+            return None;
+        }
+        if !self.load_config(warnings) || !self.load_catalog(warnings) {
+            return None;
+        }
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        let sources = catalog.theme_sources();
+        let types = routing::type_components(Some(name), &sources)
+            .iter()
+            .filter(|item| item.is_type)
+            .count();
+        if types < 2 {
+            return None;
+        }
+        let refs = catalog.theme_refs_for_name(name);
+        let lines: Vec<&str> = day_contents.lines().collect();
+        let range = capture_pomodoro_close::sub_bullet_range(
+            &lines,
+            running.line.saturating_sub(1),
+        );
+        let settings = note_tasks::read_settings(&self.root);
+        // Suggestion warnings describe task placement, not this close.
+        let mut scratch = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut link_types = BTreeMap::new();
+        for index in range {
+            let stripped =
+                capture_pomodoro_close::strip_pomodoro_markers(lines[index]);
+            for token in capture_pomodoro_close::wikilink_tokens(&stripped) {
+                if token.block_id.is_empty() {
+                    continue;
+                }
+                let key = (token.path_part.clone(), token.block_id.clone());
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                let LinkResolution::Found(path) =
+                    vault.resolve_target(day_file, &token.path_part)
+                else {
+                    continue;
+                };
+                let Ok(Some(contents)) = vault.read_latest(&path) else {
+                    continue;
+                };
+                let Ok(task) = capture_pomodoro_close::lookup_task(
+                    &contents,
+                    &settings,
+                    &token.block_id,
+                ) else {
+                    continue;
+                };
+                let Some(task_line) = contents.lines().nth(task.line_index)
+                else {
+                    continue;
+                };
+                let route = path
+                    .strip_prefix(&self.root)
+                    .unwrap_or(&path)
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if let Some(placement) = self.placement_for_task(
+                    planner,
+                    &route,
+                    task_line,
+                    &mut scratch,
+                ) {
+                    link_types.insert(key, placement.suggestion.theme.key);
+                }
+            }
+        }
+        Some(CloseTypes {
+            naming: capture_pomodoro_close::CloseNaming {
+                sources,
+                link_types,
+            },
+            refs,
         })
     }
 

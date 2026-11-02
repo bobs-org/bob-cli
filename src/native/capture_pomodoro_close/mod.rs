@@ -17,6 +17,7 @@ pub(crate) fn close_task_text(description: &str) -> String {
 mod ledger;
 mod linked_tasks;
 mod links;
+mod names;
 mod reset;
 mod selection;
 
@@ -27,10 +28,12 @@ mod selection_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use ledger::plan_ledger_close;
 pub(crate) use ledger::{
-    find_running_pomodoro, plan_ledger_close, plan_ledger_close_with_parked,
-    sub_bullet_range, target_from_token, BlockLinkTarget, FindRunningError,
-    LedgerClosePlan, LedgerLinkRole, RunningPomodoro, WorkLogNode,
+    find_running_pomodoro, plan_ledger_close_with_parked, sub_bullet_range,
+    target_from_token, BlockLinkTarget, FindRunningError, LedgerClosePlan,
+    LedgerLinkRole, RunningPomodoro, WorkLogNode,
 };
 #[allow(unused_imports)]
 pub(crate) use linked_tasks::{
@@ -42,6 +45,7 @@ pub(crate) use links::{
     strikethrough_inner_spans, strip_pomodoro_markers, wikilink_tokens,
     WikiToken,
 };
+pub(crate) use names::{close_names, CloseNaming};
 #[allow(unused_imports)]
 pub(crate) use reset::{
     has_standalone_note, is_reset_selection, is_reset_spec, plan_reset,

@@ -31,10 +31,10 @@ use super::selection::{
     NumberedTaskLink, TaskLinkOutcome, TaskLinkSource,
 };
 use super::{
-    close_task_text, find_running_pomodoro, plan_ledger_close,
+    close_names, close_task_text, find_running_pomodoro,
     plan_ledger_close_with_parked, reset as reset_mod, sub_bullet_range,
-    wikilink_tokens, BlockLinkTarget, FindRunningError, LedgerClosePlan,
-    LedgerLinkRole, RunningPomodoro, WorkLogNode,
+    wikilink_tokens, BlockLinkTarget, CloseNaming, FindRunningError,
+    LedgerClosePlan, LedgerLinkRole, RunningPomodoro, WorkLogNode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -905,6 +905,7 @@ pub(crate) fn plan_pomodoro_close_outcome<V: CloseVault>(
     now: NaiveDateTime,
     vault: &V,
     selection: Option<&CloseSelection>,
+    naming: Option<&CloseNaming>,
 ) -> Result<PomodoroCloseOutcome, PomodoroClosePlanError> {
     let running = find_running_pomodoro(day_contents)
         .map_err(PomodoroClosePlanError::FindRunning)?;
@@ -919,7 +920,7 @@ pub(crate) fn plan_pomodoro_close_outcome<V: CloseVault>(
             return Ok(PomodoroCloseOutcome::Reset(reset));
         }
     }
-    plan_pomodoro_close(day_path, day_contents, now, vault, selection)
+    plan_pomodoro_close(day_path, day_contents, now, vault, selection, naming)
         .map(PomodoroCloseOutcome::Close)
 }
 
@@ -929,6 +930,7 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     now: NaiveDateTime,
     vault: &V,
     selection: Option<&CloseSelection>,
+    naming: Option<&CloseNaming>,
 ) -> Result<PomodoroClosePlan, PomodoroClosePlanError> {
     let running = find_running_pomodoro(day_contents)
         .map_err(PomodoroClosePlanError::FindRunning)?;
@@ -1000,16 +1002,19 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
         .map(|link| link.line)
         .collect();
     check_resolved_park_conflicts(vault, day_path, &task_links)?;
-    let mut ledger = if parked_lines.is_empty() {
-        plan_ledger_close(&working_contents, &running, now)
-    } else {
-        plan_ledger_close_with_parked(
-            &working_contents,
-            &running,
-            now,
-            &parked_lines,
-        )
-    };
+    // R6: the closed session is named after the work done and the
+    // continuation after the work still planned, from each numbered link's
+    // pre-close type and its outcome.
+    let names = naming
+        .zip(running.name.as_deref())
+        .map(|(naming, name)| close_names(name, &task_links, naming));
+    let mut ledger = plan_ledger_close_with_parked(
+        &working_contents,
+        &running,
+        now,
+        &parked_lines,
+        names.as_ref(),
+    );
     let mut planner =
         ClosePlanner::new(vault, day_path, day_contents, &ledger, now);
 

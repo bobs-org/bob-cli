@@ -661,7 +661,7 @@ fn km11_closing_anchor() {
         Some(&pre),
         Some(post),
         Some(ClosingContext {
-            closed_name: "FIX".to_string(),
+            continuation_name: "FIX".to_string(),
             closed_line: 1,
             continuation: Some(ClosingContinuation {
                 line: 4,
@@ -682,6 +682,59 @@ fn km11_closing_anchor() {
         "KM11 role {:?}",
         offer.destination.entry_role
     );
+}
+
+// KM11 (R6): the closing anchor names and reuses the continuation by the
+// shed name, not the closed entry's narrowed name.
+#[test]
+fn km11_closing_anchor_follows_the_continuation_name() {
+    let tree = leaf_tree();
+    let badges = badges_body(residents_pba());
+    let snapshot = leaf_snapshot(&badges, &tree);
+    let pre = day_link("sase_badges#^t");
+    let run = |post: &str| {
+        run_km_full(
+            vec![pred("sase_badges.md", "t", "t", "Draft the badge spec")],
+            &snapshot,
+            Some(&pre),
+            Some(post),
+            Some(ClosingContext {
+                continuation_name: "BUILD".to_string(),
+                closed_line: 1,
+                continuation: None,
+            }),
+            leaf_paths(),
+            true,
+            true,
+            true,
+            SuccessorSelection::None,
+        )
+    };
+    // A later open entry named like the continuation is reused.
+    let reused = run(concat!(
+        "## Pomodoros\n",
+        "- [x] () \u{2014} FIX\n",
+        "  - [[sase_badges#^t]]\n",
+        "- [ ] () \u{2014} BUILD\n",
+    ));
+    let destination = &reused.keep_moving[0]
+        .offer
+        .as_ref()
+        .expect("offer")
+        .destination;
+    assert_eq!(destination.entry_name, "BUILD");
+    // Without one, the placeholder successors create wears that name.
+    let created = run(concat!(
+        "## Pomodoros\n",
+        "- [x] () \u{2014} FIX\n",
+        "  - [[sase_badges#^t]]\n",
+    ));
+    let destination = &created.keep_moving[0]
+        .offer
+        .as_ref()
+        .expect("offer")
+        .destination;
+    assert_eq!(destination.entry_name, "BUILD");
 }
 
 // KM13: every remaining resident folded → silence, no group.

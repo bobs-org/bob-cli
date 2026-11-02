@@ -277,6 +277,7 @@ pub(super) fn build_close_summary_json(
     day_relative: &str,
     plan: &capture_pomodoro_close::PomodoroClosePlan,
     now: chrono::NaiveDateTime,
+    types: Option<&CloseTypes>,
 ) -> (PomodoroCloseSummaryJson, Vec<String>) {
     use chrono::Timelike;
     let running = &plan.summary.running;
@@ -420,6 +421,7 @@ pub(super) fn build_close_summary_json(
                 name: next.name.clone(),
                 time_range: next.time_range.clone(),
                 created: next.created,
+                shed: shed_theme_refs(&ledger.shed, types),
             });
     let task_links: Vec<PomodoroCloseTaskLinkJson> = plan
         .summary
@@ -488,6 +490,7 @@ pub(super) fn build_close_summary_json(
         pomodoro_line: running.line,
         pomodoro_section_offset: plan.summary.pomodoro_section_offset,
         pomodoro_name: running.name.clone(),
+        closed_name: ledger.closed_name.clone(),
         day_relative: day_relative.to_string(),
         entry_line: String::new(),
         planned,
@@ -508,6 +511,22 @@ pub(super) fn build_close_summary_json(
     };
     refresh_close_headline(&ledger.contents, &mut summary);
     (summary, extra_warnings)
+}
+
+/// Refs for the types a created continuation shed, in name order. Refs
+/// come from the catalog the close resolved its types with, so a close
+/// planned without naming reports none.
+fn shed_theme_refs(
+    shed: &[(String, String)],
+    types: Option<&CloseTypes>,
+) -> Vec<crate::native::pomodoro_themes::ThemeRef> {
+    let Some(types) = types else {
+        return Vec::new();
+    };
+    shed.iter()
+        .filter_map(|(key, _)| types.refs.iter().find(|r| &r.key == key))
+        .cloned()
+        .collect()
 }
 
 pub(super) fn reject_pomodoro_close_conflicts(
@@ -625,6 +644,7 @@ fn name_successor_continuation(
         },
         time_range: None,
         created: true,
+        shed: Vec::new(),
     });
 }
 
@@ -808,7 +828,13 @@ fn plan_close_successors(
     };
     let post_day = planner.current_contents(day_file)?;
     let running = &plan.summary.running;
-    let closed_name = running.name.clone().unwrap_or_default();
+    // Two names, two jobs: the closed entry is found by the name the close
+    // wrote on it (narrowed, R6), while the continuation is named and
+    // reused by the shed name.
+    let ledger = &plan.summary.ledger;
+    let closed_name = ledger.closed_name.clone().unwrap_or_default();
+    let continuation_name =
+        ledger.continuation_name.clone().unwrap_or_default();
     let closed_line = close_entry_line(
         post_day.as_deref().unwrap_or_default(),
         &closed_name,
@@ -840,7 +866,7 @@ fn plan_close_successors(
         pre_day: pre_day.clone(),
         post_day: post_day.clone(),
         closing: Some(engine::ClosingContext {
-            closed_name,
+            continuation_name,
             closed_line,
             continuation,
         }),
@@ -1541,6 +1567,7 @@ pub(super) fn plan_pomodoro_close_item(
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<CaptureWarning>,
     dependency_ctx: &mut DependencyContext,
+    task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_close_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&spec);
@@ -1556,12 +1583,20 @@ pub(super) fn plan_pomodoro_close_item(
     // text before this item struck, moved, or retired anything.
     let pre_day_baseline = Some(day_contents.clone());
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+    let types = task_theme_context.close_types(
+        planner,
+        &vault,
+        &day_file,
+        &day_contents,
+        warnings,
+    );
     let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
         &day_file,
         &day_contents,
         now,
         &vault,
         selection.as_ref(),
+        types.as_ref().map(|types| &types.naming),
     )
     .map_err(|error| map_close_plan_error(error, &rel, None))?;
     if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
@@ -1577,7 +1612,7 @@ pub(super) fn plan_pomodoro_close_item(
         ));
     };
     let (mut summary, extra_warnings) =
-        build_close_summary_json(&spec, &rel, &plan, now);
+        build_close_summary_json(&spec, &rel, &plan, now, types.as_ref());
     warnings.extend(plan.warnings.iter().cloned().map(CaptureWarning::from));
     warnings.extend(extra_warnings.iter().cloned().map(CaptureWarning::from));
     // Surface close warnings at the top level as well.
@@ -1733,7 +1768,7 @@ fn locate_close_headline(
     if scan.entries.iter().any(|entry| {
         entry.line.saturating_sub(1) == candidate
             && entry.state == capture_pomodoros::PomodoroState::Completed
-            && entry.name == summary.pomodoro_name
+            && entry.name == summary.closed_name
     }) {
         return candidate;
     }
@@ -1744,7 +1779,7 @@ fn locate_close_headline(
         .iter()
         .filter(|entry| {
             entry.state == capture_pomodoros::PomodoroState::Completed
-                && entry.name == summary.pomodoro_name
+                && entry.name == summary.closed_name
         })
         .collect::<Vec<_>>();
     named.sort_by_key(|entry| entry.line.saturating_sub(1).abs_diff(candidate));
@@ -1984,6 +2019,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     block_id: &str,
     close_spec: PomodoroCloseSpec,
     dependency_ctx: &mut DependencyContext,
+    task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_link_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&close_spec);
@@ -2261,12 +2297,20 @@ pub(super) fn plan_pomodoro_close_link_item(
     day_contents = linked_day;
     // Close _R_ on the staged ledger (or reset it when note-free).
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+    let types = task_theme_context.close_types(
+        planner,
+        &vault,
+        &day_file,
+        &day_contents,
+        warnings,
+    );
     let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
         &day_file,
         &day_contents,
         now,
         &vault,
         selection.as_ref(),
+        types.as_ref().map(|types| &types.naming),
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
@@ -2310,7 +2354,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         ));
     };
     let (mut summary, extra_warnings) =
-        build_close_summary_json(&close_spec, &rel, &plan, now);
+        build_close_summary_json(&close_spec, &rel, &plan, now, types.as_ref());
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings
             .iter()
@@ -2491,6 +2535,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     capture_block: &str,
     close_dependencies: Option<(String, PlannedDependencyUpdateParts)>,
     dependency_ctx: &mut DependencyContext,
+    task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let selection = selection_from_spec(close_spec);
     // Body-bearing `<text> @route:block-id=x`: today's `:` new-task capture
@@ -2574,12 +2619,20 @@ pub(super) fn plan_pomodoro_close_task_item(
         })?;
     planner.stage(&day_file, linked_day.clone())?;
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+    let types = task_theme_context.close_types(
+        planner,
+        &vault,
+        &day_file,
+        &linked_day,
+        warnings,
+    );
     let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
         &day_file,
         &linked_day,
         now,
         &vault,
         selection.as_ref(),
+        types.as_ref().map(|types| &types.naming),
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
     if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
@@ -2609,7 +2662,7 @@ pub(super) fn plan_pomodoro_close_task_item(
         ));
     };
     let (mut summary, extra_warnings) =
-        build_close_summary_json(close_spec, &rel, &plan, now);
+        build_close_summary_json(close_spec, &rel, &plan, now, types.as_ref());
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings
             .iter()

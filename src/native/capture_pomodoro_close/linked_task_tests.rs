@@ -80,7 +80,7 @@ fn run_close(
     day_path: &Path,
     day_contents: &str,
 ) -> PomodoroClosePlan {
-    plan_pomodoro_close(day_path, day_contents, at(9, 37), vault, None)
+    plan_pomodoro_close(day_path, day_contents, at(9, 37), vault, None, None)
         .expect("close plan")
 }
 
@@ -388,6 +388,7 @@ fn close_with_selection(
         at(9, 37),
         vault,
         Some(selection),
+        None,
     )
     .expect("close plan")
 }

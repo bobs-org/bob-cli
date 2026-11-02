@@ -163,6 +163,7 @@ fn capture_pomodoro_close_worked_example() {
             ],
             "pomodoro_line": 5,
             "pomodoro_name": "CAPTURE",
+            "closed_name": "CAPTURE",
             "day_relative": "2026/20260928.md",
             "entry_line": "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
             "planned": {

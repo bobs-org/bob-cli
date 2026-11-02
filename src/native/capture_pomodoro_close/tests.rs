@@ -508,3 +508,98 @@ fn close_after_the_start_still_shortens_by_whole_units() {
     assert_eq!(timing.closed_duration, 13);
     assert_eq!(timing.closed_end, 13 * 60 + 13);
 }
+
+mod close_names {
+    use super::*;
+    use crate::native::capture_pomodoro_close::names::CloseNames;
+
+    fn merged_day() -> String {
+        note(&[
+            "## Pomodoros",
+            "",
+            "- [ ] (**0920-0950** [t:: 30m]) — BUILD + FIX",
+            "\t- [[bob#^build]]#",
+            "\t- ![[bob#^fix]]",
+        ])
+    }
+
+    fn names(closed: &str, continuation: &str) -> CloseNames {
+        CloseNames {
+            closed: closed.to_string(),
+            continuation: continuation.to_string(),
+            shed: vec![("fix".to_string(), "FIX".to_string())],
+        }
+    }
+
+    fn close_named(
+        contents: &str,
+        names: Option<&CloseNames>,
+    ) -> LedgerClosePlan {
+        let entry = find_running_pomodoro(contents).expect("running pomodoro");
+        plan_ledger_close_with_parked(
+            contents,
+            &entry,
+            at(9, 37),
+            &std::collections::BTreeSet::new(),
+            names,
+        )
+    }
+
+    #[test]
+    fn narrowed_closed_line_and_shed_placeholder() {
+        let plan = close_named(&merged_day(), Some(&names("FIX", "BUILD")));
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "",
+                "- [x] (**0920-0940** [t:: 20m]) — FIX",
+                "\t- ![[bob#^fix]]",
+                "- [ ] () — BUILD",
+                "\t- [[bob#^build]]",
+            ])
+        );
+        assert_eq!(plan.closed_name.as_deref(), Some("FIX"));
+        assert_eq!(plan.continuation_name.as_deref(), Some("BUILD"));
+        let next = plan.next_pomodoro.expect("continuation");
+        assert!(next.created);
+        assert_eq!(next.name.as_deref(), Some("BUILD"));
+        assert_eq!(plan.shed, vec![("fix".to_string(), "FIX".to_string())]);
+    }
+
+    #[test]
+    fn without_names_both_sessions_keep_the_running_name() {
+        let plan = close_named(&merged_day(), None);
+        assert_eq!(plan.closed_name.as_deref(), Some("BUILD + FIX"));
+        assert_eq!(plan.continuation_name.as_deref(), Some("BUILD + FIX"));
+        assert!(plan.shed.is_empty());
+        assert!(plan.contents.contains("— BUILD + FIX\n"));
+        assert!(plan.contents.contains("- [ ] () — BUILD + FIX\n"));
+    }
+
+    #[test]
+    fn a_reused_later_entry_is_never_renamed_and_sheds_nothing() {
+        let day = note(&[
+            "## Pomodoros",
+            "",
+            "- [ ] (**0920-0950** [t:: 30m]) — BUILD + FIX",
+            "\t- ![[bob#^fix]]",
+            "- [ ] () — BUILD",
+        ]);
+        let plan = close_named(&day, Some(&names("FIX", "BUILD")));
+        assert_eq!(
+            plan.contents,
+            note(&[
+                "## Pomodoros",
+                "",
+                "- [x] (**0920-0940** [t:: 20m]) — FIX",
+                "\t- ![[bob#^fix]]",
+                "- [ ] () — BUILD",
+            ])
+        );
+        let next = plan.next_pomodoro.expect("later entry");
+        assert!(!next.created);
+        assert_eq!(next.name.as_deref(), Some("BUILD"));
+        assert!(plan.shed.is_empty());
+    }
+}

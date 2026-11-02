@@ -759,6 +759,7 @@ pub(super) fn plan_capture_item(
             planner,
             warnings,
             dependency_ctx,
+            task_theme_context,
         );
     }
     if let CaptureKind::PomodoroStart {
@@ -1053,6 +1054,7 @@ pub(super) fn plan_capture_item(
                 block_id,
                 close_spec,
                 dependency_ctx,
+                task_theme_context,
             );
         }
         reject_pomodoro_link_conflicts(&parsed, request)?;
@@ -1753,6 +1755,7 @@ pub(super) fn plan_capture_item(
                     &capture_block,
                     close_dependencies,
                     dependency_ctx,
+                    task_theme_context,
                 );
             }
             // PDG4/PDG5: a `:` task that is Blocked after the

@@ -14,6 +14,7 @@ use super::super::{
     capture_pomodoros, markdown, pomodoro, task_dependencies,
 };
 use super::links::{move_only_destination, rewrite_completed_markers};
+use super::names::CloseNames;
 use super::{
     bare_plain_link, dropped_plain_link, range_is_struck,
     strikethrough_inner_spans, strip_pomodoro_markers, wikilink_tokens,
@@ -129,6 +130,16 @@ pub(crate) struct LedgerClosePlan {
     pub embedded_targets: Vec<BlockLinkTarget>,
     pub work_log_groups: Vec<WorkLogNoteGroup>,
     pub sub_bullet_range: Range<usize>,
+    /// The completed entry's name after the close (R6 narrow); the
+    /// running entry's own name when nothing narrows. `None` when the
+    /// entry is unnamed.
+    pub closed_name: Option<String>,
+    /// The continuation's name (R6 shed). The created placeholder wears
+    /// it, and successor linking names or reuses a continuation by it.
+    pub continuation_name: Option<String>,
+    /// Type components the created continuation shed, as `(key, spelling)`.
+    /// Empty unless this close created the continuation.
+    pub shed: Vec<(String, String)>,
 }
 
 pub(crate) fn find_running_pomodoro(
@@ -254,7 +265,7 @@ pub(crate) fn plan_ledger_close(
     entry: &RunningPomodoro,
     now: NaiveDateTime,
 ) -> LedgerClosePlan {
-    plan_ledger_close_with_parked(contents, entry, now, &BTreeSet::new())
+    plan_ledger_close_with_parked(contents, entry, now, &BTreeSet::new(), None)
 }
 
 /// Ledger close with explicit parked-line suppression. `parked_lines` holds
@@ -262,12 +273,24 @@ pub(crate) fn plan_ledger_close(
 /// whose worked lines must be recorded but not carried. Parked lines stay in
 /// history, startable targets, and Work Log groups; only carry is
 /// suppressed. Preserves relative order of remaining carried lines.
+///
+/// `names` carries the R6 close names. `None` keeps the running name on
+/// both the closed entry and the created continuation.
 pub(crate) fn plan_ledger_close_with_parked(
     contents: &str,
     entry: &RunningPomodoro,
     now: NaiveDateTime,
     parked_lines: &BTreeSet<usize>,
+    names: Option<&CloseNames>,
 ) -> LedgerClosePlan {
+    let closed_name = match names {
+        Some(names) => entry.name.as_ref().map(|_| names.closed.clone()),
+        None => entry.name.clone(),
+    };
+    let continuation_name = match names {
+        Some(names) => entry.name.as_ref().map(|_| names.continuation.clone()),
+        None => entry.name.clone(),
+    };
     let spans = line_spans(contents);
     let line_text = spans.iter().map(|line| line.text).collect::<Vec<_>>();
     let entry_index = entry.line.saturating_sub(1);
@@ -359,7 +382,12 @@ pub(crate) fn plan_ledger_close_with_parked(
             break;
         }
         if index == entry_index {
-            output_lines.push(close_entry_line(line, timing.as_ref()));
+            output_lines.push(close_entry_line(
+                line,
+                timing.as_ref(),
+                entry.name.as_deref(),
+                closed_name.as_deref(),
+            ));
         } else {
             output_lines.push((*line).to_string());
         }
@@ -377,8 +405,9 @@ pub(crate) fn plan_ledger_close_with_parked(
     }
 
     let mut created_next = None;
+    let mut shed = Vec::new();
     if should_create {
-        let placeholder = match entry.name.as_deref() {
+        let placeholder = match continuation_name.as_deref() {
             Some(name) => {
                 capture_pomodoros::format_named_placeholder_line(name)
             }
@@ -393,10 +422,13 @@ pub(crate) fn plan_ledger_close_with_parked(
         }
         created_next = Some(NextPomodoro {
             line: placeholder_index + 1,
-            name: entry.name.clone(),
+            name: continuation_name.clone(),
             time_range: None,
             created: true,
         });
+        if let Some(names) = names {
+            shed = names.shed.clone();
+        }
     }
     output_lines.extend(
         line_text[range.end..]
@@ -436,6 +468,9 @@ pub(crate) fn plan_ledger_close_with_parked(
         embedded_targets,
         work_log_groups,
         sub_bullet_range: range,
+        closed_name,
+        continuation_name,
+        shed,
     }
 }
 
@@ -525,7 +560,12 @@ fn pomodoro_line_time_range(line: &str) -> Option<String> {
     })
 }
 
-fn close_entry_line(line: &str, timing: Option<&CloseTiming>) -> String {
+fn close_entry_line(
+    line: &str,
+    timing: Option<&CloseTiming>,
+    running_name: Option<&str>,
+    closed_name: Option<&str>,
+) -> String {
     let mut updated = line.to_string();
     if let Some(timing) = timing
         && let Some(new_range) = &timing.new_range_text
@@ -538,7 +578,13 @@ fn close_entry_line(line: &str, timing: Option<&CloseTiming>) -> String {
             &line[range.end_ch..]
         );
     }
-    close_entry_checkbox(&updated)
+    let updated = close_entry_checkbox(&updated);
+    match (running_name, closed_name) {
+        (Some(running), Some(closed)) if running != closed => {
+            capture_pomodoros::with_name_tail(&updated, closed)
+        }
+        _ => updated,
+    }
 }
 
 fn close_entry_checkbox(line: &str) -> String {

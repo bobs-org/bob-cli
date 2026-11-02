@@ -997,6 +997,14 @@ pub(crate) fn without_name_tail(line: &str) -> &str {
     line.strip_suffix(remaining).unwrap_or(line)
 }
 
+/// Rewrite a physical Pomodoro line's em-dash name tail to `name`.
+pub(crate) fn with_name_tail(line: &str, name: &str) -> String {
+    format!(
+        "{} — {name}",
+        without_name_tail(line).trim_end_matches([' ', '\t'])
+    )
+}
+
 fn parse_ledger_task(line: &str) -> Option<(PomodoroState, char, &str)> {
     let status_symbol = checkbox_status_symbol(line)?;
     if let Some(body) = pomodoro::completed_ledger_task(line) {

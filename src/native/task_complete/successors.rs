@@ -222,8 +222,11 @@ pub(crate) struct SuccessorInput<'a> {
 /// (`docs/task-dependencies.md` §12.3 Placement).
 #[derive(Debug, Clone)]
 pub(crate) struct ClosingContext {
-    /// Short entry name (`""` when the closed entry was unnamed).
-    pub closed_name: String,
+    /// The continuation's short name (`""` when the closed entry was
+    /// unnamed). It is the closed entry's name with the types the close
+    /// shed removed (R6), so reuse and creation follow the work still
+    /// planned; the closed entry itself is found by `closed_line`.
+    pub continuation_name: String,
     /// 0-based line of the closed entry in the post-close day text.
     pub closed_line: usize,
     /// The continuation the close left behind, when it left one: its
@@ -1336,7 +1339,7 @@ fn resolve_closing_target(
     }
     // Case 2: the first open entry after the closed one with the same
     // non-empty name.
-    let reused = (!closing.closed_name.is_empty())
+    let reused = (!closing.continuation_name.is_empty())
         .then(|| position_of(closing.closed_line))
         .flatten()
         .and_then(|closed_position| {
@@ -1345,7 +1348,7 @@ fn resolve_closing_target(
                 .enumerate()
                 .skip(closed_position + 1)
                 .find(|(_, entry)| {
-                    entry.open && entry.name == closing.closed_name
+                    entry.open && entry.name == closing.continuation_name
                 })
                 .map(|(position, _)| position)
         });
@@ -1371,9 +1374,9 @@ fn resolve_closing_target(
         target: SuccessorTarget::Closing {
             entry_index: None,
             insert_at,
-            created_name: Some(closing.closed_name.clone()),
+            created_name: Some(closing.continuation_name.clone()),
         },
-        name: closing.closed_name.clone(),
+        name: closing.continuation_name.clone(),
         entry_created: true,
     }
 }

@@ -47,6 +47,7 @@ mod pomodoro_adjust;
 mod pomodoro_chain;
 mod pomodoro_close;
 mod pomodoro_close_log;
+mod pomodoro_close_names;
 mod pomodoro_close_retired;
 mod pomodoro_close_selection;
 mod pomodoro_close_successors;

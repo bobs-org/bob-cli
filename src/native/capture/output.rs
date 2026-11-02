@@ -168,10 +168,15 @@ pub(super) struct PomodoroCloseCarriedJson {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroCloseNextJson {
     pub(super) line: usize,
+    /// The continuation's name: the closed entry's name with the types
+    /// whose last Task Link did not carry shed (R6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) name: Option<String>,
     pub(super) time_range: Option<String>,
     pub(super) created: bool,
+    /// Type components the created continuation shed, omitted when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) shed: Vec<super::super::pomodoro_themes::ThemeRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -202,6 +207,11 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) pomodoro_section_offset: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_name: Option<String>,
+    /// The completed entry's name after the close (R6 narrow); equal to
+    /// `pomodoro_name` when nothing narrows. Present when the entry is
+    /// named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) closed_name: Option<String>,
     // Vault-relative day file, so human output and clients name the day
     // file even on link forms (whose `relative_target` is the route note).
     pub(super) day_relative: String,
@@ -2661,7 +2671,18 @@ pub(super) fn print_human_pomodoro_close_success(
     } else {
         "closed"
     };
-    let name = close.pomodoro_name.as_deref().unwrap_or("session");
+    let name = close
+        .closed_name
+        .as_deref()
+        .or(close.pomodoro_name.as_deref())
+        .unwrap_or("session");
+    // R6: a narrowed name says where the session came from.
+    let narrowed_from = match (&close.closed_name, &close.pomodoro_name) {
+        (Some(closed), Some(running)) if closed != running => {
+            format!(" · from {running}")
+        }
+        _ => String::new(),
+    };
     let decremented = close.decremented_minutes;
     let range_text = if decremented > 0 {
         format!(
@@ -2680,7 +2701,7 @@ pub(super) fn print_human_pomodoro_close_success(
         )
     };
     let mut header = format!(
-        "{verb} {name} {range_text} · {} line {}",
+        "{verb} {name} {range_text}{narrowed_from} · {} line {}",
         close.day_relative, close.pomodoro_line
     );
     if close.remaining_minutes < 0 {
@@ -2951,6 +2972,17 @@ pub(super) fn print_human_pomodoro_close_success(
         } else {
             String::new()
         };
+        let shed_text = if next.shed.is_empty() {
+            String::new()
+        } else {
+            let shed = next
+                .shed
+                .iter()
+                .map(|theme| theme.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" + ");
+            format!(" · shed {shed}")
+        };
         let unblocked_text = if close.unblocked.is_empty() {
             String::new()
         } else {
@@ -2960,7 +2992,7 @@ pub(super) fn print_human_pomodoro_close_success(
         println!(
             "  {}",
             styler.dim(&format!(
-                "next: {next_name}{created_text} at line {}{carries_text}{unblocked_text}{pulled}",
+                "next: {next_name}{created_text} at line {}{carries_text}{shed_text}{unblocked_text}{pulled}",
                 next.line
             ))
         );

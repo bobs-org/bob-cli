@@ -48,6 +48,7 @@ workflow guide.
   - [Shifting the current Pomodoro](#shifting-the-current-pomodoro)
   - [Running into an event](#running-into-an-event)
   - [Closing the running Pomodoro](#closing-the-running-pomodoro)
+    - [Close names follow the work](#close-names-follow-the-work)
     - [Retired close spellings](#retired-close-spellings)
     - [Choosing each Task Link's outcome](#choosing-each-task-links-outcome)
     - [Logging work while closing](#logging-work-while-closing)
@@ -3723,6 +3724,48 @@ when an explicit selection wins. Human output adds one dim caption: `ended
 08:30`, `running until 11:00`, `starts 14:00`, or
 `ended 07:30 · before this session`.
 
+#### Close names follow the work
+
+A close names the session it ends after the work actually done, and the session
+it carries after the work still planned. This is the
+[close-names rule](task-types.md#merged-pomodoros) (R6) over a
+[merged Pomodoro](task-types.md#merged-pomodoros), one whose name holds two or
+more type components such as `BUILD + FIX`. Every form of the close agrees:
+whole-item `x`, `^route:id=x…`, and `<text> @route:id=x…`.
+
+Each numbered Task Link has the type its task had _before_ the close (a task
+this close completes still counts as its type) and its outcome. **Worked**
+links are in progress, parked, or complete; **carried** links are in progress
+or deferred.
+
+- **The closed session narrows.** When at least one worked link's type is a
+  component of the running name, the completed entry keeps its labels plus
+  exactly the type components some worked link has, in the running name's
+  order and spelling. Only a FIX task worked in `BUILD + FIX` closes as `FIX`.
+  When nothing typed was worked, or only drift (a type the name does not
+  hold) or untyped links were, the name is unchanged.
+- **The carried session sheds.** When the close _creates_ the next entry, it
+  drops each type that had a link in the running entry and has no carried
+  link. Finishing the last FIX task of `BUILD + FIX` leaves `BUILD`; a FIX
+  link that was parked or dropped sheds FIX too. If that would drop every
+  type, the base stays. Types that never had a link and labels stay.
+- **Nothing else renames.** Single-type and untyped entries, `MEET`, the
+  `x0` reset, and a close that continues into an existing later entry keep
+  their names.
+
+`pomodoro_close.closed_name` is the completed entry's name after the close
+(equal to `pomodoro_name` when nothing narrows), present when the entry is
+named. `pomodoro_close.next_pomodoro.name` is the continuation's name after
+shedding, and `next_pomodoro.shed` lists the dropped types as `ThemeRef`
+objects, omitted when none were shed. Successor links are named, found, and
+reused through the continuation's name, so a later open entry named `BUILD`
+is the destination after `BUILD + FIX` sheds FIX.
+
+Human output narrows the headline and says where the session came from,
+`closed FIX 0920-0940 (20m) · from BUILD + FIX · 2026/20260928.md line 5`, and
+names the shed types on the next line,
+`next: BUILD (created) at line 7 · carries 1 link · shed FIX`.
+
 #### Retired close spellings
 
 Whole-item `=x…`, `=*…`, and `=!…` are claimed teaching errors. They write
@@ -3759,7 +3802,10 @@ This ports Obsidian's Ctrl+Enter Pomodoro completion (task-status-cycler's
 the ledger ends up byte-identical to Obsidian's completion except for the
 auto-decrement below, the deliberate atomicity divergences, and the
 intentional capture-only `x0` reset exception (a note-free `x0` resets to
-first future instead of completing; Obsidian completion remains separate). A session
+first future instead of completing; Obsidian completion remains separate). The
+promise now includes [close names](#close-names-follow-the-work); the Task
+Status Cycler adopts the same narrowing and shedding in the Bob Plugins
+`obsidian-close-names` change, so until that ships the two differ by name only. A session
 closed before its planned end is shortened to the stop time
 (`BOB_NOW=2026-09-28 09:37:00` closing `0920-0950` writes `0920-0940 [t::
 20m]`): `remaining = end − now` normalized into (−720, 720] minutes, and
@@ -3919,6 +3965,11 @@ Field notes:
 - When the successor logic created the continuation, `next_pomodoro`
   reports it (`{line, name, time_range: None, created: true}`); picked
   successors count as carried.
+- `pomodoro_close.closed_name` is the completed entry's name after the
+  close (narrowed, per [Close names follow the work](#close-names-follow-the-work)),
+  present when the entry is named. `next_pomodoro.name` carries the shed name,
+  and `next_pomodoro.shed` (an array of `ThemeRef`) lists the types the created
+  continuation dropped, omitted when none.
 - Added block lines that equal a surviving picked successor bullet carry
   `"reason": "unblocked"` (or `"keep_moving"` for a surviving
   keep-moving pick) in the `pomodoro_blocks` line objects; rows dropped
@@ -3926,7 +3977,7 @@ Field notes:
 
 Human output prints `closed NAME old → new (Nm, −Xm) · file line N` (or a
 single range with no decrement, plus `(ran Nm over)` on overruns), always
-naming the day file; one line per task as `transition text route ^id`
+naming the day file (a narrowed name adds `· from RUNNING NAME` before it); one line per task as `transition text route ^id`
 plus `+N Work Log` counts; dropped rows read `dropped <K> [[T]]`
 (with a `stays <status>` lane caption: a dropped task keeps its status) and a
 `Dropped <K>` summary follows the rows; the same numbered `offer N` /
@@ -3935,7 +3986,7 @@ prints, after the task rows;
 and the next session, which reads
 `carries 1 link` in the singular. When picked successors rode along, `next:`
 names them (`next: BOB (created) at line N · carries K links ·
-1 unblocked`). When at least one row is numbered, every
+1 unblocked`); shed types read `· shed FIX` after the carry count. When at least one row is numbered, every
 task row is prefixed with a right-aligned index column (width = digits of
 the highest number) plus one space; unnumbered rows get blanks of the same
 width and Work Log preview lines indent to stay under the text. The index

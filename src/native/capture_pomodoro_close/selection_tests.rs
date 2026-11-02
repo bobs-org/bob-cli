@@ -579,6 +579,7 @@ fn parked_links_record_work_but_are_not_carried() {
         &running,
         at(9, 37),
         &parked_lines,
+        None,
     );
     // Only link 1 is carried; parked 2 and 3 stay in history but leave no
     // carried copy. Completed 4 and 5 retire as usual.
@@ -949,6 +950,7 @@ fn close_with(
         at(9, 37),
         vault,
         selection,
+        None,
     )
     .expect("close plan")
 }
@@ -1137,6 +1139,7 @@ fn listed_blocked_and_done_warnings() {
         at(9, 37),
         &vault,
         Some(&sel(Some(vec![2]), vec![1], "x2!1")),
+        None,
     )
     .expect("close plan");
     assert_eq!(plan.summary.tasks.len(), 2);
