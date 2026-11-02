@@ -71,6 +71,7 @@ pub(crate) fn last_body_word(body: &str) -> Option<&str> {
 
 /// Remove the trailing task-ID word from a marker-stripped line body. The
 /// caller must have lexed the last word as a task ID already.
+#[cfg(test)]
 pub(crate) fn strip_task_id_suffix(body: &str) -> String {
     match body.rsplit_once(char::is_whitespace) {
         Some((head, _)) => head.to_string(),
@@ -234,10 +235,11 @@ pub(crate) fn duplicate_project_task_id_error(
     )
 }
 
-pub(crate) fn unfinished_project_task_id_error(sigil: char) -> String {
-    format!(
-        "` {sigil}` needs a task ID: end the bullet with ` {sigil}<block-id>`"
-    )
+pub(crate) fn unfinished_project_task_id_error(
+    sigil: char,
+    owner: &str,
+) -> String {
+    unfinished_task_id_error(sigil, owner)
 }
 
 /// A lone ` :` / ` ^` ending a list bullet or one of its nested lines: the
@@ -246,8 +248,17 @@ pub(crate) fn unfinished_list_task_id_error(
     sigil: char,
     owner: &str,
 ) -> String {
+    unfinished_task_id_error(sigil, owner)
+}
+
+fn unfinished_task_id_error(sigil: char, owner: &str) -> String {
+    let suggestion =
+        crate::native::capture_block_ids::suggest_ids(owner, sigil, &[])
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "<block-id>".to_string());
     format!(
-        "` {sigil}` on `{owner}` needs a task ID: end the bullet with ` {sigil}<block-id>`"
+        "` {sigil}` on `{owner}` needs a task ID: end the bullet with ` {sigil}{suggestion}`"
     )
 }
 

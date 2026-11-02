@@ -268,6 +268,20 @@ fn marker_at(draft: &str, item: &EditorItemParse) -> usize {
 }
 
 fn route_range(draft: &str, item: &EditorItemParse) -> Option<SourceRange> {
+    if let Some(list) = item.list.as_ref() {
+        return item
+            .spans
+            .iter()
+            .find(|span| {
+                span.kind == SpanKind::Route
+                    && span.start >= list.header_start
+                    && span.end <= list.header_end
+            })
+            .map(|span| SourceRange {
+                start: span.start,
+                end: span.end,
+            });
+    }
     let (line_start, line_end) = physical_line_range(draft, item.line_start)?;
     item.local_destination_markers
         .iter()
@@ -311,7 +325,7 @@ fn discard_range(
     item: &EditorItemParse,
     all_items: &[EditorItemParse],
 ) -> Option<SourceRange> {
-    if !item.sub_bullets.is_empty() {
+    if item.list.is_none() && !item.sub_bullets.is_empty() {
         return None;
     }
     let position = all_items
@@ -323,9 +337,14 @@ fn discard_range(
             end: draft.len(),
         });
     }
+    let item_start = item
+        .list
+        .as_ref()
+        .filter(|list| list.count == 1)
+        .map_or(item.start, |list| list.header_start);
     if let Some(next) = all_items.get(position + 1) {
         Some(SourceRange {
-            start: item.start,
+            start: item_start,
             end: next.start,
         })
     } else {
@@ -591,6 +610,12 @@ fn verify_note_action(
     id: &str,
     options: &EditorParseOptions<'_>,
 ) -> bool {
+    // A list's destination token is shared by every bullet. Replacing it
+    // with a task-parent marker would change the meaning of the whole list,
+    // so no per-bullet "note" action is safe there.
+    if item.list.is_some() {
+        return false;
+    }
     let parent = format!("@{}+{id}", candidate.route);
     let modified = if let Some(range) = route_range {
         replace_range(draft, range, &parent)

@@ -43,6 +43,13 @@ pub(crate) struct BlockIdMarkerRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct BlockIdSplice {
+    pub(crate) range: BlockIdMarkerRange,
+    pub(crate) before: String,
+    pub(crate) after: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct UsedBlockId {
     pub(crate) id: String,
     pub(crate) line: usize,
@@ -67,6 +74,10 @@ pub(crate) struct BlockIdField {
     pub(crate) allowed_description: String,
     pub(crate) suggestions: Vec<String>,
     pub(crate) used: Vec<UsedBlockId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) owner_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) splice: Option<BlockIdSplice>,
 }
 
 pub(crate) struct BlockIdRequest<'a> {
@@ -176,6 +187,8 @@ pub(crate) fn build_block_id_field(
         allowed_description: allowed_description.to_string(),
         suggestions,
         used,
+        owner_line: None,
+        splice: None,
     }
 }
 
@@ -208,19 +221,62 @@ fn build_project_task_block_id_field(
             allowed_description: BLOCK_ID_ALLOWED_DESCRIPTION.to_string(),
             suggestions: Vec::new(),
             used: Vec::new(),
+            owner_line: None,
+            splice: None,
         };
     };
     let (allowed_character, allowed_description) =
         allowed_rule_for_marker(detail.marker);
-    let relative_target = format!("{}.md", detail.stem);
-    let note_exists = bob_dir.join(&relative_target).is_file();
-    let used_ids: Vec<String> =
-        detail.used.iter().map(|entry| entry.id.clone()).collect();
-    let suggestions = if detail.body.is_empty() {
-        Vec::new()
+    let relative_target = capture::route_label(&detail.stem);
+    let target = bob_dir.join(&relative_target);
+    let contents = std::fs::read_to_string(&target).ok();
+    let note_exists = contents.is_some();
+    let mut used = if detail.is_list {
+        contents
+            .as_deref()
+            .map(|contents| {
+                collect_used(contents, &note_tasks::read_settings(bob_dir))
+            })
+            .unwrap_or_default()
     } else {
-        suggest_ids(&detail.body, detail.marker, &used_ids)
+        Vec::new()
     };
+    let mut seen: HashSet<String> =
+        used.iter().map(|entry| entry.id.clone()).collect();
+    for entry in detail.used {
+        if seen.insert(entry.id.clone()) {
+            used.push(UsedBlockId {
+                id: entry.id,
+                line: entry.line,
+                task: entry.task,
+                status_symbol: entry.status_symbol,
+                status_name: entry.status_name,
+                text: entry.text,
+            });
+        }
+    }
+    let used_ids: Vec<String> =
+        used.iter().map(|entry| entry.id.clone()).collect();
+    let mut suggestion_ids = used_ids.clone();
+    let mut suggestions = Vec::new();
+    if let Some(owner_id) = detail.owner_id
+        && !suggestion_ids.iter().any(|id| id == &owner_id)
+    {
+        suggestions.push(owner_id.clone());
+        suggestion_ids.push(owner_id);
+    }
+    if !detail.body.is_empty() {
+        for suggestion in
+            suggest_ids(&detail.body, detail.marker, &suggestion_ids)
+        {
+            if suggestions.len() == 3 {
+                break;
+            }
+            if !suggestions.contains(&suggestion) {
+                suggestions.push(suggestion);
+            }
+        }
+    }
     BlockIdField {
         route: detail.stem,
         relative_target,
@@ -235,18 +291,16 @@ fn build_project_task_block_id_field(
         allowed_character: allowed_character.to_string(),
         allowed_description: allowed_description.to_string(),
         suggestions,
-        used: detail
-            .used
-            .into_iter()
-            .map(|entry| UsedBlockId {
-                id: entry.id,
-                line: entry.line,
-                task: true,
-                status_symbol: None,
-                status_name: None,
-                text: entry.text,
-            })
-            .collect(),
+        used,
+        owner_line: Some(detail.owner_line),
+        splice: Some(BlockIdSplice {
+            range: BlockIdMarkerRange {
+                start: detail.splice.range.0,
+                end: detail.splice.range.1,
+            },
+            before: detail.splice.before,
+            after: detail.splice.after,
+        }),
     }
 }
 

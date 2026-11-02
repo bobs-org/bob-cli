@@ -5,6 +5,7 @@ use super::editor_model::*;
 use super::editor_parse::*;
 use super::markers::is_route_token;
 use super::model::*;
+use super::project_tasks::{lex_project_task_id, TaskIdLex};
 use super::tokens::is_block_id;
 
 /// The result of applying the capture grammar's automatic draft rewrites to
@@ -78,6 +79,12 @@ pub(crate) fn rewrite_draft(
 ) -> DraftRewrite {
     if super::template::analyze(raw_text).directive.is_some() {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
+    }
+    if let Some(position) = cursor
+        && let Some(rewrite) =
+            switch_task_bullet_id_separator(raw_text, position)
+    {
+        return rewrite;
     }
     if let Some(position) = cursor
         && let Some(rewrite) = switch_block_id_separator(raw_text, position)
@@ -202,6 +209,115 @@ fn absorb_bare_declaration(
     }
 
     unchanged_rewrite(raw_text, cursor, Vec::new())
+}
+
+/// Typing the other task-ID sigil immediately after a complete ` :id` /
+/// ` ^id` on a list or project-note task bullet switches the marker and
+/// consumes the trigger. The candidate is reparsed so ordinary prose that
+/// happens to end in a task-ID-shaped token is never rewritten.
+fn switch_task_bullet_id_separator(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let token = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor)?;
+    let trigger = *token.text.as_bytes().last()?;
+    let new_sigil = match trigger {
+        b':' => ':',
+        b'^' => '^',
+        _ => return None,
+    };
+    let current = token.text.get(..token.text.len().checked_sub(1)?)?;
+    let TaskIdLex::Valid { sigil, id } = lex_project_task_id(current)? else {
+        return None;
+    };
+    if sigil == new_sigil {
+        return None;
+    }
+    let replacement = format!("{new_sigil}{id}");
+    let mut candidate = String::with_capacity(raw_text.len() - 1);
+    candidate.push_str(&raw_text[..token.start]);
+    candidate.push_str(&replacement);
+    candidate.push_str(&raw_text[token.end..]);
+    if !candidate_selects_task_bullet_id(
+        &candidate,
+        token.start,
+        token.start + replacement.len(),
+        id.as_str(),
+        new_sigil,
+    ) {
+        return None;
+    }
+    let edits = vec![TextEdit {
+        start: token.start,
+        end: token.end,
+        replacement: replacement.clone(),
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::SwitchBlockIdSeparator),
+        edits,
+        text,
+        cursor: Some(token.start + replacement.len()),
+        summary: Some(format!("Changed {current} to {replacement}")),
+        notices: Vec::new(),
+    })
+}
+
+fn candidate_selects_task_bullet_id(
+    candidate: &str,
+    start: usize,
+    end: usize,
+    id: &str,
+    sigil: char,
+) -> bool {
+    let draft = split_capture_draft(candidate);
+    let Some(item) = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| line.raw.start <= start && end <= line.raw.end)
+    }) else {
+        return false;
+    };
+    let Some(position) = item
+        .lines
+        .iter()
+        .position(|line| line.raw.start <= start && end <= line.raw.end)
+    else {
+        return false;
+    };
+    let parsed = parse_editor_item(item).item;
+    if !parsed.diagnostics.is_empty() {
+        return false;
+    }
+    if item.list.is_some() {
+        let expected_mode = if sigil == ':' {
+            EditorMode::PomodoroTask
+        } else {
+            EditorMode::Task
+        };
+        return item.list.as_ref().is_some_and(|list| {
+            list.kind == ListKind::Tasks && !list.ownerless
+        }) && parsed.mode == expected_mode
+            && parsed.block_id.as_deref() == Some(id);
+    }
+    if position == 0
+        || !matches!(
+            parsed.mode,
+            EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+        )
+    {
+        return false;
+    }
+    let has_id = parsed.spans.iter().any(|span| {
+        span.kind == SpanKind::ProjectTaskBlockId
+            && (span.start, span.end) == (start + 1, end)
+    });
+    let has_link = parsed.spans.iter().any(|span| {
+        span.kind == SpanKind::ProjectTaskLinkMarker && span.start == start
+    });
+    has_id && has_link == (sigil == ':')
 }
 
 /// Typing `^` immediately after a complete plain `@route:id` or `@route+id`,
@@ -391,6 +507,9 @@ fn candidate_selects_plain_marker(
     separator: char,
     sealed: bool,
 ) -> bool {
+    let Some((_, route, block_id, _)) = plain_block_id_parts(stripped) else {
+        return false;
+    };
     let draft = split_capture_draft(candidate);
     for item in &draft.items {
         for (position, line) in item.lines.iter().enumerate() {
@@ -410,6 +529,51 @@ fn candidate_selects_plain_marker(
             };
             if start < line_base || end > line_end {
                 return false;
+            }
+            if item.list.is_some() {
+                if sealed || !matches!(separator, ':' | '^') {
+                    return false;
+                }
+                let parsed = parse_editor_item(item).item;
+                if !parsed.diagnostics.is_empty() {
+                    return false;
+                }
+                let expected_mode = if separator == ':' {
+                    EditorMode::PomodoroTask
+                } else {
+                    EditorMode::Task
+                };
+                return parsed.mode == expected_mode
+                    && parsed.block_id.as_deref() == Some(block_id)
+                    && parsed.route.as_deref() == Some(route)
+                    && parsed.section.is_none();
+            }
+            let parsed = (position > 0).then(|| parse_editor_item(item).item);
+            if let Some(parsed) = parsed.as_ref().filter(|parsed| {
+                matches!(
+                    parsed.mode,
+                    EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+                )
+            }) {
+                if sealed
+                    || !matches!(separator, ':' | '^')
+                    || !parsed.diagnostics.is_empty()
+                {
+                    return false;
+                }
+                let id_range = (start + 1, end);
+                let project_task = matches!(
+                    parsed.mode,
+                    EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+                ) && parsed.spans.iter().any(|span| {
+                    span.kind == SpanKind::ProjectTaskBlockId
+                        && (span.start, span.end) == id_range
+                });
+                let link = parsed.spans.iter().any(|span| {
+                    span.kind == SpanKind::ProjectTaskLinkMarker
+                        && span.start == start
+                });
+                return project_task && link == (separator == ':');
             }
             // Type markers are transparent to the toggle: mask them so a
             // neighboring `#<type>` never blocks an otherwise plain marker.

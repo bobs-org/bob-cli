@@ -303,6 +303,41 @@ fn bulk_draft_anchors_dedupe_linked_tasks_and_project_modes() {
 }
 
 #[test]
+fn list_items_use_header_and_bullet_anchors_without_emptying_the_list() {
+    let temp = TempDir::new("bob-cli-capture-related-list-anchors");
+    let vault = fixture_vault(&temp);
+    let draft = "@dev\n- Install new UPS battery\n- Another task";
+    let result = related_json(&vault, draft, &[]);
+    let items = result["items"].as_array().expect("draft items");
+    assert_eq!(items.len(), 2);
+
+    let first = &items[0];
+    let route_start = draft.find("@dev").expect("route");
+    assert_eq!(
+        first["route_range"],
+        serde_json::json!({"start": route_start, "end": route_start + 4})
+    );
+    let bullet_start = draft.find("- Install").expect("bullet");
+    let bullet_end = draft.find("\n- Another").expect("next bullet");
+    assert_eq!(first["marker_at"], bullet_end);
+    assert_eq!(first["discard_range"]["start"], bullet_start);
+    assert!(!first["matches"].as_array().unwrap().is_empty());
+    for row in first["matches"].as_array().unwrap() {
+        assert!(!row["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action == "note"));
+    }
+
+    let single = "@dev\n- Install new UPS battery\n  - battery check";
+    let one = related_json(&vault, single, &[]);
+    assert_eq!(one["items"].as_array().unwrap().len(), 1);
+    assert_eq!(one["items"][0]["discard_range"]["start"], 0);
+    assert_eq!(one["items"][0]["discard_range"]["end"], single.len());
+}
+
+#[test]
 fn linked_candidates_are_reported_and_excluded_and_closed_rows_use_split_defaults(
 ) {
     let temp = TempDir::new("bob-cli-capture-related-linked-closed");

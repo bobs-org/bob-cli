@@ -6405,12 +6405,15 @@ A missing route, ID, or name keeps that mode and reports `route`,
 route-less sealed marker (`@:<id>@`, with or without a `#name`) with the
 Pomodoro route error before it writes anything.
 The retired `<task> @:block-id+` spelling offers nothing. Once the project note is addressed, typing ` :` or
-` ^` at the end of a first-level task bullet opens the New ID flow: the
-panel offers a `project_task_block_id` completion with the project-note stem
-as its scope, body-derived suggestions, and the sibling IDs (plus `prj`) as
-its used list. Accepting a row inserts the ID after the typed sigil — `:`
-names the task Next and links it into the Pomodoro, `^` names it only — with
-no teaching line.
+` ^` at the end of a first-level task bullet or one of its nested lines opens
+the New ID flow. The `project_task_block_id` completion scopes to the project
+note stem, suggests IDs from the owning task, and reports that task's line
+and a `splice` that puts the accepted ID on its bullet while preserving the
+nested line and returning the caret to where the ID was typed. Its used list
+contains `prj` and the other task IDs in the project note; the owner's own
+current ID is left available for its replacement. Accepting a row inserts
+the ID after the typed sigil — `:` names the task Next and links it into the
+Pomodoro, `^` names it only — with no teaching line.
 
 A solo leading `^` opens the active-task picker instead of creating a task.
 Typing `^` lists In Progress and Next tasks with block IDs, ordered by
@@ -7012,8 +7015,10 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
 - `marker_at`: the UTF-8 byte offset where an action marker can be inserted
   on the parent line before a trailing Pomodoro suffix;
 - `route_range`: the item's own destination-token range, omitted when absent;
-- `discard_range`: the item and one adjacent blank-line separator, omitted
-  when it has authored children;
+- `discard_range`: the item and one adjacent blank-line separator. Ordinary
+  items with authored children omit it; task-list items always get one for
+  the bullet block, and a single-bullet list includes the shared header so a
+  discard removes the whole list safely;
 - `matches`: ranked candidate rows;
 - `linked`: resolved candidate keys already referenced by this item, with
   `link` set to `relation`, `dependency`, `blocked_task`, or `parent`.
@@ -7021,6 +7026,14 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
 Every range is half-open and indexes UTF-8 bytes in the exact draft passed to
 Bob. `marker_at` and ranges are splice anchors for that draft only; clients
 must discard them after an edit.
+
+For task-list items, `route_range` points to the shared route token on the
+list header, while `marker_at` points to the owning bullet's task line. Those
+items get a `discard_range` for their bullet block even when it has nested
+lines; if the list has one bullet, that range also includes the header. A
+`note` action is omitted for list items because changing the shared header
+would change the route for every bullet. The parser rechecks list-aware
+anchors before offering an action.
 
 A match row contains `key`, `band`, clean `title`, `matched_ranges`, `kind`,
 `status_symbol`, `status_name`, `status_type`, nullable `closed`, `route`,
@@ -7121,9 +7134,13 @@ wherever the shared grammar already recognizes that token as the item's
 destination. Route and ID spelling, surrounding whitespace, CRLF,
 schedule/priority/dependency markers, and other items stay byte-for-byte.
 Suffixes already inside the marker (`#name`, `=...`), `@@`, `@!`, standalone
-`^route:id`, `&note:id`, `!note:id`, project-task `:id`/`^id`, incomplete or
-malformed markers, same-separator repeats, `+` after a sealed
-`@route^id@` / `@route:id@` marker, and marker-looking prose the contextual parser does not select are left unchanged.
+`^route:id`, `&note:id`, `!note:id`, incomplete or malformed markers,
+same-separator repeats, `+` after a sealed `@route^id@` / `@route:id@` marker,
+and marker-looking prose the contextual parser does not select are left
+unchanged. On task-list and project-note task bullets, typing the opposite
+sigil immediately after a complete ID switches `:id` to `^id` or `^id` to
+`:id` and consumes the trigger. The shared task-bullet parser validates the
+candidate, including IDs on nested lines.
 This is an editor assist: `bob capture` and `bob capture-parse` keep the
 literal `@file:id+` text.
 
@@ -7783,10 +7800,13 @@ cursor 13:
 
 `task_block_id` covers `@route^prefix` once the route resolves;
 `candidates` is always `[]`. `project_task_block_id` covers a cursor inside a
-trailing ` :` / ` ^` task ID token on a first-level bullet of a project-note
-item with a resolved route and block ID, from just after the sigil to the
-token end; the replacement is the ID span, empty at the cursor for a lone
-sigil. All three block-ID contexts carry an additive
+trailing ` :` / ` ^` task ID token on a task-list bullet, its nested lines, or
+a project-note task bullet and its nested lines. Project-note prompts require
+a resolved route and block ID. The replacement is the ID span, empty at the
+cursor for a lone sigil. These prompts also return `block_id.owner_line` and
+`block_id.splice`: the splice puts the accepted ID on the owning task line,
+replacing an existing owner ID when present, while preserving other draft
+text and placing the caret after the ID. All three block-ID contexts carry an additive
 top-level `block_id` object with `route`, `relative_target` (for example
 `sase.md`), `note_exists` (false for a missing note, which is not an error),
 `marker` (`:` or `^`), `marker_range` (the whole marker token's draft-global
@@ -7806,16 +7826,22 @@ seal follows the ID part of either the `^` or the `:` form; `^` is otherwise alw
 the whole-item parse would classify the item as `pomodoro_link` once a valid
 ID fills the part (marker-only items), else `new` (items with text, `s:`/`$<N>`
 /`%` markers, child-line and batch positions behave the same way). The
-`project_task_block_id` object always carries intent `new` with empty
-`candidates`: `route` is the project-note stem (for example `cash_goog_exit`
-with `relative_target` `cash_goog_exit.md`), `marker` is the typed sigil
-(`:` or `^`), `marker_range` is the sigil plus the ID, `body` is the bullet
-body without the ID or a leading checkbox, and `used` holds `prj` (with that
-bullet's project body as `text`) plus every other task ID already typed in
-the item. A `used` entry carries `line` (1-based physical draft line),
-`task: true`, null `status_symbol` / `status_name`, and `text`. The object
-reads no routed note except to set `note_exists` for the project note.
-Suggestions derive from the task text: the first 3 content words when they
+`project_task_block_id` always carries intent `new` with empty `candidates`.
+For a project-note task, `route` is the project-note stem (for example
+`cash_goog_exit` with `relative_target` `cash_goog_exit.md`), `marker` is the
+typed sigil (`:` or `^`), `marker_range` is the sigil plus the ID, `body` is
+the owner task body without its ID or a leading checkbox, and `used` holds
+`prj` (with the project body as `text`) plus every other task ID already
+typed in the item. For a task list, `route` is the header route and `used`
+merges IDs in the destination note with IDs on sibling list bullets. In both
+forms `owner_line` is the 1-based physical line of the owning task;
+`splice.range` is the UTF-8 byte range to replace, and `splice.before` /
+`splice.after` are the draft text to put around the accepted ID. A `used`
+entry carries its 1-based physical `line`, task and status fields, and `text`.
+The project-note form reads no routed note except to set `note_exists`; a task
+list reads its destination note to build the duplicate-ID list.
+Suggestions put the owner's existing ID first when it is free, then derive
+from the task text: the first 3 content words when they
 fit in 24 bytes, else the first 2; then the other word-form when distinct; then
 the first phrase with a word (code spans, quoted phrases with mixed `"`/`“`
 quotes, parentheticals, Markdown `[label](destination)` labels that contain a

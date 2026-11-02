@@ -770,6 +770,35 @@ fn project_task_block_id_completes_a_caret_id() {
 }
 
 #[test]
+fn task_list_block_id_completes_on_bullet_and_nested_lines() {
+    let bullet = "@dev\n- Fix flaky gkeep test :";
+    let bullet_field = field(bullet, bullet.len()).expect("list task field");
+    assert_eq!(bullet_field.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(bullet_field.route.as_deref(), Some("dev"));
+    assert_eq!(bullet_field.replacement, (bullet.len(), bullet.len()));
+
+    let nested = "@dev\n- Fix flaky gkeep test\n  - repro on CI first :";
+    let nested_field =
+        field(nested, nested.len()).expect("nested list task field");
+    assert_eq!(nested_field.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(nested_field.route.as_deref(), Some("dev"));
+    assert_eq!(nested_field.replacement, (nested.len(), nested.len()));
+
+    let notes = "@dev#Ideas\n- A good idea :";
+    assert!(field(notes, notes.len()).is_none());
+}
+
+#[test]
+fn nested_project_task_block_id_completes_for_its_owner() {
+    let raw =
+        "Finish it @cash^goog-exit@\n- Draft the memo ^draft-memo\n  - check the facts :";
+    let completion = field(raw, raw.len()).expect("nested project task field");
+    assert_eq!(completion.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(completion.route.as_deref(), Some("cash_goog_exit"));
+    assert_eq!(completion.replacement, (raw.len(), raw.len()));
+}
+
+#[test]
 fn project_task_id_before_a_child_line_route_marker_still_completes() {
     let raw =
         "Finish it @cash^goog-exit@\n- Draft the memo :dr @cash^goog-exit@";
@@ -924,10 +953,13 @@ fn pomodoro_start_name_leaves_link_form_names_alone() {
 }
 
 #[test]
-fn project_task_block_id_completes_only_first_level_project_bullets() {
-    // Nested bullets never complete.
+fn project_task_block_id_completes_on_nested_project_bullets_through_owner() {
     let nested = "Finish it @cash^goog-exit@\n- Draft the memo :draft\n  - keep it short :x";
-    assert_eq!(field(nested, nested.len()), None);
+    let nested_field =
+        field(nested, nested.len()).expect("nested owner task field");
+    assert_eq!(nested_field.context, CompletionContext::ProjectTaskBlockId);
+    assert_eq!(nested_field.route.as_deref(), Some("cash_goog_exit"));
+    assert_eq!(nested_field.query, "x");
     // Non-project items keep `:1` literal.
     let plain = "Fix @sase\n- ratio 3 :1";
     assert_eq!(field(plain, plain.len()), None);

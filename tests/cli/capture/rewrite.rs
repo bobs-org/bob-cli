@@ -138,6 +138,42 @@ fn capture_rewrite_json_leaves_template_drafts_untouched() {
 }
 
 #[test]
+fn capture_rewrite_toggles_task_bullet_ids_in_lists_and_project_notes() {
+    for (before, expected) in [
+        ("@dev\n- Task :task-id^", "@dev\n- Task ^task-id"),
+        ("@dev\n- Task ^task-id:", "@dev\n- Task :task-id"),
+        (
+            "Project @cash^project-id@\n- Task :task-id^",
+            "Project @cash^project-id@\n- Task ^task-id",
+        ),
+        (
+            "Project @cash^project-id@\n- Task ^task-id:",
+            "Project @cash^project-id@\n- Task :task-id",
+        ),
+    ] {
+        let output = bob_command()
+            .arg("capture-rewrite")
+            .arg("-c")
+            .arg(before.len().to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(before)
+            .output()
+            .expect("run task ID toggle");
+
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("capture-rewrite JSON");
+        assert_eq!(json["changed"], true, "{before}");
+        assert_eq!(json["text"], expected, "{before}");
+        assert_eq!(json["cursor"], expected.len(), "{before}");
+        assert_eq!(json["rule"], "switch_block_id_separator", "{before}");
+    }
+}
+
+#[test]
 fn capture_rewrite_json_reports_a_rule_a5_notice_without_changing_text() {
     let output = bob_command()
         .arg("capture-rewrite")

@@ -440,6 +440,13 @@ another thin client of that service (see `docs/capture.md`
   new task with that ID, so shell completion offers the field's
   suggestions instead (for example `@dev:fix`, grouped `new task ID`)
   and never an ID `capture-complete` lists as used.
+- **Task-bullet block IDs follow the owner.** `capture-complete` opens
+  `project_task_block_id` after ` :` / ` ^` on a task-list bullet, one of its
+  nested lines, or a project-note task bullet and its nested lines. Its
+  `block_id.owner_line` and `block_id.splice` tell the client which owner line
+  receives the accepted ID and how to preserve the draft. A task list combines
+  IDs used in its destination note with IDs on sibling bullets; an existing
+  owner ID is the first suggestion when available.
 - **Action items offer nothing**, exactly as in `capture-complete`:
   closes (`x…`, `x*`, `x!`), starts (`=`, `=<X>`), numeric `+N` / `-N`
   adjustments and `++N` / `--N` shifts, and Work Log text on or below

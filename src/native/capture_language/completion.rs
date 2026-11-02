@@ -15,6 +15,7 @@ use super::project_tasks::*;
 use super::relations::{scan_line_relations, ScannedRelation};
 use super::tokens::*;
 use serde::Serialize;
+use std::collections::HashSet;
 
 /// Which discovery source a completion request should query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1397,11 +1398,12 @@ pub(crate) fn completion_field_at(
     {
         return None;
     }
-    // A trailing ` :id` / ` ^id` on a first-level project-note bullet
-    // completes the task ID itself; a cursor elsewhere on the line falls
-    // through to the `@` marker path below.
-    if line_index > 0
-        && let Some(field) = project_task_completion_field(item, line, cursor)
+    // A trailing task ID on a task-list bullet or project-note task bullet
+    // completes the ID itself; a cursor elsewhere falls through to the `@`
+    // marker path below.
+    if (line_index > 0 || item.list.is_some())
+        && let Some(field) =
+            project_task_completion_field(item, line_index, line, cursor)
     {
         return Some(field);
     }
@@ -1554,23 +1556,16 @@ fn parent_task_completion_field_at(
     })
 }
 
-/// Trailing ` :id` / ` ^id` completion on a first-level project-note child.
-///
-/// On a first-level child line of an item whose editor parse is a project
-/// note with a resolved route and project ID, a cursor inside the trailing
-/// task-ID token (from just after the sigil to the token end) yields the
-/// `project_task_block_id` context. The replacement is the ID span, which is
-/// empty at the cursor for a lone sigil. The same `project_tasks` lexer and
-/// last-body-word-after-markers rule backs both this and the editor spans,
-/// so completion never disagrees with highlighting. Parent lines, nested
-/// lines, non-project items, items without a resolved route or project ID,
-/// and cursors outside the trailing token yield nothing.
+/// Trailing ` :id` / ` ^id` completion on a task bullet, or on one of its
+/// nested lines. Project-note task bullets use the same contract under
+/// `project_note_parity`.
 fn project_task_completion_field(
     item: &CaptureItem<'_>,
+    line_index: usize,
     line: RawLine<'_>,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let info = project_task_token_at(item, line, cursor)?;
+    let info = project_task_token_at(item, line_index, line, cursor)?;
     let query = info
         .token
         .text
@@ -1586,50 +1581,67 @@ fn project_task_completion_field(
     })
 }
 
-/// One trailing task-ID token with absolute offsets plus its project stem.
+/// One trailing task-ID token plus the owning task information needed by
+/// the picker contract.
 struct ProjectTaskToken<'a> {
     token: Token<'a>,
     stem: String,
+    owner_index: usize,
+    owner_line: usize,
+    owner_body: String,
+    owner_id: Option<String>,
+    owner_id_range: Option<(usize, usize)>,
 }
 
-/// Locate the trailing task-ID token at `cursor` on a first-level child
-/// line of a project note with a resolved route and project ID. An item
-/// left `incomplete` by a lone ` :` / ` ^` still qualifies: its marker is
-/// resolved and only the ID is missing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectTaskIdToken {
+    start: usize,
+    end: usize,
+    id: Option<String>,
+}
+
+/// Locate the trailing task-ID token at `cursor` on a task-list bullet or
+/// nested line, or on a project-note task bullet and its nested lines. An
+/// item left incomplete by a lone sigil still qualifies.
 fn project_task_token_at<'a>(
     item: &CaptureItem<'a>,
+    line_index: usize,
     line: RawLine<'a>,
     cursor: usize,
 ) -> Option<ProjectTaskToken<'a>> {
-    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
-        return None;
-    };
-    if authored.depth != AuthoredDepth::First || cursor < authored.body_start {
-        return None;
-    }
     let resolved = parse_editor_item(item).item;
-    let is_project_note = matches!(
-        resolved.mode,
-        EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
-    ) || (resolved.mode == EditorMode::Incomplete
-        && resolved.needs == [Need::BlockId]);
-    if !is_project_note {
+    let is_list = item
+        .list
+        .as_ref()
+        .is_some_and(|list| list.kind == ListKind::Tasks && !list.ownerless);
+    let (stem, owner_index) = if is_list {
+        (item.list.as_ref()?.route.clone(), 0)
+    } else {
+        let is_project_note = matches!(
+            resolved.mode,
+            EditorMode::ProjectNote | EditorMode::PomodoroProjectNote
+        ) || (resolved.mode == EditorMode::Incomplete
+            && resolved.needs == [Need::BlockId]);
+        if !is_project_note || line_index == 0 {
+            return None;
+        }
+        let (Some(route), Some(project_id)) =
+            (resolved.route.as_ref(), resolved.block_id.as_ref())
+        else {
+            return None;
+        };
+        let owner = project_task_owner_index(item, line_index)?;
+        (format!("{}_{}", route, project_id.replace('-', "_")), owner)
+    };
+    let line_view = task_bullet_line(item, line_index, line)?;
+    if cursor < line_view.start {
         return None;
     }
-    let (Some(route), Some(project_id)) = (resolved.route, resolved.block_id)
-    else {
-        return None;
-    };
-    let child_line = RawLine {
-        text: authored.body,
-        start: authored.body_start,
-        end: line.end,
-    };
-    let child_tokens = tokenize_line_with_spans(&child_line);
+    let child_tokens = tokenize_line_with_spans(&line_view);
     let child_parse = parse_editor_line(
         child_tokens,
-        child_line.text,
-        child_line.start,
+        line_view.text,
+        line_view.start,
         false,
         false,
     );
@@ -1640,10 +1652,123 @@ fn project_task_token_at<'a>(
     if cursor < token.start + 1 || cursor > token.end {
         return None;
     }
+    let owner_line = item.lines.get(owner_index)?;
+    let owner_view = task_bullet_line(item, owner_index, owner_line.raw)?;
+    let (owner_body, owner_ids) = clean_task_bullet_line(owner_view);
+    let owner_id_token = owner_ids.iter().find(|id| {
+        id.id.is_some()
+            && !(owner_index == line_index
+                && id.start == token.start
+                && id.end == token.end)
+    });
+    let owner_id = owner_id_token
+        .and_then(|id| id.id.clone())
+        .or_else(|| owner_ids.iter().find_map(|id| id.id.clone()));
+    let owner_id_range = owner_id_token.map(|id| (id.start, id.end));
     Some(ProjectTaskToken {
         token: *token,
-        stem: format!("{}_{}", route, project_id.replace('-', "_")),
+        stem,
+        owner_index,
+        owner_line: owner_line.line_number,
+        owner_body,
+        owner_id,
+        owner_id_range,
     })
+}
+
+fn project_task_owner_index(
+    item: &CaptureItem<'_>,
+    line_index: usize,
+) -> Option<usize> {
+    let mut owner = None;
+    for (index, line) in
+        item.lines.iter().enumerate().take(line_index + 1).skip(1)
+    {
+        match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder => continue,
+            AuthoredLineClass::Invalid => return None,
+            AuthoredLineClass::Item(authored) => match authored.depth {
+                AuthoredDepth::First => owner = Some(index),
+                AuthoredDepth::Nested if owner.is_some() => {}
+                _ => return None,
+            },
+        }
+    }
+    owner
+}
+
+/// Return the marker-free authored body of a task bullet. List owner lines
+/// have already lost their bullet prefix in the zero-copy split; project
+/// note lines still carry their Markdown bullet.
+fn task_bullet_line<'a>(
+    item: &CaptureItem<'a>,
+    line_index: usize,
+    raw: RawLine<'a>,
+) -> Option<RawLine<'a>> {
+    if item.list.is_some() && line_index == 0 {
+        return Some(raw);
+    }
+    let AuthoredLineClass::Item(authored) = classify_authored_line(raw) else {
+        return None;
+    };
+    matches!(authored.depth, AuthoredDepth::First | AuthoredDepth::Nested)
+        .then_some(RawLine {
+            text: authored.body,
+            start: authored.body_start,
+            end: raw.end,
+        })
+}
+
+/// Clean task text and all accepted task-ID tokens from one authored line.
+/// Removing IDs before parsing lets the picker replace an existing owner ID
+/// without leaking it into the suggested body.
+fn clean_task_bullet_line<'a>(
+    line: RawLine<'a>,
+) -> (String, Vec<ProjectTaskIdToken>) {
+    let original_tokens = tokenize_line_with_spans(&line);
+    let (mut original_tokens, _) = extract_line_dependencies(
+        original_tokens,
+        line.text,
+        line.start,
+        false,
+    );
+    let mut ids = Vec::new();
+    while let Some(id) = strip_trailing_task_id(&mut original_tokens) {
+        let id_value = match id.lex {
+            TaskIdLex::Valid { id, .. } => Some(id),
+            TaskIdLex::Lone { .. } | TaskIdLex::Invalid { .. } => None,
+        };
+        ids.push(ProjectTaskIdToken {
+            start: id.token.start,
+            end: id.token.end,
+            id: id_value,
+        });
+    }
+    let masked = super::type_marker::masked_line(&line);
+    let masked_line = RawLine {
+        text: &masked,
+        start: line.start,
+        end: line.end,
+    };
+    let tokens = tokenize_line_with_spans(&masked_line);
+    let (mut remaining, _) = extract_line_dependencies(
+        tokens,
+        masked_line.text,
+        masked_line.start,
+        false,
+    );
+    remaining.retain(|token| {
+        !ids.iter()
+            .any(|id| id.start == token.start && id.end == token.end)
+    });
+    let parse = parse_editor_line(
+        remaining,
+        masked_line.text,
+        masked_line.start,
+        false,
+        false,
+    );
+    (clean_project_task_body(&parse.body), ids)
 }
 
 /// One already-typed project task ID elsewhere in the same item, for the
@@ -1653,19 +1778,31 @@ pub(crate) struct ProjectTaskUsedId {
     pub(crate) id: String,
     pub(crate) line: usize,
     pub(crate) text: String,
+    pub(crate) task: bool,
+    pub(crate) status_symbol: Option<char>,
+    pub(crate) status_name: Option<String>,
 }
 
-/// Detail behind the `project_task_block_id` block-ID object: the
-/// project-note stem, the sigil, the whole-token marker range, the cursor
-/// line's bullet body without its ID or leading checkbox, and `prj` plus
-/// every other accepted task ID in the item, in source order.
+/// Detail behind the `project_task_block_id` object: destination, owner,
+/// active marker, splice, clean task body, and IDs already in scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectTaskBlockIdDetail {
     pub(crate) stem: String,
+    pub(crate) is_list: bool,
     pub(crate) marker: char,
     pub(crate) marker_range: (usize, usize),
     pub(crate) body: String,
+    pub(crate) owner_line: usize,
+    pub(crate) owner_id: Option<String>,
+    pub(crate) splice: ProjectTaskSplice,
     pub(crate) used: Vec<ProjectTaskUsedId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectTaskSplice {
+    pub(crate) range: (usize, usize),
+    pub(crate) before: String,
+    pub(crate) after: String,
 }
 
 /// Collect the `project_task_block_id` block-ID detail at `cursor`.
@@ -1686,10 +1823,7 @@ pub(crate) fn project_task_block_id_detail(
             })
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
-    if line_index == 0 {
-        return None;
-    }
-    let info = project_task_token_at(item, line, cursor)?;
+    let info = project_task_token_at(item, line_index, line, cursor)?;
     if replacement != (info.token.start + 1, info.token.end) {
         return None;
     }
@@ -1697,89 +1831,138 @@ pub(crate) fn project_task_block_id_detail(
     if marker != ':' && marker != '^' {
         return None;
     }
-    let resolved = parse_editor_item(item).item;
-    let parent_line_number =
-        item.lines.first().map(|line| line.line_number).unwrap_or(1);
-    let mut used = vec![ProjectTaskUsedId {
-        id: "prj".to_string(),
-        line: parent_line_number,
-        text: clean_project_task_body(&resolved.body),
-    }];
-    // Run the shared per-item pass in source order so duplicate accounting
-    // matches the editor spans; only accepted IDs join the used list, and
-    // the cursor line never does.
-    let mut pass = ProjectTaskPass::new();
-    for (index, child) in item.lines.iter().enumerate().skip(1) {
-        let AuthoredLineClass::Item(authored) =
-            classify_authored_line(child.raw)
-        else {
-            continue;
-        };
-        let child_line = RawLine {
-            text: authored.body,
-            start: authored.body_start,
-            end: child.raw.end,
-        };
-        let child_tokens = tokenize_line_with_spans(&child_line);
-        let child_parse = parse_editor_line(
-            child_tokens,
-            child_line.text,
-            child_line.start,
-            false,
-            false,
-        );
-        // The completion pass keeps last-word ID accounting: only an
-        // accepted trailing ID joins the used list, and the cursor line
-        // never does.
-        let last_id = child_parse.body_tokens.last().and_then(|token| {
-            lex_project_task_id(token.text)
-                .map(|lex| StrippedTaskId { token: *token, lex })
+    let list = item.list.as_ref();
+    let mut used = Vec::new();
+    if let Some(list) = list {
+        let mut seen = HashSet::new();
+        for sibling in &draft.items {
+            let Some(sibling_list) = sibling.list.as_ref() else {
+                continue;
+            };
+            if sibling_list.ownerless
+                || sibling_list.header_start != list.header_start
+                || sibling_list.position == list.position
+            {
+                continue;
+            }
+            let parsed = parse_editor_item(sibling).item;
+            let Some(id) = parsed.block_id else {
+                continue;
+            };
+            if seen.insert(id.clone()) {
+                used.push(ProjectTaskUsedId {
+                    id,
+                    line: sibling.line_start,
+                    text: clean_project_task_body(&parsed.body),
+                    task: true,
+                    status_symbol: None,
+                    status_name: None,
+                });
+            }
+        }
+    } else {
+        let resolved = parse_editor_item(item).item;
+        let parent_line_number =
+            item.lines.first().map(|line| line.line_number).unwrap_or(1);
+        used.push(ProjectTaskUsedId {
+            id: "prj".to_string(),
+            line: parent_line_number,
+            text: clean_project_task_body(&resolved.body),
+            task: true,
+            status_symbol: None,
+            status_name: None,
         });
-        if let ChildTaskOutcome::Accept { id, .. } = pass.check_child(
-            last_id,
-            &child_parse.body,
-            authored.depth,
-            child.line_number,
-        ) && index != line_index
-        {
-            used.push(ProjectTaskUsedId {
-                id,
-                line: child.line_number,
-                text: clean_project_task_body(&strip_task_id_suffix(
-                    &child_parse.body,
-                )),
+        // Run the shared per-item pass in source order so duplicate
+        // accounting matches the editor spans. The owner's own ID is
+        // excluded whether the cursor is on the task or a nested line.
+        let mut pass = ProjectTaskPass::new();
+        for (index, child) in item.lines.iter().enumerate().skip(1) {
+            let AuthoredLineClass::Item(authored) =
+                classify_authored_line(child.raw)
+            else {
+                continue;
+            };
+            let Some(child_line) = task_bullet_line(item, index, child.raw)
+            else {
+                continue;
+            };
+            let child_tokens = tokenize_line_with_spans(&child_line);
+            let child_parse = parse_editor_line(
+                child_tokens,
+                child_line.text,
+                child_line.start,
+                false,
+                false,
+            );
+            let last_id = child_parse.body_tokens.last().and_then(|token| {
+                lex_project_task_id(token.text)
+                    .map(|lex| StrippedTaskId { token: *token, lex })
             });
+            if let ChildTaskOutcome::Accept { id, .. } = pass.check_child(
+                last_id,
+                &child_parse.body,
+                authored.depth,
+                child.line_number,
+            ) && index != info.owner_index
+            {
+                let (text, _) = clean_task_bullet_line(child_line);
+                used.push(ProjectTaskUsedId {
+                    id,
+                    line: child.line_number,
+                    text,
+                    task: true,
+                    status_symbol: None,
+                    status_name: None,
+                });
+            }
         }
     }
-    // The cursor line's body without its trailing token or checkbox. The
-    // accepted-ID strip and the plain last-word strip coincide, so one
-    // path covers valid, invalid, and lone-sigil tokens alike.
-    let current = &item.lines[line_index];
-    let AuthoredLineClass::Item(current_authored) =
-        classify_authored_line(current.raw)
-    else {
-        return None;
-    };
-    let current_line = RawLine {
-        text: current_authored.body,
-        start: current_authored.body_start,
-        end: current.raw.end,
-    };
-    let current_tokens = tokenize_line_with_spans(&current_line);
-    let current_parse = parse_editor_line(
-        current_tokens,
-        current_line.text,
-        current_line.start,
-        false,
-        false,
-    );
-    let stripped = strip_task_id_suffix(&current_parse.body);
+    let splice =
+        project_task_splice(raw_text, item, line_index, &info, marker)?;
     Some(ProjectTaskBlockIdDetail {
         stem: info.stem,
+        is_list: list.is_some(),
         marker,
         marker_range: (info.token.start, info.token.end),
-        body: clean_project_task_body(&stripped),
+        body: info.owner_body,
+        owner_line: info.owner_line,
+        owner_id: info.owner_id,
+        splice,
         used,
+    })
+}
+
+fn project_task_splice(
+    raw_text: &str,
+    item: &CaptureItem<'_>,
+    line_index: usize,
+    info: &ProjectTaskToken<'_>,
+    marker: char,
+) -> Option<ProjectTaskSplice> {
+    let id_start = info.token.start + 1;
+    if let Some((owner_id_start, owner_id_end)) = info.owner_id_range {
+        let between = raw_text.get(owner_id_end..info.token.start)?;
+        let after = between.strip_suffix(' ').unwrap_or(between).to_string();
+        return Some(ProjectTaskSplice {
+            range: (owner_id_start, info.token.end),
+            before: marker.to_string(),
+            after,
+        });
+    }
+    if line_index == info.owner_index {
+        return Some(ProjectTaskSplice {
+            range: (id_start, info.token.end),
+            before: String::new(),
+            after: String::new(),
+        });
+    }
+    let owner_end = item.lines.get(info.owner_index)?.raw.end;
+    let between = raw_text.get(owner_end..info.token.start)?;
+    let after = between.strip_suffix(' ').unwrap_or(between).to_string();
+    Some(ProjectTaskSplice {
+        range: (owner_end, info.token.end),
+        before: format!(" {marker}"),
+        after,
     })
 }
 

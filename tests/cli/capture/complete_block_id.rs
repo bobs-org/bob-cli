@@ -50,6 +50,24 @@ fn complete_json(
     serde_json::from_str(stdout(&output).trim()).expect("complete JSON")
 }
 
+fn apply_block_id_splice(
+    draft: &str,
+    json: &serde_json::Value,
+    id: &str,
+) -> String {
+    let splice = &json["block_id"]["splice"];
+    let start =
+        splice["range"]["start"].as_u64().expect("splice start") as usize;
+    let end = splice["range"]["end"].as_u64().expect("splice end") as usize;
+    format!(
+        "{}{}{}{}",
+        &draft[..start],
+        splice["before"].as_str().expect("splice before"),
+        id,
+        splice["after"].as_str().expect("splice after"),
+    ) + &draft[end..]
+}
+
 #[test]
 fn block_id_link_new_and_project_note_intents() {
     let temp = TempDir::new("bob-cli-complete-block-id-intent");
@@ -333,6 +351,133 @@ fn project_task_block_id_reports_stem_body_used_and_suggestions() {
     assert_eq!(
         caret_value["block_id"]["body"],
         "Collect the equity paperwork"
+    );
+
+    let nested = concat!(
+        "Finish it @cash^goog-exit@\n",
+        "- Draft the memo ^draft-memo\n",
+        "  - check the facts :",
+    );
+    let nested_value = complete_json(&vault, nested, nested.len(), None);
+    assert_eq!(nested_value["context"], "project_task_block_id");
+    assert_eq!(nested_value["block_id"]["owner_line"], 2);
+    assert_eq!(nested_value["block_id"]["body"], "Draft the memo");
+    assert_eq!(nested_value["block_id"]["suggestions"][0], "draft-memo");
+    assert_eq!(
+        nested_value["block_id"]["used"],
+        serde_json::json!([{
+            "id": "prj",
+            "line": 1,
+            "task": true,
+            "status_symbol": null,
+            "status_name": null,
+            "text": "Finish it",
+        }])
+    );
+    assert_eq!(nested_value["block_id"]["splice"]["before"], ":");
+    assert_eq!(
+        nested_value["block_id"]["splice"]["after"],
+        "\n  - check the facts"
+    );
+}
+
+#[test]
+fn task_list_block_id_splices_to_owner_and_merges_used_ids() {
+    let temp = TempDir::new("bob-cli-complete-list-task-block-id");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_settings(&vault);
+    write_file(
+        &vault.join("dev.md"),
+        "- [ ] #task Existing task ^note-used\n",
+    );
+
+    let draft = "@dev\n- Fix flaky gkeep test\n  - reproduce on CI ^";
+    let value = complete_json(&vault, draft, draft.len(), None);
+    assert_eq!(value["context"], "project_task_block_id");
+    let block = &value["block_id"];
+    assert_eq!(block["route"], "dev");
+    assert_eq!(block["relative_target"], "dev.md");
+    assert_eq!(block["note_exists"], true);
+    assert_eq!(block["body"], "Fix flaky gkeep test");
+    assert_eq!(block["owner_line"], 2);
+    assert_eq!(block["suggestions"][0], "fix-flaky-gkeep");
+    assert_eq!(
+        block["used"],
+        serde_json::json!([{
+            "id": "note-used",
+            "line": 1,
+            "task": true,
+            "status_symbol": " ",
+            "status_name": "Ready",
+            "text": "Existing task",
+        }])
+    );
+    let owner_end = draft.find("\n  -").expect("owner line end");
+    assert_eq!(
+        block["splice"],
+        serde_json::json!({
+            "range": {"start": owner_end, "end": draft.len()},
+            "before": " ^",
+            "after": "\n  - reproduce on CI",
+        })
+    );
+
+    let accepted = apply_block_id_splice(draft, &value, "fix-flaky-gkeep");
+    assert_eq!(
+        accepted,
+        "@dev\n- Fix flaky gkeep test ^fix-flaky-gkeep\n  - reproduce on CI"
+    );
+    let mut capture = bob_command();
+    capture
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(&accepted);
+    let captured = capture.output().expect("capture spliced task");
+    assert_success(&captured);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&captured).trim()).expect("capture JSON");
+    assert_eq!(json["text"], "Fix flaky gkeep test");
+    assert_eq!(json["block_id"], "fix-flaky-gkeep");
+
+    let draft_with_owner = concat!(
+        "@dev\n",
+        "- Owner task ^owner-id\n",
+        "  - nested details :\n",
+        "- Sibling task ^sibling-id",
+    );
+    let nested_cursor = draft_with_owner.find(":\n").expect("nested sigil") + 1;
+    let owned = complete_json(&vault, draft_with_owner, nested_cursor, None);
+    assert_eq!(owned["context"], "project_task_block_id");
+    assert_eq!(owned["block_id"]["owner_line"], 2);
+    assert_eq!(owned["block_id"]["body"], "Owner task");
+    assert_eq!(owned["block_id"]["suggestions"][0], "owner-id");
+    let used: Vec<&str> = owned["block_id"]["used"]
+        .as_array()
+        .expect("used IDs")
+        .iter()
+        .map(|entry| entry["id"].as_str().expect("ID"))
+        .collect();
+    assert_eq!(used, vec!["note-used", "sibling-id"]);
+    assert_eq!(owned["block_id"]["splice"]["before"], ":");
+    assert!(owned["block_id"]["splice"]["after"]
+        .as_str()
+        .expect("splice after")
+        .ends_with("  - nested details"));
+    let accepted = apply_block_id_splice(draft_with_owner, &owned, "owner-id");
+    assert_eq!(
+        accepted,
+        concat!(
+            "@dev\n",
+            "- Owner task :owner-id\n",
+            "  - nested details\n",
+            "- Sibling task ^sibling-id",
+        )
     );
 }
 

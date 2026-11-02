@@ -2123,10 +2123,10 @@ fn execution_rejects_project_task_id_rule_violations_verbatim() {
     // A lone sigil ending a first-level bullet is unfinished.
     let error =
         execute("Finish it @cash^x@\n- Draft :").expect_err("lone colon");
-    assert_eq!(error, unfinished_project_task_id_error(':'));
+    assert_eq!(error, unfinished_project_task_id_error(':', "Draft"));
     let error =
         execute("Finish it @cash^x@\n- Draft ^").expect_err("lone caret");
-    assert_eq!(error, unfinished_project_task_id_error('^'));
+    assert_eq!(error, unfinished_project_task_id_error('^', "Draft"));
 
     // A lone sigil on the parent stays literal, but a lone sigil ending
     // a nested bullet opens the unfinished-ID prompt for the owner.
@@ -2134,7 +2134,7 @@ fn execution_rejects_project_task_id_rule_violations_verbatim() {
     assert_eq!(parsed.body, "Finish it :");
     let error = execute("Finish it @cash^x@\n- Draft\n  - nested :")
         .expect_err("lone nested sigil");
-    assert_eq!(error, unfinished_project_task_id_error(':'));
+    assert_eq!(error, unfinished_project_task_id_error(':', "Draft"));
 
     // A `^`-only project note with a `#pomodoro` name is still unused.
     let error = execute("Finish it @cash^x@#bugs\n- Doc ^docs")

@@ -664,6 +664,21 @@ fn capture_list_unfinished_id_needs_block_id() {
     for (path, contents) in &before {
         assert_eq!(&fs::read_to_string(path).expect("read file"), contents);
     }
+
+    for draft in [
+        "@dev\n- Fix flaky gkeep test :",
+        "@dev\n- Fix flaky gkeep test\n  - reproduce on CI :",
+        "Finish it @cash^goog-exit@\n- Fix flaky gkeep test :",
+        "Finish it @cash^goog-exit@\n- Fix flaky gkeep test\n  - reproduce on CI :",
+    ] {
+        let output = run_capture(&vault, &day, draft, false);
+        assert_eq!(output.status.code(), Some(2), "{draft}");
+        let json: Value =
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+        let error = json["error"].as_str().expect("refusal text");
+        assert!(error.contains("Fix flaky gkeep test"), "{error}");
+        assert!(error.contains(" :fix-flaky-gkeep"), "{error}");
+    }
 }
 
 #[test]
@@ -879,7 +894,7 @@ fn capture_list_project_note_parity_vectors() {
     assert_eq!(output.status.code(), Some(2), "{nested}");
     let json: Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-    assert_eq!(json["code"], "invalid_project_task_id", "{nested}");
+    assert_eq!(json["code"], "invalid_project_task_id", "{nested}: {json}");
     assert!(
         json["error"]
             .as_str()

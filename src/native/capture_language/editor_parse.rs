@@ -4283,7 +4283,7 @@ pub(crate) fn editor_item_at(
                 split_physical_lines(raw_text).into_iter().find(|line| {
                     cursor >= line.start
                         && cursor <= line.end
-                        && detect_list_header(&line).is_some()
+                        && detect_list_header(line).is_some()
                 })?;
             draft
                 .items

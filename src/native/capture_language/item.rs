@@ -413,8 +413,8 @@ pub(super) fn parse_capture_item<'a>(
             // path, it reports `invalid_project_task_id`. The checkbox
             // copy starts "` :<id>` makes", so the " needs" tail keeps
             // this rule specific to the unfinished shape.
-            if error.starts_with("` :` needs a task ID")
-                || error.starts_with("` ^` needs a task ID")
+            if (error.starts_with("` :`") || error.starts_with("` ^`"))
+                && error.contains(" needs a task ID:")
             {
                 return Err(CaptureItemParseError::coded(
                     "invalid_project_task_id",
@@ -2071,9 +2071,14 @@ fn parse_capture_item_masked<'a>(
         if let Some(message) = pass.check_parent(&parent_outcome.body) {
             return Err(message);
         }
+        let mut owner_body: Option<String> = None;
         for (index, child) in sub_bullets.iter_mut().enumerate() {
             let line_number = sub_bullet_lines[index];
             let stripped = sub_bullet_stripped.get(index).cloned().flatten();
+            if child.depth == AuthoredDepth::First {
+                let (_, body) = split_leading_checkbox(child.body.trim_start());
+                owner_body = Some(body.trim().to_string());
+            }
             match pass.check_child(
                 stripped,
                 &child.body,
@@ -2082,7 +2087,10 @@ fn parse_capture_item_masked<'a>(
             ) {
                 ChildTaskOutcome::Ignore => {}
                 ChildTaskOutcome::Unfinished { sigil } => {
-                    return Err(unfinished_project_task_id_error(sigil));
+                    return Err(unfinished_project_task_id_error(
+                        sigil,
+                        owner_body.as_deref().unwrap_or(&child.body),
+                    ));
                 }
                 ChildTaskOutcome::Error { message, .. } => {
                     return Err(message);
