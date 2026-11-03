@@ -228,6 +228,31 @@ pub(crate) fn structure_ok(id: PeriodId, contents: &str) -> bool {
     }
 }
 
+/// True when a period note holds nothing `ensure` must preserve: it is
+/// empty or whitespace-only, or it is only a closed frontmatter block
+/// with a blank body. The second shape is what clicking a dangling
+/// period link leaves behind, because the vault's Templater folder
+/// template stubs every new note with `parent:` and `created:`
+/// frontmatter. Any body text, or an unclosed frontmatter block, counts
+/// as content.
+pub(crate) fn is_unfilled(contents: &str) -> bool {
+    if contents.trim().is_empty() {
+        return true;
+    }
+    let mut lines = contents.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return false;
+    }
+    let mut closed = false;
+    for line in lines.by_ref() {
+        if line.trim() == "---" {
+            closed = true;
+            break;
+        }
+    }
+    closed && lines.all(|line| line.trim().is_empty())
+}
+
 fn parse_frontmatter(contents: &str) -> BTreeMap<String, String> {
     let mut frontmatter = BTreeMap::new();
     let mut lines = contents.lines();
@@ -315,6 +340,21 @@ fn trim_body(lines: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unfilled_notes_are_blank_or_frontmatter_only_stubs() {
+        assert!(is_unfilled(""));
+        assert!(is_unfilled("  \n\t\n"));
+        let stub = "---\nparent: \"[[2026/2026-W46|2026/2026-W46]]\"\ncreated: 2026-11-03T16:30:00-05:00\n---\n";
+        assert!(is_unfilled(stub), "a Templater stub is fillable");
+        assert!(is_unfilled(&format!("{stub}\n  \n")));
+        assert!(!is_unfilled(&format!("{stub}Bryan's words\n")));
+        assert!(
+            !is_unfilled("---\nparent: x\n"),
+            "unclosed frontmatter is content"
+        );
+        assert!(!is_unfilled("Bryan's words\n"));
+    }
 
     fn drafted_note() -> String {
         let review = "**Headline:** A calm week\n\nDid the work.\n";

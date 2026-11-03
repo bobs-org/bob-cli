@@ -113,6 +113,35 @@ fn ensure_never_clobbers_and_fills_empty_notes() {
 }
 
 #[test]
+fn ensure_fills_a_frontmatter_only_stub_from_a_clicked_link() {
+    // Clicking a dangling period link makes Templater write the vault's
+    // folder template: frontmatter only, no body.
+    let vault = vault_dir("stub");
+    let stub = vault.path().join("2026/2026-W47.md");
+    fs::create_dir_all(stub.parent().unwrap()).unwrap();
+    fs::write(
+        &stub,
+        "---\nparent: \"[[2026/2026-W46|2026/2026-W46]]\"\ncreated: 2026-11-03T16:30:00-05:00\n---\n",
+    )
+    .unwrap();
+    let output = ensure(vault.path(), "2026-11-16", &["-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("ensure JSON");
+    assert!(
+        body["filled"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path == "2026/2026-W47.md"),
+        "the stub is reported as filled: {body}"
+    );
+    let filled = fs::read_to_string(&stub).unwrap();
+    assert!(filled.contains("# 2026-W47"), "stub filled:\n{filled}");
+    assert!(filled.contains("parent: \"[[2026/2026-Q4]]\""));
+}
+
+#[test]
 fn ensure_dry_run_plans_without_writing() {
     let vault = vault_dir("dry-run");
     let output = ensure(vault.path(), "2026-11-03", &["-n"]);
@@ -820,6 +849,29 @@ fn brief_output_is_deterministic() {
     first["generated_at"] = serde_json::Value::Null;
     second["generated_at"] = serde_json::Value::Null;
     assert_eq!(first, second, "same vault, same now: same brief");
+}
+
+#[test]
+fn brief_markdown_format_matches_the_agent_callouts() {
+    // Every v1 callout tells the agent to run `bob periods brief <id> -f md`.
+    let vault = vault_dir("brief-md-format");
+    write_reviews_fixture(vault.path());
+    let default = periods_command(vault.path(), "brief", &["2026-W44"]);
+    assert_success(&default);
+    for format in ["md", "human"] {
+        let output =
+            periods_command(vault.path(), "brief", &["2026-W44", "-f", format]);
+        assert_success(&output);
+        assert_eq!(
+            stdout(&output),
+            stdout(&default),
+            "-f {format} prints the Markdown bundle"
+        );
+    }
+    assert!(
+        stdout(&default).starts_with('#'),
+        "the Markdown bundle opens with a heading"
+    );
 }
 
 #[test]

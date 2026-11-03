@@ -161,9 +161,11 @@ and never push (vault-sync commits, and agents commit as the vault's
 - `bob periods ensure [-d/--date DATE] [-f human|json] [-n/--dry-run] [-q/--quiet]`:
   create-only, one week of look-ahead. It wants the week, quarter,
   year, and all-time chains for DATE (default: today from `BOB_NOW`)
-  and for DATE + 7 days. Missing notes are created; empty or
-  whitespace-only notes are filled; notes with content are never
-  touched. Human output prints one `created <path>` line per write
+  and for DATE + 7 days. Missing notes are created; empty,
+  whitespace-only, and frontmatter-only notes are filled (clicking a
+  dangling period link leaves a frontmatter-only stub, because the
+  vault's Templater folder template adds `parent:` and `created:` to
+  every new note); notes with body content are never touched. Human output prints one `created <path>` line per write
   (`would create` with `-n`); `-q` stays quiet when there was nothing
   to do. JSON returns
   `{ok, schema_version, created[], filled[], existing[], dry_run}`.
@@ -181,9 +183,11 @@ and never push (vault-sync commits, and agents commit as the vault's
   read-only. With no PERIOD it shows the current ISO week. It prints a compact
   terminal report or the schema-1 report below. The selected clock is applied to
   Pomodoro minutes and lanes; Worked is the default.
-- `bob periods brief <PERIOD> [-f human|json]`:
+- `bob periods brief <PERIOD> [-f md|json]`:
   read-only. With no PERIOD it briefs the current ISO week. It prints
-  the deterministic, versioned agent bundle (brief v1) below.
+  the deterministic, versioned agent bundle (brief v1) below, as
+  Markdown by default (`-f md`, which the agent callouts use; `human`
+  is accepted as an alias) or as JSON with `-f json`.
   `all_time` has no review and is a usage error.
 - `bob periods draft <PERIOD> -i/--input FILE|- [-F/--force] [-f human|json] [-n/--dry-run]`:
   replaces the note's `## Review` with the draft text below. `-n`

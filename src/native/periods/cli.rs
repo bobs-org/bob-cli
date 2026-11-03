@@ -15,9 +15,10 @@ pub(crate) fn ensure_command() -> ClapCommand {
             "Create missing period notes one week ahead: the week, quarter, \
              year, and all-time chains for today (or --date) and for that \
              date plus seven days. Missing notes are created from the \
-             deterministic scaffold; existing notes that are empty or \
-             whitespace-only are filled. A note with content is never \
-             touched. A re-run writes nothing. With -R/--refresh-instructions, \
+             deterministic scaffold; existing notes that are empty, \
+             whitespace-only, or only frontmatter (the stub a clicked \
+             dangling link leaves) are filled. A note with body content is \
+             never touched. A re-run writes nothing. With -R/--refresh-instructions, \
              stale agent callouts in existing notes are refreshed in one \
              commit instead. See docs/periods.md for the calendar, scaffolds, \
              and JSON.",
@@ -116,7 +117,7 @@ pub(crate) fn brief_command() -> ClapCommand {
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
-        .arg(format_arg())
+        .arg(brief_format_arg())
         .arg(help_arg())
         .arg(Arg::new("period").value_name("PERIOD").help(
             "Period id or note path (week, quarter, or year); all_time has no review",
@@ -274,6 +275,23 @@ fn format_arg() -> Arg {
         .value_parser(["human", "json"])
         .default_value("human")
         .help("Output format: human or json")
+}
+
+/// `brief` prints Markdown for agents, so its human format is `md`; the
+/// v1 agent callouts run `bob periods brief <id> -f md`. `human` stays a
+/// hidden alias for symmetry with the other period commands.
+fn brief_format_arg() -> Arg {
+    use clap::builder::{PossibleValue, PossibleValuesParser};
+    Arg::new("format")
+        .long("format")
+        .short('f')
+        .value_name("FORMAT")
+        .value_parser(PossibleValuesParser::new([
+            PossibleValue::new("md").alias("human"),
+            PossibleValue::new("json"),
+        ]))
+        .default_value("md")
+        .help("Output format: md (Markdown) or json")
 }
 
 fn show_format_arg() -> Arg {

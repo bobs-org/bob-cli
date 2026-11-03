@@ -63,10 +63,10 @@ Options:
           Bob vault root; defaults to BOB_DIR or ~/bob
 
   -f, --format <FORMAT>
-          Output format: human or json
+          Output format: md (Markdown) or json
           
-          [default: human]
-          [possible values: human, json]
+          [default: md]
+          [possible values: md, json]
 
   -h, --help
           Show help
@@ -150,7 +150,7 @@ See docs/periods.md for the draft rules, word caps, and JSON errors.
 Create missing period notes one week ahead
 
 ```text title="bob periods ensure --help"
-Create missing period notes one week ahead: the week, quarter, year, and all-time chains for today (or --date) and for that date plus seven days. Missing notes are created from the deterministic scaffold; existing notes that are empty or whitespace-only are filled. A note with content is never touched. A re-run writes nothing. With -R/--refresh-instructions, stale agent callouts in existing notes are refreshed in one commit instead. See docs/periods.md for the calendar, scaffolds, and JSON.
+Create missing period notes one week ahead: the week, quarter, year, and all-time chains for today (or --date) and for that date plus seven days. Missing notes are created from the deterministic scaffold; existing notes that are empty, whitespace-only, or only frontmatter (the stub a clicked dangling link leaves) are filled. A note with body content is never touched. A re-run writes nothing. With -R/--refresh-instructions, stale agent callouts in existing notes are refreshed in one commit instead. See docs/periods.md for the calendar, scaffolds, and JSON.
 
 Usage: bob periods ensure [OPTIONS]
 

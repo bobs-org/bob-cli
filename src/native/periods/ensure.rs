@@ -3,8 +3,9 @@
 //! The contract lives in `docs/periods.md` §7. Ensure resolves DATE
 //! (default: today from `BOB_NOW`), wants the week/quarter/year/all-time
 //! chains for DATE and DATE + 7 days, creates each missing note, and
-//! fills each existing note that is empty or whitespace-only. It never
-//! touches a note with content.
+//! fills each existing note that is empty, whitespace-only, or a
+//! frontmatter-only stub (`note::is_unfilled`). It never touches a note
+//! with body content.
 
 use std::ffi::OsString;
 use std::fs;
@@ -179,7 +180,7 @@ fn execute(matches: &clap::ArgMatches) -> Result<EnsureReport, EnsureError> {
                 )));
             }
             Ok(contents) => {
-                if contents.trim().is_empty() {
+                if note::is_unfilled(&contents) {
                     let bytes = scaffold::render(id);
                     atomic_fill(&target, &bytes).map_err(|error| {
                         EnsureError::io(format!(
@@ -226,7 +227,7 @@ fn plan_only(vault: &Path, wanted: &[PeriodId]) -> EnsureReport {
             }
             Err(_) | Ok(_) => {
                 let is_empty = fs::read_to_string(&target)
-                    .map(|contents| contents.trim().is_empty())
+                    .map(|contents| note::is_unfilled(&contents))
                     .unwrap_or(true);
                 if is_empty {
                     // Missing reads as creatable; empty reads as fillable.

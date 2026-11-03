@@ -98,10 +98,11 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Ok(matches) => matches,
         Err(error) => return print_clap_error(error),
     };
+    // `md` (alias `human`) prints the Markdown bundle; `json` the JSON one.
     let human = matches
         .get_one::<String>("format")
         .map(String::as_str)
-        .unwrap_or("human")
+        .unwrap_or("md")
         != "json";
     match execute(&matches) {
         Ok(bundle) => {
