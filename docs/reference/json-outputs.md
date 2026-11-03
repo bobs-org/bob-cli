@@ -135,6 +135,33 @@ These offers do not require a dependency on the completed task. They join
 the batch's `pull_in` choices and link only when picked.
 See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
+Relation successors use the same explicit selection flow when a managed
+gesture completes a task or parks it Pending with no live link left today.
+The additive fields are:
+
+| Location | Fields |
+| --- | --- |
+| `task_complete`, `pomodoro_close`, nested `relation_completes[].task_complete`, or a Pending-unlink capture item | `relation_successors[]`, `relation_held[]`, and `relation_check` (`checked` or `unavailable`); omitted when inapplicable |
+| An offered row | `relation: {label, key, event, after}`; `event` is `parked` or `done`, and `after[]` identifies the triggering tasks with `note_path`, `block_id`, and `text` |
+| A held relation row | Task identity, the relation, and `reason`: `already_planned`, `already_started`, `blocked`, `hidden`, or `waits_for` |
+| Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; optional `groups[]` and `copy: {title, capsule, glyph}` |
+| `pull_in.groups[]` | `group`, optional `project`, and `copy: {title, why?, tag?, fold?, glyph}`; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, `event`, and folded counts |
+
+Group order follows offer numbering across hand-offs, projects, finished
+projects, keep-moving, and relations. Clients use Bob's supplied copy.
+`offer_count` counts selectable rows, including relation successors;
+held rows are not selectable. Empty `groups` and absent copy are omitted.
+The flat `offers` list appears on a `pull_in_choice_required` refusal;
+successful results keep the rows on their owning capture items.
+
+These are the final batch's offers: later items can remove an offer by
+linking, completing, blocking, or dropping its task, or by re-linking a
+parked predecessor. A picked relation successor appears in `task_blocks`
+with role `relation_successor`; its added Pomodoro line has
+`reason: "relation"`. See the
+[successor JSON contract](../task-dependencies.md#125-reporting-model)
+and [relation events](../task-dependencies.md#1218-relation-successors-starts-after).
+
 ### Inbox-routing results
 
 Successful captures, including dry runs, return `inbox_route` with
@@ -195,7 +222,7 @@ candidate eligibility, and error behavior.
 | --- | --- | --- | --- | --- |
 | `bob plan` | `-f json` | Date, status, caps, Today tasks and root counts, lane counts, and `warnings` | `schema_version: 3` | [Plan](../plan.md) |
 | `bob ready` | `-f json` | Per-note Ready lane against `max_ready_per_note` | `schema_version: 1` | [Plan](../plan.md) |
-| `bob freshness` and `bob freshness list` | `-f json` | Review queue report | `schema_version: 15` | [Freshness](../freshness.md) |
+| `bob freshness` and `bob freshness list` | `-f json` | Review queue, `config.decay.limits: {pending, next, ready}` (integers or `false`), and per-row `keeps` / `decide` | `schema_version: 15` | [Freshness](../freshness.md) |
 | `bob freshness seed` | `-f json` | Seed dry-run report: stamped counts, buckets, skipped | `schema_version: 15` | [Freshness](../freshness.md) |
 | `bob stats overview` | `-f json` | Weekly glance report | `schema_version: 1` | [Stats](../stats.md) |
 | `bob stats show` | `-f json` | One or more metric details | `schema_version: 1` | [Stats](../stats.md) |

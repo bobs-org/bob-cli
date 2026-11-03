@@ -64,21 +64,19 @@ that a landing toast names the tier.
 
 On the row `]s` just landed on, pick one explicit answer:
 
-- **Keep and stay:** `Alt+F` stamps the task and stays on the row.
-- **Keep and advance:** `Ctrl+Alt+F` stamps and moves to the next remaining
-  due row. On a Pending task it may ask for an optional Work Log summary;
-  blank Enter still keeps.
+- **Keep and stay:** Press `Alt+F` and confirm any prompt to stay on the row.
+- **Keep and advance:** Press `Ctrl+Alt+F` and confirm any prompt to move
+  to the next remaining due row.
 - **Skip without answering:** `]s` leaves the row due.
 - **Complete a PRE/POST checklist row:** `Ctrl+Enter` completes it. On PRE it
   never leaves that group; `Ctrl+Alt+F` can cross into the next tier.
   Checklist rows are never stamped.
 
-A counted keep on a due Ready ROTTEN or scheduled TICKLER row asks "Why
-keep it as written?" before writing. The reason is optional — a blank
-Enter logs `🤷 no reason given` — and Esc cancels the keep entirely.
-Each answer lands as a dated entry under the task's `🥀 **ROTTEN
-LOG**`, newest first, so later reviews show how many times, when, and
-why the task was kept.
+A counted keep asks why the task stays on its rung, including Pending and
+Next. Enter an optional reason; blank Enter logs `🤷 no reason given` in
+the Rotten Log, and Esc cancels. At the keep limit, answer the decay card:
+Enter accepts the displayed step; Alt+F stays and restarts the count. See
+[Task decay](../freshness.md#2a-keep-streaks-and-task-decay).
 
 An inbox task asks where it goes before a non-closing answer writes. After
 each keep, `bob freshness` drops that row from today's queue.

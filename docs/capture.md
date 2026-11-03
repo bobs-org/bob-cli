@@ -3994,10 +3994,10 @@ into a lead-in, starting inside a lead-in and running into the meeting,
 starting inside a lead-out, and running through the whole event. Both
 warnings can fire for one start only when they name different events.
 Events already in that session's own lineup are skipped. Done (`[x]`)
-and cancelled (`[-]`) rows never warn. Off-clock Event Tasks (`#offclock`;
-Google also accepts `#off-clock` and `#untracked`) warn like any other open
-Event Task: off-clock means off the clock, not
-optional. MEET sessions never raise `pomodoro_starts_during_event`.
+and cancelled (`[-]`) rows never warn. Off-clock Event Tasks, whether tagged
+`#off` (or a deprecated alias) or inheriting an `offclock: true` default,
+warn like any other open Event Task. MEET sessions never raise
+`pomodoro_starts_during_event`.
 
 MEET sessions are exempt: their span follows the [event
 run](#meet-starts-follow-the-calendar), so running through those events is

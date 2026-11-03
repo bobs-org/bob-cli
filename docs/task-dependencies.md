@@ -1310,8 +1310,8 @@ The JS port counts the same set without reading note bodies.
 
 ### 12.5 Reporting model
 
-The capture result contract is additive under schema version 1, so old
-clients keep working. Dry-run JSON equals real-run JSON with the same
+Capture results are unversioned: they carry no `schema_version`. The
+successor fields are additive. Dry-run JSON equals real-run JSON with the same
 flags (including `--pull-in`). Serde omits `not_linked` when the row
 was linked; clients must not expect `"not_linked": null`. `breaker` and
 `not_planned_today` are never emitted again (clients keep their copy
@@ -1442,8 +1442,8 @@ only when its final task and link do.
 **Keep-moving rows (`keep_moving[]`)**
 
 Every `task_complete` and `pomodoro_close` object carries an additive
-`keep_moving` array, always present and possibly empty, in schema
-version 1. Its rows use the exact `unblocked[]` row shape, with:
+`keep_moving` array, always present and possibly empty. Its rows use the
+exact `unblocked[]` row shape, with:
 
 - `trigger: "last_planned"`;
 - `offer.group: "keep_moving"` and `offer.project: <N path>`;
@@ -1488,8 +1488,9 @@ has one entry for each offered group of every kind, with bob-authored
 `hand_off`, `project`, `project_created`, `project_finished`,
 `keep_moving`, or `relation`. Existing project and keep-moving groups
 keep their keys and add `copy`; hand-off and project-finished groups
-have no `folded`. A relation entry has `group`, `after`, `label`,
-`event`, folded counts (`hidden`, `blocked`, `already_started`,
+have no `folded`. A relation entry has `group`, an `after` object
+(`key`, `note_path`, `block_id`, `text`), `label`, `event`, folded
+counts (`hidden`, `blocked`, `already_started`,
 `waits_for`), and `copy`. `pull_in.copy` is `{title, capsule, glyph}`.
 The strings are specified in §12.18 and are the source for every
 client.
@@ -1549,7 +1550,9 @@ Present on **every** successful capture JSON (dry-run too):
   relation groups carry `hidden`, `blocked`, `already_started`, and
   `waits_for` (§12.18). Hand-off and project-finished groups have no
   `folded` field. The example relation entry is
-  `{"group": "relation", "after": "agents.md#^implement",
+  `{"group": "relation", "after": {"key": "agents.md#^implement",
+  "note_path": "agents.md", "block_id": "implement",
+  "text": "Send implementation prompt"},
   "label": "starts after", "event": "parked", "folded": {...},
   "copy": {"title": "Starts after …", "glyph": "relation"}}`.
 - `offer_count` and `picked_count` include keep-moving and relation
