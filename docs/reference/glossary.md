@@ -186,14 +186,17 @@ the Keep item `bob gkeep` drains. bob-cli capture's `INBOX_FILE` constant and
 
 *Aliases: keeps.*
 
-The count of consecutive due reviews at which a human confirmed a due Ready
-task as written, stored as `[keeps:: N]` (1–999; absence means 0) right after
-the task's `fresh`/`refresh` fields. Only an exact due Ready rotten/tickler
-target increments, once per review through the single keep helper; a keep on an
-unblock tickler (`returned_by: unblocked`) leaves the streak unchanged; every other
-human stamp clears it, and automation never touches it. At the configured
-limit the next due confirmation asks an explicit approved-decision question
-instead of stamping; see [Rotten Keeps Decay Through The Priority Ladder](../develop/decisions.md#rotten-keeps-use-priority-decay),
+The count of consecutive due reviews at which a human confirmed a task as written
+on its current rung, stored as `[keeps:: N]` (1–999; absence means 0) right after
+the task's `fresh`/`refresh` fields. Due keeps count on every rung — WIP on the
+PENDING tier, Next on the NEXT tier, Ready and P-levels on ROTTEN or scheduled
+TICKLER — once per review through the single keep helper; a keep on an unblock
+tickler (`returned_by: unblocked`) leaves the streak unchanged. Any rung change
+clears it, whoever makes it: human lane and priority writers stamp, and
+reconcile's lane raises strip it in the same line write (`Unblock` back to Ready
+preserves it); hand edits stay unobserved, and automation otherwise never touches
+it. At the rung's allowance the next due confirmation opens the [Task Decay](#task-decay)
+card instead of stamping; see [Task Decay Is One Ladder](../develop/decisions.md#task-decay-is-one-ladder),
 [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers), and
 [Task Freshness](#task-freshness).
 
@@ -389,21 +392,24 @@ area, or a [Task Type](#task-type); see `docs/pomodoro-homes.md`.
 
 *Aliases: keep log.*
 
-A task-local history of keeps, stored as a `🥀 **ROTTEN LOG**` direct child with
-newest-first counted entries `*YYYY-MM-DD* — <reason> · kept N×` and Next lane
-entries `*YYYY-MM-DD* — <reason> · kept in Next`. Alt+F or Ctrl+Alt+F on an exact
-due Ready ROTTEN or scheduled TICKLER row (the same keep that increments the
-[Keep Streak](#keep-streak)) and Keep on the approved-decay card ask "Why keep it as written?":
-the reason is optional (blank logs `🤷 no reason given`) but a counted entry is not,
-and Esc writes nothing. N is the streak after that keep. Marking any Next (`[*]`)
-task fresh also asks "Why keep it in Next?"; only a nonblank reason writes a Next
-entry, and it never changes `[keeps::]`. The entry count is the number of counted
-and Next entries logged since rollout: unlike `[keeps:: N]` it never resets, and
-nothing reads it to change decay, lanes, Today, schedule, priority, or
-[Task Freshness](#task-freshness). NEW, early Ready, Pending, PROJECTS, and unblock-tickler keeps
-never write it; Pending summaries stay in the [Work Log](#work-log) and deferrals in the
-[Schedule Log](#schedule-log). See [Rotten Keeps Are Logged](../develop/decisions.md#rotten-keeps-are-logged) and
-[Next Keeps Ask For An Optional Rotten Log Reason](../develop/decisions.md#next-keeps-ask-an-optional-rotten-reason).
+A task-local history of rung events, stored as a `🥀 **ROTTEN LOG**` direct child
+with newest-first entries `*YYYY-MM-DD* — <body>`. Every counted keep, Stay, step,
+and drop writes exactly one entry in the same transaction as its stamp, with one
+undo; a blank reason always logs `🤷 no reason given`, and Esc writes nothing. A
+counted keep logs `<reason> · kept N× in <Rung>` (`at` for P-levels; WIP, Next,
+and Ready use `in`), N the [Keep Streak](#keep-streak) after that keep; a Stay logs `<reason>
+· stayed in <Rung> after N keeps`; a step logs `🍂 <from> → <to> · after N keeps`
+(`🍂 rolled again at P4 · after N keeps` at the bottom); a drop logs `🍂 <Rung> →
+dropped · after N keeps` plus the existing Cancel Log entry. WIP keeps log here,
+never in the [Work Log](#work-log); freshness gestures never write or prompt for the Work
+Log. The decay card's header derives per-rung keep tallies from these entries at
+read time. The entry count never resets, is never stored as a field, and nothing
+reads it to change decay, lanes, Today, schedule, priority, or
+[Task Freshness](#task-freshness). NEW, early, same-day repeat, Today-linked, PROJECTS,
+recurring, checklist, closed, and unblock-tickler keeps never prompt and never
+write it; deferrals and rewords stay in the [Schedule Log](#schedule-log). `bob capture`,
+Rust, hooks, randomize, and seed never write it. There is no backfill: keeps
+before rollout leave no entries. See [Task Decay Is One Ladder](../develop/decisions.md#task-decay-is-one-ladder).
 
 ### Schedule Log {#schedule-log}
 
@@ -446,6 +452,30 @@ starts with nothing marked.
 Parking or completing a task also offers the tasks linked to it with a configured
 successor label (`starts after`) in their own relation group, which says which relation
 and event fired and that they are not dependents.
+
+### Task Decay {#task-decay}
+
+*Aliases: decay, decay ladder, decay card, step down.*
+
+The consent-based ladder that moves a repeatedly kept task one rung down, one
+explicit answer at a time. Rungs: WIP (`[/]`; machine lane `pending`, the
+user-facing alias of In Progress) → Next (`[*]`) → Ready (`[ ]` with no
+priority) → P1 → P2 → P3 → P4 (each a `[priority::]` level). Blocked is an
+overlay, never a rung.
+
+Each rung allows a configured number of due Alt+F keeps (Bryan: 2 on every
+rung). The allowance is the rung's `freshness.decay.pending_keeps` /
+`next_keeps` / `ready_keeps` key (Ready and every P-level share `ready_keeps`),
+then `freshness.decay.keeps`, then 3; `false` on one rung (or `decay: false`
+overall) counts and logs but never asks. The priority property's per-level
+`decay.rolls` (Bryan: 2) is the separate Ctrl+Enter same-level roll allowance,
+not a keep allowance. A rung's N+1th due keep writes nothing and opens the
+decay card: Enter steps exactly one rung down (P4 rolls again at P4), Alt+F
+stays and restarts the [Keep Streak](#keep-streak) count, E rewords, D drops. Enter never
+drops, nothing moves without a keypress, and nothing decays on a timer. Every
+counted keep, stay, step, and drop writes one rung-qualified [Rotten Log](#rotten-log)
+entry (a blank reason always logs 🤷); steps also write their [Schedule Log](#schedule-log)
+decay entry. See [Task Decay Is One Ladder](../develop/decisions.md#task-decay-is-one-ladder).
 
 ### Task Dependency Link {#task-dependency-link}
 
@@ -511,7 +541,7 @@ See `docs/capture.md`.
 
 *Aliases: freshness.*
 
-The local calendar date a human last confirmed that an open task still needs doing as written, stored as `[fresh:: YYYY-MM-DD]` before the task's trailing Tasks fields. Supported Bob keymaps, Alt+F, and `bob capture` edits of existing tasks stamp it; creation and automation never do. A visible, non-recurring Ready task is due for review when it is new (no stamp), a tickler (its `scheduled` date arrived after the stamp, or it was automatically unblocked (`[unblocked::]`); machine state `resurfaced`), or rotten (the stamp is at least its interval old; machine `ROTTEN` since schema 2). The interval comes from `[refresh:: N]`, then the note's `task_refresh`, then `freshness.interval` (7 days) — except a Pending (WIP) or Next task in a walked lane, whose lane interval (`pending_interval` / `next_interval`, default 1 day; `false` walks that lane off) overrides the whole chain. The `]s` walk visits one shared queue in tiers PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; only due tasks walk (a task stamped today drops out). PRE/POST `#gtd` checklist rows (often recurring) resolve by completion, never by a stamp. A non-checklist recurring task is never stamped; once its occurrence date (earliest of scheduled, due, start) arrives it walks in RECURRING until completed, rescheduled past today, linked to Today, or cancelled. NEW holds unconfirmed tasks on `dash`, READY holds only confirmed/exempt tasks, and `rotten.md` holds TICKLER plus expired ROTTEN; see [Recurring Occurrences Walk When Due](../develop/decisions.md#recurring-occurrences-walk-when-due), [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered), [READY Is Freshness-Gated With NEW and ROTTEN Review](../develop/decisions.md#ready-is-freshness-gated), [Today Is Read From The Ledger, Never Written To Tasks](../develop/decisions.md#today-is-read-from-the-ledger), and [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers). Freshness never changes a lane, Today, schedule, or priority. Its status-bar view is the [Morning GTD Review Footer](#morning-gtd-review-footer). It is not Zorg `@FRESHNESS`, `bob vault-sync` freshness, or P-level scheduling windows. Freshness itself still never changes priority or schedule; the approved decision card invokes separate existing writers, and only on explicit approval — see [Rotten Keeps Decay Through The Priority Ladder](../develop/decisions.md#rotten-keeps-use-priority-decay) and [Keep Streak](#keep-streak).
+The local calendar date a human last confirmed that an open task still needs doing as written, stored as `[fresh:: YYYY-MM-DD]` before the task's trailing Tasks fields. Supported Bob keymaps, Alt+F, and `bob capture` edits of existing tasks stamp it; creation and automation never do. A visible, non-recurring Ready task is due for review when it is new (no stamp), a tickler (its `scheduled` date arrived after the stamp, or it was automatically unblocked (`[unblocked::]`); machine state `resurfaced`), or rotten (the stamp is at least its interval old; machine `ROTTEN` since schema 2). The interval comes from `[refresh:: N]`, then the note's `task_refresh`, then `freshness.interval` (7 days) — except a Pending (WIP) or Next task in a walked lane, whose lane interval (`pending_interval` / `next_interval`, default 1 day; `false` walks that lane off) overrides the whole chain. The `]s` walk visits one shared queue in tiers PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; only due tasks walk (a task stamped today drops out). PRE/POST `#gtd` checklist rows (often recurring) resolve by completion, never by a stamp. A non-checklist recurring task is never stamped; once its occurrence date (earliest of scheduled, due, start) arrives it walks in RECURRING until completed, rescheduled past today, linked to Today, or cancelled. NEW holds unconfirmed tasks on `dash`, READY holds only confirmed/exempt tasks, and `rotten.md` holds TICKLER plus expired ROTTEN; see [Recurring Occurrences Walk When Due](../develop/decisions.md#recurring-occurrences-walk-when-due), [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered), [READY Is Freshness-Gated With NEW and ROTTEN Review](../develop/decisions.md#ready-is-freshness-gated), [Today Is Read From The Ledger, Never Written To Tasks](../develop/decisions.md#today-is-read-from-the-ledger), and [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers). Freshness never changes a lane, Today, schedule, or priority. Its status-bar view is the [Morning GTD Review Footer](#morning-gtd-review-footer). It is not Zorg `@FRESHNESS`, `bob vault-sync` freshness, or P-level scheduling windows. Freshness stamps alone never change a rung; only explicit decay-card answers do — see [Task Decay](#task-decay) and [Keep Streak](#keep-streak).
 
 ### Task Link {#task-link}
 

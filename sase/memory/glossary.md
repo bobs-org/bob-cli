@@ -20,10 +20,11 @@ pom); Merged Pomodoro (merged pomodoro, composite pomodoro, base type); Morning 
 Review Footer (review footer); Off-Clock Pomodoro (off-clock session, untracked
 pomodoro, untracked session); Pomodoro; Project Note (prj note); Project Task (prj
 task); Reference Note (ref note); Reference Task (ref task); Root Parent; Rotten Log
-(keep log); Schedule Log; Stats Dash (dash\_stats); Successor Offer; Task Dependency
-Link (task dep link, dep link); Task Drawer (drawer); Task Freshness (freshness); Task
-Link (task block link); Task Mention (mention, text mention); Task Relation (relation,
-LINKS line, LINKED FROM line); Task Successor (successor); Task Type (type, theme,
-pomodoro theme, pomodoro-theme); Top-Level Project (top project); Work Log
+(keep log); Schedule Log; Stats Dash (dash\_stats); Successor Offer; Task Decay (decay,
+decay ladder, decay card, step down); Task Dependency Link (task dep link, dep link);
+Task Drawer (drawer); Task Freshness (freshness); Task Link (task block link); Task
+Mention (mention, text mention); Task Relation (relation, LINKS line, LINKED FROM line);
+Task Successor (successor); Task Type (type, theme, pomodoro theme, pomodoro-theme);
+Top-Level Project (top project); Work Log
 
 <!-- /sase:strands -->

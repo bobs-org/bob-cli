@@ -12,6 +12,7 @@ metadata:
   status: superseded-in-part
   superseded_by:
     - decisions/next-keeps-ask-an-optional-rotten-reason
+    - decisions/task-decay-is-one-ladder
   decided: 2026-10-23
 ---
 
@@ -73,3 +74,7 @@ card outcomes stand.
 Superseded in part: Next keeps now ask for an optional reason and may write a
 `· kept in Next` entry — see
 [[decisions/next-keeps-ask-an-optional-rotten-reason]].
+
+Superseded in part: the Pending/Next exclusions and Pending summaries in the
+Work Log — WIP keeps now log to the Rotten Log and freshness gestures never
+write the Work Log — see [[decisions/task-decay-is-one-ladder]].

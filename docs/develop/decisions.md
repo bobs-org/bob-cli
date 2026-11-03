@@ -880,7 +880,7 @@ remain: reopening can change the transport (a daemon, FFI), never add a second g
 
 ## Next Keeps Ask For An Optional Rotten Log Reason {#next-keeps-ask-an-optional-rotten-reason}
 
-**Status:** Accepted
+**Status:** Superseded in part by [Task Decay Is One Ladder](#task-decay-is-one-ladder)
 
 Alt+F and Ctrl+Alt+F on a Next task ask why it stays; a nonblank reason writes a Rotten Log entry, while blank Enter stamps without logging or changing the keep streak.
 
@@ -933,6 +933,10 @@ Pending keeps in the Rotten Log too.
 
 Links [Rotten Keeps Are Logged](#rotten-keeps-are-logged),
 [Next And Pending Are Sticky Lanes; Only Blocked Is Derived](#task-lanes-are-sticky), and [Review Walk Is Tiered With Daily Lane Review](#review-walk-is-tiered).
+
+Superseded in part: blank writes nothing, Next uncounted, and early prompts —
+every counted keep logs (🤷 when blank), Next keeps count toward the streak,
+and early keeps stamp quietly — see [Task Decay Is One Ladder](#task-decay-is-one-ladder).
 
 ## Note Ready Cap Counts The Lane {#note-ready-cap-counts-the-lane}
 
@@ -1914,7 +1918,7 @@ Superseded in part: the walk order PRE → NEW → PROJECTS → PENDING → NEXT
 
 ## Rotten Keeps Are Logged {#rotten-keeps-are-logged}
 
-**Status:** Superseded in part by [Next Keeps Ask For An Optional Rotten Log Reason](#next-keeps-ask-an-optional-rotten-reason)
+**Status:** Superseded in part by [Next Keeps Ask For An Optional Rotten Log Reason](#next-keeps-ask-an-optional-rotten-reason), [Task Decay Is One Ladder](#task-decay-is-one-ladder)
 
 Every counted keep — Alt+F/Ctrl+Alt+F on an exact due Ready ROTTEN or scheduled TICKLER row, or the decay card's Keep — asks an optional reason and writes one dated 🥀 ROTTEN LOG entry with the stamp; the entry count is display-only history, never a field or a decay input.
 
@@ -1977,9 +1981,13 @@ Superseded in part: Next keeps now ask for an optional reason and may write a
 `· kept in Next` entry — see
 [Next Keeps Ask For An Optional Rotten Log Reason](#next-keeps-ask-an-optional-rotten-reason).
 
+Superseded in part: the Pending/Next exclusions and Pending summaries in the
+Work Log — WIP keeps now log to the Rotten Log and freshness gestures never
+write the Work Log — see [Task Decay Is One Ladder](#task-decay-is-one-ladder).
+
 ## Rotten Keeps Decay Through The Priority Ladder {#rotten-keeps-use-priority-decay}
 
-**Status:** Superseded in part by [Decay Decisions Are Available Immediately](#decay-decisions-are-available-immediately), [Unblocked Tasks Resurface As Ticklers](#unblocked-tasks-resurface-as-ticklers), [Rotten Keeps Are Logged](#rotten-keeps-are-logged)
+**Status:** Superseded in part by [Decay Decisions Are Available Immediately](#decay-decisions-are-available-immediately), [Unblocked Tasks Resurface As Ticklers](#unblocked-tasks-resurface-as-ticklers), [Rotten Keeps Are Logged](#rotten-keeps-are-logged), [Task Decay Is One Ladder](#task-decay-is-one-ladder)
 
 Repeated due-Ready keeps earn an explicit approved decision that enters the existing priority ladder; nothing decays silently and freshness itself still never changes priority or schedule.
 
@@ -2047,6 +2055,10 @@ Superseded in part: the rejection of a new REVIEW LOG structure and
 'Keep anyway leaves only the line increment' only — Keep now asks why and writes one
 Rotten Log entry; see [Rotten Keeps Are Logged](#rotten-keeps-are-logged). Counting, explicit
 consent, the priority ladder, and the other card outcomes stand.
+
+Superseded in part: limit 3, Ready-only counting, Keep counting again, and the
+P-level Not now reusing the roll recommendation — see
+[Task Decay Is One Ladder](#task-decay-is-one-ladder).
 
 ## Similar Tasks Are A Settled Heads-Up {#similar-tasks-are-a-settled-heads-up}
 
@@ -2358,6 +2370,64 @@ each entry's Event Task links by meeting time. See
 
 [Event Task](../reference/glossary.md#event-task)
 
+## Task Decay Is One Ladder {#task-decay-is-one-ladder}
+
+**Status:** Accepted
+
+Repeated freshness keeps on WIP, Next, Ready, and P-level tasks follow one consent-based decay ladder (WIP → Next → Ready → P1 → … → P4): each rung allows a configured number of due keeps, then the next due keep opens one rung-aware card whose Enter steps exactly one rung down and whose Alt+F stays and restarts the count.
+
+**Applies to.** bob-cli, bob-plugins, and the vault.
+
+**Claim.** Repeated freshness keeps on WIP, Next, Ready, and P-level tasks
+follow one consent-based decay ladder (WIP → Next → Ready → P1 → … → P4).
+Each rung allows a configured number of due Alt+F keeps (Bryan: 2 on every
+rung: `freshness.decay.pending_keeps` / `next_keeps` / `ready_keeps`, then
+`keeps`, then 3; the priority property's per-level `decay.rolls` stays the
+separate Ctrl+Enter roll allowance). A rung's N+1th due keep writes nothing
+and opens one rung-aware decay card: Enter steps exactly one rung down (WIP →
+Next → Ready → P1 → … → P4; P4 rolls again; never a drop), Alt+F stays and
+restarts the count, E rewords, D drops. Early and Today-linked WIP/Next keeps
+stamp quietly with an "early · not counted" notice: no prompt, no log entry.
+Every keep, stay, step, and drop writes one rung-qualified Rotten Log entry
+(blank reasons log 🤷); lane streaks start at 0 with no backfill, and legacy
+entries parse as they are.
+
+**Why.** The journal evidence: over 22 review days Next rows were kept 88
+times (five tasks 11–12 times each), there are zero Next Rotten Log entries
+because every Next reason was blank, and WIP holds 14 tasks against a soft
+cap of 8. Ready-only decay never asked about any of them.
+
+Evidence:
+`research:202611/task_decay_ladder/task_decay_ladder.md`;
+epic `bob-cli-g9` (`plan:202611/task_decay_ladder.md`).
+
+Rejected alternatives:
+
+- **Silent auto-demotion.** Nothing moves without an explicit answer.
+- **Lengthening intervals only.** Cadence changes do not ask the urgency
+  question the card asks.
+- **Per-status lifetime fields.** One `[keeps::]` streak field; rung
+  changes clear it.
+- **An int-or-map `keeps`.** Flat per-rung keys keep older hosts working;
+  an int-or-map value would make an older bob exit 2.
+- **Folding rolls into `[keeps::]`.** The Ctrl+Enter roll streak
+  (`decay.rolls`, Schedule Log derived) and the keep streak stay separate;
+  the card reuses the ladder and writers but skips the roll recommendation.
+- **A `held` flag for dependency-promoted lane rows.** No steady-state
+  re-raise path exists: a linked task with an open prerequisite is Blocked,
+  and its Task Link is consumed in the same run that raises its
+  prerequisites, so the sticky lane is the only thing keeping it.
+
+**Cost.** Card volume (about 1.7 a day at steady state), muscle memory
+(mitigated by destination copy and undo), and three implementations kept in
+sync (Rust, navigation, ledger-tools under shared vectors).
+
+**Reopens when.** Stay dominates card answers for a month, or WIP grace
+proves too short for agent epics.
+
+Links [Task Decay](../reference/glossary.md#task-decay), [Keep Streak](../reference/glossary.md#keep-streak),
+[Rotten Log](../reference/glossary.md#rotten-log), and [Task Freshness](../reference/glossary.md#task-freshness).
+
 ## Task Dependencies Are Links On One Depends-On Line {#task-deps-are-depends-on-links}
 
 **Status:** Superseded in part by [Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites](#capture-link-drops-blocking-deps)
@@ -2430,7 +2500,7 @@ prerequisites instead of raising them
 
 ## Next And Pending Are Sticky Lanes; Only Blocked Is Derived {#task-lanes-are-sticky}
 
-**Status:** Superseded in part by [Projects Block Their Tasks From The ^prj Line](#projects-block-from-prj-line)
+**Status:** Superseded in part by [Projects Block Their Tasks From The ^prj Line](#projects-block-from-prj-line), [Task Decay Is One Ladder](#task-decay-is-one-ladder)
 
 Linking raises Ready to Next and an =x close sets In Progress (PENDING); no unlink, hooks run, or capture drop lowers them; only Alt+N release returns a task to Ready; Blocked stays derived.
 
@@ -2488,6 +2558,10 @@ Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed;
 Superseded in part: claim 1 no longer raises a Blocked task (its link is
 consumed and its prerequisites rise), and "lanes don't survive Blocked"
 is now project-wide — see [Projects Block Their Tasks From The ^prj Line](#projects-block-from-prj-line).
+
+Superseded in part: "only release lowers Next or Pending" and the rejection
+of age-based Next decay — consent-based ladder steps are not age-based — see
+[Task Decay Is One Ladder](#task-decay-is-one-ladder).
 
 ## A Task Move Never Advances The Walk {#task-move-never-advances-the-walk}
 

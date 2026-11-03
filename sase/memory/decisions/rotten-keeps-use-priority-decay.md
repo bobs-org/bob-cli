@@ -14,6 +14,7 @@ metadata:
     - decisions/decay-decisions-are-available-immediately
     - decisions/unblocked-tasks-resurface-as-ticklers
     - decisions/rotten-keeps-are-logged
+    - decisions/task-decay-is-one-ladder
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -80,3 +81,7 @@ Superseded in part: the rejection of a new REVIEW LOG structure and
 'Keep anyway leaves only the line increment' only — Keep now asks why and writes one
 Rotten Log entry; see [[decisions/rotten-keeps-are-logged]]. Counting, explicit
 consent, the priority ladder, and the other card outcomes stand.
+
+Superseded in part: limit 3, Ready-only counting, Keep counting again, and the
+P-level Not now reusing the roll recommendation — see
+[[decisions/task-decay-is-one-ladder]].

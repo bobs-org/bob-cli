@@ -6,8 +6,10 @@ aliases:
 summary: Alt+F and Ctrl+Alt+F on a Next task ask why it stays; a nonblank reason writes a Rotten Log entry, while blank Enter stamps without logging or changing the keep streak.
 requested: project
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-11-01
+  superseded_by:
+    - decisions/task-decay-is-one-ladder
 ---
 
 # Next Keeps Ask For An Optional Rotten Log Reason
@@ -59,3 +61,7 @@ Pending keeps in the Rotten Log too.
 
 Links [[decisions/rotten-keeps-are-logged]],
 [[decisions/task-lanes-are-sticky]], and [[decisions/review-walk-is-tiered]].
+
+Superseded in part: blank writes nothing, Next uncounted, and early prompts —
+every counted keep logs (🤷 when blank), Next keeps count toward the streak,
+and early keeps stamp quietly — see [[decisions/task-decay-is-one-ladder]].

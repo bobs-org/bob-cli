@@ -221,14 +221,15 @@ edited in place.
     Hiding a theme removes it from Recent suggestion rows only; today, Stats, colors,
     and typing the name stay unchanged, and using it never unhides it.
 24. **Next And Pending Are Sticky Lanes; Only Blocked Is Derived**
-    (`task-lanes-are-sticky`) - _[partly superseded by `projects-block-from-prj-line`]_
-    Linking raises Ready to Next and an =x close sets In Progress (PENDING); no unlink,
-    hooks run, or capture drop lowers them; only Alt+N release returns a task to Ready;
-    Blocked stays derived.
+    (`task-lanes-are-sticky`) - _[partly superseded by `projects-block-from-prj-line`,
+    `task-decay-is-one-ladder`]_ Linking raises Ready to Next and an =x close sets In
+    Progress (PENDING); no unlink, hooks run, or capture drop lowers them; only Alt+N
+    release returns a task to Ready; Blocked stays derived.
 25. **Next Keeps Ask For An Optional Rotten Log Reason**
-    (`next-keeps-ask-an-optional-rotten-reason`) - Alt+F and Ctrl+Alt+F on a Next task
-    ask why it stays; a nonblank reason writes a Rotten Log entry, while blank Enter
-    stamps without logging or changing the keep streak.
+    (`next-keeps-ask-an-optional-rotten-reason`) - _[partly superseded by
+    `task-decay-is-one-ladder`]_ Alt+F and Ctrl+Alt+F on a Next task ask why it stays; a
+    nonblank reason writes a Rotten Log entry, while blank Enter stamps without logging
+    or changing the keep streak.
 26. **Note Ready Cap Counts The Lane** (`note-ready-cap-counts-the-lane`) - The per-note
     soft cap (plan.max_ready_per_note, default 5; ready_cap: N|off) counts each
     area/project note's whole Ready lane by residence, whatever its freshness.
@@ -299,16 +300,17 @@ edited in place.
     (default 1, false walks that lane off); tiers never feed buckets or chips; upkeep
     outside the lanes counts the budget; stamps stay and the seed never re-runs.
 42. **Rotten Keeps Are Logged** (`rotten-keeps-are-logged`) - _[partly superseded by
-    `next-keeps-ask-an-optional-rotten-reason`]_ Every counted keep — Alt+F/Ctrl+Alt+F
-    on an exact due Ready ROTTEN or scheduled TICKLER row, or the decay card's Keep —
-    asks an optional reason and writes one dated 🥀 ROTTEN LOG entry with the stamp; the
-    entry count is display-only history, never a field or a decay input.
+    `next-keeps-ask-an-optional-rotten-reason`, `task-decay-is-one-ladder`]_ Every
+    counted keep — Alt+F/Ctrl+Alt+F on an exact due Ready ROTTEN or scheduled TICKLER
+    row, or the decay card's Keep — asks an optional reason and writes one dated 🥀
+    ROTTEN LOG entry with the stamp; the entry count is display-only history, never a
+    field or a decay input.
 43. **Rotten Keeps Decay Through The Priority Ladder**
     (`rotten-keeps-use-priority-decay`) - _[partly superseded by
     `decay-decisions-are-available-immediately`, `unblocked-tasks-resurface-as-ticklers`
-    , `rotten-keeps-are-logged`]_ Repeated due-Ready keeps earn an explicit approved
-    decision that enters the existing priority ladder; nothing decays silently and
-    freshness itself still never changes priority or schedule.
+    , `rotten-keeps-are-logged`, `task-decay-is-one-ladder`]_ Repeated due-Ready keeps
+    earn an explicit approved decision that enters the existing priority ladder; nothing
+    decays silently and freshness itself still never changes priority or schedule.
 44. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
     Capture shows a "Similar tasks" band only after typing settles and only when a match
     clears bob's calibrated bars; every row action is an explicit draft edit and Return
@@ -325,39 +327,44 @@ edited in place.
     `decisions:event-buffers-widen-the-span`, `decisions:sync-sorts-event-task-links` ]_
     A new Event Task is filed under a past, running, or planned MEET at birth: closed
     clusters for ended meetings, one open MEET for current and future.
-48. **Task Dependencies Are Links On One Depends-On Line**
+48. **Task Decay Is One Ladder** (`task-decay-is-one-ladder`) - Repeated freshness keeps
+    on WIP, Next, Ready, and P-level tasks follow one consent-based decay ladder (WIP →
+    Next → Ready → P1 → … → P4): each rung allows a configured number of due keeps, then
+    the next due keep opens one rung-aware card whose Enter steps exactly one rung down
+    and whose Alt+F stays and restarts the count.
+49. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-49. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
+50. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
     (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
     color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
     top-level area stem, then name hash; clients render the hue Bob reports.
-50. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
+51. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
     (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
     `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
     then plan.exempt mute, then top-level area stem, then name hash; clients render the
     hue Bob reports.
-51. **Theme Preferences Live In A Per-Host Journal**
+52. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
     the only writer.
-52. **Today Is Read From The Ledger, Never Written To Tasks**
+53. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-53. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+54. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-54. **Unblocked Tasks Resurface As Ticklers**
+55. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`]_ Every automatic Blocked-to-Ready recovery
     records [unblocked:: today] unless a WRITE skip applies, so the task is TICKLER in
     the next morning review; a keep on that row leaves the streak unchanged.
-55. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
+56. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
     _[superseded by `decisions:off-clock-pomodoros-count-apart`]_ A timed ledger row
     without [t::] is an untracked session; writers decide trackedness when they write a
     span and readers only look at the row.
@@ -378,11 +385,12 @@ pom); Merged Pomodoro (merged pomodoro, composite pomodoro, base type); Morning 
 Review Footer (review footer); Off-Clock Pomodoro (off-clock session, untracked
 pomodoro, untracked session); Pomodoro; Project Note (prj note); Project Task (prj
 task); Reference Note (ref note); Reference Task (ref task); Root Parent; Rotten Log
-(keep log); Schedule Log; Stats Dash (dash\_stats); Successor Offer; Task Dependency
-Link (task dep link, dep link); Task Drawer (drawer); Task Freshness (freshness); Task
-Link (task block link); Task Mention (mention, text mention); Task Relation (relation,
-LINKS line, LINKED FROM line); Task Successor (successor); Task Type (type, theme,
-pomodoro theme, pomodoro-theme); Top-Level Project (top project); Work Log
+(keep log); Schedule Log; Stats Dash (dash\_stats); Successor Offer; Task Decay (decay,
+decay ladder, decay card, step down); Task Dependency Link (task dep link, dep link);
+Task Drawer (drawer); Task Freshness (freshness); Task Link (task block link); Task
+Mention (mention, text mention); Task Relation (relation, LINKS line, LINKED FROM line);
+Task Successor (successor); Task Type (type, theme, pomodoro theme, pomodoro-theme);
+Top-Level Project (top project); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

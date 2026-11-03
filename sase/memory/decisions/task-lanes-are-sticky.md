@@ -12,7 +12,9 @@ summary:
 metadata:
   status: superseded-in-part
   decided: 2026-09-30
-  superseded_by: decisions/projects-block-from-prj-line
+  superseded_by:
+    - decisions/projects-block-from-prj-line
+    - decisions/task-decay-is-one-ladder
 ---
 
 **Applies to.** bob-cli, bob-plugins, Bob Mac Capture, vault.
@@ -69,3 +71,7 @@ Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed;
 Superseded in part: claim 1 no longer raises a Blocked task (its link is
 consumed and its prerequisites rise), and "lanes don't survive Blocked"
 is now project-wide — see [[decisions/projects-block-from-prj-line]].
+
+Superseded in part: "only release lowers Next or Pending" and the rejection
+of age-based Next decay — consent-based ladder steps are not age-based — see
+[[decisions/task-decay-is-one-ladder]].
