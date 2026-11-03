@@ -230,6 +230,29 @@ fn existing_subjects_accept_markers() {
 }
 
 #[test]
+fn clipboard_notes_accept_type_markers_without_task_need() {
+    let parse = editor("@cash+id#requirements %c");
+    assert!(parse.needs.is_empty(), "{:?}", parse.needs);
+    assert!(parse.diagnostics.is_empty(), "{:?}", parse.diagnostics);
+    assert_eq!(parse.mode, EditorMode::SubBullet);
+
+    for raw in ["@cash+id #fix %c", "@cash+id #fix\n- a"] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::SubBullet, "{raw:?}");
+        assert!(
+            !codes(&parse).contains(&"type_marker_needs_task"),
+            "{raw:?}: {:?}",
+            parse.diagnostics
+        );
+        assert!(
+            !codes(&parse).contains(&"type_marker_not_applicable"),
+            "{raw:?}: {:?}",
+            parse.diagnostics
+        );
+    }
+}
+
+#[test]
 fn bodiless_forms_need_a_task_like_their_masked_parse() {
     // These masked forms never parse, so execution fails them with missing
     // text and the editor needs a task instead of refusing a capture.

@@ -851,6 +851,92 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
 }
 
 #[test]
+fn clipboard_notes_parse_as_sub_bullet_without_text() {
+    for raw in ["@cash+id %c", "%c @cash+id", "@cash+id %c3"] {
+        let parsed = parse_capture_text(raw, None).unwrap_or_else(|error| {
+            panic!("{raw} should parse as clipboard notes: {error:?}")
+        });
+        assert_eq!(parsed.body, "", "{raw}");
+        assert_eq!(parsed.route.as_deref(), Some("cash"), "{raw}");
+        assert_eq!(
+            parsed.kind,
+            CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId("id".to_string()),
+                section: None,
+            },
+            "{raw}"
+        );
+        assert!(parsed.sub_bullets.is_empty(), "{raw}");
+        if raw.contains("%c3") {
+            assert_eq!(
+                parsed.clip,
+                Some(ClipRequest::History {
+                    count: NonZeroUsize::new(3).expect("nonzero"),
+                }),
+                "{raw}"
+            );
+        } else {
+            assert_eq!(parsed.clip, Some(ClipRequest::Current), "{raw}");
+        }
+    }
+
+    let drawer = parse_capture_text("@cash+id#requirements %c", None)
+        .expect("drawer clipboard notes parse");
+    assert_eq!(drawer.body, "");
+    assert_eq!(
+        drawer.kind,
+        CaptureKind::SubBullet {
+            target: SubBulletTarget::BlockId("id".to_string()),
+            section: Some(DrawerSelector {
+                text: "requirements".to_string(),
+                exact: false,
+            }),
+        },
+        "drawer clipboard notes kind"
+    );
+    assert_eq!(drawer.clip, Some(ClipRequest::Current));
+
+    for raw in ["@cash+id %c s:2", "@cash+id %c $2"] {
+        let error = parse_capture_text(raw, None)
+            .expect_err(&format!("{raw} should refuse single-note markers"));
+        assert_eq!(error.kind, CaptureErrorKind::Usage, "{raw}");
+        assert!(
+            error.message.contains("decorates a single note"),
+            "{raw}: {error:?}"
+        );
+    }
+
+    // Unchanged refusals.
+    let parsed = parse_capture_text("@cash+id", None)
+        .expect("bare marker still toggles");
+    assert!(matches!(
+        parsed.kind,
+        CaptureKind::TaskToggle {
+            intent: TaskToggleIntent::EnsureNext,
+            ..
+        }
+    ));
+    let error = parse_capture_text("@cash+id s:2", None)
+        .expect_err("@cash+id s:2 should still need text");
+    assert!(
+        error.message.contains("task text is required"),
+        "@cash+id s:2: {error:?}"
+    );
+    let error = parse_capture_text("@cash+id! %c", None)
+        .expect_err("@cash+id! %c should refuse explicit toggle");
+    assert!(
+        error.message.contains("explicit toggle"),
+        "@cash+id! %c: {error:?}"
+    );
+    let error = parse_capture_text("@cash+id %c\n- a", None)
+        .expect_err("bullets plus %c should refuse");
+    assert!(
+        error.message.contains("decorates a single note"),
+        "bullets plus %c: {error:?}"
+    );
+}
+
+#[test]
 fn malformed_task_block_id_markers_are_usage_errors() {
     for (raw, expected) in [
         ("body @cash^", "block ID must be"),

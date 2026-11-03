@@ -105,7 +105,8 @@ equivalent to '%c'. `%n` files the item as a Pomodoro note (see below) and \
 composes with `%c`. `%l` queues a bare-URL reference with companion audio \
 (see below); anywhere else it refuses. Each directive appears at most once \
 per item. `%c` composes with s:<N>, $<N>, #<type>, and every route kind. \
-Each clipboard value is classified separately: \
+On a note-less `@route+id` (or `@route+id#drawer`), `%c` files the clipboard lines as notes directly \
+under that task (or drawer). Each clipboard value is classified separately: \
 small text stays inline; 2-10 flat text lines and 1-10 flat unordered Markdown \
 list items become child bullets, with source list markers removed; copied file \
 paths are saved under img/ or file/; and long or other Markdown-structured text \

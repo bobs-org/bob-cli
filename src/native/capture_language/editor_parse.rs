@@ -1439,7 +1439,7 @@ pub(super) fn parse_editor_item_with<'a>(
     if has_note {
         apply_note_directive(&mut outcome.item);
     }
-    attach_type_marker_metadata(&mut outcome.item, &occurrences);
+    attach_type_marker_metadata(&mut outcome.item, &occurrences, has_clip);
     attach_directive_metadata(&mut outcome.item, &directive_occurrences);
     if has_listen {
         apply_listen_directive(&mut outcome.item);
@@ -1689,6 +1689,7 @@ fn remap_type_marker_declarations<'a>(
 fn attach_type_marker_metadata(
     parsed: &mut EditorItemParse,
     occurrences: &[super::type_marker::TypeMarkerOccurrence],
+    has_clip: bool,
 ) {
     use super::type_marker::{
         invalid_marker_error, needs_task_error,
@@ -1742,14 +1743,22 @@ fn attach_type_marker_metadata(
                 return;
             }
             // A relationship-only SubBullet owner accepts the marker.
+            // A note-less SubBullet whose notes come from first-level
+            // bullets or a clip directive retypes the target the same way.
+            let has_first_level_notes = parsed
+                .sub_bullets
+                .iter()
+                .any(|bullet| bullet.depth == AuthoredDepth::First);
             let relationship_sub_bullet = parsed.mode == EditorMode::SubBullet
                 && parsed.body.trim().is_empty()
-                && parsed.sub_bullets.is_empty()
-                && matches!(
-                    parsed.dependency_target.as_ref(),
-                    Some(target) if target.kind
-                        == DependencyTargetKind::ExistingTask
-                );
+                && (parsed.sub_bullets.is_empty()
+                    && matches!(
+                        parsed.dependency_target.as_ref(),
+                        Some(target) if target.kind
+                            == DependencyTargetKind::ExistingTask
+                    )
+                    || has_first_level_notes
+                    || has_clip);
             // A form with no body never parses masked: execution fails it
             // with missing text, so the marker needs a task instead of
             // refusing a capture that does not exist yet.
@@ -3137,10 +3146,12 @@ pub(super) fn parse_editor_item_inner<'a>(
     {
         // A glued drawer capture with no parent note text needs its note
         // text, unless first-level bullets already supply the notes: each
-        // one becomes its own note inside the drawer.
+        // one becomes its own note inside the drawer. Clipboard notes
+        // supply the notes the same way.
         let has_first_level_note = sub_bullets
             .iter()
-            .any(|bullet| bullet.depth == AuthoredDepth::First);
+            .any(|bullet| bullet.depth == AuthoredDepth::First)
+            || seen.clip;
         if has_first_level_note {
             needs.retain(|need| *need != Need::DrawerText);
         } else {

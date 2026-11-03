@@ -118,7 +118,7 @@ what they attach to, not as one global operator.
 | `#` | free-standing `#<type>` at an item edge | Type the new task or retype its selected task; unconfigured names refuse |
 | `#` | `@route^id #<type>` (separate token) | Type the new task with that block ID |
 | `#` | `@route+id #<type>` (separate token) | Retype the target in the same transaction; marker-only also ensures Next |
-| `#` | `@route+id#drawer` (glued) | Task drawer; requires note text or child bullets |
+| `#` | `@route+id#drawer` (glued) | Task drawer; requires note text, child bullets, or `%c` |
 | `#` | First-level `- #drawer` | Drawer shortcut; requires nested notes |
 | `#` | `@route:id#pomodoro` / `=name` | Named Pomodoro (`=bugs` and `=#bugs` are one token) |
 | `@` | `@route…` | Route / destination token |
@@ -1233,13 +1233,16 @@ bob capture 'Check the parser @work+prep'
   - Check the parser
 ```
 
+A note-less `@route+id` with only `%c` files the clipboard as notes directly
+under that task: `bob capture '@work+prep %c'`.
+
 Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
 
 ### `@route+block-id#drawer` {#plus-child-section}
 
 Child bullet inside a task drawer: an ALL-CAPS child bullet holding nested
 notes. `@route+block-id#section` targets `SECTION`. The glued `#drawer`
-requires note text or child bullets. Names match by normalized key;
+requires note text, child bullets, or `%c`. Names match by normalized key;
 `#future-work` matches `FUTURE WORK`. Missing drawers are created, but a
 prefix or near-duplicate name is refused. A quoted `#"FUTURE WORK"` permits
 deliberate creation near an existing name. On a project's `^prj`, drawers

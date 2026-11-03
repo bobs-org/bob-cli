@@ -3023,7 +3023,7 @@ pub(super) fn print_human_item_success(
     }
     if !result.notes.is_empty() {
         print_human_multi_note_notes(result, &styler);
-    } else {
+    } else if !(result.kind == "sub_bullet" && result.task_line.is_empty()) {
         println!("  {}", styler.dim(&result.task_line));
     }
     print_human_link_guard(result, &styler);

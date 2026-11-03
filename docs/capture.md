@@ -1197,6 +1197,20 @@ clipboard, even when `%c` is written: a dry run reports
 `clip: {"status": "not_read", "count": N}`, and a real capture refuses with
 `clip_not_read`. `--clip` and `--no-clip` conflict.
 
+A note-less `@route+id` (or `@route+id#drawer`) with only `%c` files the
+clipboard lines as notes directly under that task (or drawer), with no
+wrapper bullet. For example, `bob capture '@cash+goog-exit %c'` with a
+two-line clipboard writes:
+
+```markdown
+- [ ] #task Finish Google Exit Packet [created::2026-07-31] ^goog-exit
+  - existing note
+  - first line
+  - second line
+```
+
+See [Clipboard notes](#clipboard-notes).
+
 ### Saving links to your reading queue
 
 A capture item that is nothing but one bare public link becomes a reference
@@ -5590,7 +5604,8 @@ drawer. On a `^prj` target drawers are the note's `##` sections. With a glued
 drawer and no note text (`@route+id#drawer` + bullets) every bullet files
 inside that drawer. A same-line note (`@route+id <note>` + bullets) still
 nests, and ALL-CAPS stays literal there. Item-wide `s:<N>`, `$<N>`, `%c`,
-and `--clip` are refused on this form, while a separate `#type` retypes the
+and `--clip` are refused on this form (see [Clipboard notes](#clipboard-notes)
+for the note-less `%c` shape), while a separate `#type` retypes the
 target and `&`, `*`, `~` keep it as owner.
 
 The modifiers do exactly what they do beside a single note. A configured
@@ -5603,6 +5618,33 @@ whole draft back. The item's `parent_line`, `parent_text`,
 every staged effect (a `&` block, a `*` lane change, a relation close, or a
 same-note mirror that moved its line), and agree with its `task_blocks`
 entry and the file bytes.
+
+#### Clipboard notes
+
+A note-less `@route+id` (or `@route+id#drawer`) whose only extra is `%c`
+(or `%c<N>`, or `--clip`) files the clipboard lines as notes directly under
+that task (or drawer), with no wrapper bullet. The parent's status, Task
+Links, schedule, and freshness stamp never change, and the daily note is
+untouched.
+
+Clipboard lines land at the plain-child anchor in clipboard order, using the
+task's child indentation. A counted `%c<N>` flattens every entry in order.
+With `@route+id#drawer`, every line files inside that drawer: an existing
+drawer appends at its end, a missing drawer is created at the plain-child
+anchor. On a `^prj` target the selector names a `##` section. A separate
+`#type` retypes the target in the same transaction, exactly as it does beside
+a single note. `bob capture --clip '@route+id'` matches `@route+id %c`
+byte for byte.
+
+Item-wide `s:<N>` and `$<N>` are refused on this form with the
+`multi_note_marker` teaching error. `--dry-run` previews exactly the lines
+that would be written; with `--dry-run --no-clip` it reports
+`clip: {"status": "not_read", "count": N}`, validates the parent and drawer,
+stages no bytes, and exits 0. JSON reports `kind: "sub_bullet"` with empty
+`text` and `task_line`, and `clip.lines` at the task's child level with no
+leading indent unit.
+
+See [Clipboard](#clipboard).
 
 Every sub-bullet batch also reports its parent tasks once, in final state,
 in the batch-level `task_blocks` array; see
@@ -5683,12 +5725,14 @@ and the `bob capture-tasks -r <route>` hint are reused. Daily-ledger errors
 match Pomodoro-linked capture: `Bob daily note does not exist: <path>`, `Bob
 daily note has no Pomodoros section`, `Bob daily note has no eligible open
 Pomodoro`, `Bob daily note has multiple open timed Pomodoros`, and invalid
-Pomodoro names with ``Pomodoro name must contain only A-Z, 0-9 or `& ' ( ) + , . / -` and must start with a letter or digit``. A task toggle also
+Pomodoro names with ``Pomodoro name must contain only A-Z, 0-9 or `& ' ( ) + , . / -` and must start with a letter or digit``. A task toggle (`@route+block-id!`) also
 rejects forced destination flags with `task toggle capture cannot be combined
 with <flags>`, `--clip` with `task toggle capture cannot be combined with
 --clip`, `%c` with `task toggle capture cannot be combined with %c`, `s:<N>` with `task toggle capture cannot be combined with s:<N>`,
 `$<N>` with `task toggle capture cannot be combined with $<N>`, and authored
 child bullets with `task toggle capture cannot have authored child bullets`.
+A marker-only `@route+id` with `%c` or `--clip` files [Clipboard notes](#clipboard-notes)
+instead of toggling.
 
 The marker-only `@route+block-id` form, with or without a separate `#type`, is an
 Ensure Next operation. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and

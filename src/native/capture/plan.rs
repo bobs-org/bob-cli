@@ -957,6 +957,38 @@ pub(super) fn plan_capture_item(
         && let Some(clip) = request.forced_clip.as_ref()
     {
         parsed.clip = Some(clip.clone());
+        // A marker-only `@route+id` with `--clip` files clipboard notes,
+        // exactly like `@route+id %c`. An explicit `!` toggle still refuses.
+        if let CaptureKind::TaskToggle { block_id, intent } =
+            parsed.kind.clone()
+            && intent == TaskToggleIntent::EnsureNext
+            && parsed.body.trim().is_empty()
+            && parsed.sub_bullets.is_empty()
+        {
+            parsed.kind = CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId(block_id),
+                section: None,
+            };
+        }
+    }
+    let is_clip_note = is_clip_note_capture(&parsed, request);
+    if is_clip_note {
+        if let Some(offset) = parsed.scheduled_offset {
+            return Err(CaptureError::usage_code(
+                crate::native::capture_language::multi_note_schedule_error(
+                    offset,
+                ),
+                "multi_note_marker",
+            ));
+        }
+        if let Some(level) = parsed.priority_level {
+            return Err(CaptureError::usage_code(
+                crate::native::capture_language::multi_note_priority_error(
+                    level,
+                ),
+                "multi_note_marker",
+            ));
+        }
     }
     // Forced `--task`/`--route` rewrites the kind to SubBullet after
     // the first relationship-only check; empty-body owners still skip
@@ -1529,6 +1561,14 @@ pub(super) fn plan_capture_item(
         )?;
         render_authored_sub_bullets(&resolved, indent)
     };
+    // Clipboard notes render at the task's child level with no leading
+    // indent unit (`- first line`), while a body-bearing note keeps
+    // today's indent (`\t- first line`).
+    let clip_indent: &str = if is_clip_note {
+        ""
+    } else {
+        child_indent.as_deref().unwrap_or("\t")
+    };
     let clip_plan = match parsed.clip.as_ref() {
         Some(clip) if request.no_clip => {
             if request.dry_run {
@@ -1548,7 +1588,7 @@ pub(super) fn plan_capture_item(
                     &request.bob_dir,
                     &clipboard,
                     now,
-                    child_indent.as_deref().unwrap_or("\t"),
+                    clip_indent,
                     clip_reservations,
                 )
                 .map_err(CaptureError::io)?,
@@ -1562,7 +1602,7 @@ pub(super) fn plan_capture_item(
                     &request.bob_dir,
                     &clipboards,
                     now,
-                    child_indent.as_deref().unwrap_or("\t"),
+                    clip_indent,
                     clip_reservations,
                 )
                 .map_err(CaptureError::io)?,
@@ -1684,12 +1724,373 @@ pub(super) fn plan_capture_item(
         }
         None => (flipped_capture_line.clone(), sub_bullet_lines.clone()),
     };
-    let capture_block = assemble_capture_block(
+    let mut capture_block = assemble_capture_block(
         &block_first_line,
         (!block_child_lines.is_empty()).then_some(block_child_lines.as_slice()),
         clip_plan.as_ref().map(|plan| plan.output.lines.as_slice()),
         schedule_log.as_ref().map(|log| log.lines.as_slice()),
     );
+    if is_clip_note {
+        // A dry run with `--no-clip` never stages: validate the parent and
+        // drawer read-only below and return before any write.
+        if request.no_clip {
+            let CaptureKind::SubBullet {
+                target: clip_target,
+                section: clip_section,
+            } = parsed.kind.clone()
+            else {
+                return Err(CaptureError::io(
+                    "clipboard-notes invariant failed: not a sub-bullet",
+                ));
+            };
+            let route = parsed.route.clone().ok_or_else(|| {
+                CaptureError::io(
+                    "sub-bullet capture invariant failed: route is missing",
+                )
+            })?;
+            let relative = PathBuf::from(route_label(&route));
+            let absolute = request.bob_dir.join(&relative);
+            let contents = planner.read_existing(&absolute)?;
+            let settings = note_tasks::read_settings(&request.bob_dir);
+            let scan = note_tasks::scan(&contents, &settings);
+            let parent_block_id = match &clip_target {
+                SubBulletTarget::BlockId(block_id) => block_id.clone(),
+                _ => {
+                    return Err(CaptureError::io(
+                        "clipboard-notes invariant failed: not a block ID target",
+                    ));
+                }
+            };
+            let parent = match scan.by_block_id(&parent_block_id) {
+                BlockIdLookup::Found(task) => task,
+                BlockIdLookup::NotATask {
+                    line_index,
+                    excerpt,
+                } => {
+                    return Err(CaptureError::io(format!(
+                    "^{parent_block_id} in {route}.md is not a task (line {}: {excerpt})",
+                    line_index + 1
+                )));
+                }
+                BlockIdLookup::Duplicate(count) => {
+                    return Err(CaptureError::io(format!(
+                    "block ID ^{parent_block_id} appears {count} times in {route}.md; make it unique before capturing"
+                )));
+                }
+                BlockIdLookup::Missing => {
+                    let choices = format!(
+                        "run 'bob capture-tasks -r {route}' to list task block IDs"
+                    );
+                    let message = match scan.suggest_block_id(&parent_block_id) {
+                    Some(suggestion) => format!(
+                        "no task with block ID ^{parent_block_id} in {route}.md; did you mean ^{suggestion}? ({choices})"
+                    ),
+                    None => format!(
+                        "no task with block ID ^{parent_block_id} in {route}.md ({choices})"
+                    ),
+                };
+                    return Err(CaptureError::io(message));
+                }
+            };
+            let parent_line = parent.line_index + 1;
+            let parent_text = parent.description.clone();
+            let parent_status_symbol = parent.status_symbol;
+            let parent_status_name = parent.status_name.clone();
+            let parent_block = parent.block_id.clone();
+            let parent_index = parent.line_index;
+            let (drawer_json, placement) = if let Some(selector) =
+                clip_section.as_ref()
+            {
+                if capture_drawers::is_prj_parent(&contents, parent) {
+                    let catalog =
+                        capture_drawers::load_drawer_catalog(&request.bob_dir)
+                            .unwrap_or_default();
+                    let drawers =
+                        capture_drawers::project_h2_drawers(&contents);
+                    let resolved = capture_drawers::resolve_h2_for_write(
+                        &drawers,
+                        &selector.text,
+                        selector.exact,
+                        &catalog,
+                        &route,
+                        parent.block_id.as_deref(),
+                    )
+                    .map_err(|error| {
+                        CaptureError::usage_code(
+                            error.message.clone(),
+                            error.code,
+                        )
+                    })?;
+                    if let Some(message) = resolved.warning.clone() {
+                        warnings.push(CaptureWarning::Structured(
+                            StructuredCaptureWarning {
+                                code: "drawer_near_catalog",
+                                label: None,
+                                count: None,
+                                message,
+                            },
+                        ));
+                    }
+                    let created = resolved.created;
+                    let (drawer, placement) = match resolved.outcome {
+                        capture_drawers::DrawerResolveOutcome::Existing {
+                            drawer,
+                        } => {
+                            let (offset, _) =
+                                capture_drawers::h2_insert_position(
+                                    &contents, &drawer,
+                                );
+                            let placement = if offset >= contents.len() {
+                                Placement::Appended
+                            } else {
+                                Placement::Inserted
+                            };
+                            (
+                                DrawerJson {
+                                    title: drawer.title.clone(),
+                                    key: drawer.key.clone(),
+                                    created,
+                                },
+                                placement,
+                            )
+                        }
+                        capture_drawers::DrawerResolveOutcome::Create {
+                            title,
+                            key,
+                            ..
+                        } => (
+                            DrawerJson {
+                                title: title.clone(),
+                                key,
+                                created,
+                            },
+                            Placement::Appended,
+                        ),
+                    };
+                    (Some(drawer), placement)
+                } else {
+                    let catalog =
+                        capture_drawers::load_drawer_catalog(&request.bob_dir)
+                            .unwrap_or_default();
+                    let drawers = capture_drawers::drawers(&contents, parent);
+                    let resolved = capture_drawers::resolve_drawer_for_write(
+                        &drawers,
+                        &selector.text,
+                        selector.exact,
+                        &catalog,
+                        &route,
+                        parent.block_id.as_deref(),
+                        capture_drawers::DrawerScope::Task,
+                    )
+                    .map_err(|error| {
+                        CaptureError::usage_code(
+                            error.message.clone(),
+                            error.code,
+                        )
+                    })?;
+                    if let Some(message) = resolved.warning.clone() {
+                        warnings.push(CaptureWarning::Structured(
+                            StructuredCaptureWarning {
+                                code: "drawer_near_catalog",
+                                label: None,
+                                count: None,
+                                message,
+                            },
+                        ));
+                    }
+                    let created = resolved.created;
+                    let drawer = match resolved.outcome {
+                        capture_drawers::DrawerResolveOutcome::Existing {
+                            drawer,
+                        } => {
+                            let insertion = capture_drawers::drawer_insertion(
+                                &contents, &drawer,
+                            );
+                            let placement =
+                                if insertion.offset >= contents.len() {
+                                    Placement::Appended
+                                } else {
+                                    Placement::Inserted
+                                };
+                            (
+                                DrawerJson {
+                                    title: drawer.title.clone(),
+                                    key: drawer.key.clone(),
+                                    created,
+                                },
+                                placement,
+                            )
+                        }
+                        capture_drawers::DrawerResolveOutcome::Create {
+                            title,
+                            key,
+                            ..
+                        } => {
+                            // The header would be created at the
+                            // plain-child anchor; report where the notes
+                            // would land without staging it.
+                            let lines = line_spans(&contents);
+                            let anchor = first_direct_managed_log_start(
+                                &lines,
+                                parent.line_index,
+                                parent.block_end,
+                            )
+                            .unwrap_or(parent.block_end);
+                            let placement = if anchor >= contents.len() {
+                                Placement::Appended
+                            } else {
+                                Placement::Inserted
+                            };
+                            (
+                                DrawerJson {
+                                    title: title.clone(),
+                                    key,
+                                    created,
+                                },
+                                placement,
+                            )
+                        }
+                    };
+                    (Some(drawer.0), drawer.1)
+                }
+            } else {
+                let lines = line_spans(&contents);
+                let offset = first_direct_managed_log_start(
+                    &lines,
+                    parent.line_index,
+                    parent.block_end,
+                )
+                .unwrap_or(parent.block_end);
+                let placement = if offset >= contents.len() {
+                    Placement::Appended
+                } else {
+                    Placement::Inserted
+                };
+                (None, placement)
+            };
+            let kind_label = capture_kind_label(&parsed.kind);
+            let created = date_string(today);
+            let clip_output =
+                clip_plan.as_ref().map(|plan| plan.output.clone());
+            let route_label_str =
+                parsed.route.as_deref().map(route_label).unwrap_or_default();
+            let relative_str = relative.to_string_lossy().into_owned();
+            let route_str = parsed.route.clone().unwrap_or_default();
+            let details = SubBulletCaptureDetails {
+                block_id: parent_block.clone(),
+                parent_line,
+                parent_text: parent_text.clone(),
+                drawer: drawer_json.clone(),
+                parent_status_symbol,
+                parent_status_name: parent_status_name.clone(),
+            };
+            let task_ref = TaskBlockRef {
+                target: absolute.clone(),
+                relative_target: relative_str.clone(),
+                route: route_str.clone(),
+                line: parent_index,
+                block_id: parent_block.clone(),
+                role: TaskBlockRole::SubBullet,
+            };
+            return Ok(PlannedCaptureItem {
+                result: CaptureItemResult {
+                    ok: true,
+                    dry_run: request.dry_run,
+                    routed: parsed.route.is_some(),
+                    route_label: route_label_str,
+                    route: parsed.route.clone(),
+                    relative_target: relative_str,
+                    target: absolute.display().to_string(),
+                    text: String::new(),
+                    task_line: String::new(),
+                    task_theme: None,
+                    type_relocation: None,
+                    kind: kind_label,
+                    created,
+                    scheduled: None,
+                    priority: None,
+                    priority_label: None,
+                    placement,
+                    sub_bullets: Vec::new(),
+                    notes: Vec::new(),
+                    drawers: Vec::new(),
+                    clip: clip_output,
+                    schedule_log: None,
+                    block_id: parent_block.clone(),
+                    day_file: None,
+                    block_link: None,
+                    pomodoro_link_placement: None,
+                    parent_line: Some(details.parent_line),
+                    parent_text: Some(details.parent_text.clone()),
+                    drawer: details.drawer.clone(),
+                    parent_status_symbol: Some(details.parent_status_symbol),
+                    parent_status_name: Some(
+                        details.parent_status_name.clone(),
+                    ),
+                    toggle_direction: None,
+                    previous_task_line: None,
+                    status_symbol: None,
+                    status_name: None,
+                    previous_status_symbol: None,
+                    previous_status_name: None,
+                    pomodoro_name: None,
+                    creates_pomodoro: None,
+                    pomodoro_already_linked: None,
+                    removed_pomodoro_links: None,
+                    removed_scheduled: None,
+                    pomodoro_selector_unused: None,
+                    toggle_behavior: None,
+                    status_changed: None,
+                    pomodoro_link_action: None,
+                    pomodoro_link_source: None,
+                    pomodoro_link_destination: None,
+                    project_note: None,
+                    pomodoro_start: None,
+                    pomodoro_adjust: None,
+                    pomodoro_shift: None,
+                    pomodoro_split: None,
+                    pomodoro_merge: None,
+                    pomodoro_close: None,
+                    pomodoro_reset: None,
+                    dependency_update: None,
+                    consumed_links: Vec::new(),
+                    task_complete: None,
+                    toggle_task_description: None,
+                    r#ref: None,
+                    link_guard: None,
+                    dropped_dependencies: Vec::new(),
+                    blocks_line_updates: Vec::new(),
+                    minted_dependent_block_id: None,
+                    dependency_updates: Vec::new(),
+                    minted_blocker_block_id: None,
+                    relation_updates: Vec::new(),
+                    relation_cancels: Vec::new(),
+                    relation_completes: Vec::new(),
+                    linked_from_line_updates: Vec::new(),
+                    minted_relation_block_ids: Vec::new(),
+                    mirror_skipped: Vec::new(),
+                    list: None,
+                    relation_label_hides: Vec::new(),
+                    relation_successors: Vec::new(),
+                    relation_held: Vec::new(),
+                    relation_check: None,
+                    relation_groups: Vec::new(),
+                },
+                clip_plan,
+                pomodoro_refs: Vec::new(),
+                task_block_refs: vec![task_ref],
+            });
+        }
+        // Clipboard notes are direct children with no wrapper bullet: the
+        // clip lines already carry no leading indent unit, and the existing
+        // sub-bullet writer prefixes the task's child indentation.
+        block_first_line = String::new();
+        let clip_lines = clip_plan
+            .as_ref()
+            .map(|plan| plan.output.lines.as_slice())
+            .unwrap_or(&[]);
+        capture_block = clip_lines.join("\n");
+    }
     // Set when a `:` task is created unlinked below (PDG4/PDG5).
     let mut new_task_link_guard: Option<LinkGuardJson> = None;
     // A separate `#type` on a body-bearing `@route+id` / `--task-ref` child
@@ -3015,6 +3416,45 @@ fn is_multi_note_capture(
         .sub_bullets
         .iter()
         .any(|bullet| bullet.depth == capture_language::AuthoredDepth::First)
+}
+
+/// Whether this parsed item is the clipboard-notes form: a note-less
+/// `@route+id` (or `@route+id#drawer`) whose only extra is a clip
+/// directive. Forced destinations keep their old behavior, and `--task-ref`
+/// selections still require text.
+fn is_clip_note_capture(
+    parsed: &ParsedCaptureText,
+    request: &CaptureRequest,
+) -> bool {
+    if request.forced_sub_bullet_target.is_some()
+        || request.forced_route.is_some()
+        || request.forced_section.is_some()
+        || request.forced_drawer.is_some()
+    {
+        return false;
+    }
+    let CaptureKind::SubBullet { target, .. } = &parsed.kind else {
+        return false;
+    };
+    if !matches!(target, SubBulletTarget::BlockId(_)) {
+        return false;
+    }
+    if !parsed.body.trim().is_empty() {
+        return false;
+    }
+    if !parsed.sub_bullets.is_empty() {
+        return false;
+    }
+    if parsed.clip.is_none() {
+        return false;
+    }
+    if !parsed.dependencies.is_empty()
+        || !parsed.blocked_tasks.is_empty()
+        || !parsed.relations.is_empty()
+    {
+        return false;
+    }
+    true
 }
 
 #[allow(clippy::too_many_arguments)]

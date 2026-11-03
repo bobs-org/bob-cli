@@ -2334,6 +2334,24 @@ pub(super) fn resolve_sub_bullet_kind(
     let CaptureKind::SubBullet { target, section } = kind else {
         return Ok(kind);
     };
+    // Clipboard notes: a note-less `@route+id` (or `@route+id#drawer`)
+    // whose only extra is `%c` files the clipboard as notes directly
+    // under that task. Item-wide single-note markers still refuse with
+    // the multi-note teaching error.
+    if parent_body_is_empty && sub_bullets_is_empty && clip_present {
+        if let Some(drawer) = section.as_ref()
+            && drawer.text.is_empty()
+        {
+            return Err(
+                "`#` is incomplete: add a drawer (`#requirements`), or write `\\#` to keep a literal `#`"
+                    .to_string(),
+            );
+        }
+        if scheduled_offset.is_some() || priority_level.is_some() {
+            return Err(multi_note_marker_error());
+        }
+        return Ok(CaptureKind::SubBullet { target, section });
+    }
     // A glued `#drawer` suffix always stays a drawer capture, never a
     // toggle. Plain `@route+id` without a drawer keeps the old
     // Ensure-Next toggle when the body is empty. A note-less item with
