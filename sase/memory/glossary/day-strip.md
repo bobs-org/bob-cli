@@ -4,7 +4,7 @@ aliases:
   - "day stats"
 ---
 
-The read-only daily Stats summary at the top of the `bob-plan` block on
+The [[stats-strip]] of a daily note: the read-only daily Stats summary at the top of the `bob-plan` block on
 canonical daily notes, above the badges, in Live Preview and Reading
 view, or wherever a `bob-day-stats` fence embeds it. Its contents: five
 LABEL-value facts, each numeric one over a quiet `typical` line (the median of
