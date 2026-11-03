@@ -522,6 +522,9 @@ account, or set `gcal.account` to the stamp's account.
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
 | Events stamp | Bob | Re-rendered when the note is written or the stamp is due; a deleted or edited line is restored |
 
+In Obsidian, each MEET Task Link to an Event Task wears that event's time pill
+([Event link times](event-link-times.md)).
+
 Badges are plain title-free links (`[📅](url)`), so link-hint plugins such as Jump to link open them correctly, and rows written by older Bob versions migrate on that day's next sync while untouched.
 
 "Untouched" means not done, not In Progress, never linked under a closed

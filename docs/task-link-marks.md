@@ -100,7 +100,9 @@ A link gets a ring only when **all** of these hold:
    section, and every other section **do** get rings. Ledger rows keep their
    `🍅` / `◐` slot; only prose links in daily notes get rings. Ledger rows wear no
    ring; when their task is off-clock they wear the off-clock link chip instead
-   ([Off-clock link chips](off-clock-link-chips.md)).
+   ([Off-clock link chips](off-clock-link-chips.md)). Ledger rows that link one of the
+   note's Event Tasks wear that event's time pill instead of a ring
+   ([Event link times](event-link-times.md)).
 6. **The target is a task.** The link resolves to a file
    (`getFirstLinkpathDest(linkpath, sourcePath)`; an empty linkpath means the source
    note). The block id names exactly one line in that file. That line is a list item

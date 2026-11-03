@@ -116,6 +116,7 @@ plugins:
           - today-marks.md
           - frees-marks.md
           - off-clock-link-chips.md
+          - event-link-times.md
           - decay-ladder.md
           - dataview.md
           - ref.md
@@ -313,6 +314,7 @@ nav:
               - "Frees marks": frees-marks.md
               - "Decay ladder": decay-ladder.md
               - "Off-clock link chips": off-clock-link-chips.md
+              - "Event link times": event-link-times.md
           - "References":
               - "bob query": dataview.md
               - "Reference library (`bob ref`)": ref.md

@@ -107,6 +107,9 @@ groups:
       - stem: off-clock-link-chips
         summary: "Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited"
         order: 36
+      - stem: event-link-times
+        summary: "Event link times: the Event Task's time pill beside ledger Task Links that point at it"
+        order: 37
       - stem: decay-ladder
         summary: "Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip"
         order: 35

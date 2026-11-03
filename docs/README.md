@@ -68,6 +68,7 @@ queued intake; full scans also synchronize annotations. The
 | [command-catalog.md](command-catalog.md) | Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage |
 | [decay-ladder.md](decay-ladder.md) | Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip |
 | [off-clock-link-chips.md](off-clock-link-chips.md) | Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited |
+| [event-link-times.md](event-link-times.md) | Event link times: the Event Task's time pill beside ledger Task Links that point at it |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and
