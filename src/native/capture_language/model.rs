@@ -873,6 +873,20 @@ pub(crate) struct ParsedCaptureItem {
     /// `@route` or forced `-r`, `global` for a plain `@@route` upgrade,
     /// `default` otherwise). `None` for non-`Ref` items.
     pub(crate) ref_source: Option<RefParentSource>,
+    /// Source context for one member expanded from an execution target run.
+    /// `None` for singleton items and non-run item kinds.
+    pub(crate) fanout: Option<FanoutContext>,
+}
+
+/// Identifies one parsed member of a capture target run. Positions are
+/// one-based in source order, and `line` is the source line that contained
+/// the run (or the originating row for template expansion).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FanoutContext {
+    pub(crate) line: usize,
+    pub(crate) position: usize,
+    pub(crate) count: usize,
+    pub(crate) marker: String,
 }
 
 /// Draft-wide `@@` declarations plus the real capture items.

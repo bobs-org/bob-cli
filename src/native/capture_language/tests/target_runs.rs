@@ -28,6 +28,23 @@ fn draft_opt_in(
     parse_capture_draft_with_options_coded(raw, None, None, &opt_in())
 }
 
+fn parse_singleton(raw: &str) -> ParsedCaptureText {
+    parse_capture_draft_with_options_coded(raw, None, None, &opt_in())
+        .expect("singleton parses")
+        .items
+        .into_iter()
+        .next()
+        .expect("one item")
+        .parsed
+}
+
+fn ignore_type_marker_offsets(parsed: &mut ParsedCaptureText) {
+    if let Some(marker) = parsed.type_marker.as_mut() {
+        marker.span = 0..0;
+        marker.name_span = 0..0;
+    }
+}
+
 fn tokens_of(text: &str) -> Vec<Token<'_>> {
     tokenize_with_spans(text)
 }
@@ -371,4 +388,222 @@ fn default_path_stays_single_target() {
 fn list_bullets_keep_list_marker_with_opt_in() {
     let error = draft_opt_in("@dev\n- A @cash+a").unwrap_err();
     assert_eq!(error.code, Some("list_bullet_marker"));
+}
+
+#[test]
+fn ordinary_draft_fans_out_in_typed_order_with_shared_source_identity() {
+    let parsed = draft_opt_in("first\n\n@work+a @dev+b note\n\nlast")
+        .expect("run parses");
+    assert_eq!(parsed.items.len(), 4);
+    assert_eq!(
+        parsed
+            .items
+            .iter()
+            .map(|item| item.parsed.body.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "note", "note", "last"]
+    );
+    let first = &parsed.items[1];
+    let second = &parsed.items[2];
+    assert_eq!(first.parsed.route.as_deref(), Some("work"));
+    assert_eq!(second.parsed.route.as_deref(), Some("dev"));
+    assert_eq!(first.index, second.index);
+    assert_eq!((first.start, first.end), (second.start, second.end));
+    assert_eq!(
+        (first.line_start, first.line_end),
+        (second.line_start, second.line_end)
+    );
+    assert_eq!(first.fanout.as_ref().map(|meta| meta.line), Some(3));
+    assert_eq!(
+        first.fanout,
+        Some(FanoutContext {
+            line: 3,
+            position: 1,
+            count: 2,
+            marker: "@work+a".to_string(),
+        })
+    );
+    assert_eq!(
+        second.fanout,
+        Some(FanoutContext {
+            line: 3,
+            position: 2,
+            count: 2,
+            marker: "@dev+b".to_string(),
+        })
+    );
+    assert_eq!(parsed.items[0].fanout, None);
+    assert_eq!(parsed.items[3].fanout, None);
+}
+
+#[test]
+fn each_member_reuses_singleton_semantics_for_toggles_drawers_and_schedule() {
+    for (run, members) in [
+        ("@a+x! @b+y", vec!["@a+x!", "@b+y"]),
+        (
+            "@a+x#first @b+y#second note",
+            vec!["@a+x#first note", "@b+y#second note"],
+        ),
+        ("note s:3 @a+x @b+y", vec!["note s:3 @a+x", "note s:3 @b+y"]),
+        ("note $2 @a+x @b+y", vec!["note $2 @a+x", "note $2 @b+y"]),
+        (
+            "note @a+x @b+y #bugs",
+            vec!["note @a+x #bugs", "note @b+y #bugs"],
+        ),
+        ("note @a+x @b+y %c", vec!["note @a+x %c", "note @b+y %c"]),
+        (
+            "@a+x @b+y\n- child note",
+            vec!["@a+x\n- child note", "@b+y\n- child note"],
+        ),
+        (
+            "note @a+x @b+y *foo:bar",
+            vec!["note @a+x *foo:bar", "note @b+y *foo:bar"],
+        ),
+        (
+            "note @a+x @b+y ~foo:bar",
+            vec!["note @a+x ~foo:bar", "note @b+y ~foo:bar"],
+        ),
+        (
+            "note @a+x @b+y ~~foo:bar",
+            vec!["note @a+x ~~foo:bar", "note @b+y ~~foo:bar"],
+        ),
+    ] {
+        let actual = draft_opt_in(run).expect("run parses");
+        assert_eq!(actual.items.len(), members.len(), "{run}");
+        for (actual, singleton) in actual.items.iter().zip(members) {
+            let mut actual = actual.parsed.clone();
+            let mut singleton = parse_singleton(singleton);
+            ignore_type_marker_offsets(&mut actual);
+            ignore_type_marker_offsets(&mut singleton);
+            assert_eq!(actual, singleton, "{run}");
+        }
+    }
+}
+
+#[test]
+fn type_marker_spans_remain_at_original_draft_offsets_for_each_member() {
+    let raw = "note @a+x @b+y #bugs";
+    let parsed = draft_opt_in(raw).expect("typed run parses");
+    let start = raw.find("#bugs").expect("type marker");
+    for item in &parsed.items {
+        let marker = item.parsed.type_marker.as_ref().expect("type marker");
+        assert_eq!(marker.name, "bugs");
+        assert_eq!(marker.span, start..start + "#bugs".len());
+        assert_eq!(marker.name_span, start + 1..start + "#bugs".len());
+    }
+}
+
+#[test]
+fn child_line_runs_and_dependency_ownership_are_member_local() {
+    let child_run = "Parent task\n- child note @a+x @b+y";
+    let parsed = draft_opt_in(child_run).expect("child run parses");
+    assert_eq!(parsed.items.len(), 2);
+    assert_eq!(parsed.items[0].parsed.route.as_deref(), Some("a"));
+    assert_eq!(parsed.items[1].parsed.route.as_deref(), Some("b"));
+    assert_eq!(
+        parsed.items[0].parsed,
+        parse_singleton("Parent task\n- child note @a+x")
+    );
+    assert_eq!(
+        parsed.items[1].parsed,
+        parse_singleton("Parent task\n- child note @b+y")
+    );
+    assert_eq!(parsed.items[0].fanout.as_ref().unwrap().line, 2);
+
+    let dependency_run = "note @a+x @b+y &foo:bar";
+    let parsed = draft_opt_in(dependency_run).expect("dependency run parses");
+    assert_eq!(parsed.items.len(), 2);
+    assert_eq!(
+        parsed.items[0].parsed,
+        parse_singleton("note @a+x &foo:bar")
+    );
+    assert_eq!(
+        parsed.items[1].parsed,
+        parse_singleton("note @b+y &foo:bar")
+    );
+}
+
+#[test]
+fn expanded_members_share_one_inline_global_declaration() {
+    let parsed = draft_opt_in("@a+x @b+y @@global note")
+        .expect("one declaration is shared by both members");
+    assert_eq!(parsed.items.len(), 2);
+    assert_eq!(
+        parsed.global.as_ref().map(|global| global.route.as_str()),
+        Some("global")
+    );
+    assert_eq!(parsed.items[0].parsed.body, "note");
+    assert_eq!(parsed.items[1].parsed.body, "note");
+    assert_eq!(parsed.items[0].parsed.route.as_deref(), Some("a"));
+    assert_eq!(parsed.items[1].parsed.route.as_deref(), Some("b"));
+}
+
+#[test]
+fn template_row_fans_out_without_changing_row_identity() {
+    let parsed = draft_opt_in("Apply {0} to @work+a @dev+b %t\n\ntask\n")
+        .expect("template fan-out parses");
+    assert_eq!(parsed.items.len(), 2);
+    assert_eq!(parsed.items[0].parsed.route.as_deref(), Some("work"));
+    assert_eq!(
+        parsed.items[1].parsed.route.as_deref(),
+        Some("dev"),
+        "{:#?}",
+        parsed.items
+    );
+    assert_eq!(parsed.items[0].parsed.body, "Apply task to");
+    assert_eq!(parsed.items[0].parsed.body, parsed.items[1].parsed.body);
+    assert_eq!(parsed.items[0].index, parsed.items[1].index);
+    assert_eq!(parsed.items[0].start, parsed.items[1].start);
+    assert_eq!(parsed.items[0].end, parsed.items[1].end);
+    assert_eq!(parsed.items[0].template_row, parsed.items[1].template_row);
+    assert_eq!(parsed.items[0].template_row.as_ref().unwrap().row, 1);
+    assert_eq!(parsed.items[0].line_start, parsed.items[1].line_start);
+    assert_eq!(parsed.items[0].line_end, parsed.items[1].line_end);
+    assert_eq!(parsed.items[0].fanout.as_ref().unwrap().position, 1);
+    assert_eq!(parsed.items[1].fanout.as_ref().unwrap().position, 2);
+    assert_eq!(parsed.items[0].fanout.as_ref().unwrap().line, 3);
+    assert_eq!(parsed.items[1].fanout.as_ref().unwrap().line, 3);
+}
+
+#[test]
+fn template_clipboard_refusal_keeps_its_coded_error() {
+    let error = draft_opt_in("Apply {0} to @a+x @b+y %c %t\n\ntask\n")
+        .expect_err("template clipboard remains refused");
+    assert_eq!(error.code, Some("template_clipboard"));
+}
+
+#[test]
+fn fanout_keeps_coded_refusals_for_later_members_and_templates() {
+    for raw in [
+        "@a+x @a+x note",
+        "@a+x note @b+y",
+        "Task {0} @a+x @a+x %t\n\nvalue\n",
+    ] {
+        let error = draft_opt_in(raw).expect_err("refusal stays an error");
+        let expected = if raw.contains("note @b") {
+            "split_capture_targets"
+        } else {
+            "duplicate_capture_target"
+        };
+        assert_eq!(error.code, Some(expected), "{raw}: {}", error.message);
+    }
+}
+
+#[test]
+fn malformed_later_member_keeps_its_existing_strict_error() {
+    let error = draft_opt_in("@a+x @b+ note")
+        .expect_err("malformed member rejects the full draft");
+    assert_eq!(error.code, None);
+    assert!(!error.message.is_empty());
+}
+
+#[test]
+fn toggle_member_keeps_relationship_refusal() {
+    let error = draft_opt_in("@a+x! @b+y *foo:bar")
+        .expect_err("a toggle cannot own a relationship");
+    assert!(
+        error.message.contains("relationship-only '@a+x!'"),
+        "{}",
+        error.message
+    );
 }

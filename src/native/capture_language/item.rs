@@ -30,6 +30,14 @@ pub(super) struct ParsedCaptureItemOutcome<'a> {
     pub(super) declarations: Vec<GlobalDeclarationToken<'a>>,
     pub(super) local_destination_marker: Option<String>,
     pub(super) list: Option<ListContext>,
+    /// Set by draft assembly after one member has been resolved.
+    pub(super) fanout: Option<FanoutContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TargetRunContext {
+    pub(super) line: usize,
+    pub(super) selection: super::target_runs::TargetRunSelection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +77,9 @@ impl From<String> for CaptureItemParseError {
 fn try_resolve_parent_target_run<'a>(
     mut tokens: Vec<Token<'a>>,
     detect_route: bool,
-) -> Option<Result<LineOutcome<'a>, String>> {
+) -> Option<
+    Result<(LineOutcome<'a>, super::target_runs::TargetRunSelection), String>,
+> {
     use super::target_runs;
     let declarations = take_global_declarations(&mut tokens);
     let (markers, _) =
@@ -126,15 +136,18 @@ fn try_resolve_parent_target_run<'a>(
         .map(|(_, token)| *token)
         .collect();
     let body = join_parse_tokens(&remaining, &markers.priority_escapes);
-    Some(Ok(LineOutcome {
-        body,
-        markers,
-        route: Some(LineRoute {
-            token: route_token,
-            marker_text: first_text,
-        }),
-        declarations,
-    }))
+    Some(Ok((
+        LineOutcome {
+            body,
+            markers,
+            route: Some(LineRoute {
+                token: route_token,
+                marker_text: first_text,
+            }),
+            declarations,
+        },
+        selection,
+    )))
 }
 
 /// Attempt run-aware child-line resolution (trailing runs only). Whole-line
@@ -143,7 +156,9 @@ fn try_resolve_parent_target_run<'a>(
 fn try_resolve_child_target_run<'a>(
     mut tokens: Vec<Token<'a>>,
     detect_route: bool,
-) -> Option<Result<LineOutcome<'a>, String>> {
+) -> Option<
+    Result<(LineOutcome<'a>, super::target_runs::TargetRunSelection), String>,
+> {
     use super::target_runs;
     let declarations = take_global_declarations(&mut tokens);
     let (markers, _) =
@@ -198,15 +213,18 @@ fn try_resolve_child_target_run<'a>(
         .map(|(_, token)| *token)
         .collect();
     let body = join_parse_tokens(&remaining, &markers.priority_escapes);
-    Some(Ok(LineOutcome {
-        body,
-        markers,
-        route: Some(LineRoute {
-            token: route_token,
-            marker_text: first_text,
-        }),
-        declarations,
-    }))
+    Some(Ok((
+        LineOutcome {
+            body,
+            markers,
+            route: Some(LineRoute {
+                token: route_token,
+                marker_text: first_text,
+            }),
+            declarations,
+        },
+        selection,
+    )))
 }
 
 /// Refuse dependency modifiers on Pomodoro operator items (close, start,
@@ -484,6 +502,7 @@ pub(super) fn parse_capture_item<'a>(
             declarations,
             local_destination_marker: outcome.local_destination_marker,
             list: outcome.list,
+            fanout: outcome.fanout,
         });
     }
     if forced_route.is_none()
@@ -668,6 +687,7 @@ pub(super) fn parse_capture_item<'a>(
             declarations,
             local_destination_marker: outcome.local_destination_marker,
             list: outcome.list,
+            fanout: outcome.fanout,
         });
     };
     let marker = match occurrence {
@@ -722,7 +742,141 @@ pub(super) fn parse_capture_item<'a>(
         declarations,
         local_destination_marker: outcome.local_destination_marker,
         list: outcome.list,
+        fanout: outcome.fanout,
     })
+}
+
+/// Select an executable target run before the whole-item claims in
+/// `parse_capture_item` run. The same line selectors used by the semantic
+/// parser supply the run and refusal evidence; an item without a run keeps
+/// the original single-item path.
+pub(super) fn select_target_run_for_item(
+    item: &CaptureItem<'_>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<Option<TargetRunContext>, CaptureItemParseError> {
+    if !options.enable_target_runs
+        || forced_route.is_some()
+        || forced_section.is_some()
+        || item.list.is_some()
+    {
+        return Ok(None);
+    }
+
+    // Match the semantic parser's source-preserving type/directive masks
+    // before selecting a route slot.
+    let occurrences = super::type_marker::collect_item(item);
+    let type_masked_source =
+        super::type_marker::masked_source(item, &occurrences);
+    let type_masked_item =
+        super::type_marker::masked_item(item, &type_masked_source);
+    let directive_occurrences =
+        super::directive::collect_item(&type_masked_item);
+    let masked_source = super::directive::masked_source(
+        &type_masked_item,
+        &directive_occurrences,
+    );
+    let mut masked_item =
+        super::directive::masked_item(&type_masked_item, &masked_source);
+    let marker_only =
+        super::type_marker::marker_only_child_lines(item, &occurrences);
+    masked_item
+        .lines
+        .retain(|line| !marker_only.contains(&(line.raw.start, line.raw.end)));
+    let Some((parent_line, child_lines)) = masked_item.lines.split_first()
+    else {
+        return Ok(None);
+    };
+
+    let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+    let parent_tokens = super::pomodoro_literal::merge_leading_literal_token(
+        &parent_line.raw,
+        parent_tokens,
+    );
+    let (parent_tokens, parent_dependencies) = extract_line_dependencies(
+        parent_tokens,
+        parent_line.raw.text,
+        parent_line.raw.start,
+        true,
+    );
+    let parent_tokens =
+        unescape_execution_tokens(parent_tokens, &parent_dependencies.escapes);
+    if let Some(result) =
+        try_resolve_parent_target_run(parent_tokens.clone(), true)
+    {
+        return result
+            .map(|(_, selection)| {
+                Some(TargetRunContext {
+                    line: parent_line.line_number,
+                    selection,
+                })
+            })
+            .map_err(target_run_parse_error);
+    }
+
+    // Child runs can follow a project-note task ID that the established
+    // semantic pass strips before marker selection. Resolve the parent's
+    // ordinary route and mirror that boundary decision here; if the parent
+    // already has an unrelated strict error, let the parser report it.
+    let parent_route = resolve_line(parent_tokens, true, true)
+        .ok()
+        .and_then(|outcome| outcome.route.map(|route| route.token.kind));
+    let parent_is_project_note =
+        matches!(parent_route, Some(CaptureKind::ProjectNote { .. }));
+    let child_seals_note = child_lines.iter().any(|line| {
+        matches!(
+            classify_authored_line(line.raw),
+            AuthoredLineClass::Item(authored)
+                if child_line_seals_project_note(authored.body)
+        )
+    });
+    let parent_takes_ids = parent_is_project_note || child_seals_note;
+
+    for line in child_lines {
+        let authored = match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder
+            | AuthoredLineClass::Invalid => continue,
+            AuthoredLineClass::Item(authored) => authored,
+        };
+        let child_line = RawLine {
+            text: authored.body,
+            start: authored.body_start,
+            end: line.raw.end,
+        };
+        let tokens = tokenize_line_with_spans(&child_line);
+        let (mut tokens, dependencies) = extract_line_dependencies(
+            tokens,
+            child_line.text,
+            child_line.start,
+            false,
+        );
+        if parent_takes_ids {
+            let _ = strip_trailing_task_id(&mut tokens);
+        }
+        let tokens = unescape_execution_tokens(tokens, &dependencies.escapes);
+        if let Some(result) = try_resolve_child_target_run(tokens, true) {
+            return result
+                .map(|(_, selection)| {
+                    Some(TargetRunContext {
+                        line: line.line_number,
+                        selection,
+                    })
+                })
+                .map_err(target_run_parse_error);
+        }
+    }
+    Ok(None)
+}
+
+fn target_run_parse_error(message: String) -> CaptureItemParseError {
+    if message.contains("twice on this line; name each task once") {
+        CaptureItemParseError::coded("duplicate_capture_target", message)
+    } else if message.contains("are at opposite ends of the line; put every") {
+        CaptureItemParseError::coded("split_capture_targets", message)
+    } else {
+        CaptureItemParseError::generic(message)
+    }
 }
 
 /// A route marker plus only item-wide markers on the first line with
@@ -1934,7 +2088,7 @@ fn parse_capture_item_masked<'a>(
     );
     let parent_outcome = if options.enable_target_runs && detect_route {
         match try_resolve_parent_target_run(parent_tokens, detect_route) {
-            Some(result) => result?,
+            Some(result) => result?.0,
             None => {
                 // Re-tokenize for the singleton fallback: the probe above
                 // consumed the original vector.
@@ -2051,7 +2205,7 @@ fn parse_capture_item_masked<'a>(
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
         let outcome = if options.enable_target_runs && detect_route {
             match try_resolve_child_target_run(tokens, detect_route) {
-                Some(result) => result?,
+                Some(result) => result?.0,
                 None => {
                     let retry = tokenize_line_with_spans(&child_line);
                     let (mut retry, _) = extract_line_dependencies(
@@ -2824,6 +2978,7 @@ pub(super) fn parsed_capture_item_outcome<'a>(
         declarations,
         local_destination_marker,
         list: item.list.clone(),
+        fanout: None,
     }
 }
 

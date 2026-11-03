@@ -1124,26 +1124,27 @@ fn parse_ordinary_draft(
     }
     let options = options.with_global(!draft.declarations.is_empty());
 
-    let mut item_outcomes = draft
-        .items
-        .iter()
-        .map(|item| {
-            parse_capture_item(item, forced_route, forced_section, &options)
-                .map_err(|error| CaptureItemParseError {
-                    code: error.code,
-                    message: format!(
-                        "capture item {} starting on line {}: {}",
-                        item.index + 1,
-                        item.line_start,
-                        error.message
-                    ),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut item_outcomes = Vec::new();
+    for item in &draft.items {
+        let outcomes = parse_capture_item_members(
+            item,
+            forced_route,
+            forced_section,
+            &options,
+        )
+        .map_err(|error| capture_item_error_at(item, error))?;
+        item_outcomes.extend(outcomes);
+    }
 
     let mut declarations = draft.declarations;
+    let mut seen_declarations = std::collections::HashSet::new();
     for outcome in &item_outcomes {
-        declarations.extend(outcome.declarations.iter().copied());
+        for declaration in &outcome.declarations {
+            let span = (declaration.token.start, declaration.token.end);
+            if seen_declarations.insert(span) {
+                declarations.push(*declaration);
+            }
+        }
     }
     let global = resolve_global_declaration_strict(&declarations)?;
     // A plain `@@route` upgrades default (routeless) Refs to the global
@@ -1157,7 +1158,9 @@ fn parse_ordinary_draft(
             }
         }
     }
-    let warnings = capture_shadow_warnings(&item_outcomes);
+    let mut warnings = capture_shadow_warnings(&item_outcomes);
+    let mut seen_warnings = std::collections::HashSet::new();
+    warnings.retain(|warning| seen_warnings.insert(warning.clone()));
 
     check_list_duplicate_ids(&item_outcomes)?;
     let mut items = Vec::with_capacity(item_outcomes.len());
@@ -1223,6 +1226,7 @@ fn parse_ordinary_draft(
             list,
             ref_source,
             template_row: None,
+            fanout: outcome.fanout,
         });
     }
 
@@ -1232,6 +1236,129 @@ fn parse_ordinary_draft(
         warnings,
         template: None,
     })
+}
+
+fn capture_item_error_at(
+    item: &CaptureItem<'_>,
+    error: CaptureItemParseError,
+) -> CaptureItemParseError {
+    CaptureItemParseError {
+        code: error.code,
+        message: format!(
+            "capture item {} starting on line {}: {}",
+            item.index + 1,
+            item.line_start,
+            error.message
+        ),
+    }
+}
+
+/// Parse a selected run by reusing the ordinary singleton parser for each
+/// byte-preserving member view. Every emitted item retains the source item's
+/// identity and receives its own fanout context.
+fn parse_capture_item_members<'a>(
+    item: &CaptureItem<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<Vec<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+    let Some(run) = select_target_run_for_item(
+        item,
+        forced_route,
+        forced_section,
+        options,
+    )?
+    else {
+        return Ok(vec![parse_capture_item(
+            item,
+            forced_route,
+            forced_section,
+            options,
+        )?]);
+    };
+    let count = run.selection.members.len();
+    let mut outcomes = Vec::with_capacity(count);
+    for (member_index, member) in run.selection.members.iter().enumerate() {
+        let masked_source = super::target_runs::masked_source_for_member(
+            item.source,
+            &run.selection.members,
+            member_index,
+        );
+        let view = capture_item_source_view(item, &masked_source);
+        let parsed =
+            parse_capture_item(&view, forced_route, forced_section, options)?;
+        let mut outcome = rebind_capture_item_declarations(parsed, item.source);
+        outcome.fanout = Some(FanoutContext {
+            line: run.line,
+            position: member_index + 1,
+            count,
+            marker: member.marker_text.clone(),
+        });
+        outcomes.push(outcome);
+    }
+    Ok(outcomes)
+}
+
+fn capture_item_source_view<'a>(
+    item: &CaptureItem<'_>,
+    source: &'a str,
+) -> CaptureItem<'a> {
+    let lines = item
+        .lines
+        .iter()
+        .map(|line| ItemLine {
+            raw: RawLine {
+                text: &source[line.raw.start..line.raw.end],
+                start: line.raw.start,
+                end: line.raw.end,
+            },
+            line_number: line.line_number,
+        })
+        .collect();
+    CaptureItem {
+        source,
+        index: item.index,
+        start: item.start,
+        end: item.end,
+        line_start: item.line_start,
+        line_end: item.line_end,
+        lines,
+        list: item.list.clone(),
+    }
+}
+
+fn rebind_capture_item_declarations<'a>(
+    outcome: ParsedCaptureItemOutcome<'_>,
+    source: &'a str,
+) -> ParsedCaptureItemOutcome<'a> {
+    let declarations = outcome
+        .declarations
+        .into_iter()
+        .map(|declaration| {
+            let start = declaration.token.start;
+            let end = declaration.token.end;
+            GlobalDeclarationToken {
+                token: Token {
+                    text: source.get(start..end).unwrap_or(""),
+                    start,
+                    end,
+                },
+                line_number: declaration.line_number,
+            }
+        })
+        .collect();
+    ParsedCaptureItemOutcome {
+        index: outcome.index,
+        start: outcome.start,
+        end: outcome.end,
+        line_start: outcome.line_start,
+        line_end: outcome.line_end,
+        parsed: outcome.parsed,
+        declarations,
+        local_destination_marker: outcome.local_destination_marker,
+        list: outcome.list,
+        fanout: outcome.fanout,
+    }
 }
 
 /// Refuse two equal task IDs inside one capture list. Ordinary items keep
@@ -1298,27 +1425,29 @@ fn parse_template_expansion(
     let mut items = Vec::with_capacity(expansion.instances.len());
 
     for instance in &expansion.instances {
-        let parsed = parse_single_template_instance(
+        let parsed_items = parse_single_template_instance(
             instance,
             forced_route,
             forced_section,
             &instance_options,
         )?;
-        let (outcome_parsed, ref_source) = parsed;
-        items.push(ParsedCaptureItem {
-            index: instance.row - 1,
-            start: instance.row_range.start,
-            end: instance.row_range.end,
-            line_start: instance.line,
-            line_end: instance.line,
-            parsed: outcome_parsed,
-            list: None,
-            ref_source,
-            template_row: Some(TemplateRowSummary {
-                row: instance.row,
-                line: instance.line,
-            }),
-        });
+        for (outcome_parsed, ref_source, fanout) in parsed_items {
+            items.push(ParsedCaptureItem {
+                index: instance.row - 1,
+                start: instance.row_range.start,
+                end: instance.row_range.end,
+                line_start: instance.line,
+                line_end: instance.line,
+                parsed: outcome_parsed,
+                list: None,
+                ref_source,
+                template_row: Some(TemplateRowSummary {
+                    row: instance.row,
+                    line: instance.line,
+                }),
+                fanout,
+            });
+        }
     }
 
     Ok(ParsedCaptureDraft {
@@ -1343,7 +1472,14 @@ fn parse_single_template_instance(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     instance_options: &CaptureParseOptions<'_>,
-) -> Result<(ParsedCaptureText, Option<RefParentSource>), TemplateCodedError> {
+) -> Result<
+    Vec<(
+        ParsedCaptureText,
+        Option<RefParentSource>,
+        Option<FanoutContext>,
+    )>,
+    TemplateCodedError,
+> {
     let lines = split_physical_lines(&instance.text)
         .into_iter()
         .enumerate()
@@ -1376,7 +1512,7 @@ fn parse_single_template_instance(
             template_session_error(instance.row, instance.line),
         ));
     }
-    let mut outcome = parse_capture_item(
+    let outcomes = parse_capture_item_members(
         &draft_items[0],
         forced_route,
         forced_section,
@@ -1386,42 +1522,52 @@ fn parse_single_template_instance(
         code: error.code,
         message: template_row_error(instance.row, instance.line, error.message),
     })?;
-
-    if outcome.parsed.clip.is_some() {
-        return Err(TemplateCodedError::coded(
-            "template_clipboard",
-            template_clipboard_error(instance.row, instance.line),
-        ));
-    }
-    if is_template_session_kind(&outcome.parsed.kind) {
-        return Err(TemplateCodedError::coded(
-            "template_session_operator",
-            template_session_error(instance.row, instance.line),
-        ));
-    }
-    finish_item_dependency_target(&mut outcome.parsed, false).map_err(
-        |message| {
-            TemplateCodedError::generic(template_row_error(
-                instance.row,
-                instance.line,
-                message,
-            ))
-        },
-    )?;
-
-    let ref_source = if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
-        if forced_route.is_some() || outcome.local_destination_marker.is_some()
-        {
-            Some(RefParentSource::Explicit)
-        } else if outcome.parsed.route.is_some() {
-            Some(RefParentSource::Global)
-        } else {
-            Some(RefParentSource::Default)
+    let mut parsed_items = Vec::with_capacity(outcomes.len());
+    for mut outcome in outcomes {
+        if outcome.parsed.clip.is_some() {
+            return Err(TemplateCodedError::coded(
+                "template_clipboard",
+                template_clipboard_error(instance.row, instance.line),
+            ));
         }
-    } else {
-        None
-    };
-    Ok((outcome.parsed, ref_source))
+        if is_template_session_kind(&outcome.parsed.kind) {
+            return Err(TemplateCodedError::coded(
+                "template_session_operator",
+                template_session_error(instance.row, instance.line),
+            ));
+        }
+        finish_item_dependency_target(&mut outcome.parsed, false).map_err(
+            |message| {
+                TemplateCodedError::generic(template_row_error(
+                    instance.row,
+                    instance.line,
+                    message,
+                ))
+            },
+        )?;
+
+        let ref_source = if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
+            if forced_route.is_some()
+                || outcome.local_destination_marker.is_some()
+            {
+                Some(RefParentSource::Explicit)
+            } else if outcome.parsed.route.is_some() {
+                Some(RefParentSource::Global)
+            } else {
+                Some(RefParentSource::Default)
+            }
+        } else {
+            None
+        };
+        let fanout = outcome.fanout.map(|mut fanout| {
+            // A template item is one authored source row regardless of
+            // where its expanded marker landed.
+            fanout.line = instance.line;
+            fanout
+        });
+        parsed_items.push((outcome.parsed, ref_source, fanout));
+    }
+    Ok(parsed_items)
 }
 
 fn first_leading_execution_error(
