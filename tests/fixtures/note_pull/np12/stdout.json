@@ -1,0 +1,1 @@
+{"code":"pull_note_missing","error":"capture item 1 starting on line 1: @nosuch pulls ready tasks from nosuch.md, which does not exist: add `- <task>` bullets below it to start a list there, or run 'bob capture-targets' to list routable notes","ok":false}

@@ -99,17 +99,67 @@ pub(super) fn plan_note_pull_item(
         crate::native::note_tasks::read_settings(&request.bob_dir);
     let tasks = task_status_hooks::parse_tasks(&source_text, &tasks_settings);
 
-    let index = super::task_complete::staged_note_index(
-        &request.bob_dir,
-        planner,
-        dependency_ctx,
-    );
-    let live = live_link_keys(&day_text, Path::new(&day_relative), &index);
-    let inbox = is_inbox_note(&relative, &source_text, &index);
+    // Most pulls have no existing Task Links in today's Pomodoros, and
+    // ordinary area notes have no inbox-parent metadata. Avoid the
+    // vault-wide path catalog in that common case; build it only when a
+    // day link needs resolution or an area may be an inbox child.
+    let needs_live_link_index = day_text.contains("#^");
+    let inbox_without_index =
+        crate::native::task_complete::successors::inbox_note_index_free_result(
+            &relative,
+            &source_text,
+        );
+    let index =
+        (needs_live_link_index || inbox_without_index.is_none()).then(|| {
+            super::task_complete::staged_note_index(
+                &request.bob_dir,
+                planner,
+                dependency_ctx,
+            )
+        });
+    let live = match (needs_live_link_index, index.as_ref()) {
+        (true, Some(index)) => {
+            live_link_keys(&day_text, Path::new(&day_relative), index)
+        }
+        _ => BTreeSet::new(),
+    };
+    let inbox = match inbox_without_index {
+        Some(inbox) => inbox,
+        None => is_inbox_note(
+            &relative,
+            &source_text,
+            index.as_ref().expect("possible inbox child builds index"),
+        ),
+    };
 
     // Prerequisite proof is needed only when a candidate carries a
     // non-empty `[dependsOn::]` (the KM31 gate).
-    let needs_snapshot = tasks.iter().any(|task| !task.depends_on.is_empty());
+    let needs_snapshot = tasks.iter().any(|task| {
+        if task.depends_on.is_empty()
+            || task.block_id.as_deref() == Some("prj")
+            || !task.status_recognized
+            || !matches!(task.status, ' ' | '*' | '/' | '?')
+        {
+            return false;
+        }
+        let raw = crate::native::task_complete::successors::raw_task_line(
+            &source_text,
+            task.line_index,
+        );
+        if task.status == '?' || has_prj_is_blocked_tag(&raw) {
+            return false;
+        }
+        if task.scheduled.is_some_and(|date| date > today) || has_hide_tag(&raw)
+        {
+            return false;
+        }
+        if let Some(block_id) = task.block_id.as_deref()
+            && live.contains(&(relative.clone(), block_id.to_string()))
+        {
+            return false;
+        }
+        true
+    });
     let snapshot_state: Option<SnapshotProof> = if needs_snapshot {
         Some(prepare_snapshot_proof(
             dependency_ctx,
@@ -1291,6 +1341,15 @@ mod tests {
             SuccessorSelection::None,
         );
         let planned = plan(&mut harness).expect("NP1 plans");
+        assert!(
+            harness.dependency_ctx.snapshot_read_counts().is_empty(),
+            "dependency-free pulls must not read the dependents snapshot"
+        );
+        assert_eq!(
+            harness.dependency_ctx.catalog_walk_count(),
+            0,
+            "a pull with no day links and no inbox-parent metadata must not walk the vault"
+        );
         assert!(planned.result.ok);
         assert_eq!(planned.result.kind, "note_pull");
         let pull = summary(&planned);
@@ -1331,6 +1390,25 @@ mod tests {
         // Write-free preview: staged bytes still equal the fixture inputs.
         assert_eq!(staged(&harness, "sase.md"), Some(PBA.to_string()));
         assert_eq!(staged(&harness, "day.md"), Some(FIX_DAY.to_string()));
+    }
+
+    #[test]
+    fn dependency_free_pull_without_day_links_does_not_walk_note_catalog() {
+        let harness = vault_harness(
+            &[("sase.md", PBA)],
+            Some(FIX_DAY),
+            SuccessorSelection::None,
+        );
+        let batch = crate::native::capture::plan::plan_capture_batch(
+            &harness.request,
+            None,
+        )
+        .expect("dependency-free note pull plans");
+        assert_eq!(
+            batch.catalog_walks, 0,
+            "the note-pull net pass must skip the catalog when the day has no task links"
+        );
+        assert!(batch.snapshot_read_counts.is_empty());
     }
 
     // NP2: `-p all` links every offer; Ready becomes Next while Pending
@@ -1500,7 +1578,7 @@ mod tests {
     #[test]
     fn np8_closed_statuses_ignored_uncounted() {
         let source = concat!(
-            "- [x] #task Done ^d\n",
+            "- [x] #task Done [id:: closed] [dependsOn:: missing] ^d\n",
             "- [-] #task Gone ^c\n",
             "- [>] #task Custom ^u\n",
         );
@@ -1518,6 +1596,10 @@ mod tests {
             "nothing to pull in from sase.md: it has no open tasks"
         );
         assert_eq!(staged(&harness, "sase.md"), Some(source.to_string()));
+        assert!(
+            harness.dependency_ctx.snapshot_read_counts().is_empty(),
+            "closed dependency rows must not trigger a vault-wide snapshot"
+        );
     }
 
     // NP9: `#ref` tasks, nested subtasks, and recurring tasks due today
@@ -1745,6 +1827,36 @@ mod tests {
             description: "Needs proof".to_string(),
         };
         assert!(proof.is_blocked(Path::new("sase.md"), &task));
+    }
+
+    #[test]
+    fn staged_closed_prerequisite_is_visible_to_note_pull_snapshot() {
+        let mut harness = vault_harness(
+            &[(
+                "sase.md",
+                "- [ ] #task Dependent [dependsOn:: pre] ^dependent\n",
+            )],
+            Some(FIX_DAY),
+            SuccessorSelection::None,
+        );
+        let staged_prerequisite = harness.request.bob_dir.join("pre.md");
+        harness
+            .planner
+            .stage(
+                &staged_prerequisite,
+                "- [x] #task Prerequisite [id:: pre] ^pre\n".to_string(),
+            )
+            .expect("stage closed prerequisite note");
+
+        let planned = plan(&mut harness).expect("staged-overlay pull plans");
+        let pull = summary(&planned);
+        assert_eq!(pull.folded.blocked, 0);
+        assert_eq!(pull.successors.len(), 1);
+        assert_eq!(pull.successors[0].text, "Dependent");
+        assert!(
+            !harness.dependency_ctx.snapshot_read_counts().is_empty(),
+            "the dependency-bearing pull must consult its snapshot"
+        );
     }
 
     // NP23: no daily note, or a daily note without an eligible Pomodoro

@@ -1256,6 +1256,9 @@ pub(super) fn apply_successor_net_post_pass(
         planner
             .peek_text(&day_file)
             .map(|final_day| {
+                if !final_day.contains("#^") {
+                    return BTreeSet::new();
+                }
                 let index = staged_note_index(bob_dir, planner, dependency_ctx);
                 engine::live_link_keys(
                     &final_day,

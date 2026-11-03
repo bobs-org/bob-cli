@@ -54,7 +54,7 @@ fn sa36_hello_and_plain_x_add_no_relation_snapshot_reads() {
         ("BOB_CONFIG_FILE", Some(config.as_os_str())),
     ]);
 
-    for text in ["hello", "x"] {
+    for text in ["hello", "x", "@sase\n- Regular task"] {
         let mut request = template_request(&vault, text);
         request.no_clip = true;
         request.no_ref = true;

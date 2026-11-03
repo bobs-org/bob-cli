@@ -403,8 +403,8 @@ pub(crate) fn is_inbox_note(
     contents: &str,
     index: &NoteIndex,
 ) -> bool {
-    if normalized_relative(relative) == "inbox.md" {
-        return true;
+    if let Some(result) = inbox_note_index_free_result(relative, contents) {
+        return result;
     }
     if !index
         .relative_paths()
@@ -433,6 +433,29 @@ pub(crate) fn is_inbox_note(
                 normalized_relative(&resolved) == "inbox.md"
             })
     })
+}
+
+/// Return an inbox classification without a vault index when the note is
+/// either the root inbox or cannot be one of its direct area children.
+/// `None` means the note has the metadata shape of a possible inbox child,
+/// so its parent link still needs the full index for canonical resolution.
+pub(crate) fn inbox_note_index_free_result(
+    relative: &Path,
+    contents: &str,
+) -> Option<bool> {
+    if normalized_relative(relative) == "inbox.md" {
+        return Some(true);
+    }
+    let Some(frontmatter) = super::super::projects::parse_frontmatter(contents)
+    else {
+        return Some(false);
+    };
+    if super::super::projects::frontmatter_is_project(&frontmatter)
+        || !super::super::projects::frontmatter_is_area(&frontmatter)
+    {
+        return Some(false);
+    }
+    parent_field_text(contents).is_none().then_some(false)
 }
 
 /// The raw text of a note's frontmatter `parent` field: the scalar rest
