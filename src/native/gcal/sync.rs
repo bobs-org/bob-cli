@@ -15,6 +15,7 @@ use super::{
     classify::{self, Inclusion},
     config::GcalConfig,
     description::bullets::render_bullets,
+    diagnostics,
     gog::Gog,
     journal::{self, OccurrenceState},
     lifecycle::{AbsentVerdict, LifecycleItem},
@@ -68,6 +69,7 @@ fn record_last_error(args: &SyncArgs, error: &GcalError) {
             links_added: 0,
             links_sorted: 0,
             warnings: Vec::new(),
+            deprecations: Vec::new(),
             quiet: true,
             json: false,
             diff: None,
@@ -101,11 +103,42 @@ struct SyncReport {
     links_added: usize,
     links_sorted: usize,
     warnings: Vec<String>,
+    deprecations: Vec<diagnostics::Deprecation>,
     quiet: bool,
     json: bool,
     diff: Option<String>,
     stamp: Option<Stamp>,
     stamp_refreshed: bool,
+}
+
+/// Deprecation diagnostics for the complete fetched snapshot, before any
+/// mutation or no-op filtering. Context and omitted occurrences keep their
+/// Google-input evidence; an observed alias still warns for unchanged,
+/// dry-run, and waiting results.
+fn snapshot_diagnostics(
+    snapshot: &snapshot::DaySnapshot,
+) -> (Vec<String>, Vec<diagnostics::Deprecation>) {
+    let inputs: Vec<diagnostics::DiagnosticInput<'_>> = snapshot
+        .events
+        .iter()
+        .map(|listed| diagnostics::DiagnosticInput {
+            calendar_id: &listed.event.key.calendar_id,
+            event_id: &listed.event.key.event_id,
+            title: &listed.event.title,
+            clock_tag: &listed.event.clock_tag,
+            deprecated_title_tags: &listed.event.deprecated_title_tags,
+            deprecated_description_tags: &listed
+                .event
+                .deprecated_description_tags,
+            root_value: listed
+                .root
+                .as_ref()
+                .and_then(|root| root.value.as_deref()),
+            root_only_off_clock: listed.root_only_clock.off_clock,
+            root_only_note: listed.root_only_clock.note.as_deref(),
+        })
+        .collect();
+    diagnostics::collect(&inputs)
 }
 
 fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
@@ -131,6 +164,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
 
     // Fetch outside any lock; an incomplete snapshot writes nothing.
     let snapshot = snapshot::fetch_day(vault, &config, day, &mut resolver)?;
+    let (diag_warnings, deprecations) = snapshot_diagnostics(&snapshot);
     let vault = snapshot.vault.clone();
     let day = snapshot.day;
     let daily_rel = snapshot.daily_rel.clone();
@@ -146,6 +180,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                 day,
                 &display_path,
                 &journal_warnings(&vault)?,
+                diag_warnings,
+                deprecations,
             );
         }
     };
@@ -157,6 +193,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             day,
             &display_path,
             &journal_warnings(&vault)?,
+            diag_warnings,
+            deprecations,
         );
     }
     stamp::account_guard(&contents, &snapshot.account, day, &display_path)?;
@@ -168,6 +206,9 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                 format!("read the gcal journal: {error}"),
             )
         })?;
+    // Diagnostics stay ephemeral: they never create journal writes and
+    // never make an otherwise unchanged plan changed.
+    warnings.extend(diag_warnings);
     let now = bob_env::current_datetime();
     let mut occurrences = Vec::new();
     for (occurrence, warning) in build_occurrences(
@@ -218,6 +259,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             links_added: plan.links_added.len(),
             links_sorted: plan.links_sorted,
             warnings: merge_warnings(warnings, &plan.warnings),
+            deprecations,
             quiet: args.quiet,
             json: args.format.is_json(),
             diff: Some(diff),
@@ -236,6 +278,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
             links_added: 0,
             links_sorted: 0,
             warnings,
+            deprecations,
             quiet: args.quiet,
             json: args.format.is_json(),
             diff: None,
@@ -323,7 +366,8 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                         entries: Vec::new(),
                         links_added: 0,
                         links_sorted: 0,
-                        warnings,
+                        warnings: warnings.clone(),
+                        deprecations: deprecations.clone(),
                         quiet: args.quiet,
                         json: args.format.is_json(),
                         diff: None,
@@ -360,6 +404,7 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         links_added: plan.links_added.len(),
         links_sorted: plan.links_sorted,
         warnings,
+        deprecations,
         quiet: args.quiet,
         json: args.format.is_json(),
         diff: None,
@@ -376,7 +421,11 @@ fn waiting(
     day: NaiveDate,
     display_path: &str,
     warnings: &[String],
+    diag_warnings: Vec<String>,
+    deprecations: Vec<diagnostics::Deprecation>,
 ) -> Result<SyncReport, GcalError> {
+    let mut merged = warnings.to_vec();
+    merged.extend(diag_warnings);
     let report = SyncReport {
         day,
         path: display_path.to_string(),
@@ -385,7 +434,8 @@ fn waiting(
         entries: Vec::new(),
         links_added: 0,
         links_sorted: 0,
-        warnings: warnings.to_vec(),
+        warnings: merged,
+        deprecations,
         quiet: args.quiet,
         json: args.format.is_json(),
         diff: None,
@@ -1206,8 +1256,16 @@ fn print_report(report: &SyncReport, _args: &SyncArgs) {
         print_json(report);
     } else if let Some(diff) = report.diff.as_deref() {
         print!("{diff}");
+        print_warnings_stderr(report);
     } else {
         print_human(report);
+    }
+}
+
+fn print_warnings_stderr(report: &SyncReport) {
+    let styler = Styler::detect();
+    for warning in &report.warnings {
+        eprintln!("{}", styler.dim(&format!("warning: {warning}")));
     }
 }
 
@@ -1268,6 +1326,7 @@ fn print_json(report: &SyncReport) {
                 "entries": json_entries(report),
             },
             "warnings": report.warnings,
+            "deprecations": report.deprecations,
             "stamp": stamp,
         })
     );
@@ -1290,13 +1349,16 @@ pub(crate) fn unified_diff(old: &str, new: &str, path: &str) -> String {
 }
 
 fn print_human(report: &SyncReport) {
+    let styler = Styler::detect();
     if report.quiet {
+        // Quiet suppresses success chatter while warnings stay visible.
+        print_warnings_stderr(report);
         return;
     }
-    let styler = Styler::detect();
     if report.status == "waiting" {
         println!("bob gcal sync · {}", report.path);
         println!("waiting for {}", report.path);
+        print_warnings_stderr(report);
         return;
     }
     println!("bob gcal sync · {}", report.path);
@@ -1407,9 +1469,7 @@ fn print_human(report: &SyncReport) {
     if let Some(stamp) = &report.stamp {
         println!("{}", styler.dim(&stamp.echo(report.day)));
     }
-    for warning in &report.warnings {
-        eprintln!("{}", styler.dim(&format!("warning: {warning}")));
-    }
+    print_warnings_stderr(report);
 }
 
 fn merge_warnings(mut warnings: Vec<String>, extra: &[String]) -> Vec<String> {

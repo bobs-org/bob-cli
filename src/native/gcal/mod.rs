@@ -12,6 +12,7 @@ pub(crate) mod client;
 mod clock;
 mod config;
 mod description;
+pub(crate) mod diagnostics;
 mod doctor;
 mod gog;
 mod journal;

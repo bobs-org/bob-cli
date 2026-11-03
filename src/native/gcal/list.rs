@@ -9,7 +9,7 @@ use super::{
     clock,
     config::GcalConfig,
     description::bullets::render_bullets,
-    journal,
+    diagnostics, journal,
     lifecycle::split_row_spans,
     model::MyAnswer,
     plan::journaled_title,
@@ -41,6 +41,31 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
     }
 }
 
+fn snapshot_diagnostics(
+    events: &[ListedEvent],
+) -> (Vec<String>, Vec<diagnostics::Deprecation>) {
+    let inputs: Vec<diagnostics::DiagnosticInput<'_>> = events
+        .iter()
+        .map(|listed| diagnostics::DiagnosticInput {
+            calendar_id: &listed.event.key.calendar_id,
+            event_id: &listed.event.key.event_id,
+            title: &listed.event.title,
+            clock_tag: &listed.event.clock_tag,
+            deprecated_title_tags: &listed.event.deprecated_title_tags,
+            deprecated_description_tags: &listed
+                .event
+                .deprecated_description_tags,
+            root_value: listed
+                .root
+                .as_ref()
+                .and_then(|root| root.value.as_deref()),
+            root_only_off_clock: listed.root_only_clock.off_clock,
+            root_only_note: listed.root_only_clock.note.as_deref(),
+        })
+        .collect();
+    diagnostics::collect(&inputs)
+}
+
 fn list(args: &ListArgs) -> Result<(), GcalError> {
     let config = GcalConfig::resolve()?;
     let day =
@@ -49,6 +74,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
     let mut resolver = HomeResolver::new(DiskHomeSource::new(&vault));
     let snapshot =
         snapshot::fetch_day(vault.clone(), &config, day, &mut resolver)?;
+    let (diag_warnings, deprecations) = snapshot_diagnostics(&snapshot.events);
     let visible_calendars: Vec<Value> = config
         .calendars()
         .iter()
@@ -98,6 +124,9 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             has_note.then_some(note_lines.as_slice()),
             last_sync_json(&newest),
             &past_open,
+            &journal_warnings,
+            &diag_warnings,
+            &deprecations,
         )
     } else {
         print_table(
@@ -112,6 +141,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             has_note.then_some(note_lines.as_slice()),
             &last_sync_human(&newest),
             &journal_warnings,
+            &diag_warnings,
             &past_open,
         )
     }
@@ -415,6 +445,9 @@ fn print_json(
     note: Option<&[&str]>,
     last_sync: Value,
     past_open: &[(NaiveDate, String)],
+    journal_warnings: &[String],
+    diag_warnings: &[String],
+    deprecations: &[diagnostics::Deprecation],
 ) -> Result<(), GcalError> {
     let rows: Vec<Value> = events
         .iter()
@@ -447,6 +480,8 @@ fn print_json(
         .iter()
         .map(|(day, title)| json!({"day": day.to_string(), "title": title}))
         .collect();
+    let mut warnings: Vec<String> = journal_warnings.to_vec();
+    warnings.extend(diag_warnings.iter().cloned());
     write_stdout(&json!({
         "schema_version": 1,
         "day": day.to_string(),
@@ -460,6 +495,8 @@ fn print_json(
         },
         "last_sync": last_sync,
         "past_open": past,
+        "warnings": warnings,
+        "deprecations": deprecations,
     }))
 }
 
@@ -479,6 +516,7 @@ fn print_table(
     note: Option<&[&str]>,
     sync_state: &str,
     journal_warnings: &[String],
+    diag_warnings: &[String],
     past_open: &[(NaiveDate, String)],
 ) -> Result<(), GcalError> {
     let styler = Styler::detect();
@@ -598,7 +636,7 @@ fn print_table(
             items.join(", ")
         ));
     }
-    for warning in journal_warnings {
+    for warning in journal_warnings.iter().chain(diag_warnings.iter()) {
         ui::warn(warning);
     }
     write_text_stdout(&output)

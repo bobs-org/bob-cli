@@ -341,14 +341,20 @@ even when their rows are hidden. The header carries the last sync: `synced
 else `never synced`.
 
 JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
-`last_sync`, and `past_open` fields. Each event reports `time`, `title`,
-`answer`, `inclusion`, `reason`, `off_clock`, deprecated `untracked`,
+`last_sync`, `past_open`, `warnings`, and `deprecations` fields. Each event
+reports `time`, `title`, `answer`, `inclusion`, `reason`, `clock` (`"off"`,
+`"on"`, or `null`, with conflicts normalized to `"on"`), `clock_source`
+(`on_tag`|`off_tag`|`note`|`invalid_note`|`default`), `clock_note`
+(the deciding note path or `null`), `off_clock`, deprecated `untracked`,
 `buffer` (`{"before_minutes", "after_minutes"}`, or `null` when the row
 carries no buffer), `description_lines` (bullet lines sync would write, 0
 otherwise), `vault`, and `root.value`, `root.source`,
-and `root.warnings`. Descriptions and attendee details are omitted. A root
-may be null when no candidate is valid; warnings explain each rejected
-candidate and its fix. `past_open` lists the open Event Tasks still sitting
+and `root.warnings`. `vault` appends ` · off-clock` for explicit off tags
+and ` · off-clock via <stem>` for inherited clocks. Descriptions and
+attendee details are omitted. A root may be null when no candidate is
+valid; per-event `root.warnings` explain each rejected candidate and its
+fix, while top-level `warnings` carry journal and Google clock-deprecation
+notices. `past_open` lists the open Event Tasks still sitting
 in the previous 7 daily notes (`day`, `title`); the table renders the same
 as a footer.
 
@@ -432,8 +438,11 @@ appends only after the note write succeeds, and host-local status
 `doctor`. Commits are left to vault-sync, as with capture. `-d` prints the
 exact unified diff of the plan and writes nothing; the diff shows the exact
 description bullets, and is the only place description text appears in
-command output. `-q` prints nothing on
-success, no-op, or waiting.
+command output. `-q` suppresses success chatter on
+success, no-op, or waiting, while clock-deprecation warnings stay visible
+on stderr. Human dry-run diffs also print those warnings on stderr; JSON
+mode carries `warnings` and `deprecations` with no duplicate stderr
+diagnostics.
 
 `sync -f json` reports `schema_version`, `ok`, `day`, `path`,
 `status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
@@ -442,7 +451,7 @@ success, no-op, or waiting.
 `null`, and `description_lines`, the bullet lines this run wrote for the
 row, 0 otherwise), `pomodoro`
 (`entry_line`, `created`, `links_added`, `links_sorted`, `entries`),
-`warnings`, and `stamp`
+`warnings`, `deprecations`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). Human rows append the buffer label to the time
 (`~ task 12:00–13:00 −30m +15m  Lunch …`), and a dim `≡ N` when the run
@@ -499,7 +508,7 @@ account, or set `gcal.account` to the stamp's account.
 | --- | --- | --- |
 | Checkbox | You | Never changed, except cancelling an untouched task (see below) |
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
-| `#offclock` (Google aliases `#off-clock`, `#untracked`) | Google until you edit it | Follows Google's token while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
+| `#off` / `#on` (deprecated Google aliases `#offclock`, `#off-clock`, `#untracked`) | Google until you edit it | Follows Google's explicit tag while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
 | `[buffer::]` | Google until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
 | Description bullets | Google until you edit them | Rewritten in place while they still match what Bob last wrote; your edit, nested note, or deletion makes them yours, reported once only if Google later changes |
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
@@ -525,44 +534,50 @@ that adds their first link, so sync never leaves a second open MEET.
 
 ## Off-clock events
 
-Tag a Google Calendar event `#offclock` (lunch, school pickup, the gym) so it
+Tag a Google Calendar event `#off` (lunch, school pickup, the gym) so it
 still lands in the day as an Event Task with a Pomodoro Task Link, but its
-session stays on the calendar and off the Worked clock. The closed MEET uses
+session stays on the calendar and off the Worked clock. `#on` explicitly
+forces on-clock and wins over any off spelling. The closed MEET uses
 `[off:: Nm]` with the event's real duration; Worked stats and
 `bob pomodoro --worked` leave those minutes out, while homes can attribute
-them. The aliases `#off-clock` and legacy `#untracked` mean the same thing.
+them. The spellings `#offclock`, `#off-clock`, and legacy `#untracked`
+remain accepted forever but are deprecated: sync and list report them and
+point at `#off`.
 
-Google accepts a standalone off-clock alias anywhere in the title, or a
-**directive line** in the description. A directive line is one whose every
-token (split on whitespace or commas) is a directive: `@route`, an off-clock
-alias, `-N`/`-Nm` (ASCII or typographic minus), or `+M`/`+Mm`. Directives
-combine on one line or spread across several. A plain-text list marker is
-stripped before checking the tokens, so `- #offclock` is a directive line,
-like an HTML `<li>` after normalization. HTML from Google's editor is
-normalized first (`<br>`, `<p>`, `<div>`, `<li>`, headings, list
-containers, table rows, and `<hr>` become line breaks, other tags are
-stripped, common entities are decoded). With a resolvable `love`
-root, `@love<br>#offclock -30` sets `[root:: love]`, marks the Event Task
-off-clock, and adds a 30-minute lead-in. A line with any other token — a
-phone number, a 4-digit value, a sentence — is ignored whole. Sync strips
-the title alias from the displayed title before reading a title-ending
-`@route`, so `Lunch @love #off-clock` gets the same root and displays as
-`Lunch`.
+Google titles use whole whitespace tokens, ASCII case-insensitive, with
+trailing `.,;:!?` stripped: `Lunch #OFFCLOCK!` marks off-clock while
+`#office`, `#one`, and `#off/x` never do. Description parsing keeps its
+existing HTML/plain normalization and whitespace/comma directive
+tokenization: every token on a line must be a directive. A directive line is
+one whose every token (split on whitespace or commas) is a directive:
+`@route`, `#off`, `#on`, a deprecated off alias, `-N`/`-Nm` (ASCII or
+typographic minus), or `+M`/`+Mm`. Directives combine on one line or spread
+across several. A plain-text list marker is stripped before checking the
+tokens, so `- #off` is a directive line, like an HTML `<li>` after
+normalization. HTML from Google's editor is normalized first (`<br>`,
+`<p>`, `<div>`, `<li>`, headings, list containers, table rows, and `<hr>`
+become line breaks, other tags are stripped, common entities are decoded).
+With a resolvable `love` root, `@love<br>#off -30` sets `[root:: love]`,
+marks the Event Task off-clock, and adds a 30-minute lead-in. A line with
+any other token — a phone number, a 4-digit value, a sentence — is ignored
+whole, so `Bring shoes #offclock` stays prose and never marks the clock.
+Sync strips the title clock token from the displayed title before reading a
+title-ending `@route`, so `Lunch @love #off` gets the same root and
+displays as `Lunch`.
 
-Google accepts standalone `#offclock`, `#off-clock`, and legacy `#untracked`
-tokens (case-insensitive) anywhere in the title, or on a description
-directive line, alone or combined with a route or buffer. Sync writes the
-canonical `#offclock` tag to the Event Task and
-strips all aliases from the displayed title, the way a resolved `@route` is
-stripped: aliases are removed first, then the title-ending `@route` is read,
-so `Lunch @love #off-clock` routes to `love` and displays as `Lunch`.
-
-On the Event Task, sync writes ` #offclock` at the end of the badge run,
-before `[root::]`:
+Explicit tags and the effective clock are separate values. Rendering and
+badge hashes depend only on Google's explicit tag: sync writes ` #off`,
+` #on`, or no tag at the end of the badge run, before `[root::]`, and an
+untagged `Lunch @love` that resolves off-clock through its root gains no
+inherited tag. `#on` wins conflicts; otherwise off wins, then the nearest
+area/project `offclock:` on the shared PT13 root walk decides, then the
+default is on-clock. See the vault-wide precedence in
+[pomodoro homes](pomodoro-homes.md). `Lunch @love #on` can force a
+love-rooted lunch back onto the Worked clock.
 
 ```markdown
 - [*] #task **1200-1300** Lunch with Kelly [📅](…)
-  #offclock [root:: love] [type:: MEET] ^lunch-with-kelly
+  #off [root:: love] [type:: MEET] ^lunch-with-kelly
 ```
 
 The tag is Google-owned exactly like the badges: updated in place while the
@@ -570,13 +585,32 @@ row is untouched, and your vault edit (adding or deleting it) wins and is
 reported once. Context rows strip the token and carry no tag; a Maybe context
 row upgraded to a task renders the tag. A tag flip after the session closed
 is reported once and left for a hand edit — sync never retimes existing MEET
-entries. Rows synced before this feature migrate on the next sync: the title
-and badge spans both still match Bob's last write, so both update in place.
+entries. Untouched legacy `#offclock` spans migrate to `#off` without
+changing row IDs, roots, children, or ledger stamps. Alias normalization is
+not a clock flip, including on a worked row.
 
-`list` shows `task · MEET · off-clock` in VAULT; JSON carries `off_clock`
-and deprecated `untracked`. `sync -f json` rows carry both fields.
+Sync computes MEET clocks from the line left after this run's merge,
+including retained vault tags and roots. List previews the same event
+through Google's chosen root instead: an untagged love-rooted lunch creates
+an `[off::]` past cluster and running MEET with no tag on its row, while
+`#on` keeps it worked. This intentional difference is covered by the
+`clock`, `clock_source`, and `clock_note` fields.
 
-An ended `#offclock` Event Task nobody started settles into a closed
+`list` shows `task · MEET · off-clock` in VAULT for explicit off tags and
+`task · MEET · off-clock via <stem>` for inherited clocks; JSON carries
+`clock`, `clock_source`, `clock_note`, `off_clock`, and deprecated
+`untracked`. `sync -f json` rows carry the effective `off_clock` and
+deprecated `untracked` for the retained row. Both commands add top-level
+`warnings` and `deprecations`: one warning per deprecated occurrence per
+run (unchanged and dry-run included) and one structured record per distinct
+deprecated alias with `calendar_id`, `event_id`, `title`, `token`,
+`where` (`title`|`description`|`both`), `replacement` (`#off`),
+`drop_suggested`, and `on_wins`. Google stays read-only: deprecations never
+create journal writes and never make an otherwise unchanged plan changed.
+A canonical `#off` plus `#on` warns with `clock_tag_conflict` and states
+that `#on` wins.
+
+An ended `#off` Event Task nobody started settles into a closed
 `[off:: Nm]` MEET on the next `bob task reconcile` (see
 [Settled off-clock events](task-status-hooks.md#settled-off-clock-events)).
 Cancel the row before it ends to keep it off the record.
@@ -588,8 +622,9 @@ Google Calendar event's description to reserve 30 minutes before and 15
 minutes after the event (travel, prep, wind-down). Each side takes 1–3
 digits with an optional `m` suffix and an ASCII or typographic minus, is
 capped at 720 (12h), and the first value per side wins. The tokens combine
-with `@route` and the off-clock aliases (`#offclock`, `#off-clock`,
-`#untracked`) on one line or spread over several, so `@love #offclock -30`
+with `@route` and the clock tags (`#off`, `#on`, deprecated `#offclock`,
+`#off-clock`, `#untracked`) on one line or spread over several, so
+`@love #off -30`
 routes, marks off-clock, and buffers at once. Numbers in
 titles are never buffers: `Q4 +1` and `Room -2` stay titles. Bob reads
 buffers from the description only.
@@ -602,13 +637,13 @@ meeting keeps its real time:
 | --- | --- |
 | Sync phases (past/current/future) | Timed close classification (`ended_inside`/`running`/…) |
 | The MEET clusters and spans sync writes | The bold span text, its journal hash, and Google ownership of the time |
-| The TIME label and `buffer` JSON in `list` and `sync` output | Row titles, `#offclock`, roots |
+| The TIME label and `buffer` JSON in `list` and `sync` output | Row titles, `#off`/`#on`, roots |
 
 Sync writes one Google-owned field at the end of the badge run, after
-`#offclock` and before `[root::]`:
+`#off`/`#on` and before `[root::]`:
 
 ```markdown
-- [*] #task **1200-1300** Lunch with Kelly [📅](…) #offclock
+- [*] #task **1200-1300** Lunch with Kelly [📅](…) #off
   [buffer:: -30m +15m] [root:: love] [type:: MEET] ^lunch-with-kelly
 ```
 
@@ -634,7 +669,7 @@ bullets.
 
 Copied: the human lines of the description — plain paragraphs, list items,
 headings, table rows, and links. Dropped: [directive
-lines](#off-clock-events) (they drive `@route`, `#offclock`, and buffers
+lines](#off-clock-events) (they drive `@route`, `#off`/`#on`, and buffers
 instead), recognized conferencing blocks (Meet, Zoom, Teams, Webex),
 separators, blank lines, and lines that only repeat the `📹` or `📍` target.
 A Teams or Zoom invite whose description is only vendor boilerplate writes
@@ -769,7 +804,7 @@ Timed multi-day events appear as context on each date they overlap.
 For Event Tasks, Bob tries these candidates in order and writes the first valid
 one: the series memory of your earlier `[root::]` edit on another occurrence
 of the same recurring event, a title-ending `@route` or a description
-directive line (combinable and HTML-safe, so `@love #offclock -30` on one
+directive line (combinable and HTML-safe, so `@love #off -30` on one
 line routes), `gcal.colors` by event colour, the calendar's
 `root`, then `gcal.root` (default `meet`). A root must resolve relative to
 the daily note, be an area at any depth or a root project, and must not be
@@ -777,8 +812,8 @@ the daily note, be an area at any depth or a root project, and must not be
 
 Invalid candidates fall through to the next source with a warning that includes
 the R11 reason and fix. If a title route resolves, Bob removes the final token
-from the displayed title. Off-clock aliases are stripped before the route is
-read, so `Lunch @love #off-clock` routes to `love`. An unknown route stays in the title and is reported.
+from the displayed title. Clock tags are stripped before the route is
+read, so `Lunch @love #off` routes to `love`. An unknown route stays in the title and is reported.
 If the default root also fails, list shows no root and `doctor` reports the
 invalid default. Root sources are reported as `learned from your 2026-10-29
 edit`, `@body`, `colour tomato`, `calendar Health`, or `default`. The VAULT
@@ -824,18 +859,20 @@ including the `last_sync` check.
 `primary`, `synced`, `root`).
 
 `list -f json`: `day`, configured `calendars`, classified `events`,
-`counts`, and `last_sync`. `-a` adds omitted event rows. Each event contains
-no provider description or attendee list, and carries `off_clock`, deprecated
-`untracked`, and the `vault` state.
+`counts`, `last_sync`, `past_open`, `warnings`, and `deprecations`. `-a`
+adds omitted event rows. Each event contains no provider description or
+attendee list, and carries `clock`, `clock_source`, `clock_note`,
+`off_clock`, deprecated `untracked`, and the `vault` state.
 
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`,
-`warnings`, and `stamp`. `stamp` is `{account, synced_at, refreshed}` or
-`null`. `pomodoro` carries `entry_line`, `created`, `links_added`,
-`links_sorted`, and
+`warnings`, `deprecations`, and `stamp`. `stamp` is
+`{account, synced_at, refreshed}` or `null`. `pomodoro` carries
+`entry_line`, `created`, `links_added`, `links_sorted`, and
 `entries` as in [Sync](#sync). Row actions add `updated`, `cancelled`,
 `removed` (context), `upgraded`, and `learned` to the sync-phase `added`,
 `adopted`, and `removed` (task) actions; lifecycle notices also arrive as
-`warnings`.
+`warnings`. `deprecations` carry one record per distinct deprecated Google
+clock alias per occurrence (see [Off-clock events](#off-clock-events)).
 
 ## Security
 
