@@ -12,7 +12,7 @@ use crate::native::{
     clock_tags::{ClockKind, ClockTag},
     config as bob_config, env as bob_env,
     event_task::EventBuffer,
-    pomodoro_homes::{DiskHomeSource, HomeResolver},
+    pomodoro_homes::{HomeResolver, HomeSource},
     pomodoro_themes, task_text_escape,
 };
 
@@ -167,7 +167,8 @@ pub(crate) fn escape_title(title: &str) -> String {
 /// is something other than MEET, meaning `[type:: MEET]` must be
 /// written. Falls back to writing the field when the catalog cannot
 /// be read, so a missing catalog never drops attribution.
-pub(crate) fn needs_meet_type(
+pub(crate) fn needs_meet_type<S: HomeSource>(
+    resolver: &mut HomeResolver<S>,
     vault: &Path,
     daily_rel: &Path,
     line_with_root: &str,
@@ -179,9 +180,8 @@ pub(crate) fn needs_meet_type(
     };
     let plan = bob_config::load_plan_config(&bob_config::config_path())
         .unwrap_or_default();
-    let mut resolver = HomeResolver::new(DiskHomeSource::new(vault));
     let result = pomodoro_themes::suggest::suggest_for_task(
-        &mut resolver,
+        resolver,
         &catalog,
         &plan,
         daily_rel,

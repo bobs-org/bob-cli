@@ -124,6 +124,27 @@ pub(crate) fn off_clock_via_label(
     }
 }
 
+/// Resolve a task line through an injectable home source. Gcal planning
+/// takes this so tests can supply an in-memory map instead of hiding
+/// filesystem reads inside cluster grouping.
+pub(crate) trait ClockLookup {
+    fn resolve_clock(
+        &mut self,
+        residence_path: &Path,
+        line: &str,
+    ) -> ClockResolution;
+}
+
+impl<S: HomeSource> ClockLookup for HomeResolver<S> {
+    fn resolve_clock(
+        &mut self,
+        residence_path: &Path,
+        line: &str,
+    ) -> ClockResolution {
+        effective_clock(self, residence_path, line)
+    }
+}
+
 /// Resolve a task's effective clock from its explicit tag, then the nearest
 /// area/project note default on the shared PT13 root walk.
 pub(crate) fn effective_clock<S: HomeSource>(

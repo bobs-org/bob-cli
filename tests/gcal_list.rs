@@ -268,3 +268,148 @@ fn bare_gcal_explains_how_to_connect_before_login() {
     assert!(lines[1].contains("bob gcal login"));
     assert!(lines[2].contains("bob gcal` again"));
 }
+
+fn write_love_tree(env: &GcalEnv) {
+    fs::write(
+        env.vault().join("love.md"),
+        "---\ntype: area\noffclock: true\n---\n# Love\n",
+    )
+    .expect("write love");
+    fs::write(
+        env.vault().join("abby.md"),
+        "---\ntype: area\nparent: [[love]]\n---\n# Abby\n",
+    )
+    .expect("write abby");
+    fs::write(
+        env.vault().join("fun.md"),
+        "---\ntype: area\nparent: [[love]]\noffclock: false\n---\n# Fun\n",
+    )
+    .expect("write fun");
+}
+
+fn list_event<'a>(report: &'a Value, title: &str) -> &'a Value {
+    report["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == title)
+        .unwrap_or_else(|| panic!("missing event {title}"))
+}
+
+#[test]
+fn listed_clock_uses_google_root_and_via_note() {
+    let env = GcalEnv::new("bob-cli-gcal-list-clock");
+    prepare(&env);
+    write_love_tree(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let events = serde_json::json!({
+        "events": [
+            {
+                "id": "lunch",
+                "summary": "Lunch @love",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T08:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T08:30:00-04:00"},
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "planning",
+                "summary": "Planning @love #on",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T09:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T09:30:00-04:00"},
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "gym",
+                "summary": "Gym @fun #off",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T10:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T10:30:00-04:00"},
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "swings",
+                "summary": "Swings @abby",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T11:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T11:30:00-04:00"},
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            },
+            {
+                "id": "coffee",
+                "summary": "Coffee #off",
+                "status": "confirmed",
+                "transparency": "transparent",
+                "start": {"dateTime": "2026-10-30T13:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T13:30:00-04:00"},
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+            }
+        ],
+        "nextPageToken": serde_json::Value::Null,
+    });
+    fake.events_json(&serde_json::to_string(&events).expect("events"));
+
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let output = command.output().expect("run gcal list json");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("list JSON");
+
+    let lunch = list_event(&report, "Lunch");
+    assert_eq!(lunch["inclusion"], "task");
+    assert_eq!(lunch["root"]["value"], "love");
+    assert_eq!(lunch["clock"], Value::Null);
+    assert_eq!(lunch["clock_source"], "note");
+    assert_eq!(lunch["clock_note"], "love.md");
+    assert_eq!(lunch["off_clock"], true);
+    assert_eq!(lunch["untracked"], true);
+    assert!(
+        lunch["vault"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("off-clock via love"),
+        "{lunch}"
+    );
+
+    let planning = list_event(&report, "Planning");
+    assert_eq!(planning["clock"], "on");
+    assert_eq!(planning["clock_source"], "on_tag");
+    assert_eq!(planning["clock_note"], Value::Null);
+    assert_eq!(planning["off_clock"], false);
+
+    let gym = list_event(&report, "Gym");
+    assert_eq!(gym["clock"], "off");
+    assert_eq!(gym["clock_source"], "off_tag");
+    assert_eq!(gym["off_clock"], true);
+
+    let swings = list_event(&report, "Swings");
+    assert_eq!(swings["clock_source"], "note");
+    assert_eq!(swings["clock_note"], "love.md");
+    assert_eq!(swings["off_clock"], true);
+
+    let coffee = list_event(&report, "Coffee");
+    assert_eq!(coffee["inclusion"], "context");
+    assert_eq!(coffee["clock"], "off");
+    assert_eq!(coffee["clock_source"], "off_tag");
+    assert_eq!(coffee["clock_note"], Value::Null);
+    assert_eq!(coffee["off_clock"], true);
+    assert_eq!(coffee["vault"], "context");
+
+    let mut table = env.command();
+    fake.install(&mut table).args(["gcal"]);
+    let table_out = table.output().expect("run table list");
+    assert_eq!(table_out.status.code(), Some(0), "{}", stderr(&table_out));
+    let table_text = stdout(&table_out);
+    assert!(table_text.contains("off-clock via love"), "{table_text}");
+    assert!(
+        table_text.lines().any(|line| {
+            line.contains("Coffee")
+                && line.contains("context")
+                && !line.contains("via")
+        }),
+        "context rows stay tag-only:\n{table_text}"
+    );
+}

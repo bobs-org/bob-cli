@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::native::{
     parent_notes,
-    pomodoro_homes::{path_string, DiskHomeSource, Home, HomeResolver, Hue},
+    pomodoro_homes::{
+        path_string, DiskHomeSource, Home, HomeResolver, HomeSource, Hue,
+    },
     task_root::is_invalid_root_value,
     vault_links::LinkResolution,
 };
@@ -57,7 +59,8 @@ pub(crate) struct EventRoot {
 }
 
 /// Choose the first valid root in the fixed precedence order.
-pub(crate) fn choose_event_root(
+pub(crate) fn choose_event_root<S: HomeSource>(
+    resolver: &mut HomeResolver<S>,
     vault: &Path,
     daily_rel: &Path,
     event: &GcalEvent,
@@ -78,7 +81,7 @@ pub(crate) fn choose_event_root(
         } else {
             format!("learned from your {} edit", learned.day)
         };
-        match validate_root_candidate(vault, daily_rel, &learned.root) {
+        match validate_root_with(resolver, daily_rel, &learned.root) {
             Ok(target) => {
                 return chosen(
                     target,
@@ -102,7 +105,7 @@ pub(crate) fn choose_event_root(
     {
         match parent_notes::resolve_parent(vault, route) {
             Ok(parent) => {
-                match validate_root_candidate(vault, daily_rel, &parent.route) {
+                match validate_root_with(resolver, daily_rel, &parent.route) {
                     Ok(target) => {
                         if event.title_route_hint.as_deref() == Some(route) {
                             title = strip_title_route(&event.title, route);
@@ -127,7 +130,7 @@ pub(crate) fn choose_event_root(
                     error.message().replace('\n', "; ")
                 );
                 if let Err(rejection) =
-                    validate_root_candidate(vault, daily_rel, route)
+                    validate_root_with(resolver, daily_rel, route)
                 {
                     warning.push_str("; ");
                     warning.push_str(&rejection_message(
@@ -145,7 +148,7 @@ pub(crate) fn choose_event_root(
     {
         let color = crate::native::config::color_name_for_id(color_id)
             .unwrap_or(color_id);
-        match validate_root_candidate(vault, daily_rel, root) {
+        match validate_root_with(resolver, daily_rel, root) {
             Ok(target) => {
                 return chosen(
                     target,
@@ -163,7 +166,7 @@ pub(crate) fn choose_event_root(
     }
 
     if let Some(root) = config.calendar_root(&event.key.calendar_id) {
-        match validate_root_candidate(vault, daily_rel, root) {
+        match validate_root_with(resolver, daily_rel, root) {
             Ok(target) => {
                 return chosen(
                     target,
@@ -180,7 +183,7 @@ pub(crate) fn choose_event_root(
         }
     }
 
-    match validate_root_candidate(vault, daily_rel, config.root()) {
+    match validate_root_with(resolver, daily_rel, config.root()) {
         Ok(target) => chosen(
             target,
             "default".to_string(),
@@ -249,6 +252,16 @@ pub(crate) fn validate_root_candidate(
     daily_rel: &Path,
     name: &str,
 ) -> Result<RootTarget, RootRejection> {
+    let mut resolver = HomeResolver::new(DiskHomeSource::new(vault));
+    validate_root_with(&mut resolver, daily_rel, name)
+}
+
+/// Same as [`validate_root_candidate`], reusing one command-scoped resolver.
+pub(crate) fn validate_root_with<S: HomeSource>(
+    resolver: &mut HomeResolver<S>,
+    daily_rel: &Path,
+    name: &str,
+) -> Result<RootTarget, RootRejection> {
     let trimmed = name.trim();
     if trimmed.is_empty() || is_invalid_root_value(trimmed) {
         return Err(RootRejection {
@@ -261,8 +274,6 @@ pub(crate) fn validate_root_candidate(
         });
     }
 
-    let source = DiskHomeSource::new(vault);
-    let mut resolver = HomeResolver::new(source);
     match resolver.resolve_target(daily_rel, trimmed) {
         LinkResolution::Missing => Err(RootRejection {
             reason: "missing",
@@ -421,11 +432,31 @@ mod tests {
         dir
     }
 
+    fn choose_at(
+        vault: &Path,
+        daily_rel: &Path,
+        event: &GcalEvent,
+        calendar_name: &str,
+        config: &GcalConfig,
+        learned: Option<&super::super::journal::LearnedRoot>,
+    ) -> EventRoot {
+        let mut resolver = HomeResolver::new(DiskHomeSource::new(vault));
+        choose_event_root(
+            &mut resolver,
+            vault,
+            daily_rel,
+            event,
+            calendar_name,
+            config,
+            learned,
+        )
+    }
+
     #[test]
     fn route_token_precedes_color_calendar_and_default() {
         let vault = root_vault();
         let event = event("Dentist @body", Some("@job"), Some("11"));
-        let root = choose_event_root(
+        let root = choose_at(
             vault.path(),
             Path::new("2026/20261030.md"),
             &event,
@@ -444,7 +475,7 @@ mod tests {
     fn unknown_title_route_stays_in_title_and_color_wins_next() {
         let vault = root_vault();
         let event = event("Dentist @missing", None, Some("11"));
-        let root = choose_event_root(
+        let root = choose_at(
             vault.path(),
             Path::new("2026/20261030.md"),
             &event,
@@ -463,7 +494,7 @@ mod tests {
     fn invalid_color_falls_back_to_calendar_and_invalid_default_has_no_root() {
         let vault = root_vault();
         let meeting_event = event("Dentist", None, Some("11"));
-        let calendar = choose_event_root(
+        let calendar = choose_at(
             vault.path(),
             Path::new("2026/20261030.md"),
             &meeting_event,
@@ -477,7 +508,7 @@ mod tests {
         assert!(calendar.warnings[0].contains("missing"));
         assert!(calendar.warnings[0].contains("fix:"));
 
-        let invalid_default = choose_event_root(
+        let invalid_default = choose_at(
             vault.path(),
             Path::new("2026/20261030.md"),
             &event("Dinner", None, None),

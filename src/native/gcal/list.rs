@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 use super::{
     classify::{self, Inclusion},
+    clock,
     config::GcalConfig,
     description::bullets::render_bullets,
     journal,
@@ -17,6 +18,7 @@ use super::{
 };
 use crate::native::{
     env as bob_env, event_task,
+    pomodoro_homes::{DiskHomeSource, HomeResolver},
     style::{self, Styler},
 };
 
@@ -44,7 +46,9 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
     let day =
         classify::resolve_day(&args.day, bob_env::current_datetime().date())?;
     let vault = args.bob_dir();
-    let snapshot = snapshot::fetch_day(vault.clone(), &config, day)?;
+    let mut resolver = HomeResolver::new(DiskHomeSource::new(&vault));
+    let snapshot =
+        snapshot::fetch_day(vault.clone(), &config, day, &mut resolver)?;
     let visible_calendars: Vec<Value> = config
         .calendars()
         .iter()
@@ -154,8 +158,8 @@ fn past_open_meetings(
 
 /// What sync did, or would do, with one event: `task · MEET`, `task`,
 /// `context`, `waiting for note`, or `removed by you`, each with
-/// ` · off-clock` appended for Google off-clock tasks. Omitted events
-/// keep their omission reason.
+/// ` · off-clock` (or ` · off-clock via love`) appended for off-clock
+/// tasks. Omitted events keep their omission reason.
 fn vault_status(
     event: &ListedEvent,
     journal: &std::collections::BTreeMap<
@@ -180,13 +184,13 @@ fn vault_status(
         return "removed by you".to_string();
     }
     // Context rows strip the token, so only tasks show the off-clock mark;
-    // both JSON fields carry Google's flag for compatibility.
-    let off_clock_suffix =
-        if event.event.off_clock && event.inclusion == Inclusion::Task {
-            " · off-clock"
-        } else {
-            ""
-        };
+    // JSON booleans carry the effective clock for tasks and tag-only
+    // values for context/omitted events.
+    let off_clock_suffix = if event.inclusion == Inclusion::Task {
+        clock::off_clock_status_suffix(&event.clock)
+    } else {
+        String::new()
+    };
     match &event.inclusion {
         Inclusion::Omitted(_) => unreachable!("filtered above"),
         Inclusion::Context(_) => {
@@ -423,8 +427,11 @@ fn print_json(
                 "answer": event.event.my_answer.as_str(),
                 "inclusion": event.inclusion.name(),
                 "reason": event.inclusion.reason(),
-                "off_clock": event.event.off_clock,
-                "untracked": event.event.off_clock,
+                "clock": clock::explicit_clock_label(&event.event.clock_tag),
+                "clock_source": event.clock.source,
+                "clock_note": event.clock.note,
+                "off_clock": event.clock.off_clock,
+                "untracked": event.clock.off_clock,
                 "buffer": buffer_json(event),
                 "description_lines": description_lines(config, event),
                 "root": {

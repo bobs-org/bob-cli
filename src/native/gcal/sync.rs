@@ -29,6 +29,7 @@ use crate::native::{
     capture::{write_staged_files, CaptureFailureKind, StagedTextFile},
     env as bob_env, ob,
     pomodoro::pomodoros_section_range,
+    pomodoro_homes::{DiskHomeSource, HomeResolver, HomeSource},
     pref_journal,
     style::Styler,
 };
@@ -126,9 +127,10 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     let day = classify::resolve_day(&args.day, today)?;
     let is_today = day == today;
     let vault = args.bob_dir();
+    let mut resolver = HomeResolver::new(DiskHomeSource::new(&vault));
 
     // Fetch outside any lock; an incomplete snapshot writes nothing.
-    let snapshot = snapshot::fetch_day(vault, &config, day)?;
+    let snapshot = snapshot::fetch_day(vault, &config, day, &mut resolver)?;
     let vault = snapshot.vault.clone();
     let day = snapshot.day;
     let daily_rel = snapshot.daily_rel.clone();
@@ -169,7 +171,13 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     let now = bob_env::current_datetime();
     let mut occurrences = Vec::new();
     for (occurrence, warning) in build_occurrences(
-        &snapshot, &config, &vault, &daily_rel, is_today, &now,
+        &snapshot,
+        &config,
+        &vault,
+        &daily_rel,
+        is_today,
+        &now,
+        &mut resolver,
     ) {
         if let Some(warning) = warning {
             warnings.push(warning);
@@ -182,18 +190,22 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
     let lifecycle =
         resolve_absent(&snapshot, &occurrences, &journal_state, &day)?;
 
-    let plan = plan::plan_sync(&plan::SyncPlanInput {
-        contents: &contents,
-        is_today,
-        occurrences: occurrences.clone(),
-        journal: &journal_state,
-        day_string: day.to_string(),
-        today: now.date(),
-        lifecycle: lifecycle.clone(),
-        series_roots: &snapshot.series_roots,
-        account: &snapshot.account,
-        now,
-    });
+    let plan = plan::plan_with_clock(
+        &plan::SyncPlanInput {
+            contents: &contents,
+            is_today,
+            occurrences: occurrences.clone(),
+            journal: &journal_state,
+            day_string: day.to_string(),
+            today: now.date(),
+            lifecycle: lifecycle.clone(),
+            series_roots: &snapshot.series_roots,
+            account: &snapshot.account,
+            now,
+        },
+        Some(daily_rel.as_path()),
+        Some(&mut resolver),
+    );
 
     if args.dry_run {
         let diff = unified_diff(&contents, &plan.contents, &display_path);
@@ -285,18 +297,23 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                     day,
                     &display_path,
                 )?;
-                plan = plan::plan_sync(&plan::SyncPlanInput {
-                    contents: &current,
-                    is_today,
-                    occurrences: occurrences.clone(),
-                    journal: &journal_state,
-                    day_string: day.to_string(),
-                    today: now.date(),
-                    lifecycle: lifecycle.clone(),
-                    series_roots: &snapshot.series_roots,
-                    account: &snapshot.account,
-                    now,
-                });
+                resolver.refresh();
+                plan = plan::plan_with_clock(
+                    &plan::SyncPlanInput {
+                        contents: &current,
+                        is_today,
+                        occurrences: occurrences.clone(),
+                        journal: &journal_state,
+                        day_string: day.to_string(),
+                        today: now.date(),
+                        lifecycle: lifecycle.clone(),
+                        series_roots: &snapshot.series_roots,
+                        account: &snapshot.account,
+                        now,
+                    },
+                    Some(daily_rel.as_path()),
+                    Some(&mut resolver),
+                );
                 if !plan.changed {
                     let report = SyncReport {
                         day,
@@ -396,13 +413,14 @@ fn journal_warnings(vault: &std::path::Path) -> Result<Vec<String>, GcalError> {
 /// roots, the `[type:: MEET]` field, badges, span hashes, description
 /// bullets, and MEET eligibility. Returns each occurrence with its root
 /// warnings.
-fn build_occurrences(
+fn build_occurrences<S: HomeSource>(
     snapshot: &snapshot::DaySnapshot,
     config: &GcalConfig,
     vault: &std::path::Path,
     daily_rel: &std::path::Path,
     is_today: bool,
     now: &chrono::NaiveDateTime,
+    resolver: &mut HomeResolver<S>,
 ) -> Vec<(PlannedOccurrence, Option<String>)> {
     let mut out = Vec::new();
     for event in &snapshot.events {
@@ -418,6 +436,7 @@ fn build_occurrences(
             event.root.as_ref().and_then(|root| root.source.clone());
         let needs_type = if task {
             needs_meet_type(
+                resolver,
                 vault,
                 daily_rel,
                 &time_label,
@@ -605,7 +624,8 @@ fn link_phase_for(
     }
 }
 
-fn needs_meet_type(
+fn needs_meet_type<S: HomeSource>(
+    resolver: &mut HomeResolver<S>,
     vault: &std::path::Path,
     daily_rel: &std::path::Path,
     time_label: &str,
@@ -616,7 +636,7 @@ fn needs_meet_type(
     if let Some(root) = root {
         probe = crate::native::task_root::set_task_root(&probe, root);
     }
-    render::needs_meet_type(vault, daily_rel, &probe)
+    render::needs_meet_type(resolver, vault, daily_rel, &probe)
 }
 
 /// Verdicts for journaled occurrences with no included snapshot row:

@@ -9,6 +9,7 @@ mod calendars;
 mod classify;
 pub(crate) mod cli;
 pub(crate) mod client;
+mod clock;
 mod config;
 mod description;
 mod doctor;

@@ -2439,3 +2439,212 @@ fn title_update_keeps_the_description_record() {
         .expect("dentist row record");
     assert_eq!(latest["description"]["lines"], 1, "{latest}");
 }
+
+fn write_love_tree(env: &GcalEnv) {
+    fs::write(
+        env.vault().join("love.md"),
+        "---\ntype: area\noffclock: true\n---\n# Love\n",
+    )
+    .expect("write love");
+    fs::write(
+        env.vault().join("fun.md"),
+        "---\ntype: area\nparent: [[love]]\noffclock: false\n---\n# Fun\n",
+    )
+    .expect("write fun");
+}
+
+fn clock_event(id: &str, summary: &str, start: &str, end: &str) -> Value {
+    serde_json::json!({
+        "id": id,
+        "summary": summary,
+        "status": "confirmed",
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+        "htmlLink": format!("https://calendar.google.com/event?eid={id}"),
+        "attendees": [{"self": true, "responseStatus": "accepted"}],
+    })
+}
+
+fn clock_envelope(events: Vec<Value>) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "events": events,
+        "nextPageToken": serde_json::Value::Null,
+    }))
+    .expect("envelope")
+}
+
+fn row_for<'a>(note: &'a str, needle: &str) -> &'a str {
+    note.lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("missing row {needle}:\n{note}"))
+}
+
+#[test]
+fn inherited_note_clock_stamps_meets_without_materializing_tags() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-note-clock");
+    prepare(&env);
+    write_love_tree(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&clock_envelope(vec![
+        clock_event(
+            "lunch",
+            "Lunch @love",
+            "2026-10-30T08:00:00-04:00",
+            "2026-10-30T08:30:00-04:00",
+        ),
+        clock_event(
+            "planning",
+            "Planning @love #on",
+            "2026-10-30T08:30:00-04:00",
+            "2026-10-30T09:00:00-04:00",
+        ),
+        clock_event(
+            "gym",
+            "Gym @fun #off",
+            "2026-10-30T09:00:00-04:00",
+            "2026-10-30T09:30:00-04:00",
+        ),
+        clock_event(
+            "love-now",
+            "Overlap @love",
+            "2026-10-30T11:30:00-04:00",
+            "2026-10-30T12:30:00-04:00",
+        ),
+        clock_event(
+            "job-now",
+            "Overlap @job",
+            "2026-10-30T12:00:00-04:00",
+            "2026-10-30T12:30:00-04:00",
+        ),
+    ]));
+
+    let output = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+
+    let lunch = row_for(&note, "^lunch");
+    assert!(lunch.contains("[root:: love]"), "{lunch}");
+    assert!(!lunch.contains(" #off"), "{lunch}");
+    assert!(!lunch.contains(" #on"), "{lunch}");
+    assert!(
+        note.contains("- [x] (**0800-0830** [off:: 30m]) — MEET"),
+        "{note}"
+    );
+
+    let planning = row_for(&note, "^planning");
+    assert!(planning.contains(" #on"), "{planning}");
+    assert!(
+        note.contains("- [x] (**0830-0900** [t:: 30m]) — MEET"),
+        "{note}"
+    );
+
+    let gym = row_for(&note, "^gym");
+    assert!(gym.contains(" #off"), "{gym}");
+    assert!(
+        note.contains("- [x] (**0900-0930** [off:: 30m]) — MEET"),
+        "{note}"
+    );
+
+    assert!(
+        note.contains("- [ ] (**1130-1230** [t:: 60m]) — MEET"),
+        "mixed current stays worked:\n{note}"
+    );
+
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("sync JSON");
+    let rows = report["rows"].as_array().expect("rows");
+    let lunch_json = rows
+        .iter()
+        .find(|row| row["title"] == "Lunch")
+        .expect("lunch json");
+    assert_eq!(lunch_json["off_clock"], true);
+    assert_eq!(lunch_json["untracked"], true);
+    let planning_json = rows
+        .iter()
+        .find(|row| row["title"] == "Planning")
+        .expect("planning json");
+    assert_eq!(planning_json["off_clock"], false);
+
+    let first_journal = journal_lines(&env).len();
+    let again = sync_output(&env, &fake, &["-f", "json"]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    let again_report: Value =
+        serde_json::from_str(&stdout(&again)).expect("second sync JSON");
+    assert_eq!(again_report["status"], "unchanged");
+    assert_eq!(journal_lines(&env).len(), first_journal);
+    assert!(
+        today_note(&env).contains("- [x] (**0800-0830** [off:: 30m]) — MEET"),
+        "{}",
+        today_note(&env)
+    );
+
+    fs::write(
+        env.vault().join("love.md"),
+        "---\ntype: area\noffclock: false\n---\n# Love\n",
+    )
+    .expect("flip love default");
+    let flipped = sync_output(&env, &fake, &[]);
+    assert_eq!(flipped.status.code(), Some(0), "{}", stderr(&flipped));
+    let flipped_note = today_note(&env);
+    assert!(
+        flipped_note.contains("- [x] (**0800-0830** [off:: 30m]) — MEET"),
+        "closed stamps stay after the note default changes:\n{flipped_note}"
+    );
+    assert!(
+        !row_for(&flipped_note, "^lunch").contains(" #off"),
+        "{}",
+        row_for(&flipped_note, "^lunch")
+    );
+}
+
+#[test]
+fn list_keeps_google_root_when_vault_root_differs() {
+    let env = GcalEnv::new("bob-cli-gcal-list-vault-root");
+    prepare(&env);
+    write_love_tree(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&clock_envelope(vec![clock_event(
+        "lunch",
+        "Lunch @job",
+        "2026-10-30T11:30:00-04:00",
+        "2026-10-30T12:30:00-04:00",
+    )]));
+
+    let note_path = env.vault().join("2026/20261030.md");
+    fs::write(
+        &note_path,
+        concat!(
+            "# Friday 2026-10-30\n\n## Events\n\n",
+            "- [*] #task **1130-1230** Lunch [📅](https://calendar.google.com/event?eid=lunch \"Open in Google Calendar\") [root:: love] ^lunch\n",
+            "\n## Pomodoros\n",
+        ),
+    )
+    .expect("seed vault root");
+
+    let mut list = env.command();
+    fake.install(&mut list).args(["gcal", "list", "-f", "json"]);
+    let list_out = list.output().expect("list before sync");
+    assert_eq!(list_out.status.code(), Some(0), "{}", stderr(&list_out));
+    let listed: Value =
+        serde_json::from_str(&stdout(&list_out)).expect("list JSON");
+    let lunch = listed["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Lunch")
+        .expect("lunch");
+    assert_eq!(lunch["root"]["value"], "job");
+    assert_eq!(lunch["clock"], Value::Null);
+    assert_eq!(lunch["clock_source"], "default");
+    assert_eq!(lunch["off_clock"], false);
+
+    let synced = sync_output(&env, &fake, &[]);
+    assert_eq!(synced.status.code(), Some(0), "{}", stderr(&synced));
+    let note = today_note(&env);
+    let row = row_for(&note, "^lunch");
+    assert!(row.contains("[root:: love]"), "{row}");
+    assert!(
+        note.contains("- [ ] (**1130-1230** [off:: 60m]) — MEET"),
+        "{note}"
+    );
+}

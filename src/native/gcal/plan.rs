@@ -15,6 +15,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     ops::Range,
+    path::Path,
 };
 
 use chrono::{NaiveDate, NaiveDateTime};
@@ -32,6 +33,7 @@ use crate::native::{
     clock_tags::{self, ClockKind, ClockTag},
     event_task, markdown,
     pomodoro::pomodoros_section_range,
+    pomodoro_homes::ClockLookup,
 };
 
 use super::{
@@ -82,8 +84,9 @@ pub(crate) struct PlannedOccurrence {
     /// Google's explicit clock state (title or description). Context rows
     /// strip it; task rows render only its canonical tag in the badge run.
     pub clock_tag: ClockTag,
-    /// Tag-only compatibility value; inherited clocks are added by a later
-    /// planning phase and must never be materialized in the row.
+    /// Tag-only fallback used when no clock lookup is supplied. MEET
+    /// planning and task-row reports prefer the retained line's effective
+    /// clock and must never materialize an inherited tag.
     pub off_clock: bool,
     /// Phase at sync time; `None` for context rows.
     pub link_phase: Option<LinkPhase>,
@@ -296,7 +299,32 @@ impl SyncPlan {
     }
 }
 
+#[cfg(test)]
+enum NoClock {}
+
+#[cfg(test)]
+impl ClockLookup for NoClock {
+    fn resolve_clock(
+        &mut self,
+        _residence_path: &Path,
+        _line: &str,
+    ) -> crate::native::pomodoro_homes::ClockResolution {
+        unreachable!("plan_sync never resolves clocks")
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
+    plan_with_clock::<NoClock>(input, None, None)
+}
+
+/// Same as [`plan_sync`], resolving MEET clocks from retained rows through
+/// `clock` when present. Unit tests inject an in-memory home source here.
+pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
+    input: &SyncPlanInput<'_>,
+    daily_rel: Option<&Path>,
+    mut clock: Option<&mut C>,
+) -> SyncPlan {
     let mut working = WorkingNote::new(input.contents);
     let mut plan = SyncPlan {
         contents: input.contents.to_string(),
@@ -501,7 +529,19 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
 
     working.ensure_events_heading_gap();
 
-    plan_meet_pomodoros(input, &mut working, &mut plan);
+    if let (Some(daily_rel), Some(clock)) =
+        (daily_rel, reborrow_clock(&mut clock))
+    {
+        apply_effective_clocks(clock, daily_rel, &working, &mut plan);
+    }
+
+    plan_meet_pomodoros(
+        input,
+        &mut working,
+        &mut plan,
+        daily_rel,
+        reborrow_clock(&mut clock),
+    );
 
     let (sorted, links_sorted) = super::link_order::sort_event_task_links(
         &working.finish(),
@@ -1945,12 +1985,14 @@ fn note_day(input: &SyncPlanInput<'_>) -> NaiveDate {
 }
 
 /// File each eligible Event Task under a past, running, or planned MEET.
-fn plan_meet_pomodoros(
+fn plan_meet_pomodoros<C: ClockLookup + ?Sized>(
     input: &SyncPlanInput<'_>,
     working: &mut WorkingNote,
     plan: &mut SyncPlan,
+    daily_rel: Option<&Path>,
+    clock: Option<&mut C>,
 ) {
-    let wanted = collect_wanted_links(input, working, plan);
+    let wanted = collect_wanted_links(input, working, plan, daily_rel, clock);
     if wanted.is_empty() {
         return;
     }
@@ -2178,10 +2220,12 @@ impl OpenMeetTargets {
     }
 }
 
-fn collect_wanted_links(
+fn collect_wanted_links<C: ClockLookup + ?Sized>(
     input: &SyncPlanInput<'_>,
     working: &WorkingNote,
     plan: &SyncPlan,
+    daily_rel: Option<&Path>,
+    mut clock: Option<&mut C>,
 ) -> Vec<WantedLink> {
     let mut wanted: Vec<WantedLink> = Vec::new();
     for occurrence in &input.occurrences {
@@ -2212,19 +2256,23 @@ fn collect_wanted_links(
             continue;
         }
         let refs = working.line_refs();
-        if find_row_line(
+        let Some(line_index) = find_row_line(
             &working.lines,
             event_task::events_section_range(&refs),
             &block_id,
             occurrence.url(),
             true,
             None,
-        )
-        .is_none()
-        {
+        ) else {
             continue;
-        }
-        wanted.push(wanted_link(occurrence, block_id, phase));
+        };
+        let off_clock = resolved_off_clock(
+            &mut clock,
+            daily_rel,
+            working.lines.get(line_index).map(String::as_str),
+            occurrence.off_clock,
+        );
+        wanted.push(wanted_link(occurrence, block_id, phase, off_clock));
     }
     for (calendar_id, event_id, block_id) in &plan.extra_link_wants {
         if wanted.iter().any(|link| link.block_id == *block_id) {
@@ -2237,18 +2285,16 @@ fn collect_wanted_links(
             continue;
         }
         let refs = working.line_refs();
-        if find_row_line(
+        let Some(line_index) = find_row_line(
             &working.lines,
             event_task::events_section_range(&refs),
             block_id,
             None,
             true,
             None,
-        )
-        .is_none()
-        {
+        ) else {
             continue;
-        }
+        };
         let Some(occurrence) = input.occurrences.iter().find(|occurrence| {
             occurrence.calendar_id == *calendar_id
                 && occurrence.event_id == *event_id
@@ -2258,9 +2304,90 @@ fn collect_wanted_links(
         let Some(phase) = occurrence.link_phase else {
             continue;
         };
-        wanted.push(wanted_link(occurrence, block_id.clone(), phase));
+        let off_clock = resolved_off_clock(
+            &mut clock,
+            daily_rel,
+            working.lines.get(line_index).map(String::as_str),
+            occurrence.off_clock,
+        );
+        wanted.push(wanted_link(
+            occurrence,
+            block_id.clone(),
+            phase,
+            off_clock,
+        ));
     }
     wanted
+}
+
+fn apply_effective_clocks<C: ClockLookup + ?Sized>(
+    clock: &mut C,
+    daily_rel: &Path,
+    working: &WorkingNote,
+    plan: &mut SyncPlan,
+) {
+    let mut resolve = |block_id: &str, url: Option<&str>| -> Option<bool> {
+        let refs = working.line_refs();
+        let index = find_row_line(
+            &working.lines,
+            event_task::events_section_range(&refs),
+            block_id,
+            url,
+            true,
+            None,
+        )?;
+        let line = working.lines.get(index)?;
+        Some(clock.resolve_clock(daily_rel, line).off_clock)
+    };
+    for row in &mut plan.rows_added {
+        if row.row_kind != "task" {
+            continue;
+        }
+        if let Some(off_clock) = resolve(&row.block_id, row.url.as_deref()) {
+            row.off_clock = off_clock;
+        }
+    }
+    for row in &mut plan.rows_adopted {
+        if row.row_kind != "task" {
+            continue;
+        }
+        if let Some(off_clock) = resolve(&row.block_id, row.url.as_deref()) {
+            row.off_clock = off_clock;
+        }
+    }
+    for row in &mut plan.rows_updated {
+        if row.row_kind != "task" {
+            continue;
+        }
+        if let Some(off_clock) = resolve(&row.block_id, row.url.as_deref()) {
+            row.off_clock = off_clock;
+        }
+    }
+    for row in &mut plan.rows_upgraded {
+        if let Some(off_clock) = resolve(&row.block_id, row.url.as_deref()) {
+            row.off_clock = off_clock;
+        }
+    }
+}
+
+fn reborrow_clock<'a, C: ClockLookup + ?Sized>(
+    clock: &'a mut Option<&mut C>,
+) -> Option<&'a mut C> {
+    clock.as_mut().map(|clock| &mut **clock)
+}
+
+fn resolved_off_clock<C: ClockLookup + ?Sized>(
+    clock: &mut Option<&mut C>,
+    daily_rel: Option<&Path>,
+    line: Option<&str>,
+    fallback: bool,
+) -> bool {
+    match (reborrow_clock(clock), daily_rel, line) {
+        (Some(clock), Some(daily_rel), Some(line)) => {
+            clock.resolve_clock(daily_rel, line).off_clock
+        }
+        _ => fallback,
+    }
 }
 
 /// One MEET filing link: the buffered span is what the event occupies,
@@ -2270,6 +2397,7 @@ fn wanted_link(
     occurrence: &PlannedOccurrence,
     block_id: String,
     phase: LinkPhase,
+    off_clock: bool,
 ) -> WantedLink {
     let (start_min, end_min) = event_task::buffered_timeline_range(
         occurrence.start_min,
@@ -2284,7 +2412,7 @@ fn wanted_link(
         start_min,
         end_min,
         title: occurrence.title.clone(),
-        off_clock: occurrence.off_clock,
+        off_clock,
     }
 }
 

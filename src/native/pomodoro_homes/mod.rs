@@ -12,8 +12,8 @@ mod session;
 mod tests;
 
 pub(crate) use clock::{
-    effective_clock, off_clock_via_label, via_clock_note, ClockResolution,
-    ClockSource,
+    effective_clock, off_clock_via_label, via_clock_note, ClockLookup,
+    ClockResolution, ClockSource,
 };
 pub(crate) use facts::{NoteFacts, NoteKind, NoteOffClock, NoteTheme};
 pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};

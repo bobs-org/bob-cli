@@ -1,6 +1,7 @@
 use super::*;
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime, TimeZone};
 use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::native::clock_tags::{ClockKind, ClockTag};
 use crate::native::gcal::{
@@ -12,6 +13,8 @@ use crate::native::gcal::{
     root::RootSourceKind,
     stamp,
 };
+use crate::native::pomodoro_homes::{HomeResolver, IndexedHomeSource};
+use crate::native::vault_links::NoteIndex;
 
 const ACCOUNT: &str = "you@example.com";
 
@@ -180,6 +183,94 @@ fn with_root(
     occurrence.root_kind = kind;
     occurrence.needs_type = needs_type;
     occurrence
+}
+
+fn with_clock_tag(
+    mut occurrence: PlannedOccurrence,
+    clock_tag: ClockTag,
+) -> PlannedOccurrence {
+    occurrence.clock_tag = clock_tag.clone();
+    occurrence.off_clock = clock_tag.explicit_off();
+    let badges = render::badge_text(
+        occurrence.html_link.as_deref(),
+        None,
+        None,
+        occurrence.task.then_some(&occurrence.clock_tag),
+        occurrence.buffer,
+    );
+    occurrence
+        .spans
+        .insert("badges".to_string(), span_hash(&badges));
+    occurrence
+}
+
+struct HomeFixture {
+    notes: BTreeMap<PathBuf, String>,
+    index: NoteIndex,
+}
+
+impl HomeFixture {
+    fn love_tree() -> Self {
+        let mut notes = BTreeMap::new();
+        notes.insert(
+            PathBuf::from("love.md"),
+            "---\ntype: [[area]]\noffclock: true\n---\n# Love\n".to_string(),
+        );
+        notes.insert(
+            PathBuf::from("abby.md"),
+            "---\ntype: [[area]]\nparent: [[love]]\n---\n# Abby\n".to_string(),
+        );
+        notes.insert(
+            PathBuf::from("fun.md"),
+            "---\ntype: [[area]]\nparent: [[love]]\noffclock: false\n---\n# Fun\n"
+                .to_string(),
+        );
+        notes.insert(
+            PathBuf::from("job.md"),
+            "---\ntype: [[area]]\n---\n# Job\n".to_string(),
+        );
+        notes.insert(
+            PathBuf::from("invalid.md"),
+            "---\ntype: [[area]]\nparent: [[love]]\noffclock: maybe\n---\n# Invalid\n"
+                .to_string(),
+        );
+        notes.insert(PathBuf::from("2026/20261030.md"), "# Day\n".to_string());
+        let index = NoteIndex::from_paths(notes.keys().cloned());
+        Self { notes, index }
+    }
+
+    fn resolver(&self) -> HomeResolver<IndexedHomeSource<'_>> {
+        HomeResolver::new(IndexedHomeSource::new(&self.index, &self.notes))
+    }
+}
+
+fn daily_rel() -> &'static Path {
+    Path::new("2026/20261030.md")
+}
+
+fn plan_clocked(
+    contents: &str,
+    occurrences: Vec<PlannedOccurrence>,
+    journal: &BTreeMap<(String, String), OccurrenceState>,
+    is_today: bool,
+    resolver: &mut HomeResolver<IndexedHomeSource<'_>>,
+) -> SyncPlan {
+    plan_with_clock(
+        &SyncPlanInput {
+            contents,
+            is_today,
+            occurrences,
+            journal,
+            day_string: "2026-10-30".to_string(),
+            today: note_day(),
+            lifecycle: Vec::new(),
+            series_roots: &BTreeMap::new(),
+            account: ACCOUNT,
+            now: now_at(12, 0),
+        },
+        Some(daily_rel()),
+        Some(resolver),
+    )
 }
 
 fn run_with_journal(
@@ -2506,4 +2597,387 @@ fn root_reroute_is_idempotent() {
     let again = run_with_journal(&plan.contents, vec![occ], &journal);
     assert!(!again.changed);
     assert!(again.rows_updated.is_empty());
+}
+
+#[test]
+fn untagged_love_event_creates_an_off_clock_cluster_without_a_tag() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let occ = with_phase(
+        with_root(
+            occurrence("lunch", "Lunch", true, "0800-0830", 480),
+            "love",
+            "@love",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Past,
+    );
+    let plan = plan_clocked(
+        empty_ledger(),
+        vec![occ],
+        &BTreeMap::new(),
+        false,
+        &mut resolver,
+    );
+    let row = row_line(&plan.contents, &plan.rows_added[0].block_id);
+    assert!(!row.contains(" #off"), "{row}");
+    assert!(!row.contains(" #on"), "{row}");
+    assert!(row.contains("[root:: love]"), "{row}");
+    assert!(
+        plan.contents
+            .contains("- [x] (**0800-0830** [off:: 30m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(plan.rows_added[0].off_clock);
+}
+
+#[test]
+fn on_tag_keeps_a_love_event_worked() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let occ = with_phase(
+        with_clock_tag(
+            with_root(
+                occurrence("planning", "Planning", true, "0800-0830", 480),
+                "love",
+                "@love",
+                RootSourceKind::Token,
+                false,
+            ),
+            ClockTag::On,
+        ),
+        LinkPhase::Past,
+    );
+    let plan = plan_clocked(
+        empty_ledger(),
+        vec![occ],
+        &BTreeMap::new(),
+        false,
+        &mut resolver,
+    );
+    let row = row_line(&plan.contents, &plan.rows_added[0].block_id);
+    assert!(row.contains(" #on"), "{row}");
+    assert!(
+        plan.contents
+            .contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(!plan.rows_added[0].off_clock);
+}
+
+#[test]
+fn explicit_off_beats_a_false_note() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let occ = with_phase(
+        with_clock_tag(
+            with_root(
+                occurrence("gym", "Gym", true, "0800-0830", 480),
+                "fun",
+                "@fun",
+                RootSourceKind::Token,
+                false,
+            ),
+            ClockTag::Off {
+                deprecated: Vec::new(),
+            },
+        ),
+        LinkPhase::Past,
+    );
+    let plan = plan_clocked(
+        empty_ledger(),
+        vec![occ],
+        &BTreeMap::new(),
+        false,
+        &mut resolver,
+    );
+    let row = row_line(&plan.contents, &plan.rows_added[0].block_id);
+    assert!(row.contains(" #off"), "{row}");
+    assert!(
+        plan.contents
+            .contains("- [x] (**0800-0830** [off:: 30m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn mixed_current_events_stamp_worked() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let love = with_phase(
+        with_root(
+            occurrence("lunch", "Lunch", true, "1130-1200", 690),
+            "love",
+            "@love",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Current,
+    );
+    let job = with_phase(
+        with_root(
+            occurrence("standup", "Standup", true, "1200-1230", 720),
+            "job",
+            "@job",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Current,
+    );
+    let plan = plan_clocked(
+        empty_ledger(),
+        vec![love, job],
+        &BTreeMap::new(),
+        true,
+        &mut resolver,
+    );
+    assert!(
+        plan.contents
+            .contains("- [ ] (**1130-1230** [t:: 60m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(plan.rows_added.iter().any(|row| row.off_clock));
+    assert!(plan.rows_added.iter().any(|row| !row.off_clock));
+}
+
+#[test]
+fn inherited_untagged_row_never_reports_kept_off_clock() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let occ = with_root(
+        occurrence("lunch", "Lunch", true, "0900-0930", 540),
+        "love",
+        "@love",
+        RootSourceKind::Token,
+        false,
+    );
+    let first = plan_clocked(
+        empty_ledger(),
+        vec![occ.clone()],
+        &BTreeMap::new(),
+        false,
+        &mut resolver,
+    );
+    let journal = journal_from_added(&first);
+    let again = plan_clocked(
+        &first.contents,
+        vec![occ],
+        &journal,
+        false,
+        &mut resolver,
+    );
+    assert!(
+        again
+            .kept
+            .iter()
+            .all(|notice| notice.flag != "kept_off_clock"),
+        "{:?}",
+        again.kept
+    );
+}
+
+#[test]
+fn replan_uses_changed_daily_note_bytes() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let occ = with_phase(
+        with_root(
+            occurrence("lunch", "Lunch", true, "1130-1230", 690),
+            "love",
+            "@love",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Current,
+    );
+    let love_note = concat!(
+        "## Events\n\n",
+        "- [*] #task **1130-1230** Lunch [📅](https://calendar.google.com/event?eid=lunch \"Open in Google Calendar\") [root:: love] ^lunch\n",
+        "\n## Pomodoros\n",
+    );
+    let (key, mut state) = journal_task(
+        "lunch",
+        "lunch",
+        Some("https://calendar.google.com/event?eid=lunch"),
+        false,
+    );
+    if let Some(record) = state.row.as_mut() {
+        record.root = Some("love".to_string());
+        record.source = Some("@love".to_string());
+        record.spans = occ.spans.clone();
+    }
+    let journal = BTreeMap::from([(key, state)]);
+    let off = plan_clocked(
+        love_note,
+        vec![occ.clone()],
+        &journal,
+        true,
+        &mut resolver,
+    );
+    assert!(
+        off.contents
+            .contains("- [ ] (**1130-1230** [off:: 60m]) — MEET"),
+        "{}",
+        off.contents
+    );
+
+    let on_note = love_note.replace("Lunch [📅]", "Lunch #on [📅]");
+    let worked =
+        plan_clocked(&on_note, vec![occ], &journal, true, &mut resolver);
+    assert!(
+        worked
+            .contents
+            .contains("- [ ] (**1130-1230** [t:: 60m]) — MEET"),
+        "{}",
+        worked.contents
+    );
+}
+
+#[test]
+fn vault_edited_root_controls_the_filed_clock() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let occ = with_phase(
+        with_root(
+            occurrence("lunch", "Lunch", true, "1130-1230", 690),
+            "job",
+            "@job",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Current,
+    );
+    let note = concat!(
+        "## Events\n\n",
+        "- [*] #task **1130-1230** Lunch [📅](https://calendar.google.com/event?eid=lunch \"Open in Google Calendar\") [root:: love] ^lunch\n",
+        "\n## Pomodoros\n",
+    );
+    let (key, mut state) = journal_task(
+        "lunch",
+        "lunch",
+        Some("https://calendar.google.com/event?eid=lunch"),
+        false,
+    );
+    if let Some(record) = state.row.as_mut() {
+        record.root = Some("job".to_string());
+        record.source = Some("@job".to_string());
+        record.spans = occ.spans.clone();
+    }
+    let journal = BTreeMap::from([(key, state)]);
+    let plan = plan_clocked(note, vec![occ], &journal, true, &mut resolver);
+    assert!(
+        plan.contents
+            .contains("- [ ] (**1130-1230** [off:: 60m]) — MEET"),
+        "kept vault root love must file off-clock:\n{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn abby_inherits_love_and_invalid_nearer_value_stays_worked() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let abby = with_phase(
+        with_root(
+            occurrence("swings", "Swings", true, "0800-0830", 480),
+            "abby",
+            "@abby",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Past,
+    );
+    let invalid = with_phase(
+        with_root(
+            occurrence("maybe", "Maybe", true, "0830-0900", 510),
+            "invalid",
+            "@invalid",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Past,
+    );
+    let plan = plan_clocked(
+        empty_ledger(),
+        vec![abby, invalid],
+        &BTreeMap::new(),
+        false,
+        &mut resolver,
+    );
+    assert!(
+        plan.contents
+            .contains("- [x] (**0800-0830** [off:: 30m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+    assert!(
+        plan.contents
+            .contains("- [x] (**0830-0900** [t:: 30m]) — MEET"),
+        "{}",
+        plan.contents
+    );
+}
+
+#[test]
+fn context_upgrade_resolves_the_upgraded_line() {
+    let fixture = HomeFixture::love_tree();
+    let mut resolver = fixture.resolver();
+    let occ = with_phase(
+        with_root(
+            occurrence("lunch", "Lunch", true, "0800-0830", 480),
+            "love",
+            "@love",
+            RootSourceKind::Token,
+            false,
+        ),
+        LinkPhase::Past,
+    );
+    let input = concat!(
+        "## Events\n\n",
+        "- **0800-0830** Lunch · *maybe* [📅](https://calendar.google.com/event?eid=lunch)\n",
+        "\n## Pomodoros\n",
+    );
+    let ts = FixedOffset::east_opt(0)
+        .expect("offset")
+        .with_ymd_and_hms(2026, 10, 30, 12, 0, 0)
+        .single()
+        .expect("ts");
+    let mut journal = BTreeMap::new();
+    journal.insert(
+        (occurrence_key("primary", "lunch"), "2026-10-30".to_string()),
+        OccurrenceState {
+            row: Some(RowRecord {
+                block_id: String::new(),
+                row_kind: "context".to_string(),
+                spans: occ.spans.clone(),
+                root: None,
+                source: None,
+                series_id: None,
+                url: occ.html_link.clone(),
+                description: DescriptionState::Absent,
+                ts,
+                host: "test".to_string(),
+                path: "2026/20261030.md".to_string(),
+            }),
+            link: false,
+            gone: false,
+            flags: HashSet::new(),
+        },
+    );
+    let plan = plan_clocked(input, vec![occ], &journal, false, &mut resolver);
+    assert_eq!(plan.rows_upgraded.len(), 1);
+    assert!(plan.rows_upgraded[0].off_clock);
+    let row = row_line(&plan.contents, &plan.rows_upgraded[0].block_id);
+    assert!(!row.contains(" #off"), "{row}");
+    assert!(
+        plan.contents
+            .contains("- [x] (**0800-0830** [off:: 30m]) — MEET"),
+        "{}",
+        plan.contents
+    );
 }

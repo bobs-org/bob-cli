@@ -13,6 +13,7 @@ use serde_json::json;
 use super::{
     account::resolve_command,
     classify::{self, DayWindow, Inclusion},
+    clock,
     config::GcalConfig,
     gog::Gog,
     journal,
@@ -20,7 +21,10 @@ use super::{
     root::{self, EventRoot},
     GcalError,
 };
-use crate::native::env as bob_env;
+use crate::native::{
+    env as bob_env,
+    pomodoro_homes::{ClockResolution, HomeResolver, HomeSource},
+};
 
 /// One classified event with its valid root and display fields.
 pub(crate) struct SnapshotEvent {
@@ -31,6 +35,11 @@ pub(crate) struct SnapshotEvent {
     pub calendar_name: String,
     pub time: String,
     pub sort_at: DateTime<FixedOffset>,
+    /// Effective clock from Google's explicit tag plus the chosen root.
+    pub clock: ClockResolution,
+    /// Untagged chosen-root walk, for a later phase's drop advice.
+    #[allow(dead_code)]
+    pub root_only_clock: ClockResolution,
 }
 
 /// A complete snapshot for one local day.
@@ -49,10 +58,11 @@ pub(crate) struct DaySnapshot {
 
 /// Fetch, classify, and root every event for `day`. A failed calendar
 /// fails the whole snapshot.
-pub(crate) fn fetch_day(
+pub(crate) fn fetch_day<S: HomeSource>(
     vault: PathBuf,
     config: &GcalConfig,
     day: NaiveDate,
+    resolver: &mut HomeResolver<S>,
 ) -> Result<DaySnapshot, GcalError> {
     let timezone = bob_env::configured_timezone();
     let window = DayWindow::new(day, timezone)?;
@@ -89,6 +99,7 @@ pub(crate) fn fetch_day(
                         .get(&(event.key.calendar_id.clone(), series.clone()))
                 });
                 Some(root::choose_event_root(
+                    resolver,
                     &vault,
                     &daily_rel,
                     &event,
@@ -105,6 +116,15 @@ pub(crate) fn fetch_day(
                 .unwrap_or_else(|| event.title.clone());
             let time = event_time(&event, &window);
             let sort_at = window.effective_start(&event);
+            let chosen_root =
+                root.as_ref().and_then(|chosen| chosen.value.as_deref());
+            let (clock, root_only_clock) = clock::resolve_listed_clock(
+                resolver,
+                &daily_rel,
+                chosen_root,
+                &event.clock_tag,
+                inclusion == Inclusion::Task,
+            );
             let mut event = event;
             event.title = title;
             events.push(SnapshotEvent {
@@ -114,6 +134,8 @@ pub(crate) fn fetch_day(
                 calendar_name: calendar_name.clone(),
                 time,
                 sort_at,
+                clock,
+                root_only_clock,
             });
         }
     }
