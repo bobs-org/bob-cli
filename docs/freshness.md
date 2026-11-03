@@ -191,9 +191,10 @@ falls back to the uncounted old stamper. The event table:
   streak in the same write so a Ready count cannot leak into a
   higher rung. `Unblock` to Ready preserves it.
 
-Due WIP and Next rows can `decide` at their rung limit. With the rung-aware
-card, a single keep opens the card without stamping; batch keeps skip those
-rows so they remain due for an individual decision.
+Due WIP (Pending) and Next rows can `decide` when their keep count has
+already reached the rung's limit. The next individual keep opens the decay
+card without stamping; batch keeps skip these rows, leaving them due for
+an individual decision. The keep that reaches the limit still stamps.
 
 What Rust guarantees today:
 

@@ -1311,10 +1311,11 @@ The JS port counts the same set without reading note bodies.
 ### 12.5 Reporting model
 
 Capture results are unversioned: they carry no `schema_version`. The
-successor fields are additive. Dry-run JSON equals real-run JSON with the same
-flags (including `--pull-in`). Serde omits `not_linked` when the row
-was linked; clients must not expect `"not_linked": null`. `breaker` and
-`not_planned_today` are never emitted again (clients keep their copy
+successor fields are additive. With the same initial vault state and
+selection (including `--pull-in`), dry runs plan the same successor changes
+as real runs; `dry_run` and preview messages differ. JSON omits `not_linked`
+when the row was linked; clients must not expect `"not_linked": null`.
+`breaker` and `not_planned_today` are never emitted again (clients keep their copy
 for older bobs). CLI selection is `-p, --pull-in` (§12.14).
 
 Both `task_complete` and `pomodoro_close` objects carry the same three
@@ -1489,9 +1490,12 @@ has one entry for each offered group of every kind, with bob-authored
 `keep_moving`, or `relation`. Existing project and keep-moving groups
 keep their keys and add `copy`; hand-off and project-finished groups
 have no `folded`. A relation entry has `group`, an `after` object
-(`key`, `note_path`, `block_id`, `text`), `label`, `event`, folded
-counts (`hidden`, `blocked`, `already_started`,
-`waits_for`), and `copy`. `pull_in.copy` is `{title, capsule, glyph}`.
+(`key`, `note_path`, `block_id`, `text`), `label`, `event`, and `copy`.
+Its optional `folded` object counts held rows: `hidden`, `already_planned`,
+`blocked`, and `already_started`; `waits_for` counts their unreleased targets.
+`sub_projects` is always 0 for relations. `folded` is omitted when all
+counts are zero; within it, zero `blocked`, `already_started`, and
+`waits_for` counts are omitted. `pull_in.copy` is `{title, capsule, glyph}`.
 The strings are specified in §12.18 and are the source for every
 client.
 
@@ -1547,8 +1551,8 @@ Present on **every** successful capture JSON (dry-run too):
   bob-authored `copy: {title, why?, tag?, fold?, glyph}`. Project groups
   carry folded counts (`hidden`, `already_planned`, `sub_projects`);
   keep-moving groups also carry `blocked` and `scheduled` (§12.15);
-  relation groups carry `hidden`, `blocked`, `already_started`, and
-  `waits_for` (§12.18). Hand-off and project-finished groups have no
+  relation groups carry the optional held counts described above (§12.18).
+  Hand-off and project-finished groups have no
   `folded` field. The example relation entry is
   `{"group": "relation", "after": {"key": "agents.md#^implement",
   "note_path": "agents.md", "block_id": "implement",

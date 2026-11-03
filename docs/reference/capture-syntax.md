@@ -1028,14 +1028,16 @@ Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-l
 ### `x*<P>` {#x-park-links}
 
 Park those links: worked tasks become or remain Pending (`[/]`) without
-carrying forward. Empty `*` parks every remaining numbered link (`x*`).
+carrying their links into the next session. Empty `*` (`x*`) parks the
+remaining numbered links, except Event Tasks whose meeting has not started.
 
 ```bash
 bob capture --dry-run 'x*'
 ```
 
-Parking can offer `starts after` successors when the task has no live link
-left today. Offers link only when selected with `--pull-in`.
+When no link to the parked task remains under today's open Pomodoros,
+tasks whose `starts after` relation points to it can be offered as
+successors. Offers link only when selected with `--pull-in`.
 
 Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-links-outcome).
 
@@ -1294,8 +1296,9 @@ Contract: [Task Link toggle](../capture.md#task-link-toggle).
 
 Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and
 own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or
-unlink it when linked (lane unchanged). Removing Pending's last live link
-today can offer `starts after` successors; removing Next's link cannot.
+unlink it when linked (lane unchanged). Removing a Pending task's last link
+under today's open Pomodoros can offer its `starts after` successors;
+removing a Next task's link cannot.
 
 ```bash
 bob capture '@work+outline!'

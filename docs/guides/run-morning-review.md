@@ -72,10 +72,11 @@ On the row `]s` just landed on, pick one explicit answer:
   never leaves that group; `Ctrl+Alt+F` can cross into the next tier.
   Checklist rows are never stamped.
 
-A counted keep asks why the task stays on its rung, including Pending and
-Next. Enter an optional reason; blank Enter logs `🤷 no reason given` in
-the Rotten Log, and Esc cancels. At the keep limit, answer the decay card:
-Enter accepts the displayed step; Alt+F stays and restarts the count. See
+A counted keep asks why the task stays in its lane or priority level.
+Enter a reason; blank Enter logs `🤷 no reason given` in the Rotten Log,
+and Esc cancels. On a decay card, Enter accepts the recommendation. To keep
+the rung and restart its count, press Alt+F, optionally type a reason, then
+Enter. See
 [Task decay](../freshness.md#2a-keep-streaks-and-task-decay).
 
 An inbox task asks where it goes before a non-closing answer writes. After

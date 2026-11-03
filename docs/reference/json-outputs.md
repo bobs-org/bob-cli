@@ -135,20 +135,22 @@ These offers do not require a dependency on the completed task. They join
 the batch's `pull_in` choices and link only when picked.
 See [keep-moving offers](../task-dependencies.md#1215-keep-moving-offers-leaf-projects).
 
-Relation successors use the same explicit selection flow when a managed
-gesture completes a task or parks it Pending with no live link left today.
-The additive fields are:
+Relation successors are tasks whose configured successor relation (such as
+`starts after`) points to a task just completed or parked Pending with no
+link left under today's open Pomodoros. They use the same explicit selection
+flow. The additive fields are:
 
 | Location | Fields |
 | --- | --- |
-| `task_complete`, `pomodoro_close`, nested `relation_completes[].task_complete`, or a Pending-unlink capture item | `relation_successors[]`, `relation_held[]`, and `relation_check` (`checked` or `unavailable`); omitted when inapplicable |
-| An offered row | `relation: {label, key, event, after}`; `event` is `parked` or `done`, and `after[]` identifies the triggering tasks with `note_path`, `block_id`, and `text` |
+| `task_complete`, `pomodoro_close`, nested `relation_completes[].task_complete`, or a Pending-unlink capture item | `relation_successors[]` and `relation_held[]` are omitted when empty; `relation_check` (`checked` or `unavailable`) is present only when the lookup ran |
+| An offered row with a relation reason | `relation: {label, key, event, after}`; `event` is `parked` or `done`, and `after[]` identifies the triggering tasks with `note_path`, `block_id`, and `text`. A relation-group row also has `offer.after`, a `note.md#^id` string |
 | A held relation row | Task identity, the relation, and `reason`: `already_planned`, `already_started`, `blocked`, `hidden`, or `waits_for` |
 | Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; optional `groups[]` and `copy: {title, capsule, glyph}` |
-| `pull_in.groups[]` | `group`, optional `project`, and `copy: {title, why?, tag?, fold?, glyph}`; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, `event`, and folded counts |
+| `pull_in.groups[]` | `group`, optional `project`, and `copy: {title, why?, tag?, fold?, glyph}`; relation groups also carry `after: {key, note_path, block_id, text}`, `label`, `event`, and optional `folded` counts |
 
-Group order follows offer numbering across hand-offs, projects, finished
-projects, keep-moving, and relations. Clients use Bob's supplied copy.
+Group order follows offer numbering: hand-offs, relations, projects,
+finished projects, then keep-moving. Clients use Bob's supplied display text
+in `copy`.
 `offer_count` counts selectable rows, including relation successors;
 held rows are not selectable. Empty `groups` and absent copy are omitted.
 The flat `offers` list appears on a `pull_in_choice_required` refusal;
@@ -157,7 +159,7 @@ successful results keep the rows on their owning capture items.
 These are the final batch's offers: later items can remove an offer by
 linking, completing, blocking, or dropping its task, or by re-linking a
 parked predecessor. A picked relation successor appears in `task_blocks`
-with role `relation_successor`; its added Pomodoro line has
+with `relation_successor` in `roles[]`; its added Pomodoro line has
 `reason: "relation"`. See the
 [successor JSON contract](../task-dependencies.md#125-reporting-model)
 and [relation events](../task-dependencies.md#1218-relation-successors-starts-after).
