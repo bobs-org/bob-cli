@@ -3101,7 +3101,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 6);
+        assert_eq!(value["grammar"], 7);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3118,6 +3118,34 @@ mod tests {
         assert_eq!(value["diagnostics"].as_array().expect("array").len(), 0);
         assert!(value.get("items").is_none(), "{value}");
         assert!(value.get("global_destination").is_none(), "{value}");
+    }
+
+    #[test]
+    fn lone_route_reports_note_pull_mode() {
+        // NP27: `bob capture-parse -f json -- @sase` reports mode
+        // `note_pull` with no needs, the route, and the ordinary list
+        // summary (`kind: "tasks"`, `count: 0`) under grammar 7. A lone
+        // header keeps its task-list metadata so clients can still offer
+        // "start a list" from it.
+        let value = json("@sase");
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["grammar"], 7);
+        assert_eq!(value["mode"], "note_pull");
+        assert_eq!(value["route"], "sase");
+        assert!(value["section"].is_null());
+        assert!(value["block_id"].is_null());
+        assert_eq!(value["needs"].as_array().expect("needs").len(), 0);
+        assert_eq!(value["diagnostics"].as_array().expect("array").len(), 0);
+        assert_eq!(value["list"]["kind"], "tasks");
+        assert_eq!(value["list"]["count"], 0);
+        assert_eq!(value["list"]["header_line"], 1);
+        assert_eq!(
+            value["items"].as_array().expect("items").len(),
+            1,
+            "{value}"
+        );
+        assert_eq!(value["items"][0]["mode"], "note_pull", "{value}");
+        assert_eq!(value["items"][0]["list"]["count"], 0, "{value}");
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub(super) enum TaskBlockRole {
     KeepMoving,
     RelationSuccessor,
     RelationSource,
+    NotePull,
 }
 
 /// One sub-bullet touch of a parent task. `line` is the 0-based parent

@@ -85,8 +85,8 @@ pub(crate) type OfferOrderKey = (u8, (usize, usize), u8, PathBuf, usize);
 
 /// Offer group (`docs/task-dependencies.md` §12.2 ORDER).
 /// Precedence is `hand_off > relation > project > project_finished >
-/// keep_moving`; the numeric ranks preserve the old relative order when
-/// no relation offers exist.
+/// keep_moving > note_pull`; the numeric ranks preserve the old relative
+/// order when no relation offers exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OfferGroup {
     HandOff,
@@ -94,6 +94,7 @@ pub(crate) enum OfferGroup {
     Project,
     ProjectFinished,
     KeepMoving,
+    NotePull,
 }
 
 impl OfferGroup {
@@ -104,9 +105,15 @@ impl OfferGroup {
             Self::Project => "project",
             Self::ProjectFinished => "project_finished",
             Self::KeepMoving => "keep_moving",
+            Self::NotePull => "note_pull",
         }
     }
 }
+
+/// Trigger for note-pull offers (`docs/task-dependencies.md` §12.20): a
+/// lone `@route` capture offering that note's eligible residents. Rows
+/// have no predecessor.
+pub(crate) const NOTE_PULL_TRIGGER: &str = "note_pull";
 
 /// Relation second-reason or winning-group metadata kept on internal
 /// rows and offers. Capture serializers ignore these fields until the
@@ -1416,7 +1423,7 @@ fn integrate_relation_offers(
                 let existing_group =
                     verdicts[position].offer.as_ref().map(|offer| offer.group);
                 match existing_group {
-                    Some(OfferGroup::HandOff) => {
+                    Some(OfferGroup::HandOff | OfferGroup::NotePull) => {
                         verdicts[position].relation = Some(info);
                     }
                     Some(
@@ -2376,7 +2383,8 @@ fn offer_order_key(
         Some(OfferGroup::Project) => 2,
         Some(OfferGroup::ProjectFinished) => 3,
         Some(OfferGroup::KeepMoving) => 4,
-        None => 5,
+        Some(OfferGroup::NotePull) => 5,
+        None => 6,
     };
     let is_relation = verdict
         .offer

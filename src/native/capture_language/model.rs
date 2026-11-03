@@ -168,6 +168,13 @@ pub(crate) enum CaptureKind {
         block_id: String,
         quoted: bool,
     },
+    /// A lone `@route` task-list header with no section, bullets, or other
+    /// markers: pull that note's eligible tasks through the Pull-In
+    /// protocol (`docs/task-dependencies.md` §12.20). The wrapped route is
+    /// already lower-cased, matching task capture resolution.
+    NotePull {
+        route: String,
+    },
     /// A whole-item `=/` Pomodoro split: split a merged Pomodoro's types
     /// into planned entries. The item must contain only the split token
     /// and have exactly one physical line; any extra text, markers, or

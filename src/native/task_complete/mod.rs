@@ -41,7 +41,7 @@ pub(crate) use successors::{
     is_inbox_note, live_link_keys, plan_successors, ClosingContext,
     ClosingContinuation, CompletedTask, DayView, OfferGroup, OfferOrderKey,
     OfferReport, ProjectFold, SuccessorInput, SuccessorPlan,
-    SuccessorSelection, UnblockedRow,
+    SuccessorSelection, UnblockedRow, NOTE_PULL_TRIGGER,
 };
 pub(crate) use tree::{
     complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,

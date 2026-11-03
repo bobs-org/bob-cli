@@ -136,9 +136,11 @@ fn execution_section_list_bullet_kind() {
 
 #[test]
 fn execution_list_refusals_carry_stable_codes() {
+    // A lone `@route` task header is now a note pull, including with an
+    // empty placeholder bullet (`@dev\n- ` has no real bullets); only a
+    // section header alone still refuses `empty_list` (NP25).
     for (raw, code) in [
-        ("@dev", "empty_list"),
-        ("@dev\n- ", "empty_list"),
+        ("@dev#Ideas", "empty_list"),
         ("@dev s:3\n- Call the bank", "list_header_marker"),
         ("@dev\n- A @cash", "list_bullet_marker"),
         ("@dev\n- A +query", "list_bullet_marker"),
@@ -167,6 +169,82 @@ fn execution_list_refusals_carry_stable_codes() {
     assert_eq!(dup.code, Some("duplicate_project_task_id"));
     assert!(dup.message.contains("line 2"));
     assert!(dup.message.contains("line 3"));
+}
+
+#[test]
+fn execution_lone_route_is_note_pull() {
+    // NP24 pins the adjacent grammar: a header plus bullets stays a list.
+    let list = parse_draft("@sase\n- Call the bank").expect("list parses");
+    assert!(matches!(list.items[0].parsed.kind, CaptureKind::Task));
+    // A lone task-list header is a note pull (NP26–NP27 grammar): route
+    // resolution matches task capture (ASCII, lower-cased, no aliases).
+    for (raw, route) in [
+        ("@sase", "sase"),
+        ("@SASE", "sase"),
+        ("@dev-2_x", "dev-2_x"),
+    ] {
+        let draft = parse_draft(raw).expect("lone header parses");
+        assert_eq!(draft.items.len(), 1, "{raw}");
+        let item = &draft.items[0];
+        assert_eq!(
+            item.parsed.kind,
+            CaptureKind::NotePull {
+                route: route.to_string()
+            },
+            "{raw}"
+        );
+        assert_eq!(item.parsed.route.as_deref(), Some(route), "{raw}");
+        assert!(item.parsed.body.is_empty(), "{raw}");
+        assert!(item.parsed.sub_bullets.is_empty(), "{raw}");
+        let list = item.list.clone().expect("list context");
+        assert_eq!(list.route, route, "{raw}");
+        assert_eq!(list.section, None, "{raw}");
+        assert_eq!(list.count, 0, "{raw}");
+    }
+    // Byte spans cover the raw header line.
+    let draft = parse_draft("@sase  ").expect("padded header parses");
+    let item = &draft.items[0];
+    assert!(matches!(item.parsed.kind, CaptureKind::NotePull { .. }));
+    let list = item.list.clone().expect("list context");
+    assert_eq!((list.header_start, list.header_end), (0, 7));
+}
+
+#[test]
+fn execution_consecutive_headers_split_note_pull_and_list() {
+    // NP26: `@dev` directly followed by `@cash` / `- b` judges each item
+    // alone — the first header is a note pull, the second a list.
+    let draft = parse_draft("@dev\n@cash\n- b").expect("headers parse");
+    assert_eq!(draft.items.len(), 2);
+    assert!(matches!(
+        draft.items[0].parsed.kind,
+        CaptureKind::NotePull { .. }
+    ));
+    assert_eq!(draft.items[0].list.clone().expect("list").count, 0);
+    assert!(matches!(draft.items[1].parsed.kind, CaptureKind::Task));
+    assert_eq!(draft.items[1].list.clone().expect("list").count, 1);
+}
+
+#[test]
+fn execution_lone_header_markers_keep_previous_meaning() {
+    // Any other marker on the line means the header is not a lone route:
+    // existing-task, toggle, project, declaration, section, and forced
+    // destinations retain their previous behavior.
+    for raw in [
+        "@dev:abc",
+        "@dev+abc",
+        "@dev^abc@ New project",
+        "@@dev\nCall the bank",
+        "@dev#Ideas\n- x",
+    ] {
+        let draft = parse_draft(raw).expect("marker parses: {raw}");
+        assert!(
+            !matches!(draft.items[0].parsed.kind, CaptureKind::NotePull { .. }),
+            "{raw}"
+        );
+    }
+    // A section header alone still refuses `empty_list` (NP25).
+    let error = parse_draft("@dev#Ideas").unwrap_err();
+    assert_eq!(error.code, Some("empty_list"));
 }
 
 #[test]
@@ -208,12 +286,41 @@ fn editor_list_nested_children_shift_up_one_level() {
 
 #[test]
 fn editor_empty_list_needs_list_item() {
-    for raw in ["@dev", "@dev#Ideas"] {
+    // A section header alone still refuses `empty_list` (NP25); a lone
+    // task header is a note pull (§12.20) and no longer lands here.
+    let parse = editor("@dev#Ideas");
+    assert_eq!(parse.mode, EditorMode::Incomplete);
+    assert_eq!(parse.needs, vec![Need::ListItem]);
+    assert!(parse.diagnostics.is_empty());
+}
+
+#[test]
+fn editor_lone_route_reports_note_pull() {
+    // NP27 editor parity: mode `note_pull` with no needs or diagnostics,
+    // keeping the route spans and the task-list metadata (`count: 0`).
+    // An empty placeholder bullet (`@dev\n- `) is still a lone header.
+    for (raw, route) in [
+        ("@dev", "dev"),
+        ("@DEV", "dev"),
+        ("@sase  ", "sase"),
+        ("@dev\n- ", "dev"),
+    ] {
         let parse = editor(raw);
-        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
-        assert_eq!(parse.needs, vec![Need::ListItem], "{raw}");
+        assert_eq!(parse.mode, EditorMode::NotePull, "{raw}");
+        assert_eq!(parse.route.as_deref(), Some(route), "{raw}");
+        assert_eq!(parse.section, None, "{raw}");
+        assert!(parse.needs.is_empty(), "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");
+        assert!(!parse.spans.is_empty(), "{raw}");
+        assert_eq!(parse.items.len(), 1, "{raw}");
+        assert_eq!(parse.items[0].mode, EditorMode::NotePull, "{raw}");
     }
+    let parse = editor("@dev");
+    let list = parse.items[0].list.clone().expect("list context");
+    assert_eq!(list.route, "dev");
+    assert_eq!(list.section, None);
+    assert_eq!(list.count, 0);
+    assert_eq!((list.header_start, list.header_end), (0, 4));
 }
 
 #[test]

@@ -64,6 +64,7 @@ pub(super) fn plan_task_complete_item(
         outcome.previous_status_symbol != outcome.final_status_symbol;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            note_pull: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1645,6 +1646,14 @@ pub(super) fn surviving_successor_link_reasons(
                         .is_some_and(|offer| offer.group == "relation")
                 {
                     "relation"
+                } else if row.trigger
+                    == crate::native::task_complete::NOTE_PULL_TRIGGER
+                    || row
+                        .offer
+                        .as_ref()
+                        .is_some_and(|offer| offer.group == "note_pull")
+                {
+                    "note_pull"
                 } else {
                     "unblocked"
                 };

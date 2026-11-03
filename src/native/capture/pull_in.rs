@@ -177,6 +177,15 @@ fn number_draft_offers(
                 }
             }
         }
+        for vec in super::output::note_pull_vecs_mut(&mut item.result) {
+            for row in vec.iter_mut() {
+                if let Some(offer) = row.offer.as_mut()
+                    && let Some(&n) = n_map.get(&offer.key)
+                {
+                    offer.n = n;
+                }
+            }
+        }
     }
 }
 

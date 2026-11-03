@@ -717,6 +717,21 @@ pub(super) struct CaptureItemResult {
     #[serde(skip)]
     pub(super) relation_groups:
         Vec<crate::native::task_complete::RelationOfferGroup>,
+    /// Note-pull result for a lone `@route` item
+    /// (`docs/task-dependencies.md` §12.20). Additive: omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note_pull: Option<NotePullSummaryJson>,
+}
+
+/// Note-pull payload on a lone `@route` item
+/// (`docs/task-dependencies.md` §12.20).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct NotePullSummaryJson {
+    pub(super) note: String,
+    pub(super) route: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) successors: Vec<TaskCompleteUnblockedJson>,
+    pub(super) folded: PullInFoldedJson,
 }
 
 /// Per-item drawer report: the matched or created drawer title, its key,
@@ -2376,16 +2391,40 @@ pub(super) fn all_relation_successors(
 }
 
 /// Every successor offer row an item reports: unblocked, then relation,
-/// then keep-moving, in the same per-summary order as [`all_unblocked`].
-/// Used for draft-level numbering, probes, selection validation,
-/// pull-in counts, and refusal payloads (`docs/task-dependencies.md`
-/// §12.5, §12.15).
+/// then keep-moving, then note-pull, in the same per-summary order as
+/// [`all_unblocked`]. Used for draft-level numbering, probes, selection
+/// validation, pull-in counts, and refusal payloads
+/// (`docs/task-dependencies.md` §12.5, §12.15, §12.20).
 pub(super) fn all_offer_rows(
     item: &CaptureItemResult,
 ) -> impl Iterator<Item = &TaskCompleteUnblockedJson> {
     all_unblocked(item)
         .chain(all_relation_successors(item))
         .chain(all_keep_moving(item))
+        .chain(all_note_pull(item))
+}
+
+/// Every note-pull row an item reports (`docs/task-dependencies.md`
+/// §12.20). Rows ride the successor-offer protocol for numbering, keys,
+/// selection, and atomic writes but have no predecessor.
+pub(super) fn all_note_pull(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &TaskCompleteUnblockedJson> {
+    item.note_pull
+        .iter()
+        .flat_map(|summary| summary.successors.iter())
+}
+
+/// Mutable access to every note-pull vec an item reports, in the same
+/// order as [`all_note_pull`].
+pub(super) fn note_pull_vecs_mut(
+    item: &mut CaptureItemResult,
+) -> Vec<&mut Vec<TaskCompleteUnblockedJson>> {
+    let mut vecs = Vec::new();
+    if let Some(summary) = item.note_pull.as_mut() {
+        vecs.push(&mut summary.successors);
+    }
+    vecs
 }
 
 /// Every surviving relation group an item reports, in the same summary
@@ -6279,6 +6318,7 @@ mod tests {
 
     fn minimal_result() -> CaptureItemResult {
         CaptureItemResult {
+            note_pull: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

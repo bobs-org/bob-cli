@@ -392,6 +392,11 @@ pub(super) fn plan_capture_to_target(
                 "reference capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::NotePull { .. } => {
+            return Err(CaptureError::io(
+                "note-pull capture is planned by plan_note_pull_item",
+            ));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {

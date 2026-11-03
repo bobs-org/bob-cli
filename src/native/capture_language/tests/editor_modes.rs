@@ -464,15 +464,15 @@ fn editor_modes_and_needs_cover_every_marker_shape() {
             &[],
         ),
         ("buy milk", EditorMode::Task, None, None, None, &[]),
-        // A lone header is an empty list: incomplete needing `list_item`,
-        // not a task.
+        // A lone header is a note pull (§12.20): mode `note_pull` with no
+        // needs, not an incomplete list.
         (
             "@route",
-            EditorMode::Incomplete,
+            EditorMode::NotePull,
             Some("route"),
             None,
             None,
-            &[Need::ListItem],
+            &[],
         ),
     ];
 
@@ -1146,6 +1146,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,
             CaptureKind::TaskComplete { .. } => EditorMode::TaskComplete,
             CaptureKind::Ref(_) => EditorMode::Ref,
+            CaptureKind::NotePull { .. } => EditorMode::NotePull,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");
         assert_eq!(

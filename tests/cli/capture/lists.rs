@@ -518,27 +518,35 @@ fn refusal_vault(
 
 #[test]
 fn capture_list_empty_header_needs_list_item() {
-    // A header with no bullets captures nothing: `capture-parse` reports
-    // `incomplete` needing `list_item` with an empty list, and `bob
-    // capture` refuses `empty_list`. This replaces today's literal `@dev`
+    // A section header with no bullets captures nothing: `capture-parse`
+    // reports `incomplete` needing `list_item` with an empty list, and
+    // `bob capture` refuses `empty_list`. A lone task header is a note
+    // pull (§12.20), not a refusal. This replaces today's literal `@dev`
     // inbox task.
     let (_temp, vault, day, before) =
         refusal_vault("bob-cli-capture-list-empty");
-    for draft in ["@dev", "@dev#Ideas", "@dev\n- "] {
-        let parse = run_parse(draft);
-        assert_eq!(parse["mode"], "incomplete", "{draft}");
-        assert_eq!(parse["needs"], serde_json::json!(["list_item"]), "{draft}");
-        assert_eq!(parse["list"]["count"], 0, "{draft}");
-        assert!(
-            parse["diagnostics"].as_array().unwrap().is_empty(),
-            "{draft}"
-        );
+    let draft = "@dev#Ideas";
+    let parse = run_parse(draft);
+    assert_eq!(parse["mode"], "incomplete", "{draft}");
+    assert_eq!(parse["needs"], serde_json::json!(["list_item"]), "{draft}");
+    assert_eq!(parse["list"]["count"], 0, "{draft}");
+    assert!(
+        parse["diagnostics"].as_array().unwrap().is_empty(),
+        "{draft}"
+    );
 
-        let output = run_capture(&vault, &day, draft, false);
-        assert_eq!(output.status.code(), Some(2), "{draft}");
-        let json: Value =
-            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
-        assert_eq!(json["code"], "empty_list", "{draft}");
+    let output = run_capture(&vault, &day, draft, false);
+    assert_eq!(output.status.code(), Some(2), "{draft}");
+    let json: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["code"], "empty_list", "{draft}");
+    // A lone task header parses as a note pull and succeeds without
+    // writing when nothing is selected.
+    for draft in ["@dev", "@dev\n- "] {
+        let parse = run_parse(draft);
+        assert_eq!(parse["mode"], "note_pull", "{draft}");
+        assert_eq!(parse["needs"], serde_json::json!([]), "{draft}");
+        assert_eq!(parse["list"]["count"], 0, "{draft}");
     }
     for (path, contents) in &before {
         assert_eq!(&fs::read_to_string(path).expect("read file"), contents);

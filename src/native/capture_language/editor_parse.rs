@@ -724,7 +724,9 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         EditorMode::TaskToggle
         | EditorMode::SubBullet
         | EditorMode::TaskDependency => "task-toggle",
-        EditorMode::Task | EditorMode::Incomplete => "task",
+        EditorMode::Task | EditorMode::Incomplete | EditorMode::NotePull => {
+            "task"
+        }
     }
 }
 
@@ -2359,6 +2361,24 @@ pub(super) fn parse_editor_list_item<'a>(
         );
     }
     if list.count == 0 {
+        // A lone `@route` task header is a note pull (§12.20): mode
+        // `note_pull` with no needs or diagnostics, keeping the route
+        // spans and task-list metadata (`count: 0`) so clients can still
+        // offer "start a list" from it.
+        if !notes && list.section.is_none() {
+            let mut outcome = list_refusal_item(
+                item,
+                &list,
+                None,
+                Some((list.header_start, list.header_end)),
+            );
+            outcome.item.spans = spans;
+            outcome.item.needs = Vec::new();
+            outcome.item.mode = EditorMode::NotePull;
+            outcome.item.route = Some(list.route.clone());
+            outcome.item.section = None;
+            return outcome;
+        }
         let mut outcome = list_refusal_item(
             item,
             &list,

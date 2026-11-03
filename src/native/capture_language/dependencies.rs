@@ -1922,6 +1922,8 @@ pub(crate) fn resolve_execution_ownership(
         CaptureKind::Ref(_) => {
             Err(unsupported_target_relation_error("reference", sigil))
         }
+        // A lone header names no task, so it owns no modifiers.
+        CaptureKind::NotePull { .. } => Ok(None),
     }
 }
 

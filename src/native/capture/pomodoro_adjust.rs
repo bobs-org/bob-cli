@@ -405,6 +405,7 @@ pub(super) fn plan_pomodoro_adjust_item(
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            note_pull: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -622,6 +623,7 @@ pub(super) fn plan_pomodoro_shift_item(
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            note_pull: None,
             task_theme: None,
             type_relocation: None,
             ok: true,

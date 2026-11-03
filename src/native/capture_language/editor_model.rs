@@ -221,6 +221,8 @@ pub(crate) enum EditorMode {
     TaskComplete,
     /// A whole-item bare URL admitted by the routing policy.
     Ref,
+    /// A lone `@route` header that pulls that note's tasks (§12.20).
+    NotePull,
     Incomplete,
 }
 
@@ -245,6 +247,7 @@ impl EditorMode {
             Self::TaskDependency => "task_dependency",
             Self::TaskComplete => "task_complete",
             Self::Ref => "ref",
+            Self::NotePull => "note_pull",
             Self::Incomplete => "incomplete",
         }
     }

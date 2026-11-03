@@ -707,6 +707,31 @@ fn parse_list_bullet_item<'a>(
         });
     }
     if list.count == 0 {
+        // A lone `@route` task header with no section is a note pull
+        // (§12.20); `@route#section` alone and notes lists keep the
+        // existing `empty_list` refusal.
+        if !notes && list.section.is_none() {
+            let route = list.route.clone();
+            return Ok(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body: String::new(),
+                    clip,
+                    route: Some(route.clone()),
+                    kind: CaptureKind::NotePull { route },
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                    dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
+                    dependency_target: None,
+                    type_marker: None,
+                },
+                Vec::new(),
+                Some(header_text),
+            ));
+        }
         return Err(coded("empty_list", empty_list_error(&header_text, notes)));
     }
     let parent_line = item.lines[0];

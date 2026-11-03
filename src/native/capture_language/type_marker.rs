@@ -1076,6 +1076,9 @@ impl TypeMarkerSubject {
             CaptureKind::PomodoroShift { .. } => Self::Shift,
             CaptureKind::PomodoroSplit { .. } => Self::Split,
             CaptureKind::PomodoroMerge { .. } => Self::Merge,
+            // A lone header carries no body, so a type marker would have
+            // kept it from becoming a pull; unreachable in practice.
+            CaptureKind::NotePull { .. } => Self::NewTask,
         }
     }
 }

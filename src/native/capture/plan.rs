@@ -509,6 +509,7 @@ fn plan_ref_item(
         .then(|| listen_hint_for_unchanged(&intent.cleaned, &parent_route));
     let planned = PlannedCaptureItem {
         result: CaptureItemResult {
+            note_pull: None,
             task_theme: None,
             type_relocation: None,
             ok: true,
@@ -1066,6 +1067,7 @@ pub(super) fn plan_capture_item(
         };
         let mut planned = PlannedCaptureItem {
             result: CaptureItemResult {
+                note_pull: None,
                 ok: true,
                 dry_run: request.dry_run,
                 routed: true,
@@ -1336,6 +1338,17 @@ pub(super) fn plan_capture_item(
             warnings,
         );
     }
+    if matches!(parsed.kind, CaptureKind::NotePull { .. }) {
+        return plan_note_pull_item(
+            request,
+            parsed,
+            today,
+            planner,
+            dependency_ctx,
+            task_theme_context,
+            warnings,
+        );
+    }
     let created = date_string(today);
     let priority = match parsed.priority_level {
         Some(number) => Some(resolve_priority(
@@ -1490,6 +1503,9 @@ pub(super) fn plan_capture_item(
         }
         CaptureKind::Ref(_) => {
             unreachable!("reference capture is planned before this point")
+        }
+        CaptureKind::NotePull { .. } => {
+            unreachable!("note-pull capture is planned by plan_note_pull_item")
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -2835,6 +2851,7 @@ pub(super) fn plan_capture_item(
 
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            note_pull: None,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),
@@ -3088,6 +3105,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::PomodoroStart { .. } => "pomodoro_start",
         CaptureKind::TaskComplete { .. } => "task_complete",
         CaptureKind::Ref(_) => "ref",
+        CaptureKind::NotePull { .. } => "note_pull",
     }
 }
 
@@ -4024,6 +4042,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let _ = parsed_index;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            note_pull: None,
             ok: true,
             dry_run: request.dry_run,
             routed: parsed.route.is_some(),

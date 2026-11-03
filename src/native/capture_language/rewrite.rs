@@ -710,6 +710,7 @@ pub(super) fn classify_local_marker(
         | EditorMode::TaskDependency
         | EditorMode::TaskComplete
         | EditorMode::Ref
+        | EditorMode::NotePull
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -815,6 +816,10 @@ pub(super) fn non_absorbable_marker_notice(
         ),
         EditorMode::Ref => format!(
             "@@ cannot take a reference link: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::NotePull => format!(
+            "@@ cannot take a note pull: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {

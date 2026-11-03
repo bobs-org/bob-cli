@@ -451,14 +451,16 @@ fn parses_auto_routes_like_hammerspoon() {
         assert_eq!(parsed.route.as_deref(), route, "{label}");
     }
 
-    // A lone header starts a list, so it refuses instead of staying a
+    // A lone header is a note pull (§12.20), not a refusing list nor a
     // literal inbox task.
-    let error =
-        parse_capture_text("@route", None).expect_err("lone header refuses");
-    assert!(
-        error.message.contains("heads a list but has no bullets"),
-        "lone header: {error:?}"
+    let parsed = parse_capture_text("@route", None).expect("lone header pulls");
+    assert_eq!(
+        parsed.kind,
+        CaptureKind::NotePull {
+            route: "route".to_string()
+        }
     );
+    assert_eq!(parsed.route.as_deref(), Some("route"));
 }
 
 #[test]
