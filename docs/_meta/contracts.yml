@@ -139,3 +139,6 @@ groups:
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
         order: 34
         reader: guides/sync-vault-across-machines.md
+      - stem: attachments
+        summary: "Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording"
+        order: 39

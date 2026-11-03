@@ -16,6 +16,7 @@ pub(crate) fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
 }
 
 mod articles;
+pub(crate) mod attachments;
 mod capture;
 mod capture_active_tasks;
 mod capture_block_ids;
@@ -114,6 +115,8 @@ mod vault_sync;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
     Articles,
+    AttachmentsImport,
+    AttachmentsOrigin,
     Capture,
     CaptureComplete,
     CaptureParse,
@@ -187,6 +190,8 @@ pub(crate) fn command_for_script(
 pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
         NativeCommand::Articles => articles::run(args),
+        NativeCommand::AttachmentsImport => attachments::run_import(args),
+        NativeCommand::AttachmentsOrigin => attachments::run_origin(args),
         NativeCommand::Capture => capture::run(args),
         NativeCommand::CaptureComplete => capture_complete::run(args),
         NativeCommand::CaptureParse => capture_parse::run(args),

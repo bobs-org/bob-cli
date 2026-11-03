@@ -29,6 +29,11 @@ pub(crate) struct AttachmentOutput {
     pub(crate) saved: String,
     pub(crate) kind: AttachmentKind,
     pub(crate) reused: bool,
+    /// SHA-256 of the planned bytes. Never serialized: `bob capture`'s
+    /// JSON stays byte-identical, and the origin journal reads this field
+    /// instead.
+    #[serde(skip_serializing)]
+    pub(crate) sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

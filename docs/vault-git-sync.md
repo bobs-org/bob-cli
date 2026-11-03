@@ -459,6 +459,40 @@ git -C ~/bob check-attr merge -- .bob/relations/apollo.jsonl
 The journal contract lives in
 [task-relations.md](task-relations.md#16-label-vocabulary).
 
+## Attachment origin journal
+
+`.bob/attachments/<host>.jsonl` is the per-host attachment origin
+journal: where each image or file `%c` or `bob attachments import`
+copied into the vault came from. It follows the theme journal's rule:
+each host appends to its own file, readers union every `*.jsonl` in
+the directory, and bob is the only writer. The vault root `.gitignore`
+also carries:
+
+```gitignore
+!/.bob/attachments/*.jsonl
+```
+
+Verify the path is not ignored:
+
+```bash
+git -C ~/bob check-ignore -v .bob/attachments/apollo.jsonl
+```
+
+A negated last match (`!/.bob/attachments/*.jsonl`) means the file is
+trackable. The directory is created on the first copy or import write.
+The vault root `.gitattributes` unions concurrent origin-journal
+appends:
+
+```gitattributes
+.bob/attachments/*.jsonl merge=union
+```
+
+```bash
+git -C ~/bob check-attr merge -- .bob/attachments/apollo.jsonl
+```
+
+The journal contract lives in [attachments.md](attachments.md).
+
 ## Google Calendar journal
 
 `.bob/gcal/<host>.jsonl` is the per-host `bob gcal sync` journal: which
@@ -548,6 +582,7 @@ The vault root `.gitattributes` also unions concurrent journal appends:
 .bob/stats/**/*.jsonl merge=union
 .bob/themes/*.jsonl merge=union
 .bob/relations/*.jsonl merge=union
+.bob/attachments/*.jsonl merge=union
 .bob/gcal/*.jsonl merge=union
 ```
 

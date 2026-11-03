@@ -55,6 +55,9 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | Command | What it does |
 | --- | --- |
 | [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |
+| [`bob attachments`](attachments.md) | Copy files into the vault and show where copies came from |
+| [`bob attachments import`](attachments.md#bob-attachments-import) | Copy image and file paths into the vault |
+| [`bob attachments origin`](attachments.md#bob-attachments-origin) | Show where a vault attachment came from |
 | [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, period notes, vault-sync |
 | [`bob periods`](periods.md) | Manage period notes: weeks, quarters, years, and all time |
 | [`bob periods brief`](periods.md#bob-periods-brief) | Print the agent review bundle for a week, quarter, or year |
@@ -115,36 +118,38 @@ its own options.
 Usage: bob <COMMAND>
 
 Daily workflow:
-  capture     Capture tasks, bullets, and Pomodoro commands into the vault
-  freshness   Walk the tiered freshness review queue
-  plan        Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
-  pomodoro    Show Pomodoro status, print the tmux line, or notify on completion
-  ready       Show each area/project note's Ready lane against the per-note cap
-  stats       Show derived daily metrics as a glance, detail chart, or catalog
-  types       Manage task types and explain task suggestions
+  capture      Capture tasks, bullets, and Pomodoro commands into the vault
+  freshness    Walk the tiered freshness review queue
+  plan         Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
+  pomodoro     Show Pomodoro status, print the tmux line, or notify on
+               completion
+  ready        Show each area/project note's Ready lane against the per-note cap
+  stats        Show derived daily metrics as a glance, detail chart, or catalog
+  types        Manage task types and explain task suggestions
 
 Tasks and projects:
-  projects    List and sync project notes via their ^prj tasks
-  relations   List, hide, unhide, and rename relation labels
-  task        Vault-wide task maintenance: archive, move, reconcile, reroll
+  projects     List and sync project notes via their ^prj tasks
+  relations    List, hide, unhide, and rename relation labels
+  task         Vault-wide task maintenance: archive, move, reconcile, reroll
 
 Vault:
-  articles    Format and inspect article notes with bob-owned section numbers
-  nightly     Run nightly maintenance: vault-sync, task archive, articles,
-              period notes, vault-sync
-  periods     Manage period notes: weeks, quarters, years, and all time
-  query       Run Dataview or Tasks queries against the vault
-  ref         Find, list, read, rename, and plan references for today; sync
-              Highlights PDFs into them
-  vault-sync  Reconcile the vault through Git (default: run) or show status
+  articles     Format and inspect article notes with bob-owned section numbers
+  attachments  Copy files into the vault and show where copies came from
+  nightly      Run nightly maintenance: vault-sync, task archive, articles,
+               period notes, vault-sync
+  periods      Manage period notes: weeks, quarters, years, and all time
+  query        Run Dataview or Tasks queries against the vault
+  ref          Find, list, read, rename, and plan references for today; sync
+               Highlights PDFs into them
+  vault-sync   Reconcile the vault through Git (default: run) or show status
 
 Integrations:
-  gcal        Project Google Calendar events onto today's daily note
-  gkeep       Drain the Google Keep inbox into Obsidian tasks
+  gcal         Project Google Calendar events onto today's daily note
+  gkeep        Drain the Google Keep inbox into Obsidian tasks
 
 Setup:
-  completion  Install and inspect shell completion for bob
-  plugins     List and deploy Bob's custom Obsidian plugins
+  completion   Install and inspect shell completion for bob
+  plugins      List and deploy Bob's custom Obsidian plugins
 
 Capture protocol:
   capture-complete       Complete the capture marker at the cursor

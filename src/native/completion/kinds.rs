@@ -301,6 +301,18 @@ const TABLE: &[Entry] = &[
         arg: "search",
         kind: Kind::Files(None),
     },
+    // `bob attachments import` copies absolute file paths into the
+    // vault; `origin` resolves a vault-relative attachment path.
+    Entry {
+        path: &["attachments", "import"],
+        arg: "path",
+        kind: Kind::Files(None),
+    },
+    Entry {
+        path: &["attachments", "origin"],
+        arg: "vault-path",
+        kind: Kind::FreeText,
+    },
     // `bob ref code` resolves the same exact reference handles as `show`.
     Entry {
         path: &["ref", "code"],

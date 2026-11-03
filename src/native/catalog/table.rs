@@ -580,6 +580,31 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        fixed: JSON,
+        slots: &[("PATH", "text"), ("path", "text")],
+        adapter: Some("json-write"),
+        ..writes(
+            "attachments-import",
+            &["attachments", "import"],
+            "Copy files into the vault",
+            &["attachments", "import", "copy", "images", "files"],
+            Policy::Run,
+            None,
+            60,
+        )
+    },
+    Row {
+        slots: &[("VAULT_PATH", "text"), ("vault-path", "text")],
+        ..reads(
+            "attachments-origin",
+            &["attachments", "origin"],
+            "Attachment origins",
+            &["attachments", "origin", "source"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
         confirm: Some(
             "Run nightly maintenance (vault-sync, task archive, articles, \
              period notes, vault-sync). Athena's timer already runs this.",

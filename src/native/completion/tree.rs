@@ -22,6 +22,12 @@ impl NativeCommand {
             NativeCommand::Articles => {
                 crate::native::articles::cli::build_cli()
             }
+            NativeCommand::AttachmentsImport => {
+                crate::native::attachments::cli::build_cli_import()
+            }
+            NativeCommand::AttachmentsOrigin => {
+                crate::native::attachments::cli::build_cli_origin()
+            }
             NativeCommand::Capture => crate::native::capture::cli::build_cli(),
             NativeCommand::CaptureComplete => {
                 crate::native::capture_complete::build_cli()

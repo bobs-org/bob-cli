@@ -51,6 +51,7 @@ pub(crate) use super::capture_language::is_route_token;
 const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
 
+mod attachments;
 mod batch;
 mod batch_move;
 mod block_diff;
@@ -335,9 +336,14 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         }
     }
     let mut hide_failures = Vec::new();
+    let mut origin_failures = Vec::new();
     if !request.dry_run {
         hide_failures =
             append_committed_relation_label_hides(&batch, &request.bob_dir);
+        origin_failures = attachments::append_committed_attachment_origins(
+            &batch,
+            &request.bob_dir,
+        );
     }
     let mut result = CaptureResult::from_items(
         batch.items.into_iter().map(|item| item.result).collect(),
@@ -353,6 +359,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.inbox_route,
     );
     result.warnings.extend(hide_failures);
+    result.warnings.extend(origin_failures);
     result.theme_refs = theme_refs;
     let has_template = result.template.is_some();
     save_template_shelf(&request, has_template, &mut result);

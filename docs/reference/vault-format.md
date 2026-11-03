@@ -555,7 +555,8 @@ vault/
 ├── .bob/                    # machine data; never scanned as notes
 │   ├── ref-sources/         # write-once saved Markdown + code.json catalogs
 │   ├── themes/              # synced per-host theme preference journals
-│   └── relations/           # synced per-host relation-label preference journals
+│   ├── relations/           # synced per-host relation-label preference journals
+│   └── attachments/         # synced per-host attachment origin journals
 └── .obsidian/plugins/       # installed community plugins, including Bob's
 ```
 

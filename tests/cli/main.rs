@@ -2,6 +2,7 @@
 
 mod aliases;
 mod articles;
+mod attachments;
 mod capture;
 mod capture_templates;
 mod catalog;

@@ -29,7 +29,7 @@ pub(super) enum PathState {
     Missing(PathBuf),
 }
 
-pub(super) fn classify_path_candidate(line: &str) -> Result<PathState, String> {
+pub(crate) fn classify_path_candidate(line: &str) -> Result<PathState, String> {
     let unquoted = strip_matching_quotes(line.trim());
     let decoded = if let Some(rest) = unquoted.strip_prefix("file://") {
         let path = match rest.strip_prefix('/') {
@@ -156,6 +156,7 @@ pub(super) fn plan_attachments<'a>(
             saved,
             kind,
             reused,
+            sha256: hash,
         });
     }
 
@@ -176,7 +177,7 @@ pub(super) fn plan_attachments<'a>(
     })
 }
 
-fn attachment_reference(attachment: &AttachmentOutput) -> String {
+pub(crate) fn attachment_reference(attachment: &AttachmentOutput) -> String {
     match attachment.kind {
         AttachmentKind::Image => {
             format!("![[{}|{IMAGE_EMBED_WIDTH}]]", attachment.saved)
@@ -276,7 +277,7 @@ fn file_matches(path: &Path, contents: &[u8]) -> Result<bool, String> {
         })
 }
 
-pub(super) fn sha256_hex(contents: &[u8]) -> String {
+pub(crate) fn sha256_hex(contents: &[u8]) -> String {
     hex::encode(Sha256::digest(contents))
 }
 

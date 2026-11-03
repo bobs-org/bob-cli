@@ -293,6 +293,37 @@ Examples:
 See docs/stats.md for the catalog, JSON contract, and display rules.
 Run 'bob stats <command> --help' for more information on a command.";
 
+const ATTACHMENTS_MEMBERS: &[Member] = &[
+    Member {
+        name: "import",
+        about: "Copy image and file paths into the vault",
+        leaf: Leaf {
+            native_command: NativeCommand::AttachmentsImport,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "origin",
+        about: "Show where a vault attachment came from",
+        leaf: Leaf {
+            native_command: NativeCommand::AttachmentsOrigin,
+            script_command: None,
+        },
+    },
+];
+
+const ATTACHMENTS_AFTER_HELP: &str = "\
+Bare `bob attachments` prints this help: the group has no flag-only
+read-only member.
+
+Examples:
+  bob attachments import ~/tmp/screenshots/x.png   Copy an image into img/
+  bob attachments import -f json -- ~/tmp/a.png     Copy paths as JSON
+  bob attachments origin img/x.png                  Show where img/x.png came from
+
+See docs/attachments.md for the origin journal contract.
+Run 'bob attachments <command> --help' for more information on a command.";
+
 const RELATIONS_MEMBERS: &[Member] = &[
     Member {
         name: "hide",
@@ -715,6 +746,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Articles,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "attachments",
+        about: "Copy files into the vault and show where copies came from",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: ATTACHMENTS_MEMBERS,
+            default: None,
+            extra_about: Some(
+                "Bare `bob attachments` prints this help. import copies files in; origin reports where a copy came from.",
+            ),
+            after_help: ATTACHMENTS_AFTER_HELP,
+            usage: "bob attachments <COMMAND>",
         }),
     },
     Subcommand {
@@ -2162,6 +2207,8 @@ mod tests {
 
         let expected = [
             NativeCommand::Articles,
+            NativeCommand::AttachmentsImport,
+            NativeCommand::AttachmentsOrigin,
             NativeCommand::Capture,
             NativeCommand::CaptureComplete,
             NativeCommand::CaptureParse,

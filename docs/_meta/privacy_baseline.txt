@@ -2,6 +2,7 @@
 # Counts ignore line movement. A second copy of the same text is a new hit.
 # Normal lint never adds rows. bob-docs lint --fix only removes obsolete hits
 # or lowers a count that shrank.
+attachments.md	home-path	1	/Users/bryan
 capture.md	home-path	3	/Users/bryan
 gkeep.md	email	1	bryanbugyi34@gmail.com
 highlights-create.md	home-path	5	/home/bryan

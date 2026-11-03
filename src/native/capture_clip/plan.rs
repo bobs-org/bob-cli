@@ -15,6 +15,83 @@ pub(super) const MAX_ATTACHMENT_COUNT: usize = 10;
 pub(super) const MAX_INLINE_CHARACTERS: usize = 1000;
 pub(super) const MAX_LINES: usize = 10;
 
+/// One `bob attachments import` failure: the journal-code the CLI prints
+/// plus the human message behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExplicitPathError {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
+/// Plan explicit paths through the same `classify_path_candidate` →
+/// `plan_attachments` path `%c` uses, with fresh reservations and an
+/// empty indent. The caller saves with `ClipPlan::save`, which never
+/// edits notes.
+pub(crate) fn plan_explicit_paths(
+    bob_dir: &Path,
+    raws: &[String],
+) -> Result<ClipPlan, ExplicitPathError> {
+    if raws.len() > MAX_ATTACHMENT_COUNT {
+        return Err(ExplicitPathError {
+            code: "too_many",
+            message: format!(
+                "cannot import {} paths; at most {MAX_ATTACHMENT_COUNT} are supported",
+                raws.len()
+            ),
+        });
+    }
+    let mut sources = Vec::with_capacity(raws.len());
+    for raw in raws {
+        match classify_path_candidate(raw) {
+            Ok(PathState::File(path)) => sources.push(path),
+            Ok(PathState::Missing(path)) => {
+                return Err(ExplicitPathError {
+                    code: "missing",
+                    message: format!(
+                        "attachment does not exist: {}",
+                        path.display()
+                    ),
+                });
+            }
+            Ok(PathState::Directory) => {
+                return Err(ExplicitPathError {
+                    code: "not_a_file",
+                    message: format!("attachment is not a file: {raw}"),
+                });
+            }
+            Ok(PathState::NotPath) => {
+                return Err(ExplicitPathError {
+                    code: "not_absolute",
+                    message: format!(
+                        "attachment is not an absolute path: {raw}"
+                    ),
+                });
+            }
+            Err(message) => {
+                return Err(ExplicitPathError {
+                    code: "io",
+                    message,
+                });
+            }
+        }
+    }
+    let mut reservations = ClipReservations::default();
+    plan_attachments(
+        bob_dir,
+        sources.iter().map(|path| path.as_path()),
+        "",
+        &mut reservations.files,
+    )
+    .map(|output| ClipPlan {
+        files: std::mem::take(&mut reservations.files.files),
+        output,
+    })
+    .map_err(|message| ExplicitPathError {
+        code: "io",
+        message,
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn plan(
     bob_dir: &Path,

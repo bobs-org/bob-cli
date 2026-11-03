@@ -1192,6 +1192,8 @@ UTF-8 without NUL bytes; binary clipboard contents should be represented by a
 copied file path. Clipboard and note edits are planned before anything is
 written, and newly created clipboard files are removed if the note write fails.
 `--dry-run` performs the same planning but creates no directories or files.
+Each copied attachment's origin is recorded in the attachment origin journal;
+see [Attachment origins](attachments.md).
 
 Use `-c, --clip` to force a clipboard read as if `%c` were written. It injects
 a live-clipboard request only when the item has no `%c` already, so

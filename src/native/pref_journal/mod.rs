@@ -1,16 +1,18 @@
-//! Shared append-only preference journals (`docs/task-relations.md` §16,
-//! `docs/task-types.md`).
+//! Shared append-only journals (`docs/task-relations.md` §16,
+//! `docs/task-types.md`, `docs/attachments.md`).
 //!
 //! Every vocabulary preference (Pomodoro theme hides, relation label
-//! hides) lives in one namespaced directory of per-host JSONL files:
-//! `.bob/themes/<host>.jsonl` for `theme.*` events, `.bob/relations/`
-//! `<host>.jsonl` for `relation_label.*` events. This module owns the
-//! namespace mechanics every journal shares: directory paths, the host
-//! label, event timestamps, single-`O_APPEND` writes, the read-all scan
-//! with bounded malformed-line warnings, last-writer-wins ordering, and
-//! the rename state move. Payload parsing and the per-key fold stay in
-//! each namespace module, because each namespace carries its own event
-//! kinds.
+//! hides) and every attachment origin lives in one namespaced directory
+//! of per-host JSONL files: `.bob/themes/<host>.jsonl` for `theme.*`
+//! events, `.bob/relations/<host>.jsonl` for `relation_label.*` events,
+//! and `.bob/attachments/<host>.jsonl` for `attachment.import` events.
+//! This module owns the namespace mechanics every journal shares:
+//! directory paths, the host label, event timestamps, single-`O_APPEND`
+//! writes, the read-all scan with bounded malformed-line warnings,
+//! last-writer-wins ordering, and the rename state move. Payload parsing
+//! and the per-key fold stay in each namespace module, because each
+//! namespace carries its own event kinds. The attachment journal records
+//! origins rather than preferences.
 
 use std::{
     collections::BTreeMap,
@@ -43,6 +45,11 @@ pub(crate) const THEMES: Namespace = Namespace {
 pub(crate) const RELATIONS: Namespace = Namespace {
     dir: ".bob/relations",
     noun: "relation",
+};
+
+pub(crate) const ATTACHMENTS: Namespace = Namespace {
+    dir: ".bob/attachments",
+    noun: "attachment",
 };
 
 /// One raw journal line with its envelope decoded; each namespace
