@@ -2,6 +2,7 @@ use super::*;
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime, TimeZone};
 use std::collections::{BTreeMap, HashSet};
 
+use crate::native::clock_tags::{ClockKind, ClockTag};
 use crate::native::gcal::{
     description::bullets::{Bullet, DescriptionBullets},
     journal::{
@@ -13,6 +14,40 @@ use crate::native::gcal::{
 };
 
 const ACCOUNT: &str = "you@example.com";
+
+#[test]
+fn kept_clock_notices_cover_every_explicit_transition() {
+    let cases = [
+        (ClockKind::None, ClockKind::Off, "add #off by hand"),
+        (
+            ClockKind::On,
+            ClockKind::Off,
+            "replace #on with #off by hand",
+        ),
+        (
+            ClockKind::Off,
+            ClockKind::On,
+            "replace #off with #on by hand",
+        ),
+        (ClockKind::None, ClockKind::On, "add #on by hand"),
+        (ClockKind::Off, ClockKind::None, "remove #off by hand"),
+        (ClockKind::On, ClockKind::None, "remove #on by hand"),
+    ];
+    for (current, google, expected) in cases {
+        assert!(
+            super::kept_clock_detail(current, google).contains(expected),
+            "{current:?} -> {google:?}"
+        );
+    }
+    assert_eq!(
+        crate::native::clock_tags::line_clock_tag(
+            "- [/] #task Visit #offclock"
+        )
+        .kind(),
+        ClockKind::Off,
+        "aliases compare as canonical off even on worked rows"
+    );
+}
 
 fn note_day() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 10, 30).expect("date")
@@ -47,11 +82,18 @@ fn occurrence_off_clock(
     let html_link =
         Some(format!("https://calendar.google.com/event?eid={event_id}"));
     let buffer = crate::native::event_task::EventBuffer::default();
+    let clock_tag = if off_clock {
+        ClockTag::Off {
+            deprecated: Vec::new(),
+        }
+    } else {
+        ClockTag::None
+    };
     let badges = render::badge_text(
         html_link.as_deref(),
         None,
         None,
-        off_clock && task,
+        task.then_some(&clock_tag),
         buffer,
     );
     let mut spans = BTreeMap::new();
@@ -78,6 +120,7 @@ fn occurrence_off_clock(
         spans,
         needs_type: false,
         buffer,
+        clock_tag,
         off_clock,
         description: None,
         link_phase: None,

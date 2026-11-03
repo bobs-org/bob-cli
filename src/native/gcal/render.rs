@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use crate::native::{
+    clock_tags::{ClockKind, ClockTag},
     config as bob_config, env as bob_env,
     event_task::EventBuffer,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
@@ -26,7 +27,7 @@ pub(crate) struct TaskRowInput<'a> {
     pub root: Option<&'a str>,
     pub needs_type: bool,
     pub buffer: EventBuffer,
-    pub off_clock: bool,
+    pub clock_tag: ClockTag,
     /// Task checkbox: `*` (Next), `/` (In Progress), or ` ` (Ready).
     pub status: char,
 }
@@ -39,7 +40,7 @@ pub(crate) struct ContextRowInput<'a> {
     pub qualifier: Option<&'a str>,
 }
 
-/// Render `- [status] #task **HHMM-HHMM** title badges [#offclock]
+/// Render `- [status] #task **HHMM-HHMM** title badges [#off/#on]
 /// [buffer::] [root::] [type::] ^id`. Google-owned badges, off-clock tag,
 /// and buffer precede Bryan's root and type fields.
 pub(crate) fn render_task_row(
@@ -53,9 +54,7 @@ pub(crate) fn render_task_row(
         escape_title(input.title),
     );
     row.push_str(&badges(input.html_link, input.join_link, input.location));
-    if input.off_clock {
-        row.push_str(" #offclock");
-    }
+    append_clock_tag(&mut row, &input.clock_tag);
     if let Some(field) = input.buffer.field() {
         row.push_str(&format!(" {field}"));
     }
@@ -66,7 +65,7 @@ pub(crate) fn render_task_row(
 /// Set `[root::]` (and add `[type:: MEET]` when asked) on a gcal Event
 /// Task row without disturbing the Google-owned run: an existing
 /// `[root::]` is replaced in place, otherwise the root is inserted after
-/// the badge run (badges, off-clock alias, `[buffer::]`) and before
+/// the badge run (badges, explicit clock tag, `[buffer::]`) and before
 /// `[type::]` / `^id`; `[type:: MEET]` goes after the root. Tokens Bryan
 /// placed (his own fields, tags, and the block id) keep their text and
 /// order. Falls back to the shared setters when the row does not parse.
@@ -193,24 +192,32 @@ pub(crate) fn needs_meet_type(
         .is_some_and(|suggestion| suggestion.theme.name == "MEET")
 }
 
-/// The badge suffix for one row (` 📅 …`, ` 📹 …`, ` 📍 …`, plus
-/// ` #offclock` for off-clock tasks and ` [buffer:: …]` for buffered
+/// The badge suffix for one row (` 📅 …`, ` 📹 …`, ` 📍 …`, plus its
+/// explicit ` #off`/` #on` tag and ` [buffer:: …]` for buffered
 /// ones), shared by the row renderer and the journal span hashes.
 pub(crate) fn badge_text(
     html_link: Option<&str>,
     join_link: Option<&str>,
     location: Option<&str>,
-    off_clock: bool,
+    clock_tag: Option<&ClockTag>,
     buffer: EventBuffer,
 ) -> String {
     let mut out = badges(html_link, join_link, location);
-    if off_clock {
-        out.push_str(" #offclock");
+    if let Some(clock_tag) = clock_tag {
+        append_clock_tag(&mut out, clock_tag);
     }
     if let Some(field) = buffer.field() {
         out.push_str(&format!(" {field}"));
     }
     out
+}
+
+fn append_clock_tag(out: &mut String, clock_tag: &ClockTag) {
+    match clock_tag.kind() {
+        ClockKind::None => {}
+        ClockKind::Off => out.push_str(" #off"),
+        ClockKind::On => out.push_str(" #on"),
+    }
 }
 
 /// Badge links are deliberately title-free, because Obsidian's Jump to
@@ -329,7 +336,7 @@ mod tests {
             root,
             needs_type,
             buffer: EventBuffer::default(),
-            off_clock: false,
+            clock_tag: ClockTag::None,
             status,
         }
     }
@@ -362,16 +369,35 @@ mod tests {
     fn off_clock_task_rows_render_the_canonical_tag_before_root() {
         let row = render_task_row(
             &TaskRowInput {
-                off_clock: true,
+                clock_tag: ClockTag::Off {
+                    deprecated: Vec::new(),
+                },
                 ..task_input("Lunch", Some("love"), true, ' ')
             },
             "lunch",
         );
-        assert!(
-            row.contains(" #offclock [root:: love] [type:: MEET]"),
-            "{row}"
-        );
+        assert!(row.contains(" #off [root:: love] [type:: MEET]"), "{row}");
         assert!(!row.contains("#untracked"), "{row}");
+    }
+
+    #[test]
+    fn on_and_conflicting_tags_render_as_canonical_on() {
+        for clock_tag in [
+            ClockTag::On,
+            ClockTag::Conflict {
+                deprecated: vec!["#offclock".to_string()],
+            },
+        ] {
+            let row = render_task_row(
+                &TaskRowInput {
+                    clock_tag,
+                    ..task_input("Planning", Some("love"), true, '*')
+                },
+                "planning",
+            );
+            assert!(row.contains(" #on [root:: love]"), "{row}");
+            assert!(!row.contains("#offclock"), "{row}");
+        }
     }
 
     #[test]
@@ -429,7 +455,7 @@ mod tests {
                 root: Some("body"),
                 needs_type: true,
                 buffer: EventBuffer::default(),
-                off_clock: false,
+                clock_tag: ClockTag::None,
                 status: '*',
             },
             "party",
@@ -486,7 +512,7 @@ mod tests {
                 root: Some("body"),
                 needs_type: false,
                 buffer: EventBuffer::default(),
-                off_clock: false,
+                clock_tag: ClockTag::None,
                 time_label: "0800-0830",
                 title: "Dentist",
                 status: '*',
@@ -513,7 +539,9 @@ mod tests {
         let buffer = EventBuffer::parse("-30m +15m").expect("buffer");
         let row = render_task_row(
             &TaskRowInput {
-                off_clock: true,
+                clock_tag: ClockTag::Off {
+                    deprecated: Vec::new(),
+                },
                 buffer,
                 ..task_input("Lunch with Kelly", Some("love"), true, '*')
             },
@@ -522,7 +550,7 @@ mod tests {
         assert_eq!(
             row,
             "- [*] #task **0800-0830** Lunch with Kelly \
-             [📅](https://www.google.com/calendar/event?eid=1) #offclock \
+             [📅](https://www.google.com/calendar/event?eid=1) #off \
              [buffer:: -30m +15m] [root:: love] [type:: MEET] \
              ^lunch-with-kelly",
             "{row}"
@@ -537,7 +565,9 @@ mod tests {
                 Some("https://www.google.com/calendar/event?eid=1"),
                 None,
                 None,
-                true,
+                Some(&ClockTag::Off {
+                    deprecated: Vec::new(),
+                }),
                 buffer
             ),
             "{row}"
@@ -569,7 +599,9 @@ mod tests {
         let buffer = EventBuffer::parse("-30m +15m").expect("buffer");
         let before = render_task_row(
             &TaskRowInput {
-                off_clock: true,
+                clock_tag: ClockTag::Off {
+                    deprecated: Vec::new(),
+                },
                 buffer,
                 ..task_input("Lunch", Some("love"), false, '*')
             },
@@ -577,9 +609,7 @@ mod tests {
         );
         let rerouted = set_row_metadata(&before, Some("job"), false);
         assert!(
-            rerouted.contains(
-                " #offclock [buffer:: -30m +15m] [root:: job] ^lunch"
-            ),
+            rerouted.contains(" #off [buffer:: -30m +15m] [root:: job] ^lunch"),
             "{rerouted}"
         );
         // The badges span (what the journal hashes) is unchanged, so the

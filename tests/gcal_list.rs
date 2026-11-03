@@ -105,6 +105,45 @@ fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
 }
 
 #[test]
+fn explicit_on_directive_is_listed_on_clock_even_with_an_off_alias() {
+    let env = GcalEnv::new("bob-cli-gcal-list-on-tag");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        r#"{
+      "events": [{
+        "id": "planning",
+        "summary": "Planning",
+        "description": "@body #on #offclock -30 +15",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T18:30:00-04:00"},
+        "end": {"dateTime": "2026-10-30T19:00:00-04:00"},
+        "attendees": [{"self": true, "responseStatus": "accepted"}]
+      }],
+      "nextPageToken": null
+    }"#,
+    );
+
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let output = command.output().expect("run gcal list");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("list JSON");
+    let planning = report["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Planning")
+        .expect("planning event");
+    assert_eq!(planning["root"]["value"], "body");
+    assert_eq!(planning["off_clock"], false);
+    assert_eq!(planning["untracked"], false);
+    assert_eq!(planning["description_lines"], 0);
+}
+
+#[test]
 fn list_uses_the_sole_bob_account_among_multiple_gog_accounts() {
     let env = GcalEnv::new("bob-cli-gcal-list-bob-account");
     env.prepare_healthy_vault();

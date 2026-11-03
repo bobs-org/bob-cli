@@ -29,6 +29,7 @@ use crate::native::{
         child_block_end_line, insert_line_after, insert_line_before,
         insert_link_into_entry, insert_named_placeholder_after_last_open,
     },
+    clock_tags::{self, ClockKind, ClockTag},
     event_task, markdown,
     pomodoro::pomodoros_section_range,
 };
@@ -78,8 +79,11 @@ pub(crate) struct PlannedOccurrence {
     /// `bullets` mode (`Some` even when the block is empty). `None`
     /// for context rows and in `off` mode.
     pub description: Option<DescriptionBullets>,
-    /// Google off-clock alias (title or description). Context rows strip
-    /// it; task rows render canonical ` #offclock` in the badge run.
+    /// Google's explicit clock state (title or description). Context rows
+    /// strip it; task rows render only its canonical tag in the badge run.
+    pub clock_tag: ClockTag,
+    /// Tag-only compatibility value; inherited clocks are added by a later
+    /// planning phase and must never be materialized in the row.
     pub off_clock: bool,
     /// Phase at sync time; `None` for context rows.
     pub link_phase: Option<LinkPhase>,
@@ -740,40 +744,33 @@ fn apply_span_updates(
     }
     let current = spans.hashes();
     // Context rows strip the token, so only task rows hash the tag.
-    // The badges span covers `#offclock` and `[buffer::]`, so flips
+    // The badges span covers explicit `#off`/`#on` and `[buffer::]`, so flips
     // and buffer changes update in place while untouched.
     let fresh_badges = super::render::badge_text(
         occurrence.html_link.as_deref(),
         occurrence.join_link.as_deref(),
         occurrence.location.as_deref(),
-        occurrence.off_clock && occurrence.task,
+        occurrence.task.then_some(&occurrence.clock_tag),
         buffer_for_row(occurrence),
     );
     // A tag flip on a worked row is reported once and left for a hand
     // edit: sync never retimes existing entries, and the ledger row keeps
     // its clock classification until Bryan edits it.
-    let current_off_clock =
-        crate::native::event_task::line_has_off_clock_tag(&current_line);
+    let current_clock = clock_tags::line_clock_tag(&current_line).kind();
+    let google_clock = occurrence.clock_tag.kind();
     let untouched =
         row_untouched(&working.as_string(), line_index, &journaled.block_id);
-    let keep_off_clock = occurrence.task
-        && current_off_clock != occurrence.off_clock
-        && !untouched;
+    let keep_off_clock =
+        occurrence.task && current_clock != google_clock && !untouched;
     if keep_off_clock {
-        let detail = if occurrence.off_clock {
-            "kept your on-clock row while Google now says off-clock; \
-             add #offclock by hand to follow Google"
-        } else {
-            "kept your off-clock row while Google dropped its off-clock mark; \
-             remove #offclock by hand to go back on the clock"
-        };
+        let detail = kept_clock_detail(current_clock, google_clock);
         push_kept_once(
             input,
             plan,
             &occurrence.calendar_id,
             &occurrence.event_id,
             occurrence.title.clone(),
-            detail.to_string(),
+            detail,
             "kept_off_clock",
         );
     }
@@ -1392,6 +1389,30 @@ fn push_kept_once(
     }
 }
 
+fn kept_clock_detail(current: ClockKind, google: ClockKind) -> String {
+    match (current, google) {
+        (ClockKind::None, ClockKind::Off) => {
+            "kept the row without an explicit clock tag while Google now says #off; add #off by hand to follow Google".to_string()
+        }
+        (ClockKind::On, ClockKind::Off) => {
+            "kept the row's #on override while Google now says #off; replace #on with #off by hand to follow Google".to_string()
+        }
+        (ClockKind::Off, ClockKind::On) => {
+            "kept the row's #off tag while Google now says #on; replace #off with #on by hand to follow Google".to_string()
+        }
+        (ClockKind::None, ClockKind::On) => {
+            "kept the row without an explicit clock tag while Google now says #on; add #on by hand to follow Google".to_string()
+        }
+        (ClockKind::Off, ClockKind::None) => {
+            "kept the row's #off tag while Google dropped its explicit clock tag; remove #off by hand to follow Google".to_string()
+        }
+        (ClockKind::On, ClockKind::None) => {
+            "kept the row's #on override while Google dropped its explicit clock tag; remove #on by hand to follow Google".to_string()
+        }
+        _ => "kept your explicit clock tag while Google changed its clock tag".to_string(),
+    }
+}
+
 /// A row's display title: the span title, or the raw line when the row
 /// no longer parses.
 pub(crate) fn journaled_title(line: &str) -> String {
@@ -1426,7 +1447,7 @@ fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
                 location: occurrence.location.as_deref(),
                 root: occurrence.root.as_deref(),
                 needs_type: occurrence.needs_type,
-                off_clock: occurrence.off_clock,
+                clock_tag: occurrence.clock_tag.clone(),
                 buffer: buffer_for_row(occurrence),
                 status: status_for_phase(occurrence.link_phase),
             },

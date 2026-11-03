@@ -987,7 +987,7 @@ fn off_clock_tag_flip_updates_untouched_row_in_place() {
     let row = dentist_row(&today_note(&env));
     assert!(row.contains("**1830-1900** Dentist "), "{row}");
     assert!(!row.contains("Dentist #untracked"), "{row}");
-    assert!(row.contains(" #offclock [root:: body]"), "{row}");
+    assert!(row.contains(" #off [root:: body]"), "{row}");
     assert!(
         stdout(&output).contains("~ task"),
         "tag flip updates in place: {}",
@@ -1004,6 +1004,45 @@ fn off_clock_tag_flip_updates_untouched_row_in_place() {
         stdout(&again)
     );
     assert_eq!(journal_lines(&env).len(), journal_count);
+}
+
+#[test]
+fn explicit_on_tag_adds_and_removes_in_place_on_untouched_rows() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-on-tag-flips");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let patch_event = |summary: &str| {
+        let mut patch = serde_json::Map::new();
+        patch.insert("summary".to_string(), summary.into());
+        patch.insert(
+            "start".to_string(),
+            serde_json::json!({"dateTime": "2026-10-30T18:30:00-04:00"}),
+        );
+        patch.insert(
+            "end".to_string(),
+            serde_json::json!({"dateTime": "2026-10-30T19:00:00-04:00"}),
+        );
+        dentist_event(&patch)
+    };
+
+    fake.events_json(&events_envelope(vec![patch_event("Dentist @body")]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let initial = dentist_row(&today_note(&env));
+    assert!(!initial.contains(" #off"), "{initial}");
+    assert!(!initial.contains(" #on"), "{initial}");
+
+    fake.events_json(&events_envelope(vec![patch_event("Dentist @body #on")]));
+    let added = sync_output(&env, &fake, &[]);
+    assert_eq!(added.status.code(), Some(0), "{}", stderr(&added));
+    let on = dentist_row(&today_note(&env));
+    assert!(on.contains(" #on [root:: body]"), "{on}");
+
+    fake.events_json(&events_envelope(vec![patch_event("Dentist @body")]));
+    let removed = sync_output(&env, &fake, &[]);
+    assert_eq!(removed.status.code(), Some(0), "{}", stderr(&removed));
+    let none = dentist_row(&today_note(&env));
+    assert!(!none.contains(" #off"), "{none}");
+    assert!(!none.contains(" #on"), "{none}");
 }
 
 #[test]
@@ -1041,8 +1080,7 @@ fn off_clock_tag_flip_on_worked_row_is_kept_once() {
     assert!(!row.contains("#untracked"), "worked row kept:\n{row}");
     let combined = format!("{}{}", stdout(&output), stderr(&output));
     assert!(
-        combined
-            .contains("kept your on-clock row while Google now says off-clock"),
+        combined.contains("add #off by hand to follow Google"),
         "flip reported once: {combined}"
     );
 
@@ -1053,9 +1091,54 @@ fn off_clock_tag_flip_on_worked_row_is_kept_once() {
     assert!(!row_again.contains("#untracked"), "{row_again}");
     let combined_again = format!("{}{}", stdout(&again), stderr(&again));
     assert!(
-        !combined_again
-            .contains("kept your on-clock row while Google now says off-clock"),
+        !combined_again.contains("add #off by hand to follow Google"),
         "reported once only: {combined_again}"
+    );
+}
+
+#[test]
+fn off_to_on_tag_flip_on_worked_row_is_kept_once() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-off-to-on-worked");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let patch_event = |summary: &str| {
+        let mut patch = serde_json::Map::new();
+        patch.insert("summary".to_string(), summary.into());
+        patch.insert(
+            "start".to_string(),
+            serde_json::json!({"dateTime": "2026-10-30T08:00:00-04:00"}),
+        );
+        patch.insert(
+            "end".to_string(),
+            serde_json::json!({"dateTime": "2026-10-30T08:30:00-04:00"}),
+        );
+        dentist_event(&patch)
+    };
+
+    fake.events_json(&events_envelope(vec![patch_event("Dentist @body #off")]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(dentist_row(&today_note(&env)).contains(" #off [root:: body]"));
+
+    fake.events_json(&events_envelope(vec![patch_event("Dentist @body #on")]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let row = dentist_row(&today_note(&env));
+    assert!(row.starts_with("- [/]"), "worked row stays: {row}");
+    assert!(
+        row.contains(" #off [root:: body]"),
+        "Google flip is kept: {row}"
+    );
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("replace #off with #on by hand to follow Google"),
+        "worked flip detail: {combined}"
+    );
+
+    let again = sync_output(&env, &fake, &[]);
+    let combined = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(
+        !combined.contains("replace #off with #on by hand to follow Google"),
+        "worked flip is reported once: {combined}"
     );
 }
 
@@ -1070,9 +1153,11 @@ fn preexisting_off_clock_title_migrates_both_spans_in_place() {
     prepare(&env);
     // Old-style row: the token lives in the title, badges carry no tag.
     let html = "https://calendar.google.com/event?eid=lunch";
-    let old_badges = format!(" [📅]({html} \"Open in Google Calendar\")");
+    let old_badges = format!(
+        " [📅]({html} \"Open in Google Calendar\") #OFFCLOCK [buffer:: -30m]"
+    );
     let old_row = format!(
-        "- [*] #task **1200-1300** Lunch #untracked{old_badges} \
+        "- [/] #task **1200-1300** Lunch #untracked{old_badges} \
          [root:: meet] ^lunch"
     );
     let note = format!(
@@ -1116,6 +1201,7 @@ fn preexisting_off_clock_title_migrates_both_spans_in_place() {
             "status": "confirmed",
             "start": {"dateTime": "2026-10-30T12:00:00-04:00"},
             "end": {"dateTime": "2026-10-30T13:00:00-04:00"},
+            "description": "-30",
             "htmlLink": html,
             "attendees": [{"self": true, "responseStatus": "accepted"}]
         }],
@@ -1131,13 +1217,97 @@ fn preexisting_off_clock_title_migrates_both_spans_in_place() {
         .find(|line| line.contains("^lunch"))
         .expect("lunch row");
     assert!(row.contains("**1200-1300** Lunch "), "{row}");
+    assert!(row.starts_with("- [/]"), "worked checkbox stays: {row}");
     assert!(!row.contains("Lunch #untracked"), "{row}");
-    assert!(row.contains(" #offclock [root:: meet]"), "{row}");
+    assert!(
+        row.contains(&format!(
+            " [📅]({html}) #off [buffer:: -30m] [root:: meet]"
+        )),
+        "legacy badge alias and buffer migrate in place: {row}"
+    );
     assert!(
         row.contains(&format!(" [📅]({html})")),
         "badges migrate title-free: {row}"
     );
     assert!(!row.contains("\"Open in Google Calendar\""), "{row}");
+}
+
+#[test]
+fn preexisting_off_clock_badge_without_calendar_link_migrates_with_buffer() {
+    use sha2::{Digest, Sha256};
+    fn span_hash(text: &str) -> String {
+        hex::encode(Sha256::digest(text.as_bytes()))[..16].to_string()
+    }
+
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-off-badge-no-calendar");
+    prepare(&env);
+    let row = "- [/] #task **1200-1300** Lunch #offclock \
+               [buffer:: -30m] [root:: body] ^lunch";
+    let badges = " #offclock [buffer:: -30m]";
+    let note = format!(
+        "# Friday 2026-10-30\n\n## Events\n\n\
+         *↻ synced 11:00 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*\n\
+         {row}\n\n## Pomodoros\n"
+    );
+    fs::write(env.vault().join("2026/20261030.md"), &note).expect("write note");
+    let journal_line = serde_json::json!({
+        "v": 1,
+        "ts": "2026-10-30T11:00:00-04:00",
+        "host": "test-host",
+        "kind": "gcal.row",
+        "key": {"calendar_id": "primary", "event_id": "lunch"},
+        "day": "2026-10-30",
+        "path": "2026/20261030.md",
+        "block_id": "lunch",
+        "url": null,
+        "row": "task",
+        "spans": {
+            "time": span_hash("1200-1300"),
+            "title": span_hash("Lunch"),
+            "badges": span_hash(badges),
+        },
+        "root": {"value": "body", "source": "token"},
+    });
+    let journal_dir = env.vault().join(".bob/gcal");
+    fs::create_dir_all(&journal_dir).expect("journal dir");
+    fs::write(
+        journal_dir.join("test-host.jsonl"),
+        serde_json::to_string(&journal_line).expect("journal") + "\n",
+    )
+    .expect("write journal");
+
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![serde_json::json!({
+        "id": "lunch",
+        "summary": "Lunch @body",
+        "description": "#off -30",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T12:00:00-04:00"},
+        "end": {"dateTime": "2026-10-30T13:00:00-04:00"},
+        "attendees": [{"self": true, "responseStatus": "accepted"}]
+    })]));
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let notices = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        !notices.contains("kept_off_clock"),
+        "normalizing a worked alias to canonical off is not a flip: {notices}"
+    );
+    let updated_note = today_note(&env);
+    let migrated = updated_note
+        .lines()
+        .find(|line| line.contains("^lunch"))
+        .expect("lunch row");
+    assert!(
+        migrated.starts_with("- [/]"),
+        "worked checkbox stays: {migrated}"
+    );
+    assert!(
+        migrated.contains("Lunch #off [buffer:: -30m] [root:: body]"),
+        "badge alias migrates without a Calendar badge: {migrated}"
+    );
+    assert!(!migrated.contains("#offclock"), "{migrated}");
 }
 
 #[test]
@@ -1481,7 +1651,7 @@ fn root_reroute_keeps_buffered_google_run() {
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
     let before = dentist_row(&today_note(&env));
     assert!(
-        before.contains(" #offclock [buffer:: -30m +15m] [root:: body]"),
+        before.contains(" #off [buffer:: -30m +15m] [root:: body]"),
         "{before}"
     );
 
@@ -1494,7 +1664,7 @@ fn root_reroute_keeps_buffered_google_run() {
     assert!(stdout(&output).contains("~ task"), "{}", stdout(&output));
     let row = dentist_row(&today_note(&env));
     assert!(
-        row.contains(" #offclock [buffer:: -30m +15m] [root:: job]"),
+        row.contains(" #off [buffer:: -30m +15m] [root:: job]"),
         "reroute keeps the Google run: {row}"
     );
 

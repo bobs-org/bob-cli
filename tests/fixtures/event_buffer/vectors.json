@@ -97,6 +97,33 @@
       "after": 15
     },
     {
+      "id": "canonical-off-tag",
+      "input": "#off",
+      "route": null,
+      "untracked": true,
+      "before": 0,
+      "after": 0,
+      "clock": "off"
+    },
+    {
+      "id": "on-tag-with-route-and-buffer",
+      "input": "@love #on -30 +15",
+      "route": "love",
+      "untracked": false,
+      "before": 30,
+      "after": 15,
+      "clock": "on"
+    },
+    {
+      "id": "on-wins-over-off-alias",
+      "input": "#on #off-clock",
+      "route": null,
+      "untracked": false,
+      "before": 0,
+      "after": 0,
+      "clock": "on"
+    },
+    {
       "id": "ordinary-text-kills-the-line",
       "input": "Lunch at noon -30 +15",
       "route": null,

@@ -41,12 +41,24 @@ pub(crate) fn capture_edge_tag_end(text: &str, start: usize) -> Option<usize> {
     Some(end)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ClockTag {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClockKind {
     None,
-    Off { deprecated: Vec<String> },
+    Off,
     On,
-    Conflict { deprecated: Vec<String> },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum ClockTag {
+    #[default]
+    None,
+    Off {
+        deprecated: Vec<String>,
+    },
+    On,
+    Conflict {
+        deprecated: Vec<String>,
+    },
 }
 
 impl ClockTag {
@@ -59,6 +71,14 @@ impl ClockTag {
         matches!(self, Self::On | Self::Conflict { .. })
     }
 
+    pub(crate) fn kind(&self) -> ClockKind {
+        match self {
+            Self::None => ClockKind::None,
+            Self::Off { .. } => ClockKind::Off,
+            Self::On | Self::Conflict { .. } => ClockKind::On,
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn deprecated(&self) -> &[String] {
         match self {
@@ -67,6 +87,51 @@ impl ClockTag {
             }
             Self::None | Self::On => &[],
         }
+    }
+}
+
+/// Parse one whole Google title or directive token. Google accepts a
+/// narrower token grammar than vault lines: the caller whitespace-splits
+/// first, then this function strips only trailing punctuation.
+pub(crate) fn google_clock_token(token: &str) -> Option<ClockTag> {
+    let token = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    if token.eq_ignore_ascii_case(ON_TAG) {
+        return Some(ClockTag::On);
+    }
+    if token.eq_ignore_ascii_case(OFF_TAG) {
+        return Some(ClockTag::Off {
+            deprecated: Vec::new(),
+        });
+    }
+    DEPRECATED_OFF_TAGS
+        .iter()
+        .find(|tag| token.eq_ignore_ascii_case(tag))
+        .map(|tag| ClockTag::Off {
+            deprecated: vec![(*tag).to_string()],
+        })
+}
+
+/// Combine independent title/description Google tag parses. Any `#on`
+/// wins, while deprecated alias evidence remains available to diagnostics.
+pub(crate) fn merge_clock_tags(left: &ClockTag, right: &ClockTag) -> ClockTag {
+    let has_on = left.is_on() || right.is_on();
+    let has_off =
+        matches!(left, ClockTag::Off { .. } | ClockTag::Conflict { .. })
+            || matches!(
+                right,
+                ClockTag::Off { .. } | ClockTag::Conflict { .. }
+            );
+    let mut deprecated = Vec::new();
+    for token in left.deprecated().iter().chain(right.deprecated()) {
+        if !deprecated.contains(token) {
+            deprecated.push(token.clone());
+        }
+    }
+    match (has_on, has_off) {
+        (false, false) => ClockTag::None,
+        (false, true) => ClockTag::Off { deprecated },
+        (true, false) => ClockTag::On,
+        (true, true) => ClockTag::Conflict { deprecated },
     }
 }
 

@@ -7,9 +7,12 @@
 
 use std::fmt;
 
-use crate::native::event_task::{parse_buffer_token, BufferPart, EventBuffer};
+use crate::native::{
+    clock_tags::{google_clock_token, merge_clock_tags, ClockTag},
+    event_task::{parse_buffer_token, BufferPart, EventBuffer},
+};
 
-use super::model::{is_off_clock_token, parse_route_token};
+use super::model::parse_route_token;
 
 mod boilerplate;
 pub(crate) mod bullets;
@@ -28,6 +31,9 @@ pub(crate) struct DescriptionContext<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct DescriptionDirectives {
     pub route: Option<String>,
+    pub clock_tag: ClockTag,
+    /// Deprecated compatibility mirror. It is true only when explicit off
+    /// wins, so a conflicting `#on` plus alias remains on-clock.
     pub untracked: bool,
     pub buffer: EventBuffer,
 }
@@ -273,8 +279,8 @@ fn directives_from_source(lines: &[SourceLine]) -> DescriptionDirectives {
                 }
                 continue;
             }
-            if is_off_clock_token(token) {
-                out.untracked = true;
+            if let Some(clock_tag) = google_clock_token(token) {
+                out.clock_tag = merge_clock_tags(&out.clock_tag, &clock_tag);
                 continue;
             }
             let Some((part, minutes)) = parse_buffer_token(token) else {
@@ -293,6 +299,7 @@ fn directives_from_source(lines: &[SourceLine]) -> DescriptionDirectives {
             }
         }
     }
+    out.untracked = out.clock_tag.explicit_off();
     out
 }
 
@@ -310,7 +317,7 @@ fn is_directive_line(line: &SourceLine) -> bool {
 
 fn is_gcal_directive_token(token: &str) -> bool {
     parse_route_token(token).is_some()
-        || is_off_clock_token(token)
+        || google_clock_token(token).is_some()
         || parse_buffer_token(token).is_some()
 }
 
@@ -572,6 +579,7 @@ fn normalize_plain_chars(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::clock_tags::ClockKind;
     use serde_json::Value;
 
     fn parse(raw: &str) -> EventDescription {
@@ -683,6 +691,19 @@ mod tests {
                 "{}",
                 case["id"]
             );
+            if let Some(expected) = case.get("clock") {
+                let clock = match parsed.clock_tag.kind() {
+                    ClockKind::None => "none",
+                    ClockKind::Off => "off",
+                    ClockKind::On => "on",
+                };
+                assert_eq!(
+                    clock,
+                    expected.as_str().expect("clock"),
+                    "{}",
+                    case["id"]
+                );
+            }
             let before =
                 u16::try_from(case["before"].as_u64().expect("before"))
                     .expect("before fits");
@@ -698,6 +719,36 @@ mod tests {
                 case["id"]
             );
         }
+    }
+
+    #[test]
+    fn on_directive_is_removed_but_tagged_prose_remains_a_bullet() {
+        let parsed = parse_description(
+            "Bring shoes\n@love #on -30 +15\nBring snacks #offclock",
+            &DescriptionContext {
+                join_link: None,
+                location: None,
+            },
+        );
+        assert_eq!(parsed.directives.route.as_deref(), Some("love"));
+        assert_eq!(parsed.directives.clock_tag.kind(), ClockKind::On);
+        assert!(!parsed.directives.untracked);
+        assert_eq!(parsed.directives.buffer.before_min, 30);
+        assert_eq!(parsed.directives.buffer.after_min, 15);
+        let bullets = parsed
+            .lines
+            .iter()
+            .map(|line| {
+                line.inlines
+                    .iter()
+                    .map(|inline| match inline {
+                        Inline::Text { text, .. }
+                        | Inline::Link { text, .. } => text.as_str(),
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bullets, ["Bring shoes", "Bring snacks #offclock"]);
     }
 
     #[test]

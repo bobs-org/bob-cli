@@ -433,7 +433,7 @@ fn build_occurrences(
             event.event.html_link.as_deref(),
             event.event.join_link.as_deref(),
             event.event.location.as_deref(),
-            off_clock && task,
+            task.then_some(&event.event.clock_tag),
             buffer,
         );
         let mut spans = BTreeMap::new();
@@ -516,6 +516,7 @@ fn build_occurrences(
                 spans,
                 needs_type,
                 off_clock,
+                clock_tag: event.event.clock_tag.clone(),
                 buffer,
                 description,
                 link_phase,

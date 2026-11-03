@@ -7,7 +7,10 @@ use chrono::{
 };
 use serde::Deserialize;
 
-use crate::native::event_task::EventBuffer;
+use crate::native::{
+    clock_tags::{google_clock_token, merge_clock_tags, ClockTag},
+    event_task::EventBuffer,
+};
 
 use super::{
     description::{parse_description, DescriptionContext, EventDescription},
@@ -24,6 +27,9 @@ pub(crate) struct GcalEvent {
     pub status: String,
     pub title: String,
     pub title_route_hint: Option<String>,
+    pub clock_tag: ClockTag,
+    pub deprecated_title_tags: Vec<String>,
+    pub deprecated_description_tags: Vec<String>,
     pub untracked: bool,
     pub buffer: EventBuffer,
     pub off_clock: bool,
@@ -120,7 +126,7 @@ impl GcalEvent {
             .summary
             .filter(|summary| !summary.trim().is_empty())
             .unwrap_or_else(|| "(untitled event)".to_string());
-        let (title, title_off_clock) = strip_off_clock_tokens(&raw_title);
+        let (title, title_clock_tag) = strip_google_clock_tokens(&raw_title);
         let description = parse_description(
             raw.description.as_deref().unwrap_or(""),
             &DescriptionContext {
@@ -128,7 +134,14 @@ impl GcalEvent {
                 location: raw.location.as_deref(),
             },
         );
-        let off_clock = title_off_clock || description.directives.untracked;
+        let clock_tag = merge_clock_tags(
+            &title_clock_tag,
+            &description.directives.clock_tag,
+        );
+        let off_clock = clock_tag.explicit_off();
+        let deprecated_title_tags = title_clock_tag.deprecated().to_vec();
+        let deprecated_description_tags =
+            description.directives.clock_tag.deprecated().to_vec();
         let title_route_hint =
             title.split_whitespace().last().and_then(parse_route_token);
         Ok(Self {
@@ -145,6 +158,9 @@ impl GcalEvent {
             status: raw.status.unwrap_or_else(|| "confirmed".to_string()),
             title,
             title_route_hint,
+            clock_tag,
+            deprecated_title_tags,
+            deprecated_description_tags,
             untracked: off_clock,
             buffer: description.directives.buffer,
             route_hint: description.directives.route.clone(),
@@ -268,38 +284,29 @@ pub(super) fn parse_route_token(token: &str) -> Option<String> {
     Some(route.to_string())
 }
 
-/// A standalone off-clock spelling in a Google title (case-insensitive,
-/// whitespace-bounded, trailing `.,;:!?` allowed).
-pub(super) fn is_off_clock_token(token: &str) -> bool {
-    let stripped = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
-    ["#offclock", "#off-clock", "#untracked"]
-        .iter()
-        .any(|tag| stripped.eq_ignore_ascii_case(tag))
-}
-
-/// Strip off-clock aliases from a Google title. Returns the cleaned
-/// title and whether any token was removed. When no token is present the
-/// title is returned unchanged so journal hashes stay stable.
-fn strip_off_clock_tokens(title: &str) -> (String, bool) {
-    let lower = title.to_ascii_lowercase();
-    if !["#offclock", "#off-clock", "#untracked"]
-        .iter()
-        .any(|tag| lower.contains(tag))
-    {
-        return (title.to_string(), false);
+/// Strip all explicit Google clock tokens before looking for a trailing
+/// `@route`. With no token, preserve the exact title bytes so journal hashes
+/// remain stable.
+fn strip_google_clock_tokens(title: &str) -> (String, ClockTag) {
+    let mut kept = Vec::new();
+    let mut clock_tag = ClockTag::None;
+    let mut removed = false;
+    for token in title.split_whitespace() {
+        if let Some(found) = google_clock_token(token) {
+            clock_tag = merge_clock_tags(&clock_tag, &found);
+            removed = true;
+        } else {
+            kept.push(token);
+        }
     }
-    let kept: Vec<&str> = title
-        .split_whitespace()
-        .filter(|token| !is_off_clock_token(token))
-        .collect();
-    if kept.len() == title.split_whitespace().count() {
-        return (title.to_string(), false);
+    if !removed {
+        return (title.to_string(), ClockTag::None);
     }
     let cleaned = kept.join(" ");
     if cleaned.trim().is_empty() {
-        ("(untitled event)".to_string(), true)
+        ("(untitled event)".to_string(), clock_tag)
     } else {
-        (cleaned, true)
+        (cleaned, clock_tag)
     }
 }
 
@@ -380,6 +387,7 @@ struct RawEntryPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::clock_tags::ClockKind;
     use serde_json::json;
 
     fn event(title: &str, description: Option<&str>) -> GcalEvent {
@@ -411,14 +419,49 @@ mod tests {
     }
 
     #[test]
-    fn title_aliases_are_stripped_before_route_parsing() {
-        for token in ["#offclock", "#OFFCLOCK.", "#off-clock", "#untracked!"] {
-            let parsed = event(&format!("Lunch @love {token}"), None);
-            assert_eq!(parsed.title, "Lunch @love", "token {token}");
-            assert_eq!(parsed.title_route_hint.as_deref(), Some("love"));
-            assert!(parsed.off_clock, "token {token}");
-            assert!(parsed.untracked, "legacy alias for {token}");
+    fn google_title_clock_tokens_strip_before_route_parsing() {
+        let spellings =
+            ["#off", "#on", "#offclock", "#off-clock", "#untracked"];
+        let punctuation = ["", ".", ",", ";", ":", "!", "?"];
+        for spelling in spellings {
+            for punctuation in punctuation {
+                let token =
+                    format!("{}{punctuation}", spelling.to_ascii_uppercase());
+                let parsed = event(&format!("Lunch @love {token}"), None);
+                assert_eq!(parsed.title, "Lunch @love", "token {token}");
+                assert_eq!(parsed.title_route_hint.as_deref(), Some("love"));
+                let expected = if spelling.eq_ignore_ascii_case("#off")
+                    || spelling.starts_with("#off")
+                    || spelling.eq_ignore_ascii_case("#untracked")
+                {
+                    ClockKind::Off
+                } else {
+                    ClockKind::On
+                };
+                assert_eq!(parsed.clock_tag.kind(), expected, "token {token}");
+                assert_eq!(
+                    parsed.off_clock,
+                    expected == ClockKind::Off,
+                    "{token}"
+                );
+                assert_eq!(parsed.untracked, parsed.off_clock, "{token}");
+                if spelling.starts_with("#offclock")
+                    || spelling.starts_with("#off-clock")
+                    || spelling.starts_with("#untracked")
+                {
+                    assert_eq!(
+                        parsed.deprecated_title_tags,
+                        [spelling.to_ascii_lowercase()]
+                    );
+                } else {
+                    assert!(parsed.deprecated_title_tags.is_empty(), "{token}");
+                }
+            }
         }
+        let parsed = event("Lunch @love #on", None);
+        assert_eq!(parsed.title, "Lunch @love");
+        assert_eq!(parsed.title_route_hint.as_deref(), Some("love"));
+        assert_eq!(parsed.clock_tag.kind(), ClockKind::On);
     }
 
     #[test]
@@ -428,11 +471,55 @@ mod tests {
                 event("Lunch", Some(&format!("Bring shoes\n {token} \n")));
             assert!(parsed.off_clock, "token {token}");
         }
-        let parsed = event("Lunch", Some("@love #off-clock -30 +15"));
+        let parsed = event("Lunch", Some("@love #on -30 +15"));
         assert_eq!(parsed.route_hint.as_deref(), Some("love"));
-        assert!(parsed.off_clock);
+        assert!(!parsed.off_clock);
+        assert_eq!(parsed.clock_tag.kind(), ClockKind::On);
         assert_eq!(parsed.buffer.before_min, 30);
         assert_eq!(parsed.buffer.after_min, 15);
         assert!(!event("Lunch", Some("text #offclock")).off_clock);
+    }
+
+    #[test]
+    fn google_clock_conflicts_are_order_independent_and_keep_alias_evidence() {
+        for (title, description) in [
+            ("Lunch @love #off", Some("#on")),
+            ("Lunch @love #on", Some("#offclock")),
+            ("Lunch @love #offclock", Some("#ON")),
+        ] {
+            let parsed = event(title, description);
+            assert_eq!(parsed.clock_tag.kind(), ClockKind::On);
+            assert!(!parsed.off_clock);
+            assert!(!parsed.untracked);
+        }
+        let alias_in_title = event("Lunch #untracked @love", Some("#on"));
+        assert_eq!(alias_in_title.deprecated_title_tags, ["#untracked"]);
+        assert!(alias_in_title.deprecated_description_tags.is_empty());
+        let alias_in_description = event("Lunch @love #on", Some("#off-clock"));
+        assert!(alias_in_description.deprecated_title_tags.is_empty());
+        assert_eq!(
+            alias_in_description.deprecated_description_tags,
+            ["#off-clock"]
+        );
+        assert_eq!(
+            alias_in_description.description.directives.clock_tag.kind(),
+            ClockKind::Off,
+            "the description retains its own verdict"
+        );
+
+        let duplicates =
+            event("Lunch #offclock #OFFCLOCK", Some("#untracked #UNTRACKED"));
+        assert_eq!(duplicates.deprecated_title_tags, ["#offclock"]);
+        assert_eq!(duplicates.deprecated_description_tags, ["#untracked"]);
+    }
+
+    #[test]
+    fn google_title_clock_matching_requires_a_whole_token() {
+        let untouched =
+            "Lunch   @love #office #one #online #off/x x#off https://x/#off";
+        let parsed = event(untouched, None);
+        assert_eq!(parsed.title, untouched, "no-token titles keep exact bytes");
+        assert_eq!(parsed.clock_tag.kind(), ClockKind::None);
+        assert!(parsed.title_route_hint.is_none());
     }
 }

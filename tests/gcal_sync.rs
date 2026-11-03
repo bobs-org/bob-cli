@@ -1452,14 +1452,14 @@ fn off_clock_aliases_split_clusters_and_report() {
         .expect("lunch row");
     assert!(lunch.contains("**0815-0900** Lunch "), "{lunch}");
     assert!(!lunch.contains("Lunch #untracked"), "{lunch}");
-    assert!(lunch.contains(" #offclock [root::"), "{lunch}");
+    assert!(lunch.contains(" #off [root::"), "{lunch}");
     // Description-only token also marks the row.
     let gym = note
         .lines()
         .find(|line| line.contains("^gym"))
         .expect("gym row");
     assert!(gym.contains("**0900-0930** Gym "), "{gym}");
-    assert!(gym.contains(" #offclock"), "{gym}");
+    assert!(gym.contains(" #off"), "{gym}");
     // The human line becomes a bullet; the directive line writes none.
     assert!(note.contains("\t- Bring shoes"), "{note}");
     // @route is read after the tag is stripped.
@@ -1470,7 +1470,7 @@ fn off_clock_aliases_split_clusters_and_report() {
     assert!(team.contains("**1100-1130** Team Lunch "), "{team}");
     assert!(!team.contains("@job"), "{team}");
     assert!(team.contains("[root:: job]"), "{team}");
-    assert!(team.contains(" #offclock [root:: job]"), "{team}");
+    assert!(team.contains(" #off [root:: job]"), "{team}");
     // Tracked rows carry no tag.
     let standup = note
         .lines()
@@ -1640,7 +1640,7 @@ fn buffered_rows_render_update_and_report() {
     assert!(lunch.starts_with("- [*] #task"), "{lunch}");
     assert!(lunch.contains("Lunch with Kelly "), "{lunch}");
     assert!(
-        lunch.contains(" #offclock [buffer:: -30m +15m] [root:: job]"),
+        lunch.contains(" #off [buffer:: -30m +15m] [root:: job]"),
         "{lunch}"
     );
     assert!(lunch.ends_with("^lunch-kelly"), "{lunch}");
@@ -1864,7 +1864,7 @@ fn buffered_spans_drive_meet_phases_and_clusters() {
     let lunch = event_row(&note, "**1200-1300**");
     assert!(lunch.starts_with("- [*] #task"), "{lunch}");
     assert!(
-        lunch.contains(" #offclock [buffer:: -30m +15m] [root:: meet]"),
+        lunch.contains(" #off [buffer:: -30m +15m] [root:: meet]"),
         "{lunch}"
     );
 
@@ -1974,14 +1974,14 @@ fn descriptions_become_bullets_in_every_phase() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let note = today_note(&env);
 
-    // The motivating case: the directive line still drives `#offclock`
+    // The motivating case: the directive line still drives canonical `#off`
     // and `[root:: love]`, and the human line becomes the bullet.
     let swings = note
         .lines()
         .find(|line| line.contains("^swings"))
         .expect("swings row");
     assert!(swings.starts_with("- [/] #task"), "{swings}");
-    assert!(swings.contains(" #offclock [root:: love]"), "{swings}");
+    assert!(swings.contains(" #off [root:: love]"), "{swings}");
     // The past row works from birth under a closed MEET.
     assert!(note.contains("\t- And retainers!"), "{note}");
     let lunch = note

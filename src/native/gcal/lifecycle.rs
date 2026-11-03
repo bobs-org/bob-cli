@@ -16,6 +16,7 @@ use crate::native::{
     capture::line_spans,
     capture_pomodoros::{self, PomodoroState},
     capture_task_toggle::child_block_end_line,
+    clock_tags::strip_trailing_clock_tag,
     pomodoro::pomodoros_section_range,
     task_cancel::line::{edit_source_create_log, CancelLogOutcome},
 };
@@ -182,7 +183,7 @@ fn split_suffix(middle: &str, task: bool) -> (&str, String) {
     (middle, String::new())
 }
 
-/// Split the trailing Google-owned run (an off-clock alias and/or
+/// Split the trailing Google-owned run (an explicit clock tag and/or
 /// `[buffer:: …]` field) off `middle` when no `📅` badge is present.
 /// Returns the head and the badge span (keeping one leading space). An
 /// empty run returns `None`, so unbuffered tracked rows parse exactly
@@ -191,7 +192,7 @@ fn split_trailing_google_run(middle: &str) -> Option<(&str, String)> {
     let trimmed = middle.trim_end();
     let mut head = trimmed;
     loop {
-        let next = strip_trailing_off_clock_token(head)
+        let next = strip_trailing_clock_token(head)
             .or_else(|| strip_trailing_buffer_token(head));
         match next {
             Some(rest) => head = rest.trim_end(),
@@ -205,22 +206,10 @@ fn split_trailing_google_run(middle: &str) -> Option<(&str, String)> {
     Some((head, format!(" {run}")))
 }
 
-/// Strip one trailing standalone off-clock alias (case-insensitive,
-/// whitespace-bounded; trailing `.,;:!?` allowed) off `text`.
-fn strip_trailing_off_clock_token(text: &str) -> Option<&str> {
-    let trimmed = text.trim_end();
-    let token_start = trimmed.rfind([' ', '\t'])? + 1;
-    let token = trimmed.get(token_start..)?;
-    let stripped = token.trim_end_matches(['.', ',', ';', ':', '!', '?']);
-    if !["#offclock", "#off-clock", "#untracked"]
-        .iter()
-        .any(|tag| stripped.eq_ignore_ascii_case(tag))
-    {
-        return None;
-    }
-    // The token must be standalone: preceded by whitespace (guaranteed by
-    // the rfind) and followed only by the stripped punctuation/end.
-    Some(trimmed.get(..token_start)?.trim_end())
+/// Strip one trailing standalone clock token using the shared spelling
+/// table and vault-line boundaries.
+fn strip_trailing_clock_token(text: &str) -> Option<&str> {
+    strip_trailing_clock_tag(text)
 }
 
 /// Strip one trailing `[buffer:: …]` field off `text`. The field must be
@@ -488,6 +477,39 @@ mod tests {
         assert_eq!(context.title, "School holiday");
         assert_eq!(context.qualifier.as_deref(), Some("day 2 of 2"));
         assert_eq!(context.suffix, "");
+    }
+
+    #[test]
+    fn trailing_clock_badges_split_with_or_without_calendar_link() {
+        let without_calendar = spans(
+            "- [/] #task **1200-1300** Lunch #OFFCLOCK [buffer:: -30m] \
+             [root:: love] ^lunch",
+        );
+        assert_eq!(without_calendar.title, "Lunch");
+        assert_eq!(without_calendar.badges, " #OFFCLOCK [buffer:: -30m]");
+
+        let with_calendar = spans(
+            "- [/] #task **1200-1300** Lunch \
+             [📅](https://calendar.example/e1) #off-clock [buffer:: +15m] \
+             [root:: love] ^lunch",
+        );
+        assert_eq!(with_calendar.title, "Lunch");
+        assert_eq!(
+            with_calendar.badges,
+            " [📅](https://calendar.example/e1) #off-clock [buffer:: +15m]"
+        );
+
+        let on = spans(
+            "- [*] #task **1200-1300** Planning #on [root:: love] ^planning",
+        );
+        assert_eq!(on.title, "Planning");
+        assert_eq!(on.badges, " #on");
+
+        let prose = spans(
+            "- [*] #task **1200-1300** Contact #office [root:: love] ^contact",
+        );
+        assert_eq!(prose.title, "Contact #office");
+        assert!(prose.badges.is_empty());
     }
 
     #[test]
