@@ -2017,7 +2017,6 @@ pub(super) fn plan_capture_item(
             };
             return Ok(PlannedCaptureItem {
                 result: CaptureItemResult {
-                    note_pull: None,
                     ok: true,
                     dry_run: request.dry_run,
                     routed: parsed.route.is_some(),

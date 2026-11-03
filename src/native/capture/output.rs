@@ -1161,6 +1161,9 @@ pub(super) struct PullInGroupJson {
     pub(super) label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) event: Option<&'static str>,
+    /// Source note for a note-pull group. Omitted for every other group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) folded: Option<PullInFoldedJson>,
     pub(super) copy: PullInGroupCopyJson,
@@ -1846,6 +1849,13 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     if result.captures.is_empty() {
         print_list_summary(&result.item);
         print_human_item_success(result, None, &result.theme_refs);
+        let rows = note_pull_rows(result);
+        print_human_note_pull_groups(
+            &result.pull_in.groups,
+            &rows,
+            result.dry_run,
+            &Styler::detect(),
+        );
         print_pull_in_hint(result);
         print_inbox_route_hint(result);
         return;
@@ -1863,8 +1873,144 @@ pub(super) fn print_human_success(result: &CaptureResult) {
             &result.theme_refs,
         );
     }
+    let rows = note_pull_rows(result);
+    print_human_note_pull_groups(
+        &result.pull_in.groups,
+        &rows,
+        result.dry_run,
+        &Styler::detect(),
+    );
     print_pull_in_hint(result);
     print_inbox_route_hint(result);
+}
+
+fn note_pull_rows(result: &CaptureResult) -> Vec<&TaskCompleteUnblockedJson> {
+    let rows = if result.captures.is_empty() {
+        all_note_pull(&result.item).collect::<Vec<_>>()
+    } else {
+        result.captures.iter().flat_map(all_note_pull).collect()
+    };
+    let mut rows: Vec<_> = rows
+        .into_iter()
+        .filter(|row| {
+            row.offer
+                .as_ref()
+                .is_some_and(|offer| offer.group == "note_pull")
+        })
+        .collect();
+    rows.sort_by_key(|row| {
+        row.offer.as_ref().map(|offer| offer.n).unwrap_or(0)
+    });
+    rows
+}
+
+fn print_human_note_pull_groups(
+    groups: &[PullInGroupJson],
+    rows: &[&TaskCompleteUnblockedJson],
+    dry_run: bool,
+    styler: &Styler,
+) {
+    for group in groups.iter().filter(|group| group.group == "note_pull") {
+        let Some(note) = group.note.as_deref() else {
+            continue;
+        };
+        let group_rows: Vec<_> = rows
+            .iter()
+            .copied()
+            .filter(|row| row.note_path == note)
+            .collect();
+        if group_rows.is_empty() {
+            continue;
+        }
+        let stem = Path::new(note)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| note.to_string());
+        let offer_count = group_rows.len();
+        let picked_count = group_rows
+            .iter()
+            .filter(|row| {
+                row.offer.as_ref().is_some_and(|offer| offer.selected)
+            })
+            .count();
+        if picked_count == 0 {
+            let noun = if offer_count == 1 { "task" } else { "tasks" };
+            println!(
+                "{} · {offer_count} ready {noun}",
+                styler.yellow(&format!("Pull from {stem}"))
+            );
+        } else {
+            println!(
+                "{} · {picked_count} of {offer_count} pulled in",
+                styler.yellow(&format!("Pull from {stem}"))
+            );
+        }
+        for row in group_rows {
+            print_human_note_pull_row(row, picked_count > 0, dry_run, styler);
+        }
+        if let Some(fold) = group.copy.fold.as_deref() {
+            println!("  {}", styler.dim(&format!("not offered  {fold}")));
+        }
+    }
+}
+
+fn print_human_note_pull_row(
+    row: &TaskCompleteUnblockedJson,
+    partial_pick: bool,
+    dry_run: bool,
+    styler: &Styler,
+) {
+    let Some(offer) = row.offer.as_ref() else {
+        return;
+    };
+    let text = if row.text.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", row.text)
+    };
+    let locator = task_complete_locator(&row.note_path, &row.block_id);
+    if let Some(link) = row.link.as_ref() {
+        let verb = if dry_run { "would link" } else { "linked" };
+        let current = styled_note_pull_lane(row.status_symbol, styler);
+        let lane = if row.previous_status_symbol == row.status_symbol {
+            current
+        } else {
+            format!(
+                "{} → {current}",
+                styled_note_pull_lane(row.previous_status_symbol, styler)
+            )
+        };
+        let minted = link
+            .block_link
+            .rsplit_once('^')
+            .filter(|_| link.block_id_created)
+            .map(|(_, id)| format!(" · added ^{}", id.trim_end_matches("]]")))
+            .unwrap_or_default();
+        println!(
+            "  offer {}  {verb} {lane}{text}  {locator} → {}{minted}",
+            offer.n,
+            offer_destination_label(&offer.destination),
+        );
+    } else {
+        let lane = styled_note_pull_lane(row.status_symbol, styler);
+        let prefix = if partial_pick {
+            format!("  not pulled in  offer {}  ", offer.n)
+        } else {
+            format!("  offer {}  ", offer.n)
+        };
+        println!(
+            "{prefix}{lane}{text}  {locator} → {}",
+            offer_destination_label(&offer.destination),
+        );
+    }
+}
+
+fn styled_note_pull_lane(symbol: char, styler: &Styler) -> String {
+    match symbol {
+        '/' => styler.blue("Pending"),
+        '*' => styler.yellow("Next"),
+        _ => styler.dim("Ready"),
+    }
 }
 
 /// The one summary line that precedes each list's first item:
@@ -2037,10 +2183,45 @@ fn print_pull_in_hint(result: &CaptureResult) {
     if result.pull_in.offer_count == 0 || result.pull_in.picked_count > 0 {
         return;
     }
+    let styler = Styler::detect();
+    if result
+        .pull_in
+        .groups
+        .iter()
+        .all(|group| group.group == "note_pull")
+    {
+        let note_rows = note_pull_rows(result);
+        let mut numbers: Vec<usize> = result
+            .pull_in
+            .groups
+            .iter()
+            .filter(|group| group.group == "note_pull")
+            .flat_map(|group| {
+                note_rows.iter().filter_map(|row| {
+                    let offer = row.offer.as_ref()?;
+                    (group.note.as_deref() == Some(row.note_path.as_str()))
+                        .then_some(offer.n)
+                })
+            })
+            .collect();
+        numbers.sort_unstable();
+        numbers.dedup();
+        let picks = numbers
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let hint = if numbers.len() == 1 {
+            format!("nothing pulled in · choose with -p {picks}")
+        } else {
+            format!("nothing pulled in · choose with -p {picks} or -p all")
+        };
+        println!("  {}", styler.dim(&hint));
+        return;
+    }
     if result.pull_in.choice.is_some() {
         return;
     }
-    let styler = Styler::detect();
     if result.dry_run {
         let mut numbers: Vec<usize> = Vec::new();
         let items = if result.captures.is_empty() {
@@ -3005,6 +3186,9 @@ pub(super) fn print_human_item_success(
             result, reference, &styler, &prefix, &ordinal,
         );
         print_consumed_links(result, &styler);
+        return;
+    }
+    if result.note_pull.is_some() {
         return;
     }
     let verb = if result.dry_run {
@@ -5774,7 +5958,9 @@ pub(super) fn print_capture_error(
     match output_format {
         OutputFormat::Human => {
             eprintln!("{COMMAND_NAME}: {}", error.message);
-            if !error.human_unblocked.is_empty() {
+            if !error.human_unblocked.is_empty()
+                || !error.human_note_pull_rows.is_empty()
+            {
                 let styler = Styler::detect();
                 // Keep-moving offers render as their own group, never
                 // under the dependency wording.
@@ -5800,6 +5986,12 @@ pub(super) fn print_capture_error(
                 print_human_keep_moving_rows(
                     &moving,
                     &error.human_keep_moving_folds,
+                    false,
+                    &styler,
+                );
+                print_human_note_pull_groups(
+                    &error.human_note_pull_groups,
+                    &error.human_note_pull_rows.iter().collect::<Vec<_>>(),
                     false,
                     &styler,
                 );
@@ -5845,6 +6037,10 @@ pub(crate) struct CaptureError {
     pub(super) human_relation_held: Vec<RelationHeldJson>,
     /// `"checked"` / `"unavailable"` for human `pull_in_choice_required`.
     pub(super) human_relation_check: Option<&'static str>,
+    /// Numbered note-pull offers shown on human `pull_in_choice_required`.
+    pub(super) human_note_pull_rows: Vec<TaskCompleteUnblockedJson>,
+    /// Note-pull groups, including folded counts, shown on human refusals.
+    pub(super) human_note_pull_groups: Vec<PullInGroupJson>,
     /// Typed failure kind for `bob ref today`. Capture JSON ignores this
     /// so `bob capture` stays byte-identical.
     pub(crate) typed: Option<CaptureFailureKind>,
@@ -5877,6 +6073,8 @@ impl CaptureError {
             human_relation_groups: Vec::new(),
             human_relation_held: Vec::new(),
             human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
             typed: None,
         }
     }
@@ -5895,6 +6093,8 @@ impl CaptureError {
             human_relation_groups: Vec::new(),
             human_relation_held: Vec::new(),
             human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
             typed: None,
         }
     }
@@ -5910,6 +6110,8 @@ impl CaptureError {
             human_relation_groups: Vec::new(),
             human_relation_held: Vec::new(),
             human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
             typed: None,
         }
     }
@@ -5925,6 +6127,8 @@ impl CaptureError {
         >,
         human_relation_held: Vec<RelationHeldJson>,
         human_relation_check: Option<&'static str>,
+        human_note_pull_rows: Vec<TaskCompleteUnblockedJson>,
+        human_note_pull_groups: Vec<PullInGroupJson>,
     ) -> Self {
         Self {
             kind: CaptureErrorKind::Io,
@@ -5937,6 +6141,8 @@ impl CaptureError {
             human_relation_groups,
             human_relation_held,
             human_relation_check,
+            human_note_pull_rows,
+            human_note_pull_groups,
             typed: None,
         }
     }
@@ -5963,6 +6169,8 @@ impl CaptureError {
             human_relation_groups: Vec::new(),
             human_relation_held: Vec::new(),
             human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
             typed: None,
         }
     }
@@ -5999,6 +6207,8 @@ impl CaptureError {
             human_relation_groups: Vec::new(),
             human_relation_held: Vec::new(),
             human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
             typed: None,
         }
     }
@@ -6036,6 +6246,8 @@ impl CaptureError {
             human_relation_groups: Vec::new(),
             human_relation_held: Vec::new(),
             human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
             typed: None,
         }
     }
@@ -6053,6 +6265,8 @@ impl CaptureError {
             human_relation_groups: Vec::new(),
             human_relation_held: Vec::new(),
             human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
             typed: None,
         }
     }

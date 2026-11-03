@@ -306,6 +306,30 @@ fn choice_required_error(
         .filter(|row| row.offer.is_some())
         .cloned()
         .collect();
+    let human_note_pull_rows = offers
+        .iter()
+        .filter(|row| {
+            row.offer
+                .as_ref()
+                .is_some_and(|offer| offer.group == "note_pull")
+        })
+        .cloned()
+        .collect();
+    let human_unblocked = offers
+        .iter()
+        .filter(|row| {
+            row.offer
+                .as_ref()
+                .is_some_and(|offer| offer.group != "note_pull")
+        })
+        .cloned()
+        .collect();
+    let human_note_pull_groups = pull_in
+        .groups
+        .iter()
+        .filter(|group| group.group == "note_pull")
+        .cloned()
+        .collect();
     let mut extra = serde_json::Map::new();
     extra.insert(
         "pull_in".to_string(),
@@ -338,11 +362,13 @@ fn choice_required_error(
     );
     CaptureError::pull_in_choice_required(
         extra,
-        offers,
+        human_unblocked,
         folds,
         relation_groups,
         relation_held,
         relation_check,
+        human_note_pull_rows,
+        human_note_pull_groups,
     )
 }
 

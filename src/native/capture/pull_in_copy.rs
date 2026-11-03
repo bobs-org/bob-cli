@@ -29,6 +29,7 @@ enum GroupKey {
     Project { project: String },
     ProjectFinished,
     KeepMoving { project: String },
+    NotePull { note: String },
 }
 
 struct GroupAcc<'a> {
@@ -103,6 +104,19 @@ pub(super) fn assemble_groups(
             )
         })
         .collect();
+    let mut note_pull_folds: HashMap<String, PullInFoldedJson> = HashMap::new();
+    for summary in items
+        .iter()
+        .filter_map(|item| item.result.note_pull.as_ref())
+        .filter(|summary| {
+            summary.successors.iter().any(|row| row.offer.is_some())
+        })
+    {
+        let folded = note_pull_folds
+            .entry(summary.note.clone())
+            .or_insert_with(empty_folded);
+        add_folded(folded, &summary.folded);
+    }
     let relation_groups: Vec<&RelationOfferGroup> = items
         .iter()
         .flat_map(|item| all_relation_groups(&item.result))
@@ -119,6 +133,7 @@ pub(super) fn assemble_groups(
                 group,
                 &project_folds,
                 &keep_moving_folds,
+                &note_pull_folds,
                 &relation_groups,
                 &held,
             )
@@ -147,6 +162,9 @@ fn group_key(row: &TaskCompleteUnblockedJson) -> Option<GroupKey> {
         "keep_moving" => GroupKey::KeepMoving {
             project: row_project(row),
         },
+        "note_pull" => GroupKey::NotePull {
+            note: row.note_path.clone(),
+        },
         _ => return None,
     })
 }
@@ -155,6 +173,7 @@ fn emit_group(
     group: &GroupAcc<'_>,
     project_folds: &HashMap<String, PullInFoldedJson>,
     keep_moving_folds: &HashMap<String, PullInFoldedJson>,
+    note_pull_folds: &HashMap<String, PullInFoldedJson>,
     relation_groups: &[&RelationOfferGroup],
     held: &[&super::output::RelationHeldJson],
 ) -> PullInGroupJson {
@@ -166,6 +185,7 @@ fn emit_group(
             label: None,
             event: None,
             folded: None,
+            note: None,
             copy: PullInGroupCopyJson {
                 title: "Hand-offs".to_string(),
                 why: None,
@@ -191,17 +211,13 @@ fn emit_group(
                 after: None,
                 label: None,
                 event: None,
-                folded: Some(project_folds.get(project).cloned().unwrap_or(
-                    PullInFoldedJson {
-                        hidden: 0,
-                        already_planned: 0,
-                        sub_projects: 0,
-                        blocked: 0,
-                        scheduled: 0,
-                        already_started: 0,
-                        waits_for: 0,
-                    },
-                )),
+                folded: Some(
+                    project_folds
+                        .get(project)
+                        .cloned()
+                        .unwrap_or(empty_folded()),
+                ),
+                note: None,
                 copy: PullInGroupCopyJson {
                     title,
                     why: None,
@@ -218,6 +234,7 @@ fn emit_group(
             label: None,
             event: None,
             folded: None,
+            note: None,
             copy: PullInGroupCopyJson {
                 title: "Project finished".to_string(),
                 why: None,
@@ -242,18 +259,12 @@ fn emit_group(
                 label: None,
                 event: None,
                 folded: Some(
-                    keep_moving_folds.get(project).cloned().unwrap_or(
-                        PullInFoldedJson {
-                            hidden: 0,
-                            already_planned: 0,
-                            sub_projects: 0,
-                            blocked: 0,
-                            scheduled: 0,
-                            already_started: 0,
-                            waits_for: 0,
-                        },
-                    ),
+                    keep_moving_folds
+                        .get(project)
+                        .cloned()
+                        .unwrap_or(empty_folded()),
                 ),
+                note: None,
                 copy: PullInGroupCopyJson {
                     title: format!("Keep ‹{stem}› moving"),
                     why: Some(why),
@@ -265,6 +276,29 @@ fn emit_group(
         }
         GroupKey::Relation { after, label_key } => {
             emit_relation_group(group, after, label_key, relation_groups, held)
+        }
+        GroupKey::NotePull { note } => {
+            let stem = project_stem(note);
+            let folded = note_pull_folds
+                .get(note)
+                .cloned()
+                .unwrap_or_else(empty_folded);
+            PullInGroupJson {
+                group: "note_pull",
+                project: None,
+                after: None,
+                label: None,
+                event: None,
+                folded: Some(folded.clone()),
+                note: Some(note.clone()),
+                copy: PullInGroupCopyJson {
+                    title: format!("Pull from ‹{stem}›"),
+                    why: None,
+                    tag: Some(format!("ready in {stem}")),
+                    fold: note_pull_fold_line(&folded),
+                    glyph: "note_pull",
+                },
+            }
         }
     }
 }
@@ -332,6 +366,7 @@ fn emit_relation_group(
         label: Some(label.to_string()),
         event: Some(event),
         folded,
+        note: None,
         copy: PullInGroupCopyJson {
             title,
             why: Some(why),
@@ -351,6 +386,45 @@ fn folded_if_nonzero(folded: PullInFoldedJson) -> Option<PullInFoldedJson> {
         && folded.already_started == 0
         && folded.waits_for == 0;
     (!empty).then_some(folded)
+}
+
+fn empty_folded() -> PullInFoldedJson {
+    PullInFoldedJson {
+        hidden: 0,
+        already_planned: 0,
+        sub_projects: 0,
+        blocked: 0,
+        scheduled: 0,
+        already_started: 0,
+        waits_for: 0,
+    }
+}
+
+fn add_folded(total: &mut PullInFoldedJson, folded: &PullInFoldedJson) {
+    total.hidden += folded.hidden;
+    total.already_planned += folded.already_planned;
+    total.sub_projects += folded.sub_projects;
+    total.blocked += folded.blocked;
+    total.scheduled += folded.scheduled;
+    total.already_started += folded.already_started;
+    total.waits_for += folded.waits_for;
+}
+
+fn note_pull_fold_line(folded: &PullInFoldedJson) -> Option<String> {
+    let mut parts = Vec::new();
+    if folded.already_planned > 0 {
+        parts.push(format!("{} already planned", folded.already_planned));
+    }
+    if folded.blocked > 0 {
+        parts.push(format!("{} blocked", folded.blocked));
+    }
+    if folded.scheduled > 0 {
+        parts.push(format!("{} scheduled later", folded.scheduled));
+    }
+    if folded.hidden > 0 {
+        parts.push(format!("{} hidden", folded.hidden));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 fn relation_after_key(group: &RelationOfferGroup) -> String {
@@ -503,6 +577,23 @@ fn top_copy(
     }
     let relation_only = groups.iter().all(|group| group.group == "relation");
     let keep_only = groups.iter().all(|group| group.group == "keep_moving");
+    let note_pull_only = groups.iter().all(|group| group.group == "note_pull");
+    if note_pull_only {
+        let notes: Vec<&str> = groups
+            .iter()
+            .filter_map(|group| group.note.as_deref())
+            .collect();
+        let title = if notes.len() == 1 {
+            format!("Pull from ‹{}›", project_stem(notes[0]))
+        } else {
+            format!("Pull from {} notes", notes.len())
+        };
+        return Some(PullInTopCopyJson {
+            title,
+            capsule: "Pull in".to_string(),
+            glyph: "note_pull",
+        });
+    }
     if relation_only {
         return Some(relation_top_copy(groups, acc));
     }
