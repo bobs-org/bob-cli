@@ -64,7 +64,7 @@ Optional Arguments
 Show the current Pomodoro status (default)
 
 ```text title="bob pomodoro status --help"
-usage: bob pomodoro [status] [-d|--debug] [-s|--show-stale]
+usage: bob pomodoro [status] [-d|--debug] [-l|--last] [-s|--show-stale]
        [-v|--verbose] [-w|--worked]
        bob pomodoro status -h
 
@@ -83,6 +83,17 @@ or stopwatch duration). Off-clock rows (`[off:: Nm]`) are omitted; older bare
 timed rows keep their off-clock meaning. A missing daily note reports `[WORKED 0m]`. --worked is
 native-only; the `BOB_CLI_USE_SCRIPT` script fallback rejects it.
 
+Pass --last when a consumer wants today's last closed Pomodoro instead of empty
+output: whenever no status line would print, the command appends
+`[LAST HHMM-HHMM] TASK`, where TASK is the status line's task text for that row
+(the cleaned `— NAME`, the derived home chip for an unnamed linked session, or
+nothing). With --worked, both print on one line, worked first:
+`[WORKED 80m] [LAST 1430-1530] — GYM`. Last means the latest end time in today's
+note (a midnight-wrapped range ends the next day, so it sorts last; equal ends go
+to the later line); canceled rows and placeholders never count. Any closed timed
+row counts, including off-clock sessions. A missing daily note behaves the same
+way. --last is native-only; the `BOB_CLI_USE_SCRIPT` script fallback rejects it.
+
 environment:
   BOB_DAY_FILE  exact daily note path to read
   BOB_DIR       Bob vault root used to find the default daily note
@@ -91,6 +102,7 @@ environment:
 options:
   -d, --debug       enable debug tracing
   -h, --help        show this help message and exit
+  -l, --last        print today's last closed Pomodoro when no status line prints
   -s, --show-stale  show open Pomodoros after the stale cutoff
   -v, --verbose     enable verbose debug output
   -w, --worked      print today's worked minutes when no Pomodoro status prints

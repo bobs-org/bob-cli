@@ -859,17 +859,36 @@ fn pomodoro_help_documents_show_stale_option() {
                 help.contains("[-w|--worked]") && help.contains("-w, --worked"),
                 "expected worked help in {label}:\n{help}"
             );
+            assert!(
+                help.contains("[-l|--last]") && help.contains("-l, --last"),
+                "expected last help in {label}:\n{help}"
+            );
             assert_text_order(&help, &["-v, --verbose", "-w, --worked"]);
+            assert_text_order(
+                &help,
+                &[
+                    "-d, --debug",
+                    "-h, --help",
+                    "-l, --last",
+                    "-s, --show-stale",
+                    "-v, --verbose",
+                ],
+            );
+        } else {
+            assert!(
+                !help.contains("[-l|--last]") && !help.contains("-l, --last"),
+                "script fallback must stay without --last in {label}:\n{help}"
+            );
+            assert_text_order(
+                &help,
+                &[
+                    "-d, --debug",
+                    "-h, --help",
+                    "-s, --show-stale",
+                    "-v, --verbose",
+                ],
+            );
         }
-        assert_text_order(
-            &help,
-            &[
-                "-d, --debug",
-                "-h, --help",
-                "-s, --show-stale",
-                "-v, --verbose",
-            ],
-        );
         assert_no_long_only_option_lines(label, &help);
         assert_stdout_has_no_ansi(&output);
     }

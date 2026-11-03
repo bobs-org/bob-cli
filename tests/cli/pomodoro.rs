@@ -375,6 +375,127 @@ fn pomodoro_worked_reports_closed_ledger_total_only_when_status_is_empty() {
 }
 
 #[test]
+fn pomodoro_last_reports_latest_closed_end() {
+    for args in [&["--worked", "--last"][..], &["-w", "-l"][..]] {
+        let output = run_pomodoro_fixture(
+            args,
+            "pomodoro/day_with_last_closed_pomodoros.md",
+            "2026-06-02 17:00:00",
+            false,
+        );
+        assert_success(&output);
+        assert_eq!(
+            stdout(&output),
+            "[WORKED 80m] [LAST 1430-1530] — GYM\n",
+            "off-clock GYM end is the last end; worked total omits it"
+        );
+        assert!(stderr(&output).is_empty());
+    }
+
+    let output = run_pomodoro_fixture(
+        &["--last"],
+        "pomodoro/day_with_last_closed_pomodoros.md",
+        "2026-06-02 17:00:00",
+        false,
+    );
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[LAST 1430-1530] — GYM\n");
+    assert!(stderr(&output).is_empty());
+
+    let output = run_pomodoro_fixture(
+        &["--worked", "--last"],
+        "pomodoro/day_with_worked_pomodoros.md",
+        "2026-06-01 12:00:00",
+        false,
+    );
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "[WORKED 50m] [LAST 2350-0010] — LATE NIGHT\n",
+        "midnight wrap sorts after every same-day end"
+    );
+
+    let output = run_pomodoro_fixture(
+        &["--worked", "--last"],
+        "pomodoro/day_with_open_pomodoro.md",
+        "2026-06-01 09:10:01",
+        false,
+    );
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[<65m] 0945-1015 Review crate skeleton\n");
+
+    let output = run_pomodoro_fixture(
+        &["--worked", "--last"],
+        "pomodoro/day_with_open_pomodoro.md",
+        "2026-06-01 10:25:00",
+        false,
+    );
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "[WORKED 0m]\n",
+        "trailing-only closed row has no leading range, so no LAST"
+    );
+
+    let temp = TempDir::new("bob-cli-pomodoro-last-missing");
+    let output = bob_command()
+        .args(["pomodoro", "--worked", "--last"])
+        .env("BOB_DAY_FILE", temp.path().join("missing-day.md"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro --worked --last with missing day file");
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[WORKED 0m]\n");
+    assert!(stderr(&output).is_empty());
+
+    let output = bob_command()
+        .args(["pomodoro", "--last"])
+        .env("BOB_DAY_FILE", temp.path().join("missing-day.md"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro --last with missing day file");
+    assert_success(&output);
+    assert!(stdout(&output).is_empty());
+    assert!(stderr(&output).is_empty());
+
+    let output = run_pomodoro_fixture(
+        &["--last"],
+        "pomodoro/day_with_last_closed_pomodoros.md",
+        "2026-06-02 17:00:00",
+        true,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("Unexpected argument: --last"));
+}
+
+#[test]
+fn pomodoro_last_prints_derived_chip_for_unnamed_closed_session() {
+    let temp = TempDir::new("bob-cli-pomodoro-last-homes-unnamed");
+    let vault = temp.path().join("vault");
+    write_homes_vault(
+        &vault,
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [x] (0950-1015)\n",
+            "  - [[sase#^one]]\n",
+        ),
+    );
+
+    let output = bob_command()
+        .args(["pomodoro", "--last"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 12:00:00")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro --last unnamed homes");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[LAST 0950-1015] sase\n");
+}
+
+#[test]
 fn pomodoro_prints_derived_chip_for_unnamed_linked_session() {
     let temp = TempDir::new("bob-cli-pomodoro-homes-unnamed");
     let vault = temp.path().join("vault");

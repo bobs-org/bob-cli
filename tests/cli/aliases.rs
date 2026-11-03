@@ -316,6 +316,8 @@ fn pomodoro_status_forms_match_with_and_without_show_stale() {
         &["-s"][..],
         &["--worked"][..],
         &["-w"][..],
+        &["--last"][..],
+        &["-l"][..],
     ] {
         let mut bob_bare = vec!["pomodoro"];
         bob_bare.extend_from_slice(extra);

@@ -35,6 +35,7 @@ struct Options {
     show_stale: bool,
     verbose: bool,
     worked: bool,
+    last: bool,
 }
 
 #[derive(Debug)]
@@ -64,17 +65,19 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             println!("{output}");
             0
         }
-        Ok(None) if options.worked => {
+        Ok(None) if options.worked || options.last => {
             let day_file = day_file();
-            match worked_minutes(&day_file) {
-                Ok(minutes) => {
-                    debug(
-                        options.verbose,
-                        format_args!("Worked Pomodoro total: {minutes}m"),
-                    );
-                    println!("[WORKED {minutes}m]");
+            match idle_line(
+                &day_file,
+                options.verbose,
+                options.worked,
+                options.last,
+            ) {
+                Ok(Some(line)) => {
+                    println!("{line}");
                     0
                 }
+                Ok(None) => 0,
                 Err(error) => {
                     let error = Error::new(
                         1,
@@ -96,17 +99,119 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     }
 }
 
-fn worked_minutes(day_file: &Path) -> io::Result<u64> {
+fn idle_line(
+    day_file: &Path,
+    verbose: bool,
+    worked: bool,
+    last: bool,
+) -> io::Result<Option<String>> {
     let contents = match fs::read_to_string(day_file) {
         Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error),
     };
     let scan = capture_pomodoros::scan(&contents);
-    Ok(
+    let minutes =
         capture_pomodoros::completed_summary_for(&scan.entries, &contents)
-            .minutes,
-    )
+            .minutes;
+    if worked {
+        debug(verbose, format_args!("Worked Pomodoro total: {minutes}m"));
+    }
+    let last_ledger = if last {
+        last_closed_pomodoro(&scan, &contents)
+    } else {
+        None
+    };
+    if let Some(ledger) = last_ledger.as_ref() {
+        debug(
+            verbose,
+            format_args!(
+                "Last closed Pomodoro: {}-{} {}",
+                ledger.start, ledger.end, ledger.task
+            ),
+        );
+    }
+    let last_text = last_ledger.as_ref().map(|ledger| {
+        let formatted = format_status_task(day_file, &contents, ledger);
+        let task_suffix = formatted
+            .strip_prefix(&ledger.range)
+            .unwrap_or("")
+            .to_string();
+        format!("[LAST {}]{task_suffix}", ledger.range)
+    });
+    match (worked, last_text) {
+        (true, Some(last)) => Ok(Some(format!("[WORKED {minutes}m] {last}"))),
+        (true, None) => Ok(Some(format!("[WORKED {minutes}m]"))),
+        (false, Some(last)) => Ok(Some(last)),
+        (false, None) => Ok(None),
+    }
+}
+
+fn last_closed_pomodoro(
+    scan: &capture_pomodoros::PomodoroScan,
+    contents: &str,
+) -> Option<LedgerPomodoro> {
+    let mut best: Option<(u32, usize, LedgerPomodoro)> = None;
+    for entry in &scan.entries {
+        if entry.state != capture_pomodoros::PomodoroState::Completed {
+            continue;
+        }
+        let Some(time_range) = entry.time_range.as_deref() else {
+            continue;
+        };
+        let Some((start, end)) = time_range.split_once('-') else {
+            continue;
+        };
+        let Some(start_minutes) = hhmm_to_minutes(start) else {
+            continue;
+        };
+        let Some(end_minutes) = hhmm_to_minutes(end) else {
+            continue;
+        };
+        let end_key =
+            end_minutes + if end_minutes < start_minutes { 1440 } else { 0 };
+        let raw_line = contents
+            .lines()
+            .nth(entry.line.saturating_sub(1))
+            .unwrap_or("");
+        let Some(body) = completed_ledger_task(raw_line) else {
+            continue;
+        };
+        let Some((raw_range, _, _)) = task_time_range(body) else {
+            continue;
+        };
+        let ledger = LedgerPomodoro {
+            start: start.to_string(),
+            end: end.to_string(),
+            range: time_range.to_string(),
+            task: clean_task(body, raw_range),
+            line: entry.line,
+        };
+        let candidate = (end_key, entry.line);
+        let is_better = match &best {
+            Some((best_end, best_line, _)) => {
+                candidate.0 > *best_end
+                    || (candidate.0 == *best_end && candidate.1 > *best_line)
+            }
+            None => true,
+        };
+        if is_better {
+            best = Some((end_key, entry.line, ledger));
+        }
+    }
+    best.map(|(_, _, ledger)| ledger)
+}
+
+fn hhmm_to_minutes(hhmm: &str) -> Option<u32> {
+    if hhmm.len() != 4 || !hhmm.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let hour: u32 = hhmm[..2].parse().ok()?;
+    let minute: u32 = hhmm[2..].parse().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Some(hour * 60 + minute)
 }
 
 pub(crate) fn run_tmux(args: Vec<OsString>) -> i32 {
@@ -315,6 +420,9 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
             "-w" | "--worked" => {
                 options.worked = true;
             }
+            "-l" | "--last" => {
+                options.last = true;
+            }
             _ => {
                 return ParseResult::Error(Error::new(
                     2,
@@ -449,11 +557,12 @@ fn unnamed_home_chip(
     let mut resolver = pomodoro_homes::HomeResolver::new(
         pomodoro_homes::DiskHomeSource::new(bob_dir),
     );
+    let closed = entry.state == capture_pomodoros::PomodoroState::Completed;
     pomodoro_homes::attribute_ledger_entry(
         contents,
         entry.line,
         None,
-        false,
+        closed,
         None,
         daily_path,
         &mut resolver,
@@ -716,6 +825,15 @@ pub(crate) fn completion_descriptor() -> ClapCommand {
                 .help("Enable verbose debug output"),
         )
         .arg(
+            Arg::new("last")
+                .long("last")
+                .short('l')
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Print today's last closed Pomodoro when no status line prints",
+                ),
+        )
+        .arg(
             Arg::new("show-stale")
                 .long("show-stale")
                 .short('s')
@@ -753,7 +871,7 @@ pub(crate) fn tmux_completion_descriptor() -> ClapCommand {
 
 pub(crate) fn help_text() -> String {
     "\
-usage: bob pomodoro [status] [-d|--debug] [-s|--show-stale]
+usage: bob pomodoro [status] [-d|--debug] [-l|--last] [-s|--show-stale]
        [-v|--verbose] [-w|--worked]
        bob pomodoro status -h
 
@@ -772,6 +890,17 @@ or stopwatch duration). Off-clock rows (`[off:: Nm]`) are omitted; older bare
 timed rows keep their off-clock meaning. A missing daily note reports `[WORKED 0m]`. --worked is
 native-only; the `BOB_CLI_USE_SCRIPT` script fallback rejects it.
 
+Pass --last when a consumer wants today's last closed Pomodoro instead of empty
+output: whenever no status line would print, the command appends
+`[LAST HHMM-HHMM] TASK`, where TASK is the status line's task text for that row
+(the cleaned `— NAME`, the derived home chip for an unnamed linked session, or
+nothing). With --worked, both print on one line, worked first:
+`[WORKED 80m] [LAST 1430-1530] — GYM`. Last means the latest end time in today's
+note (a midnight-wrapped range ends the next day, so it sorts last; equal ends go
+to the later line); canceled rows and placeholders never count. Any closed timed
+row counts, including off-clock sessions. A missing daily note behaves the same
+way. --last is native-only; the `BOB_CLI_USE_SCRIPT` script fallback rejects it.
+
 environment:
   BOB_DAY_FILE  exact daily note path to read
   BOB_DIR       Bob vault root used to find the default daily note
@@ -780,6 +909,7 @@ environment:
 options:
   -d, --debug       enable debug tracing
   -h, --help        show this help message and exit
+  -l, --last        print today's last closed Pomodoro when no status line prints
   -s, --show-stale  show open Pomodoros after the stale cutoff
   -v, --verbose     enable verbose debug output
   -w, --worked      print today's worked minutes when no Pomodoro status prints"
