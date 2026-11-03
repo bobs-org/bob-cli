@@ -2099,7 +2099,6 @@ pub(super) fn plan_capture_item(
                     relation_held: Vec::new(),
                     relation_check: None,
                     relation_groups: Vec::new(),
-                    note_pull: None,
                 },
                 clip_plan,
                 pomodoro_refs: Vec::new(),
