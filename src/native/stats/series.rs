@@ -78,18 +78,19 @@ pub(crate) fn resolve_range(
     compare: bool,
     all_since: Option<NaiveDate>,
 ) -> Result<ResolvedRange, String> {
-    let (complete, includes_today, preset, comparison_days) = match spec {
+    let (complete, includes_today, preset, comparison_days, period) = match spec
+    {
         RangeSpec::Days(count) => {
             let days = *count;
             let complete = preset_span(today, days, offset)?;
-            (Some(complete), offset == 0, Some(spec.label()), days)
+            (Some(complete), offset == 0, Some(spec.label()), days, None)
         }
         RangeSpec::Weeks(count) => {
             let days = count
                 .checked_mul(7)
                 .ok_or_else(|| "stats range is too large".to_string())?;
             let complete = preset_span(today, days, offset)?;
-            (Some(complete), offset == 0, Some(spec.label()), days)
+            (Some(complete), offset == 0, Some(spec.label()), days, None)
         }
         RangeSpec::Months(count) => {
             // Calendar months are converted to a whole number of weeks so
@@ -103,7 +104,7 @@ pub(crate) fn resolve_range(
                 .checked_mul(7)
                 .ok_or_else(|| "stats range is too large".to_string())?;
             let complete = preset_span(today, days, offset)?;
-            (Some(complete), offset == 0, Some(spec.label()), days)
+            (Some(complete), offset == 0, Some(spec.label()), days, None)
         }
         RangeSpec::Years(count) => {
             let days = count
@@ -111,7 +112,7 @@ pub(crate) fn resolve_range(
                 .and_then(|weeks| weeks.checked_mul(7))
                 .ok_or_else(|| "stats range is too large".to_string())?;
             let complete = preset_span(today, days, offset)?;
-            (Some(complete), offset == 0, Some(spec.label()), days)
+            (Some(complete), offset == 0, Some(spec.label()), days, None)
         }
         RangeSpec::All => {
             if offset != 0 {
@@ -133,7 +134,7 @@ pub(crate) fn resolve_range(
                 })
                 .transpose()?
                 .unwrap_or(0);
-            (complete, true, Some("all".to_string()), days)
+            (complete, true, Some("all".to_string()), days, None)
         }
         RangeSpec::Explicit { start, end } => {
             if *start > today {
@@ -164,7 +165,44 @@ pub(crate) fn resolve_range(
             };
             let shifted_includes_today = includes_today && offset == 0;
             let days = shifted.map_or(0, |span| span.days().unwrap_or(0));
-            (shifted, shifted_includes_today, None, days)
+            (shifted, shifted_includes_today, None, days, None)
+        }
+        RangeSpec::Period { id, start, end } => {
+            if *start > today {
+                return Err("stats.range cannot start after today".to_string());
+            }
+            let clamped_end = (*end).min(today);
+            let includes_today = clamped_end == today;
+            let complete_end = if includes_today {
+                checked_add_days(today, -1)?
+            } else {
+                clamped_end
+            };
+            let base = (*start <= complete_end).then_some(DateSpan {
+                start: *start,
+                end: complete_end,
+            });
+            let shifted = if offset == 0 {
+                base
+            } else {
+                let Some(base) = base else {
+                    return Err("cannot offset a range with no complete days"
+                        .to_string());
+                };
+                let days = base
+                    .days()
+                    .ok_or_else(|| "stats range is too large".to_string())?;
+                Some(shift_span(base, days, offset)?)
+            };
+            let shifted_includes_today = includes_today && offset == 0;
+            let days = shifted.map_or(0, |span| span.days().unwrap_or(0));
+            (
+                shifted,
+                shifted_includes_today,
+                None,
+                days,
+                Some(id.to_string()),
+            )
         }
     };
 
@@ -179,6 +217,7 @@ pub(crate) fn resolve_range(
         super::request::Grouping::Day => GroupName::Day,
         super::request::Grouping::Week => GroupName::Week,
         super::request::Grouping::Month => GroupName::Month,
+        super::request::Grouping::Quarter => GroupName::Quarter,
         super::request::Grouping::Auto if days <= 91 => GroupName::Day,
         super::request::Grouping::Auto if days <= 371 => GroupName::Week,
         super::request::Grouping::Auto => GroupName::Month,
@@ -230,6 +269,7 @@ pub(crate) fn resolve_range(
             includes_today,
             group,
             label,
+            period,
             prior: prior_report,
         },
         complete,
@@ -295,6 +335,7 @@ pub(crate) fn lead_in_start(
         GroupName::Month => shift_calendar_months(start, -2).and_then(|date| {
             NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
         }),
+        GroupName::Quarter => Some(start),
     }
 }
 
@@ -331,6 +372,7 @@ fn comparison_description(spec: &RangeSpec, days: u32) -> String {
     match spec {
         RangeSpec::All => "all history".to_string(),
         RangeSpec::Explicit { .. } => "selected period".to_string(),
+        RangeSpec::Period { id, .. } => id.to_string(),
         _ if days == 1 => "day".to_string(),
         _ if days.is_multiple_of(7) && days / 7 == 1 => "week".to_string(),
         _ if days.is_multiple_of(7) => format!("{} weeks", days / 7),
@@ -500,7 +542,7 @@ fn make_points(
             .iter()
             .map(|value| daily_point(value, unit))
             .collect(),
-        GroupName::Week | GroupName::Month => {
+        GroupName::Week | GroupName::Month | GroupName::Quarter => {
             let mut points = grouped_points(values, unit, group, clip);
             if let Some(today) = values.iter().find(|value| value.provisional) {
                 points.push(daily_point(today, unit));
@@ -725,6 +767,11 @@ fn bucket_start(date: NaiveDate, group: GroupName) -> NaiveDate {
             NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
                 .unwrap_or(date)
         }
+        GroupName::Quarter => {
+            crate::native::periods::calendar::PeriodId::quarter_for_date(date)
+                .start()
+                .unwrap_or(date)
+        }
     }
 }
 
@@ -737,6 +784,11 @@ fn bucket_end(start: NaiveDate, group: GroupName) -> NaiveDate {
         GroupName::Month => shift_calendar_months(start, 1)
             .and_then(|date| date.pred_opt())
             .unwrap_or(start),
+        GroupName::Quarter => {
+            crate::native::periods::calendar::PeriodId::quarter_for_date(start)
+                .end()
+                .unwrap_or(start)
+        }
     }
 }
 
@@ -891,7 +943,14 @@ fn add_rolling_medians(points: &mut [SeriesPoint], group: GroupName) {
         GroupName::Day => DAY_WINDOW,
         GroupName::Week => 4,
         GroupName::Month => 3,
+        GroupName::Quarter => 0,
     };
+    if window == 0 {
+        for point in points {
+            point.rolling_median = None;
+        }
+        return;
+    }
     let minimum = window.div_ceil(2);
     for index in 0..points.len() {
         if points[index].provisional {
@@ -1346,7 +1405,7 @@ fn display_daily_points(
 ) -> Vec<SeriesPoint> {
     match range.group {
         GroupName::Day => Vec::new(),
-        GroupName::Week | GroupName::Month => values
+        GroupName::Week | GroupName::Month | GroupName::Quarter => values
             .iter()
             .filter(|value| in_display_window(value.date, range))
             .map(|value| daily_point(value, unit))
@@ -1707,6 +1766,55 @@ mod tests {
         let monday = date(2026, 12, 28);
         assert_eq!(bucket_start(monday, GroupName::Week), monday);
         assert_eq!(bucket_end(monday, GroupName::Week), date(2027, 1, 3));
+    }
+
+    #[test]
+    fn period_range_and_quarter_grouping_use_iso_quarter_boundaries() {
+        let today = date(2026, 11, 3);
+        let resolved = resolve_range(
+            &RangeSpec::parse("2026-Q4").unwrap(),
+            today,
+            0,
+            Grouping::Quarter,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved.report.period.as_deref(), Some("2026-Q4"));
+        assert_eq!(resolved.report.start, date(2026, 9, 28));
+        assert_eq!(resolved.report.end, date(2026, 11, 2));
+        assert!(resolved.includes_today);
+        assert_eq!(resolved.group, GroupName::Quarter);
+
+        let cross = date(2026, 12, 28);
+        assert_eq!(bucket_start(cross, GroupName::Quarter), date(2026, 9, 28));
+        assert_eq!(bucket_end(cross, GroupName::Quarter), date(2027, 1, 3));
+        assert_eq!(
+            bucket_start(date(2027, 1, 4), GroupName::Quarter),
+            date(2027, 1, 4)
+        );
+
+        let clipped = DateSpan {
+            start: date(2026, 10, 1),
+            end: date(2026, 10, 3),
+        };
+        let values = vec![
+            daily(clipped.start, Some(2)),
+            daily(date(2026, 10, 2), Some(3)),
+            daily(clipped.end, Some(5)),
+        ];
+        let mut points = grouped_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Quarter,
+            Some(clipped),
+        );
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].date, clipped.start);
+        assert_eq!(points[0].end, clipped.end);
+        assert_eq!(points[0].partial, Some(true));
+        add_rolling_medians(&mut points, GroupName::Quarter);
+        assert_eq!(points[0].rolling_median, None);
     }
 
     #[test]

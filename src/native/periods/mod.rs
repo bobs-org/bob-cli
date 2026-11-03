@@ -14,4 +14,5 @@ pub(crate) mod list;
 pub(crate) mod migrate;
 pub(crate) mod note;
 pub(crate) mod problems;
+pub(crate) mod report;
 pub(crate) mod scaffold;

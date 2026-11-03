@@ -159,3 +159,74 @@ fn format_amount(diff: i64, unit: MetricUnit) -> String {
         _ => diff.to_string(),
     }
 }
+
+/// Shared period sentence builders. Period strips use the same relation
+/// wording as the daily typical-day line while supplying their own period
+/// kind and scaled comparison window.
+pub(crate) fn period_typical_words(
+    kind: &str,
+    display: Option<&str>,
+    relation: Option<TypicalRelation>,
+    difference: Option<&str>,
+) -> String {
+    let Some(display) = display else {
+        return format!("no typical {kind} yet");
+    };
+    match relation {
+        Some(TypicalRelation::Equal) => {
+            format!("the same as the typical {kind} of {display}")
+        }
+        Some(TypicalRelation::Above) => format!(
+            "{} above the typical {kind} of {display}",
+            difference.unwrap_or("more")
+        ),
+        Some(TypicalRelation::Below) => format!(
+            "{} below the typical {kind} of {display}",
+            difference.unwrap_or("less")
+        ),
+        None => format!("typical {kind} {display}"),
+    }
+}
+
+pub(crate) fn period_typical_detail(
+    kind: &str,
+    display: Option<&str>,
+    window: &str,
+    usable: usize,
+    periods: usize,
+    scaled_to_weeks: Option<u32>,
+    relation: Option<TypicalRelation>,
+    difference: Option<&str>,
+    in_progress: bool,
+) -> String {
+    let Some(display) = display else {
+        return format!(
+            "No typical {kind} yet: {usable} of {periods} prior {kind}s have enough tracked data (needs 2)."
+        );
+    };
+    let scale = scaled_to_weeks
+        .map(|weeks| format!("; scaled to {weeks} weeks"))
+        .unwrap_or_default();
+    let mut detail = format!(
+        "Typical {kind} {display}: median of {window} ({usable} of {periods} {kind}s with data{scale})."
+    );
+    if in_progress {
+        detail.push_str(&format!(
+            " This {kind} is still in progress, so this is context, not a pace."
+        ));
+    } else if let Some(relation) = relation {
+        match relation {
+            TypicalRelation::Equal => detail
+                .push_str(&format!(" This {kind} is within 1% of typical.")),
+            TypicalRelation::Above => detail.push_str(&format!(
+                " This {kind} is {} above typical.",
+                difference.unwrap_or("more")
+            )),
+            TypicalRelation::Below => detail.push_str(&format!(
+                " This {kind} is {} below typical.",
+                difference.unwrap_or("less")
+            )),
+        }
+    }
+    detail
+}

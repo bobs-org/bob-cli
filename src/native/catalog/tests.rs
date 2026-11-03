@@ -392,13 +392,19 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 64);
-    assert_eq!(ENTRIES.len(), 64);
+    assert_eq!(catalog.entries.len(), 65);
+    assert_eq!(ENTRIES.len(), 65);
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog
         .entries
         .iter()
         .any(|entry| entry.id == "pomodoro-start"));
+    assert!(catalog.entries.iter().any(|entry| {
+        entry.id == "periods-show" && entry.path == ["periods", "show"]
+    }));
+    assert!(catalog.entries.iter().any(|entry| {
+        entry.id == "periods-migrate" && entry.path == ["periods", "migrate"]
+    }));
     assert!(catalog.excluded.iter().any(|row| row.path == ["capture"]));
 }
 

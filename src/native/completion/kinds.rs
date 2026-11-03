@@ -138,6 +138,12 @@ const TABLE: &[Entry] = &[
         arg: "match",
         kind: Kind::FreeText,
     },
+    // Period ids are typed as text, but note paths are useful completions too.
+    Entry {
+        path: &["periods", "show"],
+        arg: "period",
+        kind: Kind::VaultNote,
+    },
     // Directories.
     Entry {
         path: &[],

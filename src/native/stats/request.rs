@@ -14,13 +14,14 @@ pub(crate) enum MetricSelection {
 }
 
 /// Requested grouping. `Auto` picks day/week/month from the resolved
-/// complete-day count in the series phase.
+/// complete-day count in the series phase; quarter is explicit only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Grouping {
     Auto,
     Day,
     Week,
     Month,
+    Quarter,
 }
 
 /// Inputs to the stats engine. `now` is captured once so `BOB_NOW`
@@ -128,6 +129,11 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 10, 12).unwrap()
         );
         let _ = MetricSelection::AllVisible;
-        let _ = [Grouping::Day, Grouping::Week, Grouping::Month];
+        let _ = [
+            Grouping::Day,
+            Grouping::Week,
+            Grouping::Month,
+            Grouping::Quarter,
+        ];
     }
 }

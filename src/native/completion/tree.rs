@@ -104,6 +104,9 @@ impl NativeCommand {
             NativeCommand::PeriodsMigrate => {
                 crate::native::periods::cli::migrate_command()
             }
+            NativeCommand::PeriodsShow => {
+                crate::native::periods::cli::show_command()
+            }
             NativeCommand::Plan => crate::native::plan_budget::cli::build_cli(),
             NativeCommand::Plugins => crate::native::plugins::build_cli(),
             NativeCommand::Pomodoro => {

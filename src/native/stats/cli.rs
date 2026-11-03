@@ -24,6 +24,8 @@ const OVERVIEW_AFTER_HELP: &str = "\
 Examples:
   bob stats
   bob stats -r 7d -c
+  bob stats -r 2026-W45
+  bob stats -r 2026-Q4 -g quarter
   bob stats -k off-clock
   bob stats -k total -f json
   bob stats -f csv
@@ -45,6 +47,7 @@ const SHOW_AFTER_HELP: &str = "\
 Examples:
   bob stats show worked -c
   bob stats show worked reviewed
+  bob stats show worked -r 2026-Q4 -g quarter
   bob stats show worked -k total
   bob stats show -a -f json
   bob stats show -a -f csv
@@ -284,6 +287,7 @@ fn grouping_from_matches(matches: &ArgMatches) -> Grouping {
         "day" => Grouping::Day,
         "week" => Grouping::Week,
         "month" => Grouping::Month,
+        "quarter" => Grouping::Quarter,
         _ => Grouping::Auto,
     }
 }
@@ -417,9 +421,9 @@ fn group_arg() -> Arg {
         .long("group")
         .short('g')
         .value_name("GROUP")
-        .value_parser(["auto", "day", "week", "month"])
+        .value_parser(["auto", "day", "week", "month", "quarter"])
         .default_value("auto")
-        .help("Bucket points by auto, day, week, or month")
+        .help("Bucket points by auto, day, week, month, or quarter")
 }
 
 fn help_arg() -> Arg {
@@ -444,7 +448,7 @@ fn range_arg() -> Arg {
         .long("range")
         .short('r')
         .value_name("RANGE")
-        .help("Window as 7d, 4w, 3m, 1y, all, or START..END")
+        .help("Window as 7d, 4w, 3m, 1y, all, a period id, or START..END")
 }
 
 #[cfg(test)]
@@ -483,5 +487,21 @@ mod tests {
             .try_get_matches_from(vec![METRICS_NAME, "-f", "csv"])
             .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn period_range_and_quarter_grouping_parse_on_stats_commands() {
+        let matches = overview_command()
+            .try_get_matches_from(vec![
+                OVERVIEW_NAME,
+                "-r",
+                "2026-Q4",
+                "-g",
+                "quarter",
+            ])
+            .unwrap();
+        assert_eq!(grouping_from_matches(&matches), Grouping::Quarter);
+        let request = request_from_matches(&matches, View::Overview).unwrap();
+        assert_eq!(request.range.as_deref(), Some("2026-Q4"));
     }
 }

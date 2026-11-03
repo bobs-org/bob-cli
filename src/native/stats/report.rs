@@ -48,6 +48,9 @@ pub(crate) struct RangeReport {
     pub(crate) includes_today: bool,
     pub(crate) group: GroupName,
     pub(crate) label: String,
+    /// Canonical period id when the range came from a period note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) period: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) prior: Option<PriorRange>,
 }
@@ -58,6 +61,7 @@ pub(crate) enum GroupName {
     Day,
     Week,
     Month,
+    Quarter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -586,6 +590,7 @@ mod tests {
                 includes_today: true,
                 group: GroupName::Day,
                 label: "Sep 13 – Oct 10".to_string(),
+                period: None,
                 prior: Some(PriorRange {
                     start: date(2026, 8, 16),
                     end: date(2026, 9, 12),
@@ -820,6 +825,6 @@ mod tests {
         assert_eq!(json["partial"], true);
         assert_eq!(json["date"], "2026-10-01");
         assert_eq!(json["end"], "2026-10-07");
-        let _ = [GroupName::Week, GroupName::Month];
+        let _ = [GroupName::Week, GroupName::Month, GroupName::Quarter];
     }
 }

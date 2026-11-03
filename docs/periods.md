@@ -174,6 +174,10 @@ period notes. Bare `bob periods` runs the read-only `list`.
   dry run by default. `-a` writes one `vault_rewrite` transaction and
   one commit. `-o` skips vault-sync before and after, as with
   `bob types rename`.
+- `bob periods show [PERIOD] [-f human|json] [-k/--clock worked|off-clock|total]`:
+  read-only. With no PERIOD it shows the current ISO week. It prints a compact
+  terminal report or the schema-1 report below. The selected clock is applied to
+  Pomodoro minutes and lanes; Worked is the default.
 
 Exit codes: 0 success; 1 vault I/O or transaction failure (including
 `lock_busy` after waiting at most 3 s on `bob_sync.lock`); 2 usage;
@@ -245,3 +249,76 @@ years are those with at least one weekly note. Each problem has
 `bob nightly` runs a report-only **Period notes** step after
 `articles` and before the final vault-sync. It prints `bob periods
 list -p` and writes nothing, so athena never creates period notes.
+
+## Period reports
+
+`bob periods show` performs one day-grouped `bob stats` computation over the
+requested period and its typical-history window. It does not create notes. The
+report is the source for both the stats strip and the parts table; clients use
+the supplied display strings, labels, review states, and catalogs without
+recomputing them.
+
+The schema-1 JSON object has these top-level members:
+
+| Member | Contents |
+| --- | --- |
+| `ok`, `schema_version` | `true`, `1` |
+| `today`, `generated_at` | The pinned local date and report timestamp |
+| `period` | Canonical id, kind, short label, title, date range, week/day counts, state, observed-through date, and coverage |
+| `note` | Period-note path, existence, instruction version, review state, and Headline |
+| `links` | Parent, previous, and next note ids, paths, and labels |
+| `facts` | Visible Day-strip facts in `worked`, `reviewed`, `done`, `created`, `review_closed` order |
+| `lanes` | Worked root-parent and type parts, with labels, minutes, displays, shares, and a type-fold flag |
+| `columns` | Render-ready strip columns: seven days for a week, weeks for a quarter/year, and quarters for all time |
+| `groups` | Quarter Worked totals for a year, or year totals for all time |
+| `children` | Parts-table rows: days, weeks, quarters, or years |
+| `homes`, `theme_hues` | The Stats home and type catalogs used by the Day strip |
+| `warnings` | Report warnings; empty when none apply |
+
+Every fact has `metric`, `label`, `unit`, `value`, `display`, `so_far`,
+`quality`, and `typical`. `review_closed` also has `of` and displays `N of M`.
+Worked adds `offclock: {value, display}` only when the selected lens contains
+positive off-clock minutes. A hidden metric (`stats.hide`) is omitted. Current
+period totals add the complete daily values to today's provisional value;
+`so_far` is true and `quality` keeps missing or pre-tracking days distinct from
+zero. For the 2026-11-03 live example, week Worked is the Nov 2 complete day
+plus the Nov 3 provisional value.
+
+Typical values use closed prior periods only. A usable prior period has no
+`not_tracked` day and at least one day with data; a missing day is no data, not
+zero. Weeks use the median total of four prior weeks and need two usable weeks.
+Quarters use a median per-week rate over four prior quarters, and years use
+three; those rates are scaled to the current quarter/year's week count when
+lengths differ. Both `words` and `detail` say when scaling occurs. The
+`relation` is `above`, `below`, or `equal` only for a closed period; it is null
+for current periods. All time has no typical value. `review_closed` has no
+typical line.
+
+`lanes.root_parent` and `lanes.theme` each contain `{key, label, minutes,
+display, share}` rows. The weekly type lane is unmodified. Quarter, year, and
+all-time type lanes fold `(unnamed)` and types below 2% of Worked into `other`.
+`columns` include the date/period id, kind, labels, path and existence, start
+and end, state, Worked value/display/quality, a root-parent `stack`, mark,
+month `tick`, and parent `group` where relevant. Day marks are `met`, `missed`,
+`open`, or null; period marks use the child note's review state. Current columns
+include today's provisional value. Future columns remain identifiable and
+carry no values.
+
+`children` rows carry their id, kind, label, range label, note path and
+existence, and state. Non-future rows add Worked and Done, review state,
+Headline and Reflection lead, closeout for days, and the top three
+root-parent `mostly` shares plus their automatic `mostly_display`. A future
+row contains only its link identity and dates. The weekly `columns` and
+`children` repeat the same day data; quarter columns and children repeat the
+same week data. Year columns are weeks grouped by quarter and all-time columns
+are quarters grouped by year. `groups` carry `key`, `label`, and
+`worked_display`.
+
+Future periods show a `Starts …` coverage line and do not run Stats. A closed
+period with gaps reports `<N> of <M> days logged`; complete coverage has an
+empty display. Period reads never write a note.
+
+On the real vault, one `cargo run --quiet -- periods show 2026 -f json` run
+measured 1.38 s wall time (including the Cargo launcher); it returned 53 week
+columns, four quarter children, and four quarter groups. This met the 1.5 s
+year-report target without a persistent cache.

@@ -19,6 +19,7 @@ Commands:
   ensure   Create missing period notes one week ahead
   list     List period notes with review states (default)
   migrate  Adopt the period-note tree (dry run by default)
+  show     Show a period's live stats and child summaries
 
 Options:
   -h, --help  Print help
@@ -26,15 +27,17 @@ Options:
 Bare `bob periods` runs the read-only list.
 
 Examples:
+  bob periods ensure             Create missing notes one week ahead
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
   bob periods list -p            Report period-note problems
-  bob periods ensure             Create missing notes one week ahead
+  bob periods show               Show this week's stats strip data
+  bob periods show 2026-Q4 -f json  Print the quarter report as JSON
   bob periods ensure -n -f json  Preview the writes as JSON
   bob periods migrate            Preview adopting the period-note tree
   bob periods migrate -a         Apply the adoption in one commit
 
-See docs/periods.md for the calendar, scaffolds, and JSON.
+See docs/periods.md for the calendar, scaffolds, reports, and JSON.
 Run 'bob periods <command> --help' for more information on a command.
 ```
 
@@ -194,6 +197,55 @@ Exit codes:
   3  refused (not a worktree, dirty paths)
 
 See docs/periods.md for the range, verify, and JSON.
+```
+
+## bob periods show
+
+Show a period's live stats and child summaries
+
+```text title="bob periods show --help"
+Show the stats strip and parts-table data for a week, quarter, year, or all time. With no PERIOD, show the current ISO week. The command is read-only. See docs/periods.md for the JSON contract and aggregation rules.
+
+Usage: bob periods show [OPTIONS] [PERIOD]
+
+Arguments:
+  [PERIOD]
+          Period id or note path; defaults to the current week
+
+Options:
+  -k, --clock <CLOCK>
+          Pomodoro clock: worked, off-clock, or total
+          
+          [default: worked]
+          [possible values: worked, off-clock, total]
+
+  -f, --format <FORMAT>
+          Output format: human or json
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+Examples:
+  bob periods show
+  bob periods show 2026-W45 -f json
+  bob periods show 2026-Q4 -k total
+  bob periods show all_time -f json
+
+Environment:
+  BOB_CONFIG_FILE  Exact Bob config file; defaults to ~/.config/bob/config.yml
+  BOB_DIR          Bob vault root; defaults to ~/bob
+  BOB_NOW          Local datetime override that pins today for the report
+  NO_COLOR         Disable colored output
+
+Exit codes:
+  0  report
+  1  vault I/O failure
+  2  usage, unknown period, config error, or non-Dataview task format
+
+See docs/periods.md for the calendar, JSON contract, and display rules.
 ```
 
 ## Related

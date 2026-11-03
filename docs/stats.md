@@ -474,17 +474,23 @@ back `K*N` days and drops today. `prior` is the equal-length window right
 before the current one and always resolves (it explains the delta);
 `prior_points` are only filled on comparison requests. Explicit
 `YYYY-MM-DD..YYYY-MM-DD` ranges clamp a future end to today and reject fully
-future or inverted intervals with usage errors.
+future or inverted intervals with usage errors. Period ids (`2026-W45`,
+`2026-Q4`, `2026`, or a vault-relative period-note path) resolve to their
+calendar dates and use the same clamping and future-start checks. Their
+`range.label` is the canonical id and `range.period` carries that id; ordinary
+ranges omit `range.period`.
 
 **Grouping.** `auto` picks day through 91 complete days, week through 371,
-month beyond; weeks start Monday (ISO year boundaries included) and months
-are calendar months. Edge-clipped buckets carry `partial: true`. Count,
+month beyond; it never picks quarter. Weeks start Monday (ISO year boundaries
+included), months are calendar months, and `-g quarter` groups whole ISO
+quarters of 13 weeks (Q4 includes W53 when present). Quarter buckets at clipped
+edges carry `partial: true`; quarter grouping has no rolling median. Count,
 minutes, and signed values sum; ratios pool `num`/`den` (periods never
 average daily percentages); bools count met days as `N of M`, where M is
 days with data. All-null buckets stay null. Week and month grouping keep
 today as a separate final provisional point (date = end = today,
 `rolling_median` null) whenever the window includes today; it is never
-merged into a bucket.
+merged into a bucket. This applies to week, month, and quarter grouping.
 
 **Summaries** always use raw complete daily values: the numeric headline is
 the daily median (`/day` suffix), _except_ `net`, whose headline is the window
@@ -1407,6 +1413,12 @@ fallback says `<ClockName> by area` (for example `Total by type`). The group sen
 `CanvasText`, gray and hatch are `GrayText`, gaps stay page background, and off-clock tails and dashed Off-clock segments stay dashed `CanvasText` on `Canvas`. The Day strip lanes are unchanged.
 
 ### Day strip
+
+The Day strip is the daily member of Bob's stats-strip family. Period notes
+use the same five facts, typical line, home/type lanes, and parts columns;
+`bob periods show <PERIOD> -f json` supplies their render-ready data. See
+[Period reports](periods.md#period-reports) for its JSON contract and the
+week, quarter, year, and all-time members.
 
 In desktop Obsidian, a Day strip renders as the first child of the
 rendered `bob-plan` block in canonical daily notes (`YYYY/YYYYMMDD.md`),

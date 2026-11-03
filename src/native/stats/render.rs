@@ -1258,6 +1258,7 @@ mod tests {
                 includes_today: true,
                 group: GroupName::Day,
                 label: "Oct 8 – Oct 10".to_string(),
+                period: None,
                 prior: None,
             },
             clock: crate::native::stats::report::ClockReport::default(),

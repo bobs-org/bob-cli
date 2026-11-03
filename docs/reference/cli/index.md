@@ -60,6 +60,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob periods ensure`](periods.md#bob-periods-ensure) | Create missing period notes one week ahead |
 | [`bob periods list`](periods.md#bob-periods-list) | List period notes with review states (default) |
 | [`bob periods migrate`](periods.md#bob-periods-migrate) | Adopt the period-note tree (dry run by default) |
+| [`bob periods show`](periods.md#bob-periods-show) | Show a period's live stats and child summaries |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
 | [`bob ref`](ref.md) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`bob vault-sync`](vault-sync.md) | Reconcile the vault through Git (default: run) or show status |

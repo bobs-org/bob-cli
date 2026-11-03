@@ -1,5 +1,7 @@
 use chrono::NaiveDate;
 
+use crate::native::periods::calendar::PeriodId;
+
 /// A configured or requested stats window. [`super::series::resolve_range`]
 /// turns this into complete-day bounds, grouping, and the prior window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,7 +11,15 @@ pub(crate) enum RangeSpec {
     Months(u32),
     Years(u32),
     All,
-    Explicit { start: NaiveDate, end: NaiveDate },
+    Explicit {
+        start: NaiveDate,
+        end: NaiveDate,
+    },
+    Period {
+        id: PeriodId,
+        start: NaiveDate,
+        end: NaiveDate,
+    },
 }
 
 impl RangeSpec {
@@ -24,6 +34,14 @@ impl RangeSpec {
         }
         if text.eq_ignore_ascii_case("all") {
             return Ok(Self::All);
+        }
+        if let Ok(id) = PeriodId::parse(text) {
+            if id == PeriodId::AllTime {
+                return Ok(Self::All);
+            }
+            if let (Some(start), Some(end)) = (id.start(), id.end()) {
+                return Ok(Self::Period { id, start, end });
+            }
         }
         if let Some((start, end)) = text.split_once("..") {
             return parse_explicit(start, end);
@@ -43,12 +61,13 @@ impl RangeSpec {
                 start.format("%Y-%m-%d"),
                 end.format("%Y-%m-%d")
             ),
+            Self::Period { id, .. } => id.to_string(),
         }
     }
 
     pub(crate) fn preset_label(&self) -> Option<String> {
         match self {
-            Self::Explicit { .. } => None,
+            Self::Explicit { .. } | Self::Period { .. } => None,
             _ => Some(self.label()),
         }
     }
@@ -136,6 +155,24 @@ mod tests {
                 end: NaiveDate::from_ymd_opt(2026, 10, 10).unwrap(),
             }
         );
+    }
+
+    #[test]
+    fn period_ids_resolve_to_explicit_calendar_bounds() {
+        assert_eq!(
+            RangeSpec::parse("2026-W45").unwrap(),
+            RangeSpec::Period {
+                id: PeriodId::Week {
+                    year: 2026,
+                    week: 45
+                },
+                start: NaiveDate::from_ymd_opt(2026, 11, 2).unwrap(),
+                end: NaiveDate::from_ymd_opt(2026, 11, 8).unwrap(),
+            }
+        );
+        assert_eq!(RangeSpec::parse("2026-Q4").unwrap().label(), "2026-Q4");
+        assert_eq!(RangeSpec::parse("2026").unwrap().label(), "2026");
+        assert_eq!(RangeSpec::parse("all_time").unwrap(), RangeSpec::All);
     }
 
     #[test]

@@ -100,10 +100,10 @@ Options:
           [possible values: human, json, csv]
 
   -g, --group <GROUP>
-          Bucket points by auto, day, week, or month
+          Bucket points by auto, day, week, month, or quarter
           
           [default: auto]
-          [possible values: auto, day, week, month]
+          [possible values: auto, day, week, month, quarter]
 
   -h, --help
           Print help
@@ -118,11 +118,13 @@ Options:
           Shift the window back this many ranges
 
   -r, --range <RANGE>
-          Window as 7d, 4w, 3m, 1y, all, or START..END
+          Window as 7d, 4w, 3m, 1y, all, a period id, or START..END
 
 Examples:
   bob stats
   bob stats -r 7d -c
+  bob stats -r 2026-W45
+  bob stats -r 2026-Q4 -g quarter
   bob stats -k off-clock
   bob stats -k total -f json
   bob stats -f csv
@@ -171,10 +173,10 @@ Options:
           [possible values: human, json, csv]
 
   -g, --group <GROUP>
-          Bucket points by auto, day, week, or month
+          Bucket points by auto, day, week, month, or quarter
           
           [default: auto]
-          [possible values: auto, day, week, month]
+          [possible values: auto, day, week, month, quarter]
 
   -h, --help
           Print help
@@ -189,11 +191,12 @@ Options:
           Shift the window back this many ranges
 
   -r, --range <RANGE>
-          Window as 7d, 4w, 3m, 1y, all, or START..END
+          Window as 7d, 4w, 3m, 1y, all, a period id, or START..END
 
 Examples:
   bob stats show worked -c
   bob stats show worked reviewed
+  bob stats show worked -r 2026-Q4 -g quarter
   bob stats show worked -k total
   bob stats show -a -f json
   bob stats show -a -f csv

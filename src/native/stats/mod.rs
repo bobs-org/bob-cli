@@ -85,6 +85,7 @@ mod tests {
                 includes_today: true,
                 group: report::GroupName::Day,
                 label: "today".to_string(),
+                period: None,
                 prior: None,
             },
             clock: report::ClockReport::default(),

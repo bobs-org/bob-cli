@@ -453,21 +453,31 @@ const PERIODS_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "show",
+        about: "Show a period's live stats and child summaries",
+        leaf: Leaf {
+            native_command: NativeCommand::PeriodsShow,
+            script_command: None,
+        },
+    },
 ];
 
 const PERIODS_AFTER_HELP: &str = "\
 Bare `bob periods` runs the read-only list.
 
 Examples:
+  bob periods ensure             Create missing notes one week ahead
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
   bob periods list -p            Report period-note problems
-  bob periods ensure             Create missing notes one week ahead
+  bob periods show               Show this week's stats strip data
+  bob periods show 2026-Q4 -f json  Print the quarter report as JSON
   bob periods ensure -n -f json  Preview the writes as JSON
   bob periods migrate            Preview adopting the period-note tree
   bob periods migrate -a         Apply the adoption in one commit
 
-See docs/periods.md for the calendar, scaffolds, and JSON.
+See docs/periods.md for the calendar, scaffolds, reports, and JSON.
 Run 'bob periods <command> --help' for more information on a command.";
 
 const GROUP_HELP_TEMPLATE: &str = "\
@@ -2165,6 +2175,7 @@ mod tests {
             NativeCommand::PeriodsEnsure,
             NativeCommand::PeriodsList,
             NativeCommand::PeriodsMigrate,
+            NativeCommand::PeriodsShow,
             NativeCommand::Plan,
             NativeCommand::Plugins,
             NativeCommand::Pomodoro,

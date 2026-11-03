@@ -124,6 +124,41 @@ pub(crate) fn migrate_command() -> ClapCommand {
         .arg(since_arg())
 }
 
+pub(crate) fn show_command() -> ClapCommand {
+    ClapCommand::new("bob periods show")
+        .about("Show a period's live stats and child summaries")
+        .long_about(
+            "Show the stats strip and parts-table data for a week, quarter, \
+             year, or all time. With no PERIOD, show the current ISO week. \
+             The command is read-only. See docs/periods.md for the JSON \
+             contract and aggregation rules.",
+        )
+        .after_help(
+            "Examples:\n  \
+             bob periods show\n  \
+             bob periods show 2026-W45 -f json\n  \
+             bob periods show 2026-Q4 -k total\n  \
+             bob periods show all_time -f json\n\n\
+             Environment:\n  \
+             BOB_CONFIG_FILE  Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
+             BOB_DIR          Bob vault root; defaults to ~/bob\n  \
+             BOB_NOW          Local datetime override that pins today for the report\n  \
+             NO_COLOR         Disable colored output\n\n\
+             Exit codes:\n  \
+             0  report\n  \
+             1  vault I/O failure\n  \
+             2  usage, unknown period, config error, or non-Dataview task format\n\n\
+             See docs/periods.md for the calendar, JSON contract, and display rules.",
+        )
+        .disable_help_flag(true)
+        .arg(show_clock_arg())
+        .arg(show_format_arg())
+        .arg(help_arg())
+        .arg(Arg::new("period").value_name("PERIOD").help(
+            "Period id or note path; defaults to the current week",
+        ))
+}
+
 fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
@@ -157,6 +192,31 @@ fn format_arg() -> Arg {
         .value_parser(["human", "json"])
         .default_value("human")
         .help("Output format: human or json")
+}
+
+fn show_format_arg() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .short('f')
+        .value_name("FORMAT")
+        .value_parser(["human", "json"])
+        .default_value("human")
+        .help("Output format: human or json")
+}
+
+fn show_clock_arg() -> Arg {
+    use clap::builder::{PossibleValue, PossibleValuesParser};
+    Arg::new("clock")
+        .long("clock")
+        .short('k')
+        .value_name("CLOCK")
+        .value_parser(PossibleValuesParser::new([
+            PossibleValue::new("worked").alias("on"),
+            PossibleValue::new("off-clock").aliases(["off", "untracked"]),
+            PossibleValue::new("total").alias("all"),
+        ]))
+        .default_value("worked")
+        .help("Pomodoro clock: worked, off-clock, or total")
 }
 
 fn help_arg() -> Arg {

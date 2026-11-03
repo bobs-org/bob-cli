@@ -606,6 +606,19 @@ pub(crate) const ENTRIES: &[Row] = &[
         60,
     ),
     Row {
+        slots: &[("PERIOD", "text"), ("period", "text")],
+        ..reads(
+            "periods-show",
+            &["periods", "show"],
+            "Period report",
+            &[
+                "periods", "period", "show", "stats", "week", "quarter", "year",
+            ],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
         invalidates: &["tasks"],
         ..writes(
             "periods-ensure",
