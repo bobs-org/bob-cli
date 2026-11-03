@@ -487,6 +487,11 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &[],
+        arg: "date",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["capture-related"],
         arg: "days",
         kind: Kind::FreeText,
@@ -659,6 +664,11 @@ const TABLE: &[Entry] = &[
     Entry {
         path: &[],
         arg: "until",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
+        arg: "year",
         kind: Kind::FreeText,
     },
     Entry {

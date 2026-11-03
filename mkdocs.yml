@@ -106,6 +106,7 @@ plugins:
           - pomodoro-homes.md
           - task-types.md
           - randomize.md
+          - periods.md
           - stats.md
           - task-dependencies.md
           - task-relations.md
@@ -222,6 +223,7 @@ nav:
           - "Vault":
               - "bob articles": reference/cli/articles.md
               - "bob nightly": reference/cli/nightly.md
+              - "bob periods": reference/cli/periods.md
               - "bob query": reference/cli/query.md
               - "bob ref": reference/cli/ref.md
               - "bob vault-sync": reference/cli/vault-sync.md
@@ -303,6 +305,7 @@ nav:
               - "Pomodoro homes": pomodoro-homes.md
               - "Task types": task-types.md
               - "Randomize": randomize.md
+              - "Period Notes": periods.md
               - "Daily Stats": stats.md
               - "Task dependency links": task-dependencies.md
               - "Task relations": task-relations.md

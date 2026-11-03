@@ -428,6 +428,37 @@ Examples:
 See docs/task-types.md for identity, cache, hue, journal, and JSON.
 Run 'bob types <command> --help' for more information on a command.";
 
+const PERIODS_MEMBERS: &[Member] = &[
+    Member {
+        name: "ensure",
+        about: "Create missing period notes one week ahead",
+        leaf: Leaf {
+            native_command: NativeCommand::PeriodsEnsure,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List period notes with review states (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::PeriodsList,
+            script_command: None,
+        },
+    },
+];
+
+const PERIODS_AFTER_HELP: &str = "\
+Bare `bob periods` runs the read-only list.
+
+Examples:
+  bob periods                    List period notes with review states
+  bob periods list -k week       List only weekly notes
+  bob periods ensure             Create missing notes one week ahead
+  bob periods ensure -n -f json  Preview the writes as JSON
+
+See docs/periods.md for the calendar, scaffolds, and JSON.
+Run 'bob periods <command> --help' for more information on a command.";
+
 const GROUP_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -654,6 +685,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "periods",
+        about: "Manage period notes: weeks, quarters, years, and all time",
+        section: Section::Vault,
+        target: Target::Group(Group {
+            members: PERIODS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one.",
+            ),
+            after_help: PERIODS_AFTER_HELP,
+            usage: "bob periods [COMMAND]",
         }),
     },
     Subcommand {
@@ -2106,6 +2151,8 @@ mod tests {
             NativeCommand::Nightly,
             NativeCommand::NoteReady,
             NativeCommand::Notify,
+            NativeCommand::PeriodsEnsure,
+            NativeCommand::PeriodsList,
             NativeCommand::Plan,
             NativeCommand::Plugins,
             NativeCommand::Pomodoro,

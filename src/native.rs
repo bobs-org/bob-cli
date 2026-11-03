@@ -68,6 +68,7 @@ mod note_tasks;
 mod notify;
 mod ob;
 pub(crate) mod parent_notes;
+pub(crate) mod periods;
 mod plan_budget;
 mod plugins;
 mod pomodoro;
@@ -141,6 +142,8 @@ pub(crate) enum NativeCommand {
     Nightly,
     NoteReady,
     Notify,
+    PeriodsEnsure,
+    PeriodsList,
     Plan,
     Plugins,
     Pomodoro,
@@ -218,6 +221,8 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::NoteReady => note_ready::cli::run(args),
         NativeCommand::Notify => notify::run(args),
+        NativeCommand::PeriodsEnsure => periods::ensure::run(args),
+        NativeCommand::PeriodsList => periods::list::run(args),
         NativeCommand::Plan => plan_budget::cli::run(args),
         NativeCommand::Plugins => plugins::run(args),
         NativeCommand::Pomodoro => pomodoro::run(args),

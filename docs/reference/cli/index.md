@@ -56,6 +56,9 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | --- | --- |
 | [`bob articles`](articles.md) | Format and inspect article notes with bob-owned section numbers |
 | [`bob nightly`](nightly.md) | Run nightly maintenance: vault-sync, task archive, articles, vault-sync |
+| [`bob periods`](periods.md) | Manage period notes: weeks, quarters, years, and all time |
+| [`bob periods ensure`](periods.md#bob-periods-ensure) | Create missing period notes one week ahead |
+| [`bob periods list`](periods.md#bob-periods-list) | List period notes with review states (default) |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
 | [`bob ref`](ref.md) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`bob vault-sync`](vault-sync.md) | Reconcile the vault through Git (default: run) or show status |
@@ -125,6 +128,7 @@ Vault:
   articles    Format and inspect article notes with bob-owned section numbers
   nightly     Run nightly maintenance: vault-sync, task archive, articles,
               vault-sync
+  periods     Manage period notes: weeks, quarters, years, and all time
   query       Run Dataview or Tasks queries against the vault
   ref         Find, list, read, rename, and plan references for today; sync
               Highlights PDFs into them

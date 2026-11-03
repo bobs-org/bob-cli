@@ -10,7 +10,7 @@ groups:
         reader: guides/add-prerequisites.md
       - stem: command-catalog
         summary: "Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage"
-        order: 34
+        order: 35
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3
@@ -74,45 +74,48 @@ groups:
       - stem: randomize
         summary: "`bob task reroll` bulk re-roll of due prioritized tasks"
         order: 21
+      - stem: periods
+        summary: "Period notes: ISO weeks, quarters, years, all time, scaffolds, `bob periods ensure/list`, and JSON"
+        order: 22
       - stem: stats
         summary: "Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page"
-        order: 24
+        order: 25
       - stem: task-dependencies
         summary: "Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors"
-        order: 25
+        order: 26
         reader: guides/add-prerequisites.md
       - stem: task-relations
         summary: "Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture"
-        order: 26
+        order: 27
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
-        order: 27
+        order: 28
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
-        order: 28
+        order: 29
         reader: concepts/tasks-and-lanes.md
       - stem: task-link-marks
         summary: "Task link marks: status rings on links that point to tasks, in Live Preview and Reading view"
-        order: 29
+        order: 30
       - stem: task-tag-marks
         summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`"
-        order: 30
+        order: 31
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
-        order: 31
+        order: 32
         reader: concepts/today-and-the-pomodoro-ledger.md
       - stem: frees-marks
         summary: "Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks"
-        order: 32
+        order: 33
       - stem: off-clock-link-chips
         summary: "Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited"
-        order: 36
+        order: 37
       - stem: event-link-times
         summary: "Event link times: the Event Task's time pill beside ledger Task Links that point at it"
-        order: 37
+        order: 38
       - stem: decay-ladder
         summary: "Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip"
-        order: 35
+        order: 36
   - title: "References"
     entries:
       - stem: dataview
@@ -120,11 +123,11 @@ groups:
         order: 4
       - stem: ref
         summary: "Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback"
-        order: 22
+        order: 23
         reader: guides/save-link-to-reading-queue.md
       - stem: ref-jobs
         summary: "`bob ref jobs` background capture progress, worker, fallback, and recovery"
-        order: 23
+        order: 24
         reader: guides/recover-reference-job.md
   - title: "Vault"
     entries:
@@ -134,5 +137,5 @@ groups:
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 33
+        order: 34
         reader: guides/sync-vault-across-machines.md

@@ -16,6 +16,7 @@ mod help_options;
 mod highlights;
 mod move_done;
 mod note_walkers;
+mod periods;
 mod plan;
 mod plugins;
 mod pomodoro;

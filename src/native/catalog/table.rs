@@ -595,6 +595,26 @@ pub(crate) const ENTRIES: &[Row] = &[
             1800,
         )
     },
+    reads(
+        "periods-list",
+        &["periods", "list"],
+        "List period notes",
+        &["periods", "list", "week", "quarter", "year", "review"],
+        Presentation::Report,
+        60,
+    ),
+    Row {
+        invalidates: &["tasks"],
+        ..writes(
+            "periods-ensure",
+            &["periods", "ensure"],
+            "Create missing period notes",
+            &["periods", "ensure", "week", "quarter", "year", "create"],
+            Policy::Run,
+            Some(DRY_RUN),
+            60,
+        )
+    },
     Row {
         fixed: &["--source"],
         extra_args: &[StaticArg {
