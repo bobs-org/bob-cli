@@ -8,8 +8,9 @@ summary:
   "The buffered span is what the event occupies; the meeting span is when
   the meeting happens."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-11-02
+  superseded_by: decisions:buffer-reasons-ride-description-bullets
 title: Event Buffers Widen The Occupied Span
 ---
 
@@ -75,3 +76,5 @@ events, § Root selection; `docs/capture.md`;
 [[decisions:untracked-sessions-omit-t-field]]
 
 [[glossary:event-task]]
+
+Superseded in part: buffers are also read from reason lines (`-30 Drive to Kelly's`), which write a labelled reason bullet. See [[decisions:buffer-reasons-ride-description-bullets]].

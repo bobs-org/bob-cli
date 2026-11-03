@@ -443,7 +443,8 @@ side omitted when zero; no field without buffers), then `[root::]`, then
 `[type:: MEET]` only when needed, then a `^block-id` minted from the bare
 title and unique within the note. When the Google event has a human
 description, sync writes it as flat first-child bullets under the row (see
-[Description bullets](../gcal.md#description-bullets)). The buffer widens
+[Description bullets](../gcal.md#description-bullets)), led by `↤`/`↦`
+buffer-reason bullets. The buffer widens
 the span the event occupies (sync phases, MEET filing) while the bold span
 keeps the meeting time. A written context row carries
 the span (`**all day**` or `**HHMM-HHMM**`) plus optional `· *day N of M*`,

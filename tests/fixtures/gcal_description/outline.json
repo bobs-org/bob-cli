@@ -13,7 +13,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "And retainers!" }]
+          "inlines": [
+            {
+              "text": "And retainers!"
+            }
+          ]
         }
       ]
     },
@@ -30,7 +34,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "And retainers!" }]
+          "inlines": [
+            {
+              "text": "And retainers!"
+            }
+          ]
         }
       ]
     },
@@ -47,18 +55,29 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Agenda:", "bold": true }]
-        },
-        {
-          "depth": 2,
-          "marker": "-",
-          "inlines": [{ "text": "Intros" }]
+          "inlines": [
+            {
+              "text": "Agenda:",
+              "bold": true
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
           "inlines": [
-            { "text": "System design – " },
+            {
+              "text": "Intros"
+            }
+          ]
+        },
+        {
+          "depth": 2,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "System design – "
+            },
             {
               "text": "prep doc",
               "url": "https://www.google.com/url?q=https://docs.google.com/document/d/1AbC/edit&sa=D"
@@ -68,7 +87,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Bring laptop & ID" }]
+          "inlines": [
+            {
+              "text": "Bring laptop & ID"
+            }
+          ]
         }
       ]
     },
@@ -79,12 +102,20 @@
         {
           "depth": 1,
           "marker": "1.",
-          "inlines": [{ "text": "Intros" }]
+          "inlines": [
+            {
+              "text": "Intros"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "2.",
-          "inlines": [{ "text": "Next" }]
+          "inlines": [
+            {
+              "text": "Next"
+            }
+          ]
         }
       ]
     },
@@ -95,12 +126,20 @@
         {
           "depth": 1,
           "marker": "1.",
-          "inlines": [{ "text": "Intros" }]
+          "inlines": [
+            {
+              "text": "Intros"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "2.",
-          "inlines": [{ "text": "Next" }]
+          "inlines": [
+            {
+              "text": "Next"
+            }
+          ]
         }
       ]
     },
@@ -111,17 +150,29 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "a" }]
+          "inlines": [
+            {
+              "text": "a"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "b" }]
+          "inlines": [
+            {
+              "text": "b"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "c" }]
+          "inlines": [
+            {
+              "text": "c"
+            }
+          ]
         }
       ]
     },
@@ -132,17 +183,29 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "a" }]
+          "inlines": [
+            {
+              "text": "a"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "b" }]
+          "inlines": [
+            {
+              "text": "b"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "c" }]
+          "inlines": [
+            {
+              "text": "c"
+            }
+          ]
         }
       ]
     },
@@ -153,12 +216,21 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Agenda:", "bold": true }]
+          "inlines": [
+            {
+              "text": "Agenda:",
+              "bold": true
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "Intros" }]
+          "inlines": [
+            {
+              "text": "Intros"
+            }
+          ]
         }
       ]
     },
@@ -169,27 +241,47 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Agenda:" }]
+          "inlines": [
+            {
+              "text": "Agenda:"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "a" }]
+          "inlines": [
+            {
+              "text": "a"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "b" }]
+          "inlines": [
+            {
+              "text": "b"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "More:" }]
+          "inlines": [
+            {
+              "text": "More:"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "c" }]
+          "inlines": [
+            {
+              "text": "c"
+            }
+          ]
         }
       ]
     },
@@ -200,12 +292,20 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "A · B" }]
+          "inlines": [
+            {
+              "text": "A · B"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "C · D" }]
+          "inlines": [
+            {
+              "text": "C · D"
+            }
+          ]
         }
       ]
     },
@@ -216,7 +316,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "See Secret Note here" }]
+          "inlines": [
+            {
+              "text": "See Secret Note here"
+            }
+          ]
         }
       ]
     },
@@ -227,7 +331,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Hello there" }]
+          "inlines": [
+            {
+              "text": "Hello there"
+            }
+          ]
         }
       ]
     },
@@ -238,7 +346,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Hello world!" }]
+          "inlines": [
+            {
+              "text": "Hello world!"
+            }
+          ]
         }
       ]
     },
@@ -250,7 +362,9 @@
           "depth": 1,
           "marker": "-",
           "inlines": [
-            { "text": "See " },
+            {
+              "text": "See "
+            },
             {
               "text": "https://x.test/path",
               "url": "https://x.test/path"
@@ -299,12 +413,16 @@
           "depth": 1,
           "marker": "-",
           "inlines": [
-            { "text": "See " },
+            {
+              "text": "See "
+            },
             {
               "text": "prep doc",
               "url": "https://example.com/a"
             },
-            { "text": " and Secret Note." }
+            {
+              "text": " and Secret Note."
+            }
           ]
         }
       ]
@@ -316,17 +434,29 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "RSVP by Friday" }]
+          "inlines": [
+            {
+              "text": "RSVP by Friday"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Done" }]
+          "inlines": [
+            {
+              "text": "Done"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Open" }]
+          "inlines": [
+            {
+              "text": "Open"
+            }
+          ]
         }
       ]
     },
@@ -354,7 +484,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Bring shoes" }]
+          "inlines": [
+            {
+              "text": "Bring shoes"
+            }
+          ]
         }
       ]
     },
@@ -365,12 +499,20 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Notes:" }]
+          "inlines": [
+            {
+              "text": "Notes:"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "- leftover" }]
+          "inlines": [
+            {
+              "text": "- leftover"
+            }
+          ]
         }
       ]
     },
@@ -382,11 +524,25 @@
           "depth": 1,
           "marker": "-",
           "inlines": [
-            { "text": "bold", "bold": true },
-            { "text": " and " },
-            { "text": "italic", "italic": true },
-            { "text": " and " },
-            { "text": "both", "bold": true, "italic": true }
+            {
+              "text": "bold",
+              "bold": true
+            },
+            {
+              "text": " and "
+            },
+            {
+              "text": "italic",
+              "italic": true
+            },
+            {
+              "text": " and "
+            },
+            {
+              "text": "both",
+              "bold": true,
+              "italic": true
+            }
           ]
         }
       ]
@@ -398,12 +554,20 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Before" }]
+          "inlines": [
+            {
+              "text": "Before"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "After" }]
+          "inlines": [
+            {
+              "text": "After"
+            }
+          ]
         }
       ]
     },
@@ -415,7 +579,9 @@
           "depth": 1,
           "marker": "-",
           "inlines": [
-            { "text": "See " },
+            {
+              "text": "See "
+            },
             {
               "text": "https://x.test/path",
               "url": "https://x.test/path"
@@ -431,17 +597,30 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "foo" }]
+          "inlines": [
+            {
+              "text": "foo"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "bar", "bold": true }]
+          "inlines": [
+            {
+              "text": "bar",
+              "bold": true
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "baz" }]
+          "inlines": [
+            {
+              "text": "baz"
+            }
+          ]
         }
       ]
     },
@@ -452,17 +631,447 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Agenda:", "bold": true }]
+          "inlines": [
+            {
+              "text": "Agenda:",
+              "bold": true
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "a" }]
+          "inlines": [
+            {
+              "text": "a"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "b" }]
+          "inlines": [
+            {
+              "text": "b"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reason-plain-both-sides",
+      "input": "Bring the gift card\n-30 Drive to Kelly's\n+15 Drive home\n@love #off",
+      "directives": {
+        "route": "love",
+        "untracked": true,
+        "before": 30,
+        "after": 15
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "Drive to Kelly's"
+            }
+          ]
+        },
+        "after": {
+          "minutes": 15,
+          "inlines": [
+            {
+              "text": "Drive home"
+            }
+          ]
+        }
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "Bring the gift card"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reason-separators",
+      "input": "-30: Drive\n+15 — Walk home",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 30,
+        "after": 15
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "Drive"
+            }
+          ]
+        },
+        "after": {
+          "minutes": 15,
+          "inlines": [
+            {
+              "text": "Walk home"
+            }
+          ]
+        }
+      },
+      "lines": []
+    },
+    {
+      "id": "reason-en-dash-m-comma",
+      "input": "–20m, Pack up",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 20,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 20,
+          "inlines": [
+            {
+              "text": "Pack up"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": []
+    },
+    {
+      "id": "reason-html-bold-token-and-link",
+      "input": "<b>-30</b> Drive to <a href=\"https://maps.example/k\">Kelly's</a><br>+15 Drive home",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 30,
+        "after": 15
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "Drive to "
+            },
+            {
+              "text": "Kelly's",
+              "url": "https://maps.example/k"
+            }
+          ]
+        },
+        "after": {
+          "minutes": 15,
+          "inlines": [
+            {
+              "text": "Drive home"
+            }
+          ]
+        }
+      },
+      "lines": []
+    },
+    {
+      "id": "reason-list-item",
+      "input": "- -30 Drive\nBring cake",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 30,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "Drive"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "Bring cake"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reason-after-bare-directive-same-value",
+      "input": "@love -30\n-30 Drive",
+      "directives": {
+        "route": "love",
+        "untracked": false,
+        "before": 30,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "Drive"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": []
+    },
+    {
+      "id": "reason-disagreeing-value-stays-prose",
+      "input": "-30 Drive\n-10 Park",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 30,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "Drive"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "-10 Park"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reason-second-for-side-stays-prose",
+      "input": "+15 Drive home\n+15 Stretch",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 0,
+        "after": 15
+      },
+      "reasons": {
+        "before": null,
+        "after": {
+          "minutes": 15,
+          "inlines": [
+            {
+              "text": "Drive home"
+            }
+          ]
+        }
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "+15 Stretch"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reason-before-bare-directive-wins",
+      "input": "-10 Park\n@love -30",
+      "directives": {
+        "route": "love",
+        "untracked": false,
+        "before": 10,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 10,
+          "inlines": [
+            {
+              "text": "Park"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": []
+    },
+    {
+      "id": "reason-emoji-start",
+      "input": "-30 🚗 Drive",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 30,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "🚗 Drive"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": []
+    },
+    {
+      "id": "reason-routes-and-tags-are-text",
+      "input": "-30 Drive @love #off",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 30,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 30,
+          "inlines": [
+            {
+              "text": "Drive @love #off"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": []
+    },
+    {
+      "id": "reason-cap-720",
+      "input": "-999 Overnight prep",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 720,
+        "after": 0
+      },
+      "reasons": {
+        "before": {
+          "minutes": 720,
+          "inlines": [
+            {
+              "text": "Overnight prep"
+            }
+          ]
+        },
+        "after": null
+      },
+      "lines": []
+    },
+    {
+      "id": "not-reason-phones-and-punctuation",
+      "input": "+1 555-1212\n+1 (555) 010-0123 US\n-30 +15 Drive\n-1234 Drive\n-30Drive\n-30 \"Drive\"",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 0,
+        "after": 0
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "+1 555-1212"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "+1 (555) 010-0123 US"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "-30 +15 Drive"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "-1234 Drive"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "-30Drive"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "-30 \"Drive\""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "not-reason-token-in-link",
+      "input": "<a href=\"https://x.example\">-30 Drive</a>",
+      "directives": {
+        "route": null,
+        "untracked": false,
+        "before": 0,
+        "after": 0
+      },
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "-30 Drive",
+              "url": "https://x.example"
+            }
+          ]
         }
       ]
     }

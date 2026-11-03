@@ -253,7 +253,7 @@ The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 | `gcal.colors` | Mapping of Google event colour names or ids (`lavender`/`1` through `tomato`/`11`) to roots | `{}` | Event-colour root source, checked after an `@route` token and before the calendar's root. Unknown colour keys are a setup error. |
 | `gcal.tentative` | `context` or `task` | `context` | Whether a busy Maybe event becomes a context row or an Event Task. |
 | `gcal.description` | `bullets` or `off` | `bullets` | Whether sync copies event descriptions as Event Task bullets; `off` is the kill switch. |
-| `gcal.description_lines` | Integer at least 2 | `8` | Most bullet lines per Event Task, overflow line included. |
+| `gcal.description_lines` | Integer at least 2 | `8` | Most copied description lines per Event Task, overflow line included; buffer reasons are extra. |
 | `gcal.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 A missing `gcal:` block uses those defaults. Unknown keys are ignored. A

@@ -26,3 +26,7 @@ Google clock directives use canonical `#off` and `#on`. The deprecated
 `#offclock`, `#off-clock`, and `#untracked` spellings remain input aliases.
 The Rust consumer checks `clock` only when a case provides it, keeping the
 existing shared cases stable for the plugin harness.
+
+Buffer-reason lines (`-30 Drive to Kelly's`) live in bob-cli-only
+`tests/fixtures/gcal_description/outline.json`, so this shared file does
+not grow: no existing case starts with a buffer token followed by a word.

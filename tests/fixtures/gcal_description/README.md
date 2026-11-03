@@ -26,8 +26,10 @@ line, an Outlook-style `text<https://…>` autolink, a directive inside
 
 ## `outline.json` notation
 
-Each case has `id`, `input`, `lines`, and optionally `directives` and
-`oversized`.
+Each case has `id`, `input`, `lines`, and optionally `directives`,
+`reasons`, and `oversized`. A case without `reasons` must produce no
+buffer reasons; the test asserts that for every case, so existing cases
+prove they create none.
 
 A line is:
 
@@ -76,6 +78,16 @@ IDs, numbers, and passcodes below are fake.
 `directives` uses the same keys as the shared event-buffer vectors:
 `route`, `untracked`, `before`, `after`. Omitted keys default to
 `null` / `false` / `0`.
+
+`reasons` is `{"before": {"minutes": 30, "inlines": [...]}, "after": null}`.
+A missing side or an explicit `null` means no reason for that side.
+Inlines use the same notation as `lines` above. Reason-line cases pin
+the buffer-reason grammar: plain both-sides, separators (`-30:`,
+`+15 —`), en-dash with `m` and comma, bold token plus link, list-item
+stripping, attach-after-bare-directive, disagreeing and second-for-side
+lines staying prose, bare-directive-wins, emoji start, routes and tags
+as text, the 720 cap, phones and punctuation staying prose, and a token
+inside a link staying prose.
 
 The parser treats the whole input as HTML when it contains a known tag
 or `<!--`; otherwise it takes the plain path. Known tags are listed in

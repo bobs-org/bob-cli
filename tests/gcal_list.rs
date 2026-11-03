@@ -144,6 +144,59 @@ fn explicit_on_directive_is_listed_on_clock_even_with_an_off_alias() {
 }
 
 #[test]
+fn list_shows_buffer_reasons_in_time_and_event_columns() {
+    let env = GcalEnv::new("bob-cli-gcal-list-reasons");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(
+        r#"{
+      "events": [{
+        "id": "dentist",
+        "summary": "Dentist",
+        "description": "Bring insurance card\n-30 Drive to the dentist\n+15 Drive home",
+        "status": "confirmed",
+        "start": {"dateTime": "2026-10-30T18:30:00-04:00"},
+        "end": {"dateTime": "2026-10-30T19:00:00-04:00"},
+        "htmlLink": "https://calendar.google.com/event?eid=dentist",
+        "attendees": [{"self": true, "responseStatus": "accepted"}]
+      }],
+      "nextPageToken": null
+    }"#,
+    );
+
+    let mut table = env.command();
+    fake.install(&mut table).args(["gcal", "list"]);
+    let table_out = table.output().expect("run table list");
+    assert_eq!(table_out.status.code(), Some(0), "{}", stderr(&table_out));
+    let table_text = stdout(&table_out);
+    assert!(
+        table_text.contains("\u{2212}30m +15m"),
+        "TIME carries buffers: {table_text}"
+    );
+    assert!(
+        table_text.contains("Dentist \u{2261} 3"),
+        "EVENT carries reason count: {table_text}"
+    );
+
+    let mut command = env.command();
+    fake.install(&mut command)
+        .args(["gcal", "list", "-f", "json"]);
+    let output = command.output().expect("run gcal list json");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let report: Value =
+        serde_json::from_str(&stdout(&output)).expect("list JSON");
+    let dentist = list_event(&report, "Dentist");
+    assert_eq!(dentist["description_lines"], 3, "{dentist}");
+    assert_eq!(dentist["buffer"]["before_minutes"], 30, "{dentist}");
+    assert_eq!(dentist["buffer"]["after_minutes"], 15, "{dentist}");
+    assert!(
+        !stdout(&output).contains("dentist"),
+        "no reason text in JSON: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn list_uses_the_sole_bob_account_among_multiple_gog_accounts() {
     let env = GcalEnv::new("bob-cli-gcal-list-bob-account");
     env.prepare_healthy_vault();

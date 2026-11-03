@@ -2045,3 +2045,211 @@ fn context_rows_still_never_get_description_bullets() {
         today_note(&env)
     );
 }
+
+#[test]
+fn buffer_reasons_lead_the_description_block() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reason-lead");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card\n-30 Drive to the dentist\n+15 Drive home",
+    )]));
+
+    let dry = sync_output(&env, &fake, &["-d"]);
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    let diff = stdout(&dry);
+    assert!(
+        diff.contains("- \u{21a4} *30m before* \u{00b7} Drive to the dentist"),
+        "dry-run shows before reason: {diff}"
+    );
+    assert!(
+        diff.contains("- \u{21a6} *15m after* \u{00b7} Drive home"),
+        "dry-run shows after reason: {diff}"
+    );
+
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("\u{2261} 3"),
+        "human row ends with ≡ 3: {}",
+        stdout(&output)
+    );
+    let note = today_note(&env);
+    let row = dentist_row(&note);
+    assert!(row.contains(" [buffer:: -30m +15m]"), "buffer field: {row}");
+    let expected_block = concat!(
+        "\t- \u{21a4} *30m before* \u{00b7} Drive to the dentist\n",
+        "\t- \u{21a6} *15m after* \u{00b7} Drive home\n",
+        "\t- Bring insurance card",
+    );
+    assert!(
+        note.contains(expected_block),
+        "reasons lead in timeline order:\n{note}"
+    );
+
+    let mut list = env.command();
+    fake.install(&mut list).args(["gcal", "list", "-f", "json"]);
+    let list_out = list.output().expect("run gcal list json");
+    assert_eq!(list_out.status.code(), Some(0), "{}", stderr(&list_out));
+    let report: Value =
+        serde_json::from_str(&stdout(&list_out)).expect("list JSON");
+    let dentist = report["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .find(|row| row["title"] == "Dentist")
+        .expect("dentist event");
+    assert_eq!(dentist["description_lines"], 3, "{dentist}");
+    assert_eq!(dentist["buffer"]["before_minutes"], 30, "{dentist}");
+    assert_eq!(dentist["buffer"]["after_minutes"], 15, "{dentist}");
+    assert!(
+        !stdout(&list_out).contains("dentist"),
+        "no reason text in JSON: {}",
+        stdout(&list_out)
+    );
+
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(
+        stdout(&again).contains("unchanged"),
+        "rerun is a no-op: {}",
+        stdout(&again)
+    );
+}
+
+#[test]
+fn google_reason_edit_rewrites_untouched_block_and_keeps_edits() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reason-kept");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card\n-30 Drive to the dentist",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    assert!(today_note(&env)
+        .contains("\t- \u{21a4} *30m before* \u{00b7} Drive to the dentist"));
+
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card\n-30 Drive to the clinic",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(
+        note.contains("\t- \u{21a4} *30m before* \u{00b7} Drive to the clinic"),
+        "untouched rewrite in place:\n{note}"
+    );
+    assert!(!note.contains("Drive to the dentist"), "{note}");
+    assert!(
+        dentist_row(&note).contains(" [buffer:: -30m]"),
+        "buffer follows: {}",
+        dentist_row(&note)
+    );
+
+    let edited = today_note(&env).replace(
+        "\t- \u{21a4} *30m before* \u{00b7} Drive to the clinic",
+        "\t- \u{21a4} *30m before* \u{00b7} Drive to the clinic (and a book)",
+    );
+    write_today(&env, &edited);
+
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Bring insurance card\n-45 Drive to the hospital",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("kept your edited description bullets"),
+        "kept once: {combined}"
+    );
+    let note = today_note(&env);
+    assert!(
+        note.contains("Drive to the clinic (and a book)"),
+        "edit kept:\n{note}"
+    );
+    assert!(!note.contains("hospital"), "{note}");
+    assert!(
+        dentist_row(&note).contains(" [buffer:: -45m]"),
+        "buffer field still follows Google: {}",
+        dentist_row(&note)
+    );
+    assert!(
+        dentist_row(&note).contains("**1830-1900**"),
+        "meeting span untouched: {}",
+        dentist_row(&note)
+    );
+
+    let again = sync_output(&env, &fake, &[]);
+    let combined = format!("{}{}", stdout(&again), stderr(&again));
+    assert!(
+        !combined.contains("kept your edited"),
+        "reported once: {combined}"
+    );
+}
+
+#[test]
+fn plain_bullet_migrates_to_reason_bullet() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reason-migrate");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "Drive to the dentist",
+    )]));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+    let first = today_note(&env);
+    assert!(first.contains("\t- Drive to the dentist"), "{first}");
+    assert!(!dentist_row(&first).contains("[buffer::"), "{first}");
+
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "-30 Drive to the dentist",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(
+        dentist_row(&note).contains(" [buffer:: -30m]"),
+        "gains buffer: {}",
+        dentist_row(&note)
+    );
+    assert!(
+        note.contains(
+            "\t- \u{21a4} *30m before* \u{00b7} Drive to the dentist"
+        ),
+        "becomes reason:\n{note}"
+    );
+    assert!(
+        !note.contains("\t- Drive to the dentist\n"),
+        "no duplicate plain bullet:\n{note}"
+    );
+
+    let again = sync_output(&env, &fake, &[]);
+    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
+    assert!(
+        stdout(&again).contains("unchanged"),
+        "stable: {}",
+        stdout(&again)
+    );
+}
+
+#[test]
+fn description_off_keeps_buffer_without_reason_bullets() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-reason-off");
+    prepare(&env);
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: you@example.com\n  writer: test-host\n  description: off\n  colors:\n    tomato: job\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(&events_envelope(vec![dentist_with_description(
+        "-30 Drive",
+    )]));
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let note = today_note(&env);
+    assert!(
+        dentist_row(&note).contains(" [buffer:: -30m]"),
+        "buffer still applies: {}",
+        dentist_row(&note)
+    );
+    assert!(!note.contains("\u{21a4}"), "no reason bullets:\n{note}");
+    assert!(!note.contains("Drive"), "no reason text:\n{note}");
+}

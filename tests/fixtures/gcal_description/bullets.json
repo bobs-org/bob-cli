@@ -4,82 +4,148 @@
       "id": "retainer-prose",
       "input": "And retainers!\n@love #offclock",
       "bullets": [
-        { "depth": 1, "body": "- And retainers!" }
+        {
+          "depth": 1,
+          "body": "- And retainers!"
+        }
       ]
     },
     {
       "id": "agenda-html-and-directive",
       "input": "<b>Agenda:</b><ul><li>Intros</li><li>System design – <a href=\"https://www.google.com/url?q=https%3A%2F%2Fdocs.google.com%2Fdocument%2Fd%2F1AbC%2Fedit&amp;sa=D\">prep doc</a></li></ul>Bring laptop &amp; ID<br>@job -15",
       "bullets": [
-        { "depth": 1, "body": "- **Agenda:**" },
-        { "depth": 2, "body": "- Intros" },
-        { "depth": 2, "body": "- System design – [prep doc](https://docs.google.com/document/d/1AbC/edit)" },
-        { "depth": 1, "body": "- Bring laptop & ID" }
+        {
+          "depth": 1,
+          "body": "- **Agenda:**"
+        },
+        {
+          "depth": 2,
+          "body": "- Intros"
+        },
+        {
+          "depth": 2,
+          "body": "- System design – [prep doc](https://docs.google.com/document/d/1AbC/edit)"
+        },
+        {
+          "depth": 1,
+          "body": "- Bring laptop & ID"
+        }
       ]
     },
     {
       "id": "ordered-list-preserved",
       "input": "1. First\n2) Second",
       "bullets": [
-        { "depth": 1, "body": "1. First" },
-        { "depth": 1, "body": "2. Second" }
+        {
+          "depth": 1,
+          "body": "1. First"
+        },
+        {
+          "depth": 1,
+          "body": "2. Second"
+        }
       ]
     },
     {
       "id": "hostile-markdown-and-drawer-guards",
       "input": "Run `$= dv.el(\"b\", 1)` now\n- [ ] RSVP #task by Friday\nSee [[Secret Note]] ![](https://t.example/p.png)\nTBD\nBring 🍅 salad\nRoom:: 4B\n[click](obsidian://advanced-uri?x=1)\nUse <% tp.date.now() %> here",
       "bullets": [
-        { "depth": 1, "body": "- Run \\`$= dv.el(\"b\", 1)\\` now" },
-        { "depth": 1, "body": "- RSVP \\#task by Friday" },
-        { "depth": 1, "body": "- See \\[\\[Secret Note]]" },
-        { "depth": 1, "body": "- **TBD**" },
-        { "depth": 1, "body": "- Bring &#127813; salad" },
-        { "depth": 1, "body": "- Room\\:\\: 4B" },
-        { "depth": 1, "body": "- click" },
-        { "depth": 1, "body": "- Use \\<% tp.date.now() %> here" }
+        {
+          "depth": 1,
+          "body": "- Run \\`$= dv.el(\"b\", 1)\\` now"
+        },
+        {
+          "depth": 1,
+          "body": "- RSVP \\#task by Friday"
+        },
+        {
+          "depth": 1,
+          "body": "- See \\[\\[Secret Note]]"
+        },
+        {
+          "depth": 1,
+          "body": "- **TBD**"
+        },
+        {
+          "depth": 1,
+          "body": "- Bring &#127813; salad"
+        },
+        {
+          "depth": 1,
+          "body": "- Room\\:\\: 4B"
+        },
+        {
+          "depth": 1,
+          "body": "- click"
+        },
+        {
+          "depth": 1,
+          "body": "- Use \\<% tp.date.now() %> here"
+        }
       ]
     },
     {
       "id": "managed-html-log-is-italicized",
       "input": "<b>Work log</b>",
       "bullets": [
-        { "depth": 1, "body": "- *Work log*" }
+        {
+          "depth": 1,
+          "body": "- *Work log*"
+        }
       ]
     },
     {
       "id": "ordinary-prose-keeps-literal-punctuation",
       "input": "AT&T, 5 > 3, a:b, Q4: $5, it’s 50% done, C# and F#",
       "bullets": [
-        { "depth": 1, "body": "- AT&T, 5 > 3, a:b, Q4: $5, it’s 50% done, C# and F#" }
+        {
+          "depth": 1,
+          "body": "- AT&T, 5 > 3, a:b, Q4: $5, it’s 50% done, C# and F#"
+        }
       ]
     },
     {
       "id": "short-url-is-bare",
       "input": "<a href=\"https://example.com/x\">https://example.com/x</a>",
       "bullets": [
-        { "depth": 1, "body": "- https://example.com/x" }
+        {
+          "depth": 1,
+          "body": "- https://example.com/x"
+        }
       ]
     },
     {
       "id": "long-url-becomes-host-link",
       "input": "<a href=\"https://www.example.com/a/very/long/path/that/is/over/forty/characters\">https://www.example.com/a/very/long/path/that/is/over/forty/characters</a>",
       "bullets": [
-        { "depth": 1, "body": "- [example.com](https://www.example.com/a/very/long/path/that/is/over/forty/characters)" }
+        {
+          "depth": 1,
+          "body": "- [example.com](https://www.example.com/a/very/long/path/that/is/over/forty/characters)"
+        }
       ]
     },
     {
       "id": "link-text-escapes-closing-bracket",
       "input": "<a href=\"https://example.com/guide\">close ] and [[note]]</a>",
       "bullets": [
-        { "depth": 1, "body": "- [close \\] and \\[\\[note\\]\\]](https://example.com/guide)" }
+        {
+          "depth": 1,
+          "body": "- [close \\] and \\[\\[note\\]\\]](https://example.com/guide)"
+        }
       ]
     },
     {
       "id": "mailto-and-tel",
       "input": "<a href=\"mailto:team@example.com\">team@example.com</a><br><a href=\"tel:+15551234567\">+15551234567</a>",
       "bullets": [
-        { "depth": 1, "body": "- [team@example.com](mailto:team@example.com)" },
-        { "depth": 1, "body": "- [+15551234567](tel:+15551234567)" }
+        {
+          "depth": 1,
+          "body": "- [team@example.com](mailto:team@example.com)"
+        },
+        {
+          "depth": 1,
+          "body": "- [+15551234567](tel:+15551234567)"
+        }
       ]
     },
     {
@@ -88,9 +154,18 @@
       "cap": 3,
       "htmlLink": "https://calendar.google.com/event?eid=abc",
       "bullets": [
-        { "depth": 1, "body": "- One" },
-        { "depth": 1, "body": "- Two" },
-        { "depth": 1, "body": "- *…2 more lines in [Google Calendar](https://calendar.google.com/event?eid=abc)*" }
+        {
+          "depth": 1,
+          "body": "- One"
+        },
+        {
+          "depth": 1,
+          "body": "- Two"
+        },
+        {
+          "depth": 1,
+          "body": "- *…2 more lines in [Google Calendar](https://calendar.google.com/event?eid=abc)*"
+        }
       ]
     },
     {
@@ -98,9 +173,103 @@
       "input": "One\nTwo\nThree\nFour",
       "cap": 3,
       "bullets": [
-        { "depth": 1, "body": "- One" },
-        { "depth": 1, "body": "- Two" },
-        { "depth": 1, "body": "- *…2 more lines in Google Calendar*" }
+        {
+          "depth": 1,
+          "body": "- One"
+        },
+        {
+          "depth": 1,
+          "body": "- Two"
+        },
+        {
+          "depth": 1,
+          "body": "- *…2 more lines in Google Calendar*"
+        }
+      ]
+    },
+    {
+      "id": "reason-bullets-lead-in-time-order",
+      "input": "+15 Drive home\nBring the gift card\n-30 Drive to Kelly's",
+      "bullets": [
+        {
+          "depth": 1,
+          "body": "- ↤ *30m before* · Drive to Kelly's"
+        },
+        {
+          "depth": 1,
+          "body": "- ↦ *15m after* · Drive home"
+        },
+        {
+          "depth": 1,
+          "body": "- Bring the gift card"
+        }
+      ]
+    },
+    {
+      "id": "reason-only",
+      "input": "-30 Drive\n@love",
+      "bullets": [
+        {
+          "depth": 1,
+          "body": "- ↤ *30m before* · Drive"
+        }
+      ]
+    },
+    {
+      "id": "reason-escapes-inline",
+      "input": "-30 Pick up #cake at [[Bakery]] a:: b",
+      "bullets": [
+        {
+          "depth": 1,
+          "body": "- ↤ *30m before* · Pick up \\#cake at \\[\\[Bakery]] a\\:\\: b"
+        }
+      ]
+    },
+    {
+      "id": "reason-link",
+      "input": "-30 Drive to [Kelly's](https://maps.example/k)",
+      "bullets": [
+        {
+          "depth": 1,
+          "body": "- ↤ *30m before* · Drive to [Kelly's](https://maps.example/k)"
+        }
+      ]
+    },
+    {
+      "id": "reason-cap-exempt",
+      "input": "-30 Drive\n+15 Walk home\nOne\nTwo\nThree",
+      "cap": 2,
+      "bullets": [
+        {
+          "depth": 1,
+          "body": "- ↤ *30m before* · Drive"
+        },
+        {
+          "depth": 1,
+          "body": "- ↦ *15m after* · Walk home"
+        },
+        {
+          "depth": 1,
+          "body": "- One"
+        },
+        {
+          "depth": 1,
+          "body": "- *…2 more lines in Google Calendar*"
+        }
+      ]
+    },
+    {
+      "id": "reason-disagreeing-line-renders-as-prose",
+      "input": "-30 Drive\n-10 Park",
+      "bullets": [
+        {
+          "depth": 1,
+          "body": "- ↤ *30m before* · Drive"
+        },
+        {
+          "depth": 1,
+          "body": "- -10 Park"
+        }
       ]
     }
   ]

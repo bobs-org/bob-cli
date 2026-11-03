@@ -99,7 +99,7 @@ gcal:
   colors: {} # e.g. {tomato: job, sage: body}
   tentative: context # context | task
   description: bullets # bullets | off
-  description_lines: 8 # most bullet lines per Event Task, overflow line included
+  description_lines: 8 # most copied lines per Event Task, overflow line included; buffer reasons are extra
   timeout_secs: 60
 ```
 
@@ -129,9 +129,10 @@ gcal:
 - `description` controls whether sync copies each event's human description
   as bullets under its Event Task (`bullets`, default) or writes none
   (`off`, the kill switch).
-- `description_lines` caps the bullet lines per Event Task at an integer of
-  at least 2 (default 8), overflow line included. A wrong type or a value
-  below 2 is a setup error (exit 2) that names the key.
+- `description_lines` caps the copied lines per Event Task at an integer
+  of at least 2 (default 8), overflow line included; buffer reasons are
+  extra. A wrong type or a value below 2 is a setup error (exit 2) that
+  names the key.
 - The host label is the same slug vault-sync uses in commit subjects.
   `doctor` prints it. Unset `writer` means this host may write; a mismatch
   fails the writer check.
@@ -333,7 +334,8 @@ what sync did, or would do, with the event — `task · MEET`, `task`,
 (`task · MEET · off-clock`). The TIME column appends the buffer label for
 buffered tasks (`12:00-13:00 −30m +15m`, dimmed on a TTY); see
 [Buffers](#buffers). The EVENT column appends a dim `≡ N` after the title
-of each Event Task with N bullet lines sync would write; see
+of each Event Task with N bullet lines sync would write, reasons
+included; see
 [Description bullets](#description-bullets). Omitted events keep their
 omission reason. `-a` also shows omitted events. Counts include omitted events
 even when their rows are hidden. The header carries the last sync: `synced
@@ -347,8 +349,8 @@ reports `time`, `title`, `answer`, `inclusion`, `reason`, `clock` (`"off"`,
 (`on_tag`|`off_tag`|`note`|`invalid_note`|`default`), `clock_note`
 (the deciding note path or `null`), `off_clock`, deprecated `untracked`,
 `buffer` (`{"before_minutes", "after_minutes"}`, or `null` when the row
-carries no buffer), `description_lines` (bullet lines sync would write, 0
-otherwise), `vault`, and `root.value`, `root.source`,
+carries no buffer), `description_lines` (bullet lines sync would write,
+reasons included, 0 otherwise), `vault`, and `root.value`, `root.source`,
 and `root.warnings`. `vault` appends ` · off-clock` for explicit off tags
 and ` · off-clock via <stem>` for inherited clocks. Descriptions and
 attendee details are omitted. A root may be null when no candidate is
@@ -449,13 +451,14 @@ diagnostics.
 (`action`, `kind`, `time`, `title`, `root`, `source`, `off_clock`, deprecated
 `untracked`, `buffer` as `{"before_minutes", "after_minutes"}` or
 `null`, and `description_lines`, the bullet lines this run wrote for the
-row, 0 otherwise), `pomodoro`
+row, reasons included, 0 otherwise), `pomodoro`
 (`entry_line`, `created`, `links_added`, `links_sorted`, `entries`),
 `warnings`, `deprecations`, and `stamp`
 (`account`, `synced_at`, `refreshed`, or `null` when there is no Events
 section and for `waiting`). Human rows append the buffer label to the time
 (`~ task 12:00–13:00 −30m +15m  Lunch …`), and a dim `≡ N` when the run
-wrote N [description bullets](#description-bullets) for the row
+wrote N [description bullets](#description-bullets) for the row, reasons
+included
 (`+ task  08:00–08:15  Swings!  ● love  via @love ≡ 1`). MEET lines show buffered
 spans. `pomodoro.entries` lists each MEET this run
 created or appended links into (`state` `closed`/`running`/`planned`,
@@ -510,7 +513,7 @@ account, or set `gcal.account` to the stamp's account.
 | Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
 | `#off` / `#on` (deprecated Google aliases `#offclock`, `#off-clock`, `#untracked`) | Google until you edit it | Follows Google's explicit tag while untouched; your add/remove wins and is reported once. A flip after the session closed is left for a hand edit and reported once as `kept_off_clock` |
 | `[buffer::]` | Google until you edit it | Follows Google's description directives while untouched; your add/remove wins and is reported once. No field when the event has no buffer |
-| Description bullets | Google until you edit them | Rewritten in place while they still match what Bob last wrote; your edit, nested note, or deletion makes them yours, reported once only if Google later changes |
+| Description bullets (buffer reasons included) | Google until you edit them | Rewritten in place while they still match what Bob last wrote; your edit, nested note, or deletion makes them yours, reported once only if Google later changes |
 | `[root::]` | Google until you edit it | Follows the chosen root (not series memory) until you edit it, and adds `[type:: MEET]` when needed. Your edits win, are reported once when Google later routes elsewhere, and teach the series |
 | `[type::]`, block ID | Bob, once | `[type:: MEET]` is added on a root reroute only when the line has none; an existing `[type::]` and the block ID are never rewritten |
 | Other child bullets (your notes) | You | Never touched |
@@ -561,6 +564,8 @@ With a resolvable `love` root, `@love<br>#off -30` sets `[root:: love]`,
 marks the Event Task off-clock, and adds a 30-minute lead-in. A line with
 any other token — a phone number, a 4-digit value, a sentence — is ignored
 whole, so `Bring shoes #offclock` stays prose and never marks the clock.
+The one exception is a buffer reason line (see
+[Buffer reasons](#buffer-reasons)).
 Sync strips the title clock token from the displayed title before reading a
 title-ending `@route`, so `Lunch @love #off` gets the same root and
 displays as `Lunch`.
@@ -660,6 +665,36 @@ while the row is untouched, and a vault edit wins and is reported once.
 Rows synced before this feature migrate on the next sync. Context rows
 (Maybe/free) carry no buffer; a Maybe row upgraded to a task renders it.
 
+### Buffer reasons
+
+A description line like `-30 Drive to Kelly's` or `+15 Drive home` sets
+that side's buffer and writes one labelled reason bullet at the top of
+the Event Task's Google-owned description bullets:
+
+```markdown
+- [*] #task **1200-1300** Lunch with Kelly [📅](…) #off [buffer:: -30m +15m] [root::
+  love] [type:: MEET] ^lunch-with-kelly
+  - ↤ *30m before* · Drive to Kelly's
+  - ↦ *15m after* · Drive home
+  - Bring the gift card
+```
+
+A reason line is `<sign><1–3 digits>[m] <separator> <reason>`: `-` (or
+`−`/`–`) for before, `+` for after, an optional `m`, then `:`, `,`, or
+whitespace, optionally followed by `—`/`–`/`-`/`:` plus whitespace, then
+the reason. `-30 Drive`, `-30m: Drive`, `−30 — Drive`, and
+`+15, Walk home` are reasons; `+1 555-1212`, `-30 +15 Drive`,
+`-1234 Drive`, `-30Drive`, and `-30 "Drive"` stay prose. The token and
+separator must be plain text (bold or italic is fine, a link label is
+not), and the reason must start with a letter or a non-ASCII character
+other than a dash. `@route`, `#off`, and `#on` inside the reason are
+text, not directives — keep them on their own line.
+
+The first value per side wins, for directive and reason lines together:
+a reason attaches when its line sets that side or repeats the same value
+with no reason yet, and a disagreeing line (or a second reason for the
+side) stays an ordinary bullet. One reason line carries one buffer.
+
 ## Description bullets
 
 Whatever you write in a Google event's description, except Bob's directive
@@ -679,6 +714,11 @@ join URL remains available. `Bring shoes #offclock` stays prose: the
 directive grammar does not change, so a line with any non-directive token
 is never a directive.
 
+Buffer reasons lead the block: a `↤ *Nm before*` bullet, then a
+`↦ *Nm after*` bullet, then the copied description bullets in order, then
+the overflow line. Reasons never count toward `description_lines` and are
+never truncated; the cap applies to copied lines only.
+
 The shape is flat: first children of the Event Task, with one nesting level
 for a list under its lead-in (`Agenda:`) and native `1.` items for ordered
 lists. Managed first children (CANCEL LOG, Depends-On, LINKS, Schedule and
@@ -695,27 +735,30 @@ drawer, checkbox, embed, task link, or managed log. A few examples:
 | `TBD` | `**TBD**` |
 | `Bring 🍅 salad` | `Bring &#127813; salad` (still shows 🍅) |
 
-At most `gcal.description_lines` bullet lines per Event Task (default 8,
-minimum 2, overflow line included). The overflow line reads *…N more lines
+At most `gcal.description_lines` copied lines per Event Task (default 8,
+minimum 2, overflow line included); buffer reasons are extra. The overflow
+line reads *…N more lines
 in [Google Calendar](https://calendar.google.com/event?eid=abc)* and links
 the event. A description above 64 KiB
-writes one fallback bullet linking Google Calendar instead.
+writes the reasons, then one fallback bullet linking Google Calendar instead.
 `gcal.description: off` is the kill switch: sync writes no new bullets,
-leaves existing ones alone, and carries their journal records forward.
+reasons included, leaves existing ones alone, and carries their journal
+records forward.
 
 Bullets land with every Event Task sync creates, and with every Maybe→Yes
 upgrade (directly under the upgraded row, above your notes there). Context
-rows never get bullets. While the block still matches what Bob last wrote,
-a later Google edit rewrites it in place, and clearing the description
-removes it. Your edit, a nested note under a Google bullet, or deleting
-the block makes the bullets yours: they are never re-added, and a
-`kept_description` warning fires once only if Google's description later
-changes. Rows synced before this feature get their bullets on the next
-sync of their day; matching existing content is adopted, never duplicated.
+rows never get bullets. Reasons follow the same ownership as the block:
+while the block still matches what Bob last wrote, a later Google edit
+rewrites it in place, and clearing the description removes it. Your edit,
+a nested note under a Google bullet, or deleting the block makes the
+bullets yours: they are never re-added, and a `kept_description` warning
+fires once only if Google's description later changes. Rows synced before
+this feature get their bullets on the next sync of their day; matching
+existing content is adopted, never duplicated.
 Human `sync` rows end with a dim `≡ N` when the run wrote N bullet
-lines; `sync -d` shows the exact bullets in its diff — the only place
-description text appears in command output. JSON carries only
-`description_lines`, never description text.
+lines, reasons included; `sync -d` shows the exact bullets in its diff —
+the only place description text appears in command output. JSON carries
+only `description_lines` (reasons included), never description text.
 
 ## Reconciling Google-side changes
 
@@ -918,6 +961,8 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
   day, and the total stays below 24h. The first value per side wins. A
   description you cannot edit cannot take a Google-owned buffer: a
   hand-added `[buffer::]` is your edit — kept and reported once.
+- Someone else's line such as `+1 to that` reads as a 1-minute
+  after-buffer with a reason; the first line per side wins.
 - R9 may clear `[*]` Event Tasks on a future day's note until that day is
   today.
 - An off-clock event ending after the last reconcile before midnight does not

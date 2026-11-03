@@ -8,7 +8,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Team standup" }]
+          "inlines": [
+            {
+              "text": "Team standup"
+            }
+          ]
         }
       ]
     },
@@ -20,7 +24,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Design sync" }]
+          "inlines": [
+            {
+              "text": "Design sync"
+            }
+          ]
         }
       ]
     },
@@ -31,7 +39,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Design sync" }]
+          "inlines": [
+            {
+              "text": "Design sync"
+            }
+          ]
         },
         {
           "depth": 1,
@@ -53,7 +65,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Sprint review" }]
+          "inlines": [
+            {
+              "text": "Sprint review"
+            }
+          ]
         }
       ]
     },
@@ -65,7 +81,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Sprint review" }]
+          "inlines": [
+            {
+              "text": "Sprint review"
+            }
+          ]
         }
       ]
     },
@@ -77,7 +97,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "All hands" }]
+          "inlines": [
+            {
+              "text": "All hands"
+            }
+          ]
         }
       ]
     },
@@ -89,12 +113,20 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Notes here" }]
+          "inlines": [
+            {
+              "text": "Notes here"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "More notes" }]
+          "inlines": [
+            {
+              "text": "More notes"
+            }
+          ]
         }
       ]
     },
@@ -106,17 +138,29 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Agenda:" }]
+          "inlines": [
+            {
+              "text": "Agenda:"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "Intros" }]
+          "inlines": [
+            {
+              "text": "Intros"
+            }
+          ]
         },
         {
           "depth": 2,
           "marker": "-",
-          "inlines": [{ "text": "Launch plan" }]
+          "inlines": [
+            {
+              "text": "Launch plan"
+            }
+          ]
         }
       ]
     },
@@ -127,17 +171,29 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Agenda" }]
+          "inlines": [
+            {
+              "text": "Agenda"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Meeting ID: decide whether to publish" }]
+          "inlines": [
+            {
+              "text": "Meeting ID: decide whether to publish"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Q&A after" }]
+          "inlines": [
+            {
+              "text": "Q&A after"
+            }
+          ]
         }
       ]
     },
@@ -148,17 +204,29 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "First thought" }]
+          "inlines": [
+            {
+              "text": "First thought"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Second thought" }]
+          "inlines": [
+            {
+              "text": "Second thought"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Third thought" }]
+          "inlines": [
+            {
+              "text": "Third thought"
+            }
+          ]
         }
       ]
     },
@@ -170,7 +238,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Office day" }]
+          "inlines": [
+            {
+              "text": "Office day"
+            }
+          ]
         }
       ]
     },
@@ -182,7 +254,11 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Office day" }]
+          "inlines": [
+            {
+              "text": "Office day"
+            }
+          ]
         }
       ]
     },
@@ -194,12 +270,20 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Agenda" }]
+          "inlines": [
+            {
+              "text": "Agenda"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Notes here" }]
+          "inlines": [
+            {
+              "text": "Notes here"
+            }
+          ]
         }
       ]
     },
@@ -211,12 +295,53 @@
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "Team lunch" }]
+          "inlines": [
+            {
+              "text": "Team lunch"
+            }
+          ]
         },
         {
           "depth": 1,
           "marker": "-",
-          "inlines": [{ "text": "See you there" }]
+          "inlines": [
+            {
+              "text": "See you there"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zoom-dial-in-wall-is-not-a-reason",
+      "input": "Team standup\n+1 646 555 0100 US (New York)\n+1 (555) 010-0123,,123#",
+      "lines": [
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "Team standup"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "+1 646 555 0100 US (New York)"
+            }
+          ]
+        },
+        {
+          "depth": 1,
+          "marker": "-",
+          "inlines": [
+            {
+              "text": "+1 (555) 010-0123,,123#"
+            }
+          ]
         }
       ]
     }

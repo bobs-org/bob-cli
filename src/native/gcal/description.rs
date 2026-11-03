@@ -38,11 +38,69 @@ pub(crate) struct DescriptionDirectives {
     pub buffer: EventBuffer,
 }
 
+/// One labelled buffer reason: the minutes for one side plus the
+/// rendered reason inlines (links preserved, tags inert).
+#[derive(Clone, PartialEq, Eq, Default)]
+pub(crate) struct BufferReason {
+    pub minutes: u16,
+    pub inlines: Vec<Inline>,
+}
+
+impl fmt::Debug for BufferReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferReason")
+            .field("minutes", &self.minutes)
+            .field("inlines", &self.inlines.len())
+            .finish()
+    }
+}
+
+/// Labelled reasons for each buffer side, at most one per side.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub(crate) struct BufferReasons {
+    pub before: Option<BufferReason>,
+    pub after: Option<BufferReason>,
+}
+
+impl fmt::Debug for BufferReasons {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferReasons")
+            .field("before", &self.before.is_some())
+            .field("after", &self.after.is_some())
+            .finish()
+    }
+}
+
+impl BufferReasons {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.before.is_none() && self.after.is_none()
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        usize::from(self.before.is_some()) + usize::from(self.after.is_some())
+    }
+
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = (BufferPart, &BufferReason)> {
+        self.before
+            .as_ref()
+            .map(|reason| (BufferPart::Before, reason))
+            .into_iter()
+            .chain(
+                self.after
+                    .as_ref()
+                    .map(|reason| (BufferPart::After, reason)),
+            )
+    }
+}
+
 /// Parsed description: outlined lines, directive verdicts, size flag.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct EventDescription {
     pub lines: Vec<DescriptionLine>,
     pub directives: DescriptionDirectives,
+    pub buffer_reasons: BufferReasons,
     pub oversized: bool,
 }
 
@@ -51,6 +109,7 @@ impl fmt::Debug for EventDescription {
         f.debug_struct("EventDescription")
             .field("lines", &self.lines.len())
             .field("directives", &self.directives)
+            .field("buffer_reasons", &self.buffer_reasons.count())
             .field("oversized", &self.oversized)
             .finish()
     }
@@ -111,11 +170,13 @@ pub(crate) fn parse_description(
     } else {
         plain::tokenize(raw)
     };
-    let directives = directives_from_source(&source);
-    let filtered = filter_source_lines(source, ctx);
+    let (directives, buffer_reasons, consumed) =
+        directives_from_source(&source);
+    let filtered = filter_source_lines(source, &consumed, ctx);
     EventDescription {
         lines: outline(filtered),
         directives,
+        buffer_reasons,
         oversized,
     }
 }
@@ -135,15 +196,22 @@ pub(crate) fn description_directives(
     .directives
 }
 
-/// Drop directive lines, then separator, badge-duplicate, and
-/// vendor-block lines while blank and separator lines are still present.
+/// Drop directive lines and consumed reason lines, then separator,
+/// badge-duplicate, and vendor-block lines while blank and separator
+/// lines are still present.
 fn filter_source_lines(
     lines: Vec<SourceLine>,
+    consumed: &[bool],
     ctx: &DescriptionContext<'_>,
 ) -> Vec<SourceLine> {
     let lines: Vec<SourceLine> = lines
         .into_iter()
-        .filter(|line| !is_directive_line(line))
+        .enumerate()
+        .filter(|(index, line)| {
+            !is_directive_line(line)
+                && !consumed.get(*index).copied().unwrap_or(false)
+        })
+        .map(|(_, line)| line)
         .collect();
     boilerplate::filter(lines, ctx)
 }
@@ -261,46 +329,211 @@ fn trim_edge_text(inlines: &mut [Inline]) {
     }
 }
 
-fn directives_from_source(lines: &[SourceLine]) -> DescriptionDirectives {
+fn directives_from_source(
+    lines: &[SourceLine],
+) -> (DescriptionDirectives, BufferReasons, Vec<bool>) {
     let mut out = DescriptionDirectives::default();
     let mut before_set = false;
     let mut after_set = false;
-    for line in lines {
-        if !is_directive_line(line) {
+    let mut reasons = BufferReasons::default();
+    let mut consumed = vec![false; lines.len()];
+    for (index, line) in lines.iter().enumerate() {
+        if is_directive_line(line) {
+            for token in project_text(line)
+                .split(|ch: char| ch.is_whitespace() || ch == ',')
+                .filter(|token| !token.is_empty())
+            {
+                if let Some(route) = parse_route_token(token) {
+                    if out.route.is_none() {
+                        out.route = Some(route);
+                    }
+                    continue;
+                }
+                if let Some(clock_tag) = google_clock_token(token) {
+                    out.clock_tag =
+                        merge_clock_tags(&out.clock_tag, &clock_tag);
+                    continue;
+                }
+                let Some((part, minutes)) = parse_buffer_token(token) else {
+                    continue;
+                };
+                match part {
+                    BufferPart::Before if !before_set => {
+                        out.buffer.before_min = minutes;
+                        before_set = true;
+                    }
+                    BufferPart::After if !after_set => {
+                        out.buffer.after_min = minutes;
+                        after_set = true;
+                    }
+                    _ => {}
+                }
+            }
             continue;
         }
-        for token in project_text(line)
-            .split(|ch: char| ch.is_whitespace() || ch == ',')
-            .filter(|token| !token.is_empty())
-        {
-            if let Some(route) = parse_route_token(token) {
-                if out.route.is_none() {
-                    out.route = Some(route);
-                }
-                continue;
+        if !line.is_content() {
+            continue;
+        }
+        let Some((part, minutes, inlines)) = reason_line(line) else {
+            continue;
+        };
+        match part {
+            BufferPart::Before if !before_set => {
+                out.buffer.before_min = minutes;
+                before_set = true;
+                reasons.before = Some(BufferReason { minutes, inlines });
+                consumed[index] = true;
             }
-            if let Some(clock_tag) = google_clock_token(token) {
-                out.clock_tag = merge_clock_tags(&out.clock_tag, &clock_tag);
-                continue;
+            BufferPart::After if !after_set => {
+                out.buffer.after_min = minutes;
+                after_set = true;
+                reasons.after = Some(BufferReason { minutes, inlines });
+                consumed[index] = true;
             }
-            let Some((part, minutes)) = parse_buffer_token(token) else {
-                continue;
-            };
-            match part {
-                BufferPart::Before if !before_set => {
-                    out.buffer.before_min = minutes;
-                    before_set = true;
-                }
-                BufferPart::After if !after_set => {
-                    out.buffer.after_min = minutes;
-                    after_set = true;
-                }
-                _ => {}
+            BufferPart::Before
+                if out.buffer.before_min == minutes
+                    && reasons.before.is_none() =>
+            {
+                reasons.before = Some(BufferReason { minutes, inlines });
+                consumed[index] = true;
             }
+            BufferPart::After
+                if out.buffer.after_min == minutes
+                    && reasons.after.is_none() =>
+            {
+                reasons.after = Some(BufferReason { minutes, inlines });
+                consumed[index] = true;
+            }
+            _ => {}
         }
     }
     out.untracked = out.clock_tag.explicit_off();
-    out
+    (out, reasons, consumed)
+}
+
+fn reason_line(line: &SourceLine) -> Option<(BufferPart, u16, Vec<Inline>)> {
+    if !line.is_content() {
+        return None;
+    }
+    let projected = project_text(line);
+    let chars: Vec<char> = projected.chars().collect();
+    let mut pos = 0;
+    while pos < chars.len() && chars[pos].is_whitespace() {
+        pos += 1;
+    }
+    let token_start = pos;
+    if pos >= chars.len() {
+        return None;
+    }
+    match chars[pos] {
+        '-' | '\u{2212}' | '\u{2013}' | '+' => {}
+        _ => return None,
+    }
+    pos += 1;
+    let digits_start = pos;
+    while pos < chars.len() && chars[pos].is_ascii_digit() {
+        pos += 1;
+    }
+    let digits_len = pos - digits_start;
+    if digits_len == 0 || digits_len > 3 {
+        return None;
+    }
+    if pos < chars.len() && matches!(chars[pos], 'm' | 'M') {
+        pos += 1;
+    }
+    let token_text: String = chars[token_start..pos].iter().collect();
+    let (part, minutes) = parse_buffer_token(&token_text)?;
+    if pos >= chars.len() {
+        return None;
+    }
+    let first_sep = chars[pos];
+    if !(first_sep == ':' || first_sep == ',' || first_sep.is_whitespace()) {
+        return None;
+    }
+    pos += 1;
+    while pos < chars.len() && chars[pos].is_whitespace() {
+        pos += 1;
+    }
+    if pos < chars.len()
+        && matches!(chars[pos], '\u{2014}' | '\u{2013}' | '-' | ':')
+    {
+        let dash_pos = pos;
+        pos += 1;
+        let ws_start = pos;
+        while pos < chars.len() && chars[pos].is_whitespace() {
+            pos += 1;
+        }
+        if pos == ws_start {
+            pos = dash_pos;
+        }
+    }
+    let prefix_len = pos;
+    let reason_text: String = chars[pos..].iter().collect();
+    let trimmed = reason_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let first = trimmed.chars().next()?;
+    let first_ok = if first.is_alphabetic() {
+        true
+    } else if !first.is_ascii()
+        && !matches!(first, '\u{2010}'..='\u{2015}' | '\u{2212}')
+    {
+        true
+    } else {
+        false
+    };
+    if !first_ok {
+        return None;
+    }
+    let mut leading_text_len = 0usize;
+    for inline in &line.inlines {
+        match inline {
+            Inline::Text { text, .. } => {
+                leading_text_len += text.chars().count();
+            }
+            Inline::Link { .. } => break,
+        }
+    }
+    if prefix_len > leading_text_len {
+        return None;
+    }
+    let mut remaining = prefix_len;
+    let mut rest: Vec<Inline> = Vec::new();
+    for inline in &line.inlines {
+        if remaining == 0 {
+            rest.push(inline.clone());
+            continue;
+        }
+        match inline {
+            Inline::Text { text, bold, italic } => {
+                let len = text.chars().count();
+                if len <= remaining {
+                    remaining -= len;
+                } else {
+                    let skipped: String =
+                        text.chars().skip(remaining).collect();
+                    remaining = 0;
+                    rest.push(Inline::Text {
+                        text: skipped,
+                        bold: *bold,
+                        italic: *italic,
+                    });
+                }
+            }
+            Inline::Link { .. } => {
+                return None;
+            }
+        }
+    }
+    if remaining != 0 {
+        return None;
+    }
+    let merged = merge_and_trim(rest);
+    if merged.is_empty() {
+        return None;
+    }
+    Some((part, minutes, merged))
 }
 
 fn is_directive_line(line: &SourceLine) -> bool {
@@ -751,6 +984,52 @@ mod tests {
         assert_eq!(bullets, ["Bring shoes", "Bring snacks #offclock"]);
     }
 
+    fn assert_buffer_reasons(
+        id: &str,
+        parsed: &EventDescription,
+        case: &Value,
+    ) {
+        let Some(expected) = case.get("reasons") else {
+            assert!(
+                parsed.buffer_reasons.is_empty(),
+                "{id} expected no reasons, got {:?}",
+                parsed.buffer_reasons
+            );
+            return;
+        };
+        for (side, slot) in [
+            ("before", &parsed.buffer_reasons.before),
+            ("after", &parsed.buffer_reasons.after),
+        ] {
+            let expected_side = expected.get(side);
+            match (slot, expected_side) {
+                (None, None) => {}
+                (None, Some(value)) if value.is_null() => {}
+                (Some(reason), Some(value)) if !value.is_null() => {
+                    assert_eq!(
+                        reason.minutes,
+                        u16::try_from(
+                            value["minutes"].as_u64().expect("minutes")
+                        )
+                        .expect("minutes fit"),
+                        "{id} {side} minutes"
+                    );
+                    let expected_inlines =
+                        value["inlines"].as_array().expect("inlines");
+                    let got: Vec<Value> =
+                        reason.inlines.iter().map(inline_json).collect();
+                    assert_eq!(got, *expected_inlines, "{id} {side} inlines");
+                }
+                (None, Some(_)) => {
+                    panic!("{id} expected {side} reason, got none");
+                }
+                (Some(_), None | Some(_)) => {
+                    panic!("{id} expected no {side} reason");
+                }
+            }
+        }
+    }
+
     #[test]
     fn outline_vectors() {
         let vectors: Value = serde_json::from_str(include_str!(
@@ -784,6 +1063,7 @@ mod tests {
                     "{id} after"
                 );
             }
+            assert_buffer_reasons(id, &parsed, case);
             let expected_lines = case["lines"].as_array().expect("lines");
             assert_outlined_lines(id, &parsed, expected_lines);
             assert_eq!(
@@ -804,6 +1084,11 @@ mod tests {
             let id = case["id"].as_str().expect("id");
             let parsed =
                 parse_with_ctx(case["input"].as_str().expect("input"), case);
+            assert!(
+                parsed.buffer_reasons.is_empty(),
+                "{id} boilerplate must not create reasons: {:?}",
+                parsed.buffer_reasons
+            );
             let expected_lines = case["lines"].as_array().expect("lines");
             assert_outlined_lines(id, &parsed, expected_lines);
             assert_eq!(
@@ -865,16 +1150,33 @@ mod tests {
         assert!(parsed.oversized);
         assert_eq!(parsed.directives.route.as_deref(), Some("love"));
         assert_eq!(parsed.lines.len(), 1);
+        let with_reason =
+            parse(&format!("{}\n-30 Drive home", "a".repeat(65_537)));
+        assert!(with_reason.oversized);
+        assert_eq!(with_reason.directives.buffer.before_min, 30);
+        assert!(!with_reason.buffer_reasons.is_empty());
+        assert_eq!(
+            with_reason
+                .buffer_reasons
+                .before
+                .as_ref()
+                .expect("reason")
+                .minutes,
+            30
+        );
     }
 
     #[test]
     fn debug_prints_counts_only() {
-        let parsed =
-            parse("SECRET_PHRASE https://secret.example/x\n@love #offclock");
+        let parsed = parse(
+            "SECRET_PHRASE https://secret.example/x\n-30 SECRET_REASON here\n@love #offclock",
+        );
         let debug = format!("{parsed:?}");
         assert!(!debug.contains("SECRET_PHRASE"), "{debug}");
+        assert!(!debug.contains("SECRET_REASON"), "{debug}");
         assert!(!debug.contains("secret.example"), "{debug}");
         assert!(debug.contains("lines: 1"), "{debug}");
+        assert!(debug.contains("buffer_reasons: 1"), "{debug}");
         assert!(debug.contains("oversized: false"), "{debug}");
     }
 

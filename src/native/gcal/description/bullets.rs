@@ -1,12 +1,20 @@
 //! Sanitized Event Task description bullets.
+//!
+//! Buffer reasons lead the block: at most one `↤ *Nm before*` and one
+//! `↦ *Nm after*` bullet, then the capped copied description lines.
 
 use crate::native::{
-    capture::parse_managed_task_log_marker, capture_drawers, gcal::journal,
-    task_dependencies, task_text_escape,
+    capture::parse_managed_task_log_marker, capture_drawers,
+    event_task::BufferPart, gcal::journal, task_dependencies, task_text_escape,
 };
 
 use super::super::render::escape_badge_url as escape_destination;
-use super::{EventDescription, Inline, LineMarker};
+use super::{BufferReason, EventDescription, Inline, LineMarker};
+
+/// Glyph that reaches back from the meeting's start.
+const BEFORE_GLYPH: char = '↤';
+/// Glyph that reaches forward from the meeting's end.
+const AFTER_GLYPH: char = '↦';
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Bullet {
@@ -43,6 +51,10 @@ impl DescriptionBullets {
 }
 
 /// Render the parsed description into inert, capped list-item bodies.
+///
+/// Reason bullets lead in timeline order (before, then after); the
+/// `cap` applies to copied description lines only, so reasons are
+/// never truncated and never count toward the overflow math.
 pub(crate) fn render_bullets(
     description: &EventDescription,
     cap: usize,
@@ -50,33 +62,58 @@ pub(crate) fn render_bullets(
 ) -> DescriptionBullets {
     if description.oversized {
         let calendar = calendar_link("Google Calendar", html_link);
-        return DescriptionBullets {
-            bullets: vec![Bullet {
-                depth: 1,
-                body: format!(
-                    "- *Description too long to copy — open it in {calendar}*"
-                ),
-            }],
-        };
+        let mut bullets = Vec::new();
+        if !description.buffer_reasons.is_empty() {
+            for (part, reason) in description.buffer_reasons.iter() {
+                bullets.push(render_reason(part, reason));
+            }
+        }
+        bullets.push(Bullet {
+            depth: 1,
+            body: format!(
+                "- *Description too long to copy — open it in {calendar}*"
+            ),
+        });
+        return DescriptionBullets { bullets };
     }
 
     // The config layer requires one content line plus its overflow line.
     let cap = cap.max(2);
-    let mut bullets = description
+    let mut copied = description
         .lines
         .iter()
         .map(render_line)
         .collect::<Vec<_>>();
-    if bullets.len() > cap {
-        let hidden = bullets.len().saturating_sub(cap - 1);
-        bullets.truncate(cap - 1);
+    if copied.len() > cap {
+        let hidden = copied.len().saturating_sub(cap - 1);
+        copied.truncate(cap - 1);
         let calendar = calendar_link("Google Calendar", html_link);
-        bullets.push(Bullet {
+        copied.push(Bullet {
             depth: 1,
             body: format!("- *…{hidden} more lines in {calendar}*"),
         });
     }
+    let mut bullets =
+        Vec::with_capacity(description.buffer_reasons.count() + copied.len());
+    if !description.buffer_reasons.is_empty() {
+        for (part, reason) in description.buffer_reasons.iter() {
+            bullets.push(render_reason(part, reason));
+        }
+    }
+    bullets.extend(copied);
     DescriptionBullets { bullets }
+}
+
+fn render_reason(part: BufferPart, reason: &BufferReason) -> Bullet {
+    let (glyph, side) = match part {
+        BufferPart::Before => (BEFORE_GLYPH, "before"),
+        BufferPart::After => (AFTER_GLYPH, "after"),
+    };
+    let rendered = render_inlines(&reason.inlines, false);
+    Bullet {
+        depth: 1,
+        body: format!("- {glyph} *{}m {side}* · {rendered}", reason.minutes),
+    }
 }
 
 /// Short SHA-256 over the exact depth/body pairs written to the note.
@@ -93,7 +130,7 @@ pub(crate) fn bullets_hash<'a>(
 
 fn render_line(line: &super::DescriptionLine) -> Bullet {
     let body_text = plain_text(&line.inlines);
-    let rendered = render_inlines(&line.inlines);
+    let rendered = render_inlines(&line.inlines, true);
     let marker = match line.marker {
         LineMarker::Bullet => "-".to_string(),
         LineMarker::Ordered(number) => format!("{number}."),
@@ -122,24 +159,16 @@ fn is_managed_line(rendered: &str, plain: &str) -> bool {
         )
 }
 
-fn render_inlines(inlines: &[Inline]) -> String {
+fn render_inlines(inlines: &[Inline], first_starts_body: bool) -> String {
     let mut rendered = String::new();
     for (index, inline) in inlines.iter().enumerate() {
+        let starts_body =
+            first_starts_body && index == 0 && rendered.is_empty();
         match inline {
-            Inline::Text { text, bold, italic } => {
-                rendered.push_str(&render_text(
-                    text,
-                    *bold,
-                    *italic,
-                    index == 0 && rendered.is_empty(),
-                ))
-            }
+            Inline::Text { text, bold, italic } => rendered
+                .push_str(&render_text(text, *bold, *italic, starts_body)),
             Inline::Link { text, url } => {
-                rendered.push_str(&render_link(
-                    text,
-                    url,
-                    index == 0 && rendered.is_empty(),
-                ));
+                rendered.push_str(&render_link(text, url, starts_body));
             }
         }
     }
@@ -389,6 +418,27 @@ mod tests {
     }
 
     #[test]
+    fn oversize_input_keeps_reasons_above_the_fallback() {
+        let raw = format!("{}\n-30 Drive home", "x".repeat(65_537));
+        let parsed = parse(&raw);
+        assert!(parsed.oversized);
+        assert_eq!(
+            render_bullets(&parsed, 8, None).bullets,
+            [
+                Bullet {
+                    depth: 1,
+                    body: "- ↤ *30m before* · Drive home".to_string(),
+                },
+                Bullet {
+                    depth: 1,
+                    body: "- *Description too long to copy — open it in Google Calendar*"
+                        .to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn markdown_destination_encoding_covers_delimiters() {
         assert_eq!(
             escape_destination("https://example.test/a b(c)<d>`"),
@@ -581,6 +631,154 @@ mod tests {
                     "Tasks due parser: {}",
                     bullet.body
                 );
+            }
+        }
+        for reason_text in [
+            "x #task",
+            "x [[#^x]]",
+            "x a:: b",
+            "x ^abc-1",
+            "Bring 🍅 [[#^swings]]",
+            "Due 📅 2026-11-03",
+            "TBD",
+            "WORK LOG",
+            "x (type:: MEET)",
+        ] {
+            let raw = format!("-30 {reason_text}\n+15 {reason_text}");
+            let parsed = parse(&raw);
+            assert_eq!(
+                parsed.directives.buffer.before_min, 30,
+                "reason {reason_text}"
+            );
+            assert_eq!(
+                parsed.directives.buffer.after_min, 15,
+                "reason {reason_text}"
+            );
+            assert_eq!(parsed.buffer_reasons.count(), 2, "{reason_text}");
+            let rendered = render_bullets(&parsed, 64, None);
+            assert_eq!(rendered.bullets.len(), 2, "{reason_text}");
+            for child_indent in ["  ", "\t"] {
+                let bullets = rendered.materialize(child_indent, child_indent);
+                assert!(bullets.iter().all(|line| !line.contains('\n')));
+                let note = format!(
+                    "## Events\n- [ ] #task **0900-1000** Standup ^event\n{}\n\n## Pomodoros\n- [ ] (09:00) — Focus\n",
+                    bullets.join("\n")
+                );
+                let baseline = "## Events\n- [ ] #task **0900-1000** Standup ^event\n\n## Pomodoros\n- [ ] (09:00) — Focus\n".to_string();
+                let before_pomodoros = capture_pomodoros::scan(&baseline);
+                let after_pomodoros = capture_pomodoros::scan(&note);
+                let projection = |scan: &capture_pomodoros::PomodoroScan| {
+                    (
+                        scan.has_section,
+                        scan.entries
+                            .iter()
+                            .map(|entry| {
+                                (
+                                    entry.state,
+                                    entry.status_symbol,
+                                    entry.name.clone(),
+                                    entry.slug.clone(),
+                                    entry.selectable,
+                                    entry.time_range.clone(),
+                                    entry.placeholder,
+                                    entry.is_current,
+                                    entry.child_count,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                        scan.warnings.clone(),
+                    )
+                };
+                assert_eq!(
+                    projection(&before_pomodoros),
+                    projection(&after_pomodoros),
+                    "Pomodoro scan with reason {reason_text}"
+                );
+                assert_eq!(
+                    task_status_hooks::reconcile_for_scanner_isolation(
+                        &baseline
+                    ),
+                    baseline,
+                    "task-status hooks reconcile baseline"
+                );
+                assert_eq!(
+                    task_status_hooks::reconcile_for_scanner_isolation(&note),
+                    note,
+                    "task-status hooks reconcile with reason {reason_text}"
+                );
+                let baseline_lines =
+                    baseline.lines().map(str::to_string).collect::<Vec<_>>();
+                let note_lines =
+                    note.lines().map(str::to_string).collect::<Vec<_>>();
+                assert_eq!(
+                    super::super::super::plan::collect_block_ids(
+                        &baseline_lines
+                    ),
+                    super::super::super::plan::collect_block_ids(&note_lines),
+                    "gcal block-id scan {reason_text}"
+                );
+                let before_spans = baseline
+                    .lines()
+                    .filter_map(event_task::parse_event_span)
+                    .collect::<Vec<_>>();
+                let after_spans = note
+                    .lines()
+                    .filter_map(event_task::parse_event_span)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    before_spans, after_spans,
+                    "event span scan {reason_text}"
+                );
+                assert_eq!(
+                    lifecycle::row_untouched(&baseline, 1, "event"),
+                    lifecycle::row_untouched(&note, 1, "event"),
+                    "row untouched {reason_text}"
+                );
+                for line in &bullets {
+                    assert!(
+                        parse_managed_task_log_marker(line).is_none(),
+                        "managed log: {line}"
+                    );
+                    assert!(
+                        !task_dependencies::is_managed_link_line(line),
+                        "managed relation: {line}"
+                    );
+                    assert!(
+                        !task_dependencies::blocks::is_cancel_log(line),
+                        "cancel log: {line}"
+                    );
+                    let body = line
+                        .trim_start_matches([' ', '\t'])
+                        .strip_prefix("- ")
+                        .or_else(|| {
+                            line.trim_start_matches([' ', '\t'])
+                                .split_once(". ")
+                                .map(|(_, body)| body)
+                        })
+                        .unwrap_or(line);
+                    assert!(
+                        !capture_drawers::is_drawer_title(body),
+                        "drawer: {line}"
+                    );
+                    assert!(
+                        task_dependencies::block_link_spans(line).is_empty(),
+                        "block link/mention: {line}"
+                    );
+                }
+                let task_format = crate::native::dataview::TaskFormat::Emoji;
+                for bullet in
+                    rendered.bullets.iter().filter(|b| b.body.contains("Due"))
+                {
+                    let details = crate::native::dataview::parse_details(
+                        bullet.body.trim_start_matches("- "),
+                        task_format,
+                    );
+                    assert!(
+                        details.due.is_none(),
+                        "Tasks due parser: {}",
+                        bullet.body
+                    );
+                }
             }
         }
     }
