@@ -62,14 +62,15 @@ impl TxnFailure {
     }
 }
 
-/// One planned file rewrite: vault-relative `/`-joined path plus the exact
-/// before-image the planner saw and the after-image to write. The stale
-/// check compares the live file against `before_contents` right before
-/// writing.
+/// One planned file rewrite or create: vault-relative `/`-joined path plus
+/// the exact before-image the planner saw and the after-image to write.
+/// `before_contents` is `Some` for a rewrite (the stale check compares the
+/// live file against it) and `None` for a create (the stale check requires
+/// the target to still be absent).
 #[derive(Debug, Clone)]
 pub(crate) struct FileRewrite {
     pub(crate) path: String,
-    pub(crate) before_contents: String,
+    pub(crate) before_contents: Option<String>,
     pub(crate) after_contents: String,
 }
 
@@ -202,11 +203,18 @@ pub(crate) fn run<C>(
     let relatives: Vec<String> =
         ready.files.iter().map(|file| file.path.clone()).collect();
     let before_images = snapshot_before_images(vault, &relatives);
-    // Re-read to detect a change since planning.
+    // Re-read to detect a change since planning. Creates must still be
+    // absent; rewrites must still match the planner's before-image.
     for file in &ready.files {
         let absolute = vault.join(&file.path);
-        let current = fs::read_to_string(&absolute).unwrap_or_default();
-        if current != file.before_contents {
+        let stale = match &file.before_contents {
+            Some(expected) => {
+                let current = fs::read_to_string(&absolute).unwrap_or_default();
+                current != *expected
+            }
+            None => absolute.exists(),
+        };
+        if stale {
             let _ =
                 restore_before_images(vault, &before_images, &BTreeMap::new());
             return Err(TxnFailure::new(
@@ -726,7 +734,7 @@ mod tests {
     fn one_file_plan(before: &str, after: &str) -> Vec<FileRewrite> {
         vec![FileRewrite {
             path: "note.md".to_string(),
-            before_contents: before.to_string(),
+            before_contents: Some(before.to_string()),
             after_contents: after.to_string(),
         }]
     }
@@ -787,6 +795,110 @@ mod tests {
         assert!(outcome.post_sync_warning.is_none());
         assert!(outcome.dirty_warning.is_none());
         assert!(committed.get(), "on_committed ran");
+    }
+
+    #[test]
+    fn create_writes_a_missing_file_and_restore_removes_it() {
+        let (_temp, vault, _guard) = scratch_vault("txn-create");
+        let child_env = ob::ChildEnv::new();
+        let created = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = std::rc::Rc::clone(&created);
+        let plan = ReadyPlan {
+            files: vec![FileRewrite {
+                path: "2026/2026-W45.md".to_string(),
+                before_contents: None,
+                after_contents: "scaffold\n".to_string(),
+            }],
+            subject: "test: create".to_string(),
+            post_write: Box::new(|| Ok(Vec::new())),
+            verify: Box::new(|| Ok(())),
+            on_committed: Box::new(move || {
+                flag.set(true);
+            }),
+            context: (),
+        };
+        let outcome = run(
+            &vault,
+            &child_env,
+            COMMAND,
+            SUBJECT,
+            true,
+            false,
+            move || Ok(plan),
+        )
+        .expect("create commits");
+        assert_eq!(
+            fs::read_to_string(vault.join("2026/2026-W45.md"))
+                .expect("created"),
+            "scaffold\n"
+        );
+        assert_eq!(outcome.subject, "test: create");
+        assert!(created.get(), "on_committed ran");
+
+        let plan = ReadyPlan {
+            files: vec![FileRewrite {
+                path: "2026/2026-W46.md".to_string(),
+                before_contents: None,
+                after_contents: "lost\n".to_string(),
+            }],
+            subject: "test: create-fail".to_string(),
+            post_write: Box::new(|| Ok(Vec::new())),
+            verify: Box::new(|| Err("injected".to_string())),
+            on_committed: Box::new(|| {}),
+            context: (),
+        };
+        let failure = run(
+            &vault,
+            &child_env,
+            COMMAND,
+            SUBJECT,
+            true,
+            false,
+            move || Ok(plan),
+        )
+        .expect_err("verify failure rolls back a create");
+        assert_eq!(failure.code, "verify_failed");
+        assert!(
+            !vault.join("2026/2026-W46.md").exists(),
+            "failed create is removed on restore"
+        );
+    }
+
+    #[test]
+    fn create_is_stale_when_the_target_appears() {
+        let (_temp, vault, _guard) = scratch_vault("txn-create-stale");
+        let child_env = ob::ChildEnv::new();
+        let target = vault.join("new.md");
+        let outcome = run(
+            &vault,
+            &child_env,
+            COMMAND,
+            SUBJECT,
+            true,
+            false,
+            move || {
+                fs::write(&target, "concurrent\n").expect("concurrent create");
+                Ok(ReadyPlan {
+                    files: vec![FileRewrite {
+                        path: "new.md".to_string(),
+                        before_contents: None,
+                        after_contents: "planned\n".to_string(),
+                    }],
+                    subject: "test: create-stale".to_string(),
+                    post_write: Box::new(|| Ok(Vec::new())),
+                    verify: Box::new(|| Ok(())),
+                    on_committed: Box::new(|| {}),
+                    context: (),
+                })
+            },
+        );
+        let failure = outcome.expect_err("appearing create is stale");
+        assert_eq!(failure.code, "stale_note");
+        assert_eq!(
+            fs::read_to_string(vault.join("new.md")).expect("kept"),
+            "concurrent\n"
+        );
+        assert_eq!(commit_count(&vault), 1);
     }
 
     #[test]

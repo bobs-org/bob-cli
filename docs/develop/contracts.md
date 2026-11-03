@@ -33,7 +33,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Pomodoro homes](../pomodoro-homes.md) — Derived Pomodoro homes, labels, chips, hues, and JSON contract
 - [Task types](../task-types.md) — Task type catalog, hues, hide journal, `bob types`, and JSON
 - [Randomize](../randomize.md) — `bob task reroll` bulk re-roll of due prioritized tasks
-- [Period Notes](../periods.md) — Period notes: ISO weeks, quarters, years, all time, scaffolds, `bob periods ensure/list`, and JSON
+- [Period Notes](../periods.md) — Period notes: ISO weeks, quarters, years, all time, scaffolds, `bob periods ensure/list/migrate`, problems, nightly, and JSON
 - [Daily Stats](../stats.md) — Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page
 - [Task dependency links](../task-dependencies.md) — Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors
 - [Task relations](../task-relations.md) — Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture

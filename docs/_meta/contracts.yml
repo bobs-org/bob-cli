@@ -75,7 +75,7 @@ groups:
         summary: "`bob task reroll` bulk re-roll of due prioritized tasks"
         order: 21
       - stem: periods
-        summary: "Period notes: ISO weeks, quarters, years, all time, scaffolds, `bob periods ensure/list`, and JSON"
+        summary: "Period notes: ISO weeks, quarters, years, all time, scaffolds, `bob periods ensure/list/migrate`, problems, nightly, and JSON"
         order: 22
       - stem: stats
         summary: "Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page"

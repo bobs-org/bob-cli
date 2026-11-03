@@ -648,6 +648,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "since",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "tasks",
         kind: Kind::FreeText,
     },

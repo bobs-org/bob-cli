@@ -9,7 +9,8 @@ and never edits a note it did not just create.
 [`bob periods` CLI reference](reference/cli/periods.md) indexes the
 commands. This page specifies the core contract: the calendar, ids,
 paths, labels, scaffolds, note anatomy, review states, agent callouts,
-and `ensure`/`list`.
+`ensure`/`list`, vault adoption (`migrate`), the problems report, and
+the report-only nightly step.
 
 ## Calendar and identity
 
@@ -163,14 +164,20 @@ period notes. Bare `bob periods` runs the read-only `list`.
   (`would create` with `-n`); `-q` stays quiet when there was nothing
   to do. JSON returns
   `{ok, schema_version, created[], filled[], existing[], dry_run}`.
-- `bob periods list [-f human|json] [-k/--kind week|quarter|year] [-y/--year YEAR]`:
+- `bob periods list [-f human|json] [-k/--kind week|quarter|year] [-p/--problems] [-y/--year YEAR]`:
   read-only. Prints the period notes that exist, newest first, grouped
   year → quarter → weeks, each with its review-state mark and Headline.
   JSON returns `{ok, schema_version, rows[]}` with
-  `{id, kind, path, review_state, headline}` rows.
+  `{id, kind, path, review_state, headline}` rows. `-p` adds the
+  problems report below.
+- `bob periods migrate [-a/--apply] [-f human|json] [-o/--offline] [-s/--since DATE]`:
+  dry run by default. `-a` writes one `vault_rewrite` transaction and
+  one commit. `-o` skips vault-sync before and after, as with
+  `bob types rename`.
 
 Exit codes: 0 success; 1 vault I/O or transaction failure (including
-`lock_busy` after waiting at most 3 s on `bob_sync.lock`); 2 usage.
+`lock_busy` after waiting at most 3 s on `bob_sync.lock`); 2 usage;
+3 a `migrate` refusal (not a worktree, dirty paths).
 JSON errors use
 `{"ok":false,"schema_version":1,"error":{"code","message","hint"}}`.
 
@@ -178,3 +185,63 @@ JSON errors use
 and re-reads just before each write. It never commits; vault-sync
 commits, and agents commit as the vault's `AGENTS.md` says.
 Environment: `BOB_DIR`, `BOB_NOW`, `BOB_CONFIG_FILE`, `NO_COLOR`.
+
+## Migration
+
+`bob periods migrate` is dry run by default. The adoption range starts
+at the Monday of the ISO week that contains `--since` (default: the
+first day of the current ISO year) and runs through the current week +
+1. One `vault_rewrite` transaction:
+
+1. Creates `all_time.md` if it is missing (fills it when empty).
+2. Adopts each in-range root year note (`YYYY.md`): sets `parent`,
+   `type`, `id`, `date`, `end`, `aliases`, and `tags` by line edits,
+   keeps every other key (including `zorg_*`), replaces unquoted
+   `parent: [[journal]]` textually, inserts the year scaffold above the
+   old body, and moves the old body under a final `## Archive` heading
+   after the callout. Missing year notes are created. Out-of-range year
+   notes (`2024.md`, `2025.md`) get only their `parent` rewritten to
+   `"[[all_time]]"`.
+3. Creates every missing quarter and week note in the range. Empty
+   notes are filled. Notes with content are never touched (`existing`).
+4. Rewrites every canonical daily note dated on or after the range
+   start (future dailies included): `parent:` becomes
+   `"[[GGGG/GGGG-Www]]"` with the original quote style; a nav line that
+   matches
+   `^\[\[(\d{4}/\d{8})\|prev\]\]\s+\|\s+\[\[(\d{4}/\d{8})\|next\]\]\s*$`
+   becomes `[[prev|prev]] · [[GGGG/GGGG-Www|Www]] · [[next|next]]`.
+   Anything else is `nav_skipped`.
+5. Never creates, edits, or deletes monthly notes.
+
+Apply (`-a`) snapshots daily `worked`, `done`, and `created` (with
+`root_parent` and `theme` parts) over the adopted range, writes, then
+recomputes. Any difference restores every file and fails with
+`verify_failed`, naming the first differing day and metric. It also
+requires zero `dangling_daily_parent` problems in the range. The
+commit subject is `periods: adopt the period-note tree for ISO
+<years>`. Dry run prints counts per action, one sample daily diff,
+`nav_skipped` / `existing` / adopted paths, and the subject `-a` will
+commit.
+
+## Problems
+
+`bob periods list -p/--problems` is report-only (exit 0). Adopted ISO
+years are those with at least one weekly note. Each problem has
+`path`, `detail`, and a `fix` hint:
+
+- `dangling_daily_parent`: a daily in an adopted year whose parent is
+  not its week;
+- `missing_period_note`: an expected note for a week that contains a
+  daily dated today or earlier, or the parent of such a week;
+- `unscaffolded`: a period note that is empty or missing its required
+  headings or fences;
+- `wrong_parent`: a period note whose parent is not the expected one;
+- `task_rows`: a period note with a `#task` checkbox line;
+- `stale_instructions` (info): an unreflected note whose callout
+  version is older than current.
+
+## Nightly
+
+`bob nightly` runs a report-only **Period notes** step after
+`articles` and before the final vault-sync. It prints `bob periods
+list -p` and writes nothing, so athena never creates period notes.

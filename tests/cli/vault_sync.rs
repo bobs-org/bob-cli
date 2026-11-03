@@ -919,13 +919,15 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
 
     assert!(
         out.contains("bob nightly")
-            && out.contains("step 1/4")
-            && out.contains("step 2/4")
-            && out.contains("step 3/4")
-            && out.contains("step 4/4")
+            && out.contains("step 1/5")
+            && out.contains("step 2/5")
+            && out.contains("step 3/5")
+            && out.contains("step 4/5")
+            && out.contains("step 5/5")
             && out.contains("vault-sync")
             && out.contains("task archive")
             && out.contains("articles")
+            && out.contains("period notes")
             && out.contains("All steps passed"),
         "expected a structured nightly summary:\n{}",
         format_output(&output)
@@ -991,7 +993,7 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
         format_output(&output)
     );
     assert!(
-        out.contains("step 4/4") && out.contains("1 step failed"),
+        out.contains("step 5/5") && out.contains("1 step failed"),
         "expected the trailing vault-sync step and failure count:\n{}",
         format_output(&output)
     );
@@ -1044,7 +1046,7 @@ fn nightly_articles_step_reports_without_writing_and_still_passes() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("step 3/4")
+        out.contains("step 3/5")
             && out.contains("articles")
             && out.contains("needs formatting")
             && out.contains("All steps passed"),

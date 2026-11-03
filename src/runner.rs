@@ -445,6 +445,14 @@ const PERIODS_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "migrate",
+        about: "Adopt the period-note tree (dry run by default)",
+        leaf: Leaf {
+            native_command: NativeCommand::PeriodsMigrate,
+            script_command: None,
+        },
+    },
 ];
 
 const PERIODS_AFTER_HELP: &str = "\
@@ -453,8 +461,11 @@ Bare `bob periods` runs the read-only list.
 Examples:
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
+  bob periods list -p            Report period-note problems
   bob periods ensure             Create missing notes one week ahead
   bob periods ensure -n -f json  Preview the writes as JSON
+  bob periods migrate            Preview adopting the period-note tree
+  bob periods migrate -a         Apply the adoption in one commit
 
 See docs/periods.md for the calendar, scaffolds, and JSON.
 Run 'bob periods <command> --help' for more information on a command.";
@@ -680,7 +691,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "nightly",
-        about: "Run nightly maintenance: vault-sync, task archive, articles, vault-sync",
+        about: "Run nightly maintenance: vault-sync, task archive, articles, period notes, vault-sync",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,
@@ -695,7 +706,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: PERIODS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one.",
+                "Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one. migrate adopts the vault (dry run by default; -a applies one commit).",
             ),
             after_help: PERIODS_AFTER_HELP,
             usage: "bob periods [COMMAND]",
@@ -2153,6 +2164,7 @@ mod tests {
             NativeCommand::Notify,
             NativeCommand::PeriodsEnsure,
             NativeCommand::PeriodsList,
+            NativeCommand::PeriodsMigrate,
             NativeCommand::Plan,
             NativeCommand::Plugins,
             NativeCommand::Pomodoro,

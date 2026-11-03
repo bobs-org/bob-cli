@@ -1,7 +1,7 @@
 //! `bob periods` CLI wiring: the Vault group for period notes.
 //!
-//! The group owns `ensure` and `list` in core; later phases add `show`,
-//! `brief`, `draft`, and `migrate`. Options stay alphabetical and every
+//! The group owns `ensure`, `list`, and `migrate`. Later phases add
+//! `show`, `brief`, and `draft`. Options stay alphabetical and every
 //! long option keeps a short alias.
 
 use clap::{
@@ -52,14 +52,17 @@ pub(crate) fn list_command() -> ClapCommand {
         .long_about(
             "List the period notes that exist, newest first, grouped year → \
              quarter → weeks. Each row shows its review-state mark and its \
-             Headline. The command is read-only. See docs/periods.md for the \
-             review states and JSON.",
+             Headline. -p/--problems reports dangling daily parents, missing \
+             period notes, unscaffolded notes, wrong parents, task rows, and \
+             stale instructions. The command is read-only. See docs/periods.md \
+             for the review states, problems, and JSON.",
         )
         .after_help(
             "Examples:\n  \
              bob periods\n  \
              bob periods list\n  \
              bob periods list -k week -y 2026\n  \
+             bob periods list -p\n  \
              bob periods list -f json\n\n\
              Environment:\n  \
              BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -76,7 +79,49 @@ pub(crate) fn list_command() -> ClapCommand {
         .arg(format_arg())
         .arg(help_arg())
         .arg(kind_arg())
+        .arg(problems_arg())
         .arg(year_arg())
+}
+
+pub(crate) fn migrate_command() -> ClapCommand {
+    ClapCommand::new("bob periods migrate")
+        .about("Adopt the period-note tree (dry run by default)")
+        .long_about(
+            "Adopt the period-note tree: create all_time.md and the ISO \
+             week/quarter/year notes in range, adopt in-range year notes \
+             (keeping zorg_* keys and archiving the old body), re-parent \
+             out-of-range year notes and canonical daily notes, and add \
+             the week link on standard prev/next nav lines. Dry run by \
+             default. -a/--apply runs one verified vault-rewrite commit. \
+             See docs/periods.md for the range, verify, and JSON.",
+        )
+        .after_help(
+            "Examples:\n  \
+             bob periods migrate\n  \
+             bob periods migrate -s 2025-12-29\n  \
+             bob periods migrate -a\n  \
+             bob periods migrate -a -o\n  \
+             bob periods migrate -a -f json\n\n\
+             Environment:\n  \
+             BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
+             BOB_NOW                   Local datetime override that pins today\n  \
+             BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n  \
+             BOB_CONFIG_FILE           Stats config used by the apply verify\n  \
+             NO_COLOR                  Disable colored output\n\n\
+             Exit codes:\n  \
+             0  planned or adopted\n  \
+             1  vault I/O or transaction failure\n  \
+             2  usage error\n  \
+             3  refused (not a worktree, dirty paths)\n\n\
+             See docs/periods.md for the range, verify, and JSON.",
+        )
+        .disable_help_flag(true)
+        .arg(apply_arg())
+        .arg(bob_dir_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(offline_arg())
+        .arg(since_arg())
 }
 
 fn bob_dir_arg() -> Arg {
@@ -122,6 +167,22 @@ fn help_arg() -> Arg {
         .help("Show help")
 }
 
+fn apply_arg() -> Arg {
+    Arg::new("apply")
+        .long("apply")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help("Write the plan and make one verified commit")
+}
+
+fn offline_arg() -> Arg {
+    Arg::new("offline")
+        .long("offline")
+        .short('o')
+        .action(ArgAction::SetTrue)
+        .help("Commit locally; skip vault sync before and after")
+}
+
 fn kind_arg() -> Arg {
     Arg::new("kind")
         .long("kind")
@@ -129,6 +190,22 @@ fn kind_arg() -> Arg {
         .value_name("KIND")
         .value_parser(["week", "quarter", "year"])
         .help("Show only one period kind")
+}
+
+fn problems_arg() -> Arg {
+    Arg::new("problems")
+        .long("problems")
+        .short('p')
+        .action(ArgAction::SetTrue)
+        .help("Report period-note problems (read-only)")
+}
+
+fn since_arg() -> Arg {
+    Arg::new("since")
+        .long("since")
+        .short('s')
+        .value_name("DATE")
+        .help("First day of the adoption range, as YYYY-MM-DD; defaults to the ISO year start")
 }
 
 fn quiet_arg() -> Arg {

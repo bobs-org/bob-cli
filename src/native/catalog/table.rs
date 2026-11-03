@@ -582,7 +582,7 @@ pub(crate) const ENTRIES: &[Row] = &[
     Row {
         confirm: Some(
             "Run nightly maintenance (vault-sync, task archive, articles, \
-             vault-sync). Athena's timer already runs this.",
+             period notes, vault-sync). Athena's timer already runs this.",
         ),
         invalidates: &["tasks"],
         ..syncs(
@@ -599,7 +599,9 @@ pub(crate) const ENTRIES: &[Row] = &[
         "periods-list",
         &["periods", "list"],
         "List period notes",
-        &["periods", "list", "week", "quarter", "year", "review"],
+        &[
+            "periods", "list", "week", "quarter", "year", "review", "problems",
+        ],
         Presentation::Report,
         60,
     ),
@@ -613,6 +615,17 @@ pub(crate) const ENTRIES: &[Row] = &[
             Policy::Run,
             Some(DRY_RUN),
             60,
+        )
+    },
+    Row {
+        ..syncs(
+            "periods-migrate",
+            &["periods", "migrate"],
+            "Adopt the period-note tree",
+            &["periods", "migrate", "week", "quarter", "year", "adopt"],
+            Policy::Run,
+            None,
+            180,
         )
     },
     Row {

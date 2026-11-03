@@ -56,9 +56,10 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Err(error) => return print_clap_error(error),
     };
     let format = OutputFormat::from_matches(&matches);
+    let problems_only = matches.get_flag("problems");
     match execute(&matches) {
-        Ok(rows) => {
-            print_success(&rows, format);
+        Ok((rows, problems)) => {
+            print_success(&rows, problems.as_deref(), problems_only, format);
             0
         }
         Err(error) => print_error(error, format),
@@ -85,7 +86,9 @@ struct ListError {
     message: String,
 }
 
-fn execute(matches: &clap::ArgMatches) -> Result<Vec<ListRow>, ListError> {
+fn execute(
+    matches: &clap::ArgMatches,
+) -> Result<(Vec<ListRow>, Option<Vec<super::problems::Problem>>), ListError> {
     let vault = matches
         .get_one::<OsString>("bob-dir")
         .map(PathBuf::from)
@@ -120,7 +123,16 @@ fn execute(matches: &clap::ArgMatches) -> Result<Vec<ListRow>, ListError> {
     // Newest first, grouped year → quarter → weeks: years descend,
     // then quarters descend, then weeks descend, with all time last.
     rows.sort_by(|a, b| sort_key(b).cmp(&sort_key(a)));
-    Ok(rows)
+    let problems = if matches.get_flag("problems") {
+        let today = bob_env::current_datetime().date();
+        Some(
+            super::problems::collect_problems(&vault, today)
+                .map_err(|message| ListError { message })?,
+        )
+    } else {
+        None
+    };
+    Ok((rows, problems))
 }
 
 fn kind_of(id: PeriodId) -> &'static str {
@@ -219,27 +231,37 @@ fn push_row(vault: &Path, path: &Path, id: PeriodId, rows: &mut Vec<ListRow>) {
     });
 }
 
-fn print_success(rows: &[ListRow], format: OutputFormat) {
+fn print_success(
+    rows: &[ListRow],
+    problems: Option<&[super::problems::Problem]>,
+    problems_only: bool,
+    format: OutputFormat,
+) {
     match format {
         OutputFormat::Human => {
-            let styler = Styler::detect();
-            let width = terminal_width();
-            for row in rows {
-                let mark = match row.review_state {
-                    "reflected" => styler.green("✓"),
-                    "drafted" | "edited" => styler.yellow("·"),
-                    _ => styler.cyan("–"),
-                };
-                let headline = row.headline.as_deref().unwrap_or_default();
-                let mut line = format!(
-                    "{mark} {} {}",
-                    row.id,
-                    truncate(headline, width.saturating_sub(12))
-                );
-                if headline.is_empty() {
-                    line = format!("{mark} {}", row.id);
+            if !problems_only {
+                let styler = Styler::detect();
+                let width = terminal_width();
+                for row in rows {
+                    let mark = match row.review_state {
+                        "reflected" => styler.green("✓"),
+                        "drafted" | "edited" => styler.yellow("·"),
+                        _ => styler.cyan("–"),
+                    };
+                    let headline = row.headline.as_deref().unwrap_or_default();
+                    let mut line = format!(
+                        "{mark} {} {}",
+                        row.id,
+                        truncate(headline, width.saturating_sub(12))
+                    );
+                    if headline.is_empty() {
+                        line = format!("{mark} {}", row.id);
+                    }
+                    println!("{line}");
                 }
-                println!("{line}");
+            }
+            if let Some(problems) = problems {
+                super::problems::print_human(problems);
             }
         }
         OutputFormat::Json => {
@@ -255,11 +277,17 @@ fn print_success(rows: &[ListRow], format: OutputFormat) {
                     })
                 })
                 .collect();
-            let body = json!({
+            let mut body = json!({
                 "ok": true,
                 "schema_version": SCHEMA_VERSION,
                 "rows": rows_json,
             });
+            if let Some(problems) = problems {
+                body["problems"] = json!(problems
+                    .iter()
+                    .map(|p| p.to_json())
+                    .collect::<Vec<_>>());
+            }
             println!("{}", serde_json::to_string(&body).unwrap_or_default());
         }
     }

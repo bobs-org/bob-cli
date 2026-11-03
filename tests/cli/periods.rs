@@ -199,10 +199,31 @@ fn periods_help_lists_options_alphabetically() {
             "-f, --format",
             "-h, --help",
             "-k, --kind",
+            "-p, --problems",
             "-y, --year",
         ],
     );
     assert_stdout_has_no_ansi(&list_help);
+
+    let migrate_help = bob_command()
+        .arg("periods")
+        .arg("migrate")
+        .arg("--help")
+        .output()
+        .expect("run bob periods migrate --help");
+    assert_success(&migrate_help);
+    assert_text_order(
+        &stdout(&migrate_help),
+        &[
+            "-a, --apply",
+            "-b, --bob-dir",
+            "-f, --format",
+            "-h, --help",
+            "-o, --offline",
+            "-s, --since",
+        ],
+    );
+    assert_stdout_has_no_ansi(&migrate_help);
 
     // Bare `bob periods` runs the read-only list.
     let bare = bob_command()
@@ -219,5 +240,342 @@ fn periods_help_lists_options_alphabetically() {
     assert!(
         help.contains("docs/periods.md"),
         "group help points at the contract:\n{help}"
+    );
+}
+
+const MIGRATE_NOW: &str = "2026-11-03 12:00:00";
+
+fn zorg_year() -> &'static str {
+    "---\nparent: [[journal]]\ntype: [[day]]\nzorg_id: 2026\n---\n\n# 2026\n\nIndex of 2026.\n"
+}
+
+fn write_dataview_tasks_settings(vault: &std::path::Path) {
+    let settings =
+        vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(settings, "{\"taskFormat\":\"dataview\"}\n").unwrap();
+}
+
+fn write_adoption_fixture(vault: &std::path::Path) {
+    write_dataview_tasks_settings(vault);
+    fs::create_dir_all(vault.join("2026")).unwrap();
+    fs::create_dir_all(vault.join("2025")).unwrap();
+    fs::write(vault.join("2026.md"), zorg_year()).unwrap();
+    fs::write(
+        vault.join("2024.md"),
+        "---\nparent: [[journal]]\n---\n\n# 2024\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.join("2025.md"),
+        "---\nparent: [[journal]]\n---\n\n# 2025\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.join("2026/202611.md"),
+        "---\nparent: [[2026]]\n---\n\n# November\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.join("2026/20261102.md"),
+        "---\nparent: '[[2026/202611]]'\n---\n\n[[2026/20261101|prev]]  | [[2026/20261103|next]]\n\n## Pomodoros\n- [x] (**08:00 - 08:25** [t:: 25m]) — PLAN\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.join("2026/20261103.md"),
+        "---\nparent: '[[2026/202611]]'\n---\n\nsee you tomorrow\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.join("2025/20251229.md"),
+        "---\nparent: '[[2025/202512]]'\n---\n\n[[2025/20251228|prev]]  | [[2025/20251230|next]]\n",
+    )
+    .unwrap();
+    fs::write(vault.join("2026/2026-W44.md"), "   \n").unwrap();
+    fs::write(
+        vault.join("2026/2026-W43.md"),
+        "Bryan already wrote this week.\n",
+    )
+    .unwrap();
+}
+
+fn init_git_vault(vault: &std::path::Path) {
+    git_in(vault, ["init", "-q"]);
+    git_in(vault, ["config", "user.email", "t@t"]);
+    git_in(vault, ["config", "user.name", "t"]);
+    git_in(vault, ["add", "-A"]);
+    git_in(vault, ["commit", "-qm", "init"]);
+}
+
+fn migrate(vault: &std::path::Path, extra: &[&str]) -> std::process::Output {
+    let mut command = bob_command();
+    command
+        .arg("periods")
+        .arg("migrate")
+        .arg("-b")
+        .arg(vault)
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", MIGRATE_NOW)
+        .env("NO_COLOR", "1");
+    for arg in extra {
+        command.arg(arg);
+    }
+    command.output().expect("run bob periods migrate")
+}
+
+#[test]
+fn migrate_dry_run_is_a_pure_plan() {
+    let temp = TempDir::new("bob-cli-periods-migrate-dry");
+    let vault = temp.path().join("vault");
+    write_adoption_fixture(&vault);
+    init_git_vault(&vault);
+    let before = fs::read_to_string(vault.join("2026.md")).unwrap();
+    let monthly = fs::read_to_string(vault.join("2026/202611.md")).unwrap();
+
+    let output = migrate(&vault, &["-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("migrate JSON");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["dry_run"], true);
+    assert_eq!(
+        body["commit_subject"],
+        "periods: adopt the period-note tree for ISO 2026"
+    );
+    let created = body["created"].as_array().expect("created");
+    assert!(created.iter().any(|p| p == "all_time.md"), "{created:?}");
+    assert!(
+        body["adopted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "2026.md"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        body["nav_skipped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "2026/20261103.md"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("2026.md")).unwrap(),
+        before,
+        "dry run must not write"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("2026/202611.md")).unwrap(),
+        monthly
+    );
+    assert!(
+        !vault.join("all_time.md").exists(),
+        "dry run must not create files"
+    );
+}
+
+#[test]
+fn migrate_apply_commits_the_tree_and_reruns_cleanly() {
+    let temp = TempDir::new("bob-cli-periods-migrate-apply");
+    let vault = temp.path().join("vault");
+    write_adoption_fixture(&vault);
+    init_git_vault(&vault);
+    let monthly = fs::read_to_string(vault.join("2026/202611.md")).unwrap();
+    let week43 = fs::read_to_string(vault.join("2026/2026-W43.md")).unwrap();
+
+    let output = migrate(&vault, &["-a", "-o", "-f", "json"]);
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("apply JSON");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["dry_run"], false);
+    assert!(body["sha"].as_str().is_some_and(|sha| !sha.is_empty()));
+    assert_eq!(
+        body["commit_subject"],
+        "periods: adopt the period-note tree for ISO 2026"
+    );
+
+    let adopted = fs::read_to_string(vault.join("2026.md")).unwrap();
+    assert!(adopted.contains("parent: \"[[all_time]]\""), "{adopted}");
+    assert!(adopted.contains("zorg_id: 2026"), "{adopted}");
+    assert!(adopted.contains("## Archive"), "{adopted}");
+    assert!(adopted.contains("# 2026\n\nIndex of 2026."), "{adopted}");
+    assert!(
+        adopted.contains("Agent instructions · yearly v1"),
+        "{adopted}"
+    );
+    let archive_at = adopted.find("## Archive").expect("archive");
+    let callout_at = adopted.find("> [!agent]").expect("callout");
+    assert!(callout_at < archive_at, "Archive follows the callout");
+
+    assert!(vault.join("all_time.md").is_file());
+    assert!(vault.join("2026/2026-W45.md").is_file());
+    assert!(vault.join("2026/2026-Q4.md").is_file());
+    let filled = fs::read_to_string(vault.join("2026/2026-W44.md")).unwrap();
+    assert!(filled.contains("# 2026-W44"), "{filled}");
+    assert_eq!(
+        fs::read_to_string(vault.join("2026/2026-W43.md")).unwrap(),
+        week43,
+        "notes with content stay untouched"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("2026/202611.md")).unwrap(),
+        monthly,
+        "monthly notes stay untouched"
+    );
+
+    let daily = fs::read_to_string(vault.join("2026/20261102.md")).unwrap();
+    assert!(daily.contains("parent: '[[2026/2026-W45]]'"), "{daily}");
+    assert!(
+        daily.contains(
+            "[[2026/20261101|prev]] · [[2026/2026-W45|W45]] · [[2026/20261103|next]]"
+        ),
+        "{daily}"
+    );
+    let skipped = fs::read_to_string(vault.join("2026/20261103.md")).unwrap();
+    assert!(skipped.contains("parent: '[[2026/2026-W45]]'"), "{skipped}");
+    assert!(skipped.contains("see you tomorrow"), "{skipped}");
+    let dec29 = fs::read_to_string(vault.join("2025/20251229.md")).unwrap();
+    assert!(dec29.contains("parent: '[[2026/2026-W01]]'"), "{dec29}");
+
+    let year2024 = fs::read_to_string(vault.join("2024.md")).unwrap();
+    assert!(year2024.contains("parent: \"[[all_time]]\""), "{year2024}");
+    assert!(year2024.contains("# 2024"), "{year2024}");
+    assert!(!year2024.contains("## Archive"), "{year2024}");
+
+    let log = git_in(&vault, ["log", "--format=%s"]);
+    let subjects = stdout(&log);
+    let lines: Vec<&str> = subjects.lines().collect();
+    assert_eq!(lines[0], "periods: adopt the period-note tree for ISO 2026");
+    assert_eq!(lines.len(), 2, "exactly one adoption commit:\n{subjects}");
+
+    let after = snapshot_tree(&vault);
+    let rerun = migrate(&vault, &["-a", "-o", "-f", "json"]);
+    assert_success(&rerun);
+    let rerun_body: serde_json::Value =
+        serde_json::from_str(&stdout(&rerun)).expect("rerun JSON");
+    assert!(
+        rerun_body["sha"].is_null(),
+        "re-run must not commit:\n{}",
+        stdout(&rerun)
+    );
+    assert_eq!(snapshot_tree(&vault), after, "re-run is a no-op");
+    let log_after = stdout(&git_in(&vault, ["log", "--format=%s"]));
+    assert_eq!(log_after, subjects);
+}
+
+fn snapshot_tree(vault: &std::path::Path) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    fn walk(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        rows: &mut Vec<(String, String)>,
+    ) {
+        let mut entries: Vec<_> =
+            fs::read_dir(dir).unwrap().map(|e| e.unwrap()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.file_name().and_then(|n| n.to_str()) == Some(".git") {
+                continue;
+            }
+            if path.is_dir() {
+                walk(root, &path, rows);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                rows.push((
+                    relative,
+                    fs::read_to_string(&path).unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    walk(vault, vault, &mut rows);
+    rows
+}
+
+#[test]
+fn list_problems_reports_each_kind() {
+    let vault = vault_dir("problems");
+    fs::create_dir_all(vault.path().join("2026")).unwrap();
+    fs::write(
+        vault.path().join("2026/2026-W45.md"),
+        "---\nparent: \"[[journal]]\"\n---\n\n# 2026-W45\n\n- [ ] do it #task\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("2026/20261103.md"),
+        "---\nparent: '[[2026/202611]]'\n---\n\n# day\n",
+    )
+    .unwrap();
+    let output = bob_command()
+        .arg("periods")
+        .arg("list")
+        .arg("-b")
+        .arg(vault.path())
+        .arg("-p")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_NOW", MIGRATE_NOW)
+        .output()
+        .expect("list -p");
+    assert_success(&output);
+    let body: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("problems JSON");
+    let kinds: Vec<&str> = body["problems"]
+        .as_array()
+        .expect("problems")
+        .iter()
+        .map(|p| p["kind"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "dangling_daily_parent",
+        "missing_period_note",
+        "unscaffolded",
+        "wrong_parent",
+        "task_rows",
+        "stale_instructions",
+    ] {
+        assert!(
+            kinds.contains(&expected),
+            "missing {expected} in {kinds:?}\n{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn nightly_help_names_the_period_notes_step() {
+    let output = bob_command()
+        .arg("nightly")
+        .arg("--help")
+        .output()
+        .expect("nightly help");
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("period notes"),
+        "nightly help names the step:\n{help}"
+    );
+    assert!(
+        help.contains("report period-note problems"),
+        "nightly help says the step is report-only:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "2. run vault-sync against the vault",
+            "3. run task archive against the vault",
+            "4. report article notes that need formatting (write nothing)",
+            "5. report period-note problems (write nothing)",
+            "6. run vault-sync against the vault",
+        ],
     );
 }

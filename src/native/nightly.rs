@@ -44,6 +44,11 @@ const STEPS: &[Step] = &[
         run: run_articles_step,
     },
     Step {
+        name: "period notes",
+        blurb: "Report period-note problems",
+        run: run_period_notes_step,
+    },
+    Step {
         name: "vault-sync",
         blurb: "Publish maintenance changes",
         run: run_vault_sync_step,
@@ -137,14 +142,15 @@ pub(crate) fn help_text() -> String {
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
-runs `vault-sync`, `task archive`, `articles`, and `vault-sync` in order.
+runs `vault-sync`, `task archive`, `articles`, `period notes`, and `vault-sync` in order.
 
 workflow:
   1. acquire the shared Bob maintenance lock
   2. run vault-sync against the vault
   3. run task archive against the vault
   4. report article notes that need formatting (write nothing)
-  5. run vault-sync against the vault
+  5. report period-note problems (write nothing)
+  6. run vault-sync against the vault
 
 environment:
   BOB_DIR                        Bob vault root; defaults to ~/bob
@@ -172,6 +178,10 @@ fn run_collect_done_step(child_env: &ChildEnv) -> i32 {
 
 fn run_articles_step(_child_env: &ChildEnv) -> i32 {
     super::articles::nightly_check(&bob_env::bob_dir())
+}
+
+fn run_period_notes_step(_child_env: &ChildEnv) -> i32 {
+    super::periods::problems::nightly_check(&bob_env::bob_dir())
 }
 
 fn run_vault_sync_step(child_env: &ChildEnv) -> i32 {
@@ -259,7 +269,7 @@ fn print_summary_row(styler: &Styler, name: &str, ok: bool, detail: &str) {
     } else {
         styler.red("\u{2717}")
     };
-    println!("  {marker} {name:<17} {detail}");
+    println!("  {marker} {name:<18} {detail}");
 }
 
 /// Build a `╭─ <label> ──…──` opening rule, padded to `RULE_WIDTH`.

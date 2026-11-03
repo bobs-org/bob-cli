@@ -241,8 +241,8 @@ fn parse_frontmatter(contents: &str) -> BTreeMap<String, String> {
             let mut value = value.trim().to_string();
             // Strip one layer of surrounding quotes.
             if value.len() >= 2
-                && value.starts_with('"')
-                && value.ends_with('"')
+                && ((value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\'')))
             {
                 value = value[1..value.len() - 1].to_string();
             }

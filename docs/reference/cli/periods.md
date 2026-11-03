@@ -11,13 +11,14 @@ Manage period notes: weeks, quarters, years, and all time
 ```text title="bob periods --help"
 Manage period notes: weeks, quarters, years, and all time
 
-Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one.
+Bare `bob periods` runs the read-only list. ensure creates missing period notes and never edits an existing one. migrate adopts the vault (dry run by default; -a applies one commit).
 
 Usage: bob periods [COMMAND]
 
 Commands:
-  ensure  Create missing period notes one week ahead
-  list    List period notes with review states (default)
+  ensure   Create missing period notes one week ahead
+  list     List period notes with review states (default)
+  migrate  Adopt the period-note tree (dry run by default)
 
 Options:
   -h, --help  Print help
@@ -27,8 +28,11 @@ Bare `bob periods` runs the read-only list.
 Examples:
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
+  bob periods list -p            Report period-note problems
   bob periods ensure             Create missing notes one week ahead
   bob periods ensure -n -f json  Preview the writes as JSON
+  bob periods migrate            Preview adopting the period-note tree
+  bob periods migrate -a         Apply the adoption in one commit
 
 See docs/periods.md for the calendar, scaffolds, and JSON.
 Run 'bob periods <command> --help' for more information on a command.
@@ -90,7 +94,7 @@ See docs/periods.md for the calendar, scaffolds, and JSON.
 List period notes with review states (default)
 
 ```text title="bob periods list --help"
-List the period notes that exist, newest first, grouped year → quarter → weeks. Each row shows its review-state mark and its Headline. The command is read-only. See docs/periods.md for the review states and JSON.
+List the period notes that exist, newest first, grouped year → quarter → weeks. Each row shows its review-state mark and its Headline. -p/--problems reports dangling daily parents, missing period notes, unscaffolded notes, wrong parents, task rows, and stale instructions. The command is read-only. See docs/periods.md for the review states, problems, and JSON.
 
 Usage: bob periods list [OPTIONS]
 
@@ -112,6 +116,9 @@ Options:
           
           [possible values: week, quarter, year]
 
+  -p, --problems
+          Report period-note problems (read-only)
+
   -y, --year <YEAR>
           Show only periods in one ISO year, as YYYY
 
@@ -119,6 +126,7 @@ Examples:
   bob periods
   bob periods list
   bob periods list -k week -y 2026
+  bob periods list -p
   bob periods list -f json
 
 Environment:
@@ -132,6 +140,60 @@ Exit codes:
   2  usage error
 
 See docs/periods.md for the review states and JSON.
+```
+
+## bob periods migrate
+
+Adopt the period-note tree (dry run by default)
+
+```text title="bob periods migrate --help"
+Adopt the period-note tree: create all_time.md and the ISO week/quarter/year notes in range, adopt in-range year notes (keeping zorg_* keys and archiving the old body), re-parent out-of-range year notes and canonical daily notes, and add the week link on standard prev/next nav lines. Dry run by default. -a/--apply runs one verified vault-rewrite commit. See docs/periods.md for the range, verify, and JSON.
+
+Usage: bob periods migrate [OPTIONS]
+
+Options:
+  -a, --apply
+          Write the plan and make one verified commit
+
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -f, --format <FORMAT>
+          Output format: human or json
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -o, --offline
+          Commit locally; skip vault sync before and after
+
+  -s, --since <DATE>
+          First day of the adoption range, as YYYY-MM-DD; defaults to the ISO year start
+
+Examples:
+  bob periods migrate
+  bob periods migrate -s 2025-12-29
+  bob periods migrate -a
+  bob periods migrate -a -o
+  bob periods migrate -a -f json
+
+Environment:
+  BOB_DIR                   Bob vault root when --bob-dir is omitted
+  BOB_NOW                   Local datetime override that pins today
+  BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock
+  BOB_CONFIG_FILE           Stats config used by the apply verify
+  NO_COLOR                  Disable colored output
+
+Exit codes:
+  0  planned or adopted
+  1  vault I/O or transaction failure
+  2  usage error
+  3  refused (not a worktree, dirty paths)
+
+See docs/periods.md for the range, verify, and JSON.
 ```
 
 ## Related
