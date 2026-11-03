@@ -41,6 +41,12 @@ pub(crate) enum SpanKind {
     ProjectNoteOfferMarker,
     ProjectTaskLinkMarker,
     ProjectTaskBlockId,
+    /// A `- ^<id>` move sigil in a sealed project-note item.
+    ProjectTaskMoveMarker,
+    /// A `- :<id>` move-and-link sigil in a sealed project-note item.
+    ProjectTaskMoveLinkMarker,
+    /// A move bullet's block ID, including a partial ID while typing.
+    ProjectTaskMoveBlockId,
     GlobalRoute,
     Schedule,
     Priority,
@@ -113,6 +119,9 @@ impl SpanKind {
             Self::ProjectNoteOfferMarker => "project_note_offer_marker",
             Self::ProjectTaskLinkMarker => "project_task_link_marker",
             Self::ProjectTaskBlockId => "project_task_block_id",
+            Self::ProjectTaskMoveMarker => "project_task_move_marker",
+            Self::ProjectTaskMoveLinkMarker => "project_task_move_link_marker",
+            Self::ProjectTaskMoveBlockId => "project_task_move_block_id",
             Self::GlobalRoute => "global_route",
             Self::Schedule => "schedule",
             Self::Priority => "priority",
@@ -300,6 +309,9 @@ pub(crate) enum Need {
     TemplateRow,
     /// A list header still needs bullets below it.
     ListItem,
+    /// A lone `- ^` / `- :` move bullet is still open: pick one of the
+    /// parent note's open tasks to move.
+    ProjectTaskMove,
 }
 
 impl Need {
@@ -334,6 +346,7 @@ impl Need {
             Self::PomodoroMergeDest => "pomodoro_merge_dest",
             Self::TemplateRow => "template_row",
             Self::ListItem => "list_item",
+            Self::ProjectTaskMove => "project_task_move",
         }
     }
 }

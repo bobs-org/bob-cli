@@ -630,11 +630,29 @@ pub(crate) struct ProjectTaskId {
     pub(crate) link: bool,
 }
 
+/// A first-level `- ^<id>` / `- :<id>` move bullet in a sealed project-note
+/// item: move that open task from the parent note into this slot (`:` also
+/// makes it Next and links it). Always `None` outside project-note items
+/// and on nested bullets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct MoveBullet {
+    /// The move sigil: `^` or `:`.
+    pub(crate) sigil: char,
+    /// The moved task's block ID. `None` while the move is unfinished (a
+    /// lone sigil), serialized as JSON null.
+    pub(crate) block_id: Option<String>,
+    /// UTF-8 byte range covering the sigil plus ID in the draft.
+    pub(crate) range: (usize, usize),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthoredSubBullet {
     pub(crate) body: String,
     pub(crate) depth: AuthoredDepth,
     pub(crate) task_id: Option<ProjectTaskId>,
+    /// A first-level move bullet, when the shared move lexer claimed this
+    /// line. Move bodies stay empty and their `task_id` stays `None`.
+    pub(crate) move_task: Option<MoveBullet>,
     /// Leading `#slug` / `#"TITLE"` drawer shortcut, when this first-level
     /// bullet names a drawer. Literal ALL-CAPS drawer bullets gain this
     /// after grouping. Nested notes keep `None`.

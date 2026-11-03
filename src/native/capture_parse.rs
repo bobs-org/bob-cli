@@ -17,7 +17,7 @@ use super::{
         self, resolve_exact_type_name, scan_line, unmatched_type_display,
         AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
-        EditorParseOptions, ListContext, Need, PomodoroAdjustSpec,
+        EditorParseOptions, ListContext, MoveBullet, Need, PomodoroAdjustSpec,
         PomodoroCloseSpec, PomodoroMergeSpec, PomodoroShiftSpec,
         PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
         RelationEntry, ResolvedTypeName, Severity, Span,
@@ -359,7 +359,7 @@ the `:` and a `project_task_block_id` span over the ID (` ^id` spans only the ID
 `section` carries the marker's Pomodoro name. Misplaced, invalid, reserved, empty, or checkbox-carrying IDs report \
 `misplaced_project_task_id` or `invalid_project_task_id`, a repeated ID reports `duplicate_project_task_id`, and a \
 `#pomodoro` name with no ` :` task reports `unused_project_note_pomodoro` (or the offer wording when the marker is sealed with ':'). A lone trailing `:` or `^` is an unfinished \
-ID: mode 'incomplete' needing `block_id` with an `interactive_placeholder` span over the sigil and no diagnostic. \
+ID: mode 'incomplete' needing `block_id` with an `interactive_placeholder` span over the sigil and no diagnostic. In a sealed project-note item, a first-level bullet holding only `^id` or `:id` moves that open task from the parent note into this slot instead: `:id` additionally makes it Next and links it, reporting mode 'pomodoro_project_note' with a `project_task_move_marker` span over the `^` (`project_task_move_link_marker` for `:`) and a `project_task_move_block_id` span over the ID. Move bullets appear with empty bodies in `sub_bullets` and a parallel `sub_bullet_moves` array of `null` or `{\"sigil\", \"block_id\", \"range\"}` entries (`range` covers the sigil plus ID, and `block_id` is null while unfinished). A lone `^` or `:` filling its first-level bullet is an unfinished move: mode 'incomplete' needing `project_task_move` with both the marker and an `interactive_placeholder` span over the sigil and no diagnostic. Move IDs share a namespace with authored task IDs: a repeated move reports `move_bullet_duplicate`, a move matching an authored ID reports `move_bullet_id_collision`, and words, markers, checkboxes, nested bullets, a cross-note `^route:id` shape, or `^prj` after the token reports its matching `move_bullet_*` diagnostic. \
 Outside project-note items these words stay literal text. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
 today's Pomodoro ledger instead of creating one, and parses as \
 'pomodoro_link' with the same spans and `pomodoro_start` object; anything \
@@ -600,6 +600,13 @@ struct CaptureParseResult {
     /// input keeps its exact JSON shape.
     #[serde(skip_serializing_if = "all_task_ids_none")]
     sub_bullet_task_ids: Vec<Option<ProjectTaskId>>,
+    /// Additive schema-version-1 field aligned one-to-one with
+    /// `sub_bullets`: each entry is `null` or
+    /// `{"sigil", "block_id", "range"}` (`block_id` is null while the
+    /// move is unfinished). Emitted only when at least one entry is
+    /// non-null, so every older input keeps its exact JSON shape.
+    #[serde(skip_serializing_if = "all_moves_none")]
+    sub_bullet_moves: Vec<Option<MoveBullet>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     items: Vec<CaptureParseItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -754,6 +761,8 @@ struct CaptureParseItem {
     sub_bullet_depths: Vec<u8>,
     #[serde(skip_serializing_if = "all_task_ids_none")]
     sub_bullet_task_ids: Vec<Option<ProjectTaskId>>,
+    #[serde(skip_serializing_if = "all_moves_none")]
+    sub_bullet_moves: Vec<Option<MoveBullet>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_start: Option<PomodoroStartSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1031,6 +1040,7 @@ impl CaptureParseResult {
         let sub_bullets = parse.sub_bullets;
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
+        let sub_bullet_moves = sub_bullet_moves(&sub_bullets);
         let mut diagnostics = Vec::new();
         if let Some(warning) =
             missing_template_directive_hint(&input, &parse.items)
@@ -1083,6 +1093,7 @@ impl CaptureParseResult {
             sub_bullets: sub_bullet_bodies(&sub_bullets),
             sub_bullet_depths,
             sub_bullet_task_ids,
+            sub_bullet_moves,
             items,
             template: None,
             global_destination: parse
@@ -1259,6 +1270,7 @@ impl CaptureParseResult {
                     sub_bullets: Vec::new(),
                     sub_bullet_depths: Vec::new(),
                     sub_bullet_task_ids: Vec::new(),
+                    sub_bullet_moves: Vec::new(),
                     pomodoro_start: None,
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
@@ -1294,6 +1306,7 @@ impl CaptureParseResult {
                     sub_bullets: Vec::new(),
                     sub_bullet_depths: Vec::new(),
                     sub_bullet_task_ids: Vec::new(),
+                    sub_bullet_moves: Vec::new(),
                     pomodoro_start: None,
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
@@ -1473,6 +1486,7 @@ impl CaptureParseResult {
         let sub_bullets = parsed.sub_bullets;
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
+        let sub_bullet_moves = sub_bullet_moves(&sub_bullets);
 
         let relation_grammar = relation_grammar_for(&input);
         let relations = parse_relations(&parsed.relations);
@@ -1498,6 +1512,7 @@ impl CaptureParseResult {
             sub_bullets: sub_bullet_bodies(&sub_bullets),
             sub_bullet_depths,
             sub_bullet_task_ids,
+            sub_bullet_moves,
             items,
             template: Some(template),
             global_destination: None,
@@ -2232,6 +2247,7 @@ fn empty_wire_item() -> CaptureParseItem {
         sub_bullets: Vec::new(),
         sub_bullet_depths: Vec::new(),
         sub_bullet_task_ids: Vec::new(),
+        sub_bullet_moves: Vec::new(),
         pomodoro_start: None,
         pomodoro_adjust: None,
         pomodoro_shift: None,
@@ -2326,6 +2342,7 @@ fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
         sub_bullets: sub_bullet_bodies(&item.sub_bullets),
         sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
         sub_bullet_task_ids: sub_bullet_task_ids(&item.sub_bullets),
+        sub_bullet_moves: sub_bullet_moves(&item.sub_bullets),
         pomodoro_start: item.pomodoro_start.clone(),
         pomodoro_adjust: item.pomodoro_adjust.clone(),
         pomodoro_shift: item.pomodoro_shift.clone(),
@@ -2392,8 +2409,21 @@ fn sub_bullet_task_ids(
         .collect()
 }
 
+fn sub_bullet_moves(
+    sub_bullets: &[AuthoredSubBullet],
+) -> Vec<Option<MoveBullet>> {
+    sub_bullets
+        .iter()
+        .map(|item| item.move_task.clone())
+        .collect()
+}
+
 fn all_task_ids_none(ids: &[Option<ProjectTaskId>]) -> bool {
     ids.iter().all(Option::is_none)
+}
+
+fn all_moves_none(moves: &[Option<MoveBullet>]) -> bool {
+    moves.iter().all(Option::is_none)
 }
 
 fn is_false(value: &bool) -> bool {
@@ -2408,10 +2438,16 @@ fn merge_spans(
     capture_spans.sort_by_key(|span| (span.start, span.end));
     let mut merged = Vec::new();
     for span in capture_spans {
-        if merged
-            .last()
-            .is_some_and(|previous: &Span| previous.end > span.start)
-        {
+        if merged.last().is_some_and(|previous: &Span| {
+            if previous.start == span.start && previous.end == span.end {
+                // Same bytes: keep both when they say different things
+                // (a lone move sigil carries its marker plus the picker
+                // placeholder); drop an exact duplicate.
+                previous.kind == span.kind
+            } else {
+                previous.end > span.start
+            }
+        }) {
             continue;
         }
         merged.push(span);
@@ -2551,6 +2587,19 @@ fn print_human_success_with_styler(
             let depth =
                 result.sub_bullet_depths.get(index).copied().unwrap_or(1);
             let indentation = "  ".repeat(usize::from(depth.saturating_sub(1)));
+            if let Some(move_bullet) = result
+                .sub_bullet_moves
+                .get(index)
+                .and_then(|entry| entry.as_ref())
+            {
+                let id = move_bullet.block_id.as_deref().unwrap_or_default();
+                if move_bullet.sigil == ':' {
+                    println!("    {indentation}- move & link :{id}");
+                } else {
+                    println!("    {indentation}- move ^{id}");
+                }
+                continue;
+            }
             let task_id = result
                 .sub_bullet_task_ids
                 .get(index)

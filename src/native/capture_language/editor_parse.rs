@@ -8,6 +8,8 @@ use super::editor_pomodoro::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
+use super::move_bullet::MoveBulletHit;
+use super::move_bullet::MoveBulletInvalid;
 use super::project_tasks::*;
 use super::tokens::*;
 use crate::native::url_routing::{classify_token, RoutingEntry};
@@ -2708,6 +2710,7 @@ pub(super) fn parse_editor_list_item<'a>(
             body: child_parse.body,
             depth,
             task_id: None,
+            move_task: None,
             drawer: None,
         });
     }
@@ -2752,6 +2755,182 @@ pub(super) fn parse_editor_list_item<'a>(
 /// A trailing parent selector (`+`/`+query`) or task completion
 /// (`!note:id`) among surviving body tokens: both would file the bullet
 /// elsewhere, so the bullet is refused instead.
+/// Interpret one move-bullet lexer hit in the editor project-note
+/// post-pass, in source order. Accepted moves record an empty body, the
+/// move, and the marker and block-ID spans; a `:` move also counts as a
+/// link for the unused-`#pomodoro` rule and upgrades the mode. Violations
+/// become diagnostics with the same codes and messages `bob capture`
+/// reports. A lone sigil marks the item incomplete needing
+/// `project_task_move` instead of recording anything.
+#[allow(clippy::too_many_arguments)]
+fn interpret_editor_move(
+    hit: MoveBulletHit,
+    pass: &mut ProjectTaskPass,
+    sub_bullets: &mut [AuthoredSubBullet],
+    spans: &mut Vec<Span>,
+    needs: &mut Vec<Need>,
+    mode: &mut EditorMode,
+    diagnostics: &mut Vec<Diagnostic>,
+    has_pending_colon_link: &mut bool,
+    index: usize,
+    line_number: usize,
+    route: &str,
+    new_id: Option<&str>,
+) {
+    let push_span =
+        |spans: &mut Vec<Span>, start: usize, end: usize, kind: SpanKind| {
+            spans.push(Span {
+                start,
+                end,
+                kind,
+                project_note: None,
+                title: None,
+                key: None,
+            });
+        };
+    match hit {
+        MoveBulletHit::Invalid { code, kind, span } => {
+            let message = match &kind {
+                MoveBulletInvalid::Text { sigil, id } => {
+                    super::move_bullet::move_bullet_text_error(
+                        *sigil, id, route,
+                    )
+                }
+                MoveBulletInvalid::Marker { token } => {
+                    super::move_bullet::move_bullet_marker_error(token)
+                }
+                MoveBulletInvalid::Checkbox { status } => {
+                    super::move_bullet::move_bullet_checkbox_error(*status)
+                }
+                MoveBulletInvalid::CrossNote { sigil, id } => {
+                    super::move_bullet::move_bullet_cross_note_error(
+                        *sigil, id, route,
+                    )
+                }
+                MoveBulletInvalid::Reserved { sigil, id } => {
+                    super::move_bullet::move_bullet_reserved_error(
+                        *sigil, id, route,
+                    )
+                }
+                MoveBulletInvalid::BadId { raw } => {
+                    invalid_project_task_id_charset_error(raw)
+                }
+            };
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code,
+                message,
+                range: Some((span.start, span.end)),
+            });
+        }
+        MoveBulletHit::Unfinished { sigil, span } => {
+            *mode = EditorMode::Incomplete;
+            if sigil == ':' {
+                *has_pending_colon_link = true;
+            }
+            if !needs.contains(&Need::ProjectTaskMove) {
+                needs.push(Need::ProjectTaskMove);
+            }
+            // The move stays visible to clients as an entry with a null
+            // block ID, mirroring how complete moves report.
+            sub_bullets[index].body.clear();
+            sub_bullets[index].move_task = Some(MoveBullet {
+                sigil,
+                block_id: None,
+                range: (span.start, span.end),
+            });
+            let marker = if sigil == ':' {
+                SpanKind::ProjectTaskMoveLinkMarker
+            } else {
+                SpanKind::ProjectTaskMoveMarker
+            };
+            push_span(spans, span.start, span.end, marker);
+            push_span(
+                spans,
+                span.start,
+                span.end,
+                SpanKind::InteractivePlaceholder,
+            );
+        }
+        MoveBulletHit::Complete {
+            sigil,
+            id,
+            sigil_span,
+            id_span,
+            ..
+        } => {
+            let range = (sigil_span.0, id_span.1);
+            if let Some(new_id) = new_id
+                && sub_bullets
+                    .get(index + 1)
+                    .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+            {
+                let basename =
+                    crate::native::capture_project_note::project_note_basename(
+                        route, new_id,
+                    );
+                let stem = basename.strip_suffix(".md").unwrap_or(&basename);
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "move_bullet_nested",
+                    message: super::move_bullet::move_bullet_nested_error(
+                        stem, &id,
+                    ),
+                    range: Some(range),
+                });
+                return;
+            }
+            match pass.register_move(sigil, &id, line_number) {
+                MoveIdOutcome::Accept => {
+                    sub_bullets[index].body.clear();
+                    sub_bullets[index].move_task = Some(MoveBullet {
+                        sigil,
+                        block_id: Some(id),
+                        range,
+                    });
+                    let marker = if sigil == ':' {
+                        SpanKind::ProjectTaskMoveLinkMarker
+                    } else {
+                        SpanKind::ProjectTaskMoveMarker
+                    };
+                    push_span(spans, sigil_span.0, sigil_span.1, marker);
+                    push_span(
+                        spans,
+                        id_span.0,
+                        id_span.1,
+                        SpanKind::ProjectTaskMoveBlockId,
+                    );
+                }
+                MoveIdOutcome::Duplicate { first_line } => {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "move_bullet_duplicate",
+                        message:
+                            super::move_bullet::move_bullet_duplicate_error(
+                                sigil, &id, first_line,
+                            ),
+                        range: Some(range),
+                    });
+                }
+                MoveIdOutcome::Collision { authored_line } => {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "move_bullet_id_collision",
+                        message:
+                            super::move_bullet::move_bullet_id_collision_error(
+                                &id,
+                                route,
+                                line_number,
+                                authored_line,
+                            ),
+                        range: Some(range),
+                    });
+                }
+            }
+        }
+    }
+}
+
 fn list_affix_token<'a>(tokens: &[Token<'a>], source: &str) -> Option<&'a str> {
     for token in tokens {
         if crate::native::capture_links::is_protected_markup_range(
@@ -2935,6 +3114,7 @@ pub(super) fn parse_editor_item_inner<'a>(
     let mut child_task_tokens: Vec<Option<Token<'_>>> = Vec::new();
     let mut child_task_stripped: Vec<Option<StrippedTaskId<'_>>> = Vec::new();
     let mut child_task_lines: Vec<usize> = Vec::new();
+    let mut child_move_hits: Vec<Option<MoveBulletHit>> = Vec::new();
     let mut has_first_level_owner = false;
     for line in item.lines.iter().skip(1) {
         let line_number = line.line_number;
@@ -3022,6 +3202,19 @@ pub(super) fn parse_editor_item_inner<'a>(
                 )
             })
             .flatten();
+        // Move bullets claim the line from its raw shape before the
+        // trailing-ID rule runs; the project-note post-pass interprets
+        // the hit and the line never reaches the new-task path.
+        let move_hit = (parent_takes_ids
+            && authored.depth == AuthoredDepth::First)
+            .then(|| {
+                super::move_bullet::scan_move_bullet(
+                    authored.body,
+                    authored.body_start,
+                    item.source,
+                )
+            })
+            .flatten();
         if let Some(super::drawer_bullet::DrawerBulletHit::Complete {
             leftover,
             ..
@@ -3083,6 +3276,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             child_task_tokens.push(child_parse.body_tokens.last().copied());
             child_task_stripped.push(child_parse.stripped_task_id.clone());
             child_task_lines.push(line_number);
+            child_move_hits.push(move_hit);
             let (child_body, drawer) = match drawer_hit {
                 Some(super::drawer_bullet::DrawerBulletHit::Escaped {
                     ..
@@ -3119,6 +3313,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     body: child_body,
                     depth: authored.depth,
                     task_id: None,
+                    move_task: None,
                     drawer,
                 });
                 if authored.depth == AuthoredDepth::First {
@@ -3302,16 +3497,26 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
     }
 
-    // Project task IDs (` :id` / ` ^id`) are a post-pass over the parsed
-    // lines, mirroring execution's evaluation order through the shared
-    // `ProjectTaskPass`: the parent line, then each child in source order,
-    // then the unused-`#pomodoro` rule. Accepted IDs are stripped from the
-    // sub-bullet bodies and recorded on them; violations become
-    // diagnostics. A lone sigil ending a first-level bullet is an
-    // unfinished ID: `incomplete` needing `block_id` with a placeholder
-    // span over the sigil and no diagnostic. A project note with at least
-    // one accepted ` :` task upgrades to `pomodoro_project_note`.
-    if mode == EditorMode::ProjectNote {
+    // Project task IDs (` :id` / ` ^id`) and move bullets (`- ^<id>` /
+    // `- :<id>`) are a post-pass over the parsed lines, mirroring
+    // execution's evaluation order through the shared `ProjectTaskPass`:
+    // the parent line, then each child in source order, then the
+    // unused-`#pomodoro` rule. Accepted IDs are stripped from the
+    // sub-bullet bodies and recorded on them; accepted moves are recorded
+    // with empty bodies and their own spans; violations become
+    // diagnostics. A lone trailing sigil is an unfinished ID: `incomplete`
+    // needing `block_id` with a placeholder span over the sigil and no
+    // diagnostic. A lone move sigil is an unfinished move: `incomplete`
+    // needing `project_task_move` with marker and placeholder spans over
+    // the sigil and no diagnostic. A project note with at least one
+    // accepted ` :` task or `:` move upgrades to `pomodoro_project_note`.
+    //
+    // Both sealed forms run this pass so `bob capture` and `capture-parse`
+    // agree on every rule. The entry mode tells the create form from the
+    // offer form for the unused-`#pomodoro` diagnostic, which execution
+    // only reports for the create form.
+    let is_create_note = mode == EditorMode::ProjectNote;
+    if is_create_note || mode == EditorMode::PomodoroProjectNote {
         let mut pass = ProjectTaskPass::new();
         let mut has_pending_colon_link = false;
         if let Some(message) = pass.check_parent(&body) {
@@ -3325,7 +3530,9 @@ pub(super) fn parse_editor_item_inner<'a>(
                     .map(|token| (token.start, token.end)),
             });
         }
-        for (index, sub_bullet) in sub_bullets.iter_mut().enumerate() {
+        let route_name = route.as_deref().unwrap_or_default();
+        let new_id = block_id.as_deref();
+        for index in 0..sub_bullets.len() {
             let token = child_task_tokens[index];
             let stripped = child_task_stripped.get(index).cloned().flatten();
             let line_number = child_task_lines[index];
@@ -3333,10 +3540,33 @@ pub(super) fn parse_editor_item_inner<'a>(
             // marker extraction, so the body below is already clean.
             let token =
                 stripped.as_ref().map(|stripped| stripped.token).or(token);
+            // A claimed move bullet never reaches the new-task path: its
+            // hit decides spans, needs, and diagnostics here. Without a
+            // parent route the move cannot name its source, so the line
+            // keeps the trailing-ID path exactly as before.
+            if route.is_some()
+                && let Some(hit) = child_move_hits[index].clone()
+            {
+                interpret_editor_move(
+                    hit,
+                    &mut pass,
+                    &mut sub_bullets,
+                    &mut spans,
+                    &mut needs,
+                    &mut mode,
+                    &mut diagnostics,
+                    &mut has_pending_colon_link,
+                    index,
+                    line_number,
+                    route_name,
+                    new_id,
+                );
+                continue;
+            }
             match pass.check_child(
                 stripped,
-                &sub_bullet.body,
-                sub_bullet.depth,
+                &sub_bullets[index].body,
+                sub_bullets[index].depth,
                 line_number,
             ) {
                 ChildTaskOutcome::Ignore => {}
@@ -3360,8 +3590,24 @@ pub(super) fn parse_editor_item_inner<'a>(
                     }
                 }
                 ChildTaskOutcome::Accept { sigil, id } => {
+                    if let Some(move_line) = pass.move_line_for(&id) {
+                        diagnostics.push(Diagnostic {
+                            severity: Severity::Error,
+                            code: "move_bullet_id_collision",
+                            message:
+                                super::move_bullet::move_bullet_id_collision_error(
+                                    &id,
+                                    route_name,
+                                    move_line,
+                                    line_number,
+                                ),
+                            range: token
+                                .map(|token| (token.start, token.end)),
+                        });
+                        continue;
+                    }
                     let link = sigil == ':';
-                    sub_bullet.task_id =
+                    sub_bullets[index].task_id =
                         Some(ProjectTaskId { block_id: id, link });
                     if let Some(token) = token {
                         if link {
@@ -3396,9 +3642,14 @@ pub(super) fn parse_editor_item_inner<'a>(
         }
         // A `#pomodoro` name picks the Pomodoro that ` :<id>` Task Links
         // go under. The diagnostic covers the `#name` component. An
-        // unfinished ` :` ID counts as a pending link (a lone `^` does
-        // not, per Rule 7).
-        if section.is_some() && !pass.has_link && !has_pending_colon_link {
+        // unfinished ` :` ID or pending `- :` move counts as a link (a
+        // lone `^` does not, per Rule 7). Only the create form reports it
+        // at parse time; the offer form resolves offers during planning.
+        if is_create_note
+            && section.is_some()
+            && !pass.has_link
+            && !has_pending_colon_link
+        {
             let range = spans
                 .iter()
                 .find(|span| span.kind == SpanKind::PomodoroName)

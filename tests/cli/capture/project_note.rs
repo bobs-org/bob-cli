@@ -1551,3 +1551,44 @@ fn capture_project_note_reports_created_pomodoro_block() {
     );
     assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
 }
+
+#[test]
+fn capture_project_note_move_bullets_refused_until_execution_lands() {
+    // The grammar phase parses move bullets but the execution phase has
+    // not landed: any item holding one is refused before planning. The
+    // execution phase deletes this test when it removes the guard.
+    let temp = TempDir::new("bob-cli-capture-project-note-move-guard");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
+    let input = "Finish the exit packet @cash^goog-exit@\n- Draft the memo\n- ^equity-docs\n";
+    let output = bob_command()
+        .arg("capture")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(input)
+        .env("BOB_NOW", "2026-09-20 14:31:07")
+        .env("TZ", "UTC0")
+        .output()
+        .expect("run bob capture move guard");
+    assert!(
+        !output.status.success(),
+        "expected move refusal:\n{}",
+        format_output(&output)
+    );
+    // JSON errors report on stdout.
+    assert!(
+        stdout(&output).contains(
+            "moving tasks into a new project note is not available in this build yet"
+        ),
+        "expected interim guard message:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !vault.join("cash_goog_exit.md").exists(),
+        "refused capture writes nothing"
+    );
+}

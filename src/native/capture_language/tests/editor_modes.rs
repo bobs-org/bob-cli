@@ -5,6 +5,7 @@ use super::super::editor_model::*;
 use super::super::editor_parse::*;
 use super::super::markers::*;
 use super::super::model::*;
+use super::super::move_bullet::move_bullet_checkbox_error;
 use super::super::project_tasks::*;
 use super::*;
 
@@ -621,10 +622,10 @@ fn editor_reports_project_task_ids_with_modes_spans_and_diagnostics() {
             false,
         ),
         (
-            "Finish it @cash^x@\n- :foo",
-            "invalid_project_task_id",
-            empty_project_task_body_error(2),
-            ":foo",
+            "Finish it @cash^x@\n- [x] ^foo",
+            "move_bullet_checkbox",
+            move_bullet_checkbox_error('x'),
+            "^foo",
             false,
         ),
         (
@@ -664,6 +665,33 @@ fn editor_reports_project_task_ids_with_modes_spans_and_diagnostics() {
             Some((start, start + needle.len())),
             "{raw}"
         );
+    }
+
+    // A lone `^id` / `:id` bullet is a move, not an empty task: the
+    // body stays empty, the move is recorded, and `:` links the mode.
+    for (raw, mode, sigil, id) in [
+        (
+            "Finish it @cash^x@\n- :foo",
+            EditorMode::PomodoroProjectNote,
+            ':',
+            "foo",
+        ),
+        (
+            "Finish it @cash^x@\n- ^foo",
+            EditorMode::ProjectNote,
+            '^',
+            "foo",
+        ),
+    ] {
+        let moved = editor(raw);
+        assert!(moved.diagnostics.is_empty(), "{raw}");
+        assert_eq!(moved.mode, mode, "{raw}");
+        assert_eq!(moved.sub_bullets.len(), 1);
+        assert_eq!(moved.sub_bullets[0].body, "");
+        let move_bullet =
+            moved.sub_bullets[0].move_task.as_ref().expect("move");
+        assert_eq!(move_bullet.sigil, sigil);
+        assert_eq!(move_bullet.block_id.as_deref(), Some(id));
     }
 
     // A duplicate keeps the first ID and still upgrades the mode.
@@ -2084,12 +2112,19 @@ fn editor_keeps_equals_wording_off_caret_tokens_without_plus() {
 
 #[test]
 fn editor_rejects_checkbox_only_project_task_ids_over_the_id_token() {
-    for raw in [
-        "Finish it @cash^x@\n- [x] ^foo",
-        "Finish it @cash^x@\n- [ ] ^foo",
+    // A checkbox before a lone move token refuses the move, not the
+    // old empty-body error: the line is move-shaped first.
+    for (raw, status) in [
+        ("Finish it @cash^x@\n- [x] ^foo", 'x'),
+        ("Finish it @cash^x@\n- [ ] ^foo", ' '),
     ] {
         let parse = editor(raw);
-        assert_eq!(codes(&parse), vec!["invalid_project_task_id"], "{raw}");
+        assert_eq!(codes(&parse), vec!["move_bullet_checkbox"], "{raw}");
+        assert_eq!(
+            parse.diagnostics[0].message,
+            move_bullet_checkbox_error(status),
+            "{raw}"
+        );
         let needle = raw.rsplit(' ').next().expect("id token");
         let start = raw.rfind(needle).expect("needle");
         assert_eq!(

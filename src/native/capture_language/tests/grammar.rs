@@ -7,6 +7,7 @@ use super::super::editor_classify::*;
 use super::super::editor_model::*;
 use super::super::markers::*;
 use super::super::model::*;
+use super::super::move_bullet::move_bullet_checkbox_error;
 use super::super::project_tasks::*;
 use super::super::tokens::*;
 use super::*;
@@ -2089,9 +2090,14 @@ fn execution_rejects_project_task_id_rule_violations_verbatim() {
         .expect_err("reserved on nested");
     assert_eq!(error, reserved_project_task_id_error("PRJ"));
 
-    // An empty remaining body names no task.
-    let error = execute("Finish it @cash^x@\n- :foo").expect_err("empty body");
-    assert_eq!(error, empty_project_task_body_error(2));
+    // A lone `:foo` bullet is a move, not an empty task: the body
+    // stays empty and the move is recorded for planning.
+    let parsed = execute("Finish it @cash^x@\n- :foo").expect("move bullet");
+    assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec![""]);
+    assert_eq!(parsed.sub_bullets[0].task_id, None);
+    let move_bullet = parsed.sub_bullets[0].move_task.as_ref().expect("move");
+    assert_eq!(move_bullet.sigil, ':');
+    assert_eq!(move_bullet.block_id.as_deref(), Some("foo"));
 
     // A `:` task takes no authored checkbox.
     let error =
@@ -2227,13 +2233,15 @@ fn execution_keeps_equals_wording_off_caret_tokens_without_plus() {
 
 #[test]
 fn execution_rejects_checkbox_only_project_task_ids() {
-    for raw in [
-        "Finish it @cash^x@\n- [x] ^foo",
-        "Finish it @cash^x@\n- [ ] ^foo",
-        "Finish it @cash^x@\n- [x] :foo",
+    // A checkbox before a lone move token refuses the move, not the
+    // old empty-body error: the line is move-shaped first.
+    for (raw, status) in [
+        ("Finish it @cash^x@\n- [x] ^foo", 'x'),
+        ("Finish it @cash^x@\n- [ ] ^foo", ' '),
+        ("Finish it @cash^x@\n- [x] :foo", 'x'),
     ] {
-        let error = execute(raw).expect_err("empty body");
-        assert_eq!(error, empty_project_task_body_error(2), "{raw}");
+        let error = execute(raw).expect_err("checkbox move");
+        assert_eq!(error, move_bullet_checkbox_error(status), "{raw}");
     }
 }
 

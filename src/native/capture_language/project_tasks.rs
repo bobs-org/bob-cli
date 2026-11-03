@@ -378,19 +378,73 @@ pub(crate) enum ChildTaskOutcome {
     Error { code: &'static str, message: String },
 }
 
+/// The outcome of registering a complete move bullet's ID against the
+/// item's shared task-ID namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MoveIdOutcome {
+    /// The ID is new to the item.
+    Accept,
+    /// The same ID already moves earlier in this item.
+    Duplicate { first_line: usize },
+    /// The same ID already names an authored new task.
+    Collision { authored_line: usize },
+}
+
 /// Stateful per-item task-ID pass shared by the execution and editor
 /// parsers. Feed the parent body, then each child in source order; both
 /// paths implement the same evaluation order through this one type so
-/// `bob capture` and `capture-parse` can never disagree.
+/// `bob capture` and `capture-parse` can never disagree. Move-bullet IDs
+/// share the namespace: registering a move reports the move-specific
+/// duplicate and collision outcomes, and callers check authored IDs
+/// against `move_line_for` after an accept.
 #[derive(Debug, Default)]
 pub(crate) struct ProjectTaskPass {
     seen: Vec<(String, usize)>,
+    seen_moves: Vec<(String, usize)>,
     pub(crate) has_link: bool,
 }
 
 impl ProjectTaskPass {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Register a complete move bullet's ID. An ID already used by an
+    /// authored new task reports the collision (rename the new task); an
+    /// ID already moved reports the duplicate. A `:` move counts as a
+    /// link for the unused-`#pomodoro` rule.
+    pub(crate) fn register_move(
+        &mut self,
+        sigil: char,
+        id: &str,
+        line_number: usize,
+    ) -> MoveIdOutcome {
+        if let Some((_, first)) =
+            self.seen.iter().find(|(seen_id, _)| seen_id == id)
+        {
+            return MoveIdOutcome::Collision {
+                authored_line: *first,
+            };
+        }
+        if let Some((_, first)) =
+            self.seen_moves.iter().find(|(seen_id, _)| seen_id == id)
+        {
+            return MoveIdOutcome::Duplicate { first_line: *first };
+        }
+        self.seen_moves.push((id.to_string(), line_number));
+        if sigil == ':' {
+            self.has_link = true;
+        }
+        MoveIdOutcome::Accept
+    }
+
+    /// The line number of an already-moved ID, when a later authored
+    /// new-task ID must refuse as a move collision.
+    pub(crate) fn move_line_for(&self, id: &str) -> Option<usize> {
+        self.seen_moves
+            .iter()
+            .find(|(seen_id, _)| seen_id == id)
+            .map(|(_, line)| *line)
     }
 
     /// Step 2 of the evaluation order: the parent line. A well-formed or

@@ -98,6 +98,20 @@ pub(super) fn plan_project_note_item(
             "project-note capture invariant failed: route is missing",
         )
     })?;
+    // Move bullets (`- ^<id>` / `- :<id>`) parse already, but execution
+    // lands in a later phase. Refuse them here so no draft captures
+    // half a move; the execution phase deletes this guard and its test.
+    // (Lone `- ^` / `- :` moves never reach planning: the parsers refuse
+    // them as `move_bullet_unfinished` first.)
+    if parsed
+        .sub_bullets
+        .iter()
+        .any(|sub_bullet| sub_bullet.move_task.is_some())
+    {
+        return Err(CaptureError::usage(
+            "moving tasks into a new project note is not available in this build yet",
+        ));
+    }
     reject_project_note_conflicts(&parsed, request)?;
 
     let created = date_string(today);
@@ -1092,6 +1106,7 @@ mod tests {
             body: body.to_string(),
             depth,
             task_id: None,
+            move_task: None,
             drawer: None,
         }
     }
@@ -1109,6 +1124,7 @@ mod tests {
                 block_id: id.to_string(),
                 link,
             }),
+            move_task: None,
             drawer: None,
         }
     }

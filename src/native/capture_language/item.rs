@@ -9,6 +9,8 @@ use super::editor_parse::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
+use super::move_bullet::MoveBulletHit;
+use super::move_bullet::MoveBulletInvalid;
 use super::pomodoro_literal::{
     canonicalize_exact_name, decode_close_hash_name, lex_exact_name_after_hash,
     opens_exact_name,
@@ -439,6 +441,9 @@ pub(super) fn parse_capture_item<'a>(
                 ));
             }
             if let Some(code) = super::drawer_bullet::code_for_message(&error) {
+                return Err(CaptureItemParseError::coded(code, error));
+            }
+            if let Some(code) = super::move_bullet::code_for_message(&error) {
                 return Err(CaptureItemParseError::coded(code, error));
             }
             // An unfinished ` :` / ` ^` names no ID: like the list
@@ -1012,6 +1017,7 @@ fn parse_list_bullet_item<'a>(
             body,
             depth,
             task_id: None,
+            move_task: None,
             drawer: None,
         });
     }
@@ -1438,6 +1444,95 @@ fn type_marker_not_applicable_error(name: &str, kind: &CaptureKind) -> String {
     )
 }
 
+/// Interpret one move-bullet lexer hit in the project-note post-pass, in
+/// source order. Returns the recorded move on success and the refusal
+/// message otherwise. The caller clears the bullet body and records the
+/// move.
+#[allow(clippy::too_many_arguments)]
+fn interpret_execution_move(
+    hit: MoveBulletHit,
+    pass: &mut ProjectTaskPass,
+    sub_bullets: &[AuthoredSubBullet],
+    index: usize,
+    line_number: usize,
+    route: &str,
+    new_id: &str,
+) -> Result<MoveBullet, String> {
+    let invalid = |kind: &MoveBulletInvalid| -> String {
+        match kind {
+            MoveBulletInvalid::Text { sigil, id } => {
+                super::move_bullet::move_bullet_text_error(*sigil, id, route)
+            }
+            MoveBulletInvalid::Marker { token } => {
+                super::move_bullet::move_bullet_marker_error(token)
+            }
+            MoveBulletInvalid::Checkbox { status } => {
+                super::move_bullet::move_bullet_checkbox_error(*status)
+            }
+            MoveBulletInvalid::CrossNote { sigil, id } => {
+                super::move_bullet::move_bullet_cross_note_error(
+                    *sigil, id, route,
+                )
+            }
+            MoveBulletInvalid::Reserved { sigil, id } => {
+                super::move_bullet::move_bullet_reserved_error(
+                    *sigil, id, route,
+                )
+            }
+            MoveBulletInvalid::BadId { raw } => {
+                invalid_project_task_id_charset_error(raw)
+            }
+        }
+    };
+    match hit {
+        MoveBulletHit::Invalid { kind, .. } => Err(invalid(&kind)),
+        MoveBulletHit::Unfinished { sigil, .. } => Err(
+            super::move_bullet::move_bullet_unfinished_error(sigil, route),
+        ),
+        MoveBulletHit::Complete {
+            sigil,
+            id,
+            sigil_span,
+            id_span,
+            ..
+        } => {
+            if sub_bullets
+                .get(index + 1)
+                .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+            {
+                let basename =
+                    crate::native::capture_project_note::project_note_basename(
+                        route, new_id,
+                    );
+                let stem = basename.strip_suffix(".md").unwrap_or(&basename);
+                return Err(super::move_bullet::move_bullet_nested_error(
+                    stem, &id,
+                ));
+            }
+            match pass.register_move(sigil, &id, line_number) {
+                MoveIdOutcome::Accept => Ok(MoveBullet {
+                    sigil,
+                    block_id: Some(id),
+                    range: (sigil_span.0, id_span.1),
+                }),
+                MoveIdOutcome::Duplicate { first_line } => {
+                    Err(super::move_bullet::move_bullet_duplicate_error(
+                        sigil, &id, first_line,
+                    ))
+                }
+                MoveIdOutcome::Collision { authored_line } => {
+                    Err(super::move_bullet::move_bullet_id_collision_error(
+                        &id,
+                        route,
+                        line_number,
+                        authored_line,
+                    ))
+                }
+            }
+        }
+    }
+}
+
 fn parse_capture_item_masked<'a>(
     item: &CaptureItem<'a>,
     forced_route: Option<&str>,
@@ -1730,6 +1825,7 @@ fn parse_capture_item_masked<'a>(
     let mut sub_bullets = Vec::new();
     let mut sub_bullet_lines = Vec::new();
     let mut sub_bullet_stripped = Vec::new();
+    let mut sub_bullet_moves: Vec<Option<MoveBulletHit>> = Vec::new();
     let mut has_first_level_owner = false;
     for line in child_lines {
         let line_number = line.line_number;
@@ -1770,6 +1866,19 @@ fn parse_capture_item_masked<'a>(
             outcome.declarations,
             line_number,
         ));
+        // Move bullets claim the line from its raw shape before the
+        // trailing-ID rule runs; the project-note post-pass interprets
+        // the hit and the line never reaches the new-task path.
+        let move_hit = (parent_takes_ids
+            && authored.depth == AuthoredDepth::First)
+            .then(|| {
+                super::move_bullet::scan_move_bullet(
+                    authored.body,
+                    authored.body_start,
+                    item.source,
+                )
+            })
+            .flatten();
         let drawer_hit = (authored.depth == AuthoredDepth::First)
             .then(|| super::drawer_bullet::scan_leading(authored.body, 0))
             .flatten();
@@ -1840,10 +1949,12 @@ fn parse_capture_item_masked<'a>(
             body,
             depth: authored.depth,
             task_id: None,
+            move_task: None,
             drawer,
         });
         sub_bullet_lines.push(line_number);
         sub_bullet_stripped.push(child_stripped);
+        sub_bullet_moves.push(move_hit);
         if authored.depth == AuthoredDepth::First {
             has_first_level_owner = true;
         }
@@ -2154,39 +2265,84 @@ fn parse_capture_item_masked<'a>(
     // A project-note `#pomodoro` name picks the Pomodoro that ` :<id>`
     // Task Links go under. The trailing-ID post-pass below strips accepted
     // IDs from bodies and records them on the sub-bullets; a name with no
-    // ` :` task stays unused.
+    // ` :` task stays unused. Move bullets (`- ^<id>` / `- :<id>`) are
+    // interpreted first from their lexer hits, in the same source order, so
+    // a claimed line never reaches the new-task path.
     let mut has_link_task = false;
     if matches!(kind, CaptureKind::ProjectNote { .. }) {
         let mut pass = ProjectTaskPass::new();
         if let Some(message) = pass.check_parent(&parent_outcome.body) {
             return Err(message);
         }
+        let route_name = route.as_deref();
+        let new_id = match &kind {
+            CaptureKind::ProjectNote { block_id, .. } => {
+                Some(block_id.as_str())
+            }
+            _ => None,
+        };
         let mut owner_body: Option<String> = None;
-        for (index, child) in sub_bullets.iter_mut().enumerate() {
+        for index in 0..sub_bullets.len() {
             let line_number = sub_bullet_lines[index];
-            let stripped = sub_bullet_stripped.get(index).cloned().flatten();
-            if child.depth == AuthoredDepth::First {
-                let (_, body) = split_leading_checkbox(child.body.trim_start());
+            if sub_bullets[index].depth == AuthoredDepth::First {
+                let (_, body) = split_leading_checkbox(
+                    sub_bullets[index].body.trim_start(),
+                );
                 owner_body = Some(body.trim().to_string());
             }
+            if route_name.is_some()
+                && let Some(hit) = sub_bullet_moves[index].clone()
+            {
+                let route_name =
+                    route_name.expect("gated on route presence above");
+                match interpret_execution_move(
+                    hit,
+                    &mut pass,
+                    &sub_bullets,
+                    index,
+                    line_number,
+                    route_name,
+                    new_id.unwrap_or_default(),
+                ) {
+                    Ok(move_bullet) => {
+                        sub_bullets[index].body.clear();
+                        sub_bullets[index].move_task = Some(move_bullet);
+                    }
+                    Err(message) => return Err(message),
+                }
+                continue;
+            }
+            let stripped = sub_bullet_stripped.get(index).cloned().flatten();
             match pass.check_child(
                 stripped,
-                &child.body,
-                child.depth,
+                &sub_bullets[index].body,
+                sub_bullets[index].depth,
                 line_number,
             ) {
                 ChildTaskOutcome::Ignore => {}
                 ChildTaskOutcome::Unfinished { sigil } => {
                     return Err(unfinished_project_task_id_error(
                         sigil,
-                        owner_body.as_deref().unwrap_or(&child.body),
+                        owner_body
+                            .as_deref()
+                            .unwrap_or(&sub_bullets[index].body),
                     ));
                 }
                 ChildTaskOutcome::Error { message, .. } => {
                     return Err(message);
                 }
                 ChildTaskOutcome::Accept { sigil, id } => {
-                    child.task_id = Some(ProjectTaskId {
+                    if let Some(move_line) = pass.move_line_for(&id) {
+                        return Err(
+                            super::move_bullet::move_bullet_id_collision_error(
+                                &id,
+                                route_name.unwrap_or_default(),
+                                move_line,
+                                line_number,
+                            ),
+                        );
+                    }
+                    sub_bullets[index].task_id = Some(ProjectTaskId {
                         block_id: id,
                         link: sigil == ':',
                     });

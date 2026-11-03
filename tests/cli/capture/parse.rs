@@ -1641,3 +1641,99 @@ fn capture_parse_human_reports_start_suffix() {
     assert_success(&plain);
     assert!(!stdout(&plain).contains("start"), "{}", stdout(&plain));
 }
+
+#[test]
+fn capture_parse_json_reports_move_bullets() {
+    // MC1 parse-side: a lone `- ^` in a sealed project-note item needs
+    // `project_task_move` (not `block_id`), with marker and placeholder
+    // spans and a null-ID move entry.
+    let vault_temp = TempDir::new("bob-cli-capture-parse-moves");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish @cash^x@\n- ^")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse unfinished move");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["grammar"], 7);
+    assert_eq!(json["mode"], "incomplete");
+    assert_eq!(json["needs"], serde_json::json!(["project_task_move"]));
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 7, "end": 12, "kind": "task_block_id_route", "project_note": "create" },
+            { "start": 12, "end": 13, "kind": "project_note_separator", "project_note": "create" },
+            { "start": 13, "end": 14, "kind": "task_block_id", "project_note": "create" },
+            { "start": 14, "end": 15, "kind": "project_note_marker", "project_note": "create" },
+            { "start": 18, "end": 19, "kind": "project_task_move_marker" },
+            { "start": 18, "end": 19, "kind": "interactive_placeholder" },
+        ])
+    );
+    assert_eq!(
+        json["sub_bullet_moves"],
+        serde_json::json!([
+            { "sigil": "^", "block_id": null, "range": [18, 19] },
+        ])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty());
+
+    // MC2 spans: a partial `- ^dr` keeps the marker span over `^` and the
+    // block span over the typed prefix.
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish @cash^x@\n- ^dr")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse partial move");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["mode"], "project_note");
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 7, "end": 12, "kind": "task_block_id_route", "project_note": "create" },
+            { "start": 12, "end": 13, "kind": "project_note_separator", "project_note": "create" },
+            { "start": 13, "end": 14, "kind": "task_block_id", "project_note": "create" },
+            { "start": 14, "end": 15, "kind": "project_note_marker", "project_note": "create" },
+            { "start": 18, "end": 19, "kind": "project_task_move_marker" },
+            { "start": 19, "end": 21, "kind": "project_task_move_block_id" },
+        ])
+    );
+    assert_eq!(
+        json["sub_bullet_moves"],
+        serde_json::json!([
+            { "sigil": "^", "block_id": "dr", "range": [18, 21] },
+        ])
+    );
+    assert_eq!(json["sub_bullets"], serde_json::json!([""]));
+
+    // MV7 lexical: a repeated move reports `move_bullet_duplicate`.
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish @cash^x@\n- ^a\n- ^a")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse duplicate move");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["diagnostics"][0]["code"], "move_bullet_duplicate");
+    assert_eq!(
+        json["diagnostics"][0]["message"],
+        serde_json::json!("`^a` is already moved on line 2")
+    );
+}
