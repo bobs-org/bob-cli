@@ -30,7 +30,7 @@ Rendered line (canonical Markdown has no callout markers):
 | 3 | `Review the intake queue` | Description. Wikilinks and other tags may follow. |
 | 4 | `[fresh:: 2026-10-13]` | Last human confirmation date. Absence means never confirmed (NEW). |
 | 5 | `[refresh:: 7]` | Per-task review interval in days. |
-| 6 | `[keeps:: 2]` | Keep streak on the current rung (WIP, Next, or Ready). Absence means 0. |
+| 6 | `[keeps:: 2]` | Keep streak on the current rung (WIP, Next, Ready, or P-level). Absence means 0. |
 | 7 | `[unblocked:: 2026-10-12]` | Date of an automatic Blocked → Ready recovery. |
 | 8 | `[scheduled:: 2026-10-20]` | Tasks scheduled date. Future dates keep the task Blocked. |
 | 9 | `[created:: 2026-10-01]` | Capture date. Written by capture; not a freshness stamp. |
@@ -157,10 +157,20 @@ Relations never block, count as Pomodoro Task Links, or change status.
 Other machine-owned direct children (closed registry): `❌ **CANCEL LOG**`,
 `🧱 **BLOCKS:**`, `🧩 **Sub-projects:**` on `^prj`,
 `🪢 **LINKS:**`, `🪢 **LINKED FROM:**`, `🗓️ **SCHEDULE LOG**`,
-`🛠️ **WORK LOG**`, `🥀 **ROTTEN LOG**` with newest-first counted entries
-`*YYYY-MM-DD* — <reason> · kept N×` or Next lane entries
-`*YYYY-MM-DD* — <reason> · kept in Next`. Writers emit `🥀 **ROTTEN LOG**`
-(U+1F940, no VS16); parsers also accept an optional U+FE0F, the emoji-less
+`🛠️ **WORK LOG**`, `🥀 **ROTTEN LOG**` with newest-first rung events.
+A counted keep entry reads `*YYYY-MM-DD* — <reason> · kept N× in <Rung>`
+(lanes and Ready: `WIP`, `Next`, `Ready`) or
+`*YYYY-MM-DD* — <reason> · kept N× at <Level>` (P-levels), with N the
+streak after that keep; a blank reason logs `🤷 no reason given`. A Stay
+reads `*YYYY-MM-DD* — <reason> · stayed in <Rung> after N keeps`
+(`at <Level>` for P-levels, `after 1 keep` singular). A lane or priority
+step reads `*YYYY-MM-DD* — 🍂 <From> → <To> · after N keeps`, a P4
+re-roll reads `*YYYY-MM-DD* — 🍂 rolled again at <Level> · after N keeps`,
+and a drop reads `*YYYY-MM-DD* — 🍂 <Rung> → dropped · after N keeps`.
+Legacy `<reason> · kept N×` reads as Ready; legacy `<reason> · kept in
+Next` reads as an uncounted Next keep. Writers emit `🥀 **ROTTEN LOG**`
+(U+1F940, no VS16) and `🍂` (U+1F342, no VS16) for step entries; parsers
+also accept an optional U+FE0F on each emoji, the emoji-less
 `**ROTTEN LOG**`, and the legacy `**Rotten log**`, each with an optional colon
 and only trailing spaces or tabs. None of these is a Pomodoro Task Link.
 

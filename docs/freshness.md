@@ -155,22 +155,24 @@ follow the existing writer rules. No metadata leaks into clean task
 descriptions or capture previews.
 
 **Counting, clearing, and storage.** Exact eligibility authorizes counting
-only for an exact due-Ready ROTTEN/TICKLER row: the pre-write queue holds
+only for an exact due row on its rung's tier: the pre-write queue holds
 exactly one row with `entry.path === path`, `entry.line === editorLine + 1`,
-`entry.originalMarkdown === rawLine`, `lane === 'ready'`, and
-`tier in {'rotten','tickler'}`. The sole increment helper is
-`api.freshness.keepLine(line, dateText, { counted })` with its valid-prior-
-`fresh < today` guard; Rust reads/clears/reports with no increment path
-(the seed preserve-mode exception aside). A v5 provider with a missing or
-throwing `keepLine` fails without writing, while pre-v5 falls back to the
-uncounted old stamper. The event table:
+`entry.originalMarkdown === rawLine`, and PENDING for a pending lane, NEXT
+for a next lane, or ROTTEN/TICKLER for a ready lane. The sole increment
+helper is `api.freshness.keepLine(line, dateText, { counted })` with its
+valid-prior-`fresh < today` guard; Rust reads/clears/reports with no
+increment path (the seed preserve-mode exception aside). A v5 provider
+with a missing or throwing `keepLine` fails without writing, while pre-v5
+falls back to the uncounted old stamper. The event table:
 
-- Alt+F / Ctrl+Alt+F on an exact due Ready target in `rotten`/`tickler`
-  stamps and increments once in the same write, unless an active decision
-  is required.
-- NEW, FRESH/early, Pending, Next, Blocked, Today-linked, PROJECTS rows, other excluded targets, and
-  unresolved cache matches stamp through `keepLine` uncounted and
-  preserve the streak.
+- Alt+F / Ctrl+Alt+F on an exact due target on its rung's tier stamps and
+  increments once in the same write, unless an active decision is required.
+  The counted rung is WIP for `[/]`, Next for `[*]`, the priority level
+  label for a prioritized `[ ]`, else Ready.
+- NEW, FRESH/early, Today-linked, PROJECTS rows, other excluded targets,
+  and unresolved cache matches stamp through `keepLine` uncounted and
+  preserve the streak. Early and Today-linked WIP/Next keeps stamp quietly
+  with an "early · not counted" notice: no prompt and no Rotten Log entry.
 - A repeated same-day keep preserves the streak and is byte-identical.
 - Every other supported human stamp clears the streak, even same-day.
 - Close/cancel preserves the streak on the closed line.
@@ -189,9 +191,9 @@ uncounted old stamper. The event table:
   streak in the same write so a Ready count cannot leak into a
   higher rung. `Unblock` to Ready preserves it.
 
-Lane keep counting (due PENDING and NEXT) lands with the later
-nav-keeps phase. Until then, due WIP and Next rows can `decide` at
-their rung limit while counting still authorizes only due Ready.
+Due WIP and Next rows can `decide` at their rung limit; until the
+rung-aware card ships, lane rows with `decide: true` count and log like
+any keep, with no card and no batch skip.
 
 What Rust guarantees today:
 
@@ -213,29 +215,31 @@ not evidence of keeps. Git sync may lose an increment during conflict
 recovery; this scalar is not an exact global event counter. Cache
 uncertainty under-counts. Hand editing remains unobserved.
 
-**Rotten Log and the decay card.** The ladder's rung-aware card,
-always-logged Rotten Log grammar, and due WIP/Next counting land in
-later phases. Until then the shipped Ready card and optional Next
-reason prompt below still apply.
+**Rotten Log and the decay card.** The ladder's rung-aware card lands in a
+later phase; the shipped Ready card below still applies. Due WIP/Next
+counting and the always-logged Rotten Log grammar ship here.
 
-**Rotten Log.** Every counted keep — Alt+F/Ctrl+Alt+F on an exact due
-Ready ROTTEN or scheduled TICKLER row, or the decay card's Keep — first
-asks "Why keep it as written?" and writes one dated entry under a
+**Rotten Log.** Every counted keep — Alt+F/Ctrl+Alt+F on an exact due row
+on its rung's tier, or the decay card's Keep — first asks "Why keep it in
+<rung>?" ("at <level>?" for P-levels) with the rung allowance shown
+(`keep 1 of 2 in Next`), and writes one rung-qualified entry under a
 `🥀 **ROTTEN LOG**` direct child in the same write as the stamp. A blank
-Enter logs `🤷 no reason given`; Esc writes nothing. Counted entries read
-`*YYYY-MM-DD* — <reason> · kept N×`, with N the streak after that keep,
-newest first.
+Enter logs `🤷 no reason given`; Esc writes nothing. Counted keep entries
+read `*YYYY-MM-DD* — <reason> · kept N× in <Rung>` (lanes and Ready) or
+`*YYYY-MM-DD* — <reason> · kept N× at <Level>` (P-levels), with N the
+streak after that keep, newest first. Stay, step, re-roll, and drop
+entries follow the same grammar (see the vault format); the rung-aware
+card writes those, and this phase only writes keep entries.
 
-Alt+F and Ctrl+Alt+F also ask every Next (`[*]`) target, including early
-tasks outside the due NEXT tier, "Why keep it in Next?" A typed reason writes
-`*YYYY-MM-DD* — <reason> · kept in Next`; a blank Enter stamps without a
-Rotten Log entry. This never changes `[keeps::]`. Multiple markers or an
-unreadable history allow a blank keep with no entry; a typed reason is refused.
-Pending asks for an optional Work Log summary and never writes the Rotten Log.
-The entry count ("N keeps logged") is display-only history: unlike
-`[keeps:: N]` it never resets, and nothing reads it to change decay, buckets,
-tiers, lanes, Today, schedule, priority, or freshness. Grammar lives in
-[the vault format](reference/vault-format.md). See
+A counted keep whose entry cannot be written — duplicate `🥀 ROTTEN LOG`
+markers or an unreadable history — writes nothing at all: repair the
+markers first. Freshness gestures never ask for or write a Work Log
+summary; the Work Log keeps its real writers (unlink, release, close,
+Task Link pause). Per-rung tallies (`🥀 WIP 2 · Next 1 · Ready 3`,
+derived at read time, legacy entries included) are display-only history:
+unlike `[keeps:: N]` they never reset, and nothing reads them to change
+decay, buckets, tiers, lanes, Today, schedule, priority, or freshness.
+Grammar lives in [the vault format](reference/vault-format.md). See
 [Rotten Keeps Are Logged](develop/decisions.md#rotten-keeps-are-logged) and
 [Next keeps ask for an optional Rotten Log reason](develop/decisions.md#next-keeps-ask-for-an-optional-rotten-log-reason).
 
@@ -644,16 +648,19 @@ place, and when ledger-tools is absent or old the gesture simply
 doesn't stamp. Clicking a freshness mark only reveals the raw field
 for editing and never stamps.
 
-Before Alt+F or Ctrl+Alt+F stamps a validated Pending (`[/]`) target,
-it asks once for an optional Work Log summary. In a counted or Task Link
-batch, only the Pending targets receive the shared summary; every other
-accepted target still refreshes. Enter on an empty summary still keeps
-the task and writes no Work Log entry. Escape cancels the refresh, so the
-task stays due and Ctrl+Alt+F does not advance.
+Before Alt+F or Ctrl+Alt+F stamps a validated due WIP (`[/]`) or Next
+(`[*]`) target, it asks once "Why keep it in <rung>?" with the rung
+allowance shown, and always writes a rung-qualified Rotten Log entry
+(blank logs `🤷 no reason given`). Early and Today-linked lane targets
+stamp quietly with an "early · not counted" notice. In a counted or Task
+Link batch, one shared reason applies to every counted target, each
+logged with its own rung tail. Escape cancels the refresh, so the task
+stays due and Ctrl+Alt+F does not advance. Freshness gestures never ask
+for or write a Work Log summary.
 
 Only bob-navigation-hotkeys writes the Rotten Log (single keeps,
-counted batches, Task Link sessions, Next keep reasons, and the decay
-card's Keep stage). `bob capture`, Rust, hooks, and all other automation never
+counted batches, Task Link sessions, and the decay card's Keep stage).
+`bob capture`, Rust, hooks, and all other automation never
 write it: capture's stamps stay generic and clear `keeps` through the
 same default as any other generic stamp.
 
@@ -679,8 +686,8 @@ same default as any other generic stamp.
    Ctrl+Alt+F on a landed RECURRING row behaves like Alt+F: it writes nothing,
    shows the recurring-tier notice, and stays on the row.
    In the lanes, ask "still in this lane?": keep with Ctrl+Alt+F
-   (Pending asks for an optional Work Log summary; Next asks why it stays
-   in Next and logs only a nonblank reason; Escape leaves the task due), do it today with
+   (a due lane keep asks why it stays and always logs a rung-qualified
+   entry; an early one stamps quietly; Escape leaves the task due), do it today with
    Ctrl+Shift+Enter (picks a Pomodoro), release with Alt+N. Every answer on a landed row
    moves on to the next remaining review item in the same keystroke —
    including a resolving Task Card commit. Ctrl+Shift+M never advances: it moves the
@@ -696,8 +703,9 @@ same default as any other generic stamp.
    no priority takes P1. An immediate
    roll or decay uses the existing Ctrl+Enter path and advances the walk;
    when the recommendation is cancel, the card appears and a second Alt+P
-   confirms it. Alt+F on Pending offers the optional Work Log summary; Next
-   asks why it stays in Next and writes only a typed reason to the Rotten Log.
+   confirms it. Alt+F on a due lane row asks why it stays and always
+   writes a rung-qualified entry to the Rotten Log; an early lane row
+   stamps quietly.
    Ctrl+Shift+P `1`–`4` remains available to choose a specific
    priority. Clear CROWDED to 0 (split,
    sequence, defer, drop via `bob ready`) and choose a highlight (≤3
@@ -705,10 +713,10 @@ same default as any other generic stamp.
    review got.
 4. ROTTEN is optional upkeep until 0, the budget, or you stop. The
    commitments → ROTTEN boundary notice includes `]S closes the review`
-   when POST remains. A counted keep on a due Ready ROTTEN or
-   scheduled TICKLER row asks "Why keep it as written?" and writes one
-   dated Rotten Log entry with the stamp; a blank Enter logs `🤷 no
-   reason given`, while Esc writes nothing.
+   when POST remains. A counted keep on a due row on its rung's tier asks
+   "Why keep it in <rung>?" and writes one rung-qualified Rotten Log
+   entry with the stamp; a blank Enter logs `🤷 no reason given`, while
+   Esc writes nothing.
 5. From ROTTEN, `]S` jumps to POST's first row when POST remains. Complete
    Morning review last with Ctrl+Enter or Alt+F. On a multi-row POST
    checklist, Ctrl+Enter and Ctrl+Alt+F move to the next row, Alt+F stays
@@ -916,9 +924,9 @@ an invalid `freshness:` block or a non-Dataview task format.
 | `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; grouped Review / Work / Browse navigation with NEW/PENDING/NEXT/READY/CROWDED/BLOCKED/ROTTEN/TODAY plus PROJECTS/REFERENCES chips; gated READY with whole-lane tooltip; CROWDED via `noteReady` v1 opening crowded.md; PROJECTS/REFERENCES via `dashboardCollections` v1 opening dash_projects/dash_references with Base-contract guards) |
 | `crowded.md` + `bob-ready-notes` + heading chips | per-note Ready cap rollout (landed: Crowded Notes page, ranked-bar code block, live `ready n/cap` chips on each note's `## Tasks` heading) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
-| keep-reason prompt (single keeps, counted batches, Task Link sessions, Next lane keeps) | rotten-log (landed: nav 2.54.0 single keeps, 2.56.0 batches; Next typed reasons in nav 2.64.0; a Next entry is optional and does not change `[keeps::]`) |
+| keep-reason prompt (single keeps, counted batches, Task Link sessions, every rung) | rotten-log (landed: nav 2.54.0 single keeps, 2.56.0 batches; nav-keeps counts due WIP/Next with rung-qualified always-logged entries, early lane keeps stamp quietly) |
 | decay-card Keep stage | rotten-log (landed: nav 2.55.0; in-card reason stage, one transaction, Esc back to the choices) |
-| freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.65.0; `🥀 N keeps logged · last …` counts counted and `kept in Next` entries in source-note Live Preview + reading views only, never Tasks query rows; 1.81.0) |
+| freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.65.0; per-rung tallies `🥀 WIP 2 · Next 1 · last …` in source-note Live Preview + reading views only, never Tasks query rows) |
 | note snapshots (`bob` highlights/ref) | rotten-log (open tasks: one condensed `KEPT` row with the newest entry; include-closed snapshots: every entry) |
 | Mac idle agenda rotten chip | rotten-log (`🥀 Rotten log` header folding with the other logs, `🥀 N` chip after `⚒ N` / `🗓 N`) |
 
@@ -1432,9 +1440,9 @@ builder near the `Alt+F to decide` string (tests
   (`Kept N reviews in a row` alone without the card capability,
   `· decay off` with decay off or a `false` rung, `· Bob asks every
   review` for a zero threshold).
-- Rotten-log line (shipped ledger-tools 1.65.0, extended to count `kept in Next` entries in 1.81.0):
-  `🥀 3 keeps logged · last Oct 16 — waiting for the weekend…` after
-  the keeps line and before the action line (`🥀 1 keep logged · …`
+- Rotten-log line (shipped ledger-tools 1.65.0, per-rung tallies with nav-keeps):
+  `🥀 WIP 1 · Ready 2 · last Oct 16 — waiting for the weekend…` after
+  the keeps line and before the action line (`🥀 Ready 1 · …` for one rung)
   for one entry). The reason truncates to 48 characters with `…`;
   `🤷 no reason given` shows as is. It appears only where the task's
   child block is available from the same source document (Live
@@ -1637,6 +1645,11 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-11-02: schema 15 adds per-rung decay limits
   (`config.decay.limits`) and lets `decide` be true on due PENDING
   and NEXT rows. Reconcile lane raises strip `[keeps::]`.
+- 2026-11-02: nav-keeps counts due WIP/Next keeps with rung-qualified
+  always-logged Rotten Log entries (`kept N× in WIP / in Next / in Ready`,
+  `kept N× at <Level>`); early and Today-linked lane keeps stamp quietly;
+  freshness gestures never write the Work Log; lane `decide` rows count
+  and log until the rung-aware card ships.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
