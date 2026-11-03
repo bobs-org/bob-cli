@@ -496,6 +496,9 @@ pub(super) struct PomodoroStartSummary {
     /// Whether this session is off the work clock. Omitted when false.
     #[serde(skip_serializing_if = "is_false")]
     pub(super) off_clock: bool,
+    /// Shared inherited note when the via rule applies. Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) clock_note: Option<String>,
     /// The event run a MEET start followed or overrode, omitted when the
     /// session is not a MEET with open lineup Event Tasks.
     #[serde(skip_serializing_if = "Option::is_none")]

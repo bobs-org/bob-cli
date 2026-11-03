@@ -5,8 +5,9 @@ aliases:
   - off-clock ledger
 summary: "A timed row with [off:: Nm] records off-clock minutes; separate clock views keep those minutes out of Worked metrics."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-11-02
+  superseded_by: decisions:off-clock-follows-tag-then-note-default
 ---
 
 # Off-Clock Pomodoros Are Recorded And Counted Apart
@@ -53,3 +54,7 @@ Evidence: `plan:202611/off_clock_pomodoros.md`;
 `research:202611/off_clock_pomodoro_stats/off_clock_pomodoro_stats.md`;
 `docs/reference/vault-format.md`; `docs/stats.md`; and the pomodoro-homes and
 meet-event-run vectors.
+
+The counted-links clause that required the task's own line to carry a
+standalone `#offclock` tag is retired by
+[[decisions:off-clock-follows-tag-then-note-default]].

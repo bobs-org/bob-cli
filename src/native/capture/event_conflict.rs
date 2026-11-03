@@ -17,9 +17,11 @@
 use std::collections::HashSet;
 
 use super::*;
+use crate::native::capture_pomodoro_close::{clock_resolver, CloseVault};
 use crate::native::event_task::{
-    event_span_conflicts, events_in_note, events_in_progress_at, BufferPart,
-    EventBuffer, EventNoteRow, EventSpan, EventSpanConflict,
+    enrich_event_clocks, event_span_conflicts, events_in_note,
+    events_in_progress_at, BufferPart, EventBuffer, EventNoteRow, EventSpan,
+    EventSpanConflict,
 };
 
 /// How to spell the largest same-operator count that still ends at or
@@ -252,6 +254,20 @@ fn lineup_exclude_ids(contents: &str, entry_index: usize) -> HashSet<String> {
 /// `--N` is the exception: it keeps the session's start mid-meeting
 /// (`start < S < end`, which never warns), so it measures from the meeting
 /// start.
+fn events_for_clock<V: CloseVault + ?Sized>(
+    contents: &str,
+    date: NaiveDate,
+    vault: Option<&V>,
+    day_relative: Option<&Path>,
+) -> Vec<EventNoteRow> {
+    let mut events = events_in_note(contents, date);
+    if let (Some(vault), Some(day_relative)) = (vault, day_relative) {
+        let mut resolver = clock_resolver(vault);
+        enrich_event_clocks(day_relative, contents, &mut events, &mut resolver);
+    }
+    events
+}
+
 fn fit_target(
     kind: &FitKind,
     event: &EventNoteRow,
@@ -267,6 +283,7 @@ fn fit_target(
 /// Conflict for a non-MEET session whose new span newly conflicts with an
 /// open Event Task's occupied span. `None` when the session is MEET or
 /// nothing new conflicts.
+#[allow(dead_code)]
 pub(super) fn detect_event_conflict(
     contents: &str,
     date: NaiveDate,
@@ -277,10 +294,36 @@ pub(super) fn detect_event_conflict(
     old: Option<(u16, u16)>,
     fit: &FitKind,
 ) -> Option<EventConflictJson> {
+    detect_event_conflict_with(
+        contents,
+        date,
+        session_name,
+        entry_index,
+        new_start,
+        new_end,
+        old,
+        fit,
+        None::<&dyn CloseVault>,
+        None,
+    )
+}
+
+pub(super) fn detect_event_conflict_with<V: CloseVault + ?Sized>(
+    contents: &str,
+    date: NaiveDate,
+    session_name: Option<&str>,
+    entry_index: usize,
+    new_start: u16,
+    new_end: u16,
+    old: Option<(u16, u16)>,
+    fit: &FitKind,
+    vault: Option<&V>,
+    day_relative: Option<&Path>,
+) -> Option<EventConflictJson> {
     if is_meet_name(session_name) {
         return None;
     }
-    let events = events_in_note(contents, date);
+    let events = events_for_clock(contents, date, vault, day_relative);
     let exclude = lineup_exclude_ids(contents, entry_index);
     let crossed =
         event_span_conflicts(new_start, new_end, old, &events, &exclude);
@@ -307,6 +350,7 @@ pub(super) fn detect_event_conflict(
 /// A non-MEET start whose written start sits strictly inside an open
 /// Event Task's meeting span. `None` when the session is MEET or no
 /// open meeting contains `S`. Does not apply an "only new" rule.
+#[allow(dead_code)]
 pub(super) fn detect_event_in_progress(
     contents: &str,
     date: NaiveDate,
@@ -314,10 +358,30 @@ pub(super) fn detect_event_in_progress(
     entry_index: usize,
     start: u16,
 ) -> Option<EventInProgressJson> {
+    detect_event_in_progress_with(
+        contents,
+        date,
+        session_name,
+        entry_index,
+        start,
+        None::<&dyn CloseVault>,
+        None,
+    )
+}
+
+pub(super) fn detect_event_in_progress_with<V: CloseVault + ?Sized>(
+    contents: &str,
+    date: NaiveDate,
+    session_name: Option<&str>,
+    entry_index: usize,
+    start: u16,
+    vault: Option<&V>,
+    day_relative: Option<&Path>,
+) -> Option<EventInProgressJson> {
     if is_meet_name(session_name) {
         return None;
     }
-    let events = events_in_note(contents, date);
+    let events = events_for_clock(contents, date, vault, day_relative);
     let exclude = lineup_exclude_ids(contents, entry_index);
     let in_progress = events_in_progress_at(start, &events, &exclude);
     let first = in_progress.first().copied()?;
@@ -339,12 +403,33 @@ pub(super) fn detect_event_in_progress(
 /// final span. Restart and swap reuse the previous session's clock as
 /// the old span so already-crossed events are not re-warned. Mid-meeting
 /// starts attach `event_in_progress` without that "only new" filter.
+#[allow(dead_code)]
 pub(super) fn attach_start_event_conflict(
     summary: &mut PomodoroStartSummary,
     contents: &str,
     date: NaiveDate,
     spec: &PomodoroStartSpec,
     typed_name: Option<&str>,
+) {
+    attach_start_event_conflict_with(
+        summary,
+        contents,
+        date,
+        spec,
+        typed_name,
+        None::<&dyn CloseVault>,
+        None,
+    );
+}
+
+pub(super) fn attach_start_event_conflict_with<V: CloseVault + ?Sized>(
+    summary: &mut PomodoroStartSummary,
+    contents: &str,
+    date: NaiveDate,
+    spec: &PomodoroStartSpec,
+    typed_name: Option<&str>,
+    vault: Option<&V>,
+    day_relative: Option<&Path>,
 ) {
     let Some((new_start, new_end)) = clock_span(&summary.start, &summary.end)
     else {
@@ -359,7 +444,7 @@ pub(super) fn attach_start_event_conflict(
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_string);
-    summary.event_conflict = detect_event_conflict(
+    summary.event_conflict = detect_event_conflict_with(
         contents,
         date,
         summary.pomodoro_name.as_deref(),
@@ -371,13 +456,17 @@ pub(super) fn attach_start_event_conflict(
             spec: spec.clone(),
             name,
         },
+        vault,
+        day_relative,
     );
-    summary.event_in_progress = detect_event_in_progress(
+    summary.event_in_progress = detect_event_in_progress_with(
         contents,
         date,
         summary.pomodoro_name.as_deref(),
         summary.pomodoro_line.saturating_sub(1),
         new_start,
+        vault,
+        day_relative,
     );
 }
 

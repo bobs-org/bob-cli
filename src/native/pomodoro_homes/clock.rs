@@ -11,7 +11,6 @@ use crate::native::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[allow(dead_code)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ClockSource {
     OnTag,
@@ -26,6 +25,8 @@ pub(crate) struct ClockResolution {
     pub(crate) off_clock: bool,
     pub(crate) source: ClockSource,
     pub(crate) note: Option<String>,
+    /// True when `#on` and an off spelling share the line. `#on` still wins.
+    pub(crate) conflict: bool,
 }
 
 impl ClockResolution {
@@ -35,12 +36,14 @@ impl ClockResolution {
                 off_clock: false,
                 source: ClockSource::OnTag,
                 note: None,
+                conflict: matches!(tag, ClockTag::Conflict { .. }),
             })
         } else if tag.explicit_off() {
             Some(Self {
                 off_clock: true,
                 source: ClockSource::OffTag,
                 note: None,
+                conflict: false,
             })
         } else {
             None
@@ -52,17 +55,77 @@ impl ClockResolution {
             off_clock: false,
             source: ClockSource::Default,
             note: None,
+            conflict: false,
         }
     }
 
     pub(crate) fn tag_only(tag: &ClockTag) -> Self {
         Self::tagged(tag).unwrap_or_else(Self::default)
     }
+
+    /// Structured capture warning when this resolution decided a counted
+    /// link's clock.
+    pub(crate) fn capture_warning_code(&self) -> Option<&'static str> {
+        if self.conflict {
+            Some("clock_tag_conflict")
+        } else if self.source == ClockSource::InvalidNote {
+            Some("note_offclock_invalid")
+        } else {
+            None
+        }
+    }
+}
+
+/// Shared `clock_note` when every counted off-clock link inherited from the
+/// same area or project note. Otherwise none, so summaries keep `· off-clock`.
+pub(crate) fn via_clock_note<'a>(
+    off_clock: bool,
+    resolutions: impl IntoIterator<Item = &'a ClockResolution>,
+) -> Option<String> {
+    if !off_clock {
+        return None;
+    }
+    let mut shared: Option<&str> = None;
+    let mut any = false;
+    for resolution in resolutions {
+        any = true;
+        if resolution.source != ClockSource::Note {
+            return None;
+        }
+        let note = resolution.note.as_deref()?;
+        match shared {
+            None => shared = Some(note),
+            Some(existing) if existing == note => {}
+            _ => return None,
+        }
+    }
+    any.then_some(shared.map(str::to_string)).flatten()
+}
+
+/// Stem of a vault-relative clock note path (`love.md` → `love`).
+pub(crate) fn clock_note_stem(path: &str) -> Option<&str> {
+    Path::new(path).file_stem().and_then(|stem| stem.to_str())
+}
+
+/// ` · off-clock via love` when `clock_note` names one note; else ` · off-clock`.
+pub(crate) fn off_clock_via_label(
+    off_clock: bool,
+    clock_note: Option<&str>,
+) -> String {
+    if !off_clock {
+        return String::new();
+    }
+    match clock_note
+        .and_then(clock_note_stem)
+        .filter(|stem| !stem.is_empty())
+    {
+        Some(stem) => format!(" · off-clock via {stem}"),
+        None => " · off-clock".to_string(),
+    }
 }
 
 /// Resolve a task's effective clock from its explicit tag, then the nearest
 /// area/project note default on the shared PT13 root walk.
-#[allow(dead_code)]
 pub(crate) fn effective_clock<S: HomeSource>(
     resolver: &mut HomeResolver<S>,
     residence_path: &Path,
@@ -112,6 +175,7 @@ fn resolve_note_default<S: HomeSource>(
                     off_clock: true,
                     source: ClockSource::Note,
                     note: Some(path_string),
+                    conflict: false,
                 };
             }
             NoteOffClock::False => {
@@ -119,6 +183,7 @@ fn resolve_note_default<S: HomeSource>(
                     off_clock: false,
                     source: ClockSource::Note,
                     note: Some(path_string),
+                    conflict: false,
                 };
             }
             NoteOffClock::Invalid(raw) => {
@@ -127,6 +192,7 @@ fn resolve_note_default<S: HomeSource>(
                     off_clock: false,
                     source: ClockSource::InvalidNote,
                     note: Some(path_string),
+                    conflict: false,
                 };
             }
         }

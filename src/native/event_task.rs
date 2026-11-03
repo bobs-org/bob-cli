@@ -711,7 +711,6 @@ pub(crate) fn events_in_note(
 
 /// Resolve every Event Task row in a daily note against the same effective
 /// clock rule used for ordinary tasks. Context rows remain tag-only.
-#[allow(dead_code)]
 pub(crate) fn enrich_event_clocks<S: HomeSource>(
     daily_path: &Path,
     contents: &str,
@@ -991,10 +990,6 @@ pub(crate) fn cluster_by_off_clock<T>(
     clusters
 }
 
-pub(crate) fn line_has_off_clock_tag(line: &str) -> bool {
-    line_clock_tag(line).explicit_off()
-}
-
 fn mask_code_and_markdown_links(line: &str) -> String {
     let mut out = line.as_bytes().to_vec();
     let mut index = 0;
@@ -1263,34 +1258,6 @@ mod tests {
         assert!(!events[2].off_clock);
         assert_eq!(events[3].kind, EventKind::TimedContext);
         assert_eq!(events[3].title, "Toddler class");
-    }
-
-    #[test]
-    fn line_has_off_clock_tag_skips_code_spans_and_markdown_links() {
-        assert!(line_has_off_clock_tag(
-            "- [*] #task **1200-1300** Lunch #untracked [root:: love]"
-        ));
-        assert!(line_has_off_clock_tag(
-            "- [*] #task **1200-1300** Lunch #OFFCLOCK."
-        ));
-        assert!(line_has_off_clock_tag(
-            "- [*] #task **1200-1300** Lunch #Off-Clock)"
-        ));
-        assert!(!line_has_off_clock_tag(
-            "- [*] #task **1200-1300** `#untracked` in code"
-        ));
-        assert!(!line_has_off_clock_tag(
-            "- [*] #task **1200-1300** [see #untracked](https://example.com)"
-        ));
-        assert!(!line_has_off_clock_tag(
-            "- [*] #task **1200-1300** lunch#untracked glued"
-        ));
-        assert!(!line_has_off_clock_tag(
-            "- [*] #task **1200-1300** Lunch #offclock/nested"
-        ));
-        assert!(!line_has_off_clock_tag(
-            "- [*] #task **1200-1300** Lunch #off #on"
-        ));
     }
 
     #[test]

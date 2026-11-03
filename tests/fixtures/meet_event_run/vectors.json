@@ -229,6 +229,21 @@
       "expected_source": "calendar",
       "expected_warning": "pomodoro_event_run_later",
       "expected_off_clock": false
+    },
+    {
+      "id": "inherited-root-event-is-off-clock",
+      "now": "2026-11-01 10:55:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "abby.md": "---\ntype: [[area]]\nparent: [[love]]\n---\n"
+      },
+      "day": "## Events\n- [ ] #task **1100-1130** Pickup [root:: abby] ^pickup\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^pickup]]\n",
+      "expected_day": "## Events\n- [ ] #task **1100-1130** Pickup [root:: abby] ^pickup\n\n## Pomodoros\n- [ ] (**1100-1130** [off:: 30m]) — MEET\n  - [[#^pickup]]\n",
+      "expected_span": "1100-1130",
+      "expected_source": "calendar",
+      "expected_off_clock": true,
+      "expected_clock_note": "love.md"
     }
   ]
 }

@@ -37,7 +37,8 @@ pub(crate) use ledger::{
 };
 #[allow(unused_imports)]
 pub(crate) use linked_tasks::{
-    lookup_task, plan_pomodoro_close, plan_pomodoro_close_outcome, CloseVault,
+    clock_resolver, lookup_task, plan_pomodoro_close,
+    plan_pomodoro_close_outcome, CloseVault, CloseVaultHomeSource,
     PomodoroCloseOutcome, PomodoroClosePlan, PomodoroClosePlanError,
 };
 pub(crate) use links::{

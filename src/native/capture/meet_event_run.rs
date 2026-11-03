@@ -11,19 +11,22 @@
 //! start writes the run's span; a MEET with a non-empty run records `[off::]`
 //! exactly when that run is off-clock. Every other session stamps the clock
 //! from the counted-links rule: off the clock iff it keeps at least one Task
-//! Link and every one resolves to a `#offclock` task. The run is computed on
+//! Link and every one resolves off-clock (`#off`, a deprecated alias, or an
+//! inherited area/project `offclock: true`). The run is computed on
 //! the staged daily note, so drops (`~K`) and earlier items of the same draft
 //! are already applied.
 
 use std::collections::HashSet;
 
 use super::*;
-use crate::native::capture_pomodoro_close::CloseVault;
+use crate::native::capture_pomodoro_close::{clock_resolver, CloseVault};
 use crate::native::capture_pomodoro_start::CountedLinkFact;
 use crate::native::event_task::{
-    clock_verdict, event_task_by_id, ClockReason, ClockVerdict, EventSpan,
-    EventTask,
+    clock_verdict, enrich_event_clocks, event_task_by_id, events_in_note,
+    ClockReason, ClockVerdict, EventKind, EventSpan, EventTask,
 };
+use crate::native::pomodoro_homes::{via_clock_note, ClockResolution};
+use crate::native::task_status_hooks::canonical_daily_date;
 
 /// A run starting further than this from now adds a `pomodoro_event_run_later`
 /// warning: a default Pomodoro would fit before it.
@@ -63,6 +66,7 @@ pub(super) struct EventRun {
 ///
 /// `numbers` are the pre-drop lineup numbers of the surviving links in
 /// ledger order (a drop leaves gaps); `None` numbers the links 1..n.
+#[allow(dead_code)]
 pub(super) fn compute_event_run(
     day_relative: &Path,
     contents: &str,
@@ -70,17 +74,51 @@ pub(super) fn compute_event_run(
     numbers: Option<&[u32]>,
     now_min: i32,
 ) -> Option<EventRun> {
+    compute_event_run_with(
+        day_relative,
+        contents,
+        entry_index,
+        numbers,
+        now_min,
+        None::<&dyn CloseVault>,
+    )
+}
+
+pub(super) fn compute_event_run_with<V: CloseVault + ?Sized>(
+    day_relative: &Path,
+    contents: &str,
+    entry_index: usize,
+    numbers: Option<&[u32]>,
+    now_min: i32,
+    vault: Option<&V>,
+) -> Option<EventRun> {
     let links =
         capture_pomodoro_start::list_queued_links(contents, entry_index);
+    let mut event_rows = canonical_daily_date(day_relative)
+        .map(|date| events_in_note(contents, date))
+        .unwrap_or_default();
+    if let Some(vault) = vault {
+        let mut resolver = clock_resolver(vault);
+        enrich_event_clocks(
+            day_relative,
+            contents,
+            &mut event_rows,
+            &mut resolver,
+        );
+    }
     let mut seen = HashSet::new();
     let mut candidates: Vec<(usize, RunEvent)> = Vec::new();
     for (position, link) in links.iter().enumerate() {
         if link.embedded || !link.path_part.is_empty() {
             continue;
         }
-        let Some(event) =
-            event_task_by_id(day_relative, contents, &link.block_id)
-        else {
+        let Some(event) = event_task_from_rows(
+            day_relative,
+            contents,
+            &event_rows,
+            &link.block_id,
+            vault.is_none(),
+        ) else {
             continue;
         };
         let buffered = event.buffered_span();
@@ -126,6 +164,31 @@ pub(super) fn compute_event_run(
     })
 }
 
+fn event_task_from_rows(
+    day_relative: &Path,
+    contents: &str,
+    events: &[crate::native::event_task::EventNoteRow],
+    block_id: &str,
+    tag_only: bool,
+) -> Option<EventTask> {
+    if tag_only {
+        return event_task_by_id(day_relative, contents, block_id);
+    }
+    let mut found = None;
+    for event in events {
+        if event.kind != EventKind::Task {
+            continue;
+        }
+        if event.block_id.as_deref() != Some(block_id) {
+            continue;
+        }
+        if found.replace(event).is_some() {
+            return None;
+        }
+    }
+    found.and_then(crate::native::event_task::EventNoteRow::as_event_task)
+}
+
 fn start_suffix_too_large() -> CaptureError {
     CaptureError::usage(
         "Pomodoro start suffix is too large; use a smaller duration or offset",
@@ -163,12 +226,31 @@ pub(crate) fn start_block_minute(
 
 /// Open untimed MEET placeholder whose event run overlaps `[S, S + 5)`.
 /// Several matches take the earliest `run.start_min`, then ledger line.
+#[allow(dead_code)]
 pub(crate) fn meet_overlapping_start_block<'a>(
     day_relative: &Path,
     contents: &str,
     scan: &'a capture_pomodoros::PomodoroScan,
     start_min: i64,
     now: chrono::NaiveDateTime,
+) -> Option<&'a capture_pomodoros::PomodoroEntry> {
+    meet_overlapping_start_block_with(
+        day_relative,
+        contents,
+        scan,
+        start_min,
+        now,
+        None::<&dyn CloseVault>,
+    )
+}
+
+pub(crate) fn meet_overlapping_start_block_with<'a, V: CloseVault + ?Sized>(
+    day_relative: &Path,
+    contents: &str,
+    scan: &'a capture_pomodoros::PomodoroScan,
+    start_min: i64,
+    now: chrono::NaiveDateTime,
+    vault: Option<&V>,
 ) -> Option<&'a capture_pomodoros::PomodoroEntry> {
     use chrono::Timelike;
     let start = i32::try_from(start_min).ok()?;
@@ -185,12 +267,13 @@ pub(crate) fn meet_overlapping_start_block<'a>(
         })
         .filter_map(|entry| {
             let index = entry.line.checked_sub(1)?;
-            let run = compute_event_run(
+            let run = compute_event_run_with(
                 day_relative,
                 contents,
                 index,
                 None,
                 now_min,
+                vault,
             )?;
             (run.start_min < block_end && run.end_min > start).then_some((
                 run.start_min,
@@ -211,13 +294,32 @@ pub(crate) fn unnamed_start_target<'a>(
     now: chrono::NaiveDateTime,
     spec: &PomodoroStartSpec,
 ) -> Option<&'a capture_pomodoros::PomodoroEntry> {
+    unnamed_start_target_with(
+        day_relative,
+        contents,
+        scan,
+        now,
+        spec,
+        None::<&dyn CloseVault>,
+    )
+}
+
+pub(crate) fn unnamed_start_target_with<'a, V: CloseVault + ?Sized>(
+    day_relative: &Path,
+    contents: &str,
+    scan: &'a capture_pomodoros::PomodoroScan,
+    now: chrono::NaiveDateTime,
+    spec: &PomodoroStartSpec,
+    vault: Option<&V>,
+) -> Option<&'a capture_pomodoros::PomodoroEntry> {
     if let Ok(start_min) = start_block_minute(now, spec)
-        && let Some(entry) = meet_overlapping_start_block(
+        && let Some(entry) = meet_overlapping_start_block_with(
             day_relative,
             contents,
             scan,
             start_min,
             now,
+            vault,
         )
     {
         return Some(entry);
@@ -382,6 +484,7 @@ pub(super) struct MeetFinish {
     pub(super) offset_units: Option<u64>,
     pub(super) tracked: bool,
     pub(super) off_clock: bool,
+    pub(super) clock_note: Option<String>,
     pub(super) event_run: Option<EventRunJson>,
     pub(super) warnings: Vec<CaptureWarning>,
 }
@@ -410,6 +513,7 @@ impl MeetFinish {
         }
         summary.tracked = self.tracked;
         summary.off_clock = self.off_clock;
+        summary.clock_note = self.clock_note;
         summary.event_run = self.event_run;
         self.warnings
     }
@@ -513,12 +617,13 @@ pub(super) fn finalize_session_clock(
     let now_min = i32::try_from(input.now.hour() * 60 + input.now.minute())
         .unwrap_or_default();
     let run = if meet && input.use_event_run {
-        compute_event_run(
+        compute_event_run_with(
             input.day_relative,
             contents,
             input.entry_index,
             input.numbers,
             now_min,
+            input.vault,
         )
     } else {
         None
@@ -536,6 +641,7 @@ pub(super) fn finalize_session_clock(
 
     let off_clock = run.off_clock;
     let tracked = !off_clock;
+    let clock_note = event_run_clock_note(&run);
     let calendar =
         input.span_rule == SpanRule::Calendar && input.spec.raw.is_empty();
     let closed_end = latest_closed_end(contents);
@@ -546,7 +652,7 @@ pub(super) fn finalize_session_clock(
     let source = if calendar { "calendar" } else { "explicit" };
     let event_run = Some(EventRunJson::new(&run, clamped_start, source));
 
-    let mut warnings = Vec::new();
+    let mut warnings = event_run_clock_warnings(&run);
     if calendar {
         let duration =
             u64::try_from(run.end_min - clamped_start).unwrap_or_default();
@@ -586,6 +692,7 @@ pub(super) fn finalize_session_clock(
             offset_units: Some(0),
             tracked,
             off_clock,
+            clock_note: clock_note.clone(),
             event_run,
             warnings,
         }));
@@ -608,6 +715,7 @@ pub(super) fn finalize_session_clock(
             offset_units: None,
             tracked,
             off_clock,
+            clock_note,
             event_run,
             warnings,
         }));
@@ -634,9 +742,56 @@ pub(super) fn finalize_session_clock(
         offset_units: None,
         tracked,
         off_clock,
+        clock_note,
         event_run,
         warnings,
     }))
+}
+
+fn event_run_clock_warnings(run: &EventRun) -> Vec<CaptureWarning> {
+    let links: Vec<_> = run
+        .events
+        .iter()
+        .map(|item| CountedLinkFact {
+            fact: crate::native::event_task::LinkFact {
+                off_clock: Some(item.event.off_clock),
+            },
+            block_link: item
+                .event
+                .block_id
+                .as_deref()
+                .map(|id| format!("[[#^{id}]]"))
+                .unwrap_or_default(),
+            text: Some(item.event.title.clone()),
+            resolution: Some(ClockResolution {
+                off_clock: item.event.off_clock,
+                source: item.event.clock_source,
+                note: item.event.clock_note.clone(),
+                conflict: matches!(
+                    item.event.clock_tag,
+                    crate::native::clock_tags::ClockTag::Conflict { .. }
+                ),
+            }),
+        })
+        .collect();
+    clock_link_warnings(&links)
+}
+
+fn event_run_clock_note(run: &EventRun) -> Option<String> {
+    let resolutions: Vec<_> = run
+        .events
+        .iter()
+        .map(|item| ClockResolution {
+            off_clock: item.event.off_clock,
+            source: item.event.clock_source,
+            note: item.event.clock_note.clone(),
+            conflict: matches!(
+                item.event.clock_tag,
+                crate::native::clock_tags::ClockTag::Conflict { .. }
+            ),
+        })
+        .collect();
+    via_clock_note(run.off_clock, resolutions.iter())
 }
 
 fn finalize_lineup_clock(
@@ -656,9 +811,15 @@ fn finalize_lineup_clock(
     let facts: Vec<_> = links.iter().map(|link| link.fact).collect();
     let verdict = clock_verdict(&facts);
     let off_clock = matches!(verdict, ClockVerdict::OffClock);
-    let warnings = mixed_clock_warning(entry.name.as_deref(), &links, verdict)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let clock_note = via_clock_note(
+        off_clock,
+        links.iter().filter_map(|link| link.resolution.as_ref()),
+    );
+    let mut warnings =
+        mixed_clock_warning(entry.name.as_deref(), &links, verdict)
+            .into_iter()
+            .collect::<Vec<_>>();
+    warnings.extend(clock_link_warnings(&links));
     let already_on_requested_clock = match (ledger_clock, off_clock) {
         (SessionClock::Worked { .. }, false) => {
             ledger_stamp != ClockStamp::Conflict
@@ -679,6 +840,7 @@ fn finalize_lineup_clock(
             offset_units: None,
             tracked: !off_clock,
             off_clock,
+            clock_note,
             event_run: None,
             warnings,
         }));
@@ -705,9 +867,58 @@ fn finalize_lineup_clock(
         offset_units: None,
         tracked: !off_clock,
         off_clock,
+        clock_note,
         event_run: None,
         warnings,
     }))
+}
+
+fn clock_link_warnings(links: &[CountedLinkFact]) -> Vec<CaptureWarning> {
+    let mut warnings = Vec::new();
+    let mut seen = HashSet::new();
+    for link in links {
+        let Some(resolution) = link.resolution.as_ref() else {
+            continue;
+        };
+        let Some(code) = resolution.capture_warning_code() else {
+            continue;
+        };
+        if !seen.insert((code, link.block_link.clone())) {
+            continue;
+        }
+        let message = match code {
+            "clock_tag_conflict" => {
+                let label = link
+                    .text
+                    .as_deref()
+                    .map(clock_link_label)
+                    .filter(|label| !label.is_empty());
+                match label {
+                    Some(label) => {
+                        format!("◌ {label} has both #on and #off; #on wins")
+                    }
+                    None => format!(
+                        "◌ {} has both #on and #off; #on wins",
+                        link.block_link
+                    ),
+                }
+            }
+            "note_offclock_invalid" => {
+                let note = resolution.note.as_deref().unwrap_or("a note");
+                format!(
+                    "◌ {note} has an invalid offclock: value; that task stays on the clock"
+                )
+            }
+            _ => continue,
+        };
+        warnings.push(CaptureWarning::Structured(StructuredCaptureWarning {
+            code,
+            label: None,
+            count: None,
+            message,
+        }));
+    }
+    warnings
 }
 
 fn mixed_clock_warning(

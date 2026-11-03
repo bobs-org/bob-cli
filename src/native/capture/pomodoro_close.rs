@@ -501,6 +501,7 @@ pub(super) fn build_close_summary_json(
         remaining_minutes,
         decremented_minutes,
         off_clock: plan.off_clock,
+        clock_note: plan.clock_note.clone(),
         tasks,
         carried,
         notes: ledger.notes.clone(),
@@ -524,24 +525,39 @@ fn emit_close_clock_warning(
     plan: &capture_pomodoro_close::PomodoroClosePlan,
     warnings: &mut Vec<CaptureWarning>,
 ) {
-    let Some(message) = plan.clock_warning.as_ref() else {
-        return;
-    };
-    if warnings.iter().any(|warning| {
-        matches!(
-            warning,
-            CaptureWarning::Structured(structured)
-                if structured.code == "pomodoro_clock_mixed"
-        )
-    }) {
-        return;
+    if let Some(message) = plan.clock_warning.as_ref()
+        && !warnings.iter().any(|warning| {
+            matches!(
+                warning,
+                CaptureWarning::Structured(structured)
+                    if structured.code == "pomodoro_clock_mixed"
+            )
+        })
+    {
+        warnings.push(CaptureWarning::Structured(StructuredCaptureWarning {
+            code: "pomodoro_clock_mixed",
+            label: None,
+            count: None,
+            message: message.clone(),
+        }));
     }
-    warnings.push(CaptureWarning::Structured(StructuredCaptureWarning {
-        code: "pomodoro_clock_mixed",
-        label: None,
-        count: None,
-        message: message.clone(),
-    }));
+    for (code, message) in &plan.clock_diagnostics {
+        if warnings.iter().any(|warning| {
+            matches!(
+                warning,
+                CaptureWarning::Structured(structured)
+                    if structured.code == *code && structured.message == *message
+            )
+        }) {
+            continue;
+        }
+        warnings.push(CaptureWarning::Structured(StructuredCaptureWarning {
+            code,
+            label: None,
+            count: None,
+            message: message.clone(),
+        }));
+    }
 }
 
 /// Refs for the types a created continuation shed, in name order. Refs

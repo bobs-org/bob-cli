@@ -259,13 +259,12 @@ pub(super) fn print_human_pomodoro_start_success(
     }
 }
 
-/// ` · off-clock` inside the duration parentheses of an off-clock session.
-pub(super) fn off_clock_label(start: &PomodoroStartSummary) -> &'static str {
-    if !start.off_clock {
-        ""
-    } else {
-        " · off-clock"
-    }
+/// ` · off-clock` or ` · off-clock via love` inside the duration parentheses.
+pub(super) fn off_clock_label(start: &PomodoroStartSummary) -> String {
+    crate::native::pomodoro_homes::off_clock_via_label(
+        start.off_clock,
+        start.clock_note.as_deref(),
+    )
 }
 
 /// ` · from your calendar: A, B` when the span follows an event run; a

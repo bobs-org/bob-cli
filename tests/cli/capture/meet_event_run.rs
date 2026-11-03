@@ -37,6 +37,14 @@ fn capture_start_matches_shared_meet_event_run_vectors() {
         let vault = temp.path().join("vault");
         let day_file = vault.join("2026/20261101.md");
         write_file(&day_file, case["day"].as_str().expect("day"));
+        if let Some(notes) = case.get("notes").and_then(Value::as_object) {
+            for (relative, contents) in notes {
+                write_file(
+                    &vault.join(relative),
+                    contents.as_str().expect("note contents"),
+                );
+            }
+        }
         let json = run_start(
             &vault,
             &day_file,
@@ -89,6 +97,11 @@ fn capture_start_matches_shared_meet_event_run_vectors() {
                 "{id}: unexpected run warning: {warnings:?}"
             ),
         }
+        assert_eq!(
+            start.get("clock_note").and_then(Value::as_str),
+            case.get("expected_clock_note").and_then(Value::as_str),
+            "{id}: {start}"
+        );
     }
 }
 

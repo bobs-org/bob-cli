@@ -94,6 +94,17 @@ fn session_off_clock(json: &Value) -> bool {
         .unwrap_or(false)
 }
 
+fn session_clock_note(json: &Value) -> Option<&str> {
+    json.get("pomodoro_start")
+        .or_else(|| json.get("pomodoro_close"))
+        .and_then(|session| session.get("clock_note"))
+        .and_then(Value::as_str)
+}
+
+fn assert_clock_note(json: &Value, id: &str, expected: Option<&str>) {
+    assert_eq!(session_clock_note(json), expected, "{id}: {json}");
+}
+
 fn assert_warning(json: &Value, id: &str, expected: Option<&str>) {
     let warnings = json["warnings"].as_array().cloned().unwrap_or_default();
     match expected {
@@ -150,6 +161,11 @@ fn capture_matches_shared_pomodoro_clock_vectors() {
             id,
             case.get("expected_warning").and_then(Value::as_str),
         );
+        assert_clock_note(
+            &json,
+            id,
+            case.get("expected_clock_note").and_then(Value::as_str),
+        );
     }
 }
 
@@ -183,6 +199,11 @@ fn dry_run_matches_vector_json_and_writes_nothing() {
             &json,
             id,
             case.get("expected_warning").and_then(Value::as_str),
+        );
+        assert_clock_note(
+            &json,
+            id,
+            case.get("expected_clock_note").and_then(Value::as_str),
         );
     }
 }

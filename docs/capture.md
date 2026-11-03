@@ -3247,10 +3247,12 @@ and Event Tasks that already ended are skipped.
 | Link start (`@route:id#meet=`) | The written span | `[off:: Nm]` when the run is off-clock |
 | Any non-MEET session, or a MEET with an empty run | Unchanged | Always written |
 
-An event run is off-clock only when every linked Event Task is tagged
-`#offclock` (Google aliases `#off-clock` and `#untracked` are accepted). The
-session then writes `(**1200-1300** [off:: 60m])`, which remains on the ledger
-and outside Worked metrics (see [vault format](reference/vault-format.md)).
+An event run is off-clock when every linked Event Task resolves off-clock:
+`#off` (deprecated aliases `#offclock`, `#off-clock`, and `#untracked`) or
+an inherited area/project `offclock: true`, with `#on` and `offclock: false`
+as overrides. The session then writes `(**1200-1300** [off:: 60m])`, which
+remains on the ledger and outside Worked metrics (see
+[vault format](reference/vault-format.md)).
 A worked event and an off-clock event never share a run, so lunch at
 1200-1300 followed by a 1300-1330 standup starts an off-clock MEET; capture
 `=` again after it closes to run the standup. Buffers inherit their event's
@@ -3282,7 +3284,10 @@ resets it instead.
 Capture JSON is unversioned and additive. `pomodoro_start.off_clock` is `true`
 for an off-clock session and omitted otherwise; deprecated `tracked: false`
 and `pomodoro_blocks[].tracked` remain for compatibility, while
-`pomodoro_blocks[].off_clock` mirrors the new field. `pomodoro_start.event_run`
+`pomodoro_blocks[].off_clock` mirrors the new field. `pomodoro_start.clock_note`
+is the vault-relative path of the shared inherited note when every counted
+off-clock link resolved through that note's `offclock:` default, and is
+omitted otherwise. `pomodoro_start.event_run`
 appears when a MEET
 has a non-empty run:
 
@@ -3315,8 +3320,9 @@ gains an additive `buffer` object (omitted when there is none):
 `explicit` when a counted suffix or a kept ledger set its own. Each event's
 `index` is its lineup number on the pre-drop lineup, so a drop leaves gaps. Human
 output appends the same facts: `MEET 1200-1300 (60m · off-clock) at line 7 ·
-from your calendar: Lunch with Kelly`; a buffered event adds its meeting span
-and buffer, `from your calendar: Lunch with Kelly (1200-1300 −30m +15m)`.
+from your calendar: Lunch with Kelly`; when `clock_note` names one note the
+duration reads `60m · off-clock via love`; a buffered event adds its meeting
+span and buffer, `from your calendar: Lunch with Kelly (1200-1300 −30m +15m)`.
 Obsidian's `se<X>` + Tab mirrors the rule through the shared
 [`meet_event_run` vectors](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/meet_event_run/vectors.json).
 
@@ -3801,8 +3807,12 @@ session's counted Task Links: see
 ### Which clock a session is on
 
 A session is **off-clock** when the Task Links it keeps, **K**, are
-non-empty and every one of them resolves to a task whose own line has a
-standalone `#offclock` tag (`#off-clock` and `#untracked` are aliases).
+non-empty and every one of them resolves off-clock. First match on the
+task wins: a standalone `#on` (even beside an off spelling, with warning
+`clock_tag_conflict`); else `#off` or a deprecated alias (`#offclock`,
+`#off-clock`, `#untracked`); else the nearest area or project
+`offclock: true|false` on the task's root walk; else on-clock. An invalid
+nearer `offclock:` value stays on-clock and raises `note_offclock_invalid`.
 Anything else stays on the work clock: an unlinked session, a mixed
 lineup, or a link that does not resolve. Mixed never splits per link —
 one on-clock or unresolved neighbour keeps the whole session on the
@@ -3822,8 +3832,8 @@ Four edges:
 | Lineup | Clock | Notice |
 | --- | --- | --- |
 | No counted Task Links | Worked | None |
-| Every kept link is `#offclock` | Off-clock | None |
-| At least one off-clock link and one on-clock task | Worked | `pomodoro_clock_mixed` |
+| Every kept link is off-clock (`#off`, an alias, or inherited `offclock: true`) | Off-clock | None; human copy adds `via love` when every link inherited from the same note |
+| At least one off-clock link and one on-clock task (including a love task mixed with a job task) | Worked | `pomodoro_clock_mixed` |
 | At least one off-clock link and one unresolved link | Worked | `pomodoro_clock_mixed` |
 
 The mixed notice is a structured warning, including in `--dry-run`:
@@ -3833,11 +3843,14 @@ The mixed notice is a structured warning, including in `--dry-run`:
 `◌ LUNCH stays on the clock: [[bob#^gone]] does not resolve`
 
 A nested or glued token (`#offclock/nested`, `lunch#untracked`) is not a
-standalone tag, so that task stays on the clock. An `#offclock` "Walk the
-dog" start writes `(**0905-0930** [off:: 25m])`. Capture JSON reports
+standalone tag, so that task stays on the clock. An `#off` "Walk the
+dog" start writes `(**0905-0930** [off:: 25m])`. An untagged love task whose
+area has `offclock: true` writes the same key, and human output names the
+source: `(25m · off-clock via love)`. Capture JSON reports
 `pomodoro_start.off_clock` / `pomodoro_close.off_clock` as `true` for an
 off-clock session and omits the field otherwise; `pomodoro_blocks[].off_clock`
-mirrors it.
+mirrors it. Additive `clock_note` is the vault-relative path of that shared
+inherited note when the via rule applies, and is omitted otherwise.
 
 ### Adjusting the current Pomodoro
 
@@ -4089,7 +4102,9 @@ instead``. After the start, `x` shortens by whole five-minute units as always.
 Closing restamps the clock key from the Task Links the closed row keeps
 (see [Which clock a session is on](#which-clock-a-session-is-on)), even when
 the remaining time is under five minutes and the span itself does not
-retime. Human output names the clock: `(60m · off-clock)`.
+retime. Human output names the clock: `(60m · off-clock)`, or
+`(60m · off-clock via love)` when every counted off-clock link inherited
+from the same note.
 
 #### Event Task links close by the clock
 
@@ -4299,7 +4314,9 @@ Field notes:
 
 - `pomodoro_close.off_clock` is `true` for an off-clock session and omitted
   otherwise; the closed row's `[t::]` / `[off::]` key follows
-  [Which clock a session is on](#which-clock-a-session-is-on).
+  [Which clock a session is on](#which-clock-a-session-is-on). Additive
+  `pomodoro_close.clock_note` is the vault-relative path of the shared
+  inherited note when the via rule applies, and is omitted otherwise.
 - `pomodoro_close.raw` is the typed token exactly as typed: the bare token
   (`x`, `x1*2!3~4`) for whole-item closes, and the `=`-prefixed suffix
   (`=x!1`) for link and task closes.

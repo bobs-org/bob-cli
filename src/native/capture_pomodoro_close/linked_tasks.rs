@@ -8,9 +8,13 @@ use std::{
 use chrono::{NaiveDateTime, Timelike};
 
 use super::super::event_task::{
-    clock_verdict, event_task_by_id, line_has_off_clock_tag, ClockReason,
-    ClockVerdict, CloseClock, LinkFact,
+    clock_verdict, enrich_event_clocks, events_in_note, ClockReason,
+    ClockVerdict, CloseClock, EventKind, EventNoteRow, LinkFact,
 };
+use super::super::pomodoro_homes::{
+    effective_clock, via_clock_note, ClockResolution, HomeResolver, HomeSource,
+};
+use super::super::task_status_hooks::canonical_daily_date;
 use super::super::{
     capture::{
         line_spans, parse_adjustment_range, set_ledger_clock, ClockKind,
@@ -129,9 +133,13 @@ pub(crate) struct PomodoroClosePlan {
     pub warnings: Vec<String>,
     /// Whether the closed row is on the off-clock key.
     pub off_clock: bool,
+    /// Shared inherited note when the via rule applies; otherwise none.
+    pub clock_note: Option<String>,
     /// Mixed-clock notice for the closed session, when K holds at least
     /// one off-clock link but the verdict is worked.
     pub clock_warning: Option<String>,
+    /// Per-link clock diagnostics that decided a counted link's clock.
+    pub clock_diagnostics: Vec<(&'static str, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,6 +163,60 @@ pub(crate) trait CloseVault {
     fn bob_dir(&self) -> &Path;
     fn resolve_target(&self, from_path: &Path, target: &str) -> LinkResolution;
     fn read_latest(&self, path: &Path) -> Result<Option<String>, String>;
+}
+
+/// Home-resolver backend over a close vault so unsaved planner state wins
+/// over disk when capture stamps a session clock.
+pub(crate) struct CloseVaultHomeSource<'a, V: CloseVault + ?Sized> {
+    vault: &'a V,
+}
+
+impl<'a, V: CloseVault + ?Sized> CloseVaultHomeSource<'a, V> {
+    pub(crate) fn new(vault: &'a V) -> Self {
+        Self { vault }
+    }
+}
+
+impl<V: CloseVault + ?Sized> super::super::pomodoro_homes::HomeSource
+    for CloseVaultHomeSource<'_, V>
+{
+    fn resolve(&self, current: &Path, target: &str) -> LinkResolution {
+        let from = if current.is_absolute() {
+            current.to_path_buf()
+        } else {
+            self.vault.bob_dir().join(current)
+        };
+        match self.vault.resolve_target(&from, target) {
+            LinkResolution::Found(path) => LinkResolution::Found(
+                path.strip_prefix(self.vault.bob_dir())
+                    .map(Path::to_path_buf)
+                    .unwrap_or(path),
+            ),
+            other => other,
+        }
+    }
+
+    fn read_facts(
+        &self,
+        path: &Path,
+    ) -> Option<super::super::pomodoro_homes::NoteFacts> {
+        let abs = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.vault.bob_dir().join(path)
+        };
+        self.vault.read_latest(&abs).ok().flatten().map(|contents| {
+            super::super::pomodoro_homes::NoteFacts::parse(&contents)
+        })
+    }
+}
+
+pub(crate) fn clock_resolver<V: CloseVault + ?Sized>(
+    vault: &V,
+) -> super::super::pomodoro_homes::HomeResolver<CloseVaultHomeSource<'_, V>> {
+    super::super::pomodoro_homes::HomeResolver::new(CloseVaultHomeSource::new(
+        vault,
+    ))
 }
 
 type TaskKey = (PathBuf, String);
@@ -1025,7 +1087,7 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
         &parked_lines,
         names.as_ref(),
     );
-    let (off_clock, clock_warning) = stamp_closed_session_clock(
+    let closed_clock = stamp_closed_session_clock(
         &mut ledger,
         vault,
         day_path,
@@ -1107,8 +1169,10 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
             log: log_entries,
         },
         warnings: planner.warnings,
-        off_clock,
-        clock_warning,
+        off_clock: closed_clock.off_clock,
+        clock_note: closed_clock.clock_note,
+        clock_warning: closed_clock.clock_warning,
+        clock_diagnostics: closed_clock.diagnostics,
     })
 }
 
@@ -1116,6 +1180,14 @@ struct CloseClockFact {
     fact: LinkFact,
     block_link: String,
     text: Option<String>,
+    resolution: Option<ClockResolution>,
+}
+
+struct ClosedSessionClock {
+    off_clock: bool,
+    clock_note: Option<String>,
+    clock_warning: Option<String>,
+    diagnostics: Vec<(&'static str, String)>,
 }
 
 /// Stamp `[t::]` / `[off::]` on the closed headline from the counted
@@ -1127,7 +1199,7 @@ fn stamp_closed_session_clock<V: CloseVault>(
     day_path: &Path,
     working_contents: &str,
     running: &RunningPomodoro,
-) -> (bool, Option<String>) {
+) -> ClosedSessionClock {
     let facts =
         remaining_close_clock_facts(ledger, vault, day_path, working_contents);
     let verdict =
@@ -1137,9 +1209,19 @@ fn stamp_closed_session_clock<V: CloseVault>(
         ledger.closed_name.as_deref().or(running.name.as_deref());
     let clock_warning =
         mixed_close_clock_warning(session_name, &facts, verdict);
+    let clock_note = via_clock_note(
+        off_clock,
+        facts.iter().filter_map(|link| link.resolution.as_ref()),
+    );
+    let diagnostics = close_clock_diagnostics(&facts);
     let entry_index = running.line.saturating_sub(1);
     let Some(headline) = ledger.contents.lines().nth(entry_index) else {
-        return (off_clock, clock_warning);
+        return ClosedSessionClock {
+            off_clock,
+            clock_note,
+            clock_warning,
+            diagnostics,
+        };
     };
     let clock = if off_clock {
         ClockKind::OffClock
@@ -1153,7 +1235,12 @@ fn stamp_closed_session_clock<V: CloseVault>(
     {
         ledger.contents = updated;
     }
-    (off_clock, clock_warning)
+    ClosedSessionClock {
+        off_clock,
+        clock_note,
+        clock_warning,
+        diagnostics,
+    }
 }
 
 fn remaining_close_clock_facts<V: CloseVault>(
@@ -1167,6 +1254,16 @@ fn remaining_close_clock_facts<V: CloseVault>(
     all_settings.global_filter.clear();
     let day_relative =
         day_path.strip_prefix(vault.bob_dir()).unwrap_or(day_path);
+    let mut event_rows = canonical_daily_date(day_relative)
+        .map(|date| events_in_note(working_contents, date))
+        .unwrap_or_default();
+    let mut resolver = clock_resolver(vault);
+    enrich_event_clocks(
+        day_relative,
+        working_contents,
+        &mut event_rows,
+        &mut resolver,
+    );
     ledger
         .classified_links
         .iter()
@@ -1181,6 +1278,8 @@ fn remaining_close_clock_facts<V: CloseVault>(
         .map(|link| {
             resolve_close_clock_fact(
                 vault,
+                &mut resolver,
+                &event_rows,
                 day_path,
                 day_relative,
                 working_contents,
@@ -1192,8 +1291,10 @@ fn remaining_close_clock_facts<V: CloseVault>(
         .collect()
 }
 
-fn resolve_close_clock_fact<V: CloseVault>(
+fn resolve_close_clock_fact<V: CloseVault, S: HomeSource>(
     vault: &V,
+    resolver: &mut HomeResolver<S>,
+    events: &[EventNoteRow],
     day_path: &Path,
     day_relative: &Path,
     contents: &str,
@@ -1205,18 +1306,11 @@ fn resolve_close_clock_fact<V: CloseVault>(
         fact: LinkFact { off_clock: None },
         block_link: link.raw_target.clone(),
         text: None,
+        resolution: None,
     };
     if link.path_part.is_empty() {
-        if let Some(event) =
-            event_task_by_id(day_relative, contents, &link.block_id)
-        {
-            return CloseClockFact {
-                fact: LinkFact {
-                    off_clock: Some(event.off_clock),
-                },
-                block_link: link.raw_target.clone(),
-                text: Some(event.title.clone()),
-            };
+        if let Some(event) = close_event_row_by_id(events, &link.block_id) {
+            return close_fact_from_event(event, &link.raw_target);
         }
         let lookup_settings = if link.role == LedgerLinkRole::Embedded {
             all_settings
@@ -1224,16 +1318,14 @@ fn resolve_close_clock_fact<V: CloseVault>(
             settings
         };
         return match lookup_task(contents, lookup_settings, &link.block_id) {
-            Ok(task) => {
-                let line = contents.lines().nth(task.line_index).unwrap_or("");
-                CloseClockFact {
-                    fact: LinkFact {
-                        off_clock: Some(line_has_off_clock_tag(line)),
-                    },
-                    block_link: link.raw_target.clone(),
-                    text: Some(close_task_text(&task.description)),
-                }
-            }
+            Ok(task) => close_fact_from_task(
+                resolver,
+                day_relative,
+                contents,
+                task.line_index,
+                &task.description,
+                &link.raw_target,
+            ),
             Err(_) => unresolved,
         };
     }
@@ -1254,17 +1346,125 @@ fn resolve_close_clock_fact<V: CloseVault>(
     };
     match lookup_task(&note, lookup_settings, &link.block_id) {
         Ok(task) => {
-            let line = note.lines().nth(task.line_index).unwrap_or("");
-            CloseClockFact {
-                fact: LinkFact {
-                    off_clock: Some(line_has_off_clock_tag(line)),
-                },
-                block_link: link.raw_target.clone(),
-                text: Some(close_task_text(&task.description)),
-            }
+            let residence = path.strip_prefix(vault.bob_dir()).unwrap_or(&path);
+            close_fact_from_task(
+                resolver,
+                residence,
+                &note,
+                task.line_index,
+                &task.description,
+                &link.raw_target,
+            )
         }
         Err(_) => unresolved,
     }
+}
+
+fn close_event_row_by_id<'a>(
+    events: &'a [EventNoteRow],
+    block_id: &str,
+) -> Option<&'a EventNoteRow> {
+    let mut found = None;
+    for event in events {
+        if event.kind != EventKind::Task {
+            continue;
+        }
+        if event.block_id.as_deref() != Some(block_id) {
+            continue;
+        }
+        if found.replace(event).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
+fn close_fact_from_event(
+    event: &EventNoteRow,
+    block_link: &str,
+) -> CloseClockFact {
+    let resolution = ClockResolution {
+        off_clock: event.off_clock,
+        source: event.clock_source,
+        note: event.clock_note.clone(),
+        conflict: matches!(
+            event.clock_tag,
+            super::super::clock_tags::ClockTag::Conflict { .. }
+        ),
+    };
+    CloseClockFact {
+        fact: LinkFact {
+            off_clock: Some(resolution.off_clock),
+        },
+        block_link: block_link.to_string(),
+        text: Some(event.title.clone()),
+        resolution: Some(resolution),
+    }
+}
+
+fn close_fact_from_task<S: HomeSource>(
+    resolver: &mut HomeResolver<S>,
+    residence_path: &Path,
+    contents: &str,
+    line_index: usize,
+    description: &str,
+    block_link: &str,
+) -> CloseClockFact {
+    let line = contents.lines().nth(line_index).unwrap_or("");
+    let resolution = effective_clock(resolver, residence_path, line);
+    CloseClockFact {
+        fact: LinkFact {
+            off_clock: Some(resolution.off_clock),
+        },
+        block_link: block_link.to_string(),
+        text: Some(close_task_text(description)),
+        resolution: Some(resolution),
+    }
+}
+
+fn close_clock_diagnostics(
+    links: &[CloseClockFact],
+) -> Vec<(&'static str, String)> {
+    let mut diagnostics = Vec::new();
+    let mut seen = BTreeSet::new();
+    for link in links {
+        let Some(resolution) = link.resolution.as_ref() else {
+            continue;
+        };
+        let Some(code) = resolution.capture_warning_code() else {
+            continue;
+        };
+        if !seen.insert((code, link.block_link.clone())) {
+            continue;
+        }
+        let message = match code {
+            "clock_tag_conflict" => {
+                let label = link
+                    .text
+                    .as_deref()
+                    .map(close_clock_link_label)
+                    .filter(|label| !label.is_empty());
+                match label {
+                    Some(label) => {
+                        format!("◌ {label} has both #on and #off; #on wins")
+                    }
+                    None => format!(
+                        "◌ {} has both #on and #off; #on wins",
+                        link.block_link
+                    ),
+                }
+            }
+            "note_offclock_invalid" => {
+                let note = resolution.note.as_deref().unwrap_or("a note");
+                format!(
+                    "◌ {note} has an invalid offclock: value; that task stays on the clock"
+                )
+            }
+            _ => continue,
+        };
+        diagnostics.push((code, message));
+    }
+    diagnostics
 }
 
 fn mixed_close_clock_warning(

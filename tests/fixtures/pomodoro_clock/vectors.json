@@ -13,7 +13,7 @@
       "now": "2026-11-01 09:02:00",
       "token": "=",
       "notes": {
-        "bob.md": "## Tasks\n- [ ] #task Walk the dog #offclock ^walk\n"
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #off ^walk\n"
       },
       "day": "## Pomodoros\n- [ ] () — WALK\n  - [[bob#^walk]]\n",
       "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — WALK\n  - [[bob#^walk]]\n",
@@ -24,7 +24,7 @@
       "now": "2026-11-01 09:02:00",
       "token": "=",
       "notes": {
-        "bob.md": "## Tasks\n- [ ] #task Walk the dog #offclock ^walk\n- [ ] #task Fix the parser ^parser\n"
+        "bob.md": "## Tasks\n- [ ] #task Walk the dog #off ^walk\n- [ ] #task Fix the parser ^parser\n"
       },
       "day": "## Pomodoros\n- [ ] () — LUNCH\n  - [[bob#^walk]]\n  - [[bob#^parser]]\n",
       "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — LUNCH\n  - [[bob#^walk]]\n  - [[bob#^parser]]\n",
@@ -134,6 +134,130 @@
       },
       "day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — WALK\n",
       "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — WALK\n\t- [[bob#^walk]]\n",
+      "expected_off_clock": true
+    },
+    {
+      "id": "love-default-untagged-child-is-off-clock",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n\n## Tasks\n- [ ] #task Lunch with Kelly ^lunch\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — LUNCH\n  - [[love#^lunch]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — LUNCH\n  - [[love#^lunch]]\n",
+      "expected_off_clock": true,
+      "expected_clock_note": "love.md"
+    },
+    {
+      "id": "event-task-root-abby-inherits-love",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "abby.md": "---\ntype: [[area]]\nparent: [[love]]\n---\n"
+      },
+      "day": "## Events\n- [ ] #task **1100-1130** Pickup [root:: abby] ^pickup\n\n## Pomodoros\n- [ ] () — PICKUP\n  - [[#^pickup]]\n",
+      "expected_day": "## Events\n- [ ] #task **1100-1130** Pickup [root:: abby] ^pickup\n\n## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — PICKUP\n  - [[#^pickup]]\n",
+      "expected_off_clock": true,
+      "expected_clock_note": "love.md"
+    },
+    {
+      "id": "false-child-true-grandchild-is-off-clock",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "fun.md": "---\ntype: [[area]]\nparent: [[love]]\noffclock: false\n---\n",
+        "surf.md": "---\ntype: [[area]]\nparent: [[fun]]\noffclock: true\n---\n\n## Tasks\n- [ ] #task Surf ^surf\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — SURF\n  - [[surf#^surf]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — SURF\n  - [[surf#^surf]]\n",
+      "expected_off_clock": true,
+      "expected_clock_note": "surf.md"
+    },
+    {
+      "id": "untyped-dog-passes-inheritance-through",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "dog.md": "---\ntype: [[article]]\nparent: [[love]]\noffclock: false\n---\n\n## Tasks\n- [ ] #task Walk Lenard ^lenard\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — DOG\n  - [[dog#^lenard]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — DOG\n  - [[dog#^lenard]]\n",
+      "expected_off_clock": true,
+      "expected_clock_note": "love.md"
+    },
+    {
+      "id": "on-tag-under-love-stays-worked",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n\n## Tasks\n- [ ] #task Work call #on ^call\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — CALL\n  - [[love#^call]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — CALL\n  - [[love#^call]]\n",
+      "expected_off_clock": false
+    },
+    {
+      "id": "on-off-conflict-stays-worked",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n\n## Tasks\n- [ ] #task Work call #on #off ^call\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — CALL\n  - [[love#^call]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — CALL\n  - [[love#^call]]\n",
+      "expected_off_clock": false,
+      "expected_warning": "clock_tag_conflict"
+    },
+    {
+      "id": "invalid-note-offclock-stays-worked",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "invalid.md": "---\ntype: [[project]]\nparent: [[love]]\noffclock: maybe\n---\n\n## Tasks\n- [ ] #task Maybe later ^maybe\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — MAYBE\n  - [[invalid#^maybe]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — MAYBE\n  - [[invalid#^maybe]]\n",
+      "expected_off_clock": false,
+      "expected_warning": "note_offclock_invalid"
+    },
+    {
+      "id": "invalid-root-on-daily-stays-worked",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n"
+      },
+      "day": "## Tasks\n- [ ] #task Orphan [root:: missing] ^orphan\n\n## Pomodoros\n- [ ] () — BOB\n  - [[#^orphan]]\n",
+      "expected_day": "## Tasks\n- [ ] #task Orphan [root:: missing] ^orphan\n\n## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — BOB\n  - [[#^orphan]]\n",
+      "expected_off_clock": false
+    },
+    {
+      "id": "love-plus-job-stays-worked-mixed",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n\n## Tasks\n- [ ] #task Lunch with Kelly ^lunch\n",
+        "job.md": "---\ntype: [[area]]\n---\n\n## Tasks\n- [ ] #task Fix the parser ^parser\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — MIX\n  - [[love#^lunch]]\n  - [[job#^parser]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [t:: 25m]) — MIX\n  - [[love#^lunch]]\n  - [[job#^parser]]\n",
+      "expected_off_clock": false,
+      "expected_warning": "pomodoro_clock_mixed"
+    },
+    {
+      "id": "explicit-off-beats-false-child",
+      "now": "2026-11-01 09:02:00",
+      "token": "=",
+      "notes": {
+        "love.md": "---\ntype: [[area]]\noffclock: true\n---\n",
+        "fun.md": "---\ntype: [[area]]\nparent: [[love]]\noffclock: false\n---\n\n## Tasks\n- [ ] #task Park #off ^park\n"
+      },
+      "day": "## Pomodoros\n- [ ] () — PARK\n  - [[fun#^park]]\n",
+      "expected_day": "## Pomodoros\n- [ ] (**0905-0930** [off:: 25m]) — PARK\n  - [[fun#^park]]\n",
       "expected_off_clock": true
     }
   ]

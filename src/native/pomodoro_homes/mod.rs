@@ -11,7 +11,10 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use clock::{effective_clock, ClockResolution, ClockSource};
+pub(crate) use clock::{
+    effective_clock, off_clock_via_label, via_clock_note, ClockResolution,
+    ClockSource,
+};
 pub(crate) use facts::{NoteFacts, NoteKind, NoteOffClock, NoteTheme};
 pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};
 pub(crate) use palette::{fallback_hue, Hue};

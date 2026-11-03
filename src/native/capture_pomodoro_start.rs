@@ -16,13 +16,20 @@ use std::{
 use super::{
     capture::{leading_spaces_or_tabs_len, line_spans, LineSpan},
     capture_pomodoro_close::{
-        bare_embedded_link, bare_plain_link, close_task_text, join_numbers,
-        lookup_task, range_is_struck, strikethrough_inner_spans,
+        bare_embedded_link, bare_plain_link, clock_resolver, close_task_text,
+        join_numbers, lookup_task, range_is_struck, strikethrough_inner_spans,
         strip_pomodoro_markers, sub_bullet_range, wikilink_tokens, CloseVault,
     },
     capture_task_toggle::child_block_end_line,
-    event_task::{event_task_by_id, line_has_off_clock_tag, LinkFact},
+    clock_tags::line_clock_tag,
+    event_task::{
+        enrich_event_clocks, events_in_note, EventKind, EventNoteRow, LinkFact,
+    },
     markdown, note_tasks,
+    pomodoro_homes::{
+        effective_clock, ClockResolution, HomeResolver, HomeSource,
+    },
+    task_status_hooks::canonical_daily_date,
     vault_links::LinkResolution,
 };
 
@@ -295,12 +302,14 @@ pub(crate) struct CountedLinkFact {
     pub fact: LinkFact,
     pub block_link: String,
     pub text: Option<String>,
+    pub resolution: Option<ClockResolution>,
 }
 
 /// Resolve the counted Task Links under `entry_index` to clock facts.
 /// Same-note links read `contents` (the note being rewritten). Other-note
 /// links go through `vault` when one is present, and fail toward worked
-/// when it is not.
+/// when it is not. With a vault, each link uses `effective_clock`; without
+/// one, the fact stays tag-only.
 pub(crate) fn resolve_session_clock_links<V: CloseVault + ?Sized>(
     vault: Option<&V>,
     day_relative: &Path,
@@ -313,11 +322,20 @@ pub(crate) fn resolve_session_clock_links<V: CloseVault + ?Sized>(
         .unwrap_or_else(|| note_tasks::read_settings(Path::new("")));
     let mut all_settings = settings.clone();
     all_settings.global_filter.clear();
+    let mut event_rows = canonical_daily_date(day_relative)
+        .map(|date| events_in_note(contents, date))
+        .unwrap_or_default();
+    let mut resolver = vault.map(clock_resolver);
+    if let Some(resolver) = resolver.as_mut() {
+        enrich_event_clocks(day_relative, contents, &mut event_rows, resolver);
+    }
     links
         .iter()
         .map(|link| {
             resolve_clock_fact(
                 vault,
+                resolver.as_mut(),
+                &event_rows,
                 day_relative,
                 contents,
                 link,
@@ -328,8 +346,10 @@ pub(crate) fn resolve_session_clock_links<V: CloseVault + ?Sized>(
         .collect()
 }
 
-fn resolve_clock_fact<V: CloseVault + ?Sized>(
+fn resolve_clock_fact<V: CloseVault + ?Sized, S: HomeSource>(
     vault: Option<&V>,
+    resolver: Option<&mut HomeResolver<S>>,
+    events: &[EventNoteRow],
     day_relative: &Path,
     contents: &str,
     link: &StartLink,
@@ -340,18 +360,15 @@ fn resolve_clock_fact<V: CloseVault + ?Sized>(
         fact: LinkFact { off_clock: None },
         block_link: link.block_link.clone(),
         text: None,
+        resolution: None,
     };
     if link.path_part.is_empty() {
-        if let Some(event) =
-            event_task_by_id(day_relative, contents, &link.block_id)
-        {
-            return CountedLinkFact {
-                fact: LinkFact {
-                    off_clock: Some(event.off_clock),
-                },
-                block_link: link.block_link.clone(),
-                text: Some(event.title.clone()),
-            };
+        if let Some(event) = event_row_by_id(events, &link.block_id) {
+            return counted_fact_from_event(
+                event,
+                &link.block_link,
+                resolver.is_none(),
+            );
         }
         let lookup_settings = if link.embedded {
             all_settings
@@ -360,6 +377,8 @@ fn resolve_clock_fact<V: CloseVault + ?Sized>(
         };
         return match lookup_task(contents, lookup_settings, &link.block_id) {
             Ok(task) => clock_fact_from_task(
+                resolver,
+                day_relative,
                 contents,
                 task.line_index,
                 &task.description,
@@ -392,29 +411,88 @@ fn resolve_clock_fact<V: CloseVault + ?Sized>(
         settings
     };
     match lookup_task(&note, lookup_settings, &link.block_id) {
-        Ok(task) => clock_fact_from_task(
-            &note,
-            task.line_index,
-            &task.description,
-            &link.block_link,
-        ),
+        Ok(task) => {
+            let residence = path.strip_prefix(vault.bob_dir()).unwrap_or(&path);
+            clock_fact_from_task(
+                resolver,
+                residence,
+                &note,
+                task.line_index,
+                &task.description,
+                &link.block_link,
+            )
+        }
         Err(_) => unresolved,
     }
 }
 
-fn clock_fact_from_task(
+fn event_row_by_id<'a>(
+    events: &'a [EventNoteRow],
+    block_id: &str,
+) -> Option<&'a EventNoteRow> {
+    let mut found = None;
+    for event in events {
+        if event.kind != EventKind::Task {
+            continue;
+        }
+        if event.block_id.as_deref() != Some(block_id) {
+            continue;
+        }
+        if found.replace(event).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
+fn counted_fact_from_event(
+    event: &EventNoteRow,
+    block_link: &str,
+    tag_only: bool,
+) -> CountedLinkFact {
+    let resolution = if tag_only {
+        ClockResolution::tag_only(&event.clock_tag)
+    } else {
+        ClockResolution {
+            off_clock: event.off_clock,
+            source: event.clock_source,
+            note: event.clock_note.clone(),
+            conflict: matches!(
+                event.clock_tag,
+                super::clock_tags::ClockTag::Conflict { .. }
+            ),
+        }
+    };
+    CountedLinkFact {
+        fact: LinkFact {
+            off_clock: Some(resolution.off_clock),
+        },
+        block_link: block_link.to_string(),
+        text: Some(event.title.clone()),
+        resolution: Some(resolution),
+    }
+}
+
+fn clock_fact_from_task<S: HomeSource>(
+    resolver: Option<&mut HomeResolver<S>>,
+    residence_path: &Path,
     contents: &str,
     line_index: usize,
     description: &str,
     block_link: &str,
 ) -> CountedLinkFact {
     let line = contents.lines().nth(line_index).unwrap_or("");
+    let resolution = match resolver {
+        Some(resolver) => effective_clock(resolver, residence_path, line),
+        None => ClockResolution::tag_only(&line_clock_tag(line)),
+    };
     CountedLinkFact {
         fact: LinkFact {
-            off_clock: Some(line_has_off_clock_tag(line)),
+            off_clock: Some(resolution.off_clock),
         },
         block_link: block_link.to_string(),
         text: Some(close_task_text(description)),
+        resolution: Some(resolution),
     }
 }
 

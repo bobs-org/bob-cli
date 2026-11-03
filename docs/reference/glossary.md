@@ -42,7 +42,9 @@ elsewhere never moves it. Area notes hold the ongoing tasks, usually under `## T
 that belong to no finite project; the inboxes (`inbox`, `mac_inbox`, `gkeep_inbox`) are
 area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task, [Event Task](#event-task) rows under `## Events`, and closed tasks that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
 Root-level area notes are `@route` capture targets, and every area note gets the
-per-note Ready cap and `## Tasks` status grouping.
+per-note Ready cap and `## Tasks` status grouping. An `offclock: true|false` key
+sets the clock default for tasks on the root walk beneath it (see
+[Off-Clock Follows Tag Then Note Default](../develop/decisions.md#off-clock-follows-tag-then-note-default)).
 
 ### Bulk Capture {#bulk-capture}
 
@@ -142,8 +144,9 @@ A checkbox `#task` row inside a canonical daily note's `## Events` section,
 whose description begins with a local `**HHMM-HHMM**` span. Hand-written
 rows qualify. Its `[root:: NOTE]` attributes meeting time to an area or
 project, and a Pomodoro Task Link under the daily note's ledger records the
-session. An `#offclock` tag (alias `#untracked`) makes the session that links
-it an [Off-Clock Pomodoro](#off-clock-pomodoro), so its `[root::]` attributes off-clock minutes.
+session. `#off`, `#on`, or an inherited area/project `offclock:` through
+`[root::]` decides whether the session that links it is an
+[Off-Clock Pomodoro](#off-clock-pomodoro), so its `[root::]` attributes those minutes.
 On timed close, Bob compares the span with the session's start and
 close times: a meeting that ended inside is completed, one still running
 stays In Progress and carried, and one not started or ended before the
@@ -306,7 +309,7 @@ into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily 
 
 *Aliases: off-clock session, untracked pomodoro, untracked session.*
 
-A [Pomodoro](#pomodoro) whose time Bob records but keeps off the work clock — lunch, the gym, school pickup. Its timespan carries `[off:: Nm]` where a worked session carries `[t:: Nm]`: `- [x] (**1200-1300** [off:: 60m]) — MEET`. A session goes off the clock exactly when it keeps at least one [Task Link](#task-link) and every one resolves to a task tagged `#offclock` (aliases `#untracked`, `#off-clock`); an unlinked session, an unresolved link, or one on-clock link keeps the whole session worked. Writers decide when they write the span (starts, closes, and `bob gcal sync` for an off-clock [Event Task](#event-task)); a closed row's key is history, and later tag edits are reported, never applied. An ended `#offclock` [Event Task](#event-task) nobody started settles into one on the next `bob task reconcile`. Worked, Sessions, `bob pomodoro --worked`, and the [Day Strip](#day-strip) facts leave it out; its [Root Parent](#root-parent) still receives its minutes. The Off-clock and Total clocks of `bob stats -k` and the [Stats Dash](#stats-dash) count it, grouped by [Root Parent](#root-parent) like any session. Drawn dashed; `◌` in text. A bare closed `(**HHMM-HHMM**)` row is an older off-clock session counted by its span. Not a `()` placeholder, a Stats day before tracking began (`not_tracked`), or the tracked-task mark on a `#task` row.
+A [Pomodoro](#pomodoro) whose time Bob records but keeps off the work clock — lunch, the gym, school pickup. Its timespan carries `[off:: Nm]` where a worked session carries `[t:: Nm]`: `- [x] (**1200-1300** [off:: 60m]) — MEET`. A session goes off the clock exactly when it keeps at least one [Task Link](#task-link) and every one resolves off-clock: `#off` (deprecated `#offclock`, `#off-clock`, `#untracked`) or an inherited area/project `offclock: true`, with `#on` and `offclock: false` as overrides; an unlinked session, an unresolved link, or one on-clock link keeps the whole session worked. Writers decide when they write the span (starts, closes, and `bob gcal sync` for an off-clock [Event Task](#event-task)); a closed row's key is history, and later tag or note-default edits are reported, never applied. An ended off-clock [Event Task](#event-task) nobody started — tagged or inherited — settles into one on the next `bob task reconcile`. Worked, Sessions, `bob pomodoro --worked`, and the [Day Strip](#day-strip) facts leave it out; its [Root Parent](#root-parent) still receives its minutes. The Off-clock and Total clocks of `bob stats -k` and the [Stats Dash](#stats-dash) count it, grouped by [Root Parent](#root-parent) like any session. Drawn dashed; `◌` in text. A bare closed `(**HHMM-HHMM**)` row is an older off-clock session counted by its span. Not a `()` placeholder, a Stats day before tracking began (`not_tracked`), or the tracked-task mark on a `#task` row.
 
 ### Pomodoro {#pomodoro}
 
@@ -319,7 +322,9 @@ A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily
 A Bob vault Markdown file with frontmatter `type: "[[project]]"` that holds a project's
 context and work. Its [Project Task](#project-task) (`^prj`) states the completion criteria and
 represents the project's overall status; ordinary tasks describe work toward that
-outcome. A closed project remains a project note if its `^prj` task is archived. See
+outcome. A closed project remains a project note if its `^prj` task is archived. An
+`offclock: true|false` key sets the clock default for tasks on the root walk
+beneath it (see [Off-Clock Follows Tag Then Note Default](../develop/decisions.md#off-clock-follows-tag-then-note-default)). See
 `docs/projects.md`.
 
 ### Project Task {#project-task}

@@ -13,4 +13,6 @@ elsewhere never moves it. Area notes hold the ongoing tasks, usually under `## T
 that belong to no finite project; the inboxes (`inbox`, `mac_inbox`, `gkeep_inbox`) are
 area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task, [[event-task]] rows under `## Events`, and closed tasks that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
 Root-level area notes are `@route` capture targets, and every area note gets the
-per-note Ready cap and `## Tasks` status grouping.
+per-note Ready cap and `## Tasks` status grouping. An `offclock: true|false` key
+sets the clock default for tasks on the root walk beneath it (see
+[[decisions:off-clock-follows-tag-then-note-default]]).

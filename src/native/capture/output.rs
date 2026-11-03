@@ -228,6 +228,9 @@ pub(super) struct PomodoroCloseSummaryJson {
     /// Whether the closed session is off the work clock. Omitted when false.
     #[serde(skip_serializing_if = "is_false")]
     pub(super) off_clock: bool,
+    /// Shared inherited note when the via rule applies. Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) clock_note: Option<String>,
     pub(super) tasks: Vec<PomodoroCloseTaskJson>,
     pub(super) carried: Vec<PomodoroCloseCarriedJson>,
     pub(super) notes: Vec<String>,
@@ -3247,7 +3250,10 @@ pub(super) fn print_human_pomodoro_close_success(
         _ => String::new(),
     };
     let decremented = close.decremented_minutes;
-    let off_clock = if close.off_clock { " · off-clock" } else { "" };
+    let off_clock = crate::native::pomodoro_homes::off_clock_via_label(
+        close.off_clock,
+        close.clock_note.as_deref(),
+    );
     let range_text = if decremented > 0 {
         format!(
             "{}-{} → {}-{} ({}m{}, −{}m)",

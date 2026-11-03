@@ -366,11 +366,12 @@ pub(super) fn plan_pomodoro_adjust_item(
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
+    let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
     let event_conflict = if spec.plus {
         let old_start = range.start_minutes as u16;
         let old_end = range.end_minutes as u16;
         let new_end = new_end_minutes;
-        detect_event_conflict(
+        detect_event_conflict_with(
             &updated,
             now.date(),
             target_name.as_deref(),
@@ -379,6 +380,8 @@ pub(super) fn plan_pomodoro_adjust_item(
             new_end,
             Some((old_start, old_end)),
             &FitKind::AdjustPlus { old_end },
+            Some(&vault),
+            Some(relative_target.as_path()),
         )
     } else {
         None
@@ -590,7 +593,8 @@ pub(super) fn plan_pomodoro_shift_item(
     } else {
         FitKind::ShiftEarlier { old_start }
     };
-    let event_conflict = detect_event_conflict(
+    let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+    let event_conflict = detect_event_conflict_with(
         &updated,
         now.date(),
         target_name.as_deref(),
@@ -599,6 +603,8 @@ pub(super) fn plan_pomodoro_shift_item(
         new_end,
         Some((old_start, old_end)),
         &fit,
+        Some(&vault),
+        Some(relative_target.as_path()),
     );
     let summary = PomodoroShiftSummary {
         direction: if spec.later { "later" } else { "earlier" },

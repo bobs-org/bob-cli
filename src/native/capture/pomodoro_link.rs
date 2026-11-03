@@ -1230,6 +1230,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         r#override: None,
                         tracked: true,
                         off_clock: false,
+                        clock_note: None,
                         event_run: None,
                         event_conflict: None,
                         event_in_progress: None,
@@ -1237,12 +1238,16 @@ pub(super) fn plan_pomodoro_link_with_start(
                     if let Some(finish) = meet_finish {
                         warnings.extend(finish.apply(&mut summary));
                     }
-                    attach_start_event_conflict(
+                    let vault =
+                        SnapshotCloseVault::from_planner(planner, bob_dir);
+                    attach_start_event_conflict_with(
                         &mut summary,
                         &started_day,
                         now.date(),
                         spec,
                         pomodoro_name,
+                        Some(&vault),
+                        Some(day_relative),
                     );
                     return Ok(CaptureWritePlan {
                         placement: Placement::Linked,
@@ -1384,6 +1389,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     r#override: None,
                     tracked: true,
                     off_clock: false,
+                    clock_note: None,
                     event_run: None,
                     event_conflict: None,
                     event_in_progress: None,
@@ -1391,12 +1397,15 @@ pub(super) fn plan_pomodoro_link_with_start(
                 if let Some(finish) = meet_finish {
                     warnings.extend(finish.apply(&mut summary));
                 }
-                attach_start_event_conflict(
+                let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
+                attach_start_event_conflict_with(
                     &mut summary,
                     &moved_day,
                     now.date(),
                     spec,
                     pomodoro_name,
+                    Some(&vault),
+                    Some(day_relative),
                 );
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -1551,6 +1560,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     r#override: None,
                     tracked: true,
                     off_clock: false,
+                    clock_note: None,
                     event_run: None,
                     event_conflict: None,
                     event_in_progress: None,
@@ -1558,12 +1568,15 @@ pub(super) fn plan_pomodoro_link_with_start(
                 if let Some(finish) = meet_finish {
                     warnings.extend(finish.apply(&mut summary));
                 }
-                attach_start_event_conflict(
+                let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
+                attach_start_event_conflict_with(
                     &mut summary,
                     &moved_day,
                     now.date(),
                     spec,
                     pomodoro_name,
+                    Some(&vault),
+                    Some(day_relative),
                 );
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -1672,6 +1685,7 @@ pub(super) fn plan_pomodoro_link_with_start(
         r#override: None,
         tracked: true,
         off_clock: false,
+        clock_note: None,
         event_run: None,
         event_conflict: None,
         event_in_progress: None,
@@ -1679,12 +1693,15 @@ pub(super) fn plan_pomodoro_link_with_start(
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
-    attach_start_event_conflict(
+    let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
+    attach_start_event_conflict_with(
         &mut summary,
         &started_day,
         now.date(),
         spec,
         pomodoro_name,
+        Some(&vault),
+        Some(day_relative),
     );
     let _ = (q_line_index, q_subtree_end);
     // The queued entry started in place and already holds the link: the

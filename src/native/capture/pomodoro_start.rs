@@ -81,12 +81,14 @@ pub(super) fn plan_pomodoro_start(
     if let Some(finish) = finish {
         warnings.extend(finish.apply(&mut summary));
     }
-    attach_start_event_conflict(
+    attach_start_event_conflict_with(
         &mut summary,
         &updated_day,
         now.date(),
         spec,
         pomodoro_name,
+        vault,
+        Some(day_relative),
     );
     Ok((updated_day, placement, summary, before))
 }
@@ -190,6 +192,7 @@ fn plan_pomodoro_start_unruled(
                         r#override: None,
                         tracked: true,
                         off_clock: false,
+                        clock_note: None,
                         event_run: None,
                         event_conflict: None,
                         event_in_progress: None,
@@ -238,6 +241,7 @@ fn plan_pomodoro_start_unruled(
                         r#override: None,
                         tracked: true,
                         off_clock: false,
+                        clock_note: None,
                         event_run: None,
                         event_conflict: None,
                         event_in_progress: None,
@@ -281,6 +285,7 @@ fn plan_pomodoro_start_unruled(
                         r#override: None,
                         tracked: true,
                         off_clock: false,
+                        clock_note: None,
                         event_run: None,
                         event_conflict: None,
                         event_in_progress: None,
@@ -354,6 +359,7 @@ fn plan_pomodoro_start_unruled(
                 r#override: None,
                 tracked: true,
                 off_clock: false,
+                clock_note: None,
                 event_run: None,
                 event_conflict: None,
                 event_in_progress: None,
@@ -387,6 +393,7 @@ fn plan_pomodoro_start_unruled(
             r#override: None,
             tracked: true,
             off_clock: false,
+            clock_note: None,
             event_run: None,
             event_conflict: None,
             event_in_progress: None,
@@ -455,6 +462,7 @@ fn plan_typed_pomodoro_start(
                     r#override: None,
                     tracked: true,
                     off_clock: false,
+                    clock_note: None,
                     event_run: None,
                     event_conflict: None,
                     event_in_progress: None,
@@ -490,6 +498,7 @@ fn plan_typed_pomodoro_start(
                     r#override: None,
                     tracked: true,
                     off_clock: false,
+                    clock_note: None,
                     event_run: None,
                     event_conflict: None,
                     event_in_progress: None,
@@ -943,9 +952,16 @@ pub(super) fn plan_pomodoro_start_item(
             "cannot start the next Pomodoro: today's ledger has multiple open timed Pomodoros; finish all but one first",
         ));
     }
-    let Some(entry) =
-        unnamed_start_target(Path::new(&rel), &staged, &scan, now, &spec)
-    else {
+    let start_vault =
+        SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+    let Some(entry) = unnamed_start_target_with(
+        Path::new(&rel),
+        &staged,
+        &scan,
+        now,
+        &spec,
+        Some(&start_vault),
+    ) else {
         return Err(CaptureError::io(format!(
             "no future Pomodoro to start: today's ledger (`{rel}`) has no open `- [ ] ()` placeholder (start a new named session with `=<name>`, or a task's session with `^route:block-id=`)"
         )));
@@ -1033,6 +1049,7 @@ pub(super) fn plan_pomodoro_start_item(
         r#override: None,
         tracked: true,
         off_clock: false,
+        clock_note: None,
         event_run: None,
         event_conflict: None,
         event_in_progress: None,
@@ -1040,7 +1057,15 @@ pub(super) fn plan_pomodoro_start_item(
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
-    attach_start_event_conflict(&mut summary, &staged_day, today, &spec, None);
+    attach_start_event_conflict_with(
+        &mut summary,
+        &staged_day,
+        today,
+        &spec,
+        None,
+        Some(&vault),
+        Some(relative_target.as_path()),
+    );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
@@ -1273,6 +1298,7 @@ fn plan_override_restart_item(
         }),
         tracked: true,
         off_clock: false,
+        clock_note: None,
         event_run: None,
         event_conflict: None,
         event_in_progress: None,
@@ -1280,7 +1306,15 @@ fn plan_override_restart_item(
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
-    attach_start_event_conflict(&mut summary, &staged_day, today, spec, None);
+    attach_start_event_conflict_with(
+        &mut summary,
+        &staged_day,
+        today,
+        spec,
+        None,
+        Some(&vault),
+        Some(Path::new(&rel)),
+    );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             task_theme: None,
@@ -1856,6 +1890,7 @@ fn plan_override_swap_item(
         }),
         tracked: true,
         off_clock: false,
+        clock_note: None,
         event_run: None,
         event_conflict: None,
         event_in_progress: None,
@@ -1863,12 +1898,14 @@ fn plan_override_swap_item(
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
-    attach_start_event_conflict(
+    attach_start_event_conflict_with(
         &mut summary,
         &staged_day,
         today,
         spec,
         Some(selector),
+        Some(&vault),
+        Some(relative_target.as_path()),
     );
     let started_ref = match start_before {
         PomodoroBlockBefore::Created => {
@@ -2651,6 +2688,7 @@ fn plan_named_pomodoro_start_item(
         r#override: None,
         tracked: true,
         off_clock: false,
+        clock_note: None,
         event_run: None,
         event_conflict: None,
         event_in_progress: None,
@@ -2658,12 +2696,14 @@ fn plan_named_pomodoro_start_item(
     if let Some(finish) = meet_finish {
         warnings.extend(finish.apply(&mut summary));
     }
-    attach_start_event_conflict(
+    attach_start_event_conflict_with(
         &mut summary,
         &staged_day,
         today,
         spec,
         Some(selector),
+        Some(&vault),
+        Some(relative_target.as_path()),
     );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
