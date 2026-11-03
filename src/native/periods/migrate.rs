@@ -757,17 +757,22 @@ fn rewrite_daily(contents: &str, week: PeriodId) -> (String, bool, bool) {
     let mut lines: Vec<String> = Vec::new();
     let mut in_fm = false;
     let mut fm_started = false;
+    let mut fm_open_idx: Option<usize> = None;
+    let mut fm_closed = false;
+    let mut parent_found = false;
     let mut nav_rewritten = false;
     let mut saw_old_nav = false;
     for line in contents.lines() {
         if !fm_started && line.trim() == "---" {
             fm_started = true;
             in_fm = true;
+            fm_open_idx = Some(lines.len());
             lines.push(line.to_string());
             continue;
         }
         if in_fm && line.trim() == "---" {
             in_fm = false;
+            fm_closed = true;
             lines.push(line.to_string());
             continue;
         }
@@ -775,6 +780,7 @@ fn rewrite_daily(contents: &str, week: PeriodId) -> (String, bool, bool) {
             && line.trim_start().starts_with("parent:")
             && let Some(rewritten) = rewrite_parent_line(line, &target)
         {
+            parent_found = true;
             lines.push(rewritten);
             continue;
         }
@@ -785,6 +791,12 @@ fn rewrite_daily(contents: &str, week: PeriodId) -> (String, bool, bool) {
             continue;
         }
         lines.push(line.to_string());
+    }
+    if fm_closed
+        && !parent_found
+        && let Some(open_idx) = fm_open_idx
+    {
+        lines.insert(open_idx + 1, format!("parent: \"[[{target}]]\""));
     }
     let mut after = lines.join("\n");
     if contents.ends_with('\n') {
@@ -1057,6 +1069,27 @@ mod tests {
         assert!(!nav);
         assert!(after.contains("parent: \"[[2026/2026-W01]]\""), "{after}");
         assert!(after.contains("[[yesterday]] | [[tomorrow]]"), "{after}");
+    }
+
+    #[test]
+    fn missing_parent_line_is_inserted_first_in_frontmatter() {
+        let week = PeriodId::Week {
+            year: 2026,
+            week: 22,
+        };
+        let daily = "---\ntype: \"[[day]]\"\ndate: 2026-05-28\n---\n\n[[2026/20260527|prev]] | [[2026/20260528|day]] | [[2026/20260529|next]]\n";
+        let (after, nav, skipped) = rewrite_daily(daily, week);
+        assert!(skipped);
+        assert!(!nav);
+        assert!(
+            after.contains("---\nparent: \"[[2026/2026-W22]]\"\ntype:"),
+            "{after}"
+        );
+        assert_eq!(
+            after.matches("parent:").count(),
+            1,
+            "exactly one parent line: {after}"
+        );
     }
 
     #[test]
