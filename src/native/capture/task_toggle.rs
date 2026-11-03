@@ -1,5 +1,6 @@
 //! Task-toggle capture planning.
 use super::*;
+use crate::native::task_complete as engine;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_task_toggle_capture(
@@ -14,6 +15,7 @@ pub(super) fn plan_task_toggle_capture(
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
+    selection: engine::SuccessorSelection,
 ) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
@@ -81,13 +83,33 @@ pub(super) fn plan_task_toggle_capture(
     if removal.has_changes {
         let day_relative =
             day_file.strip_prefix(bob_dir).unwrap_or(day_file.as_path());
+        planner.stage(&day_file, removal.content.clone())?;
+        let relation = plan_unlink_relation_successors(
+            planner,
+            ctx,
+            bob_dir,
+            target,
+            &day_file,
+            day_relative,
+            block_id,
+            previous_status_symbol,
+            &previous_task_line,
+            &day_contents,
+            &removal.content,
+            removal.first_removed_line,
+            today,
+            selection,
+        )?;
+        let final_day = planner
+            .current_contents(&day_file)?
+            .unwrap_or_else(|| removal.content.clone());
         let pomodoro_refs = restamp_changed_timed_entries(
             planner,
             bob_dir,
             &day_file,
             day_relative,
             &day_contents,
-            removal.content,
+            final_day,
             now,
             warnings,
         )?;
@@ -125,6 +147,7 @@ pub(super) fn plan_task_toggle_capture(
                     dropped_dependencies: Vec::new(),
                     task_block_ref: None,
                     blocks_updates: Vec::new(),
+                    relation,
                 }),
                 pomodoro_link: None,
                 pomodoro_refs,
@@ -237,6 +260,7 @@ pub(super) fn plan_task_toggle_capture(
                             dropped_dependencies: Vec::new(),
                             task_block_ref: None,
                             blocks_updates: Vec::new(),
+                            relation: ToggleRelationPlan::default(),
                         }),
                         pomodoro_link: None,
                         pomodoro_refs: consumption.pomodoro_refs,
@@ -392,10 +416,170 @@ pub(super) fn plan_task_toggle_capture(
                 dropped_dependencies,
                 task_block_ref,
                 blocks_updates,
+                relation: ToggleRelationPlan::default(),
             }),
             pomodoro_link: None,
             pomodoro_refs,
         },
         None,
     ))
+}
+
+/// Raise `(T, parked)` when `@route+id!` unlinks a Pending task
+/// (`docs/task-dependencies.md` §12.18 SA31). Next, Ready, and Blocked
+/// unlinks stay silent (SA32). Relation-only: C is empty.
+#[allow(clippy::too_many_arguments)]
+fn plan_unlink_relation_successors(
+    planner: &mut CaptureBatchPlanner,
+    ctx: &mut DependencyContext,
+    bob_dir: &Path,
+    target: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    block_id: &str,
+    status_symbol: char,
+    task_line: &str,
+    pre_day: &str,
+    post_day: &str,
+    first_removed_line: Option<usize>,
+    today: NaiveDate,
+    selection: engine::SuccessorSelection,
+) -> Result<ToggleRelationPlan, CaptureError> {
+    if status_symbol != '/'
+        || block_id.is_empty()
+        || ctx.successor_labels().is_empty()
+        || !ctx.link_unblocked()
+    {
+        return Ok(ToggleRelationPlan::default());
+    }
+    let settings = note_tasks::read_settings(bob_dir);
+    let relative = target
+        .strip_prefix(bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| target.to_path_buf());
+    let parked = vec![engine::RelationEvent {
+        target: engine::RelationTarget {
+            note_path: relative.clone(),
+            block_id: block_id.to_string(),
+            text: task_complete_display_text(
+                task_line,
+                &settings.global_filter,
+                Some(block_id),
+            ),
+        },
+        kind: engine::RelationEventKind::Parked,
+        slot: first_removed_line.map(|line| engine::RelationSlotAnchor {
+            note_path: day_relative.to_path_buf(),
+            line,
+        }),
+    }];
+    let mut note_texts = Vec::new();
+    if let Some(contents) = planner.current_contents(target)? {
+        note_texts.push((relative, contents));
+    }
+    let tasks_settings =
+        crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    let index = super::task_complete::staged_note_index(bob_dir, planner, ctx);
+    let Some(read) = super::relation_sources::collect_relation_sources(
+        ctx,
+        planner,
+        bob_dir,
+        &[],
+        &parked,
+        &note_texts,
+        &tasks_settings,
+        &index,
+    )?
+    else {
+        return Ok(ToggleRelationPlan::default());
+    };
+    super::task_complete::overlay_note_texts(
+        &mut note_texts,
+        read.source_notes,
+    );
+    super::task_complete::overlay_note_texts(
+        &mut note_texts,
+        read.target_notes,
+    );
+    super::task_complete::overlay_note_texts(
+        &mut note_texts,
+        read.dependency_notes,
+    );
+    let snapshot: Vec<(PathBuf, String)> = Vec::new();
+    let successor_plan = engine::plan_successors(engine::SuccessorInput {
+        bob_dir: Some(bob_dir),
+        completed: Vec::new(),
+        snapshot,
+        note_texts,
+        pre_day: Some(pre_day.to_string()),
+        post_day: Some(post_day.to_string()),
+        closing: None,
+        day_relative: day_relative.to_path_buf(),
+        today,
+        tasks_settings: &tasks_settings,
+        note_settings: &settings,
+        link_unblocked: ctx.link_unblocked(),
+        keep_moving: ctx.keep_moving(),
+        snapshot_complete: true,
+        relation: Some(read.input),
+        selection,
+        index: &index,
+    });
+    for (relative_path, text) in &successor_plan.changed_files {
+        planner.stage(&bob_dir.join(relative_path), text.clone())?;
+    }
+    if let Some(updated_day) = successor_plan.new_day_text.clone() {
+        planner.stage(day_file, updated_day)?;
+    }
+    let day_relative_display = day_relative.to_string_lossy();
+    let successors = successor_plan
+        .relation_successors
+        .iter()
+        .map(|row| {
+            unblocked_row_json(
+                row,
+                bob_dir,
+                day_relative_display.as_ref(),
+                &settings.global_filter,
+            )
+        })
+        .collect::<Vec<_>>();
+    let held = successor_plan
+        .relation_held
+        .iter()
+        .map(|row| {
+            relation_held_row_json(row, bob_dir, &settings.global_filter)
+        })
+        .collect::<Vec<_>>();
+    let check =
+        relation_check_json(successor_plan.relation_check, &successors, &held);
+    let mut task_block_refs = Vec::new();
+    for dependent in &successor_plan.relation_successors {
+        if dependent.link.is_none() {
+            continue;
+        }
+        let absolute_path = bob_dir.join(&dependent.note_path);
+        let rel = display_relative(&dependent.note_path);
+        let mut stem = dependent.note_path.clone();
+        stem.set_extension("");
+        super::task_complete::push_relation_successor_ref(
+            &mut task_block_refs,
+            absolute_path,
+            rel,
+            display_relative(&stem),
+            dependent.line.saturating_sub(1),
+            if dependent.block_id.is_empty() {
+                None
+            } else {
+                Some(dependent.block_id.clone())
+            },
+        );
+    }
+    Ok(ToggleRelationPlan {
+        successors,
+        held,
+        check,
+        groups: successor_plan.relation_groups.clone(),
+        task_block_refs,
+    })
 }

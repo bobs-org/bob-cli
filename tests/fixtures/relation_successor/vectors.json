@@ -98,7 +98,7 @@
     {"id": "SU-P30", "name": "relation-only title with several groups", "input": {"label": "starts after", "targets": ["T1", "T2"], "count": 2}, "expected": {"title": "Starts after 2 tasks"}},
     {"id": "SU-P31", "name": "capture-complete offers verdict", "input": {"source": "Prepare evaluation prompt", "target": "Send implementation prompt"}, "expected": {"message": "🪢 Offers “Prepare evaluation prompt” when “Send implementation prompt” is parked or done · never blocks"}}
   ],
-  "ui_only": ["SA25", "SA27", "SA29", "SA30", "SA31", "SA32", "SA33", "SA34", "SA35", "SA36"],
+  "ui_only": ["SA25", "SA27", "SA29", "SA30", "SA33", "SA34", "SA35", "SA36"],
   "coverage": {
     "SA22": "key",
     "SA23": "config",
@@ -107,8 +107,8 @@
     "SA27": "UI uncertainty presentation",
     "SA29": "UI revalidation",
     "SA30": "authoring indication",
-    "SA31": "v1.1 capture unlink UI",
-    "SA32": "v1.1 capture unlink UI",
+    "SA31": "capture unlink",
+    "SA32": "capture unlink silence",
     "SA33": "v1.1 Obsidian unlink UI",
     "SA34": "UI API version gate",
     "SA35": "UI undo receipt",

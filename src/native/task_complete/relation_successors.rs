@@ -47,7 +47,7 @@ pub(crate) struct RelationEvent {
     pub(crate) target: RelationTarget,
     pub(crate) kind: RelationEventKind,
     /// Explicit only for gestures that name a placement slot (for example,
-    /// a future unlink gesture); ordinary close gestures use their context.
+    /// a capture unlink); ordinary close gestures use their context.
     pub(crate) slot: Option<RelationSlotAnchor>,
 }
 
@@ -82,8 +82,8 @@ pub(crate) struct RelationHeldRow {
 
 /// Optional relation-successor engine input for [`plan_successors`].
 ///
-/// Capture `!` and complete-label callers pass `Some` after the cheap
-/// gate; Pomodoro close still passes `None` until the parks phase.
+/// Capture `!`, complete-label, Pomodoro-close, and unlink callers pass
+/// `Some` after the cheap gate.
 /// Source texts and the narrow target reader are derived from the
 /// planner's held snapshot (`snapshot` + `note_texts`); this struct
 /// supplies the remaining relation facts: effective labels, parked-only

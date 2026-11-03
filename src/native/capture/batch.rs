@@ -778,6 +778,20 @@ pub(super) struct TaskToggleCaptureDetails {
     pub(super) dropped_dependencies: Vec<DroppedDependencyJson>,
     pub(super) task_block_ref: Option<TaskBlockRef>,
     pub(super) blocks_updates: Vec<BlocksLineUpdateJson>,
+    /// Item-level relation successor plan for an `@route+id!` unlink of a
+    /// Pending task. Empty on every other toggle path.
+    pub(super) relation: ToggleRelationPlan,
+}
+
+/// Relation-successor rows raised by a Pending unlink (`docs/task-dependencies.md`
+/// §12.18 SA31). Default is silence.
+#[derive(Debug, Default)]
+pub(super) struct ToggleRelationPlan {
+    pub(super) successors: Vec<TaskCompleteUnblockedJson>,
+    pub(super) held: Vec<RelationHeldJson>,
+    pub(super) check: Option<&'static str>,
+    pub(super) groups: Vec<crate::native::task_complete::RelationOfferGroup>,
+    pub(super) task_block_refs: Vec<TaskBlockRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

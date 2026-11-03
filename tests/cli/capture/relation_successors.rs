@@ -1,8 +1,9 @@
 //! Capture relation-successor offers for managed Done (`!` and nested
-//! complete-label commits) and Pomodoro parked/close events (`x*`, `x!`,
-//! embeds, `=x*`). JSON shape, picks, refusal, omission, and dry-run
-//! parity (`docs/task-dependencies.md` §§12.1, 12.5, 12.18; SA1–SA6,
-//! SA11–SA18).
+//! complete-label commits), Pomodoro parked/close events (`x*`, `x!`,
+//! embeds, `=x*`), and `@route+id!` unlink of a Pending task. JSON shape,
+//! picks, refusal, omission, and dry-run parity
+//! (`docs/task-dependencies.md` §§12.1, 12.5, 12.18; SA1–SA6, SA11–SA18,
+//! SA31–SA32).
 
 use crate::support::*;
 use std::fs;
@@ -1452,4 +1453,202 @@ fn link_unblocked_false_omits_relation_fields() {
         json["task_complete"].get("relation_check").is_none(),
         "{json}"
     );
+}
+
+fn unlink_agents(status: char) -> String {
+    format!(
+        concat!(
+            "- [ ] #task Prepare evaluation prompt [id:: evaluate] ^evaluate\n",
+            "  - 🪢 **LINKS:** starts after [[agents#^implement]]\n",
+            "- [{status}] #task Send implementation prompt [id:: implement] ^implement\n",
+        ),
+        status = status
+    )
+}
+
+fn unlink_day() -> String {
+    "## Pomodoros\n- [ ] () \u{2014} BUILD\n  - [[agents#^implement]]\n"
+        .to_string()
+}
+
+fn unlink_vault(
+    name: &str,
+    status: char,
+) -> (TempDir, PathBuf, PathBuf, PathBuf) {
+    let (temp, vault, day_file) = vault(name);
+    write_file(&vault.join("agents.md"), &unlink_agents(status));
+    write_file(&day_file, &unlink_day());
+    let config = write_config(&vault, SUCCESSOR_CONFIG);
+    (temp, vault, day_file, config)
+}
+
+fn item_relation_row(json: &serde_json::Value) -> &serde_json::Value {
+    let rows = json["relation_successors"]
+        .as_array()
+        .unwrap_or_else(|| panic!("item relation_successors array: {json}"));
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    &rows[0]
+}
+
+fn assert_item_relation_silent(json: &serde_json::Value) {
+    assert!(json.get("relation_successors").is_none(), "{json}");
+    assert!(json.get("relation_held").is_none(), "{json}");
+    assert!(json.get("relation_check").is_none(), "{json}");
+}
+
+// SA31: `@agents+implement!` unlinks a `[/]` T and offers S at T's former
+// slot on the capture item (no sub-object).
+#[test]
+fn sa31_pending_unlink_offers_relation_at_former_slot() {
+    let (_temp, vault, day_file, config) =
+        unlink_vault("bob-cli-sa31-unlink", '/');
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "@agents+implement!",
+    );
+    assert_eq!(json["kind"], "task_toggle");
+    assert_eq!(json["toggle_direction"], "unlink");
+    assert_eq!(json["status_symbol"], "/");
+    assert_eq!(json["relation_check"], "checked");
+    assert!(json.get("task_complete").is_none(), "{json}");
+    let row = item_relation_row(&json);
+    assert_eq!(row["note_path"], "agents.md");
+    assert_eq!(row["block_id"], "evaluate");
+    assert_eq!(row["text"], "Prepare evaluation prompt");
+    assert_eq!(row["trigger"], "relation");
+    assert_eq!(row["offer"]["group"], "relation");
+    assert_eq!(row["offer"]["after"], "agents.md#^implement");
+    assert_eq!(row["offer"]["selected"], false);
+    assert_eq!(row["not_linked"], "not_selected");
+    assert_eq!(row["offer"]["destination"]["entry_name"], "BUILD");
+    assert_eq!(row["offer"]["destination"]["entry_role"], "slot");
+    assert_eq!(row["relation"]["label"], "starts after");
+    assert_eq!(row["relation"]["key"], "starts after");
+    assert_eq!(row["relation"]["event"], "parked");
+    assert_eq!(
+        row["relation"]["after"],
+        serde_json::json!([{
+            "note_path": "agents.md",
+            "block_id": "implement",
+            "text": "Send implementation prompt",
+        }])
+    );
+    assert_eq!(json["pull_in"]["offer_count"], 1);
+    assert_eq!(json["pull_in"]["picked_count"], 0);
+    let groups = json["pull_in"]["groups"].as_array().expect("groups");
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0]["group"], "relation");
+    assert_eq!(groups[0]["event"], "parked");
+    assert_eq!(groups[0]["label"], "starts after");
+
+    let human = capture_output(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run"],
+        "@agents+implement!",
+        true,
+    );
+    let text = stdout(&human);
+    assert!(
+        text.contains(
+            "Starts after \u{201c}Send implementation prompt\u{201d}"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("it is parked (your \u{1faa2} links, not dependents)"),
+        "{text}"
+    );
+}
+
+// SA31 pick: `-p all` links S at T's former slot; dry-run JSON matches
+// the real run aside from `dry_run`.
+#[test]
+fn sa31_pick_links_at_former_slot_with_dry_run_parity() {
+    let (_temp, vault, day_file, config) =
+        unlink_vault("bob-cli-sa31-pick", '/');
+    let dry = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run", "-p", "all"],
+        "@agents+implement!",
+    );
+    let before = vault_bytes(&vault);
+    assert_eq!(dry["dry_run"], true);
+    let row = item_relation_row(&dry);
+    assert_eq!(row["offer"]["selected"], true);
+    assert_eq!(row["offer"]["destination"]["entry_role"], "slot");
+    let real = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["-p", "all"],
+        "@agents+implement!",
+    );
+    assert_eq!(real["dry_run"], false);
+    assert_ne!(vault_bytes(&vault), before);
+    let mut masked = dry.clone();
+    masked["dry_run"] = serde_json::Value::Bool(false);
+    assert_eq!(masked["relation_successors"], real["relation_successors"]);
+    assert_eq!(
+        masked["pull_in"]["picked_count"],
+        real["pull_in"]["picked_count"]
+    );
+    let note = fs::read_to_string(vault.join("agents.md")).expect("agents");
+    assert!(
+        note.contains("- [*] #task Prepare evaluation prompt"),
+        "{note}"
+    );
+    assert!(note.contains("[fresh:: 2026-11-02]"), "{note}");
+    let day = fs::read_to_string(&day_file).expect("day");
+    assert!(day.contains("[[agents#^evaluate]]"), "{day}");
+    assert!(!day.contains("[[agents#^implement]]"), "{day}");
+}
+
+// SA32: unlinking a Next or Ready T stays silent.
+#[test]
+fn sa32_next_or_ready_unlink_is_relation_silent() {
+    for (status, name) in [('*', "next"), (' ', "ready")] {
+        let (_temp, vault, day_file, config) =
+            unlink_vault(&format!("bob-cli-sa32-{name}"), status);
+        let json = capture_json(
+            &vault,
+            &day_file,
+            &config,
+            &["--dry-run"],
+            "@agents+implement!",
+        );
+        assert_eq!(json["kind"], "task_toggle", "{name}");
+        assert_eq!(json["toggle_direction"], "unlink", "{name}");
+        assert_item_relation_silent(&json);
+        assert_eq!(json["pull_in"]["offer_count"], 0, "{name}");
+    }
+}
+
+// Later re-linking a parked T via `@route+id!` drops that T's parked group.
+#[test]
+fn unlink_then_relink_drops_parked_group() {
+    let (_temp, vault, day_file, config) =
+        unlink_vault("bob-cli-sa31-relink", '/');
+    let json = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["--dry-run", "-p", "all"],
+        "@agents+implement!\n\n@agents+implement!",
+    );
+    let captures = json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 2, "{captures:?}");
+    assert!(
+        captures[0].get("relation_successors").is_none(),
+        "relinked T drops its parked group: {}",
+        captures[0]
+    );
+    assert_eq!(captures[1]["toggle_direction"], "link");
+    assert_eq!(json["pull_in"]["offer_count"], 0);
 }

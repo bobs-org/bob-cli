@@ -395,7 +395,7 @@ fn finish_link_insertion(
             (line_index, child_block_end_line(&updated_lines, line_index))
         })
         .collect::<Vec<_>>();
-    let (final_content, removed_links) =
+    let (final_content, removed_links, _) =
         remove_matching_links(content_after_insert, block_link, &ranges);
     let destination = updated_scan
         .entries
@@ -427,6 +427,10 @@ pub(crate) struct LinkRemovalPlan {
     pub(crate) content: String,
     pub(crate) has_changes: bool,
     pub(crate) removed_links: usize,
+    /// 0-based pre-gesture line of the first matching live link, in
+    /// document order. The relation-successor unlink slot uses this
+    /// against the post-gesture day text.
+    pub(crate) first_removed_line: Option<usize>,
 }
 
 /// Remove every matching `block_link` from every currently open Pomodoro
@@ -444,6 +448,7 @@ pub(crate) fn plan_link_removal(
             content: day_contents.to_string(),
             has_changes: false,
             removed_links: 0,
+            first_removed_line: None,
         };
     }
     let lines = line_spans(day_contents);
@@ -456,12 +461,13 @@ pub(crate) fn plan_link_removal(
             (line_index, child_block_end_line(&lines, line_index))
         })
         .collect::<Vec<_>>();
-    let (content, removed_links) =
+    let (content, removed_links, first_removed_line) =
         remove_matching_links(day_contents, block_link, &ranges);
     LinkRemovalPlan {
         has_changes: removed_links > 0,
         content,
         removed_links,
+        first_removed_line,
     }
 }
 
@@ -595,12 +601,13 @@ fn remove_matching_links(
     contents: &str,
     block_link: &str,
     ranges: &[(usize, usize)],
-) -> (String, usize) {
+) -> (String, usize, Option<usize>) {
     let lines = line_spans(contents);
     let mut covered = vec![false; lines.len()];
     let mut removed_line_ranges: Vec<(usize, usize)> = Vec::new();
     let mut token_edits: Vec<(usize, String)> = Vec::new();
     let mut removed_count = 0usize;
+    let mut first_removed_line = None;
 
     for &(entry_line, child_end_line) in ranges {
         if child_end_line < entry_line + 1 {
@@ -614,6 +621,9 @@ fn remove_matching_links(
             let live_links = unstruck_link_ranges(text, block_link);
             if live_links.is_empty() {
                 continue;
+            }
+            if first_removed_line.is_none() {
+                first_removed_line = Some(line_index);
             }
             let sole_content =
                 list_item_body(text).map(str::trim_end) == Some(block_link);
@@ -637,7 +647,7 @@ fn remove_matching_links(
     }
 
     if removed_count == 0 {
-        return (contents.to_string(), 0);
+        return (contents.to_string(), 0, None);
     }
 
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
@@ -667,7 +677,7 @@ fn remove_matching_links(
     }
     result.push_str(&contents[cursor..]);
 
-    (result, removed_count)
+    (result, removed_count, first_removed_line)
 }
 
 /// Byte ranges for live, unstruck occurrences of a block link on one

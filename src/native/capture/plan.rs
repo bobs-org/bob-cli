@@ -1011,6 +1011,7 @@ pub(super) fn plan_capture_item(
             warnings,
             dependency_ctx,
             task_theme_context,
+            request.selection.clone(),
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
         let has_marker = marker_retype.is_some();
@@ -1115,10 +1116,10 @@ pub(super) fn plan_capture_item(
                 mirror_skipped: Vec::new(),
                 list: None,
                 relation_label_hides: Vec::new(),
-                relation_successors: Vec::new(),
-                relation_held: Vec::new(),
-                relation_check: None,
-                relation_groups: Vec::new(),
+                relation_successors: toggle.relation.successors.clone(),
+                relation_held: toggle.relation.held.clone(),
+                relation_check: toggle.relation.check,
+                relation_groups: toggle.relation.groups.clone(),
             },
             clip_plan: None,
             pomodoro_refs,
@@ -1126,6 +1127,7 @@ pub(super) fn plan_capture_item(
                 .task_block_ref
                 .clone()
                 .into_iter()
+                .chain(toggle.relation.task_block_refs.iter().cloned())
                 .collect(),
         };
         if let Some((original, applied)) = marker_retype {

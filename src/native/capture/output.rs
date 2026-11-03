@@ -702,8 +702,9 @@ pub(super) struct CaptureItemResult {
     /// `@route` / `@route#section` header. Additive: omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) list: Option<ListContext>,
-    /// Item-level relation successor offers for future toggle-unlink.
-    /// Omitted when empty so existing items stay byte-identical.
+    /// Item-level relation successor offers for an `@route+id!` unlink of
+    /// a Pending task (`docs/task-dependencies.md` §12.18 SA31). Omitted
+    /// when empty so existing items stay byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) relation_successors: Vec<TaskCompleteUnblockedJson>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -4360,6 +4361,18 @@ pub(super) fn print_human_task_toggle_success(
         }
         _ => {}
     }
+    print_human_successor_rows(
+        &[],
+        &[],
+        RelationHumanOutput {
+            rows: &result.relation_successors,
+            groups: &result.relation_groups,
+            held: &result.relation_held,
+            check: result.relation_check,
+        },
+        result.dry_run,
+        styler,
+    );
 }
 
 pub(super) fn print_human_ensure_next_ledger(
@@ -4919,11 +4932,11 @@ impl RelationHumanOutput<'static> {
     }
 }
 
-/// Successor rows shared by `!` closes and Pomodoro closes
-/// (`docs/task-dependencies.md` §12.6 human output): linked rows with
-/// their destination capsule, recovered rows with their reason, and
-/// muted still-blocked rows. Relation groups print in engine order
-/// between hand-offs and project groups.
+/// Successor rows shared by `!` closes, Pomodoro closes, and Pending
+/// unlinks (`docs/task-dependencies.md` §12.6 human output): linked
+/// rows with their destination capsule, recovered rows with their
+/// reason, and muted still-blocked rows. Relation groups print in
+/// engine order between hand-offs and project groups.
 pub(super) fn print_human_successor_rows(
     unblocked: &[TaskCompleteUnblockedJson],
     still_blocked: &[TaskCompleteStillBlockedJson],

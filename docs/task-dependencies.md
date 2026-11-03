@@ -1015,6 +1015,8 @@ It **never** prompts, offers, or links on any of the following:
 - raw checkbox clicks;
 - `bob task reconcile` / hooks;
 - `x*` parks; it offers relation successors only (§12.18);
+- `@route+id!` unlinking a Pending `[/]` task; it offers relation
+  successors only, at the removed-link slot (§12.18);
 - Ctrl+Enter on a Depends-On line.
 
 Cancels still recover dependents exactly as today. Cancel never offers
@@ -1023,7 +1025,9 @@ project's `^prj` (surfaces only, §12.10).
 
 Parking with `x*` is not a managed Done gesture. It may offer relation
 successors for the parked task (§12.18); dependency, project,
-project-finished, and keep-moving offers still do not run.
+project-finished, and keep-moving offers still do not run. Capture
+`@route+id!` unlinking a Pending task is the same kind of parked event
+and uses T's first removed-link slot.
 
 ### 12.2 Rule
 
@@ -2917,7 +2921,7 @@ capture item and before the gesture strikes, moves, or drops links.
 | --- | --- | --- |
 | Capture close with effective parked outcome (`x*`, `x*N`, `x1*`, `x*!M`, `=x*…`); includes T already `[/]` | `parked`, only if no post-close live link remains | capture |
 | Every managed Done in §12.1, including capture close, complete label, Ctrl+Enter, Alt+] into Done, and walk PRE/POST completion | `done` | capture or cycler |
-| Capture `@route+id!` unlinking a `[/]` T | `parked` | capture, v1.1 |
+| Capture `@route+id!` unlinking a `[/]` T | `parked` | capture |
 | Obsidian Ctrl+Shift+Enter unlink of a `[/]` T, once the Unlink task prompt settles | `parked` | Obsidian, v1.1 |
 
 Nothing else fires. In particular, a park that leaves another live link,
@@ -2992,9 +2996,10 @@ Placement uses the triggering target's §12.3 anchor and D7 type
 routing. A `done` event uses the struck-bullet slot, closing anchor,
 `inherit`, or implicit destination. A `parked` `x*` event uses the
 closing continuation (the matching open same-name entry, else a new
-placeholder). A v1.1 unlink uses T's first removed-link slot, or the
-implicit destination if cleanup removed that entry. A placeholder is
-never created only to display an offer.
+placeholder). A capture `@route+id!` unlink uses T's first removed-link
+slot, or the implicit destination if cleanup removed that entry. Obsidian
+unlink placement ships in v1.1. A placeholder is never created only to
+display an offer.
 
 A picked row follows the ordinary successor write: Ready or Blocked
 becomes Next as allowed by the event rule; Next stays Next. Bob mints a
@@ -3150,8 +3155,8 @@ surface that owns them, not the pure rule engines.
 | SA28 | S is closed, under `done/`, or in previous daily note | Skip, unreported |
 | SA29 | Picked S lost its edge, became Blocked, or linked before Obsidian apply | Refuse that row; nothing substituted (UI revalidation) |
 | SA30 | Author edge to already parked / closed T | Caveat `already parked — … offered when it is done` / `already closed — nothing left to wait for`; no offer at commit (authoring) |
-| SA31 | `@agents+implement!` unlinks a `[/]` T | Event `parked`; offer at T's former slot (v1.1 UI) |
-| SA32 | `@agents+implement!` unlinks a `[*]` T | Silence (v1.1 UI) |
+| SA31 | `@agents+implement!` unlinks a `[/]` T | Event `parked`; offer at T's former slot |
+| SA32 | `@agents+implement!` unlinks a `[*]` T | Silence |
 | SA33 | Obsidian unlink prompt settles on `[/]` T | Relation picker with event `parked`; canceling the prompt is silent (v1.1 UI) |
 | SA34 | Nav `api.successors.version < 3` | Cycler plans no relation group; close succeeds (UI gate) |
 | SA35 | Same-day Obsidian reopen of T after picking S | Take back S's untouched link (UI undo) |

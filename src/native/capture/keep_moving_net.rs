@@ -73,7 +73,9 @@ impl KeepMovingTrace {
 fn explicit_link_key(
     result: &super::output::CaptureItemResult,
 ) -> Option<(PathBuf, String)> {
-    if result.kind != "pomodoro_link" {
+    let linked = result.kind == "pomodoro_link"
+        || result.toggle_direction == Some("link");
+    if !linked {
         return None;
     }
     let block_id = result.block_id.as_ref()?;

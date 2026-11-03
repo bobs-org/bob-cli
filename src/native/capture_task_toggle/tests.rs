@@ -338,6 +338,7 @@ fn removal_deletes_whole_subtree_for_sole_content_bullet() {
     );
     let plan = plan_link_removal(contents, "[[cash#^id]]");
     assert_eq!(plan.removed_links, 1);
+    assert_eq!(plan.first_removed_line, Some(2));
     assert_eq!(
         plan.content,
         concat!("## Pomodoros\n", "- [ ] () — OPEN\n", "- [ ] () — NEXT\n",)

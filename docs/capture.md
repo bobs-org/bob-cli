@@ -5517,10 +5517,13 @@ Link presence for `@route+block-id!` is:
 | yes | any open status | Every matching link under every open Pomodoro removed; status unchanged |
 | — | done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, Next, and In Progress tasks can be toggled` |
 
-Unlinking does not offer successors in this release. The v1.1 unlink
-hand-off will offer sources of configured successor relations when the
-task is Pending and its last live link is removed (see
+Unlinking a Pending `[/]` task whose last live link is removed offers
+sources of configured successor relations at the removed-link slot (see
 [task-dependencies.md §12.18](task-dependencies.md#1218-relation-successors-starts-after)).
+Unlinking a Next or Ready task stays silent. The item itself carries
+`relation_successors[]`, `relation_held[]`, and `relation_check` (omitted
+when the event does not apply); there is no sub-object. Obsidian unlink
+hand-offs ship in v1.1.
 
 When an unlinked task links with `!`, Bob inserts the task
 link under the Pomodoro the task's type places unless that entry already
@@ -5643,7 +5646,9 @@ Human output says `would toggle` / `toggled` and prints a link summary:
 `linked ^id under NAME · stays In Progress`, `not linked ^id · stays
 <Status>` plus the guard sentence when consumption replaced the link, or
 `unlinked ^id from N open Pomodoros · stays <Status>`, followed by the day
-file and ledger lines. A successful dependency drop adds a dim
+file and ledger lines. A Pending unlink that offers relation successors
+then prints the §12.18 group header, offer rows, and fold line. A successful
+dependency drop adds a dim
 `⛓️ dropped dependency on [[route#^id]]` line after the status line (or
 `⛓️ dropped N dependencies: …` for several). JSON is unversioned with kind `"task_toggle"`.
 Successful link and unlink actions include `toggle_direction: "link"` or
@@ -6141,7 +6146,8 @@ successor row shape with `trigger: "relation"`, `offer.group:
 another group may carry the same relation as a second reason.
 `relation_held[]` reports held sources with reason and waiting-target
 details, and `relation_check` is `checked` or `unavailable` when the
-source lookup ran. See
+source lookup ran. A Pending `@route+id!` unlink reports those fields
+on the capture item itself (toggles have no sub-object). See
 [task-dependencies.md §12.5 and §12.18](task-dependencies.md#125-reporting-model).
 `struck_in` and `dropped` are always present (possibly empty)
 whenever `ledger` is present; `struck` and `deduplicated` keep their count

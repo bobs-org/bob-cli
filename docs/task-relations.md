@@ -2235,7 +2235,8 @@ had a live link before the gesture. T is **done** when a managed Done
 gesture completes it. Every supported gesture, event exclusion,
 baseline, batch rule, and pick destination is specified in
 [task-dependencies.md §12.18](task-dependencies.md#1218-relation-successors-starts-after).
-The capture unlink and Obsidian unlink events ship in v1.1.
+Capture `@route+id!` unlinking a Pending task ships in this release.
+Obsidian unlink events ship in v1.1.
 
 ### SU5 Authoring indication
 

@@ -17,7 +17,7 @@ The sections are:
 | `key` | Configured label effect and display-inverse lookup, including `starts before` as hint-only |
 | `rule` | Event and source state → ordered relation groups and held rows |
 | `copy` | Bob-authored strings, pluralization, and text truncation |
-| `ui_only` | SA cases owned by an interface, live-index wiring, v1.1 unlink, or undo test |
+| `ui_only` | SA cases owned by an interface, live-index wiring, Obsidian unlink, or undo test |
 
 Each vector carries an SA or SU id that points to the matching contract
 row. When a behavior changes, update the contract and vectors in the
