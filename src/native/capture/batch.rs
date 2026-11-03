@@ -5,6 +5,8 @@ use super::*;
 pub(crate) struct CaptureBatchPlanner {
     pub(super) files: Vec<BatchTextFile>,
     pub(super) by_path: HashMap<PathBuf, usize>,
+    move_destinations: BTreeSet<PathBuf>,
+    move_sources: BTreeSet<PathBuf>,
     item_pre_day: Option<Option<String>>,
     item_consumed_links: Vec<ConsumedLinkJson>,
 }
@@ -22,6 +24,13 @@ pub(crate) struct StagedTextFile {
     pub(crate) target_existed: bool,
     pub(crate) original_target: String,
     pub(crate) updated_target: String,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum MoveWriteRole {
+    Other,
+    Destination,
+    Source,
 }
 
 impl CaptureBatchPlanner {
@@ -164,7 +173,17 @@ impl CaptureBatchPlanner {
         path: &Path,
         snapshot_contents: Option<String>,
         postimage: String,
+        role: MoveWriteRole,
     ) -> Result<(), CaptureError> {
+        match role {
+            MoveWriteRole::Other => {}
+            MoveWriteRole::Destination => {
+                self.move_destinations.insert(path.to_path_buf());
+            }
+            MoveWriteRole::Source => {
+                self.move_sources.insert(path.to_path_buf());
+            }
+        }
         if self.by_path.contains_key(path) {
             let index = self.by_path[path];
             self.files[index].present = true;
@@ -272,18 +291,41 @@ impl CaptureBatchPlanner {
     }
 
     pub(super) fn into_staged_files(self) -> Vec<StagedTextFile> {
-        self.files
+        let CaptureBatchPlanner {
+            files: staged,
+            move_destinations,
+            move_sources,
+            ..
+        } = self;
+        let mut files: Vec<(usize, StagedTextFile)> = staged
             .into_iter()
-            .filter(|file| {
+            .enumerate()
+            .filter(|(_, file)| {
                 file.present && (!file.existed || file.current != file.original)
             })
-            .map(|file| StagedTextFile {
-                target: file.path,
-                target_existed: file.existed,
-                original_target: file.original,
-                updated_target: file.current,
+            .map(|(index, file)| {
+                (
+                    index,
+                    StagedTextFile {
+                        target: file.path,
+                        target_existed: file.existed,
+                        original_target: file.original,
+                        updated_target: file.current,
+                    },
+                )
             })
-            .collect()
+            .collect();
+        files.sort_by_key(|(index, file)| {
+            let priority = if move_destinations.contains(&file.target) {
+                0
+            } else if move_sources.contains(&file.target) {
+                2
+            } else {
+                1
+            };
+            (priority, *index)
+        });
+        files.into_iter().map(|(_, file)| file).collect()
     }
 }
 

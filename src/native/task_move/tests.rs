@@ -6,8 +6,9 @@ use std::{
 };
 
 use super::{
-    list_task_move_destinations, load_vault_snapshot, plan_task_move,
-    MoveRequest, MoveSelector, PlanError, VaultSnapshot,
+    list_task_move_destinations, load_vault_snapshot, movable_roots,
+    plan_task_move, IdCollisionPolicy, MovePlacement, MoveRequest,
+    MoveSelector, PlanError, VaultSnapshot,
 };
 
 fn snap(notes: &[(&str, &str)]) -> VaultSnapshot {
@@ -40,6 +41,8 @@ fn request(
         dest: dest.to_string(),
         selectors,
         allow_closed: false,
+        placement: MovePlacement::Append,
+        id_collision: IdCollisionPolicy::Rename,
     }
 }
 
@@ -1535,4 +1538,86 @@ fn move_preserves_distinctive_root_field() {
         "id not repaired to dest: {moved}"
     );
     assert!(moved.contains("^rooted"), "block id lost: {moved}");
+}
+
+#[test]
+fn capture_slots_place_moves_in_draft_order_and_report_exact_landings() {
+    let source =
+        area("\n## Tasks\n- [ ] #task Move X ^x\n- [ ] #task Move Y ^y\n");
+    let dest = project(
+        "wip",
+        "\n## Tasks\n- [ ] #task Existing A ^a\n- [ ] #task Existing B ^b\n",
+    );
+    let mut request = request("source", "dest", vec![block("x"), block("y")]);
+    request.placement = MovePlacement::CaptureSlots(vec![2, 0]);
+    request.id_collision = IdCollisionPolicy::Refuse;
+    let result = plan_task_move(
+        &snap(&[("source.md", &source), ("dest.md", &dest)]),
+        &request,
+    )
+    .expect("capture move plan");
+
+    let rows = post(&result, "dest.md")
+        .lines()
+        .filter(|line| line.contains("#task"))
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            "- [ ] #task Move Y ^y",
+            "- [ ] #task Existing A ^a",
+            "- [ ] #task Move X ^x",
+            "- [ ] #task Existing B ^b",
+        ]
+    );
+    assert_eq!(result.moves.len(), 2);
+    assert_eq!(result.moves[0].old_block_id.as_deref(), Some("y"));
+    assert_eq!(result.moves[1].old_block_id.as_deref(), Some("x"));
+    assert!(result.moves[0].dest_line < result.moves[1].dest_line);
+}
+
+#[test]
+fn capture_move_refuses_destination_block_id_collisions() {
+    let source = area("\n## Tasks\n- [ ] #task Incoming ^same\n");
+    let dest = project("wip", "\n## Tasks\n- [ ] #task Existing ^same\n");
+    let mut request = request("source", "dest", vec![block("same")]);
+    request.id_collision = IdCollisionPolicy::Refuse;
+    let error = plan_task_move(
+        &snap(&[("source.md", &source), ("dest.md", &dest)]),
+        &request,
+    )
+    .expect_err("collision should refuse");
+    assert!(matches!(
+        error,
+        PlanError::BlockIdCollision { ref block_id, .. } if block_id == "same"
+    ));
+}
+
+#[test]
+fn movable_roots_share_source_eligibility_and_include_idless_rows() {
+    let contents = area(concat!(
+        "\n## Tasks\n",
+        "- [ ] #task Movable ^movable\n",
+        "  - [ ] #task Nested ^nested\n",
+        "- [ ] #task Idless\n",
+        "- [ ] #task Project task ^prj\n",
+        "- [~] #task Unsupported ^unsupported\n",
+        "- [x] #task Closed ^closed\n",
+    ));
+    let roots = movable_roots(Path::new("parent.md"), &contents);
+    assert_eq!(roots.len(), 4);
+    assert_eq!(roots[0].block_id.as_deref(), Some("movable"));
+    assert_eq!(roots[0].disabled_reason, None);
+    assert_eq!(roots[1].title, "Idless");
+    assert_eq!(roots[1].block_id, None);
+    assert_eq!(roots[1].disabled_reason, None);
+    assert!(roots[2]
+        .disabled_reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("project task")));
+    assert!(roots[3]
+        .disabled_reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("checkbox [~]")));
 }

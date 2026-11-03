@@ -1,6 +1,9 @@
 //! Batch-level detection of inbox tasks whose status changed in a capture,
 //! plus the route-apply stage that moves answered candidates through the
 //! task-move engine inside the same batch.
+use super::batch_move::{
+    apply_batch_move_from_snapshot, destination_snapshot, BatchMoveError,
+};
 use super::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -8,11 +11,11 @@ use std::{
 };
 
 use crate::native::{
-    freshness::placement::stamp_fresh,
     task_complete::is_inbox_note,
     task_move::{
-        list_task_move_destinations, plan_task_move, MoveRequest, MoveSelector,
-        PlanError, TaskMoveDestination, VaultSnapshot,
+        list_task_move_destinations, IdCollisionPolicy, MovePlacement,
+        MoveRequest, MoveSelector, PlanError, TaskMoveDestination,
+        VaultSnapshot,
     },
     vault_links::{target_to_markdown_path, NoteIndex},
 };
@@ -465,14 +468,19 @@ pub(super) fn apply_inbox_routes(
             dest: display_relative(dest),
             selectors: selectors.clone(),
             allow_closed: true,
+            placement: MovePlacement::Append,
+            id_collision: IdCollisionPolicy::Rename,
         };
-        let plan = match plan_task_move(&snapshot, &request) {
+        let plan = match apply_batch_move_from_snapshot(
+            planner, bob_dir, settings, today, &request, &snapshot,
+        ) {
             Ok(plan) => plan,
-            Err(error) => {
+            Err(BatchMoveError::Plan(error)) => {
                 return Err(route_engine_refusal(
                     &report, members, &selectors, &request, error,
                 ));
             }
+            Err(BatchMoveError::Capture(error)) => return Err(error),
         };
         for (path, link_count, dependency_token_count) in
             plan.repaired_files.iter().map(|repaired| {
@@ -524,73 +532,10 @@ pub(super) fn apply_inbox_routes(
                     .collect()
             })
             .unwrap_or_default();
-        stage_move_postimages(planner, bob_dir, &snapshot, &plan.postimages)?;
-        // Stamp each moved root line in the staged destination text and
-        // record its final landing. The destination line comes straight
-        // from the move planner, never from a unique title/status
-        // search, so identical titles at the destination and identical
-        // roots moving together stay exact. The stamp is an in-place
-        // line edit, so later groups appending to the same note never
-        // shift it.
         for (index, movement) in members.iter().zip(plan.moves.iter()) {
             let candidate = &report.candidates[*index];
             let absolute = bob_dir.join(dest);
-            let dest_text = planner.peek_text(&absolute).ok_or_else(|| {
-                CaptureError::io(format!(
-                    "routing lost its destination note {}",
-                    dest.display()
-                ))
-            })?;
             let new_id = movement.new_block_id.clone();
-            let root = movement.dest_line.saturating_sub(1);
-            let root_line =
-                dest_text.lines().nth(root).unwrap_or_default().to_string();
-            // Verify the planner's exact landing still holds the moved
-            // task: block-ID tasks must show their new ID; id-less tasks
-            // are trusted by exact line, never re-searched by text.
-            if let Some(id) = new_id.as_deref().filter(|id| !id.is_empty()) {
-                let scan = note_tasks::scan(&dest_text, settings);
-                let holds = match scan.by_block_id(id) {
-                    note_tasks::BlockIdLookup::Found(task) => {
-                        task.line_index == root
-                    }
-                    _ => false,
-                };
-                if !holds {
-                    return Err(CaptureError::io(format!(
-                        "routing lost candidate {} ({}) in {}",
-                        candidate.n,
-                        candidate.key,
-                        dest.display()
-                    )));
-                }
-            } else if dest_text.lines().nth(root).is_none() {
-                return Err(CaptureError::io(format!(
-                    "routing lost candidate {} ({}) in {}",
-                    candidate.n,
-                    candidate.key,
-                    dest.display()
-                )));
-            }
-            let stamped = stamp_fresh(&root_line, today);
-            if stamped.line != root_line {
-                let mut rebuilt = dest_text
-                    .lines()
-                    .enumerate()
-                    .map(|(number, line)| {
-                        if number == root {
-                            stamped.line.clone()
-                        } else {
-                            line.to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if dest_text.ends_with('\n') {
-                    rebuilt.push('\n');
-                }
-                planner.stage(&absolute, rebuilt)?;
-            }
             let dest_relative = display_relative(dest);
             moves.push(RoutedTaskMove {
                 candidate: *index,
@@ -916,6 +861,7 @@ fn blame_route_member(
         | PlanError::NestedTask { candidate }
         | PlanError::ProjectTask { candidate }
         | PlanError::UnsupportedCheckbox { candidate }
+        | PlanError::BlockIdCollision { candidate, .. }
         | PlanError::DependsOnDestPrj { candidate, .. }
         | PlanError::DestBlocked { candidate, .. }
         | PlanError::NonCanonicalId { candidate, .. } => {
@@ -1125,64 +1071,6 @@ fn line_start_offset(lines: &[&str], line: usize) -> usize {
     lines.iter().take(line).map(|line| line.len() + 1).sum()
 }
 
-fn destination_snapshot(
-    bob_dir: &Path,
-    planner: &CaptureBatchPlanner,
-) -> Result<VaultSnapshot, CaptureError> {
-    let paths = collect_done::link_repair_markdown_files(bob_dir)
-        .map_err(|error| CaptureError::io(error.to_string()))?;
-    let mut notes = BTreeMap::new();
-    for path in paths {
-        let relative = path.strip_prefix(bob_dir).map_err(|error| {
-            CaptureError::io(format!(
-                "note {} is outside vault {}: {error}",
-                path.display(),
-                bob_dir.display()
-            ))
-        })?;
-        let contents = fs::read_to_string(&path).map_err(|error| {
-            CaptureError::io(format!(
-                "failed to read {}: {error}",
-                path.display()
-            ))
-        })?;
-        notes.insert(relative.to_path_buf(), contents);
-    }
-    for file in &planner.files {
-        let Ok(relative) = file.path.strip_prefix(bob_dir) else {
-            continue;
-        };
-        if file.present {
-            notes.insert(relative.to_path_buf(), file.current.clone());
-        } else {
-            notes.remove(relative);
-        }
-    }
-    Ok(VaultSnapshot::from_notes(notes))
-}
-
-/// Stage a move plan's postimages bound to the snapshot the plan
-/// consumed. Previously unstaged destinations and link-repair files
-/// adopt the snapshot's content as their preimage; any intervening
-/// disk edit is the typed `NoteChanged` refusal with no writes.
-fn stage_move_postimages(
-    planner: &mut CaptureBatchPlanner,
-    bob_dir: &Path,
-    snapshot: &VaultSnapshot,
-    postimages: &BTreeMap<PathBuf, String>,
-) -> Result<(), CaptureError> {
-    for (path, postimage) in postimages {
-        let absolute = bob_dir.join(path);
-        let expected = snapshot.notes.get(path).cloned();
-        planner.stage_snapshot_postimage(
-            &absolute,
-            expected,
-            postimage.clone(),
-        )?;
-    }
-    Ok(())
-}
-
 fn display_relative(path: &Path) -> String {
     path.components()
         .filter_map(|component| component.as_os_str().to_str())
@@ -1192,6 +1080,7 @@ fn display_relative(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::batch_move::stage_move_postimages;
     use super::*;
 
     const TODAY: &str = "2026-10-24";
@@ -1439,9 +1328,15 @@ mod tests {
             PathBuf::from("health.md"),
             format!("{health_before}- [ ] #task Route me ^route-task\n"),
         );
-        let error =
-            stage_move_postimages(&mut planner, &vault, &snapshot, &postimages)
-                .expect_err("dest drift refuses");
+        let error = stage_move_postimages(
+            &mut planner,
+            &vault,
+            &snapshot,
+            &postimages,
+            None,
+            None,
+        )
+        .expect_err("dest drift refuses");
         assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
         assert!(
             error
@@ -1460,6 +1355,8 @@ mod tests {
             &vault,
             &snapshot,
             &repair_postimages,
+            None,
+            None,
         )
         .expect_err("repair drift refuses");
         assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));

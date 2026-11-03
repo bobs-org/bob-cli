@@ -30,7 +30,8 @@ use crate::native::{
 };
 
 use super::{
-    plan_task_move, MovePlan, MoveRequest, MoveSelector, VaultSnapshot,
+    plan_task_move, IdCollisionPolicy, MovePlacement, MovePlan, MoveRequest,
+    MoveSelector, VaultSnapshot,
 };
 
 const COMMAND_NAME: &str = "bob task move";
@@ -57,6 +58,8 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             .unwrap_or_default(),
         selectors: selectors_from_matches(&matches),
         allow_closed: false,
+        placement: MovePlacement::Append,
+        id_collision: IdCollisionPolicy::Rename,
     };
     let dry_run = matches.get_flag("dry-run");
     let offline = matches.get_flag("offline");
@@ -1168,6 +1171,8 @@ mod tests {
             dest: "dest".to_string(),
             selectors: vec![MoveSelector::Block("move-me".to_string())],
             allow_closed: false,
+            placement: MovePlacement::Append,
+            id_collision: IdCollisionPolicy::Rename,
         }
     }
 

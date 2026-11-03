@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     ffi::OsString,
     fs,
     io::{self, IsTerminal, Read, Write},
@@ -52,6 +52,7 @@ const COMMAND_NAME: &str = "bob capture";
 pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
 
 mod batch;
+mod batch_move;
 mod block_diff;
 mod blocked_tasks;
 mod blocks_mirror;

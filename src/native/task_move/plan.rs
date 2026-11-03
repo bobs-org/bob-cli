@@ -68,6 +68,28 @@ pub(crate) struct MoveRequest {
     /// `[x]`/`[-]` tasks it otherwise refuses. The `bob task move` CLI
     /// never sets it and keeps refusing closed tasks.
     pub(crate) allow_closed: bool,
+    /// Capture can place moved roots into the order represented by its
+    /// project-note draft. Each slot is the root-task index in the final
+    /// `## Tasks` lane and is paired with the selector at the same index.
+    /// The regular task-move command and inbox routing keep appending.
+    pub(crate) placement: MovePlacement,
+    /// The regular task-move command and inbox routing preserve the existing
+    /// collision-renaming behavior. Capture can refuse instead because a
+    /// collision would make a typed move bullet resolve to a different task.
+    pub(crate) id_collision: IdCollisionPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // Capture slot placement is consumed by project-note moves.
+pub(crate) enum MovePlacement {
+    Append,
+    CaptureSlots(Vec<usize>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdCollisionPolicy {
+    Rename,
+    Refuse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +256,59 @@ pub(crate) struct TaskCandidate {
     pub(crate) status: char,
 }
 
+/// A top-level, non-closed task that capture may offer for moving, along with
+/// any source-side reason the move engine would refuse it. Destination rules
+/// are checked when the move is planned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[allow(dead_code)] // Capture completion consumes these eligibility rows.
+pub(crate) struct MovableRoot {
+    pub(crate) line: usize,
+    pub(crate) title: String,
+    pub(crate) block_id: Option<String>,
+    pub(crate) status: char,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) disabled_reason: Option<String>,
+}
+
+/// List movable-root candidates using the same source-side eligibility checks
+/// as `plan_task_move`. ID-less tasks remain eligible and are returned with no
+/// block ID so capture can offer its Add block ID flow.
+#[allow(dead_code)] // Capture completion consumes this shared eligibility API.
+pub(crate) fn movable_roots(
+    source_path: &Path,
+    contents: &str,
+) -> Vec<MovableRoot> {
+    let tasks = scan_task_lines(contents);
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let id_counts = count_live_block_ids(contents);
+    tasks
+        .iter()
+        .filter(|task| {
+            !task.in_fence_or_frontmatter
+                && task.is_column0()
+                && !task.is_closed()
+        })
+        .map(|task| {
+            let reason = validate_movable_root(
+                task,
+                source_path,
+                &lines,
+                &id_counts,
+                false,
+            )
+            .err()
+            .map(|error| error.to_string());
+            MovableRoot {
+                line: task.line_index + 1,
+                title: task.title.clone(),
+                block_id: task.block_id.clone(),
+                status: task.symbol,
+                disabled_reason: reason,
+            }
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PlanError {
     NoSelectors,
@@ -280,6 +355,14 @@ pub(crate) enum PlanError {
     },
     UnsupportedCheckbox {
         candidate: TaskCandidate,
+    },
+    InvalidCaptureSlots {
+        detail: String,
+    },
+    BlockIdCollision {
+        candidate: TaskCandidate,
+        path: PathBuf,
+        block_id: String,
     },
     NotATask {
         line: usize,
@@ -404,6 +487,21 @@ impl fmt::Display for PlanError {
                     "refusing task {} with checkbox [{}]",
                     format_candidate(candidate),
                     candidate.status
+                )
+            }
+            Self::InvalidCaptureSlots { detail } => {
+                write!(formatter, "invalid capture move slots: {detail}")
+            }
+            Self::BlockIdCollision {
+                candidate,
+                path,
+                block_id,
+            } => {
+                write!(
+                    formatter,
+                    "refusing task {} because block ID ^{block_id} already exists in {}",
+                    format_candidate(candidate),
+                    path.display()
                 )
             }
             Self::NotATask {
@@ -555,8 +653,51 @@ pub(crate) fn plan_task_move(
     }
 
     let source_tasks = scan_task_lines(source_contents);
-    let selected =
+    let selected_with_selectors =
         select_tasks(source_contents, &source_tasks, &request.selectors)?;
+    let (selected, capture_slots) = match &request.placement {
+        MovePlacement::Append => (
+            selected_with_selectors
+                .into_iter()
+                .map(|(_, task)| task)
+                .collect::<Vec<_>>(),
+            None,
+        ),
+        MovePlacement::CaptureSlots(slots) => {
+            if slots.len() != request.selectors.len()
+                || slots.len() != selected_with_selectors.len()
+            {
+                return Err(PlanError::InvalidCaptureSlots {
+                    detail: format!(
+                        "expected one slot per distinct selector ({}), got {}",
+                        selected_with_selectors.len(),
+                        slots.len()
+                    ),
+                });
+            }
+            let mut distinct_slots = BTreeSet::new();
+            if slots.iter().any(|slot| !distinct_slots.insert(*slot)) {
+                return Err(PlanError::InvalidCaptureSlots {
+                    detail:
+                        "each moved task must have a distinct root-task index"
+                            .into(),
+                });
+            }
+            let mut ordered = selected_with_selectors;
+            ordered.sort_by_key(|(selector_index, _)| {
+                (slots[*selector_index], *selector_index)
+            });
+            let ordered_slots = ordered
+                .iter()
+                .map(|(selector_index, _)| slots[*selector_index])
+                .collect::<Vec<_>>();
+            let selected = ordered
+                .into_iter()
+                .map(|(_, task)| task)
+                .collect::<Vec<_>>();
+            (selected, Some(ordered_slots))
+        }
+    };
     let dest_blocked = dest_prj_is_blocked(dest_contents);
     let source_lines: Vec<&str> =
         source_contents.split_inclusive('\n').collect();
@@ -566,9 +707,16 @@ pub(crate) fn plan_task_move(
         .collect();
     let source_fenced =
         markdown::fenced_lines(&source_logical, 0..source_logical.len());
+    let source_id_counts = count_live_block_ids(source_contents);
 
     for task in &selected {
-        validate_movable_task(task, request.allow_closed)?;
+        validate_movable_root(
+            task,
+            &source_path,
+            &source_lines,
+            &source_id_counts,
+            request.allow_closed,
+        )?;
         if task_depends_on_dest_prj(
             &source_logical,
             &source_fenced,
@@ -590,17 +738,10 @@ pub(crate) fn plan_task_move(
         }
     }
 
-    let source_id_counts = count_live_block_ids(source_contents);
     let mut blocks = Vec::new();
     for task in &selected {
         let end = task_block_end(&source_lines, task.line_index, 0);
         let fragment = source_lines[task.line_index..end].concat();
-        validate_fragment_identities(
-            &fragment,
-            &source_path,
-            &source_id_counts,
-            task,
-        )?;
         blocks.push(SelectedBlock {
             task: task.clone(),
             end,
@@ -610,8 +751,12 @@ pub(crate) fn plan_task_move(
 
     let dest_used: BTreeSet<String> =
         live_block_ids(dest_contents).into_iter().collect();
-    let (fragments, renames, id_map) =
-        rename_incoming_fragments(&blocks, &dest_path, &dest_used)?;
+    let (fragments, renames, id_map) = rename_incoming_fragments(
+        &blocks,
+        &dest_path,
+        &dest_used,
+        request.id_collision,
+    )?;
     validate_mapped_identities(snapshot, &source_path, &dest_path, &id_map)?;
 
     let dest_target = vault_relative_link_target(&dest_path, "destination")
@@ -679,10 +824,11 @@ pub(crate) fn plan_task_move(
         true,
     );
 
-    let (dest_with_insert, insertion_line) = insert_into_dest(
+    let (dest_with_insert, landing_lines) = insert_into_dest(
         &dest_existing_repair.contents,
         &repaired_fragments,
         dest_kind,
+        capture_slots.as_deref(),
     )?;
 
     let mut repair_counts: BTreeMap<PathBuf, (usize, usize)> = BTreeMap::new();
@@ -731,8 +877,11 @@ pub(crate) fn plan_task_move(
 
     let mut moves = Vec::new();
     let mut carried_block_tag = false;
-    let mut dest_offset = 0;
-    for (task, fragment) in selected.iter().zip(fragments.iter()) {
+    for ((task, _fragment), landing_line) in selected
+        .iter()
+        .zip(fragments.iter())
+        .zip(landing_lines.iter())
+    {
         if has_prj_is_blocked_tag(&task.line) {
             carried_block_tag = true;
         }
@@ -746,8 +895,7 @@ pub(crate) fn plan_task_move(
         let new_dependency_id = new_block_id
             .as_ref()
             .and_then(|id| dependency_id(&dest_path, id).ok());
-        let dest_line = insertion_line + dest_offset + 1;
-        dest_offset += fragment.lines().count().max(1);
+        let dest_line = landing_line + 1;
         moves.push(MoveRecord {
             source_path: source_path.clone(),
             dest_path: dest_path.clone(),
@@ -1012,13 +1160,13 @@ fn select_tasks(
     contents: &str,
     tasks: &[ScannedTask],
     selectors: &[MoveSelector],
-) -> Result<Vec<ScannedTask>, PlanError> {
+) -> Result<Vec<(usize, ScannedTask)>, PlanError> {
     let visible: Vec<&ScannedTask> = tasks
         .iter()
         .filter(|task| !task.in_fence_or_frontmatter)
         .collect();
-    let mut selected: BTreeMap<usize, ScannedTask> = BTreeMap::new();
-    for selector in selectors {
+    let mut selected: BTreeMap<usize, (usize, ScannedTask)> = BTreeMap::new();
+    for (selector_index, selector) in selectors.iter().enumerate() {
         let matched = match selector {
             MoveSelector::Block(id) => visible
                 .iter()
@@ -1051,7 +1199,9 @@ fn select_tasks(
         }
 
         let unique = resolve_selector_matches(selector, &matched, tasks)?;
-        selected.insert(unique.line_index, unique.clone());
+        selected
+            .entry(unique.line_index)
+            .or_insert((selector_index, unique.clone()));
     }
     Ok(selected.into_values().collect())
 }
@@ -1124,6 +1274,19 @@ fn validate_movable_task(
         });
     }
     Ok(())
+}
+
+fn validate_movable_root(
+    task: &ScannedTask,
+    source_path: &Path,
+    source_lines: &[&str],
+    source_id_counts: &BTreeMap<String, usize>,
+    allow_closed: bool,
+) -> Result<(), PlanError> {
+    validate_movable_task(task, allow_closed)?;
+    let end = task_block_end(source_lines, task.line_index, 0);
+    let fragment = source_lines[task.line_index..end].concat();
+    validate_fragment_identities(&fragment, source_path, source_id_counts, task)
 }
 
 fn task_depends_on_dest_prj(
@@ -1372,6 +1535,7 @@ fn rename_incoming_fragments(
     blocks: &[SelectedBlock],
     dest_path: &Path,
     dest_used: &BTreeSet<String>,
+    collision_policy: IdCollisionPolicy,
 ) -> Result<(Vec<String>, Vec<RenameRecord>, BTreeMap<String, String>), PlanError>
 {
     let mut used = dest_used.clone();
@@ -1395,6 +1559,13 @@ fn rename_incoming_fragments(
         let mut finals = Vec::with_capacity(occurrences.len());
         for occurrence in &occurrences {
             let final_id = if used.contains(&occurrence.id) {
+                if collision_policy == IdCollisionPolicy::Refuse {
+                    return Err(PlanError::BlockIdCollision {
+                        candidate: block.task.candidate(),
+                        path: dest_path.to_path_buf(),
+                        block_id: occurrence.id.clone(),
+                    });
+                }
                 next_available_block_id(&occurrence.id, &used, &reserved)
             } else {
                 occurrence.id.clone()
@@ -1736,25 +1907,125 @@ fn insert_into_dest(
     dest_contents: &str,
     fragments: &[String],
     dest_kind: DestKind,
-) -> Result<(String, usize), PlanError> {
+    capture_slots: Option<&[usize]>,
+) -> Result<(String, Vec<usize>), PlanError> {
+    if let Some(slots) = capture_slots {
+        if dest_kind != DestKind::Project {
+            return Err(PlanError::InvalidCaptureSlots {
+                detail: "slot placement requires a project destination".into(),
+            });
+        }
+        if slots.len() != fragments.len() {
+            return Err(PlanError::InvalidCaptureSlots {
+                detail: format!(
+                    "expected {} slots for {} moved tasks, got {}",
+                    fragments.len(),
+                    fragments.len(),
+                    slots.len()
+                ),
+            });
+        }
+        let existing_roots = task_roots_in_tasks_lane(dest_contents);
+        let final_root_count = existing_roots.len() + fragments.len();
+        if let Some(slot) = slots.iter().find(|slot| **slot >= final_root_count)
+        {
+            return Err(PlanError::InvalidCaptureSlots {
+                detail: format!(
+                    "slot {slot} is outside the final lane of {final_root_count} root tasks"
+                ),
+            });
+        }
+        let mut updated = dest_contents.to_string();
+        let mut landings = vec![0; fragments.len()];
+        for (index, (slot, fragment)) in slots.iter().zip(fragments).enumerate()
+        {
+            let insert_at = task_slot_byte(&updated, *slot)?;
+            let insertion = join_fragments(
+                std::slice::from_ref(fragment),
+                document_line_ending(&updated),
+            );
+            let (next, line) =
+                insert_at_byte_with_line(&updated, insert_at, &insertion);
+            let inserted_lines = fragment.lines().count().max(1);
+            for landing in landings.iter_mut().take(index) {
+                if *landing >= line {
+                    *landing += inserted_lines;
+                }
+            }
+            landings[index] = line;
+            updated = next;
+        }
+        return Ok((updated, landings));
+    }
+
     let insertion =
         join_fragments(fragments, document_line_ending(dest_contents));
     if let Some(insert_at) = tasks_intake_insert_byte(dest_contents) {
-        return Ok(insert_at_byte_with_line(
-            dest_contents,
-            insert_at,
-            &insertion,
-        ));
+        let (updated, first_line) =
+            insert_at_byte_with_line(dest_contents, insert_at, &insertion);
+        return Ok((updated, fragment_landing_lines(first_line, fragments)));
     }
     if dest_kind == DestKind::Area {
         let result = append_tasks_section(dest_contents, &insertion);
         let prefix_len = result.len().saturating_sub(insertion.len());
-        let insertion_line = result[..prefix_len].matches('\n').count();
-        return Ok((result, insertion_line));
+        let first_line = result[..prefix_len].matches('\n').count();
+        return Ok((result, fragment_landing_lines(first_line, fragments)));
     }
     Err(PlanError::ProjectWithoutTasks {
         path: PathBuf::from("destination"),
     })
+}
+
+fn fragment_landing_lines(
+    first_line: usize,
+    fragments: &[String],
+) -> Vec<usize> {
+    let mut next = first_line;
+    fragments
+        .iter()
+        .map(|fragment| {
+            let line = next;
+            next += fragment.lines().count().max(1);
+            line
+        })
+        .collect()
+}
+
+fn task_roots_in_tasks_lane(contents: &str) -> Vec<usize> {
+    let Some(heading) = tasks_heading_index(contents) else {
+        return Vec::new();
+    };
+    let Some(end_byte) = tasks_intake_insert_byte(contents) else {
+        return Vec::new();
+    };
+    let end_line = contents[..end_byte].matches('\n').count();
+    scan_task_lines(contents)
+        .into_iter()
+        .filter(|task| {
+            !task.in_fence_or_frontmatter
+                && task.is_column0()
+                && task.line_index > heading
+                && task.line_index < end_line
+        })
+        .map(|task| task.line_index)
+        .collect()
+}
+
+fn task_slot_byte(contents: &str, slot: usize) -> Result<usize, PlanError> {
+    let roots = task_roots_in_tasks_lane(contents);
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let line = roots.get(slot).copied().or_else(|| {
+        (slot == roots.len())
+            .then(|| tasks_intake_insert_byte(contents))
+            .flatten()
+            .map(|byte| contents[..byte].matches('\n').count())
+    });
+    let Some(line) = line else {
+        return Err(PlanError::InvalidCaptureSlots {
+            detail: format!("slot {slot} has no task row in the destination"),
+        });
+    };
+    Ok(lines.iter().take(line).map(|line| line.len()).sum())
 }
 
 fn join_fragments(fragments: &[String], ending: &str) -> String {

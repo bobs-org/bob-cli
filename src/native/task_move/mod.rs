@@ -12,7 +12,10 @@ mod tests;
 pub(crate) use command::{build_cli, run};
 #[cfg(test)]
 pub(crate) use plan::load_vault_snapshot;
+#[allow(unused_imports)]
 pub(crate) use plan::{
-    list_task_move_destinations, plan_task_move, MovePlan, MoveRequest,
-    MoveSelector, PlanError, TaskCandidate, TaskMoveDestination, VaultSnapshot,
+    list_task_move_destinations, movable_roots, plan_task_move,
+    IdCollisionPolicy, MovableRoot, MovePlacement, MovePlan, MoveRecord,
+    MoveRequest, MoveSelector, PlanError, TaskCandidate, TaskMoveDestination,
+    VaultSnapshot,
 };
