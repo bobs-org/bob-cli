@@ -53,6 +53,10 @@ pub(super) struct DependencyContext {
     catalog: OnceLock<NoteCatalog>,
     previous_daily: OnceLock<Option<PathBuf>>,
     note_bytes: OnceLock<SharedNoteBytes>,
+    /// Event `^id` tokens for the current close, set before the shared
+    /// byte pass so relation workers retain only notes that can match.
+    /// Unset keeps the broad LINKS prefilter (tests and non-event paths).
+    relation_event_tokens: OnceLock<Vec<Vec<u8>>>,
     link_unblocked: OnceLock<bool>,
     keep_moving: OnceLock<bool>,
     blocks_lines: OnceLock<(bool, Option<String>)>,
@@ -90,6 +94,7 @@ impl DependencyContext {
             catalog: OnceLock::new(),
             previous_daily: OnceLock::new(),
             note_bytes: OnceLock::new(),
+            relation_event_tokens: OnceLock::new(),
             link_unblocked: OnceLock::new(),
             keep_moving: OnceLock::new(),
             blocks_lines: OnceLock::new(),
@@ -165,9 +170,31 @@ impl DependencyContext {
     /// caller passes the relation gate. When successor labels are enabled,
     /// the shared byte pass evaluates both predicates in workers so
     /// dependency and relation consumers in either order do not read a
-    /// note twice.
+    /// note twice. Relation retention is event-token-narrowed when the
+    /// caller remembered the close's `^id`s first.
     pub(super) fn relation_sources_snapshot(&self) -> &DependentsSnapshot {
         &self.note_bytes().relation
+    }
+
+    /// Record the close's event block IDs before the shared byte pass.
+    /// The first call wins; later calls are ignored so a dependents
+    /// snapshot cannot rebuild with a different filter.
+    pub(super) fn remember_relation_event_ids<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a str>,
+    ) {
+        let mut tokens = Vec::new();
+        let mut seen = BTreeSet::new();
+        for id in ids {
+            if id.is_empty() || !seen.insert(id) {
+                continue;
+            }
+            let mut token = Vec::with_capacity(id.len() + 1);
+            token.push(b'^');
+            token.extend_from_slice(id.as_bytes());
+            tokens.push(token);
+        }
+        let _ = self.relation_event_tokens.set(tokens);
     }
 
     fn note_bytes(&self) -> &SharedNoteBytes {
@@ -179,10 +206,16 @@ impl DependencyContext {
             // keep the old prefiltered-memory fast path.
             let relations_enabled =
                 !self.close_policy().2.is_empty() && self.link_unblocked();
+            let tokens = self
+                .relation_event_tokens
+                .get()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             SharedNoteBytes::build(
                 &self.bob_dir,
                 self.catalog(),
                 relations_enabled,
+                tokens,
                 &self.snapshot_reads,
             )
         })
@@ -563,7 +596,7 @@ impl DependentsSnapshot {
     pub(super) fn overlaid_matching(
         &self,
         staged: &BTreeMap<PathBuf, Option<String>>,
-        mut accept: impl FnMut(&str) -> bool,
+        mut accept: impl FnMut(&Path, &str) -> bool,
     ) -> Vec<(PathBuf, String)> {
         let mut matched = Vec::new();
         for (relative, text) in &self.base {
@@ -571,7 +604,7 @@ impl DependentsSnapshot {
                 continue;
             }
             let text: &str = text.as_ref();
-            if accept(text) {
+            if accept(relative, text) {
                 matched.push((relative.clone(), text.to_string()));
             }
         }
@@ -585,7 +618,7 @@ impl DependentsSnapshot {
             if !self.kind.contains(text.as_bytes()) {
                 continue;
             }
-            if accept(text) {
+            if accept(relative, text) {
                 matched.push((relative.clone(), text.clone()));
             }
         }
@@ -598,7 +631,10 @@ impl SnapshotKind {
     fn contains(self, bytes: &[u8]) -> bool {
         match self {
             Self::Dependencies => contains_dependency_markers(bytes),
-            Self::Relations => contains_relation_markers(bytes),
+            // Overlay of staged text has no event-token context; keep the
+            // broad LINKS prefilter here. Disk retention already applied
+            // the token filter in the worker.
+            Self::Relations => contains_relation_markers(bytes, &[]),
         }
     }
 }
@@ -614,11 +650,27 @@ fn contains_dependency_markers(bytes: &[u8]) -> bool {
         || memchr::memmem::find(bytes, b"id::").is_some()
 }
 
+fn contains_links_marker(bytes: &[u8]) -> bool {
+    memchr::memmem::find(bytes, b"LINKS").is_some()
+}
+
 /// LINKS sources are byte-prefiltered on the managed label token. Direct
 /// child parsing and event target matching happen only after the relation
-/// gate, using the shared relation parser in `relation_sources`.
-fn contains_relation_markers(bytes: &[u8]) -> bool {
-    memchr::memmem::find(bytes, b"LINKS").is_some()
+/// gate, using the shared relation parser in `relation_sources`. When the
+/// close remembered event `^id` tokens, only notes that also contain one
+/// of those tokens are retained: a LINKS note that cannot match this
+/// batch's events is not a source. Retention is the filter; an unreadable
+/// LINKS note still taints the snapshot even when it lacks those tokens.
+fn contains_relation_markers(bytes: &[u8], event_tokens: &[Vec<u8>]) -> bool {
+    if !contains_links_marker(bytes) {
+        return false;
+    }
+    if event_tokens.is_empty() {
+        return true;
+    }
+    event_tokens
+        .iter()
+        .any(|token| memchr::memmem::find(bytes, token).is_some())
 }
 
 /// Per-context instrumentation keeps concurrent vault tests isolated.
@@ -662,6 +714,7 @@ enum SnapshotRead {
 fn read_snapshot_one(
     pair: &(PathBuf, PathBuf),
     relations_enabled: bool,
+    relation_tokens: &[Vec<u8>],
     reads: &SnapshotReadCounts,
 ) -> SnapshotRead {
     reads.record(&pair.1);
@@ -687,25 +740,26 @@ fn read_snapshot_one(
         };
     }
     let dep_match = contains_dependency_markers(&bytes);
-    let rel_match = contains_relation_markers(&bytes);
-    if !dep_match && !rel_match {
+    let has_links = contains_links_marker(&bytes);
+    let rel_match = contains_relation_markers(&bytes, relation_tokens);
+    if !dep_match && !has_links {
         return SnapshotRead::Skipped;
     }
     match String::from_utf8(bytes) {
         Ok(text) => {
+            if !dep_match && !rel_match {
+                return SnapshotRead::Skipped;
+            }
             let shared: Arc<str> = Arc::from(text);
-            match (dep_match, rel_match) {
-                (true, true) => SnapshotRead::Both((pair.1.clone(), shared)),
-                (true, false) => {
-                    SnapshotRead::Dependency((pair.1.clone(), shared))
-                }
-                (false, true) => {
-                    SnapshotRead::Relation((pair.1.clone(), shared))
-                }
-                (false, false) => SnapshotRead::Skipped,
+            if dep_match && rel_match {
+                SnapshotRead::Both((pair.1.clone(), shared))
+            } else if dep_match {
+                SnapshotRead::Dependency((pair.1.clone(), shared))
+            } else {
+                SnapshotRead::Relation((pair.1.clone(), shared))
             }
         }
-        Err(_) => match (dep_match, rel_match) {
+        Err(_) => match (dep_match, has_links) {
             (true, true) => SnapshotRead::FailedBoth(pair.1.clone()),
             (true, false) => SnapshotRead::FailedDependency(pair.1.clone()),
             (false, true) => SnapshotRead::FailedRelation(pair.1.clone()),
@@ -753,6 +807,7 @@ impl SnapshotWorkerOutput {
 fn read_snapshot_parallel(
     pairs: &[(PathBuf, PathBuf)],
     relations_enabled: bool,
+    relation_tokens: &[Vec<u8>],
     reads: &SnapshotReadCounts,
 ) -> SnapshotWorkerOutput {
     if pairs.is_empty() {
@@ -766,7 +821,12 @@ fn read_snapshot_parallel(
     if worker_count <= 1 {
         let mut output = SnapshotWorkerOutput::default();
         for pair in pairs {
-            output.record(read_snapshot_one(pair, relations_enabled, reads));
+            output.record(read_snapshot_one(
+                pair,
+                relations_enabled,
+                relation_tokens,
+                reads,
+            ));
         }
         output.dep_failed.sort();
         output.dep_failed.dedup();
@@ -788,6 +848,7 @@ fn read_snapshot_parallel(
                         local.record(read_snapshot_one(
                             pair,
                             relations_enabled,
+                            relation_tokens,
                             reads,
                         ));
                     }
@@ -829,6 +890,7 @@ impl SharedNoteBytes {
         bob_dir: &Path,
         catalog: &NoteCatalog,
         relations_enabled: bool,
+        relation_tokens: &[Vec<u8>],
         reads: &SnapshotReadCounts,
     ) -> Self {
         if !catalog.complete() {
@@ -847,7 +909,12 @@ impl SharedNoteBytes {
             .filter(|relative| !under_archive_dir(relative))
             .map(|relative| (bob_dir.join(relative), relative.to_path_buf()))
             .collect();
-        let output = read_snapshot_parallel(&pairs, relations_enabled, reads);
+        let output = read_snapshot_parallel(
+            &pairs,
+            relations_enabled,
+            relation_tokens,
+            reads,
+        );
         let dependency = DependentsSnapshot {
             base: output.dependencies.into_iter().collect(),
             failed: output.dep_failed,
@@ -3721,6 +3788,7 @@ mod tests {
             root,
             &catalog,
             false,
+            &[],
             &SnapshotReadCounts::default(),
         );
         let base = &shared.dependency;

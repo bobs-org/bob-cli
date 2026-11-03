@@ -123,8 +123,9 @@ pub(crate) struct RelationClassifyInput<'a> {
     pub labels: &'a [CancelLabel],
     pub events: &'a [RelationEvent],
     pub source_texts: &'a BTreeMap<PathBuf, String>,
-    pub known_paths: &'a BTreeSet<PathBuf>,
-    pub archive_paths: &'a [PathBuf],
+    /// Caller-supplied vault index. Classification reuses it instead of
+    /// rebuilding a basename map from a cloned path set.
+    pub notes: &'a NoteIndex,
     pub day_before: Option<&'a str>,
     pub day_after: Option<&'a str>,
     pub day_path: &'a Path,
@@ -238,13 +239,13 @@ pub(crate) fn classify_relation_successors<R: TargetNoteReader>(
         };
     }
 
-    let notes = NoteIndex::from_paths(input.known_paths.iter().cloned());
+    let notes = input.notes;
     let baseline = input
         .day_before
-        .map(|text| DayView::parse(text, input.day_path, &notes));
+        .map(|text| DayView::parse(text, input.day_path, notes));
     let post = input
         .day_after
-        .map(|text| DayView::parse(text, input.day_path, &notes));
+        .map(|text| DayView::parse(text, input.day_path, notes));
     let mut cache = NoteCache::new(input.source_texts);
 
     let valid = valid_events(
@@ -261,7 +262,7 @@ pub(crate) fn classify_relation_successors<R: TargetNoteReader>(
         };
     }
 
-    let sources = extract_sources(input, &notes, &mut cache, reader);
+    let sources = extract_sources(input, notes, &mut cache, reader);
     let event_keys = valid
         .iter()
         .map(|event| {
@@ -544,7 +545,7 @@ fn resolve_edge<R: TargetNoteReader>(
         source_path,
         &entry.target,
         notes,
-        |path| input.archive_paths.iter().any(|known| known == path),
+        |path| notes.contains(path),
     )?;
     if source.block_id.as_deref() == Some(entry.block_id.as_str())
         && target_path == source_path

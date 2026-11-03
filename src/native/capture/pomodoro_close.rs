@@ -962,6 +962,21 @@ fn plan_close_successors(
             &tasks_settings,
         );
     let needs_snapshot = gate.needs_dependents || keep_moving_needs_proof;
+    if relation_candidate {
+        let mut ids: Vec<&str> = predecessors
+            .iter()
+            .map(|task| task.block_id.as_str())
+            .filter(|id| !id.is_empty())
+            .collect();
+        for link in &plan.summary.task_links {
+            if link.outcome == capture_pomodoro_close::TaskLinkOutcome::Parked
+                && !link.block_id.is_empty()
+            {
+                ids.push(link.block_id.as_str());
+            }
+        }
+        dependency_ctx.remember_relation_event_ids(ids);
+    }
     let mut unblocked_check = "checked";
     let snapshot = if needs_snapshot {
         let overlay =

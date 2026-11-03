@@ -378,21 +378,13 @@ impl World {
     }
 
     fn classify(&self) -> RelationClassifyResult {
-        let known = self.notes.keys().cloned().collect::<BTreeSet<_>>();
-        let archives = known
-            .iter()
-            .filter(|path| {
-                path.components().any(|part| part.as_os_str() == "done")
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let notes = planner_index(&self.notes);
         let mut reader = self.notes.clone();
         let input = RelationClassifyInput {
             labels: &self.labels,
             events: &self.events,
             source_texts: &self.notes,
-            known_paths: &known,
-            archive_paths: &archives,
+            notes: &notes,
             day_before: Some(&self.day_before),
             day_after: Some(&self.day_after),
             day_path: &self.day_path,
@@ -1165,13 +1157,12 @@ fn gates_do_not_read_targets() {
         World::materialize(&data["base"], &Value::Null, &Value::Null);
     world.labels.clear();
     let mut reader = CountingReader::new(world.notes.clone());
-    let known = world.notes.keys().cloned().collect::<BTreeSet<_>>();
+    let notes = planner_index(&world.notes);
     let input = RelationClassifyInput {
         labels: &world.labels,
         events: &world.events,
         source_texts: &world.notes,
-        known_paths: &known,
-        archive_paths: &[],
+        notes: &notes,
         day_before: Some(&world.day_before),
         day_after: Some(&world.day_after),
         day_path: &world.day_path,
@@ -1195,8 +1186,7 @@ fn gates_do_not_read_targets() {
         labels: &world.labels,
         events: &world.events,
         source_texts: &world.notes,
-        known_paths: &known,
-        archive_paths: &[],
+        notes: &notes,
         day_before: Some(&world.day_before),
         day_after: Some(&world.day_after),
         day_path: &world.day_path,
@@ -1218,13 +1208,12 @@ fn incomplete_snapshot_is_unavailable_without_reads() {
     let data = vectors();
     let world = World::materialize(&data["base"], &Value::Null, &Value::Null);
     let mut reader = CountingReader::new(world.notes.clone());
-    let known = world.notes.keys().cloned().collect::<BTreeSet<_>>();
+    let notes = planner_index(&world.notes);
     let input = RelationClassifyInput {
         labels: &world.labels,
         events: &world.events,
         source_texts: &world.notes,
-        known_paths: &known,
-        archive_paths: &[],
+        notes: &notes,
         day_before: Some(&world.day_before),
         day_after: Some(&world.day_after),
         day_path: &world.day_path,
@@ -1355,14 +1344,13 @@ fn unread_resolved_target_does_not_count_as_released() {
     }
     let mut source_texts = world.notes.clone();
     source_texts.remove(Path::new("other.md"));
-    let known = world.notes.keys().cloned().collect::<BTreeSet<_>>();
+    let notes = planner_index(&world.notes);
     let mut reader = Unavailable;
     let input = RelationClassifyInput {
         labels: &world.labels,
         events: &world.events,
         source_texts: &source_texts,
-        known_paths: &known,
-        archive_paths: &[],
+        notes: &notes,
         day_before: Some(&world.day_before),
         day_after: Some(&world.day_after),
         day_path: &world.day_path,

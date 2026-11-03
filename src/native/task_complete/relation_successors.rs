@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::native::config::relations::CancelLabel;
+use crate::native::vault_links::NoteIndex;
 
 pub(crate) mod classify;
 pub(crate) mod copy;
@@ -177,18 +178,20 @@ pub(crate) fn relation_offer_survives_final_state(
 /// Narrow in-memory target reader over held source texts plus an explicit
 /// unavailable set. Staged texts win; unavailable paths report
 /// `Unavailable` so R6 holds instead of releasing; unknown paths report
-/// `Missing` so dangling edges are ignored. The known set is borrowed so
-/// one vault index build serves both classification and target reads.
+/// `Missing` so dangling edges are ignored. The caller-supplied note
+/// index is borrowed so one vault index serves both classification and
+/// target reads, and held file text is borrowed so the integrate phase
+/// does not clone the recovery snapshot.
 pub(crate) struct MapTargetReader<'a> {
-    staged: BTreeMap<PathBuf, String>,
-    known: &'a BTreeSet<PathBuf>,
+    staged: BTreeMap<&'a Path, &'a str>,
+    known: &'a NoteIndex,
     unavailable: BTreeSet<PathBuf>,
 }
 
 impl<'a> MapTargetReader<'a> {
     pub(crate) fn new(
-        staged: BTreeMap<PathBuf, String>,
-        known: &'a BTreeSet<PathBuf>,
+        staged: BTreeMap<&'a Path, &'a str>,
+        known: &'a NoteIndex,
         unavailable: BTreeSet<PathBuf>,
     ) -> Self {
         Self {
@@ -202,7 +205,7 @@ impl<'a> MapTargetReader<'a> {
 impl classify::TargetNoteReader for MapTargetReader<'_> {
     fn read_target(&mut self, path: &Path) -> classify::TargetNoteRead {
         if let Some(text) = self.staged.get(path) {
-            return classify::TargetNoteRead::Text(text.clone());
+            return classify::TargetNoteRead::Text((*text).to_string());
         }
         if self.unavailable.contains(path) {
             return classify::TargetNoteRead::Unavailable;

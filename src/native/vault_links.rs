@@ -54,6 +54,11 @@ impl NoteIndex {
         self.relative_paths.iter().map(PathBuf::as_path)
     }
 
+    /// Whether this index knows the vault-relative path.
+    pub(crate) fn contains(&self, path: &Path) -> bool {
+        self.relative_paths.contains(path)
+    }
+
     /// Sorted vault-relative paths sharing one case-insensitive basename stem.
     /// Iteration follows the underlying sorted set, so diagnostics built from
     /// this list are deterministic across runs.
@@ -452,6 +457,8 @@ mod tests {
             PathBuf::from("20261005.md"),
         ]);
         let union = base.with_additional([PathBuf::from("fresh.md")]);
+        assert!(union.contains(Path::new("fresh.md")));
+        assert!(!union.contains(Path::new("missing.md")));
         assert_eq!(
             union.resolve(None, "fresh"),
             Some(PathBuf::from("fresh.md"))

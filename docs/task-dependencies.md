@@ -1946,6 +1946,86 @@ Budget notes (re-measured):
   (park human 376.15 ms / json 266.97 ms, bang human 398.37 ms /
   json 285.99 ms) and on a tiny local vault during the same run.
 
+**Re-measured 2026-11-03 after capture relation-source narrowing.** Athena
+same-binary on/off, then apollo master-vs-candidate using the §12.7
+scratch method. Never the live vault.
+
+- Host (athena): AMD Ryzen Threadripper 3970X, 64 CPUs, x86_64.
+- Host (apollo): Intel Xeon Platinum 8168 @ 2.70 GHz, x86_64.
+- Toolchain: rustc 1.95.0 (59807616e 2026-04-14), cargo 1.95.0
+  (f2d3ce0bd 2026-03-21) on both hosts.
+- Commit: master `a414c171` plus the uncommitted perf working tree (9
+  files, working-tree diff sha256
+  `e0baf0b5571e568f95c12f847874023bb239a12d5b19721623c7365b14b6a43a`).
+- Binaries: master sha256
+  `e324dd2fcdc359e1b7f379c39b315a94f03c2201c711517c00602309590e5c09`,
+  candidate sha256
+  `ab7eccb1a9ee25de1d58f884207af980d5fbbad8d5eb40803a0b19e95fe4e6bc`.
+- Athena scratch: Markdown-only rsync of `~/bob` (6847 notes) plus
+  synthetic `capture-measure.md` / `2026/20261102.md`. Isolated
+  `BOB_DIR`, `BOB_DAY_FILE`, `BOB_CONFIG_FILE`, `BOB_NOW=2026-11-02
+  09:30:00`, and `XDG_*`. `off.yml` empty; `on.yml` is
+  `relations.successor_labels: [starts after]`.
+- Athena sample: `hyperfine -N -w 5 -r 30 --export-json`, same candidate
+  binary, configs toggled. Medians from
+  `results[].summary.time_wall_clock.median` (hyperfine 2 has no
+  top-level median).
+- Apollo sample: `ssh apollo`, `cp -a ~/bob` into `mktemp -d`, five
+  discarded warmups then 25 interleaved dry-runs of master vs candidate
+  with order swapped each round, isolated `on.yml` and `XDG_*`, p95
+  nearest rank (`ceil(0.95 × n) − 1`). Cases are `hello`, `x`, `x*`,
+  `!capture-measure:chore` (`!noid`), `!capture-measure:implement`, and
+  the same `!` after adding a `[dependsOn:: implement]` follower.
+
+Athena same-binary on − off wall ms (CPU off → on):
+
+| Case | Before off / on / Δ | After off / on / Δ | CPU after |
+| --- | --- | --- | --- |
+| `hello` | 13.70 / 14.00 / +0.30 | 14.38 / 14.20 / −0.18 | 14.22 → 14.05 |
+| `x` | 55.82 / 56.88 / +1.06 | 57.58 / 57.73 / +0.15 | 57.35 → 57.51 |
+| `x*` park | 56.63 / 97.94 / +41.31 | 55.78 / 77.83 / +22.05 | 55.59 → 396.94 |
+| `!noid` | 58.35 / 86.01 / +27.66 | 58.06 / 72.05 / +13.99 | 57.87 → 379.93 |
+| `!implement` | 76.12 / 98.11 / +21.99 | 74.64 / 80.74 / +6.10 | 386.79 → 398.81 |
+
+D after = `!implement` off − `!noid` off = **16.58 ms**.
+
+Apollo master vs candidate (relations enabled), median / p95:
+
+| Case | Master median / p95 | Candidate median / p95 | Δ median |
+| --- | --- | --- | --- |
+| `hello` | 26.76 / 58.37 ms | 27.22 / 41.04 ms | +0.46 ms |
+| `x` | 153.21 / 210.30 ms | 153.07 / 220.62 ms | −0.14 ms |
+| `x*` park | 237.55 / 345.74 ms | 196.60 / 226.10 ms | −40.95 ms |
+| `!noid` | 210.85 / 241.72 ms | 179.02 / 251.19 ms | −31.83 ms |
+| `!implement` | 229.22 / 329.51 ms | 199.96 / 268.97 ms | −29.26 ms |
+| `!` with dependents | 267.65 / 363.13 ms | 210.06 / 305.75 ms | −57.59 ms |
+
+Budget notes (re-measured):
+
+- **A** (`!implement` shared pass, athena on − off) is **+6.10 ms**
+  against ≤ +5 ms. Serial snapshot clones and the vault-wide
+  `NoteIndex` rebuild are gone (classify 0.06 ms, integrate 0.17 ms).
+  The leftover is `SuccessorTypeRouting::load` for the relation offer
+  that the relations-off close does not build, plus ~1 ms of source
+  overlay. Temporary stderr stage timers recorded that split and were
+  removed before commit.
+- **B** (`!noid`) is **+13.99 ms** against D+5 = 21.58 ms, **met**. The
+  residual is the design-accepted relation-only byte pass (catalog walk
+  plus parallel read/classify).
+- **C** (`x*`) is **+22.05 ms** against D+5 = 21.58 ms, **0.47 ms
+  over**. The byte pass is ~13 ms of that; offer routing is ~2 ms.
+  Stretch `x*` with relations on is 77.83 ms against ≤ 70 ms; relations
+  off already meets that stretch (55.78 ms).
+- `hello` and plain `x` stay flat within noise. Existing zero-read tests
+  still pass.
+- Apollo `x*` / `!` medians fall 29–58 ms versus unfixed master, and
+  still miss ≤ 70 ms because the pre-feature `!` path is already over
+  that budget. That baseline stays **bob-cli-gc**. Apollo `x` ~153 ms
+  (versus earlier ~27 ms) is host-load variance; both binaries match.
+- SA1 `x*` and SA4 `!` JSON smokes passed on the athena scratch copy:
+  relations on yield `event: parked` / `event: done` with a Starts
+  after group; relations off yield no group.
+
 ### 12.8 Kill switch
 
 `plan.link_unblocked: true` and `plan.keep_moving: true` live in
@@ -3030,7 +3110,8 @@ relation rows, `relation_check: "unavailable"`, and a muted uncertainty
 line. If the gate is off, no scan runs and no relation fields are
 emitted. Rust builds one batch-scoped fresh source snapshot from the
 shared path set, byte-prefilters `**LINKS` and the event target's block
-IDs, then overlays staged files. It never uses a persistent cache or
+IDs, then overlays staged files. An unreadable `LINKS` note still makes
+the snapshot incomplete even when it lacks those block IDs. It never uses a persistent cache or
 the 60-second relation-label cache. Obsidian reads
 `api.relationIndex.incoming(path, blockId)` and re-reads candidate S.
 

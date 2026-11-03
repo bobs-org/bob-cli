@@ -440,6 +440,14 @@ pub(super) fn complete_existing_task(
         // or keep-moving dependency proof does. Otherwise only staged
         // project text is needed.
         let needs_snapshot = gate.needs_dependents || keep_moving_needs_proof;
+        if relation_candidate {
+            dependency_ctx.remember_relation_event_ids(
+                predecessors
+                    .iter()
+                    .map(|task| task.block_id.as_str())
+                    .filter(|id| !id.is_empty()),
+            );
+        }
         let snapshot = if needs_snapshot {
             let overlay = staged_overlay_map(bob_dir, planner);
             let snapshot_ready = dependency_ctx

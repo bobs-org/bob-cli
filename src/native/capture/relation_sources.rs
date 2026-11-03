@@ -72,6 +72,15 @@ pub(super) fn collect_relation_sources(
         return Ok(None);
     }
 
+    // Remember event tokens before the shared byte pass so workers keep
+    // only LINKS notes that can match this close. Callers that snapshot
+    // earlier must remember the same IDs first; a later call is ignored.
+    ctx.remember_relation_event_ids(
+        trigger_events
+            .iter()
+            .map(|event| event.target.block_id.as_str()),
+    );
+
     // The catalog walk and all note reads begin after G0-G3. If dependency
     // recovery already requested the snapshot earlier in this batch, this
     // derives a relation view from the shared worker-classified texts
@@ -108,7 +117,7 @@ pub(super) fn collect_relation_sources(
         // Borrow the snapshot and clone only token-matching notes. Staged
         // text supersedes disk via the shared overlay helper.
         let candidates = relation_snapshot
-            .overlaid_matching(&staged, |contents| {
+            .overlaid_matching(&staged, |_, contents| {
                 contains_event_block_token(contents, &event_ids)
             });
         for (source_path, contents) in candidates {
@@ -130,10 +139,17 @@ pub(super) fn collect_relation_sources(
 
     // Dependency proof is only needed when at least one source matched.
     // With zero matched sources the engine needs no dependency texts.
+    // Matched sources need only their own prerequisite / identity notes,
+    // never a clone of the whole dependents snapshot.
     let dependency_notes = if source_notes.is_empty() {
         Vec::new()
     } else {
-        dependency_snapshot.overlaid(staged.clone())
+        dependency_proof_notes(
+            dependency_snapshot,
+            &staged,
+            &source_notes,
+            tasks_settings,
+        )
     };
 
     let source_texts: BTreeMap<PathBuf, String> =
@@ -222,6 +238,46 @@ fn event_paths_for_notes(events: &[&RelationEvent]) -> BTreeSet<PathBuf> {
         .filter(|event| !event.target.block_id.is_empty())
         .map(|event| event.target.note_path.clone())
         .collect()
+}
+
+/// Notes the engine needs to prove a matched source's own R4 state:
+/// the source note itself (when it carries dependency markers) plus
+/// notes that hold `[id::]` / `(id::)` for its `dependsOn` IDs. Unrelated
+/// `id::` notes stay out so `plan_successors` does not parse the whole
+/// dependents snapshot on a relation-only close.
+fn dependency_proof_notes(
+    snapshot: &DependentsSnapshot,
+    staged: &BTreeMap<PathBuf, Option<String>>,
+    source_notes: &[(PathBuf, String)],
+    tasks_settings: &TasksSettings,
+) -> Vec<(PathBuf, String)> {
+    let source_paths: BTreeSet<&Path> = source_notes
+        .iter()
+        .map(|(path, _)| path.as_path())
+        .collect();
+    let mut ids = BTreeSet::new();
+    for (_, contents) in source_notes {
+        for task in task_status_hooks::parse_tasks(contents, tasks_settings) {
+            ids.extend(task.depends_on);
+        }
+    }
+    let needles: Vec<Vec<u8>> = ids
+        .iter()
+        .map(|id| {
+            let mut needle = Vec::from(&b"id:: "[..]);
+            needle.extend_from_slice(id.as_bytes());
+            needle
+        })
+        .collect();
+    snapshot.overlaid_matching(staged, |path, contents| {
+        if source_paths.contains(path) {
+            return true;
+        }
+        let bytes = contents.as_bytes();
+        needles
+            .iter()
+            .any(|needle| memchr::memmem::find(bytes, needle).is_some())
+    })
 }
 
 fn contains_event_block_token(
@@ -621,7 +677,6 @@ mod tests {
             BTreeSet::from([
                 PathBuf::from("dep.md"),
                 PathBuf::from("source.md"),
-                PathBuf::from("target.md"),
             ])
         );
         let target_paths: BTreeSet<_> = result
@@ -722,6 +777,113 @@ mod tests {
             assert!(dep_snapshot.get(Path::new("plain.md")).is_none());
             assert!(rel_snapshot.get(Path::new("plain.md")).is_none());
         }
+    }
+
+    #[test]
+    fn matched_source_dependency_proof_skips_unrelated_id_notes() {
+        let vault = tempfile::tempdir().expect("vault");
+        let root = vault.path();
+        write_note(
+            root,
+            "source.md",
+            concat!(
+                "- [ ] #task Source [dependsOn:: dep] ^s\n",
+                "  - 🪢 **LINKS:** starts after [[target#^t]]\n",
+            ),
+        );
+        write_note(
+            root,
+            "dep.md",
+            "- [ ] #task Open prerequisite [id:: dep] ^d\n",
+        );
+        write_note(
+            root,
+            "target.md",
+            "- [x] #task Done target [id:: target] ^t\n",
+        );
+        write_note(
+            root,
+            "unrelated.md",
+            "- [ ] #task Unrelated [id:: unrelated] ^u\n",
+        );
+        write_note(
+            root,
+            "other.md",
+            "- [ ] #task Other waiter [id:: other] ^o\n",
+        );
+        let ctx = context(root, &["starts after"], true);
+        let mut planner = CaptureBatchPlanner::default();
+        let result =
+            collect(&ctx, &mut planner, root, &[event("target.md", "t")]);
+        let paths: BTreeSet<_> = result
+            .dependency_notes
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            BTreeSet::from([
+                PathBuf::from("dep.md"),
+                PathBuf::from("source.md"),
+            ])
+        );
+        assert!(!paths.contains(Path::new("unrelated.md")));
+        assert!(!paths.contains(Path::new("other.md")));
+        assert!(!paths.contains(Path::new("target.md")));
+    }
+
+    #[test]
+    fn relation_snapshot_drops_links_notes_without_event_token() {
+        let vault = tempfile::tempdir().expect("vault");
+        let root = vault.path();
+        write_note(
+            root,
+            "source.md",
+            "- [ ] #task Source ^s\n  - 🪢 **LINKS:** starts after [[target#^t]]\n",
+        );
+        write_note(
+            root,
+            "other.md",
+            "- [ ] #task Other ^o\n  - 🪢 **LINKS:** starts after [[other#^x]]\n",
+        );
+        write_note(root, "target.md", "- [x] #task Target ^t\n");
+        let ctx = context(root, &["starts after"], true);
+        let mut planner = CaptureBatchPlanner::default();
+        let _ = collect(&ctx, &mut planner, root, &[event("target.md", "t")]);
+        let relation = ctx.relation_sources_snapshot();
+        assert!(relation.get(Path::new("source.md")).is_some());
+        assert!(
+            relation.get(Path::new("other.md")).is_none(),
+            "LINKS notes that cannot match this close's ^id stay out of the relation snapshot"
+        );
+        assert!(
+            relation.snapshot_complete(&BTreeMap::new()),
+            "dropping a readable non-matching LINKS note must not taint the snapshot"
+        );
+    }
+
+    #[test]
+    fn unreadable_links_note_taints_when_event_token_does_not_match() {
+        let vault = tempfile::tempdir().expect("vault");
+        let root = vault.path();
+        write_note(root, "target.md", "- [x] #task Target ^t\n");
+        fs::write(
+            root.join("poison.md"),
+            [b"LINKS".as_slice(), &[0xff]].concat(),
+        )
+        .expect("poison");
+        let ctx = context(root, &["starts after"], true);
+        let mut planner = CaptureBatchPlanner::default();
+        let result =
+            collect(&ctx, &mut planner, root, &[event("target.md", "t")]);
+        assert!(
+            !result.input.relation_snapshot_complete,
+            "an unreadable LINKS note taints even without this close's ^id"
+        );
+        assert!(ctx
+            .relation_sources_snapshot()
+            .get(Path::new("poison.md"))
+            .is_none());
     }
 
     #[test]

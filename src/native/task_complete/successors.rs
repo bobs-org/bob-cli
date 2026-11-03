@@ -842,14 +842,21 @@ fn effective_relation_state_map(
     post_day: &str,
     day_relative: &Path,
     index: &NoteIndex,
+    source_paths: &BTreeSet<&Path>,
 ) -> BTreeMap<String, SourceRecovery> {
     let mut map = BTreeMap::new();
+    if source_paths.is_empty() {
+        return map;
+    }
     let recovered_project_files: BTreeSet<usize> =
         recovered_unblocked_project_files(verdicts, files, project_states)
             .into_iter()
             .collect();
     let post = DayView::parse(post_day, day_relative, index);
     for (file_index, file) in files.iter().enumerate() {
+        if !source_paths.contains(file.relative_path.as_path()) {
+            continue;
+        }
         for (task_index, task) in file.tasks.iter().enumerate() {
             let raw = raw_task_line(&file.contents, task.line_index);
             let verdict = verdicts.iter().find(|verdict| {
@@ -1292,45 +1299,35 @@ fn integrate_relation_offers(
     if !relation_input.relation_snapshot_complete {
         return (Vec::new(), Vec::new(), Some(RelationCheck::Unavailable), 0);
     }
-    let mut all_texts = BTreeMap::new();
-    for file in files {
-        all_texts.insert(file.relative_path.clone(), file.contents.clone());
-    }
     // Use the complete caller-supplied note index for resolution so
     // ambiguity from a known-but-unheld note is detectable and an
     // unavailable target in the index does not silently disappear.
     // One vault index build serves both classification and target reads.
-    let known: BTreeSet<PathBuf> = index
-        .relative_paths()
-        .map(|path| path.to_path_buf())
-        .collect();
-    let archive_paths: Vec<PathBuf> = known
-        .iter()
-        .filter(|path| path.components().any(|part| part.as_os_str() == "done"))
-        .cloned()
-        .collect();
     // Hand the engine only relation-relevant text: held files whose text
     // contains LINKS and a `^id` token for some event target, plus held
     // event targets so their validation hits the in-memory cache instead
     // of counting a target read. Every held file stays available to the
-    // target reader.
+    // target reader by borrow; the recovery snapshot is not cloned.
     let event_ids: BTreeSet<&str> = relation_events
         .iter()
         .filter(|event| !event.target.block_id.is_empty())
         .map(|event| event.target.block_id.as_str())
         .collect();
     let mut source_texts = BTreeMap::new();
-    for (path, contents) in &all_texts {
+    let mut staged = BTreeMap::new();
+    for file in files {
+        let path = file.relative_path.as_path();
+        let contents = file.contents.as_str();
+        staged.insert(path, contents);
+        let is_event_target = relation_events.iter().any(|event| {
+            !event.target.block_id.is_empty() && event.target.note_path == path
+        });
         if memchr::memmem::find(contents.as_bytes(), b"LINKS").is_none() {
             // Event targets without LINKS are still cached so their
             // validation does not count a target read; extraction skips
             // them cheaply without parsing.
-            let is_event_target = relation_events.iter().any(|event| {
-                !event.target.block_id.is_empty()
-                    && event.target.note_path == *path
-            });
             if is_event_target {
-                source_texts.insert(path.clone(), contents.clone());
+                source_texts.insert(path.to_path_buf(), contents.to_string());
             }
             continue;
         }
@@ -1346,18 +1343,8 @@ fn integrate_relation_offers(
                 break;
             }
         }
-        if matches_target {
-            source_texts.insert(path.clone(), contents.clone());
-        } else {
-            // Held event targets stay cached even when they are not LINKS
-            // sources.
-            let is_event_target = relation_events.iter().any(|event| {
-                !event.target.block_id.is_empty()
-                    && event.target.note_path == *path
-            });
-            if is_event_target {
-                source_texts.insert(path.clone(), contents.clone());
-            }
+        if matches_target || is_event_target {
+            source_texts.insert(path.to_path_buf(), contents.to_string());
         }
     }
     let day_after = post_day.or(pre_day);
@@ -1366,6 +1353,8 @@ fn integrate_relation_offers(
     // pass when the caller's main snapshot is incomplete.
     let relation_dependency_complete =
         snapshot_complete || relation_input.dependency_snapshot_complete;
+    let source_paths: BTreeSet<&Path> =
+        source_texts.keys().map(PathBuf::as_path).collect();
     let recovered = effective_relation_state_map(
         verdicts,
         files,
@@ -1375,18 +1364,18 @@ fn integrate_relation_offers(
         day_after.unwrap_or_default(),
         day_relative,
         index,
+        &source_paths,
     );
     let mut reader = MapTargetReader::new(
-        all_texts,
-        &known,
+        staged,
+        index,
         relation_input.unavailable_targets.clone(),
     );
     let classify_input = RelationClassifyInput {
         labels: &relation_input.labels,
         events: relation_events,
         source_texts: &source_texts,
-        known_paths: &known,
-        archive_paths: &archive_paths,
+        notes: index,
         day_before: pre_day,
         day_after,
         day_path: day_relative,
