@@ -21,8 +21,9 @@ use chrono::{NaiveDate, NaiveDateTime, Timelike};
 use crate::native::{
     capture::{parse_adjustment_range, session_clock, SessionClock},
     capture_task_toggle::set_task_line_status,
-    event_task::{events_in_note, EventKind},
+    event_task::{enrich_event_clocks, events_in_note, EventKind},
     pomodoro as native_pomodoro,
+    pomodoro_homes::{HomeResolver, HomeSource},
     task_complete::tree::add_or_replace_completion_field,
     task_status_hooks::{
         logical_lines, scan_pomodoros, PomodoroModel, RawReference,
@@ -49,13 +50,14 @@ struct Candidate {
     span_text: String,
 }
 
-pub(crate) fn plan_settle(
+pub(crate) fn plan_settle<S: HomeSource>(
     daily_contents: &str,
     daily_relative: &Path,
     anchor: NaiveDate,
     now: NaiveDateTime,
     resolved: &BTreeMap<RawReference, ResolvedReference>,
     global_filter: &str,
+    resolver: &mut HomeResolver<S>,
 ) -> SettleOutcome {
     let empty = SettleOutcome {
         contents: daily_contents.to_string(),
@@ -77,7 +79,8 @@ pub(crate) fn plan_settle(
     )
     .unwrap_or("\t");
 
-    let events = events_in_note(daily_contents, anchor);
+    let mut events = events_in_note(daily_contents, anchor);
+    enrich_event_clocks(daily_relative, daily_contents, &mut events, resolver);
     let mut candidates: Vec<Candidate> = Vec::new();
     for event in events {
         if event.kind != EventKind::Task {

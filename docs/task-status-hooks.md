@@ -229,9 +229,11 @@ A second run after a successful cleanup is a no-op.
 
 During structural cleanup, the command settles ended off-clock Event
 Tasks still parked under an unstarted `()` placeholder. Every open Event Task
-carrying `#offclock` (or `#off-clock` / `#untracked`) whose span has ended
-and whose only Task Link sits under an open untimed `()` MEET placeholder
-settles: back-to-back events cluster (`next.start ≤ cluster end`), every
+that is off-clock by the effective clock — `#off` (or a deprecated alias
+`#offclock` / `#off-clock` / `#untracked`) or an inherited area/project
+`offclock: true`, with `#on` and `offclock: false` as overrides — whose span
+has ended and whose only Task Link sits under an open untimed `()` MEET
+placeholder settles: back-to-back events cluster (`next.start ≤ cluster end`), every
 on-clock timed session's span (closed or running) is subtracted, and each
 remaining piece of at least 5 minutes becomes a closed
 `- [x] (**SSSS-EEEE** [off:: Nm]) — MEET` in time order, linking

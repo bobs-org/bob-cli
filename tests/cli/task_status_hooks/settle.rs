@@ -250,6 +250,54 @@ fn settle_running_on_clock_session_trims_and_mixed_placeholder_keeps_future() {
 }
 
 #[test]
+fn settle_inherited_off_clock_event_settles_once_and_on_stays_open() {
+    let temp = TempDir::new("bob-cli-settle-inherited");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    write_file(
+        &vault.join("love.md"),
+        "---\ntype: [[area]]\noffclock: true\n---\n# Love\n",
+    );
+    write_file(
+        &vault.join("abby.md"),
+        "---\ntype: [[area]]\nparent: [[love]]\n---\n# Abby\n",
+    );
+    write_vault(
+        &daily,
+        concat!(
+            "# Daily\n\n",
+            "## Events\n\n",
+            "- [*] #task **1200-1300** Inherited [root:: abby] [type:: MEET] ^inherited\n",
+            "- [*] #task **1200-1300** Override #on [root:: abby] [type:: MEET] ^override\n",
+            "\n## Pomodoros\n\n",
+            "- [ ] () — MEET\n",
+            "  - [[#^inherited]]\n",
+            "  - [[#^override]]\n",
+        ),
+    );
+
+    let json = settle_json(&vault, &daily, "2026-07-16 13:00");
+    let settled = json["settled"].as_array().unwrap();
+    assert_eq!(settled.len(), 1);
+    assert_eq!(settled[0]["block_id"], "inherited");
+    let after = fs::read_to_string(&daily).unwrap();
+    assert!(
+        after.contains("- [x] (**1200-1300** [off:: 60m]) — MEET"),
+        "inherited closed MEET:\n{after}"
+    );
+    assert!(
+        after.contains("- [x] #task **1200-1300** Inherited"),
+        "inherited event completed:\n{after}"
+    );
+    assert!(
+        after.contains("- [*] #task **1200-1300** Override #on"),
+        "override stays open:\n{after}"
+    );
+    let second = settle_json(&vault, &daily, "2026-07-16 13:00");
+    assert_eq!(second["settled"].as_array().unwrap().len(), 0);
+}
+
+#[test]
 fn settle_ignores_cancelled_done_unlinked_and_on_clock_events() {
     let temp = TempDir::new("bob-cli-settle-never");
     let vault = temp.path().join("vault");

@@ -22,15 +22,12 @@ use super::{
 };
 use crate::native::{
     capture::ClockStamp,
-    event_task::{
-        clock_verdict, event_task_by_id, line_has_off_clock_tag, ClockVerdict,
-        LinkFact,
-    },
+    event_task::{clock_verdict, event_task_by_id, ClockVerdict, LinkFact},
     note_tasks::{self, BlockIdLookup, NoteTaskScan, NoteTaskSettings},
     pomodoro_homes::{
-        attribute_session, path_string, unfiled_home, unlinked_home, Home,
-        HomeKind, HomeResolver, Hue, IndexedHomeSource, NoteKind,
-        ResolverHealth, SessionHomes, SessionKind, SessionLink,
+        attribute_session, effective_clock, path_string, unfiled_home,
+        unlinked_home, Home, HomeKind, HomeResolver, Hue, IndexedHomeSource,
+        NoteKind, ResolverHealth, SessionHomes, SessionKind, SessionLink,
     },
     vault_links::LinkResolution,
 };
@@ -780,6 +777,7 @@ impl<'a> ClockTaskLookup<'a> {
         path: &str,
         block_id: &str,
         embedded: bool,
+        resolver: &mut HomeResolver<IndexedHomeSource<'_>>,
     ) -> Option<bool> {
         let contents = self.contents(path)?;
         let settings = if embedded {
@@ -799,7 +797,7 @@ impl<'a> ClockTaskLookup<'a> {
         match scan.by_block_id(block_id) {
             BlockIdLookup::Found(task) => {
                 let line = contents.lines().nth(task.line_index)?;
-                Some(line_has_off_clock_tag(line))
+                Some(effective_clock(resolver, Path::new(path), line).off_clock)
             }
             BlockIdLookup::NotATask { .. }
             | BlockIdLookup::Duplicate(_)
@@ -869,9 +867,10 @@ fn resolve_link_clock(
         && let Some(contents) = lookup.contents(&path_key)
         && let Some(event) = event_task_by_id(&path, contents, &link.block_id)
     {
-        return Some(event.off_clock);
+        let line = contents.lines().nth(event.line_index)?;
+        return Some(effective_clock(resolver, daily_path, line).off_clock);
     }
-    lookup.task_off_clock(&path_key, &link.block_id, link.embedded)
+    lookup.task_off_clock(&path_key, &link.block_id, link.embedded, resolver)
 }
 
 /// Parse a ledger time range into half-open minutes for overlap checks.
@@ -2131,20 +2130,40 @@ mod tests {
             ),
         ];
         let lookup = super::ClockTaskLookup::from_buffers(&buffers, dir.path());
-        assert!(lookup.task_off_clock("tasks.md", "t", false).is_none());
-        assert_eq!(lookup.task_off_clock("tasks.md", "u", false), Some(false));
-        assert!(lookup.task_off_clock("tasks.md", "ghost", false).is_none());
+        let note_index = crate::native::vault_links::NoteIndex::from_paths(
+            buffers
+                .iter()
+                .map(|(path, _)| std::path::PathBuf::from(path)),
+        );
+        let mut resolver = crate::native::pomodoro_homes::HomeResolver::new(
+            crate::native::pomodoro_homes::IndexedHomeSource::from_buffers(
+                &note_index,
+                &buffers,
+            ),
+        );
+        assert!(lookup
+            .task_off_clock("tasks.md", "t", false, &mut resolver)
+            .is_none());
         assert_eq!(
-            lookup.task_off_clock("tasks.md", "off1", false),
+            lookup.task_off_clock("tasks.md", "u", false, &mut resolver),
             Some(false)
         );
-        assert!(lookup.task_off_clock("tasks.md", "plain", false).is_none());
+        assert!(lookup
+            .task_off_clock("tasks.md", "ghost", false, &mut resolver)
+            .is_none());
         assert_eq!(
-            lookup.task_off_clock("tasks.md", "plain", true),
+            lookup.task_off_clock("tasks.md", "off1", false, &mut resolver),
+            Some(false)
+        );
+        assert!(lookup
+            .task_off_clock("tasks.md", "plain", false, &mut resolver)
+            .is_none());
+        assert_eq!(
+            lookup.task_off_clock("tasks.md", "plain", true, &mut resolver),
             Some(false)
         );
         assert_eq!(
-            lookup.task_off_clock("done/old.md", "arch1", false),
+            lookup.task_off_clock("done/old.md", "arch1", false, &mut resolver),
             Some(true)
         );
     }

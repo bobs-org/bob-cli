@@ -14,6 +14,7 @@ use super::super::project_dependencies::{
 };
 use super::super::projects::edits::normalize_prj_is_blocked_tag;
 use super::super::task_complete::is_recurring_task_line;
+use crate::native::pomodoro_homes::{DiskHomeSource, HomeResolver};
 
 pub(crate) fn daily_anchor_date(
     daily_path: &Path,
@@ -529,6 +530,8 @@ pub(super) fn sync_task_statuses(
             }
         }
         let now_dt = bob_env::current_datetime();
+        let mut settle_resolver =
+            HomeResolver::new(DiskHomeSource::new(&request.bob_dir));
         let settle = plan_settle(
             &normalized_daily,
             &daily_rel_buf,
@@ -536,6 +539,7 @@ pub(super) fn sync_task_statuses(
             now_dt,
             &settle_resolved,
             &settings.global_filter,
+            &mut settle_resolver,
         );
         if !settle.settled.is_empty() || settle.contents != normalized_daily {
             normalized_daily = settle.contents;

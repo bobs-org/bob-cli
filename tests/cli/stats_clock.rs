@@ -932,6 +932,35 @@ fn run_capture(vault: &Path, day_file: &Path, now: &str, token: &str) -> Value {
 }
 
 #[test]
+fn inherited_off_clock_task_and_on_override_both_drift() {
+    let temp = TempDir::new().expect("tempdir");
+    let vault = temp.path().join("vault");
+    copy_dir(&fixture_vault(), &vault);
+    fs::write(
+        vault.join("love.md"),
+        "---\ntype: [[area]]\noffclock: true\n---\n# Love\n",
+    )
+    .expect("write love");
+    fs::write(
+        vault.join("abby.md"),
+        "---\ntype: [[area]]\nparent: [[love]]\n---\n# Abby\n- [ ] #task Love task ^love-task\n- [ ] #task Override #on ^override\n",
+    )
+    .expect("write abby");
+    let daily = vault.join("2026/20261009.md");
+    let mut text = fs::read_to_string(&daily).expect("daily note");
+    text.push_str(
+        "- [x] (**1000-1030** [t:: 30m]) — LATE\n  - [[abby#^love-task]]\n",
+    );
+    text.push_str(
+        "- [x] (**1100-1130** [off:: 30m]) — EARLY\n  - [[abby#^override]]\n",
+    );
+    fs::write(&daily, text).expect("write daily");
+
+    let drifted = run_json(&vault, &["stats", "-r", "2026-10-09..2026-10-09"]);
+    assert_eq!(drifted["health"]["homes"]["clock_drift"], 2);
+}
+
+#[test]
 fn writer_stamped_off_clock_row_agrees_with_stats_until_the_task_drifts() {
     let temp = TempDir::new().expect("tempdir");
     let vault = temp.path().join("vault");

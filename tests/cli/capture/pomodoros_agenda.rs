@@ -277,6 +277,69 @@ fn agenda_events_buffered_golden() {
 }
 
 #[test]
+fn agenda_inherited_clock_uses_note_default() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-inherited-clock");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_tasks_vault(&vault);
+    write_file(
+        &vault.join("love.md"),
+        "---\ntype: [[area]]\noffclock: true\n---\n# Love\n",
+    );
+    write_file(
+        &vault.join("abby.md"),
+        "---\ntype: [[area]]\nparent: [[love]]\n---\n# Abby\n",
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Events\n",
+            "- [ ] #task **1000-1100** Love lunch [root:: abby] ^love-lunch\n",
+            "- [ ] #task **1100-1200** Override #on [root:: abby] ^override\n",
+            "- [ ] #task **1200-1300** Plain ^plain\n",
+            "## Pomodoros\n",
+            "- [ ] () — MEET\n",
+            "\t- [[#^love-lunch]]\n",
+            "\t- [[#^override]]\n",
+            "\t- [[#^plain]]\n",
+        ),
+    );
+    let json = agenda_json(&vault, &day_file, &[]);
+    let rows = json["events"]["rows"].as_array().expect("event rows");
+    assert_eq!(rows.len(), 3);
+    let love = rows
+        .iter()
+        .find(|row| row["block_id"] == "love-lunch")
+        .expect("love row");
+    assert_eq!(love["off_clock"], true);
+    assert_eq!(love["clock_source"], "note");
+    assert_eq!(love["clock_note"], "love.md");
+    let over = rows
+        .iter()
+        .find(|row| row["block_id"] == "override")
+        .expect("override row");
+    assert_eq!(over["off_clock"], false);
+    assert_eq!(over["clock_source"], "on_tag");
+    assert_eq!(over["clock_note"], serde_json::Value::Null);
+    let plain = rows
+        .iter()
+        .find(|row| row["block_id"] == "plain")
+        .expect("plain row");
+    assert_eq!(plain["off_clock"], false);
+    assert_eq!(plain["clock_source"], "default");
+    assert_eq!(plain["clock_note"], serde_json::Value::Null);
+    let items = json["pomodoros"][0]["items"].as_array().expect("items");
+    let chip = items
+        .iter()
+        .find(|item| item["block_id"] == "love-lunch")
+        .expect("love chip");
+    assert_eq!(chip["event"]["off_clock"], true);
+    assert_eq!(chip["event"]["clock_source"], "note");
+    assert_eq!(chip["event"]["clock_note"], "love.md");
+}
+
+#[test]
 fn agenda_gap_skips_a_running_event_lead_out() {
     let temp = TempDir::new("bob-cli-pomodoros-agenda-gap-buffer");
     let vault = temp.path().join("vault");

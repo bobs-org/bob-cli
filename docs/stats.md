@@ -217,8 +217,10 @@ the same way.
 Each row has exactly one classification. A closed row with both keys is
 Worked using `[t::]` and raises a conflict diagnostic. A closed placeholder
 `()` counts on neither clock. Closed history is never reinterpreted from
-today's task tags: a later `#offclock` edit shows up as drift, not as a new
-total. Counts count the selected sessions, not minutes.
+today's task tags: a later `#off` edit or `offclock:` change shows up as
+drift, not as a new total. Toggling an area or project `offclock:` default
+only changes new decisions; earlier love-rooted `[t::]` sessions drift by
+design. Counts count the selected sessions, not minutes.
 
 **Selection.** `-k/--clock worked|off-clock|total` on `bob stats` and
 `bob stats show` sets the request lens (default Worked). The hidden aliases
@@ -274,7 +276,9 @@ and minutes covered by two or more closed timed sessions
 never inflates it; clock totals never subtract it). An empty fully resolved
 lineup uses the shared Unlinked verdict, so a keyed off-clock row with no
 counted links drifts and a keyed Worked row does not. Drift resolves the
-same tasks the writers do: `note_tasks` scans skip frontmatter and fenced
+same effective clock the writers stamp: `#on` wins, then `#off` (or a
+deprecated alias), then the nearest area/project `offclock:` on the task's
+root walk, then on-clock. `note_tasks` scans skip frontmatter and fenced
 examples, ordinary links honor the global filter, embedded links do not,
 and same-note Event Tasks win for empty targets. Overlap uses date-aware
 coordinates, so an overnight session can overlap the next day's early

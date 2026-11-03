@@ -38,7 +38,7 @@ use super::{
     env as bob_env,
     event_task::{self, EventKind, EventNoteRow},
     markdown, note_tasks, pomodoro,
-    pomodoro_homes::{DiskHomeSource, HomeResolver, Hue},
+    pomodoro_homes::{ClockSource, DiskHomeSource, HomeResolver, Hue},
     task_root::{self, TaskRootState},
     vault_links::{LinkResolution, VaultLinkResolver},
 };
@@ -142,6 +142,8 @@ pub(crate) struct AgendaItemEvent {
     pub(crate) off_clock: bool,
     /// Deprecated f6 field, retained for one release train.
     pub(crate) untracked: bool,
+    pub(crate) clock_source: ClockSource,
+    pub(crate) clock_note: Option<String>,
     pub(crate) title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) buffer: Option<AgendaEventBuffer>,
@@ -214,6 +216,8 @@ pub(crate) struct AgendaEventRow {
     pub(crate) off_clock: bool,
     /// Deprecated f6 field, retained for one release train.
     pub(crate) untracked: bool,
+    pub(crate) clock_source: ClockSource,
+    pub(crate) clock_note: Option<String>,
     pub(crate) root: Option<String>,
     pub(crate) home: Option<AgendaEventHome>,
     pub(crate) join_url: Option<String>,
@@ -340,7 +344,23 @@ impl<'a> AgendaNotes<'a> {
         let settings = note_tasks::read_settings(bob_dir);
         let mut cleared = settings.clone();
         cleared.global_filter.clear();
-        let event_chips = event_item_chips(day_contents, agenda_date(day_path));
+        let day_relative = day_path
+            .strip_prefix(bob_dir)
+            .unwrap_or(day_path)
+            .to_path_buf();
+        let mut chip_rows =
+            event_task::events_in_note(day_contents, agenda_date(day_path));
+        {
+            let mut chip_resolver =
+                HomeResolver::new(DiskHomeSource::new(bob_dir));
+            event_task::enrich_event_clocks(
+                &day_relative,
+                day_contents,
+                &mut chip_rows,
+                &mut chip_resolver,
+            );
+        }
+        let event_chips = event_item_chips(&chip_rows, agenda_date(day_path));
         let mut notes = Self {
             bob_dir,
             day_path: day_path.to_path_buf(),
@@ -830,7 +850,7 @@ pub(crate) fn agenda_events_payload(
             super::gcal::stamp::parse(lines.get(index).copied()?, date)
                 .map(|stamp| stamp.json_synced_at())
         });
-    let note_rows = event_task::events_in_note(contents, date);
+    let mut note_rows = event_task::events_in_note(contents, date);
     let day_relative = day_path
         .strip_prefix(bob_dir)
         .unwrap_or(day_path)
@@ -838,6 +858,12 @@ pub(crate) fn agenda_events_payload(
     let task_settings = note_tasks::read_settings(bob_dir);
     let task_scan = note_tasks::scan(contents, &task_settings);
     let mut home_resolver = HomeResolver::new(DiskHomeSource::new(bob_dir));
+    event_task::enrich_event_clocks(
+        &day_relative,
+        contents,
+        &mut note_rows,
+        &mut home_resolver,
+    );
     let mut all_day = Vec::new();
     let mut rows = Vec::new();
 
@@ -922,6 +948,8 @@ pub(crate) fn agenda_events_payload(
                 .map(|task| status_type_label(task.status_type).to_string()),
             off_clock: event.off_clock,
             untracked: event.off_clock,
+            clock_source: event.clock_source,
+            clock_note: event.clock_note.clone(),
             root,
             home,
             join_url: markdown_link_target(raw_line, "📹"),
@@ -1343,16 +1371,16 @@ pub(crate) fn agenda_datetimes(
 }
 
 fn event_item_chips(
-    contents: &str,
+    rows: &[EventNoteRow],
     date: NaiveDate,
 ) -> HashMap<String, AgendaItemEvent> {
     let mut chips = HashMap::new();
     let mut duplicates = HashSet::new();
-    for event in event_task::events_in_note(contents, date) {
+    for event in rows {
         if event.kind != EventKind::Task {
             continue;
         }
-        let Some(block_id) = event.block_id else {
+        let Some(block_id) = event.block_id.clone() else {
             continue;
         };
         if duplicates.contains(&block_id) {
@@ -1373,7 +1401,9 @@ fn event_item_chips(
             ends_at,
             off_clock: event.off_clock,
             untracked: event.off_clock,
-            title: event.title,
+            clock_source: event.clock_source,
+            clock_note: event.clock_note.clone(),
+            title: event.title.clone(),
             buffer: agenda_event_buffer(date, span, event.buffer),
         };
         if chips.insert(block_id.clone(), chip).is_some() {
