@@ -230,6 +230,8 @@ read `*YYYY-MM-DD* — <reason> · kept N× in <Rung>` (lanes and Ready) or
 streak after that keep, newest first. Stay, step, re-roll, and drop
 entries follow the same grammar (see the vault format); the rung-aware
 card writes Step, Stay, and Drop events through the same managed log.
+For P-levels, `<Level>` is the configured priority level label, never the
+stored `[priority::]` value.
 
 A counted keep whose entry cannot be written — duplicate `🥀 ROTTEN LOG`
 markers or an unreadable history — writes nothing at all: repair the

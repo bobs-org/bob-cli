@@ -77,24 +77,36 @@ Verified 2026-11-03: `--self-test` complete on this host.
 
 ## Live verification (real-Obsidian e2e)
 
+Completed twice on Athena on 2026-11-03 with Obsidian 1.15.0 and Tasks
+8.6.0. Each run passed all 48 checks, skipped none, and captured the six
+WIP, Ready, and P4 card views in light and dark themes. The checks asserted
+the task line and Rotten Log after each keep, stay, step, roll, drop, and
+undo; verified the Ready P1 schedule window and P4 re-roll; and confirmed
+that a counted batch skip changes neither task.
+
+The runner copied the working bob-plugins tree and the Tasks plugin source
+into a fresh Athena `/tmp` directory for each run, then used an isolated
+scratch vault. It did not use Athena's repository checkout or the live vault.
+The command run inside each copy was:
+
 ```text
-xvfb-run -a node scripts/obsidian-decay-ladder-e2e.cjs [--out DIR] [-e PATH] [-r REPORT]
+BOB_E2E_TASKS_PLUGIN_DIR=<isolated Tasks plugin> xvfb-run -a node scripts/obsidian-decay-ladder-e2e.cjs --out <results/run-N> --report <results/report-N.json>
 ```
 
-This host has no Obsidian Electron app (`/snap/bin/obsidian` missing) and
-no `xvfb-run`, so the live pass did not run here. Exit 2 from the driver
-means unrun, not a product failure. Rerun on a Linux host with Obsidian
-and Xvfb, or on the Mac with the installed app:
+The harness now pins both `freshnessTodayText` and `laneReleaseDateText` to
+the simulated review day, waits for the Tasks cache and task writes, and
+accepts duplicate copies of the same batch notice toast. It dispatches card
+answers to the focused control in Obsidian's app document. The e2e asserts
+that each decay card's owner document is that same app document.
 
-- every keep, stay, step, drop, and undo row in the table above matches
-  the exact task line and Rotten Log body
-- WIP / Ready / P4 cards screenshot in light and dark
-- counted batch skip writes nothing and shows `2 need a decision`
+The screenshot review confirmed the recommended Enter row, rung title,
+Stay and Drop actions, and readable light/dark contrast on all three cards.
+The second run's WIP and Ready images and P4 dark image were byte-identical
+to the first run; P4 light differed by a small capture-level pixel variation
+without a visible layout or content change. The configured P-level label is
+shown in the decay log, while `[priority::]` continues to store its configured
+value.
 
-**Pending (Bryan, in Obsidian)**
-
-- live Linux `xvfb-run` pass and screenshot review against the card
-  anatomy (title `Kept 2× in/at …`, recommended Enter row, Stay, Drop)
-- Mac smoke: Alt+F keep, card Enter / Alt+F / D, and Ctrl+Z undo on a
-  real vault task
-- iOS glyph rendering of 🥀 / 🍂 / 🤷
+The reports and six reviewed screenshots are registered as SASE artifacts on
+`bob-cli-g9`. The separate Mac smoke and iOS glyph checks remain optional
+device checks outside this real-Obsidian acceptance run.

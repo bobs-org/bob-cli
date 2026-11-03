@@ -173,6 +173,8 @@ Next` reads as an uncounted Next keep. Writers emit `🥀 **ROTTEN LOG**`
 also accept an optional U+FE0F on each emoji, the emoji-less
 `**ROTTEN LOG**`, and the legacy `**Rotten log**`, each with an optional colon
 and only trailing spaces or tabs. None of these is a Pomodoro Task Link.
+For P-levels, `<Level>` is the configured priority level label, never the
+stored `[priority::]` value.
 
 Work Log entries are newest first. Writers emit
 `*YYYY-MM-DD HH:MM* — <summary>`; readers also accept the legacy
