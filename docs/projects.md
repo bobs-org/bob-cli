@@ -971,40 +971,45 @@ priority ladder config, then reuses the previewed plan/date through
 the existing transactional writers (one undo step). Esc writes nothing and
 retains the anchor; stale inputs rebuild for a fresh choice.
 
-- **Not now (Enter).** P0 tasks enter at the first configured level in ladder
-  order whose `min_days` is at least the effective refresh interval (3 → P1
-  on Bryan's 3–8 / 9–31 ladder; 7 → P2 and 30 → P3 with the default 2–7 /
-  8–30 ladder), unless `freshness.decay.enter` names a valid fixed level. Prioritized tasks reuse the recommended roll or decay
-  unchanged. A terminal cancel is never offered: it substitutes a truthful
-  same-level roll for this card only. Unknown priorities, unknown `enter`
-  labels, invalid windows, and dates that would not defer into the future
-  make Not now unavailable with an explanation instead.
+- **Step down (Enter).** The card follows one rung at a time: WIP moves to Next,
+  Next moves to Ready, Ready enters the first configured level whose
+  `min_days` meets the effective refresh interval (unless
+  `freshness.decay.enter` names a valid fixed level), and each P-level moves to
+  the next configured level. At the last level, Step rolls again at that level
+  rather than cancelling. Priority changes show one previewed future date and
+  write the rung change, Schedule Log entry, and dated Rotten Log entry in one
+  undo step. Lane moves write no Schedule Log or Work Log entry. A missing
+  ladder, invalid level, or date that cannot defer into the future disables
+  that step with an explanation.
 - **Less often (L).** The next refresh preset strictly above the current
   interval (7 → 14 → 30 → 90); at 90+ the existing custom refresh picker
   takes over constrained to a longer value ≤ 365, and at 365 the row is
   unavailable.
-- **Keep (Alt+F)** opens a reason stage inside the same card ("Keep
-  as written?", with the logged-keeps history and the exact entry
-  preview): Enter commits the stamp, counts once with saturation at
-  999 and never resets, and writes one dated Rotten Log entry in the
-  same transaction; Esc returns to the card's choices and a second Esc
-  writes nothing. **Reword (E)** and **Less often** stamp and clear;
-  **Drop (D)** cancels through the existing guarded cancel writer.
-- **Kept-count tails.** Schedule-changing decisions append `· kept N×` after
+- **Stay (Alt+F).** Available on every rung, opens the reason stage for
+  "Stay in/at <rung>?" with the logged-keeps history and exact entry preview.
+  Enter stamps and clears the keep streak, then writes a dated
+  `stayed in/at <rung> after N keeps` Rotten Log entry in the same undo step;
+  blank reason text is logged as `🤷 no reason given`. Esc returns to the card,
+  and a second Esc writes nothing. **Reword (E)** and **Less often** stamp and
+  clear; **Drop (D)** cancels through the existing guarded cancel writer and
+  adds a dated `dropped after N keeps` Rotten Log event in the same undo step.
+  Every Step also logs its rung transition in Rotten Log.
+- **Kept-count tails.** Schedule-changing decisions append a rung-qualified
+  `· kept N× in/at <rung>` after
   the existing reason head (`🎲 P0 → P2 decay · in **17** (8–30) days ·
   kept 3×`), so the classification table above keeps its meaning.
 - **Review-decision entries.** Less often and Reword write dated Schedule Log
-  entries (`🎲 less often · every 7 → 14 days · kept 3×`,
-  `🎲 reword · kept 3×`) with no fabricated scheduled date change; both
-  classify as `other` and deliberately reset the roll streak. Drop writes a
-  dated Cancel Log entry (`🍂 dropped after 3 keeps`) and preserves keeps
-  history on the closed line. Dismissals (Not now, Less often, Reword,
-  Drop) write only their own Schedule/Cancel entries and never a Rotten
-  Log entry.
-- **Explicit levels (1–4)** preview one roll per configured level in ladder
-  order, each with reset; absent levels are never invented. An invalid
-  priority config disables every priority-changing action while keeping
-  Keep, Reword, Less often, and Drop.
+  entries (`🎲 less often · every 7 → 14 days · kept 3× at P2`,
+  `🎲 reword · kept 3× in Next`) with no fabricated scheduled date change;
+  both classify as `other` and deliberately reset the roll streak. Step, Stay,
+  and Drop write one dated Rotten Log entry. Drop also writes a dated Cancel
+  Log entry (`🍂 dropped after 3 keeps`) and preserves keeps history on the
+  closed line.
+- **Explicit levels (1–4)** appear only on Ready and preview one roll per
+  configured level in ladder order, each with reset; absent levels are never
+  invented. WIP, Next, and P-level cards show only Step, Stay, Reword, and
+  Drop. An invalid priority config disables priority-changing actions while
+  preserving lane steps, Stay, Reword, Less often, and Drop.
 
 ### Schedule-log reason prompt
 

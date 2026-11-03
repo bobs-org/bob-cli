@@ -215,12 +215,12 @@ not evidence of keeps. Git sync may lose an increment during conflict
 recovery; this scalar is not an exact global event counter. Cache
 uncertainty under-counts. Hand editing remains unobserved.
 
-**Rotten Log and the decay card.** The ladder's rung-aware card lands in a
-later phase; the shipped Ready card below still applies. Due WIP/Next
-counting and the always-logged Rotten Log grammar ship here.
+**Rotten Log and the decay card.** The rung-aware card is available as soon
+as compatible plugins are installed. It writes rung transitions and Stay
+reasons alongside the existing counted-keep entries.
 
 **Rotten Log.** Every counted keep — Alt+F/Ctrl+Alt+F on an exact due row
-on its rung's tier, or the decay card's Keep — first asks "Why keep it in
+on its rung's tier, or the decay card's Stay — first asks "Why stay in
 <rung>?" ("at <level>?" for P-levels) with the rung allowance shown
 (`keep 1 of 2 in Next`), and writes one rung-qualified entry under a
 `🥀 **ROTTEN LOG**` direct child in the same write as the stamp. A blank
@@ -229,7 +229,7 @@ read `*YYYY-MM-DD* — <reason> · kept N× in <Rung>` (lanes and Ready) or
 `*YYYY-MM-DD* — <reason> · kept N× at <Level>` (P-levels), with N the
 streak after that keep, newest first. Stay, step, re-roll, and drop
 entries follow the same grammar (see the vault format); the rung-aware
-card writes those, and this phase only writes keep entries.
+card writes Step, Stay, and Drop events through the same managed log.
 
 A counted keep whose entry cannot be written — duplicate `🥀 ROTTEN LOG`
 markers or an unreadable history — writes nothing at all: repair the
@@ -294,14 +294,14 @@ ready. Unblock ticklers, PROJECTS, recurring, checklist overlays,
 and Today-linked rows never decide. The annotation means a choice is
 due, not permission to execute an action. The shared approved-decay
 action planner (`planFreshnessDecayCard` in bob-navigation-hotkeys)
-turns that flag into stable previewed decisions — P0 entry, a
-non-cancelling Not now, Less often steps, and dated review-decision
-entries with `· kept N×` tails — as specified in `docs/projects.md`
-("Approved-decay decision planner"); the card interaction itself
-(`FreshnessDecayCardModal` plus guarded commit adapters, batch
-skipping, the leaf, and the capability guard) landed with the
-decision-card phase. The rung-aware card that steps WIP → Next →
-Ready → P1…P4 lands in a later phase.
+turns that flag into stable previewed rung decisions — WIP → Next →
+Ready → configured priority levels, with a final-level roll in place —
+as specified in `docs/projects.md` ("Approved-decay decision planner").
+Card capability v3 includes the rung-aware rows and guarded commit adapters:
+each rung offers Step, Stay, Reword, and Drop; Ready also offers Less often
+and explicit configured levels. Step, Stay, and Drop append a dated Rotten Log
+event in the same undo step as their task change. Lane moves never write a
+Work Log, and Stay resets the keep count after recording its reason.
 
 ## 3. Placement rule
 
@@ -605,7 +605,7 @@ today on a canonical line is a no-op.
 | Surface                | Stamps | Never stamps |
 | ---------------------- | ------ | ------------ |
 | bob-navigation-hotkeys — reverse Blocks stage | Ctrl+Shift+Alt+B, Task Card ⇧B, the palette command, the BLOCKS-line entries, and the BLOCKS chip × all use one writer and stamp each changed dependent T once when its Depends-On line changes, on add and remove, including counted and Task Link gestures | Source N's target-id, lane, and BLOCKS edits, including a minted id and generated mirror; N is never stamped |
-| bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D; Ctrl+Shift+B is the same card route as `b`) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; routed moves stamp like Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
+| bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D; Ctrl+Shift+B is the same card route as `b`) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; routed moves stamp like Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Step and level picks through the priority or lane writer, Stay/Reword through freshness stamp writers, Less often through set-refresh, Drop through the cancel writer plus Rotten Log) | the cancel row (including the decay cancel), create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task; **picked successor offers** on a Done close (Ctrl+Enter / Alt+] into Done), which stamp like Ctrl+Shift+Enter | closing the completed task itself (done or cancelled), unpicked recoveries, cancelled closes, Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | dependency drop on an existing dependent; `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `x` rows that set `[/]`, an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status), a `*note:id` capture that edits T (its Depends-On line, derived fields, or Blocked status), **picked `--pull-in` successor offers** (same stamp as a manual link), and each open task an `--inbox-route` answer moves (same stamp as Ctrl+Shift+M) | new tasks on any route (including new tasks with `&` or `*` modifiers), `x` complete of the closed task itself, unpicked successor recoveries, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an existing owner's target-ID and lane edits under `*`, an unchanged repeat `&` or `*` |
@@ -659,7 +659,8 @@ stays due and Ctrl+Alt+F does not advance. Freshness gestures never ask
 for or write a Work Log summary.
 
 Only bob-navigation-hotkeys writes the Rotten Log (single keeps,
-counted batches, Task Link sessions, and the decay card's Keep stage).
+counted batches, Task Link sessions, and the decay card's Step, Stay, and
+Drop actions).
 `bob capture`, Rust, hooks, and all other automation never
 write it: capture's stamps stay generic and clear `keeps` through the
 same default as any other generic stamp.
@@ -770,13 +771,13 @@ itself, an empty queue, the day change or a reload, or when its row is no
 longer due with the same path and text; a stamp or answer elsewhere does
 not end it.
 
-A due at-limit task's Alt+F opens the decision card (Not now / Less
-often / Reword / Drop / Keep) as soon as compatible plugins are
-loaded. Counted and Task Link sessions skip such tasks with
-`N needs a decision`. The card's Keep swaps the rows for a reason
-stage inside the same card: Enter commits stamp, increment, and one
-Rotten Log entry together, while Esc returns to the choices — no
-reason in mind means picking Not now, Less often, or Drop instead.
+A due at-limit task's Alt+F opens the decision card as soon as compatible
+plugins are loaded. Every rung offers Step, Stay, Reword, and Drop; Ready also
+offers Less often and configured level picks. Counted and Task Link sessions
+skip such tasks with `N needs a decision`. Stay opens the in-card reason
+stage: Enter stamps, clears the keep count, and writes one Rotten Log entry;
+Esc returns to the choices, and a second Esc writes nothing. Step and Drop
+also write one dated Rotten Log entry with the task change.
 See `docs/projects.md` "Approved-decay decision planner".
 
 ## 7. `bob freshness`
@@ -925,7 +926,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | `crowded.md` + `bob-ready-notes` + heading chips | per-note Ready cap rollout (landed: Crowded Notes page, ranked-bar code block, live `ready n/cap` chips on each note's `## Tasks` heading) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
 | keep-reason prompt (single keeps, counted batches, Task Link sessions, every rung) | rotten-log (landed: nav 2.54.0 single keeps, 2.56.0 batches; nav-keeps counts due WIP/Next with rung-qualified always-logged entries, early lane keeps stamp quietly) |
-| decay-card Keep stage | rotten-log (landed: nav 2.55.0; in-card reason stage, one transaction, Esc back to the choices) |
+| decay-card Stay stage | rotten-log (landed: nav 2.55.0; in-card reason stage, one transaction, Esc back to the choices; v3 adds rung steps and Rotten Log events) |
 | freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.65.0; per-rung tallies `🥀 WIP 2 · Next 1 · last …` in source-note Live Preview + reading views only, never Tasks query rows) |
 | note snapshots (`bob` highlights/ref) | rotten-log (open tasks: one condensed `KEPT` row with the newest entry; include-closed snapshots: every entry) |
 | Mac idle agenda rotten chip | rotten-log (`🥀 Rotten log` header folding with the other logs, `🥀 N` chip after `⚒ N` / `🗓 N`) |
