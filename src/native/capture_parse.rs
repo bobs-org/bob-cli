@@ -173,8 +173,11 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 6` for the capture-language revision while \
+Success JSON reports `grammar: 7` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
+A lone task-list header `@route` with no section, bullets, or other text \
+reports mode `note_pull`; `@route` with bullets remains a task list, and a \
+lone `@route#section` remains an empty-list refusal.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> \

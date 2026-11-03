@@ -76,9 +76,11 @@ workflow guide.
 ## Grammar at a glance
 
 One capture item is a parent line plus optional authored child bullets. Blank
-physical lines split a draft into multiple items; a lone `@route` or
-`@route#section` header line plus its bullets is a list of items (see
-[Lists](#lists-several-tasks-or-notes-at-once)). Each item is planned before
+physical lines split a draft into multiple items; an `@route` header with
+bullets is a list of items, while a lone `@route` header pulls tasks from that
+note (see [Lists](#lists-several-tasks-or-notes-at-once) and
+[Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note)). A lone
+`@route#section` remains an empty section list. Each item is planned before
 anything is written, and any failure rolls the whole batch back.
 
 **`@` says where. `#` names a place or a task type. `%` says how to capture.**
@@ -92,10 +94,11 @@ anything is written, and any failure rolls the whole batch back.
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
 | `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
-| `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
+| `@route` with task text | Write a task to `<route>.md` (default route is `mac_inbox`) |
+| `@route` alone on its line, with no bullets or other markers | Pull the note's unlinked, unblocked Pending, Next, and Ready tasks into today's Pomodoros through the explicit Pull-In choice; see [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
-| `@route` alone on its line, bullets below | Task list: each first-level bullet below becomes its own task in `<route>.md` (see [Lists](#lists-several-tasks-or-notes-at-once)) |
+| `@route` on its line, bullets below | Task list: each first-level bullet below becomes its own task in `<route>.md` (see [Lists](#lists-several-tasks-or-notes-at-once)) |
 | `@route#Section` alone on its line, bullets below | Section list: each first-level bullet below becomes its own bullet under that heading |
 | `- <task> :<task-id>` (list bullet) | Same as the project-note bullet: name the task, make it Next, and link it into the Pomodoro the task's type places |
 | `- <task> ^<task-id>` (list bullet) | Same as the project-note bullet: name the task only |
@@ -911,11 +914,14 @@ clipboard children, then the schedule log.
 
 ### Lists: several tasks or notes at once
 
-A first line that is only `@route` (a task list) or only `@route#section`
-(a section list) files each first-level bullet below it as its own item in
-that file, with the bullet's nested bullets as its children. A header line
-also starts a new list when no blank line precedes it, so `@dev` / `- a` /
-`@cash` / `- b` is two lists. A section header may name a heading with spaces
+A first line that is only `@route` or only `@route#section`, followed by one
+or more bullets, files each first-level bullet below it as its own item in
+that file, with the bullet's nested bullets as its children. A bare `@route`
+with no bullets is a note pull instead; see
+[Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note). A header
+line also starts a new list when no blank line precedes it, so `@dev` / `- a`
+/ `@cash` / `- b` is a note pull from `dev.md`, then a task list in `cash.md`.
+A section header may name a heading with spaces
 as `@sase#future-work` or `@sase#"Future Work"`; both file under
 `## Future Work`. An unterminated `@sase#"Fu` is incomplete (`needs:
 ["section"]`) rather than a list. For example, with this `dev.md`:
@@ -973,8 +979,10 @@ byte-for-byte what the equivalent blank-line batch writes.
 | `  - detail` (nested) | A child of that task, one indentation unit beneath it |
 | `- [ ] Call the bank` | A leading open checkbox is dropped; the bullet becomes an open task |
 
-A header with no bullets captures nothing: `capture-parse` reports
-`incomplete` needing `list_item`, and `bob capture` refuses `empty_list`.
+A section header with no bullets captures nothing: `capture-parse` reports
+`incomplete` needing `list_item`, and `bob capture` refuses `empty_list`. A
+bare `@route` header with no bullets is the note-pull form, not an empty-list
+refusal.
 A header with other markers on its line is refused `list_header_marker`:
 the header stands alone, so move the marker to the bullet it configures.
 Route-changing markers on a bullet (`@…`, trailing `+`/`+query`, `%n`,
@@ -992,6 +1000,92 @@ apply: a list bullet is always task text with trailing markers, so `- x`,
 Drawers are not offered under list tasks: a nested ALL-CAPS line is a plain
 note. In a `%t` template draft, a header in the template body is refused
 (`template_list`), and template rows are never split by headers.
+
+### Pulling ready tasks from a note {#pulling-ready-tasks-from-a-note}
+
+Type one root route by itself to ask Bob which open tasks in that note can be
+pulled into today's Pomodoros:
+
+```text
+@sase
+```
+
+This form is recognized only when the item is exactly one task-list header
+line: `@route` with no section, bullets, task text, or other markers. Route
+resolution matches task capture: ASCII letters, digits, `_`, or `-`, folded to
+lowercase, resolving to `<route>.md` at the vault root. Aliases do not resolve.
+Adding bullets makes it a normal task list. `@route#section` alone remains an
+`empty_list` refusal, and `@@route`, `@route:id`, `@route+id`, and `@route^id`
+keep their existing meanings. Any other marker on the header keeps the
+existing list grammar and validation.
+
+Bob offers open `#task` residents that are not already linked under today's
+open Pomodoros and can be proved unblocked. The order is Pending → Next →
+Ready, then note order. This is the open-lanes offer set, not the freshness-
+gated READY bucket: a Ready task remains eligible even when it is NEW or
+ROTTEN. `#ref` tasks, nested subtasks, and recurring tasks due today or earlier
+are eligible too. A task's own open prerequisite or `#prj_is_blocked` folds it
+as blocked; future-scheduled tasks fold as scheduled, `#hide` tasks as hidden,
+and live-linked tasks as already planned. A scheduled date of today is
+eligible. The note's own `^prj` row is never offered or counted, and residents
+of sub-projects are not pulled by their parent's route.
+
+Bob does not preselect or write any row while previewing. Use the existing
+Pull-In selection to choose offers:
+
+```text
+bob capture @sase
+Pull from sase · 3 ready tasks
+  offer 1  Pending Ship the badge renderer  sase.md ^ship-renderer → FIX
+  offer 2  Next Wire badges into the README  sase.md ^readme-badges → FIX
+  offer 3  Ready Write badge docs  sase.md → new DOCS session
+  not offered  2 already planned · 3 blocked · 1 scheduled later · 1 hidden
+  nothing pulled in · choose with -p 1,3 or -p all
+
+bob capture -p 1,3 @sase
+Pull from sase · 2 of 3 pulled in
+  linked Pending Ship the badge renderer  sase.md ^ship-renderer → FIX
+  linked Ready → Next Write badge docs  sase.md ^write-badge-docs → new DOCS session · added ^write-badge-docs
+  not pulled in  offer 2 Wire badges into the README
+  not offered  2 already planned · 3 blocked · 1 scheduled later · 1 hidden
+```
+
+`-p, --pull-in` accepts offer numbers or keys, `all`, or `none`. With no
+selection Bob reports offers without writing. `--require-pull-in-choice`
+turns an unanswered set into the existing write-free
+`pull_in_choice_required` refusal. If nothing can be offered, capture refuses
+`nothing_to_pull_in` and includes the note and fold counts so the reason stays
+visible. If `<route>.md` is neither on disk nor staged by an earlier draft
+item, Bob refuses `pull_note_missing`. Unknown or stale picks use the usual
+teaching error and write nothing.
+
+A note pull reads today's daily note to preview placement. Bob uses normal
+typed placement: an open Pomodoro with the task's effective type, or a new
+typed placeholder; without an effective type it uses the current or next open
+entry as an implicit destination. If there is no daily note or no eligible
+Pomodoro, capture returns the usual missing-file or no-eligible-Pomodoro
+error. A typed placeholder is created only if a picked task lands there.
+
+Picking changes a Ready (`[ ]`) task to Next (`[*]`); Pending (`[/]`) and Next
+(`[*]`) keep their lane. Bob mints a missing block ID, stamps
+`[fresh:: today]`, clears `[unblocked::]` and `[keeps::]`, then inserts a
+plain Task Link. It leaves schedules and dependency links alone. A task
+created earlier in the same draft is not stamped fresh. Unpicked tasks are
+untouched and receive no recovery marker. If picking changes a Ready inbox
+task to Next, the existing inbox-route choice can move it in the same batch;
+picked Pending and Next inbox tasks do not become route candidates.
+
+The JSON result uses `kind: "note_pull"` and an additive `note_pull` object
+with the note, route, offered `successors`, and folded counts. Each offered row
+uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
+`unblocked_by`, and `offer.group: "note_pull"`. The matching
+`pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
+unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
+diagnostics, the route spans, and the ordinary list summary with
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 7`.
+See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
+for the JSON, copy, gate, and protocol contracts, and
+[§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
 
 ### Directives (`%`)
 
@@ -2876,6 +2970,10 @@ true`, `offer_count`, `choice`, `picked_count`) and a `keep_moving`
 array on every `task_complete` and `pomodoro_close` object (always
 present, possibly empty; see
 [task-dependencies.md §12.15](task-dependencies.md#1215-keep-moving-offers-leaf-projects)).
+Note-pull items add `kind: "note_pull"` and
+`note_pull: {note, route, successors, folded}`; see
+[Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) and
+[task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers).
 Dry-run JSON equals real-run JSON with the same flags, including
 `--pull-in`. A sealed `@route:id@` project note contributes its tasks
 to the same offer set
@@ -3101,7 +3199,8 @@ text unchanged.
 
 `code` appears on `pull_in_choice_required`
 (§12.14 when `--require-pull-in-choice` is set, offers exist, and no
-`--pull-in` was given); every other capture failure omits it.
+`--pull-in` was given), `nothing_to_pull_in`, and `pull_note_missing`;
+every other capture failure omits it.
 
 Every `pomodoro_link_destination` carries a `role` naming how the entry
 was chosen: `current` (the running timed entry), `next_up` (implicitly
@@ -5883,7 +5982,7 @@ drafts without `%t` it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
-`"pomodoro_close"`, `"pomodoro_link"`, `"task_dependency"`, `"task_complete"`, or `"ref"`, and
+`"pomodoro_close"`, `"pomodoro_link"`, `"note_pull"`, `"task_dependency"`, `"task_complete"`, or `"ref"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
@@ -6651,12 +6750,19 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 6` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 7` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
 will succeed. Wikilink highlighting is syntax-only and additive; it does
 not change capture routing or diagnostics.
+
+A lone `@route` header reports mode `note_pull`, the resolved `route`, no
+needs or diagnostics, and the header's usual route spans. It retains the
+per-item list summary (`kind: "tasks"`, `count: 0`, `header_line`, and
+`header_range`) so an editor can still offer to start a task list. A lone
+`@route#section` remains an `empty_list` refusal; an `@route` followed by
+bullets remains a task list.
 
 The command is read-only and does not read the clipboard or contact the
 network; it takes no `--bob-dir`. Unless `--no-ref` is set, it reads the URL
@@ -7792,7 +7898,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 6`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 7`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

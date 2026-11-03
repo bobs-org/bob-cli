@@ -938,8 +938,10 @@ the NEW and TICKLER review tiers resurface unpicked work.
   `@route:id@` — each eligible open task of the project note that capture
   creates (trigger `project_created`, §12.5), plus every §12.15
   keep-moving offer (trigger `last_planned`), plus each source reached
-  by a configured successor relation to an event target (§12.18). One
-  row per task identity.
+  by a configured successor relation to an event target (§12.18), plus
+  each resident offered by a lone `@route` note pull (trigger
+  `note_pull`, §12.20). A note-pull offer has no predecessor. One row per
+  task identity.
 - **Pick / selection.** The input that chooses which offers to link.
   Nothing is pre-checked. ↵ applies the marked rows, or the highlighted
   row when none are marked; Esc means none.
@@ -947,13 +949,15 @@ the NEW and TICKLER review tiers resurface unpicked work.
   unblocked project, or of a project note capture just created),
   `project_finished` (§12.10 pull-ins), `keep_moving` (§12.15
   keep-moving offers from a leaf project's last planned task), and
-  `relation` (§12.18 successor-label edges).
+  `relation` (§12.18 successor-label edges), and `note_pull` (§12.20
+  offers requested by a lone `@route`).
 - **Destination.** Where a picked link is inserted. Hand-offs and
   pull-ins use the §12.3 anchor (slot / closing / inherit). Project
   residents use the earliest anchor among `preds(R)` (the tasks that
   unblocked R; in closing mode the closing target), falling back to the
   implicit destination. An unplanned predecessor uses the implicit
-  destination.
+  destination. Note-pull rows have no anchor and use typed placement
+  (§12.20).
 - **Offer key.** Opaque, stable identity string (§12.2 KEYS).
 - **Anchor.** Where a predecessor was planned today. It is read from
   today's day text **before** this gesture strikes or moves anything.
@@ -970,11 +974,12 @@ The Obsidian picker API is §12.13. CLI selection (`-p, --pull-in`) is
 
 ### 12.1 Trigger
 
-Successor offers are planned inside these **managed Done** gestures, and
-only when they **complete** a task. A picker appears only when the
-offer set is non-empty. `bob capture` **never prompts and never
-auto-links**: without a pick flag it recovers and reports numbered
-offers.
+Completion-triggered successor offers are planned inside these **managed
+Done** gestures, and only when they **complete** a task. The lone-`@route`
+note pull in the trigger table is the explicit non-completion request that
+also uses this offer protocol. A picker appears only when an offer set is
+non-empty. `bob capture` **never prompts and never auto-links**: without a
+pick flag it reports numbered offers without writing them.
 
 | Gesture | Where |
 | --- | --- |
@@ -986,6 +991,7 @@ offers.
 | complete-label commit (`~` / `~~` or nav Links / Linked-from with a `relations.complete_labels` label) | bob-cli / bob-navigation-hotkeys |
 | Alt+] / Alt+[ status cycling into Done | task-status-cycler |
 | `bob capture '<text> @route:id@'` — a sealed project note. This is the one trigger that completes nothing: the project's creation is the gesture, and its rows say `trigger: "project_created"` | bob-cli |
+| `bob capture '@route'` — a lone task-list header with no bullets or other text; the explicit request completes nothing and offers that note's eligible residents as `note_pull` | bob-cli |
 
 The same complete gestures produce project offers and project-finished
 pull-in offers (§12.10). Every managed Done row above also runs the
@@ -1113,14 +1119,19 @@ DEDUP    : one row per task identity; causes are merged. A resident
            removes N's project_finished offer; a later item that links
            any open task of N, or closes R, drops N's whole keep_moving
            group (§12.15, KM21).
+           For note pulls, one row per key per draft: the earliest item
+           that offers a key owns it, and later note pulls omit that
+           duplicate. A later `!` close can make a task newly offerable.
 ORDER    : offers by group (hand_off, relation, project, then
-           project_finished, then keep_moving), then anchor ledger position,
+           project_finished, then keep_moving, then note_pull), then anchor ledger position,
            then note path, then line. Relation groups sort by event-target
            anchor position, target note path, then target line; rows within
            each relation group sort Next → Ready, then note path and line.
            Within keep_moving, rows sort by
            anchor ledger position, then note path, then lane pull order
-           (Pending → Next → Ready), then line (§12.15).
+           (Pending → Next → Ready), then line (§12.15). Note-pull groups
+           sort after every other group, then by draft item order; rows sort
+           by Pending → Next → Ready, then source line (§12.20).
 BREAKER  : deleted. No replacement cap. SL17, PP15, and the breaker
            notice tests are retired. Keep the unrelated
            embedded-completion safeguards (25 levels / 250 targets).
@@ -1355,11 +1366,13 @@ stale `[ ]` resident).
 
 - The existing fields keep their meaning; `unblocked` stays on
   `task_complete` and is new on `pomodoro_close`.
-- `trigger` is `"dependency"`, `"project_empty"`, or
-  `"project_created"`; relation rows use `"relation"`. Every existing successor row says
+- `trigger` is `"dependency"`, `"project_empty"`, `"project_created"`, or
+  `"note_pull"`; relation rows use `"relation"`. Every existing dependency
+  successor row says
   `"dependency"`; a missing key means an older bob. Project pull-in
   rows say `"project_empty"` (§12.10). Rows for a project note created
-  by capture's `@route:id@` say `"project_created"`. Keep-moving rows
+  by capture's `@route:id@` say `"project_created"`. Note-pull rows say
+  `"note_pull"` and have `unblocked_by: []`. Keep-moving rows
   never appear in `unblocked[]`; they live in `keep_moving[]` with
   `trigger: "last_planned"` (§12.15).
 - `hide_removed` is true when this gesture removed a whole-token
@@ -1380,7 +1393,8 @@ stale `[ ]` resident).
   - `n`: 1-based index in the numbered offer list this command reports
     without a selection;
   - `group`: `"hand_off"` | `"relation"` | `"project"` |
-    `"project_finished"` | `"keep_moving"` (§12.18 / §12.15);
+    `"project_finished"` | `"keep_moving"` | `"note_pull"`
+    (§12.18 / §12.15 / §12.20);
   - `project`: vault-relative path of N, present on the `project` and
     `keep_moving` groups;
   - `after`: event target key for a `relation` group;
@@ -1487,9 +1501,10 @@ Held already-planned rows are JSON-only.
 has one entry for each offered group of every kind, with bob-authored
 `copy: {title, why?, tag?, fold?, glyph}`. The `glyph` is one of
 `hand_off`, `project`, `project_created`, `project_finished`,
-`keep_moving`, or `relation`. Existing project and keep-moving groups
-keep their keys and add `copy`; hand-off and project-finished groups
-have no `folded`. A relation entry has `group`, an `after` object
+`keep_moving`, `relation`, or `note_pull`. A `note_pull` group also carries
+its vault-relative `note` path and the `folded` counts in §12.20. Existing
+project and keep-moving groups keep their keys and add `copy`; hand-off and
+project-finished groups have no `folded`. A relation entry has `group`, an `after` object
 (`key`, `note_path`, `block_id`, `text`), `label`, `event`, and `copy`.
 Its optional `folded` object counts held rows: `hidden`, `already_planned`,
 `blocked`, and `already_started`; `waits_for` counts their unreleased targets.
@@ -1551,7 +1566,8 @@ Present on **every** successful capture JSON (dry-run too):
   bob-authored `copy: {title, why?, tag?, fold?, glyph}`. Project groups
   carry folded counts (`hidden`, `already_planned`, `sub_projects`);
   keep-moving groups also carry `blocked` and `scheduled` (§12.15);
-  relation groups carry the optional held counts described above (§12.18).
+  relation groups carry the optional held counts described above (§12.18);
+  note-pull groups carry `note` and the folded counts from §12.20.
   Hand-off and project-finished groups have no
   `folded` field. The example relation entry is
   `{"group": "relation", "after": {"key": "agents.md#^implement",
@@ -1612,12 +1628,17 @@ applies.
 
 **Copy rules (shared by every surface).**
 
-- One notice per gesture, and silence when nothing was unblocked.
-- Each row reads successor text first, then the destination, then the
-  cause.
+- One notice per gesture. Completion notices stay silent when nothing was
+  unblocked; a note pull with no offers refuses with its folded reason (§12.20).
+- A note pull is an explicit request with no predecessor; its copy says
+  which note supplied the offers, never that work was unblocked.
+- Each completion row reads successor text first, then the destination,
+  then the cause. Note-pull rows show their source lane and destination and
+  have no predecessor cause.
 - Offer lists use group headers: `Hand-offs`, `‹Label› “‹T›”` (§12.18),
   `Project ‹note›`, `Project finished`, and `Keep ‹N› moving` (§12.15). The project group's
-  `^prj` is the header, not a choice, when N still has open work.
+  `^prj` is the header, not a choice, when N still has open work. Note-pull
+  groups use `Pull from ‹N›` (§12.20).
 - Keep-moving surfaces always lead with **why** and always say **not
   dependents**; they never use 🔓 or the word "unblocked". Their glyph
   is ⏭. See the §12.15 copy table and mocks.
@@ -1626,6 +1647,9 @@ applies.
   🔓 or the word "unblocked". Relation groups say which relation fired,
   what happened to its target, and that these are the user's links
   rather than dependents. Use the exact §12.18 copy.
+- Note-pull rows use the 📥 glyph (Mac `tray.and.arrow.down.fill`) and the
+  existing Next status colour token because a picked Ready task becomes
+  Next. Their tag is `ready in ‹N›`; use the exact §12.20 copy table.
 - Use only existing glyphs: 🔓 unblocked (Mac `lock.open.fill`), 🔒
   still blocked (Mac `lock.fill`), ✓ done.
 - Use only existing `--task-status-*` colour tokens, with no new hex
@@ -1815,6 +1839,8 @@ plan 10/10 links
 - an enabled `x*` that parks a live-linked task takes ≤ 70 ms;
 - adding the dependents pass on top of a relation `!` adds ≤ 5 ms;
 - `capture-parse` does no new work;
+- a note-pull dry run on a release build against a temporary vault copy
+  stays within 70 ms; non-pull drafts do no note-pull work;
 - no extra spawn is needed to report results.
 
 **Measured 2026-11-02 (bob-cli-fs.4.1.6).** Isolated Apollo scratch copy
@@ -3249,6 +3275,269 @@ surface that owns them, not the pure rule engines.
 | SA34 | Nav `api.successors.version < 3` | Cycler plans no relation group; close succeeds (UI gate) |
 | SA35 | Same-day Obsidian reopen of T after picking S | Take back S's untouched link (UI undo) |
 | SA36 | Plain `x` parks/completes nothing, or JS closes T with no incoming successor-label edge | Zero added reads (performance/wiring) |
+
+### 12.20 Note pull offers
+
+A complete, lone `@route` capture item is an explicit request to inspect the
+root note `<route>.md` and offer its eligible tasks through the existing
+Pull-In protocol. It has **no predecessor**: a note pull is not a completion
+or recovery event, and its rows ride the successor-offer protocol only for
+numbering, keys, selection, and atomic writes. It does not use a new picker.
+
+#### Trigger and eligible residents
+
+The item must be exactly one task-list header line with no section, task text,
+bullets, or other markers. `@route` plus bullets remains a task list;
+`@route#section` alone remains `empty_list`. Routes resolve like task capture
+to a root `<route>.md`, lower-cased, with no alias lookup. The note may already
+be on disk or have been staged by an earlier item; otherwise capture refuses
+`pull_note_missing`.
+
+Classify every `#task` checkbox line in the source note, including nested
+subtasks, in this first-match order:
+
+| Resident | Result |
+| --- | --- |
+| The source note's own `^prj` task | Never offered or counted; it represents the project's lifecycle |
+| Done, Cancelled, custom, or unknown status | Ignored and uncounted |
+| `[?]`, an own open prerequisite, or `#prj_is_blocked` | Folded as `blocked` |
+| `scheduled` after today | Folded as `scheduled` |
+| Whole-token `#hide` | Folded as `hidden` |
+| A live Task Link in today's open Pomodoros (§12 Live link) | Folded as `already_planned` |
+| `[/]` Pending, `[*]` Next, or `[ ]` Ready | Offered |
+
+An own open prerequisite is proved only when the candidate has a non-empty
+`[dependsOn::]`. Build the vault-wide dependents snapshot only for those
+candidates. If that snapshot is unavailable, fold the candidate as `blocked`;
+Bob never offers a task it cannot prove unblocked. A blocked source project's
+reason comes from its `^prj` task and is retained in empty-pull copy.
+
+`#ref` tasks, nested subtasks, and recurring tasks whose occurrence is today
+or earlier are eligible. A `scheduled` date of today is eligible. The source
+note's `^prj` never appears in counts, and sub-project residents are not
+included. Inbox files are valid sources. Each offered inbox row has
+`inbox: true`; a picked Ready task becomes Next and is passed to the existing
+batch inbox-route detector, while picked Pending and Next tasks do not become
+route candidates.
+
+#### Order, keys, and destinations
+
+Rows sort Pending → Next → Ready, then by line in the source note. Note-pull
+groups sort after all other offer groups, then in capture-draft item order.
+Offer numbering continues across the whole draft. Each group has one row per
+key: the earliest note-pull item that offers that key owns it, and a later
+note pull omits the duplicate. A later item that completes, blocks, links, or
+explicitly drops an offered task removes that row in the final net pass.
+
+Keys are computed from the source note staged **before any pick**. A task with
+a block ID uses `<note_path>#^<block-id>`; otherwise it uses the stable
+note-path and description digest key from §12.2 KEYS, including its `~k`
+duplicate suffix. This keeps preview keys valid when a later selection is
+submitted.
+
+There is no predecessor anchor. Placement is the normal typed placement used
+for a capture link or `project_created` row:
+
+- an open Pomodoro with the task's effective type is `typed`;
+- when none exists, a new `— TYPE` placeholder is `created`;
+- without an effective type, use the current or next open entry as
+  `implicit`, with `fallback: true`.
+
+Placement is planned in offer order. Once the first picked or previewed DOCS
+row would create the DOCS session, a later DOCS row shows `typed`. A new
+placeholder is written only if a picked task lands there. Because the preview
+needs destinations, note pull reads today's daily note and returns the usual
+missing-file or no-eligible-Pomodoro error when placement cannot be resolved.
+
+#### Picks and writes
+
+A pick writes the same core fields as a picked `keep_moving` or `hand_off`
+row (§12.4): `' '` becomes `'*'`, while `'*'` and `'/'` stay unchanged; a
+missing block ID is minted; `[fresh:: today]` is stamped, clearing
+`[unblocked::]` and `[keeps::]`; and a plain Task Link is inserted at the
+destination. Schedules, `[id::]`, and `[dependsOn::]` are untouched. Do not
+call `plan_task_link`, which retires schedules. A task created by an earlier
+item of the same draft is not stamped fresh, because creation does not stamp.
+
+Unpicked rows write nothing: no status change, ID mint, Task Link,
+`[unblocked::]`, or recovery. JSON reports `not_linked: "not_selected"`.
+There is no keep-moving-style group invalidation because a note pull is a
+request, not a trigger. An earlier item that links a resident makes it
+`already_planned`; an earlier item that creates a task in the source note can
+make that task offerable, with the created-task freshness exception above.
+Any batch failure rolls the entire draft back.
+
+#### Selection and refusals
+
+`-p, --pull-in` accepts numbered offers or keys, `all`, and `none` as defined
+by §12.14:
+
+| Input | Result |
+| --- | --- |
+| No `-p`, or `-p none` | Success with no write; rows are `not_selected`; human output ends with `nothing pulled in · choose with -p …` |
+| `-p 1,3`, `-p sase.md#^ship-renderer`, or `-p all` | Existing Pull-In selection; stale, unknown, or out-of-range picks give the existing teaching error and write nothing |
+| `--require-pull-in-choice`, no `-p`, and at least one offer | Existing write-free `pull_in_choice_required` refusal with `pull_in` and flat `offers` |
+| No offered task, with any `-p` value | `nothing_to_pull_in`, with folded counts; no write |
+| Source note is neither on disk nor staged | `pull_note_missing`; no write |
+| No daily note or no eligible Pomodoro | Usual missing-file or no-eligible-Pomodoro error; no write |
+
+The empty-pull JSON is additive:
+
+```json
+{
+  "ok": false,
+  "code": "nothing_to_pull_in",
+  "note_pull": {
+    "note": "sase.md",
+    "route": "sase",
+    "folded": {"already_planned": 2, "blocked": 3, "scheduled": 1,
+                "hidden": 1, "sub_projects": 0,
+                "already_started": 0, "waits_for": 0}
+  }
+}
+```
+
+Fold copy omits zero counts, in this order: `already planned`, `blocked`,
+`scheduled later`, `hidden`. When no open residents exist, say `it has no open
+tasks`. When the source is a blocked project and has no offers, name its
+project reason, for example `the project is blocked (its ^prj waits on 1
+task)` or `is scheduled for 2026-11-20`.
+
+| Empty-pull case | Message |
+| --- | --- |
+| Some residents folded | `nothing to pull in from sase.md: 2 already planned · 3 blocked · 1 hidden` |
+| No open residents | `nothing to pull in from sase.md: it has no open tasks` |
+| Blocked project | `nothing to pull in from sase_badges.md: the project is blocked (its ^prj waits on 1 task)` or `is scheduled for 2026-11-20` |
+
+The `pull_note_missing` message is:
+
+```text
+@foo pulls ready tasks from foo.md, which does not exist: add `- <task>` bullets below it to start a list there, or run 'bob capture-targets' to list routable notes
+```
+
+#### Reporting and copy
+
+Capture remains unversioned (`ok`, no `schema_version`). A successful item
+uses `kind: "note_pull"` and carries:
+
+```json
+{
+  "kind": "note_pull",
+  "note_pull": {
+    "note": "sase.md",
+    "route": "sase",
+    "successors": [{
+      "trigger": "note_pull", "unblocked_by": [], "inbox": false,
+      "offer": {"group": "note_pull", "project": null, "key": "sase.md#^task"}
+    }],
+    "folded": {"already_planned": 2, "blocked": 3, "scheduled": 1,
+                "hidden": 1, "sub_projects": 0,
+                "already_started": 0, "waits_for": 0}
+  },
+  "pull_in": {
+    "supported": true, "offer_count": 1, "choice": null, "picked_count": 0,
+    "groups": [{
+      "group": "note_pull", "note": "sase.md",
+      "folded": {"already_planned": 2, "blocked": 3, "scheduled": 1,
+                  "hidden": 1, "sub_projects": 0,
+                  "already_started": 0, "waits_for": 0},
+      "copy": {"title": "Pull from ‹sase›", "why": null,
+               "tag": "ready in sase", "glyph": "note_pull"}
+    }],
+    "copy": {"title": "Pull from ‹sase›", "capsule": "Pull in",
+             "glyph": "note_pull"}
+  }
+}
+```
+
+Rows use the exact `unblocked[]` row shape with `trigger: "note_pull"`,
+`unblocked_by: []`, and `inbox`; the offer has `group: "note_pull"` and
+`project: null`. `pull_in.groups[]` adds `note` only for this group. The group
+fold includes `already_planned`, `blocked`, `scheduled`, `hidden`,
+`sub_projects`, `already_started`, and `waits_for`; zero fields may be
+omitted as in other groups. Pomodoro block diffs mark picked lines with
+`reason: "note_pull"`, and `TaskBlockRole` is `NotePull`. Dry-run and real-run
+JSON match for the same flags apart from `dry_run` and preview wording.
+
+| Element | Copy |
+| --- | --- |
+| Group title | `Pull from ‹N›` |
+| Contrast tag | `ready in ‹N›` |
+| Fold line, omitting zero counts | `2 already planned · 3 blocked · 1 scheduled later · 1 hidden` |
+| Top title, only note-pull groups | `Pull from ‹N›` / `Pull from 2 notes`; mixed groups keep the existing title |
+| Capsule | `Pull in` |
+| Glyph and tint | `📥` (Mac `tray.and.arrow.down.fill`); existing Next status colour token |
+| CLI group header | `Pull from N · k ready tasks` (`1 ready task`); after picks, `Pull from N · p of k pulled in` |
+| CLI fold row | `not offered  2 already planned · …` |
+| CLI no-pick hint | `nothing pulled in · choose with -p 1,3 or -p all`; with one offer, `-p 1` |
+| Mac footer verb | `Pull In` |
+| Mac preview hint | `↩ choose what to pull in · ⇧↩ start a list` |
+| Mac prompt status / VoiceOver | `Choose tasks to pull in from ‹N›` |
+| Mac empty state | `Nothing ready in ‹N›` above the fold line |
+| Mac notification title | `📥 Pulled in k from ‹N›`; mixed drafts use the existing summary and count note-pull picks as pulled in |
+| Mac notification body | Picked task texts and destinations, e.g. `Ship the badge renderer → FIX · Write badge docs → DOCS` |
+
+#### Gates and interaction
+
+Non-pull drafts pay nothing; detection is lexical during parse. A pull reads
+the staged source note (if present), today's daily note, and the `NoteIndex`
+needed to resolve live links. Read the dependents snapshot only when a
+candidate has non-empty `[dependsOn::]` (§12.20 Eligible residents). Against a
+temporary copy of the largest area/project note and `mac_inbox`, a release
+build's `bob capture --dry-run -f json @<route>` stays within the 70 ms target
+in §12.7. Never measure against the live vault.
+
+Note-pull groups follow the consent rule in `unblocked-tasks-are-offered`:
+Bob offers every qualifying row but links only explicit picks. The source note
+comes from the route and staged note text; `already_planned` is read at
+runtime from live Task Links under today's open Pomodoros, never from tags or
+path filters (`today-is-read-from-the-ledger`). The offer set uses sticky Pending/Next
+lanes and the same freshness write as other picks (`task-lanes-are-sticky`),
+while `ready-is-freshness-gated` still governs review buckets, not this open-
+lane source. Bob owns route parsing, previews, placement, copy, and writes;
+Mac Capture renders Bob's response and submits one capture call
+(`mac-capture-is-a-thin-client`). This is a grammar and JSON contract change,
+so the normal daily release train and exact-SHA CI rules apply
+(`bob-cli-releases-ride-a-daily-train`). There is no configuration switch,
+type filter, sub-project traversal, or Obsidian surface.
+
+### 12.21 NP — note pull vectors
+
+These vectors pin the note-pull offer rules and use the same pre-write key,
+selection, and batch semantics as the other Pull-In groups. Fixture: area
+`sase.md` (→ `dev`), a daily note with an open `FIX` Pomodoro and no `DOCS`
+entry, and fixed `BOB_NOW`. Select-all applies unless a row says otherwise.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| NP1 | `@sase`; Ready A, Next B, Pending P, none linked | One `note_pull` group: P, B, A; `trigger: note_pull`; `unblocked_by: []`; nothing written; exit 0 |
+| NP2 | `-p all @sase` | P and B are linked with unchanged status; A goes `[ ]`→`[*]`; missing IDs are minted; all three are stamped fresh, clearing `[unblocked::]` / `[keeps::]`; links use typed destinations |
+| NP3 | B has a live link today | B is folded `already_planned` |
+| NP4 | B's link is struck, or sits under a closed Pomodoro | B is offered |
+| NP5 | Residents `[?]` / Ready with open prerequisite / `#prj_is_blocked` / scheduled tomorrow / `#hide` | Folded blocked / blocked / blocked / scheduled / hidden; scheduled today is offered |
+| NP6 | N is a project | `^prj` is never offered or counted |
+| NP7 | N has sub-projects with Ready tasks | Only N's residents are offered |
+| NP8 | Done, cancelled, or custom-status residents | Ignored and uncounted |
+| NP9 | `#ref` resident, nested subtask, recurring task due today | Offered |
+| NP10 | Every resident folded, or no open tasks (any `-p`) | `nothing_to_pull_in` with the fold; writes nothing |
+| NP11 | N's `^prj` waits on an open task | `nothing_to_pull_in` names the project reason |
+| NP12 | `@nosuch` with no `nosuch.md` | `pull_note_missing`; writes nothing |
+| NP13 | `--require-pull-in-choice` without `-p` | `pull_in_choice_required` with `pull_in` and flat `offers`; writes nothing |
+| NP14 | `-p 3`, `-p sase.md#^ship-renderer`, `-p 9` | Numeric pick, key pick, and teaching error listing current offers |
+| NP15 | `-p none` | Success; nothing written; no IDs minted |
+| NP16 | `-p 1 @mac_inbox` picks a Ready inbox task | An inbox-route candidate (`-i 1=health` moves it in the same batch); a picked Next inbox task is not a candidate |
+| NP17 | Draft `Write docs @sase` then `@sase` | The new task is offered; picking it does not stamp it fresh |
+| NP18 | Draft `@sase` then `@sase:docs` | The later link drops A's row in the final net pass |
+| NP19 | Draft `!sase:t` recovers dependent D in `sase.md`, then `@sase` | D appears once in `hand_off`; the pull omits it |
+| NP20 | Draft `@sase` then `@dev` | Two groups in item order; offer numbers continue |
+| NP21 | A has type DOCS and no DOCS entry exists | Destination is `created`; placeholder is written only when A is picked; a second DOCS offer shows `typed` |
+| NP22 | Candidate has `[dependsOn::]` and the snapshot is unavailable | Candidate is folded `blocked` |
+| NP23 | No daily note or no `## Pomodoros` | Usual missing-file or no-eligible-Pomodoro error |
+| NP24 | `@sase` then `- Call the bank` | A task list, unchanged |
+| NP25 | `@sase#Ideas` alone | `empty_list`, unchanged |
+| NP26 | `@dev` directly followed by `@cash` then `- b` | `@dev` is a note pull; `@cash` is a task list |
+| NP27 | `bob capture-parse -f json -- @sase` | Mode `note_pull`, `needs: []`, list `count: 0`, `grammar: 7` |
+| NP28 | Same vault and flags, dry run vs real run | Identical JSON apart from `dry_run` and preview wording |
 
 ## 13. Project dependencies
 

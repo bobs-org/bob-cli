@@ -68,9 +68,11 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 6` revision. Clients can use it to distinguish
+additive top-level `grammar: 7` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope.
+envelope. Grammar 7 treats an exactly lone `@route` task-list header as a
+note pull; `@route` with bullets remains a list, and a lone
+`@route#section` remains an empty-list refusal.
 
 ## Runtime dependencies
 

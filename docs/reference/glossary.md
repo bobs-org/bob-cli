@@ -123,9 +123,9 @@ the task-link picker instead. Not the SASE TUI's command-mode panel. See
 
 *Aliases: day stats.*
 
-The read-only daily Stats summary at the top of the `bob-plan` block on
-canonical daily notes, above the badges, in Live Preview and Reading
-view, or wherever a `bob-day-stats` fence embeds it. Its contents: five
+The [Stats Strip](#stats-strip) of a daily note: the read-only daily Stats summary at the top
+of the `bob-plan` block on canonical daily notes, above the badges, in Live
+Preview and Reading view, or wherever a `bob-day-stats` fence embeds it. Its contents: five
 LABEL-value facts, each numeric one over a quiet `typical` line (the median of
 the seven days before, with a ▲/▼/= mark once the day is finished), then a
 [Root Parent](#root-parent) lane and a [Task Type](#task-type) lane, each a legend over a
@@ -311,6 +311,34 @@ into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily 
 
 A [Pomodoro](#pomodoro) whose time Bob records but keeps off the work clock — lunch, the gym, school pickup. Its timespan carries `[off:: Nm]` where a worked session carries `[t:: Nm]`: `- [x] (**1200-1300** [off:: 60m]) — MEET`. A session goes off the clock exactly when it keeps at least one [Task Link](#task-link) and every one resolves off-clock: `#off` (deprecated `#offclock`, `#off-clock`, `#untracked`) or an inherited area/project `offclock: true`, with `#on` and `offclock: false` as overrides; an unlinked session, an unresolved link, or one on-clock link keeps the whole session worked. Writers decide when they write the span (starts, closes, and `bob gcal sync` for an off-clock [Event Task](#event-task)); a closed row's key is history, and later tag or note-default edits are reported, never applied. An ended off-clock [Event Task](#event-task) nobody started — tagged or inherited — settles into one on the next `bob task reconcile`. Worked, Sessions, `bob pomodoro --worked`, and the [Day Strip](#day-strip) facts leave it out; its [Root Parent](#root-parent) still receives its minutes. The Off-clock and Total clocks of `bob stats -k` and the [Stats Dash](#stats-dash) count it, grouped by [Root Parent](#root-parent) like any session. Drawn dashed; `◌` in text. A bare closed `(**HHMM-HHMM**)` row is an older off-clock session counted by its span. Not a `()` placeholder, a Stats day before tracking began (`not_tracked`), or the tracked-task mark on a `#task` row.
 
+### Period Note {#period-note}
+
+*Aliases: weekly note, quarterly note, yearly note, all_time.*
+
+A Bob vault note for one period above the day, in whole ISO weeks:
+
+- `YYYY/YYYY-Www.md`: a Mon–Sun ISO week, filed under its ISO week-year;
+- `YYYY/YYYY-Qn.md`: 13 ISO weeks (W01–13, W14–26, W27–39, W40–52/53);
+- `YYYY.md`: an ISO week-year;
+- `all_time.md`: the singleton.
+
+Each `parent` is the next period up (a daily note's is its week, a year's is
+`all_time`, and `all_time`'s is `org`), so the tree is also an exact partition of
+days. bob creates them, create-only and one week ahead (`bob periods ensure`).
+
+Each opens with a [Stats Strip](#stats-strip) and a live parts table that summarizes every child
+with its Headline or the root parents it mostly went to. It then holds:
+
+- Bryan's `Intentions`, `Outcomes`, or `Theme`;
+- a `## Review` that an agent may draft only through `bob periods draft`, while it
+  is empty or still unedited;
+- Bryan's `## Reflection`;
+- a folded `[!agent]` callout with the complete, versioned drafting instructions.
+
+Period notes hold no task rows. Monthly notes are retired: months are a Stats
+grouping, not a note level. Not a daily note, an [Area Note](#area-note), or a
+[Project Note](#project-note).
+
 ### Pomodoro {#pomodoro}
 
 A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily file, representing one timed session, on the clock (`[t::]`) or off it (`[off::]`, an [Off-Clock Pomodoro](#off-clock-pomodoro)). Its body is either a timespan such as `(**0920-0950** [t:: 30m])` or an empty `()` placeholder; an optional ` — NAME` suffix (em dash plus ALL-CAPS name) makes it a named Pomodoro. Past Pomodoros are closed with timespans, current Pomodoros are open with timespans, and planned Pomodoros are open placeholders. Child bullets log the session's work, usually with a task link. On a sub-bullet, `N<ctrl+shift+m>` moves it and the next N siblings into another open Pomodoro, or into a new named one below.
@@ -430,6 +458,35 @@ chart, day pinning, and family panels. "Where the time went" groups by
 [Root Parent](#root-parent) by default, with sub-projects one click away, or by
 [Task Type](#task-type). Opened from the dashboard STATS chip, Open Stats, or
 any [Day Strip](#day-strip) fact. Not `dash.md` or the `bob stats` terminal output.
+
+### Stats Strip {#stats-strip}
+
+*Aliases: period strip, week strip, quarter strip, year strip.*
+
+The read-only Stats summary that heads a [Period Note](#period-note) or a daily note, or appears
+wherever a `bob-stats-strip` fence embeds one, for exactly one period: a day, an ISO
+week, a 13- or 14-week quarter, an ISO year, or all time.
+
+Every member has the same tiers, all painted from bob's values:
+
+- five facts (Worked, Reviewed, Done, Created, Review closed), totalled over the
+  period and marked `so far` while it is open. Each numeric fact sits over a quiet
+  `typical` line: the median of the same-kind periods just before it, marked ▲/▼/=
+  only once the period has closed;
+- a [Root Parent](#root-parent) lane and a [Task Type](#task-type) lane;
+- above the day, a parts row with one column per child period, stacked by root
+  parent, that opens that child's note.
+
+Because periods are whole ISO weeks, the parts always add up to the whole. Worked
+counts closed on-clock [Pomodoro](#pomodoro)s; [Off-Clock Pomodoro](#off-clock-pomodoro) time stays a quiet
+separate hint.
+
+The [Day Strip](#day-strip) is the day member: it has no parts row and mounts itself in
+`bob-plan`. Facts and lanes open the [Stats Dash](#stats-dash) with the period pinned. bob owns
+every value, and the strip never writes the note.
+
+Not the parts table (`bob-period-parts`), the [Stats Dash](#stats-dash), `bob stats` terminal
+output, or the [Morning GTD Review Footer](#morning-gtd-review-footer).
 
 ### Successor Offer {#successor-offer}
 
