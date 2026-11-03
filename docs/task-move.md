@@ -51,6 +51,31 @@ bob task move --dry-run -f json inbox projects/launch -b draft -m 'Check readine
 bob task move inbox projects/launch -b draft -o
 ```
 
+## Many tasks into one note (`-t`)
+
+`bob task move -t <NOTE> <TASK>...` moves many tasks into one note in typed
+order, on the shared command shell. Each positional is a task locator
+(`note:block-id`, split on the last `:`; `[[note#^id]]` is also accepted).
+The run plans one `plan_task_move` per locator against staged snapshots, in
+typed order, with freshness stamped and Task Links relocated exactly as
+`Ctrl+Shift+M` does. A source already in the destination note is refused
+(`move_same_note`).
+
+```bash
+bob task move -t db inbox:bench work:pgdump
+```
+
+`move -t db:upgrade` is refused as `move_to_task` with "to fold tasks into
+db:upgrade, use `bob task merge -i db:upgrade …`". A bare `@c` transfer
+destination (`@a+x > @c`) and `bob task move -t` share this path; a task,
+drawer, or section destination (`> @c+id[#drawer]`, `> @c#section`) merges
+instead (see [Merge tasks into a task, drawer, or section](task-merge.md)).
+The command commits as `bob task move -> db (2 tasks)` and reuses the move
+report with a `↻ Moved N tasks into db.md › Tasks` header.
+
+> [!NOTE] Contract only: the `merge-cli` phase lands `-t` alongside
+> `bob task merge`. Until then this section pins the contract it must pass.
+
 ## Refusals and placement
 
 The command validates every selector and destination before writing. It refuses

@@ -111,6 +111,8 @@ plugins:
           - task-dependencies.md
           - task-relations.md
           - task-move.md
+          - task-merge.md
+          - task-split.md
           - task-status-hooks.md
           - task-link-marks.md
           - task-tag-marks.md
@@ -312,6 +314,8 @@ nav:
               - "Task dependency links": task-dependencies.md
               - "Task relations": task-relations.md
               - "Move open tasks between notes": task-move.md
+              - "Merge tasks into a task, drawer, or section": task-merge.md
+              - "Split bullets out into tasks": task-split.md
               - "Task Status Hooks": task-status-hooks.md
               - "Task link marks": task-link-marks.md
               - "Task tag marks": task-tag-marks.md

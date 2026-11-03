@@ -10,7 +10,7 @@ groups:
         reader: guides/add-prerequisites.md
       - stem: command-catalog
         summary: "Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage"
-        order: 35
+        order: 37
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3
@@ -90,32 +90,38 @@ groups:
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
         order: 28
+      - stem: task-merge
+        summary: "`bob task merge` folding tasks into a task, drawer, or section, merge labels, and guarded writes"
+        order: 29
+      - stem: task-split
+        summary: "`bob task split` promoting bullets into tasks, stubs, mentions, and conformance vectors"
+        order: 30
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
-        order: 29
+        order: 31
         reader: concepts/tasks-and-lanes.md
       - stem: task-link-marks
         summary: "Task link marks: status rings on links that point to tasks, in Live Preview and Reading view"
-        order: 30
+        order: 32
       - stem: task-tag-marks
         summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`"
-        order: 31
+        order: 33
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
-        order: 32
+        order: 34
         reader: concepts/today-and-the-pomodoro-ledger.md
       - stem: frees-marks
         summary: "Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks"
-        order: 33
+        order: 35
       - stem: off-clock-link-chips
         summary: "Off-clock link chips: the Event Task `off` chip after ledger Task Links whose task resolves off the clock, tagged or inherited"
-        order: 37
+        order: 39
       - stem: event-link-times
         summary: "Event link times: the Event Task's time pill beside ledger Task Links that point at it"
-        order: 38
+        order: 40
       - stem: decay-ladder
         summary: "Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip"
-        order: 36
+        order: 38
   - title: "References"
     entries:
       - stem: dataview
@@ -137,8 +143,8 @@ groups:
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 34
+        order: 36
         reader: guides/sync-vault-across-machines.md
       - stem: attachments
         summary: "Attachment origin journal, resolution states, `bob attachments import` / `origin`, and `%c` recording"
-        order: 39
+        order: 41

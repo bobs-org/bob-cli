@@ -1,0 +1,1300 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "SP1",
+      "title": "cursor on a first-level authored note",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - Write the rollback runbook\n    - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - Write the rollback runbook\n    - include pg_dump timing\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "ping-alice-about",
+            "title": "Ping Alice about the cutover window",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Ping Alice about the cutover window"
+      }
+    },
+    {
+      "id": "SP2",
+      "title": "cursor on a nested line splits its first-level note",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - Write the rollback runbook\n    - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 4
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "write-rollback",
+            "title": "Write the rollback runbook",
+            "anchor_reused": false,
+            "child_lines": 1
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Write the rollback runbook"
+      }
+    },
+    {
+      "id": "SP3",
+      "title": "cursor on a drawer entry stays inside its drawer",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - FUTURE WORK\n    - Try logical replication\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - FUTURE WORK\n    - [[#^try-logical|Try logical replication]]\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "try-logical",
+            "title": "Try logical replication",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Try logical replication"
+      }
+    },
+    {
+      "id": "SP4",
+      "title": "count selects the first N splittable siblings",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - Write the rollback runbook\n    - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "count",
+          "line": 2,
+          "count": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "ping-alice-about",
+            "title": "Ping Alice about the cutover window",
+            "anchor_reused": false,
+            "child_lines": 0
+          },
+          {
+            "path": "db.md",
+            "block_id": "write-rollback",
+            "title": "Write the rollback runbook",
+            "anchor_reused": false,
+            "child_lines": 1
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 2 notes into tasks · ◯ Ping Alice about the cutover window · ◯ Write the rollback runbook"
+      }
+    },
+    {
+      "id": "SP5",
+      "title": "clamped count splits what exists",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - Write the rollback runbook\n    - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "count",
+          "line": 2,
+          "count": 5
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "ping-alice-about",
+            "title": "Ping Alice about the cutover window",
+            "anchor_reused": false,
+            "child_lines": 0
+          },
+          {
+            "path": "db.md",
+            "block_id": "write-rollback",
+            "title": "Write the rollback runbook",
+            "anchor_reused": false,
+            "child_lines": 1
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 2 notes into tasks · ◯ Ping Alice about the cutover window · ◯ Write the rollback runbook",
+        "clamped": {
+          "requested": 5,
+          "split": 2
+        }
+      }
+    },
+    {
+      "id": "SP6",
+      "title": "line range splits every touched head line",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - Write the rollback runbook\n    - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "lines",
+          "from": 2,
+          "to": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "ping-alice-about",
+            "title": "Ping Alice about the cutover window",
+            "anchor_reused": false,
+            "child_lines": 0
+          },
+          {
+            "path": "db.md",
+            "block_id": "write-rollback",
+            "title": "Write the rollback runbook",
+            "anchor_reused": false,
+            "child_lines": 1
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 2 notes into tasks · ◯ Ping Alice about the cutover window · ◯ Write the rollback runbook"
+      }
+    },
+    {
+      "id": "SP7",
+      "title": "non-contiguous nth picks split in document order",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Prepare the cutover checklist\n  - Confirm backups are current\n  - Call the vendor support line\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "nth",
+          "picks": [
+            3,
+            1
+          ]
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^prepare-cutover|Prepare the cutover checklist]]\n  - Confirm backups are current\n  - [[#^call-vendor-line|Call the vendor support line]]\n- [ ] #task Prepare the cutover checklist [created:: 2026-11-03] ^prepare-cutover\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task Call the vendor support line [created:: 2026-11-03] ^call-vendor-line\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "prepare-cutover",
+            "title": "Prepare the cutover checklist",
+            "anchor_reused": false,
+            "child_lines": 0
+          },
+          {
+            "path": "db.md",
+            "block_id": "call-vendor-line",
+            "title": "Call the vendor support line",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 2 notes into tasks · ◯ Prepare the cutover checklist · ◯ Call the vendor support line"
+      }
+    },
+    {
+      "id": "SP8",
+      "title": "match splits the unique bullet containing the text",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - Write the rollback runbook\n    - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "match",
+          "texts": [
+            "rollback runbook"
+          ]
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - [[#^write-rollback|Write the rollback runbook]]\n- [ ] #task Write the rollback runbook [created:: 2026-11-03] ^write-rollback\n  - include pg_dump timing\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "write-rollback",
+            "title": "Write the rollback runbook",
+            "anchor_reused": false,
+            "child_lines": 1
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Write the rollback runbook"
+      }
+    },
+    {
+      "id": "SP9",
+      "title": "trailing anchor becomes the task ID",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Call the vendor support line ^call-vendor\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^call-vendor|Call the vendor support line]]\n- [ ] #task Call the vendor support line [created:: 2026-11-03] ^call-vendor\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "call-vendor",
+            "title": "Call the vendor support line",
+            "anchor_reused": true,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Call the vendor support line"
+      }
+    },
+    {
+      "id": "SP10",
+      "title": "owner without an ID gains one silently",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Plan the release [created:: 2026-10-20]\n  - Triage inbox zero\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Plan the release [created:: 2026-10-20] ^plan-release\n  - [[#^triage-inbox-zero|Triage inbox zero]]\n- [ ] #task Triage inbox zero [created:: 2026-11-03] ^triage-inbox-zero\n  - 🪢 **LINKED FROM:** [[#^plan-release]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "triage-inbox-zero",
+            "title": "Triage inbox zero",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Triage inbox zero",
+        "owner_minted_id": "plan-release"
+      }
+    },
+    {
+      "id": "SP11",
+      "title": "pipe in the text becomes a slash in the alias",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Review firewall rules | open ports\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^firewall-rules-open|Review firewall rules / open ports]]\n- [ ] #task Review firewall rules | open ports [created:: 2026-11-03] ^firewall-rules-open\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "firewall-rules-open",
+            "title": "Review firewall rules | open ports",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Review firewall rules | open ports"
+      }
+    },
+    {
+      "id": "SP12",
+      "title": "brackets drop from the stub alias",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Note with ]] brackets inside\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^note-brackets-inside|Note with brackets inside]]\n- [ ] #task Note with ]] brackets inside [created:: 2026-11-03] ^note-brackets-inside\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "note-brackets-inside",
+            "title": "Note with ]] brackets inside",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Note with ]] brackets inside"
+      }
+    },
+    {
+      "id": "SP13",
+      "title": "hash stays in the title and the alias",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Tag #urgent inline stays\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^tag-urgent-inline|Tag #urgent inline stays]]\n- [ ] #task Tag #urgent inline stays [created:: 2026-11-03] ^tag-urgent-inline\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "tag-urgent-inline",
+            "title": "Tag #urgent inline stays",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Tag #urgent inline stays"
+      }
+    },
+    {
+      "id": "SP14",
+      "title": "links flatten to display text in alias and mint",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - See [[dev#^upgrade]] for context\n  - [Link text](https://example.com) plus words here\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "lines",
+          "from": 2,
+          "to": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^see-dev-context|See dev for context]]\n  - [[#^link-text-plus|Link text plus words here]]\n- [ ] #task See [[dev#^upgrade]] for context [created:: 2026-11-03] ^see-dev-context\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n- [ ] #task [Link text](https://example.com) plus words here [created:: 2026-11-03] ^link-text-plus\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "see-dev-context",
+            "title": "See [[dev#^upgrade]] for context",
+            "anchor_reused": false,
+            "child_lines": 0
+          },
+          {
+            "path": "db.md",
+            "block_id": "link-text-plus",
+            "title": "[Link text](https://example.com) plus words here",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 2 notes into tasks · ◯ See [[dev#^upgrade]] for context · ◯ [Link text](https://example.com) plus words here"
+      }
+    },
+    {
+      "id": "SP15",
+      "title": "emphasis strips in the alias only",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - **Bold** and `code` and ==highlight== text here\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^bold-code-highlight|Bold and code and highlight text here]]\n- [ ] #task **Bold** and `code` and ==highlight== text here [created:: 2026-11-03] ^bold-code-highlight\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "bold-code-highlight",
+            "title": "**Bold** and `code` and ==highlight== text here",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ **Bold** and `code` and ==highlight== text here"
+      }
+    },
+    {
+      "id": "SP16",
+      "title": "long title truncates on a word boundary",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - This is a very long bullet text that definitely exceeds eighty characters in length for sure\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^very-long-bullet|This is a very long bullet text that definitely exceeds eighty characters in…]]\n- [ ] #task This is a very long bullet text that definitely exceeds eighty characters in length for sure [created:: 2026-11-03] ^very-long-bullet\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "very-long-bullet",
+            "title": "This is a very long bullet text that definitely exceeds eighty characters in length for sure",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ This is a very long bullet text that definitely exceeds eighty characters in…"
+      }
+    },
+    {
+      "id": "SP17",
+      "title": "ALL-CAPS child travels as the new drawer",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Draft the rollback runbook outline with timing notes\n    - REQUIREMENTS\n      - staging box with 64 GB\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^draft-rollback|Draft the rollback runbook outline with timing notes]]\n- [ ] #task Draft the rollback runbook outline with timing notes [created:: 2026-11-03] ^draft-rollback\n  - REQUIREMENTS\n    - staging box with 64 GB\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "draft-rollback",
+            "title": "Draft the rollback runbook outline with timing notes",
+            "anchor_reused": false,
+            "child_lines": 2
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 3
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Draft the rollback runbook outline with timing notes"
+      }
+    },
+    {
+      "id": "SP18",
+      "title": "tab-indented note splits under a tab parent",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n\t- Ping Alice about the cutover window\n\t- Write the rollback runbook\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n\t- [[#^ping-alice-about|Ping Alice about the cutover window]]\n\t- Write the rollback runbook\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "ping-alice-about",
+            "title": "Ping Alice about the cutover window",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Ping Alice about the cutover window"
+      }
+    },
+    {
+      "id": "SP19",
+      "title": "space-indented note keeps relative structure",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n    - Ping Alice about the cutover window\n    - Write the rollback runbook\n      - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n    - [[#^ping-alice-about|Ping Alice about the cutover window]]\n    - Write the rollback runbook\n      - include pg_dump timing\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n  - 🪢 **LINKED FROM:** [[#^upgrade]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "ping-alice-about",
+            "title": "Ping Alice about the cutover window",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Ping Alice about the cutover window"
+      }
+    },
+    {
+      "id": "SP20",
+      "title": "daily-note owner routes to its root note",
+      "input": {
+        "files": {
+          "2026/20261103.md": "- [ ] #task Deploy the release [created:: 2026-11-03] ^deploy [root:: projects/launch]\n  - Confirm backups are current\n",
+          "projects/launch.md": "# Launch\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n"
+        },
+        "owner": {
+          "path": "2026/20261103.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "2026/20261103.md": "- [ ] #task Deploy the release [created:: 2026-11-03] ^deploy [root:: projects/launch]\n  - [[projects/launch#^confirm-backups-are|Confirm backups are current]]\n",
+          "projects/launch.md": "# Launch\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n- [ ] #task Confirm backups are current [created:: 2026-11-03] ^confirm-backups-are\n  - 🪢 **LINKED FROM:** [[2026/20261103#^deploy]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "projects/launch.md",
+            "block_id": "confirm-backups-are",
+            "title": "Confirm backups are current",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "projects/launch.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Confirm backups are current",
+        "placement": {
+          "kind": "root_note",
+          "path": "projects/launch.md"
+        }
+      }
+    },
+    {
+      "id": "SP21",
+      "title": "daily-note owner without a root routes to the inbox",
+      "input": {
+        "files": {
+          "2026/20261103.md": "- [ ] #task Triage the inbox [created:: 2026-11-03] ^triage\n  - File the change request ticket\n",
+          "inbox.md": "# Inbox\n\n## Tasks\n"
+        },
+        "owner": {
+          "path": "2026/20261103.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "2026/20261103.md": "- [ ] #task Triage the inbox [created:: 2026-11-03] ^triage\n  - [[inbox#^file-change-request|File the change request ticket]]\n",
+          "inbox.md": "# Inbox\n\n## Tasks\n- [ ] #task File the change request ticket [created:: 2026-11-03] ^file-change-request\n  - 🪢 **LINKED FROM:** [[2026/20261103#^triage]] (💬 mentions)\n"
+        },
+        "tasks": [
+          {
+            "path": "inbox.md",
+            "block_id": "file-change-request",
+            "title": "File the change request ticket",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "inbox.md",
+          "line": 4
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ File the change request ticket",
+        "placement": {
+          "kind": "inbox",
+          "path": "inbox.md"
+        }
+      }
+    },
+    {
+      "id": "SP22",
+      "title": "section bullet routes to its own Tasks intake",
+      "input": {
+        "files": {
+          "dev.md": "# Dev\n\n## Future Work\n- Try logical replication\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n"
+        },
+        "owner": {
+          "path": "dev.md",
+          "line": 4
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 4
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "dev.md": "# Dev\n\n## Future Work\n- [[#^try-logical|Try logical replication]]\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n"
+        },
+        "tasks": [
+          {
+            "path": "dev.md",
+            "block_id": "try-logical",
+            "title": "Try logical replication",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "dev.md",
+          "line": 8
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Try logical replication",
+        "placement": {
+          "kind": "tasks_section",
+          "path": "dev.md"
+        }
+      }
+    },
+    {
+      "id": "SP23",
+      "title": "Tasks intake is appended when missing",
+      "input": {
+        "files": {
+          "dev.md": "# Dev\n\n## Future Work\n- Try logical replication\n"
+        },
+        "owner": {
+          "path": "dev.md",
+          "line": 4
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 4
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "dev.md": "# Dev\n\n## Future Work\n- [[#^try-logical|Try logical replication]]\n\n## Tasks\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n"
+        },
+        "tasks": [
+          {
+            "path": "dev.md",
+            "block_id": "try-logical",
+            "title": "Try logical replication",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "dev.md",
+          "line": 7
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Try logical replication",
+        "placement": {
+          "kind": "tasks_section",
+          "path": "dev.md"
+        }
+      }
+    },
+    {
+      "id": "SP24",
+      "title": "mentions disabled omits the LINKED FROM line",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - Write the rollback runbook\n    - include pg_dump timing\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": false,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n  - Write the rollback runbook\n    - include pg_dump timing\n- [ ] #task Ping Alice about the cutover window [created:: 2026-11-03] ^ping-alice-about\n"
+        },
+        "tasks": [
+          {
+            "path": "db.md",
+            "block_id": "ping-alice-about",
+            "title": "Ping Alice about the cutover window",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "db.md",
+          "line": 5
+        },
+        "notice": "✂ Split 1 note into tasks · ◯ Ping Alice about the cutover window"
+      }
+    },
+    {
+      "id": "SP25",
+      "title": "task line is already a task",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 1
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_already_task",
+        "message": "Already a task — split one of its notes or drawer entries instead"
+      }
+    },
+    {
+      "id": "SP26",
+      "title": "stub-only bullet is not splittable",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [[#^ping-alice-about|Ping Alice about the cutover window]]\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_stub",
+        "message": "Stub only links a task — split a note with its own text instead"
+      }
+    },
+    {
+      "id": "SP27",
+      "title": "managed Depends-On line is not splittable",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - ⛓️ **DEPENDS ON:** [[db#^other]]\n  - Ping Alice about the cutover window\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_managed_line",
+        "message": "Managed line — Bob writes it; split a note or drawer entry instead"
+      }
+    },
+    {
+      "id": "SP28",
+      "title": "Pomodoro line is not splittable",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - Ping Alice about the cutover window\n  - (**) — BUILD · 25m\n    - [[#^upgrade]]\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 3
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_managed_line",
+        "message": "Managed line — Bob writes it; split a note or drawer entry instead"
+      }
+    },
+    {
+      "id": "SP29",
+      "title": "checked checkbox is not splittable",
+      "input": {
+        "files": {
+          "db.md": "- [ ] #task Upgrade Postgres to 17 [created:: 2026-10-20] ^upgrade\n  - [x] Done work\n  - Ping Alice about the cutover window\n"
+        },
+        "owner": {
+          "path": "db.md",
+          "line": 1
+        },
+        "selection": {
+          "kind": "cursor",
+          "line": 2
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "code": "split_not_splittable",
+        "message": "Checked box — split an unchecked note instead"
+      }
+    },
+    {
+      "id": "SP30",
+      "title": "section mode splits every bullet under the H2",
+      "input": {
+        "files": {
+          "dev.md": "# Dev\n\n## Future Work\n- Try logical replication\n- Check replication lag on staging\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n"
+        },
+        "owner": {
+          "path": "dev.md",
+          "line": 3
+        },
+        "selection": {
+          "kind": "section",
+          "title": "Future Work"
+        },
+        "today": "2026-11-03",
+        "settings": {
+          "linked_from_mentions": true,
+          "linked_from_lines": true,
+          "inbox_route": "inbox.md"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "files": {
+          "dev.md": "# Dev\n\n## Future Work\n- [[#^try-logical|Try logical replication]]\n- [[#^replication-lag|Check replication lag on staging]]\n\n## Tasks\n- [ ] #task Existing work [created:: 2026-10-20] ^existing\n- [ ] #task Try logical replication [created:: 2026-11-03] ^try-logical\n- [ ] #task Check replication lag on staging [created:: 2026-11-03] ^replication-lag\n"
+        },
+        "tasks": [
+          {
+            "path": "dev.md",
+            "block_id": "try-logical",
+            "title": "Try logical replication",
+            "anchor_reused": false,
+            "child_lines": 0
+          },
+          {
+            "path": "dev.md",
+            "block_id": "replication-lag",
+            "title": "Check replication lag on staging",
+            "anchor_reused": false,
+            "child_lines": 0
+          }
+        ],
+        "cursor": {
+          "path": "dev.md",
+          "line": 9
+        },
+        "notice": "✂ Split 2 notes into tasks · ◯ Try logical replication · ◯ Check replication lag on staging",
+        "placement": {
+          "kind": "tasks_section",
+          "path": "dev.md"
+        }
+      }
+    }
+  ]
+}

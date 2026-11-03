@@ -66,9 +66,13 @@ vector, fix this doc first in the same change.
   `relations.successor_labels`. It offers the source as a successor
   when the target is parked or done ([§20](#20-successor-labels)); it
   has no commit-time effect.
+- **Merge label**: a relation label listed in
+  `relations.merge_labels`. Committing one through an explicit
+  relation gesture merges the relation's source into the target at
+  commit time ([§21](#21-merge-labels)).
 - **Label effect**: the one configured consequence of a relation
-  label: cancel, complete, or successor. A label in more than one
-  list has no effect and is dropped from every list.
+  label: cancel, complete, successor, or merge. A label in more than
+  one list has no effect and is dropped from every list.
 - **Closing label**: a cancel label or a complete label. One label
   carries at most one effect.
 - **Task Link** keeps its glossary meaning: a block link to an
@@ -100,10 +104,12 @@ A relation write, a relation line, or a relation gesture never:
   archived. Relations are history;
 - except the commit-time cancel of [§17](#17-cancel-labels), which
   may cancel the source, prune its links from today's open
-  Pomodoros, and recover blocked dependents, and the commit-time
+  Pomodoros, and recover blocked dependents; the commit-time
   complete of [§18](#18-complete-labels), which may mark the source
   Done, retire its links from today's open Pomodoros, recover
-  blocked dependents, and offer successors. A configured successor
+  blocked dependents, and offer successors; and the commit-time
+  merge of [§21](#21-merge-labels), which moves the source's notes
+  into the target and cancels the source. A configured successor
   label [offers its source when the target is parked or done](#20-successor-labels),
   but never fires when the relation is committed.
 
@@ -1206,7 +1212,12 @@ relations:
   cancel_labels:
     - duplicate of
     - superseded by
-    # - merged into
+  # Committing a link with one of these labels merges the task the label is
+  # phrased from ("S merged into T" merges S into T). Matched like cancel
+  # labels. Empty disables only the label trigger; `>` still merges and writes
+  # "merged into". The first entry is the label `>` and `bob task merge` write.
+  merge_labels:
+    - merged into
 ```
 
 - **Matching** uses `relation_label_key`. `Duplicate  Of:` matches;
@@ -2304,3 +2315,228 @@ for the successor rule, copy, config, and key vectors. Every SA row in
 [task-dependencies.md §12.19](task-dependencies.md#1219-sa-relation-successor-vectors)
 is either covered there or marked UI-only. bob-plugins copies this file
 byte-for-byte; bob-cli is authoritative.
+
+## 21. Merge labels
+
+A **merge label** is a relation label listed in
+`relations.merge_labels`. Committing one through an explicit
+relation gesture merges the relation's **source** into the target at
+commit time: the source's notes move under the target and the source
+is cancelled.
+
+> [!NOTE] Contract only: the `merge-label` phase lands the config,
+> capture dispatch, cues, and chezmoi enablement. Until then this
+> section pins the contract it must pass.
+
+### ML1 The rule
+
+*Status: contract only; the `merge-label` phase lands it.*
+
+When an explicit relation gesture **adds** a merge label to an open
+task, or **relabels** one of its links **into** a merge label, the
+same gesture merges that task (the relation's **source**) into the
+target through the merge engine, then cancels the source. Nothing else
+merges because of a label, and nothing ever unmerges because of one.
+
+**Explicit gestures** are capture `~` / `~~` (CLI and Mac), the nav
+Links-to and Linked-from stages (`l` / `⇧L` → `⇧↵`), and counted or
+marked batches in those stages.
+
+It **never** fires on: reconcile, `bob relations rename`, hand edits
+of LINKS, agent edits, unlink, relabel *away* from a merge label,
+mirrors, vault sync, config changes, or an `Unchanged` re-add.
+
+It **fires once, at commit.** A reopened source stays open. Only a
+*new* explicit add or relabel can merge it again. Unlinking never
+unmerges.
+
+### ML2 Config
+
+*Status: contract only; chezmoi enables `merged into` in the
+`merge-label` phase.*
+
+The config lives in chezmoi `home/dot_config/bob/config.yml`. bob's
+built-in default is `[]`.
+
+```yaml
+relations:
+  cancel_labels: [duplicate of, superseded by]
+  complete_labels: [implemented by, verified by]
+  successor_labels:
+    - starts after
+  # Committing a link with one of these labels merges the source task into
+  # the target ("S merged into T"): S's notes move under T, S's open
+  # dependents wait on T, and S is cancelled. The first entry is the label
+  # `>` and `bob task merge` write. Empty disables only the label trigger;
+  # `>` still merges and writes "merged into".
+  merge_labels: [merged into]
+```
+
+- **Effect.** `LabelEffect::Merge` joins Cancel, Complete, and Successor.
+- **Matching** uses `relation_label_key`. `Merged  Into:` matches;
+  `merges`, `merging into`, and `merge` do not. There is no substring or
+  fuzzy matching.
+- **Parsing fails toward fewer merges**, exactly like cancel labels:
+  a missing key, `null`, or `[]` is a valid empty policy; a non-sequence
+  value warns and yields an empty set; a non-string or illegal label entry
+  warns and is skipped; entries that share a key collapse; a problem never
+  becomes a `ConfigError` and never changes `linked_from_lines`.
+- **One effect per label.** The one-effect-per-label overlap rule now spans
+  four lists. A key found in more than one of `cancel_labels`,
+  `complete_labels`, `successor_labels`, and `merge_labels` is dropped from
+  all of them, and the warning names `merge_labels`. That way an upgrade
+  never quietly turns a cancel-only `merged into` into a content move.
+- **Hide is not disable.** A hidden or `||` one-off merge label still
+  merges when typed. To turn the effect off, change the config.
+- **Catalog overlay.** A configured merge label appears in suggestions and
+  in `bob relations list -a` even with zero uses. It is marked
+  `configured`, ranks as a zero-use row, and is never boosted. Hidden still
+  wins.
+- **Written label.** `>` and `bob task merge` always write the first
+  configured merge label, falling back to `merged into`.
+- **Host-wide YAML**, like `linked_from_lines`. It never goes in the
+  per-host label journal, and bob never edits `config.yml`.
+
+### ML3 Which task merges
+
+*Status: contract only.*
+
+The source is always the task the label is phrased from: "S merged into
+T" merges S into T.
+
+| Gesture | Source S (merged and cancelled) | Target T (grows) |
+| --- | --- | --- |
+| Task Card `l` → `⇧↵` | task under the cursor | picked task |
+| Task Card `⇧L` → `⇧↵` | **picked task**, possibly in another note | task under the cursor |
+| Capture `@note+id ~t:id\|"merged into"` | routed existing task | picked task |
+| Capture `Umbrella ~~old:id\|"merged into"` | **picked existing task** | the new umbrella task |
+| Capture `New task ~old:id\|"merged into"` | — refused `relation_merges_new_task` | — |
+| Counted `N Ctrl+Shift+L` / marked rows | each source | one target (second Return if ≥2 merges) |
+
+### ML4 What one commit writes
+
+*Status: contract only; the merge engine owns the bytes.*
+
+The commit runs the merge engine with gesture `Label` and the container
+at T's plain-child anchor, then the relation write:
+
+1. The engine validates, cuts each source's notes into the container,
+   re-points dependents, writes the relation or Cancel Log provenance,
+   cancels the source, prunes today's links, and computes the offer —
+   exactly as `bob task merge` would (see
+   [Merge tasks into a task, drawer, or section](task-merge.md)).
+2. The LINKS edge `merged into [[T]]` lands on S and T's LINKED FROM
+   gains `[[S]] (merged into)`.
+3. Landing is at T's plain-child anchor. Choosing a drawer there is a
+   follow-up.
+4. A landing label gesture with an already-closed S writes the relation
+   only, with outcome `already_closed`.
+
+### ML5 Verdicts and edge cases
+
+*Status: contract only.*
+
+| Source state | Verdict | Effect |
+| --- | --- | --- |
+| Open: `[ ]` Ready, `[*]` Next, `[/]` In Progress, `[?]` Blocked | `merged` | link and merge (notes move, dependents re-point, source cancels) |
+| Already merged into this same T (`Unchanged` re-add) | `unchanged` | nothing written; retries are safe |
+| Closed with another label or another target | `already_closed` | link or relabel only; keep the original date |
+| Recurring (`is_recurring_task_line`) | `recurring` | refused before writing; merge-label rows disabled |
+| `~` source is the task this capture item creates | `new_task` | refused `relation_merges_new_task`, with a `~~` hint |
+| Item also completes, starts, Pomodoro-links, or adds `&` / `*` to S | `conflict` | refused `relation_merge_conflicts_with_item_action` |
+| One commit both merges and cancels or completes the same S | `conflict` | refused `relation_close_effects_conflict` |
+
+More edge cases:
+
+- **Relabel from one merge label to another** on an already-merged S:
+  relabel only.
+- **Relabel away, or unlink:** S stays Cancelled. The nav notice says
+  `stays Cancelled · reopen with Alt+]`.
+- **T is Cancelled or archived:** allowed with the amber caveat
+  `“T” is Cancelled too`. T is never changed.
+- **Midnight rollover or a config change between cue and commit:**
+  re-plan at commit. If the consequence changed, nav writes nothing and
+  re-renders for a fresh Return. Capture always plans at commit, so its
+  result reports what happened.
+
+### ML6 Equivalences
+
+*Status: contract only.*
+
+- `@inbox+bench ~db:upgrade|"merged into"` ≡
+  `@inbox+bench > @db+upgrade`.
+- `Umbrella ~~old:a|"merged into"` creates the umbrella task and folds
+  `old:a` into it.
+- `New task ~old:a|"merged into"` is refused as `relation_merges_new_task`,
+  because it would be born merged (mirroring cancel's `new_task`
+  verdict).
+- A merge label with the item's own `&`/`*` on the source is refused like
+  the corresponding cancel conflict.
+
+### ML7 The indication
+
+*Status: contract only.*
+
+Name the task, use ⤵, stay calm.
+
+| Where | Text |
+| --- | --- |
+| Row meta (nav) / capsule (Mac) / `relations list` / zsh | `⤵ merges` / `arrow.triangle.merge merges` / `⤵ merges source` / `N links · merges source` |
+| Live sentence (nav, Mac) | `⤵ {S} — {label} → {T}`, source dimmed |
+| Verdict `merged` | `⤵ Merges “{S}” into “{T}”` |
+| Consequence strip (nav) | `⤵ Merges “{S}” into “{T}” · moves N notes · cancels “{S}” · N dependent(s) now wait on “{T}” · offers “{T}” under ENTRY` |
+| Return hint (nav) | `↵ link & merge` |
+| Verdict `already_closed` (muted) | `Already Cancelled · link only` |
+| Verdict `recurring` (disabled row) | `“{S}” repeats — merge it by hand first` |
+| Verdict `new_task` (disabled row, refusal) | `“{S}” is new — it would be born merged · to fold “{T}”, use ~~` |
+| Rename warning | `“{label}” is a merge label in config.yml — update relations.merge_labels` |
+| Mac submit hint | `Capture & merge {N} task(s)` |
+
+### ML8 Contracts
+
+*Status: contract only.*
+
+All additions are additive, every `schema_version` stays 1, and every new
+field is omitted when it does not apply, so older output stays
+byte-identical. Names below are final.
+
+- **`capture-complete`, `relation_label` context:**
+  - Rows gain `merges_source: true` for configured keys, and the shared
+    `configured: true` on overlay rows.
+  - A merge-label row gets the existing `disabled_reason` when the verdict
+    is `recurring` or `new_task`.
+  - The response gains
+    `relation_merge: {source: {path, block_id?, text}, verdict: "merged"|"already_closed"|"recurring"|"new_task", message, hint?}`.
+    It is present only when at least one merge label is configured. It
+    resolves only the token's source and never scans the vault. It sits
+    beside `relation_cancel` and `relation_complete` when those kinds are
+    configured.
+- **`capture-parse`:** relation-label spans gain `merges_source: true`.
+- **`capture` (dry run and commit), per item:**
+  - `merges[]` carries the `MergeRecord` JSON of
+    [Merge tasks into a task, drawer, or section](task-merge.md#9-command-line).
+  - `relation_updates[]` rows gain `merge_effect: "merged"|"already_closed"`.
+  - Offers join top-level `pull_in` and its numbering.
+  - Refusal codes: `relation_merges_new_task`,
+    `relation_merges_recurring_task`,
+    `relation_merge_conflicts_with_item_action`,
+    `relation_close_effects_conflict`.
+- **`bob relations list`:** JSON rows gain `merges_source`, and the top
+  level gains `merge_labels?` (a count); the human header gains `· N merge`;
+  rows read `⤵ merges source`.
+
+### ML vector index
+
+The `merge-label` phase turns these into tests. Each ML row names the
+preimage, the gesture, and the byte-exact postimage expectation.
+
+| ID | Pins | Representative cases |
+| --- | --- | --- |
+| ML1 | rule | every ML5 row; every ML1 never path; the ML3 table |
+| ML2 | config | missing, `null`, `[]`, scalar, mapping, non-string, illegal label, duplicate keys, a key in two effect lists (dropped from both) |
+| ML3 | key | case/spacing/colon; inverses; substrings |
+| ML4 | capture `~` merge | task source merges through the engine; T grows, S retires |
+| ML5 | capture `~~` umbrella | new umbrella task folds the picked task into it |
+| ML6 | `new_task` refusal | `New task ~old:a` refused with a `~~` hint; vault byte-identical |
+| ML7 | already-closed | closed S gains the relation only (`already_closed`) |
+| ML8 | conflict | item `&`/`*` on S refused; merge plus cancel/complete refused |
