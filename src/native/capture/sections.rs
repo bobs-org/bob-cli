@@ -97,7 +97,7 @@ pub(crate) fn insert_task_line(
     (insert_at(contents, index, &addition), Placement::Inserted)
 }
 
-pub(super) fn insert_at(
+pub(crate) fn insert_at(
     contents: &str,
     index: usize,
     addition: &str,
@@ -124,7 +124,7 @@ pub(super) fn insertion_text(
     }
 }
 
-pub(super) fn empty_section_insertion_text(
+pub(crate) fn empty_section_insertion_text(
     contents: &str,
     index: usize,
     line: &str,
@@ -138,7 +138,7 @@ pub(super) fn empty_section_insertion_text(
     }
 }
 
-pub(super) fn document_line_ending(contents: &str) -> &'static str {
+pub(crate) fn document_line_ending(contents: &str) -> &'static str {
     if contents.contains("\r\n") {
         "\r\n"
     } else {

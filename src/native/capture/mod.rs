@@ -163,10 +163,11 @@ pub(crate) use pomodoro_adjust::{
     AdjustRange, ClockKind, ClockStamp, SessionClock,
 };
 pub(crate) use pomodoro_insert::{
-    select_default_pomodoro_line, DefaultPomodoroBranch,
-    DefaultPomodoroSelection,
+    insertion_text_preserving_line_endings, select_default_pomodoro_line,
+    DefaultPomodoroBranch, DefaultPomodoroSelection,
 };
 pub(crate) use sections::{
+    document_line_ending, empty_section_insertion_text, insert_at,
     insert_task_line, line_spans, non_tasks_section_headings,
     section_completion_rows, LineSpan, SectionHeading,
 };

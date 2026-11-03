@@ -669,7 +669,7 @@ pub(super) fn unordered_child_indentation(line: &str) -> Option<String> {
         .then(|| line[..indentation_len].to_string())
 }
 
-pub(super) fn insertion_text_preserving_line_endings(
+pub(crate) fn insertion_text_preserving_line_endings(
     contents: &str,
     index: usize,
     line: &str,

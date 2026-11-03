@@ -401,8 +401,9 @@ Stats Dash (dash\_stats); Stats Strip (period strip, week strip, quarter strip, 
 strip); Successor Offer; Task Decay (decay, decay ladder, decay card, step down); Task
 Dependency Link (task dep link, dep link); Task Drawer (drawer); Task Freshness
 (freshness); Task Link (task block link); Task Mention (mention, text mention); Task
-Relation (relation, LINKS line, LINKED FROM line); Task Successor (successor); Task Type
-(type, theme, pomodoro theme, pomodoro-theme); Top-Level Project (top project); Work Log
+Merge; Task Relation (relation, LINKS line, LINKED FROM line); Task Split; Task
+Successor (successor); Task Type (type, theme, pomodoro theme, pomodoro-theme);
+Top-Level Project (top project); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

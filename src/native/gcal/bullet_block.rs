@@ -10,10 +10,10 @@
 use crate::native::{
     capture::{
         line_spans, list_item_body, nearest_shallower_list_item_parent,
-        parse_managed_task_log_marker, LineSpan,
+        LineSpan,
     },
     capture_task_toggle::child_block_end_line,
-    task_dependencies,
+    task_children,
 };
 
 use super::description::bullets::bullets_hash;
@@ -79,7 +79,8 @@ pub(crate) fn insertion_index(lines: &[String], row_index: usize) -> usize {
             break;
         }
         if structural_depth(&spans, row_index, cursor) == Some(1)
-            && is_managed_direct_child(&lines[cursor])
+            && task_children::classify_task_child(&lines[cursor], None)
+                .is_managed()
         {
             cursor = child_block_end_line(&spans, cursor) + 1;
             continue;
@@ -190,12 +191,6 @@ fn structural_depth(
     }
     let grandparent = nearest_shallower_list_item_parent(spans, parent)?;
     (grandparent == row_index).then_some(2)
-}
-
-fn is_managed_direct_child(line: &str) -> bool {
-    task_dependencies::is_managed_link_line(line)
-        || task_dependencies::blocks::is_cancel_log(line)
-        || parse_managed_task_log_marker(line).is_some()
 }
 
 #[cfg(test)]

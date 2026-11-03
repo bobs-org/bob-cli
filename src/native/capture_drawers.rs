@@ -22,8 +22,9 @@ use serde_json::json;
 
 use super::{
     capture::{
-        self, dominant_indent_unit, first_child_indentation,
-        first_direct_managed_log_start, leading_spaces_or_tabs_len,
+        self, document_line_ending, dominant_indent_unit,
+        first_child_indentation, first_direct_managed_log_start, insert_at,
+        insertion_text_preserving_line_endings, leading_spaces_or_tabs_len,
         leading_whitespace, line_spans, list_item_body,
         nearest_shallower_list_item_parent, parse_managed_task_log_marker,
         LineSpan,
@@ -1344,6 +1345,79 @@ pub(crate) fn drawers(contents: &str, task: &NoteTask) -> Vec<Drawer> {
     drawers
 }
 
+/// Find or create the resolved task drawer / project H2 section. The
+/// returned note contains the header when it was created, ready for the
+/// caller to insert its payload at the usual drawer insertion point.
+pub(crate) fn ensure_drawer(
+    contents: &str,
+    task: &NoteTask,
+    resolved: &DrawerResolved,
+) -> Result<(String, Drawer, bool), String> {
+    match &resolved.outcome {
+        DrawerResolveOutcome::Existing { drawer } => {
+            Ok((contents.to_string(), drawer.clone(), resolved.created))
+        }
+        DrawerResolveOutcome::Create { title, key, .. } => {
+            let updated = if is_prj_parent(contents, task) {
+                let ending = document_line_ending(contents);
+                let double = format!("{ending}{ending}");
+                let separator =
+                    if contents.is_empty() || contents.ends_with(&double) {
+                        String::new()
+                    } else if contents.ends_with(ending) {
+                        ending.to_string()
+                    } else {
+                        double
+                    };
+                format!("{contents}{separator}## {title}{ending}")
+            } else {
+                let lines = line_spans(contents);
+                let drawer_indent = first_child_indentation(
+                    &lines,
+                    task.line_index,
+                    task.block_end,
+                    &task.indentation,
+                )
+                .or_else(|| {
+                    dominant_indent_unit(&lines)
+                        .map(|unit| format!("{}{}", task.indentation, unit))
+                })
+                .unwrap_or_else(|| format!("{}\t", task.indentation));
+                let header_offset = first_direct_managed_log_start(
+                    &lines,
+                    task.line_index,
+                    task.block_end,
+                )
+                .unwrap_or(task.block_end);
+                let header = format!("{drawer_indent}- {title}");
+                let addition = insertion_text_preserving_line_endings(
+                    contents,
+                    header_offset,
+                    &header,
+                );
+                let mut updated_task = task.clone();
+                if header_offset <= updated_task.block_end {
+                    updated_task.block_end += addition.len();
+                }
+                let updated = insert_at(contents, header_offset, &addition);
+                let drawer = drawers(&updated, &updated_task)
+                    .into_iter()
+                    .find(|drawer| drawer.key == *key)
+                    .ok_or_else(|| {
+                        format!("failed to create drawer {title}")
+                    })?;
+                return Ok((updated, drawer, true));
+            };
+
+            let drawer = project_h2_drawers(&updated)
+                .into_iter()
+                .find(|drawer| drawer.key == *key)
+                .ok_or_else(|| format!("failed to create drawer {title}"))?;
+            Ok((updated, drawer, true))
+        }
+    }
+}
+
 /// Whole-slug match in document order, else the first slug-prefix match.
 // Covered by unit tests; prod write path uses `resolve_drawer_for_write`.
 #[allow(dead_code)]
@@ -2118,6 +2192,60 @@ mod tests {
             .iter()
             .find(|drawer| drawer.title == title)
             .unwrap_or_else(|| panic!("missing drawer {title:?}"))
+    }
+
+    #[test]
+    fn ensure_drawer_creates_task_drawer_then_rescans_it() {
+        let contents = "- [ ] #task Parent ^parent\n";
+        let task = parent_task(contents);
+        let resolved = resolve_drawer_for_write(
+            &[],
+            "requirements",
+            false,
+            &BTreeMap::new(),
+            "note",
+            Some("parent"),
+            DrawerScope::Task,
+        )
+        .expect("valid task drawer");
+
+        let (updated, drawer, created) =
+            ensure_drawer(contents, &task, &resolved).expect("create drawer");
+
+        assert!(created);
+        assert_eq!(drawer.title, "REQUIREMENTS");
+        assert!(updated.contains("\t- REQUIREMENTS\n"));
+        assert_eq!(drawers(&updated, &parent_task(&updated)).len(), 1);
+    }
+
+    #[test]
+    fn ensure_drawer_creates_project_h2_sibling_and_rescans_it() {
+        let contents = "- [ ] #task Project ^prj\n## Tasks\n";
+        let settings = note_tasks::read_settings(Path::new("/nonexistent"));
+        let task = note_tasks::scan(contents, &settings)
+            .task_named("Project")
+            .cloned()
+            .expect("project task");
+        let resolved = resolve_drawer_for_write(
+            &[],
+            "research",
+            false,
+            &BTreeMap::new(),
+            "project",
+            Some("prj"),
+            DrawerScope::ProjectSection,
+        )
+        .expect("valid project section");
+
+        let (updated, drawer, created) =
+            ensure_drawer(contents, &task, &resolved).expect("create section");
+
+        assert!(created);
+        assert_eq!(drawer.title, "Research");
+        assert!(updated.contains("\n\n## Research\n"));
+        assert!(project_h2_drawers(&updated)
+            .iter()
+            .any(|candidate| candidate.title == "Research"));
     }
 
     #[test]

@@ -92,9 +92,11 @@ mod subprocess_runner;
 // Later epic phases connect these primitives to explicit relation gestures.
 #[cfg_attr(not(test), allow(dead_code))]
 mod task_cancel;
+mod task_children;
 mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
+mod task_locator;
 mod task_move;
 pub(crate) mod task_relations;
 mod task_root;

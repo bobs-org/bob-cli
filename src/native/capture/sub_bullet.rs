@@ -98,236 +98,82 @@ pub(super) fn plan_sub_bullet_capture(
         }
     };
 
-    let (insertion_offset, indentation, drawer) = if let Some(selector) =
-        section_selector
-    {
-        if capture_drawers::is_prj_parent(&contents, parent) {
-            return plan_prj_section_capture(
-                planner,
-                bob_dir,
-                target,
-                route,
-                &contents,
-                parent,
-                selector,
-                capture_block,
-                warnings,
-            );
-        }
-        // Load catalog for spelling (best-effort; empty on failure).
-        let catalog =
-            capture_drawers::load_drawer_catalog(bob_dir).unwrap_or_default();
-        let drawers = capture_drawers::drawers(&contents, parent);
-        let block_id = parent.block_id.as_deref();
-        match capture_drawers::resolve_drawer_for_write(
-            &drawers,
-            &selector.text,
-            selector.exact,
-            &catalog,
-            route,
-            block_id,
-            capture_drawers::DrawerScope::Task,
-        ) {
-            Ok(resolved) => {
-                let resolved_warning = resolved.warning.clone();
-                let resolved_created = resolved.created;
-                match resolved.outcome {
-                    capture_drawers::DrawerResolveOutcome::Existing {
-                        drawer,
-                    } => {
-                        if let Some(message) = resolved_warning {
-                            warnings.push(CaptureWarning::Structured(
-                                StructuredCaptureWarning {
-                                    code: "drawer_near_catalog",
-                                    label: None,
-                                    count: None,
-                                    message,
-                                },
-                            ));
-                        }
-                        let insertion = capture_drawers::drawer_insertion(
-                            &contents, &drawer,
-                        );
-                        (
-                            insertion.offset,
-                            insertion.indentation,
-                            Some(DrawerJson {
-                                title: drawer.title.clone(),
-                                key: drawer.key.clone(),
-                                created: resolved_created,
-                            }),
-                        )
-                    }
-                    capture_drawers::DrawerResolveOutcome::Create {
-                        title,
-                        key: _,
-                        slug: _,
-                    } => {
-                        // Create the drawer header first at the plain-child
-                        // anchor, stage it, then re-resolve as existing so
-                        // two items into one new drawer share one header.
-                        let lines = line_spans(&contents);
-                        let drawer_indent = first_child_indentation(
-                            &lines,
-                            parent.line_index,
-                            parent.block_end,
-                            &parent.indentation,
-                        )
-                        .or_else(|| {
-                            dominant_indent_unit(&lines).map(|unit| {
-                                format!("{}{}", parent.indentation, unit)
-                            })
-                        })
-                        .unwrap_or_else(|| format!("{}\t", parent.indentation));
-                        let header_offset = first_direct_managed_log_start(
-                            &lines,
-                            parent.line_index,
-                            parent.block_end,
-                        )
-                        .unwrap_or(parent.block_end);
-                        let header_block = format!("{drawer_indent}- {title}");
-                        let header_addition =
-                            insertion_text_preserving_line_endings(
-                                &contents,
-                                header_offset,
-                                &header_block,
-                            );
-                        let with_header = insert_at(
-                            &contents,
-                            header_offset,
-                            &header_addition,
-                        );
-                        planner.stage(target, with_header.clone())?;
-                        // Re-read staged (includes our header plus any
-                        // earlier batch items) and resolve as existing.
-                        let staged = planner.read_existing(target)?;
-                        let settings = note_tasks::read_settings(bob_dir);
-                        let staged_scan = note_tasks::scan(&staged, &settings);
-                        let staged_parent = match sub_bullet_target {
-                            SubBulletTarget::BlockId(block_id) => {
-                                match staged_scan.by_block_id(block_id) {
-                                    BlockIdLookup::Found(task) => task,
-                                    _ => {
-                                        return Err(CaptureError::io(format!(
-                                            "task ^{block_id} vanished while creating drawer {title}"
-                                        )));
-                                    }
-                                }
-                            }
-                            SubBulletTarget::Ref { line, digest } => {
-                                match staged_scan.by_ref(*line, digest) {
-                                    RefLookup::Found(task) => task,
-                                    _ => {
-                                        return Err(CaptureError::io(format!(
-                                            "task vanished while creating drawer {title}"
-                                        )));
-                                    }
-                                }
-                            }
-                        };
-                        let staged_drawers =
-                            capture_drawers::drawers(&staged, staged_parent);
-                        let Some(drawer) =
-                            staged_drawers.iter().find(|d| d.title == title)
-                        else {
-                            return Err(CaptureError::io(format!(
-                                "failed to create drawer {title}"
-                            )));
-                        };
-                        // Header already staged; the entry below stages
-                        // against the staged contents directly so
-                        // header+entry stay atomic and two rows into one
-                        // new drawer share one header on re-resolve.
-                        let contents = staged;
-                        let parent = staged_parent;
-                        let insertion = capture_drawers::drawer_insertion(
-                            &contents, drawer,
-                        );
-                        // Stage entry against staged contents (which already
-                        // has the header). We inline the entry staging here
-                        // to keep header+entry atomic.
-                        let indented_block = capture_block
-                            .split('\n')
-                            .map(|line| {
-                                format!("{}{}", insertion.indentation, line)
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let addition = insertion_text_preserving_line_endings(
-                            &contents,
-                            insertion.offset,
-                            &indented_block,
-                        );
-                        let placement = if insertion.offset >= contents.len() {
-                            Placement::Appended
-                        } else {
-                            Placement::Inserted
-                        };
-                        if let Some(message) = resolved_warning {
-                            warnings.push(CaptureWarning::Structured(
-                                StructuredCaptureWarning {
-                                    code: "drawer_near_catalog",
-                                    label: None,
-                                    count: None,
-                                    message,
-                                },
-                            ));
-                        }
-                        let details = SubBulletCaptureDetails {
-                            block_id: parent.block_id.clone(),
-                            parent_line: parent.line_index + 1,
-                            parent_text: parent.description.clone(),
-                            drawer: Some(DrawerJson {
-                                title: drawer.title.clone(),
-                                key: drawer.key.clone(),
-                                created: true,
-                            }),
-                            parent_status_symbol: parent.status_symbol,
-                            parent_status_name: parent.status_name.clone(),
-                        };
-                        let updated_target =
-                            insert_at(&contents, insertion.offset, &addition);
-                        planner.stage(target, updated_target)?;
-                        return Ok(CaptureWritePlan {
-                            placement,
-                            pomodoro: None,
-                            sub_bullet: Some(details),
-                            pomodoro_note: None,
-                            toggle: None,
-                            pomodoro_link: None,
-                            pomodoro_refs: Vec::new(),
-                        });
-                    }
-                }
+    let (contents, insertion_offset, indentation, drawer) =
+        if let Some(selector) = section_selector {
+            if capture_drawers::is_prj_parent(&contents, parent) {
+                return plan_prj_section_capture(
+                    planner,
+                    bob_dir,
+                    target,
+                    route,
+                    &contents,
+                    parent,
+                    selector,
+                    capture_block,
+                    warnings,
+                );
             }
-            Err(e) => {
-                return Err(CaptureError::usage_code(
-                    e.message.clone(),
-                    e.code,
+            let catalog = capture_drawers::load_drawer_catalog(bob_dir)
+                .unwrap_or_default();
+            let drawers = capture_drawers::drawers(&contents, parent);
+            let resolved = capture_drawers::resolve_drawer_for_write(
+                &drawers,
+                &selector.text,
+                selector.exact,
+                &catalog,
+                route,
+                parent.block_id.as_deref(),
+                capture_drawers::DrawerScope::Task,
+            )
+            .map_err(|error| {
+                CaptureError::usage_code(error.message.clone(), error.code)
+            })?;
+            if let Some(message) = resolved.warning.clone() {
+                warnings.push(CaptureWarning::Structured(
+                    StructuredCaptureWarning {
+                        code: "drawer_near_catalog",
+                        label: None,
+                        count: None,
+                        message,
+                    },
                 ));
             }
-        }
-    } else {
-        let lines = line_spans(&contents);
-        let indentation = first_child_indentation(
-            &lines,
-            parent.line_index,
-            parent.block_end,
-            &parent.indentation,
-        )
-        .or_else(|| {
-            dominant_indent_unit(&lines)
-                .map(|unit| format!("{}{}", parent.indentation, unit))
-        })
-        .unwrap_or_else(|| format!("{}\t", parent.indentation));
-        let insertion_offset = first_direct_managed_log_start(
-            &lines,
-            parent.line_index,
-            parent.block_end,
-        )
-        .unwrap_or(parent.block_end);
-        (insertion_offset, indentation, None)
-    };
+            let (contents, drawer, created) =
+                capture_drawers::ensure_drawer(&contents, parent, &resolved)
+                    .map_err(CaptureError::io)?;
+            let insertion =
+                capture_drawers::drawer_insertion(&contents, &drawer);
+            (
+                contents,
+                insertion.offset,
+                insertion.indentation,
+                Some(DrawerJson {
+                    title: drawer.title,
+                    key: drawer.key,
+                    created,
+                }),
+            )
+        } else {
+            let lines = line_spans(&contents);
+            let indentation = first_child_indentation(
+                &lines,
+                parent.line_index,
+                parent.block_end,
+                &parent.indentation,
+            )
+            .or_else(|| {
+                dominant_indent_unit(&lines)
+                    .map(|unit| format!("{}{}", parent.indentation, unit))
+            })
+            .unwrap_or_else(|| format!("{}\t", parent.indentation));
+            let insertion_offset = first_direct_managed_log_start(
+                &lines,
+                parent.line_index,
+                parent.block_end,
+            )
+            .unwrap_or(parent.block_end);
+            (contents, insertion_offset, indentation, None)
+        };
     let indented_block = capture_block
         .split('\n')
         .map(|line| format!("{indentation}{line}"))
@@ -411,64 +257,27 @@ fn plan_prj_section_capture(
             message,
         }));
     }
-    let resolved_created = resolved.created;
-    let (updated_target, placement, drawer) = match resolved.outcome {
-        capture_drawers::DrawerResolveOutcome::Existing { drawer } => {
-            let (offset, empty) =
-                capture_drawers::h2_insert_position(contents, &drawer);
-            let addition = if empty {
-                empty_section_insertion_text(contents, offset, capture_block)
-            } else {
-                insertion_text_preserving_line_endings(
-                    contents,
-                    offset,
-                    capture_block,
-                )
-            };
-            let placement = if offset >= contents.len() {
-                Placement::Appended
-            } else {
-                Placement::Inserted
-            };
-            let updated_target = insert_at(contents, offset, &addition);
-            (
-                updated_target,
-                placement,
-                Some(DrawerJson {
-                    title: drawer.title.clone(),
-                    key: drawer.key.clone(),
-                    created: resolved_created,
-                }),
-            )
-        }
-        capture_drawers::DrawerResolveOutcome::Create {
-            title, key, ..
-        } => {
-            let ending = document_line_ending(contents);
-            let double = format!("{ending}{ending}");
-            let separator =
-                if contents.is_empty() || contents.ends_with(double.as_str()) {
-                    String::new()
-                } else if contents.ends_with(ending) {
-                    ending.to_string()
-                } else {
-                    double
-                };
-            let block = capture_block.replace('\n', ending);
-            let updated_target = format!(
-                "{contents}{separator}## {title}{ending}{ending}{block}{ending}"
-            );
-            (
-                updated_target,
-                Placement::Appended,
-                Some(DrawerJson {
-                    title: title.clone(),
-                    key,
-                    created: true,
-                }),
-            )
-        }
+    let (contents, drawer, created) =
+        capture_drawers::ensure_drawer(contents, parent, &resolved)
+            .map_err(CaptureError::io)?;
+    let (offset, empty) =
+        capture_drawers::h2_insert_position(&contents, &drawer);
+    let addition = if empty {
+        empty_section_insertion_text(&contents, offset, capture_block)
+    } else {
+        insertion_text_preserving_line_endings(&contents, offset, capture_block)
     };
+    let placement = if offset >= contents.len() {
+        Placement::Appended
+    } else {
+        Placement::Inserted
+    };
+    let updated_target = insert_at(&contents, offset, &addition);
+    let drawer = Some(DrawerJson {
+        title: drawer.title,
+        key: drawer.key,
+        created,
+    });
     let details = SubBulletCaptureDetails {
         block_id: parent.block_id.clone(),
         parent_line: parent.line_index + 1,

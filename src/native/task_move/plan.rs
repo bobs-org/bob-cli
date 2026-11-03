@@ -6,19 +6,18 @@ use std::{
 
 use serde::Serialize;
 
+use super::transplant;
+pub(crate) use super::transplant::{RenameRecord, RepairedFile};
+
 #[cfg(test)]
 use std::{fs, io};
 
 use super::super::{
     capture_dependency_tasks::has_prj_is_blocked_tag,
     collect_done::{
-        self, block_id_occurrences_in_text, has_task_tag,
-        is_simple_markdown_destination, leading_indent_len,
-        next_available_block_id, repair_dependency_metadata,
-        repair_links_in_note_with, repair_markdown_destination,
-        repair_wiki_link_inner, split_block_fragment, split_line_ending,
-        task_block_end, trailing_block_id_in_line, vault_relative_link_target,
-        MovedBlockTarget, MovedBlockTargets,
+        has_task_tag, leading_indent_len, repair_links_in_note_with,
+        split_line_ending, task_block_end, trailing_block_id_in_line,
+        vault_relative_link_target, MovedBlockTarget, MovedBlockTargets,
     },
     markdown,
     note_tasks::clean_description,
@@ -232,20 +231,6 @@ pub(crate) struct MoveRecord {
     pub(crate) new_block_id: Option<String>,
     pub(crate) old_dependency_id: Option<String>,
     pub(crate) new_dependency_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RenameRecord {
-    pub(crate) path: PathBuf,
-    pub(crate) old_block_id: String,
-    pub(crate) new_block_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RepairedFile {
-    pub(crate) path: PathBuf,
-    pub(crate) link_count: usize,
-    pub(crate) dependency_token_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -825,7 +810,14 @@ pub(crate) fn plan_task_move(
     let mut blocks = Vec::new();
     for task in &selected {
         let end = task_block_end(&source_lines, task.line_index, 0);
-        let fragment = source_lines[task.line_index..end].concat();
+        let fragment = transplant::cut_line_range(
+            source_contents,
+            &transplant::LineRange {
+                start: task.line_index,
+                end,
+            },
+        )
+        .expect("selected task block is within the scanned source note");
         blocks.push(SelectedBlock {
             task: task.clone(),
             end,
@@ -833,14 +825,33 @@ pub(crate) fn plan_task_move(
         });
     }
 
-    let dest_used: BTreeSet<String> =
-        live_block_ids(dest_contents).into_iter().collect();
-    let (fragments, renames, id_map) = rename_incoming_fragments(
-        &blocks,
+    let raw_fragments: Vec<String> =
+        blocks.iter().map(|block| block.fragment.clone()).collect();
+    let dest_used: BTreeSet<String> = transplant::live_block_ids(dest_contents)
+        .into_iter()
+        .collect();
+    let (fragments, renames, id_map) = transplant::rename_fragments(
+        &raw_fragments,
         &dest_path,
         &dest_used,
         request.id_collision,
-    )?;
+    )
+    .map_err(|error| match error {
+        transplant::RenameError::Collision {
+            fragment_index,
+            block_id,
+        } => PlanError::BlockIdCollision {
+            candidate: selected[fragment_index].candidate(),
+            path: dest_path.clone(),
+            block_id,
+        },
+    })?;
+    let fragments: Vec<String> = fragments
+        .iter()
+        .map(|fragment| {
+            transplant::rebase_fragment(fragment, "", "", "", "", false)
+        })
+        .collect();
     validate_mapped_identities(snapshot, &source_path, &dest_path, &id_map)?;
 
     let dest_target = vault_relative_link_target(&dest_path, "destination")
@@ -867,18 +878,26 @@ pub(crate) fn plan_task_move(
         );
     }
 
+    let ranges: Vec<transplant::LineRange> = blocks
+        .iter()
+        .map(|block| transplant::LineRange {
+            start: block.task.line_index,
+            end: block.end,
+        })
+        .collect();
     let moved_old_ids: BTreeSet<String> = id_map.keys().cloned().collect();
-    let stayed_source_ids: BTreeSet<String> =
-        live_block_ids(&remove_selected_blocks(source_contents, &blocks))
-            .into_iter()
-            .filter(|id| !moved_old_ids.contains(id))
-            .collect();
+    let stayed_source_ids: BTreeSet<String> = transplant::live_block_ids(
+        &transplant::remove_line_ranges(source_contents, &ranges),
+    )
+    .into_iter()
+    .filter(|id| !moved_old_ids.contains(id))
+    .collect();
 
     let mut fragment_link_count = 0;
     let mut fragment_dep_count = 0;
     let mut repaired_fragments = Vec::new();
     for fragment in &fragments {
-        let repaired = repair_moved_fragment(
+        let repaired = transplant::repair_moved_fragment(
             fragment,
             &source_path,
             &source_target,
@@ -899,14 +918,8 @@ pub(crate) fn plan_task_move(
         &moved_targets,
         true,
     );
-    let source_without = remove_selected_blocks(source_contents, &blocks);
-    let source_repair = repair_links_in_note_with(
-        &source_without,
-        &source_path,
-        &note_index,
-        &moved_targets,
-        true,
-    );
+    let source_without =
+        transplant::remove_line_ranges(source_contents, &ranges);
 
     let (dest_with_insert, landing_lines) = insert_into_dest(
         &dest_existing_repair.contents,
@@ -922,49 +935,31 @@ pub(crate) fn plan_task_move(
         dest_existing_repair.link_count + fragment_link_count,
         dest_existing_repair.dependency_metadata_count + fragment_dep_count,
     );
-    add_repair(
-        &mut repair_counts,
-        source_path.clone(),
-        source_repair.link_count,
-        source_repair.dependency_metadata_count,
+    let source_postimages =
+        BTreeMap::from([(source_path.clone(), source_without)]);
+    let repaired = transplant::repair_vault_postimages(
+        &snapshot.notes,
+        &source_postimages,
+        &dest_path,
+        dest_with_insert,
+        &note_index,
+        &moved_targets,
+        repair_counts,
     );
-
-    let mut postimages = BTreeMap::new();
-    postimages.insert(dest_path.clone(), dest_with_insert);
-    postimages.insert(source_path.clone(), source_repair.contents);
-
-    for (path, original) in &snapshot.notes {
-        if path == &source_path || path == &dest_path {
-            continue;
-        }
-        let repair = repair_links_in_note_with(
-            original,
-            path,
-            &note_index,
-            &moved_targets,
-            true,
-        );
-        if repair.link_count > 0 || repair.dependency_metadata_count > 0 {
-            add_repair(
-                &mut repair_counts,
-                path.clone(),
-                repair.link_count,
-                repair.dependency_metadata_count,
-            );
-            postimages.insert(path.clone(), repair.contents);
-        }
-    }
-
-    postimages.retain(|path, contents| {
-        snapshot.notes.get(path).map(String::as_str) != Some(contents.as_str())
-    });
+    let transplanted = transplant::finish_transplant(
+        repaired,
+        repaired_fragments,
+        renames,
+        landing_lines,
+    );
+    let postimages = transplanted.postimages;
 
     let mut moves = Vec::new();
     let mut carried_block_tag = false;
     for ((task, _fragment), landing_line) in selected
         .iter()
         .zip(fragments.iter())
-        .zip(landing_lines.iter())
+        .zip(transplanted.landing_lines.iter())
     {
         if has_prj_is_blocked_tag(&task.line) {
             carried_block_tag = true;
@@ -993,23 +988,11 @@ pub(crate) fn plan_task_move(
         });
     }
 
-    let repaired_files = repair_counts
-        .into_iter()
-        .filter(|(_, (links, deps))| *links > 0 || *deps > 0)
-        .map(
-            |(path, (link_count, dependency_token_count))| RepairedFile {
-                path,
-                link_count,
-                dependency_token_count,
-            },
-        )
-        .collect();
-
     Ok(MovePlan {
         postimages,
         moves,
-        renamed_block_ids: renames,
-        repaired_files,
+        renamed_block_ids: transplanted.renames,
+        repaired_files: transplanted.repaired_files,
         needs_reconcile: dest_blocked || carried_block_tag,
     })
 }
@@ -1418,16 +1401,7 @@ fn count_live_block_ids(contents: &str) -> BTreeMap<String, usize> {
 }
 
 fn live_block_ids(contents: &str) -> Vec<String> {
-    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
-    let logical: Vec<&str> =
-        lines.iter().map(|line| split_line_ending(line).0).collect();
-    let hidden = hidden_markdown_indexes(&logical);
-    logical
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| !hidden.contains(index))
-        .filter_map(|(_, line)| trailing_block_id_in_line(line))
-        .collect()
+    transplant::live_block_ids(contents)
 }
 
 fn hidden_markdown_indexes(logical: &[&str]) -> BTreeSet<usize> {
@@ -1615,378 +1589,6 @@ struct SelectedBlock {
     fragment: String,
 }
 
-fn rename_incoming_fragments(
-    blocks: &[SelectedBlock],
-    dest_path: &Path,
-    dest_used: &BTreeSet<String>,
-    collision_policy: IdCollisionPolicy,
-) -> Result<(Vec<String>, Vec<RenameRecord>, BTreeMap<String, String>), PlanError>
-{
-    let mut used = dest_used.clone();
-    let mut reserved = BTreeSet::new();
-    let mut seen = BTreeSet::new();
-    for block in blocks {
-        for occurrence in fragment_occurrences(&block.fragment) {
-            if seen.insert(occurrence.id.clone())
-                && !used.contains(&occurrence.id)
-            {
-                reserved.insert(occurrence.id);
-            }
-        }
-    }
-
-    let mut fragments = Vec::new();
-    let mut renames = Vec::new();
-    let mut id_map = BTreeMap::new();
-    for block in blocks {
-        let occurrences = fragment_occurrences(&block.fragment);
-        let mut finals = Vec::with_capacity(occurrences.len());
-        for occurrence in &occurrences {
-            let final_id = if used.contains(&occurrence.id) {
-                if collision_policy == IdCollisionPolicy::Refuse {
-                    return Err(PlanError::BlockIdCollision {
-                        candidate: block.task.candidate(),
-                        path: dest_path.to_path_buf(),
-                        block_id: occurrence.id.clone(),
-                    });
-                }
-                next_available_block_id(&occurrence.id, &used, &reserved)
-            } else {
-                occurrence.id.clone()
-            };
-            if final_id != occurrence.id {
-                renames.push(RenameRecord {
-                    path: dest_path.to_path_buf(),
-                    old_block_id: occurrence.id.clone(),
-                    new_block_id: final_id.clone(),
-                });
-            }
-            used.insert(final_id.clone());
-            id_map.insert(occurrence.id.clone(), final_id.clone());
-            finals.push(final_id);
-        }
-        let mut fragment = block.fragment.clone();
-        for (occurrence, final_id) in
-            occurrences.iter().zip(finals.iter()).rev()
-        {
-            if final_id != &occurrence.id {
-                fragment
-                    .replace_range(occurrence.start..occurrence.end, final_id);
-            }
-        }
-        fragments.push(fragment);
-    }
-    Ok((fragments, renames, id_map))
-}
-
-struct Occurrence {
-    id: String,
-    start: usize,
-    end: usize,
-}
-
-fn fragment_occurrences(fragment: &str) -> Vec<Occurrence> {
-    let lines: Vec<&str> = fragment.split_inclusive('\n').collect();
-    let logical: Vec<&str> =
-        lines.iter().map(|line| split_line_ending(line).0).collect();
-    let hidden = hidden_markdown_indexes(&logical);
-    let mut occurrences = Vec::new();
-    let mut offset = 0;
-    for (index, line) in lines.iter().enumerate() {
-        let (content, _) = split_line_ending(line);
-        if !hidden.contains(&index) {
-            for occurrence in block_id_occurrences_in_text(content) {
-                occurrences.push(Occurrence {
-                    id: occurrence.id,
-                    start: offset + occurrence.start,
-                    end: offset + occurrence.end,
-                });
-            }
-        }
-        offset += line.len();
-    }
-    occurrences
-}
-
-struct FragmentRepair {
-    contents: String,
-    link_count: usize,
-    dependency_count: usize,
-}
-
-fn repair_moved_fragment(
-    fragment: &str,
-    source_path: &Path,
-    source_target: &str,
-    note_index: &NoteIndex,
-    moved_targets: &MovedBlockTargets,
-    stayed_source_ids: &BTreeSet<String>,
-    id_map: &BTreeMap<String, String>,
-) -> FragmentRepair {
-    let wiki = repair_fragment_wiki_links(
-        fragment,
-        source_path,
-        source_target,
-        note_index,
-        moved_targets,
-        stayed_source_ids,
-        id_map,
-    );
-    let markdown = repair_fragment_markdown_links(
-        &wiki.contents,
-        source_path,
-        source_target,
-        note_index,
-        moved_targets,
-        stayed_source_ids,
-        id_map,
-    );
-    let metadata =
-        repair_dependency_metadata(&markdown.contents, moved_targets);
-    FragmentRepair {
-        contents: metadata.contents,
-        link_count: wiki.link_count + markdown.link_count,
-        dependency_count: metadata.count,
-    }
-}
-
-fn repair_fragment_wiki_links(
-    contents: &str,
-    source_path: &Path,
-    source_target: &str,
-    note_index: &NoteIndex,
-    moved_targets: &MovedBlockTargets,
-    stayed_source_ids: &BTreeSet<String>,
-    id_map: &BTreeMap<String, String>,
-) -> collect_done::LinkRepairResult {
-    let lines: Vec<&str> = contents
-        .split_inclusive('\n')
-        .map(|line| split_line_ending(line).0)
-        .collect();
-    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
-    let mut repaired = String::with_capacity(contents.len());
-    let mut link_count = 0;
-    let mut cursor = 0;
-    while let Some(relative_start) = contents[cursor..].find("[[") {
-        let start = cursor + relative_start;
-        let inner_start = start + 2;
-        let Some(relative_end) = contents[inner_start..].find("]]") else {
-            break;
-        };
-        let end = inner_start + relative_end;
-        repaired.push_str(&contents[cursor..start]);
-        let inner = &contents[inner_start..end];
-        let line_index = contents[..start].matches('\n').count();
-        let line = lines.get(line_index).copied().unwrap_or("");
-        let line_start =
-            contents[..start].rfind('\n').map_or(0, |index| index + 1);
-        let code_spans = inline_code_spans(line);
-        let relative_in_line = start.saturating_sub(line_start);
-        let skip = fenced.contains(&line_index)
-            || code_spans.iter().any(|span| {
-                relative_in_line < span.end && end + 2 - line_start > span.start
-            });
-        let replacement = if skip {
-            None
-        } else {
-            repair_fragment_wiki_inner(
-                inner,
-                source_path,
-                source_target,
-                note_index,
-                moved_targets,
-                stayed_source_ids,
-                id_map,
-            )
-        };
-        if let Some(new_inner) = replacement {
-            repaired.push_str("[[");
-            repaired.push_str(&new_inner);
-            repaired.push_str("]]");
-            link_count += 1;
-        } else {
-            repaired.push_str(&contents[start..end + 2]);
-        }
-        cursor = end + 2;
-    }
-    repaired.push_str(&contents[cursor..]);
-    collect_done::LinkRepairResult {
-        contents: repaired,
-        link_count,
-        dependency_metadata_count: 0,
-    }
-}
-
-fn repair_fragment_wiki_inner(
-    inner: &str,
-    source_path: &Path,
-    source_target: &str,
-    note_index: &NoteIndex,
-    moved_targets: &MovedBlockTargets,
-    stayed_source_ids: &BTreeSet<String>,
-    id_map: &BTreeMap<String, String>,
-) -> Option<String> {
-    let (target_with_fragment, alias) = match inner.find('|') {
-        Some(index) => (&inner[..index], &inner[index..]),
-        None => (inner, ""),
-    };
-    let (target, fragment) = split_block_fragment(target_with_fragment)?;
-    let block_id = fragment.strip_prefix('^')?;
-    if target.trim().is_empty() {
-        if let Some(final_id) = id_map.get(block_id) {
-            return Some(format!("#^{final_id}{alias}"));
-        }
-        if stayed_source_ids.contains(block_id) {
-            return Some(format!("{source_target}#^{block_id}{alias}"));
-        }
-        return None;
-    }
-    repair_wiki_link_inner(inner, source_path, note_index, moved_targets)
-}
-
-fn repair_fragment_markdown_links(
-    contents: &str,
-    source_path: &Path,
-    source_target: &str,
-    note_index: &NoteIndex,
-    moved_targets: &MovedBlockTargets,
-    stayed_source_ids: &BTreeSet<String>,
-    id_map: &BTreeMap<String, String>,
-) -> collect_done::LinkRepairResult {
-    let lines: Vec<&str> = contents
-        .split_inclusive('\n')
-        .map(|line| split_line_ending(line).0)
-        .collect();
-    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
-    let mut repaired = String::with_capacity(contents.len());
-    let mut link_count = 0;
-    let mut cursor = 0;
-    while let Some(relative_open) = contents[cursor..].find("](") {
-        let open = cursor + relative_open;
-        if let Some(wiki_start) =
-            contents[cursor..].find("[[").map(|rel| cursor + rel)
-            && wiki_start < open
-        {
-            let Some(wiki_end) = contents[wiki_start + 2..].find("]]") else {
-                break;
-            };
-            let wiki_end = wiki_start + 2 + wiki_end + 2;
-            repaired.push_str(&contents[cursor..wiki_end]);
-            cursor = wiki_end;
-            continue;
-        }
-        let destination_start = open + 2;
-        let Some(relative_close) = contents[destination_start..].find(')')
-        else {
-            break;
-        };
-        let destination_end = destination_start + relative_close;
-        repaired.push_str(&contents[cursor..destination_start]);
-        let destination = &contents[destination_start..destination_end];
-        let line_index = contents[..open].matches('\n').count();
-        let line = lines.get(line_index).copied().unwrap_or("");
-        let line_start =
-            contents[..open].rfind('\n').map_or(0, |index| index + 1);
-        let code_spans = inline_code_spans(line);
-        let relative_in_line = open.saturating_sub(line_start);
-        let skip = fenced.contains(&line_index)
-            || code_spans.iter().any(|span| {
-                relative_in_line < span.end
-                    && destination_end + 1 - line_start > span.start
-            });
-        if skip {
-            repaired.push_str(destination);
-        } else if let Some(new_destination) =
-            repair_fragment_markdown_destination(
-                destination,
-                source_path,
-                source_target,
-                note_index,
-                moved_targets,
-                stayed_source_ids,
-                id_map,
-            )
-        {
-            repaired.push_str(&new_destination);
-            link_count += 1;
-        } else {
-            repaired.push_str(destination);
-        }
-        repaired.push(')');
-        cursor = destination_end + 1;
-    }
-    repaired.push_str(&contents[cursor..]);
-    collect_done::LinkRepairResult {
-        contents: repaired,
-        link_count,
-        dependency_metadata_count: 0,
-    }
-}
-
-fn repair_fragment_markdown_destination(
-    destination: &str,
-    source_path: &Path,
-    source_target: &str,
-    note_index: &NoteIndex,
-    moved_targets: &MovedBlockTargets,
-    stayed_source_ids: &BTreeSet<String>,
-    id_map: &BTreeMap<String, String>,
-) -> Option<String> {
-    if !is_simple_markdown_destination(destination) {
-        return None;
-    }
-    let (target, fragment) = split_block_fragment(destination)?;
-    if target.contains("://") {
-        return None;
-    }
-    let block_id = fragment.strip_prefix('^')?;
-    if target.is_empty() {
-        if let Some(final_id) = id_map.get(block_id) {
-            return Some(format!("#^{final_id}"));
-        }
-        if stayed_source_ids.contains(block_id) {
-            return Some(format!("{source_target}.md#^{block_id}"));
-        }
-        return None;
-    }
-    repair_markdown_destination(
-        destination,
-        source_path,
-        note_index,
-        moved_targets,
-    )
-}
-
-fn remove_selected_blocks(contents: &str, blocks: &[SelectedBlock]) -> String {
-    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
-    let mut drop = vec![false; lines.len()];
-    for block in blocks {
-        for index in block.task.line_index..block.end {
-            if index < drop.len() {
-                drop[index] = true;
-            }
-        }
-    }
-    let mut result = String::new();
-    let mut last_emitted_blank = false;
-    let mut at_seam = false;
-    for (index, line) in lines.iter().enumerate() {
-        if drop[index] {
-            at_seam = true;
-            continue;
-        }
-        let blank = split_line_ending(line).0.trim().is_empty();
-        if at_seam && blank && last_emitted_blank {
-            at_seam = false;
-            continue;
-        }
-        at_seam = false;
-        result.push_str(line);
-        last_emitted_blank = blank;
-    }
-    result
-}
-
 fn insert_into_dest(
     dest_contents: &str,
     fragments: &[String],
@@ -2024,12 +1626,23 @@ fn insert_into_dest(
         for (index, (slot, fragment)) in slots.iter().zip(fragments).enumerate()
         {
             let insert_at = task_slot_byte(&updated, *slot)?;
-            let insertion = join_fragments(
+            let extra_separator =
+                last_line_is_task_lane_marker(&updated[..insert_at]);
+            let (next, landing_lines) = transplant::insert_fragments_at_byte(
+                &updated,
+                insert_at,
                 std::slice::from_ref(fragment),
-                document_line_ending(&updated),
-            );
-            let (next, line) =
-                insert_at_byte_with_line(&updated, insert_at, &insertion);
+                extra_separator,
+            )
+            .ok_or_else(|| PlanError::InvalidCaptureSlots {
+                detail: format!(
+                    "slot {slot} produced an invalid insertion offset"
+                ),
+            })?;
+            let line = landing_lines
+                .first()
+                .copied()
+                .expect("one inserted task has one landing line");
             let inserted_lines = fragment.lines().count().max(1);
             for landing in landings.iter_mut().take(index) {
                 if *landing >= line {
@@ -2042,37 +1655,34 @@ fn insert_into_dest(
         return Ok((updated, landings));
     }
 
-    let insertion =
-        join_fragments(fragments, document_line_ending(dest_contents));
     if let Some(insert_at) = tasks_intake_insert_byte(dest_contents) {
-        let (updated, first_line) =
-            insert_at_byte_with_line(dest_contents, insert_at, &insertion);
-        return Ok((updated, fragment_landing_lines(first_line, fragments)));
+        let extra_separator =
+            last_line_is_task_lane_marker(&dest_contents[..insert_at]);
+        let (updated, landings) = transplant::insert_fragments_at_byte(
+            dest_contents,
+            insert_at,
+            fragments,
+            extra_separator,
+        )
+        .expect("tasks intake insertion offset is a character boundary");
+        return Ok((updated, landings));
     }
     if dest_kind == DestKind::Area {
+        let insertion = transplant::join_fragments(
+            fragments,
+            transplant::document_line_ending(dest_contents),
+        );
         let result = append_tasks_section(dest_contents, &insertion);
         let prefix_len = result.len().saturating_sub(insertion.len());
         let first_line = result[..prefix_len].matches('\n').count();
-        return Ok((result, fragment_landing_lines(first_line, fragments)));
+        return Ok((
+            result,
+            transplant::fragment_landing_lines(first_line, fragments),
+        ));
     }
     Err(PlanError::ProjectWithoutTasks {
         path: PathBuf::from("destination"),
     })
-}
-
-fn fragment_landing_lines(
-    first_line: usize,
-    fragments: &[String],
-) -> Vec<usize> {
-    let mut next = first_line;
-    fragments
-        .iter()
-        .map(|fragment| {
-            let line = next;
-            next += fragment.lines().count().max(1);
-            line
-        })
-        .collect()
 }
 
 fn task_roots_in_tasks_lane(contents: &str) -> Vec<usize> {
@@ -2112,22 +1722,8 @@ fn task_slot_byte(contents: &str, slot: usize) -> Result<usize, PlanError> {
     Ok(lines.iter().take(line).map(|line| line.len()).sum())
 }
 
-fn join_fragments(fragments: &[String], ending: &str) -> String {
-    let mut joined = String::new();
-    for fragment in fragments {
-        if !joined.is_empty() && !joined.ends_with('\n') {
-            joined.push_str(ending);
-        }
-        joined.push_str(fragment);
-    }
-    if !joined.is_empty() && !joined.ends_with('\n') {
-        joined.push_str(ending);
-    }
-    joined
-}
-
 fn append_tasks_section(contents: &str, insertion: &str) -> String {
-    let ending = document_line_ending(contents);
+    let ending = transplant::document_line_ending(contents);
     let mut result = contents.to_string();
     if !result.is_empty() && !result.ends_with('\n') {
         result.push_str(ending);
@@ -2195,37 +1791,7 @@ fn tasks_intake_insert_byte(contents: &str) -> Option<usize> {
     Some(lines.iter().take(intake_end).map(|line| line.len()).sum())
 }
 
-/// Insert fragments at a byte offset, plus the 0-based line index of
-/// the first inserted line in the result. The index counts `'\n'` in
-/// the prefix plus any leading endings added before the insertion, so
-/// identical titles already at the destination never confuse it.
-fn insert_at_byte_with_line(
-    contents: &str,
-    index: usize,
-    insertion: &str,
-) -> (String, usize) {
-    let ending = document_line_ending(contents);
-    let mut addition = insertion.to_string();
-    let needs_leading = index > 0 && !contents[..index].ends_with('\n');
-    if needs_leading {
-        addition = format!("{ending}{addition}");
-    }
-    if index == 0 || contents[..index].ends_with(&format!("{ending}{ending}")) {
-        // already a blank line before the insert point
-    } else if last_line_is_heading(&contents[..index]) {
-        addition = format!("{ending}{addition}");
-    }
-    let leading_len = addition.len().saturating_sub(insertion.len());
-    let insertion_line = (contents[..index].matches('\n').count())
-        + (addition[..leading_len].matches('\n').count());
-    let mut result = String::with_capacity(contents.len() + addition.len());
-    result.push_str(&contents[..index]);
-    result.push_str(&addition);
-    result.push_str(&contents[index..]);
-    (result, insertion_line)
-}
-
-fn last_line_is_heading(prefix: &str) -> bool {
+fn last_line_is_task_lane_marker(prefix: &str) -> bool {
     let last = prefix
         .rsplit_once('\n')
         .map(|(_, last)| split_line_ending(last).0)
@@ -2239,17 +1805,8 @@ fn last_line_is_heading(prefix: &str) -> bool {
     } else {
         last
     };
-    markdown::atx_heading(last).is_some()
-        || task_status_groups::is_badge_row(last)
+    task_status_groups::is_badge_row(last)
         || task_status_groups::is_legacy_badge_marker(last)
-}
-
-fn document_line_ending(contents: &str) -> &'static str {
-    if contents.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    }
 }
 
 fn add_repair(

@@ -8,6 +8,7 @@ mod command;
 pub(crate) mod plan;
 #[cfg(test)]
 mod tests;
+pub(crate) mod transplant;
 
 pub(crate) use command::{build_cli, run};
 #[cfg(test)]
