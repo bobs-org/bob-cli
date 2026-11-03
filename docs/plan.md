@@ -157,6 +157,10 @@ budget.links.cap` with the same grey/blue/green/yellow/orange/magenta/red bands.
 Types never affect it: there is no type count or cap.
 Missing ledger data or a missing Pomodoros section is `TODAY –`, never a
 synthetic `0/limit`; an existing empty Pomodoros section is grey.
+Bob Mac Capture's TODAY badge (idle agenda, capture preview, and pull-in chooser)
+applies the same label, ladder, and `–` rule to Bob's reported `plan_budget.links`,
+so a ladder change must land in bob-ledger-tools `workBadgeTone` and the Mac
+`WorkBadgeTone` together.
 
 ## Today roots
 
