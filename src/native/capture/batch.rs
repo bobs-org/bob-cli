@@ -5,10 +5,16 @@ use super::*;
 pub(crate) struct CaptureBatchPlanner {
     pub(super) files: Vec<BatchTextFile>,
     pub(super) by_path: HashMap<PathBuf, usize>,
-    move_destinations: BTreeSet<PathBuf>,
-    move_sources: BTreeSet<PathBuf>,
+    move_edges: Vec<(PathBuf, PathBuf)>,
+    moved_origins: HashMap<(PathBuf, String), MovedOrigin>,
     item_pre_day: Option<Option<String>>,
     item_consumed_links: Vec<ConsumedLinkJson>,
+}
+
+#[derive(Clone)]
+pub(super) struct MovedOrigin {
+    pub(super) destination: PathBuf,
+    pub(super) item_number: usize,
 }
 
 pub(super) struct BatchTextFile {
@@ -19,18 +25,12 @@ pub(super) struct BatchTextFile {
     pub(super) current: String,
 }
 
+#[derive(Debug)]
 pub(crate) struct StagedTextFile {
     pub(crate) target: PathBuf,
     pub(crate) target_existed: bool,
     pub(crate) original_target: String,
     pub(crate) updated_target: String,
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum MoveWriteRole {
-    Other,
-    Destination,
-    Source,
 }
 
 impl CaptureBatchPlanner {
@@ -173,17 +173,7 @@ impl CaptureBatchPlanner {
         path: &Path,
         snapshot_contents: Option<String>,
         postimage: String,
-        role: MoveWriteRole,
     ) -> Result<(), CaptureError> {
-        match role {
-            MoveWriteRole::Other => {}
-            MoveWriteRole::Destination => {
-                self.move_destinations.insert(path.to_path_buf());
-            }
-            MoveWriteRole::Source => {
-                self.move_sources.insert(path.to_path_buf());
-            }
-        }
         if self.by_path.contains_key(path) {
             let index = self.by_path[path];
             self.files[index].present = true;
@@ -264,6 +254,36 @@ impl CaptureBatchPlanner {
         }
     }
 
+    pub(super) fn record_move(&mut self, source: &Path, destination: &Path) {
+        self.move_edges
+            .push((source.to_path_buf(), destination.to_path_buf()));
+    }
+
+    pub(super) fn moved_origin(
+        &self,
+        source: &Path,
+        block_id: &str,
+    ) -> Option<&MovedOrigin> {
+        self.moved_origins
+            .get(&(source.to_path_buf(), block_id.to_string()))
+    }
+
+    pub(super) fn record_moved_origin(
+        &mut self,
+        source: &Path,
+        block_id: &str,
+        destination: &Path,
+        item_number: usize,
+    ) {
+        self.moved_origins.insert(
+            (source.to_path_buf(), block_id.to_string()),
+            MovedOrigin {
+                destination: destination.to_path_buf(),
+                item_number,
+            },
+        );
+    }
+
     pub(super) fn ensure_loaded(
         &mut self,
         path: &Path,
@@ -290,14 +310,15 @@ impl CaptureBatchPlanner {
         Ok(index)
     }
 
-    pub(super) fn into_staged_files(self) -> Vec<StagedTextFile> {
+    pub(super) fn into_staged_files(
+        self,
+    ) -> Result<Vec<StagedTextFile>, CaptureError> {
         let CaptureBatchPlanner {
             files: staged,
-            move_destinations,
-            move_sources,
+            move_edges,
             ..
         } = self;
-        let mut files: Vec<(usize, StagedTextFile)> = staged
+        let files: Vec<(usize, StagedTextFile)> = staged
             .into_iter()
             .enumerate()
             .filter(|(_, file)| {
@@ -315,18 +336,64 @@ impl CaptureBatchPlanner {
                 )
             })
             .collect();
-        files.sort_by_key(|(index, file)| {
-            let priority = if move_destinations.contains(&file.target) {
-                0
-            } else if move_sources.contains(&file.target) {
-                2
-            } else {
-                1
-            };
-            (priority, *index)
-        });
-        files.into_iter().map(|(_, file)| file).collect()
+        let ordered = stable_move_write_order(&files, &move_edges)?;
+        let mut files: Vec<Option<StagedTextFile>> =
+            files.into_iter().map(|(_, file)| Some(file)).collect();
+        Ok(ordered
+            .into_iter()
+            .map(|index| files[index].take().expect("ordered file exists"))
+            .collect())
     }
+}
+
+fn stable_move_write_order(
+    files: &[(usize, StagedTextFile)],
+    move_edges: &[(PathBuf, PathBuf)],
+) -> Result<Vec<usize>, CaptureError> {
+    let by_path: HashMap<&Path, usize> = files
+        .iter()
+        .enumerate()
+        .map(|(index, (_, file))| (file.target.as_path(), index))
+        .collect();
+    let mut outgoing = vec![BTreeSet::new(); files.len()];
+    let mut indegree = vec![0usize; files.len()];
+    for (source, destination) in move_edges {
+        let (Some(&source), Some(&destination)) = (
+            by_path.get(source.as_path()),
+            by_path.get(destination.as_path()),
+        ) else {
+            continue;
+        };
+        if source != destination && outgoing[destination].insert(source) {
+            indegree[source] += 1;
+        }
+    }
+
+    // Ready nodes are ordered by original first-touch index. Newly freed
+    // nodes re-enter at their original position, making this Kahn traversal
+    // stable while honoring every destination-before-source edge.
+    let mut ready = BTreeSet::new();
+    for (node, degree) in indegree.iter().enumerate() {
+        if *degree == 0 {
+            ready.insert((files[node].0, node));
+        }
+    }
+    let mut order = Vec::with_capacity(files.len());
+    while let Some((_, node)) = ready.pop_first() {
+        order.push(node);
+        for next in outgoing[node].iter().copied() {
+            indegree[next] -= 1;
+            if indegree[next] == 0 {
+                ready.insert((files[next].0, next));
+            }
+        }
+    }
+    if order.len() != files.len() {
+        return Err(CaptureError::io(
+            "capture move write ordering contains a cycle",
+        ));
+    }
+    Ok(order)
 }
 
 pub(super) fn plan_capture_to_target(
@@ -902,5 +969,69 @@ pub(super) fn destination_role(
         "current"
     } else {
         "next_up"
+    }
+}
+
+#[cfg(test)]
+mod move_order_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn replacement_order_is_stable_and_destinations_precede_sources() {
+        let dir = tempfile::tempdir().expect("temp vault");
+        let source = dir.path().join("cash.md");
+        let middle = dir.path().join("cash_x.md");
+        let unrelated = dir.path().join("repair.md");
+        let destination = dir.path().join("cash_x_y.md");
+        for path in [&source, &middle, &unrelated, &destination] {
+            fs::write(path, "before\n").expect("write note");
+        }
+        let mut planner = CaptureBatchPlanner::default();
+        for path in [&source, &middle, &unrelated, &destination] {
+            planner
+                .stage(path, "after\n".to_string())
+                .expect("stage note");
+        }
+        planner.record_move(&source, &middle);
+        planner.record_move(&middle, &destination);
+
+        let order = planner
+            .into_staged_files()
+            .expect("topologically order staged files")
+            .into_iter()
+            .map(|file| {
+                file.target
+                    .file_name()
+                    .expect("filename")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(order, ["repair.md", "cash_x_y.md", "cash_x.md", "cash.md"]);
+    }
+
+    #[test]
+    fn cyclic_move_order_refuses_before_returning_staged_files() {
+        let dir = tempfile::tempdir().expect("temp vault");
+        let first = dir.path().join("first.md");
+        let second = dir.path().join("second.md");
+        for path in [&first, &second] {
+            fs::write(path, "before\n").expect("write note");
+        }
+        let mut planner = CaptureBatchPlanner::default();
+        planner
+            .stage(&first, "after\n".to_string())
+            .expect("stage first");
+        planner
+            .stage(&second, "after\n".to_string())
+            .expect("stage second");
+        planner.record_move(&first, &second);
+        planner.record_move(&second, &first);
+
+        let error = planner
+            .into_staged_files()
+            .expect_err("cyclic move ordering refuses");
+        assert!(error.message.contains("ordering contains a cycle"));
     }
 }

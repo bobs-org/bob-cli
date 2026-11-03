@@ -495,6 +495,49 @@ pub(super) struct ProjectTaskLinkJson {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectNotePlannedLink {
+    pub(super) entry_name: String,
+    pub(super) entry_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectNoteMovedTask {
+    pub(super) sigil: char,
+    pub(super) draft_range: (usize, usize),
+    pub(super) item_line: usize,
+    pub(super) source: String,
+    pub(super) source_line: usize,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) text: String,
+    pub(super) previous_status_symbol: char,
+    pub(super) previous_status_name: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) fresh: Option<String>,
+    pub(super) planned: Option<ProjectNotePlannedLink>,
+    pub(super) link: Option<ProjectTaskLinkJson>,
+    pub(super) not_linked: Option<String>,
+    pub(super) detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectNoteMoveSummary {
+    pub(super) parent: String,
+    pub(super) moved: usize,
+    pub(super) repaired_links: usize,
+    pub(super) repaired_notes: usize,
+    pub(super) needs_reconcile: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectNoteRepairedFile {
+    pub(super) path: String,
+    pub(super) link_count: usize,
+    pub(super) dependency_token_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ProjectNoteSummary {
     pub(super) basename: String,
     pub(super) parent_route: String,
@@ -502,6 +545,12 @@ pub(super) struct ProjectNoteSummary {
     pub(super) tasks: usize,
     pub(super) sections: Vec<String>,
     pub(super) task_links: Vec<ProjectTaskLinkJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) moved_tasks: Vec<ProjectNoteMovedTask>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) move_summary: Option<ProjectNoteMoveSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) repaired_files: Option<Vec<ProjectNoteRepairedFile>>,
     /// `"offer"` for `@route:id@`; omitted on Create.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) form: Option<&'static str>,
@@ -6729,6 +6778,9 @@ mod tests {
             tasks: 2,
             sections: Vec::new(),
             task_links: Vec::new(),
+            moved_tasks: Vec::new(),
+            move_summary: None,
+            repaired_files: None,
             form: Some("offer"),
             successors: Some(vec![unblocked_row(
                 "Draft the memo",
@@ -6765,6 +6817,9 @@ mod tests {
             tasks: 1,
             sections: Vec::new(),
             task_links: Vec::new(),
+            moved_tasks: Vec::new(),
+            move_summary: None,
+            repaired_files: None,
             form: None,
             successors: None,
             project_folds: Vec::new(),

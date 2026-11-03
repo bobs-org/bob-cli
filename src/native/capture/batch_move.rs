@@ -110,19 +110,14 @@ pub(super) fn stage_move_postimages(
     destination: Option<&Path>,
 ) -> Result<(), CaptureError> {
     for (path, postimage) in postimages {
-        let role = if Some(path.as_path()) == destination {
-            MoveWriteRole::Destination
-        } else if Some(path.as_path()) == source {
-            MoveWriteRole::Source
-        } else {
-            MoveWriteRole::Other
-        };
         planner.stage_snapshot_postimage(
             &bob_dir.join(path),
             snapshot.notes.get(path).cloned(),
             postimage.clone(),
-            role,
         )?;
+    }
+    if let (Some(source), Some(destination)) = (source, destination) {
+        planner.record_move(&bob_dir.join(source), &bob_dir.join(destination));
     }
     Ok(())
 }
@@ -194,6 +189,10 @@ fn stamp_move_roots(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::task_move::{
+        IdCollisionPolicy, MovePlacement, MoveRequest, MoveSelector,
+    };
+    use chrono::NaiveDate;
 
     #[test]
     fn batch_replacement_order_writes_destinations_before_sources() {
@@ -251,6 +250,7 @@ mod tests {
 
         let targets = planner
             .into_staged_files()
+            .expect("order staged files")
             .into_iter()
             .map(|file| {
                 file.target
@@ -260,6 +260,70 @@ mod tests {
                     .into_owned()
             })
             .collect::<Vec<_>>();
-        assert_eq!(targets, ["destination.md", "repair.md", "source.md"]);
+        assert_eq!(targets, ["repair.md", "destination.md", "source.md"]);
+    }
+
+    #[test]
+    fn changed_repair_note_refuses_the_move_snapshot() {
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let vault = temp.path();
+        let source = vault.join("source.md");
+        let repair = vault.join("repair.md");
+        let destination = vault.join("destination.md");
+        fs::write(
+            &source,
+            "---\ntype: \"[[area]]\"\n---\n## Tasks\n- [ ] #task Move ^a\n",
+        )
+        .expect("write source");
+        let repair_before = "- [ ] #task Referrer ^r\n  - [[source#^a]]\n";
+        fs::write(&repair, repair_before).expect("write repair note");
+        let destination_skeleton = concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task Destination ^prj\n",
+            "\n## Tasks\n\n",
+        );
+
+        let mut planner = CaptureBatchPlanner::default();
+        planner
+            .stage(&destination, destination_skeleton.to_string())
+            .expect("stage destination");
+        let snapshot = destination_snapshot(vault, &planner)
+            .expect("capture move snapshot");
+        fs::write(&repair, "external edit\n").expect("race edit");
+        let settings = note_tasks::read_settings(vault);
+        let request = MoveRequest {
+            source: "source".to_string(),
+            dest: "destination".to_string(),
+            selectors: vec![MoveSelector::Block("a".to_string())],
+            allow_closed: false,
+            placement: MovePlacement::Append,
+            id_collision: IdCollisionPolicy::Refuse,
+        };
+
+        let error = apply_batch_move_from_snapshot(
+            &mut planner,
+            vault,
+            &settings,
+            NaiveDate::from_ymd_opt(2026, 9, 20).expect("valid date"),
+            &request,
+            &snapshot,
+        )
+        .expect_err("repair race refuses");
+        let BatchMoveError::Capture(error) = error else {
+            panic!("expected snapshot guard, got {error:?}");
+        };
+        assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+        assert_eq!(
+            fs::read_to_string(&source).expect("source unchanged"),
+            "---\ntype: \"[[area]]\"\n---\n## Tasks\n- [ ] #task Move ^a\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&repair).expect("external edit remains"),
+            "external edit\n"
+        );
+        assert!(!destination.exists(), "staged destination is not committed");
     }
 }

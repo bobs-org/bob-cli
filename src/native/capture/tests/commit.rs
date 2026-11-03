@@ -295,9 +295,10 @@ fn complete_label_batch_failure_after_replace_rolls_back() {
         ),
         staged_existing(&day, day_original, "## Pomodoros\n- [ ] Morning\n  - ~~[[a#^alpha]]~~\n"),
     ];
-    *RENAME_FAIL_TARGET.lock().expect("lock seam") = Some(dependent.clone());
+    RENAME_FAIL_TARGET
+        .with(|target| *target.borrow_mut() = Some(dependent.clone()));
     let error = write_staged_files(&planned).expect_err("replace fails");
-    *RENAME_FAIL_TARGET.lock().expect("lock seam") = None;
+    RENAME_FAIL_TARGET.with(|target| *target.borrow_mut() = None);
     assert!(
         error.message.contains("rolled back earlier note writes"),
         "commit invokes rollback: {}",
@@ -320,6 +321,47 @@ fn complete_label_batch_failure_after_replace_rolls_back() {
 }
 
 #[test]
+fn move_destination_is_rolled_back_when_source_replace_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("cash.md");
+    let destination = dir.path().join("cash_x.md");
+    let source_before = "- [ ] #task Move ^a\n";
+    fs::write(&source, source_before).expect("write source");
+
+    let mut planner = CaptureBatchPlanner::default();
+    planner
+        .stage(&source, "source after\n".to_string())
+        .expect("stage source");
+    planner
+        .stage(&destination, "destination with moved task\n".to_string())
+        .expect("stage destination");
+    planner.record_move(&source, &destination);
+    let staged = planner
+        .into_staged_files()
+        .expect("destination-first move order");
+    assert_eq!(staged[0].target, destination);
+    assert_eq!(staged[1].target, source);
+
+    RENAME_FAIL_TARGET
+        .with(|target| *target.borrow_mut() = Some(source.clone()));
+    let error = write_staged_files(&staged).expect_err("source replace fails");
+    RENAME_FAIL_TARGET.with(|target| *target.borrow_mut() = None);
+    assert!(
+        error.message.contains("rolled back earlier note writes"),
+        "{error:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&source).expect("source restored"),
+        source_before
+    );
+    assert!(
+        !destination.exists(),
+        "new destination removed during rollback"
+    );
+    no_capture_litter(dir.path());
+}
+
+#[test]
 fn cumulative_stages_into_one_note_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let note = dir.path().join("note.md");
@@ -336,7 +378,7 @@ fn cumulative_stages_into_one_note_commit() {
     planner
         .stage(&note, cumulative.clone())
         .expect("stage second item");
-    let planned = planner.into_staged_files();
+    let planned = planner.into_staged_files().expect("order staged files");
     assert_eq!(planned.len(), 1, "one note stages one file");
 
     write_staged_files(&planned).expect("matching preimage commits");

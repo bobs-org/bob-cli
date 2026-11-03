@@ -78,6 +78,15 @@ pub(crate) struct RenderedProjectNote {
     /// Every rendered `## Tasks` row (not section headings or note-only
     /// bullets), in output order, with source identity for offer selection.
     pub(crate) task_rows: Vec<RenderedTask>,
+    /// Final zero-based task-root slots for authored move bullets. Slots
+    /// count task roots only; headings and section-note bullets do not count.
+    pub(crate) move_slots: Vec<ProjectNoteMoveSlot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectNoteMoveSlot {
+    pub(crate) source_index: usize,
+    pub(crate) slot: usize,
 }
 
 /// One named first-level task bullet: a trailing ` :id` / ` ^id` token
@@ -350,9 +359,17 @@ pub(crate) fn render_project_note(
     let mut tasks_block: Vec<String> = Vec::new();
     let mut task_entries: usize = 0;
     let mut pending_tasks: Vec<PendingTask> = Vec::new();
+    let mut move_slots = Vec::new();
     let mut sections: Vec<SectionEntry> = Vec::new();
     let mut section_index: HashMap<String, usize> = HashMap::new();
     for group in &groups {
+        if group.owner.move_task.is_some() {
+            move_slots.push(ProjectNoteMoveSlot {
+                source_index: group.owner_index,
+                slot: task_entries + move_slots.len(),
+            });
+            continue;
+        }
         let owner_body = group.owner.body.trim();
         let (checkbox, bare) = split_leading_checkbox(owner_body);
         let named = group.owner.task_id.as_ref();
@@ -461,7 +478,10 @@ pub(crate) fn render_project_note(
         contents.push('\n');
     }
     contents.push_str("\n## Tasks\n\n");
-    let task_count = if tasks_block.is_empty() && merged_tasks.is_empty() {
+    let task_count = if tasks_block.is_empty()
+        && merged_tasks.is_empty()
+        && move_slots.is_empty()
+    {
         let placeholder_line = format!(
             "- [ ] #task {PLACEHOLDER_TASK_BODY} [created::{created_date}]"
         );
@@ -487,7 +507,7 @@ pub(crate) fn render_project_note(
             contents.push_str(line);
             contents.push('\n');
         }
-        task_entries
+        task_entries + move_slots.len()
     };
 
     let mut section_titles = Vec::with_capacity(sections.len());
@@ -536,6 +556,7 @@ pub(crate) fn render_project_note(
         task_count,
         named_tasks,
         task_rows,
+        move_slots,
     }
 }
 

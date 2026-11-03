@@ -1,5 +1,14 @@
 //! Project-note planning for plus-sigil captures.
+use super::batch_move::{apply_batch_move, BatchMoveError};
+use super::output::{
+    ProjectNoteMoveSummary, ProjectNoteMovedTask, ProjectNotePlannedLink,
+    ProjectNoteRepairedFile,
+};
 use super::*;
+use crate::native::task_move::{
+    resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot, MovePlacement,
+    MoveRequest, MoveSelector, PlanError,
+};
 
 pub(super) fn reject_project_note_conflicts(
     parsed: &ParsedCaptureText,
@@ -98,16 +107,15 @@ pub(super) fn plan_project_note_item(
             "project-note capture invariant failed: route is missing",
         )
     })?;
-    // Move bullets (`- ^<id>` / `- :<id>`) parse already, but execution
-    // lands in a later phase. Refuse them here so no draft captures
-    // half a move; the execution phase deletes this guard and its test.
-    // (Lone `- ^` / `- :` moves never reach planning: the parsers refuse
-    // them as `move_bullet_unfinished` first.)
-    if parsed
-        .sub_bullets
-        .iter()
-        .any(|sub_bullet| sub_bullet.move_task.is_some())
-    {
+    // Colon moves and Offer-form moves also link or settle moved rows. Those
+    // operations land in the next execution phase; caret moves on Create
+    // items can already use the shared atomic move engine.
+    let has_unsupported_move = parsed.sub_bullets.iter().any(|sub_bullet| {
+        sub_bullet.move_task.as_ref().is_some_and(|movement| {
+            movement.sigil != '^' || form == ProjectNoteForm::Offer
+        })
+    });
+    if has_unsupported_move {
         return Err(CaptureError::usage(
             "moving tasks into a new project note is not available in this build yet",
         ));
@@ -156,6 +164,17 @@ pub(super) fn plan_project_note_item(
 
     let basename =
         capture_project_note::project_note_basename(&route, &block_id);
+    let source_path = request.bob_dir.join(format!("{route}.md"));
+    let resolved_moves = resolve_project_note_moves(
+        planner,
+        &source_path,
+        &route,
+        &basename,
+        &parsed.sub_bullets,
+        scheduled.as_deref(),
+        today,
+        &request.bob_dir,
+    )?;
     let new_target = request.bob_dir.join(&basename);
     if planner.currently_exists(&new_target)? {
         return Err(CaptureError::io(format!(
@@ -186,6 +205,24 @@ pub(super) fn plan_project_note_item(
             status_types: settings.status_types.clone(),
         },
     );
+
+    let move_execution = if resolved_moves.is_empty() {
+        None
+    } else {
+        Some(execute_project_note_moves(
+            request,
+            planner,
+            &source_path,
+            &new_target,
+            &route,
+            &basename,
+            &rendered,
+            &resolved_moves,
+            &settings,
+            today,
+            item_index + 1,
+        )?)
+    };
 
     // A future project date blocks the whole note (§13.3, PDG5):
     // `:` tasks render `[?]` plus the tag and stay unlinked, with a
@@ -407,7 +444,9 @@ pub(super) fn plan_project_note_item(
     let note_route: &str = basename.strip_suffix(".md").unwrap_or(&basename);
     // Stage the new note before linking so per-task type resolution (D3)
     // sees the staged residence, including the just-rendered task lines.
-    planner.stage(&new_target, rendered.contents.clone())?;
+    if move_execution.is_none() {
+        planner.stage(&new_target, rendered.contents.clone())?;
+    }
     let need_day = !linked.is_empty() || !frozen_offers.is_empty();
     let mut actual_placements: Vec<PlacedProjectLink> = Vec::new();
     let mut scratch_placements: Vec<PlacedProjectLink> = Vec::new();
@@ -718,6 +757,16 @@ pub(super) fn plan_project_note_item(
                 tasks: rendered.task_count,
                 sections: rendered.sections.clone(),
                 task_links,
+                moved_tasks: move_execution
+                    .as_ref()
+                    .map(|execution| execution.moved_tasks.clone())
+                    .unwrap_or_default(),
+                move_summary: move_execution
+                    .as_ref()
+                    .map(|execution| execution.summary.clone()),
+                repaired_files: move_execution
+                    .as_ref()
+                    .map(|execution| execution.repaired_files.clone()),
                 form: (form == ProjectNoteForm::Offer).then_some("offer"),
                 successors: (form == ProjectNoteForm::Offer).then(|| {
                     let mut scratch_index = 0;
@@ -889,6 +938,459 @@ pub(super) fn plan_project_note_item(
             .collect(),
         task_block_refs: Vec::new(),
     })
+}
+
+struct ResolvedProjectMove {
+    source_index: usize,
+    sigil: char,
+    block_id: String,
+    draft_range: (usize, usize),
+    root: MovableRoot,
+}
+
+struct ProjectMoveExecution {
+    moved_tasks: Vec<ProjectNoteMovedTask>,
+    summary: ProjectNoteMoveSummary,
+    repaired_files: Vec<ProjectNoteRepairedFile>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_project_note_moves(
+    planner: &CaptureBatchPlanner,
+    source_path: &Path,
+    route: &str,
+    destination_basename: &str,
+    sub_bullets: &[AuthoredSubBullet],
+    scheduled: Option<&str>,
+    today: NaiveDate,
+    bob_dir: &Path,
+) -> Result<Vec<ResolvedProjectMove>, CaptureError> {
+    let moves: Vec<(usize, &crate::native::capture_language::MoveBullet)> =
+        sub_bullets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, bullet)| {
+                bullet.move_task.as_ref().map(|movement| (index, movement))
+            })
+            .collect();
+    if moves.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(contents) = planner.peek_text(source_path) else {
+        return Err(CaptureError::io(format!(
+            "project-note parent disappeared while planning: {}",
+            source_path.display()
+        )));
+    };
+    let parent_label = format!("{route}.md");
+    let destination_label = destination_basename
+        .strip_suffix(".md")
+        .unwrap_or(destination_basename)
+        .to_string();
+    let future_project_date = scheduled.and_then(|value| {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .ok()
+            .filter(|date| *date > today)
+    });
+    let mut resolved = Vec::with_capacity(moves.len());
+    for (source_index, movement) in moves {
+        let Some(block_id) = movement.block_id.as_deref() else {
+            return Err(CaptureError::io(
+                "project-note move invariant failed: block ID is missing",
+            ));
+        };
+        if let Some(previous) = planner.moved_origin(source_path, block_id) {
+            let destination = previous
+                .destination
+                .strip_prefix(bob_dir)
+                .unwrap_or(&previous.destination);
+            return Err(CaptureError::usage_code(
+                format!(
+                    "`^{block_id}` already moved to {} in item {}",
+                    display_project_path(destination),
+                    previous.item_number
+                ),
+                "move_task_already_moved",
+            ));
+        }
+        let root = resolve_movable(&contents, block_id).map_err(|reason| {
+            project_move_ineligible_error(
+                reason,
+                block_id,
+                &parent_label,
+                bob_dir,
+            )
+        })?;
+        if future_project_date.is_some() && root.status != '?' {
+            let date = scheduled.unwrap_or_default();
+            let status_name =
+                task_complete::status_name_for(bob_dir, root.status);
+            return Err(CaptureError::usage_code(
+                format!(
+                    "`s:{}` starts {} on {date}, so it cannot take {status_name} task `^{block_id}` yet; drop `s:{}` or move the task after it starts",
+                    scheduled_offset_from_date(today, date),
+                    destination_label,
+                    scheduled_offset_from_date(today, date),
+                ),
+                "move_task_blocked_birth",
+            ));
+        }
+        resolved.push(ResolvedProjectMove {
+            source_index,
+            sigil: movement.sigil,
+            block_id: block_id.to_string(),
+            draft_range: movement.range,
+            root,
+        });
+    }
+    Ok(resolved)
+}
+
+fn project_move_ineligible_error(
+    reason: Ineligible,
+    block_id: &str,
+    parent_label: &str,
+    bob_dir: &Path,
+) -> CaptureError {
+    let task = format!("`^{block_id}`");
+    let (message, code) = match reason {
+        Ineligible::Missing => (
+            format!(
+                "{parent_label} has no open task {task}; type `^` after `- ` to pick one of its open tasks"
+            ),
+            "move_task_missing",
+        ),
+        Ineligible::Closed { status } => {
+            let name = task_complete::status_name_for(bob_dir, status);
+            (
+                format!("{task} in {parent_label} is {}; only open tasks move into a new project", name.to_lowercase()),
+                "move_task_closed",
+            )
+        }
+        Ineligible::Nested {
+            parent_id,
+            parent_title,
+        } => {
+            let parent = parent_id
+                .map(|id| format!("`^{id}`"))
+                .unwrap_or_else(|| format!("`{parent_title}`"));
+            (
+                format!("{task} is nested under {parent} in {parent_label}; move {parent} to bring the whole block"),
+                "move_task_nested",
+            )
+        }
+        Ineligible::Ambiguous { count } => (
+            format!(
+                "{parent_label} has {count} tasks ending {task}; give one a new ID before moving it"
+            ),
+            "move_task_ambiguous",
+        ),
+        Ineligible::Project => (
+            format!("{task} is a project's own task and cannot move"),
+            "",
+        ),
+        Ineligible::UnsupportedCheckbox { status } => (
+            format!(
+                "refusing task {task} in {parent_label} with checkbox [{status}]"
+            ),
+            "",
+        ),
+    };
+    if code.is_empty() {
+        CaptureError::usage(message)
+    } else {
+        CaptureError::usage_code(message, code)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_project_note_moves(
+    request: &CaptureRequest,
+    planner: &mut CaptureBatchPlanner,
+    source_path: &Path,
+    new_target: &Path,
+    route: &str,
+    basename: &str,
+    rendered: &capture_project_note::RenderedProjectNote,
+    moves: &[ResolvedProjectMove],
+    settings: &note_tasks::NoteTaskSettings,
+    today: NaiveDate,
+    item_number: usize,
+) -> Result<ProjectMoveExecution, CaptureError> {
+    let slot_by_source: HashMap<usize, usize> = rendered
+        .move_slots
+        .iter()
+        .map(|slot| (slot.source_index, slot.slot))
+        .collect();
+    let selectors = moves
+        .iter()
+        .map(|movement| MoveSelector::Block(movement.block_id.clone()))
+        .collect::<Vec<_>>();
+    let slots = moves
+        .iter()
+        .map(|movement| {
+            slot_by_source.get(&movement.source_index).copied().ok_or_else(
+                || {
+                    CaptureError::io(
+                        "project-note move invariant failed: task slot is missing",
+                    )
+                },
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    planner.stage(new_target, rendered.contents.clone())?;
+    let destination_route = basename.strip_suffix(".md").unwrap_or(basename);
+    let move_request = MoveRequest {
+        source: route.to_string(),
+        dest: destination_route.to_string(),
+        selectors,
+        allow_closed: false,
+        placement: MovePlacement::CaptureSlots(slots),
+        id_collision: IdCollisionPolicy::Refuse,
+    };
+    let move_plan = match apply_batch_move(
+        planner,
+        &request.bob_dir,
+        settings,
+        today,
+        &move_request,
+    ) {
+        Ok(plan) => plan,
+        Err(BatchMoveError::Plan(error)) => {
+            return Err(project_move_engine_error(
+                error,
+                &rendered.contents,
+                settings,
+                route,
+            ));
+        }
+        Err(BatchMoveError::Capture(error)) => return Err(error),
+    };
+
+    let destination_contents =
+        planner.peek_text(new_target).ok_or_else(|| {
+            CaptureError::io(format!(
+                "capture move lost destination note {}",
+                new_target.display()
+            ))
+        })?;
+    let destination_scan = note_tasks::scan(&destination_contents, settings);
+    let day_file = pomodoro::day_file_for(&request.bob_dir);
+    let day_contents = planner.peek_text(&day_file);
+    let mut moved_tasks = Vec::with_capacity(moves.len());
+    for authored in moves {
+        let movement = move_plan
+            .moves
+            .iter()
+            .find(|record| {
+                record.old_block_id.as_deref() == Some(&authored.block_id)
+            })
+            .ok_or_else(|| {
+                CaptureError::io(format!(
+                    "capture move lost result for ^{}",
+                    authored.block_id
+                ))
+            })?;
+        let landed = match destination_scan.by_block_id(&authored.block_id) {
+            BlockIdLookup::Found(task) => task,
+            _ => {
+                return Err(CaptureError::io(format!(
+                    "capture move lost block ^{} in {}",
+                    authored.block_id, basename
+                )));
+            }
+        };
+        let landing_line = destination_contents
+            .lines()
+            .nth(landed.line_index)
+            .unwrap_or_default();
+        let fresh = crate::native::freshness::placement::read_freshness(
+            landing_line,
+            today,
+        )
+        .fresh
+        .map(|date| date.to_string());
+        let planned = day_contents.as_deref().and_then(|day| {
+            followed_live_link(day, destination_route, &authored.block_id)
+        });
+        let detail = planned.as_ref().map(|link| {
+            if link.entry_name.is_empty() {
+                "Task Link follows".to_string()
+            } else {
+                format!("{} link follows", link.entry_name)
+            }
+        });
+        let source = display_project_path(&movement.source_path);
+        moved_tasks.push(ProjectNoteMovedTask {
+            sigil: authored.sigil,
+            draft_range: authored.draft_range,
+            item_line: draft_line_number(
+                &request.raw_text,
+                authored.draft_range.0,
+            ),
+            source,
+            source_line: movement.source_line,
+            line: movement.dest_line,
+            block_id: authored.block_id.clone(),
+            text: movement.title.clone(),
+            previous_status_symbol: authored.root.status,
+            previous_status_name: task_complete::status_name_for(
+                &request.bob_dir,
+                authored.root.status,
+            ),
+            status_symbol: landed.status_symbol,
+            status_name: task_complete::status_name_for(
+                &request.bob_dir,
+                landed.status_symbol,
+            ),
+            fresh,
+            planned,
+            link: None,
+            not_linked: None,
+            detail,
+        });
+        planner.record_moved_origin(
+            source_path,
+            &authored.block_id,
+            new_target,
+            item_number,
+        );
+    }
+
+    let repaired_files = move_plan
+        .repaired_files
+        .iter()
+        .map(|file| ProjectNoteRepairedFile {
+            path: display_project_path(&file.path),
+            link_count: file.link_count,
+            dependency_token_count: file.dependency_token_count,
+        })
+        .collect::<Vec<_>>();
+    let repaired_links =
+        repaired_files.iter().map(|file| file.link_count).sum();
+    Ok(ProjectMoveExecution {
+        moved_tasks,
+        summary: ProjectNoteMoveSummary {
+            parent: display_project_path(
+                source_path
+                    .strip_prefix(&request.bob_dir)
+                    .unwrap_or(source_path),
+            ),
+            moved: move_plan.moves.len(),
+            repaired_links,
+            repaired_notes: repaired_files.len(),
+            needs_reconcile: move_plan.needs_reconcile,
+        },
+        repaired_files,
+    })
+}
+
+fn project_move_engine_error(
+    error: PlanError,
+    destination_contents: &str,
+    settings: &note_tasks::NoteTaskSettings,
+    route: &str,
+) -> CaptureError {
+    let PlanError::BlockIdCollision {
+        candidate,
+        block_id,
+        ..
+    } = &error
+    else {
+        return CaptureError::usage(error.to_string());
+    };
+    let collision_line = note_tasks::scan(destination_contents, settings)
+        .by_block_id(block_id)
+        .found_line();
+    let moved_root = candidate.block_id.as_deref().unwrap_or("?");
+    let message = if block_id != moved_root {
+        match collision_line {
+            Some(line) => format!(
+                "`^{block_id}` under moved `^{moved_root}` collides with task ID `{block_id}` on line {line}; rename the new task"
+            ),
+            None => format!(
+                "`^{block_id}` under moved `^{moved_root}` collides with another task ID in {route}.md; rename the new task"
+            ),
+        }
+    } else {
+        match collision_line {
+            Some(line) => format!(
+                "task ID `{block_id}` is moved from {route}.md on line {}; rename the new task on line {line}",
+                candidate.line
+            ),
+            None => format!(
+                "task ID `{block_id}` is moved from {route}.md; rename the new task"
+            ),
+        }
+    };
+    CaptureError::usage_code(message, "move_task_id_collision")
+}
+
+trait FoundLine {
+    fn found_line(self) -> Option<usize>;
+}
+
+impl<'a> FoundLine for BlockIdLookup<'a> {
+    fn found_line(self) -> Option<usize> {
+        match self {
+            BlockIdLookup::Found(task) => Some(task.line_index + 1),
+            BlockIdLookup::Missing
+            | BlockIdLookup::Duplicate(_)
+            | BlockIdLookup::NotATask { .. } => None,
+        }
+    }
+}
+
+fn followed_live_link(
+    day_contents: &str,
+    destination_route: &str,
+    block_id: &str,
+) -> Option<ProjectNotePlannedLink> {
+    let link_target = format!("{destination_route}#^{block_id}");
+    let lines: Vec<&str> = day_contents.lines().collect();
+    let scan = capture_pomodoros::scan(day_contents);
+    for entry in scan
+        .entries
+        .iter()
+        .filter(|entry| entry.state == capture_pomodoros::PomodoroState::Open)
+    {
+        let start = entry.line.saturating_sub(1);
+        let end = (start + 1..lines.len())
+            .find(|index| {
+                !lines[*index].trim().is_empty()
+                    && !lines[*index].starts_with(' ')
+                    && !lines[*index].starts_with('\t')
+            })
+            .unwrap_or(lines.len());
+        if lines[start..end]
+            .iter()
+            .any(|line| line.contains(&link_target))
+        {
+            return Some(ProjectNotePlannedLink {
+                entry_name: entry.name.clone().unwrap_or_default(),
+                entry_line: entry.line,
+            });
+        }
+    }
+    None
+}
+
+fn draft_line_number(text: &str, offset: usize) -> usize {
+    text.get(..offset.min(text.len()))
+        .map(|prefix| prefix.bytes().filter(|byte| *byte == b'\n').count() + 1)
+        .unwrap_or(1)
+}
+
+fn display_project_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn scheduled_offset_from_date(today: NaiveDate, scheduled: &str) -> String {
+    let Some(scheduled) = NaiveDate::parse_from_str(scheduled, "%Y-%m-%d").ok()
+    else {
+        return "?".to_string();
+    };
+    (scheduled - today).num_days().to_string()
 }
 
 struct FrozenOffer {

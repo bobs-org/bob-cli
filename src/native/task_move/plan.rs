@@ -309,6 +309,90 @@ pub(crate) fn movable_roots(
         .collect()
 }
 
+/// A typed reason a capture move ID does not resolve to one movable root.
+/// These cases are derived from the same task scanner and eligibility rules
+/// used by the move engine, so capture can give stable teaching errors
+/// without parsing an engine error's display text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Ineligible {
+    Missing,
+    Closed {
+        status: char,
+    },
+    Nested {
+        parent_id: Option<String>,
+        parent_title: String,
+    },
+    Ambiguous {
+        count: usize,
+    },
+    Project,
+    UnsupportedCheckbox {
+        status: char,
+    },
+}
+
+/// Resolve one typed block ID against the source note. Duplicate task IDs are
+/// reported before root eligibility, matching the engine's selector
+/// ambiguity behavior. The caller still runs `plan_task_move` as the
+/// authoritative snapshot validation and mutation pass.
+pub(crate) fn resolve_movable(
+    contents: &str,
+    block_id: &str,
+) -> Result<MovableRoot, Ineligible> {
+    let tasks = scan_task_lines(contents);
+    let matches: Vec<&ScannedTask> = tasks
+        .iter()
+        .filter(|task| {
+            !task.in_fence_or_frontmatter
+                && task.block_id.as_deref() == Some(block_id)
+        })
+        .collect();
+    let task = match matches.as_slice() {
+        [] => return Err(Ineligible::Missing),
+        [task] => *task,
+        many => return Err(Ineligible::Ambiguous { count: many.len() }),
+    };
+
+    if !task.is_column0() {
+        let parent = tasks
+            .iter()
+            .filter(|candidate| {
+                candidate.line_index < task.line_index
+                    && !candidate.in_fence_or_frontmatter
+                    && candidate.indent < task.indent
+            })
+            .last();
+        return Err(Ineligible::Nested {
+            parent_id: parent.and_then(|parent| parent.block_id.clone()),
+            parent_title: parent
+                .map(|parent| parent.title.clone())
+                .unwrap_or_else(|| "its parent task".to_string()),
+        });
+    }
+    if task.is_prj() {
+        return Err(Ineligible::Project);
+    }
+    if task.is_closed() {
+        return Err(Ineligible::Closed {
+            status: task.symbol,
+        });
+    }
+    if !task.is_open_checkbox() {
+        return Err(Ineligible::UnsupportedCheckbox {
+            status: task.symbol,
+        });
+    }
+
+    Ok(MovableRoot {
+        line: task.line_index + 1,
+        title: task.title.clone(),
+        block_id: task.block_id.clone(),
+        status: task.symbol,
+        disabled_reason: None,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PlanError {
     NoSelectors,

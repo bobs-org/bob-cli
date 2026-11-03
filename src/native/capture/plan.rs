@@ -289,7 +289,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     }
     Ok(PlannedCaptureBatch {
         items,
-        text_files: planner.into_staged_files(),
+        text_files: planner.into_staged_files()?,
         global_destination,
         warnings,
         plan_budget: None,

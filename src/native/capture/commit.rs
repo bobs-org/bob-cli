@@ -2,17 +2,19 @@
 use super::*;
 
 #[cfg(test)]
-pub(super) static RENAME_FAIL_TARGET: std::sync::Mutex<Option<PathBuf>> =
-    std::sync::Mutex::new(None);
+thread_local! {
+    pub(super) static RENAME_FAIL_TARGET: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(test)]
 fn test_rename_failure(target: &Path) -> Option<CaptureError> {
-    if RENAME_FAIL_TARGET
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
-        .is_some_and(|fail| fail == target)
-    {
+    if RENAME_FAIL_TARGET.with(|fail_target| {
+        fail_target
+            .borrow()
+            .as_ref()
+            .is_some_and(|fail| fail == target)
+    }) {
         return Some(CaptureError::io(format!(
             "replace target {}: injected test failure",
             target.display()

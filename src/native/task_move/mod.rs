@@ -15,7 +15,7 @@ pub(crate) use plan::load_vault_snapshot;
 #[allow(unused_imports)]
 pub(crate) use plan::{
     list_task_move_destinations, movable_roots, plan_task_move,
-    IdCollisionPolicy, MovableRoot, MovePlacement, MovePlan, MoveRecord,
-    MoveRequest, MoveSelector, PlanError, TaskCandidate, TaskMoveDestination,
-    VaultSnapshot,
+    resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot, MovePlacement,
+    MovePlan, MoveRecord, MoveRequest, MoveSelector, PlanError, TaskCandidate,
+    TaskMoveDestination, VaultSnapshot,
 };
