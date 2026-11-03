@@ -25,6 +25,7 @@ fn routing_options(
         explicit_destination: false,
         has_global_destination: false,
         recognize_lists: true,
+        enable_target_runs: false,
     }
 }
 
@@ -48,6 +49,7 @@ fn editor_routing(raw: &str, policy: Option<&UrlRoutingPolicy>) -> EditorParse {
         &EditorParseOptions {
             url_routing: policy,
             has_global_destination: false,
+            enable_target_runs: false,
         },
     )
 }

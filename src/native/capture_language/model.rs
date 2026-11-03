@@ -22,6 +22,10 @@ pub(crate) struct CaptureParseOptions<'a> {
     /// A `@@` declaration in the draft keeps every item a task. Draft
     /// resolution fills this in from the split declarations.
     pub(crate) has_global_destination: bool,
+    /// Temporary internal staging for capture target runs (`@a+x @b+y`).
+    /// `false` at all production entry points; new grammar unit tests opt
+    /// in explicitly. The activate phase removes this option.
+    pub(crate) enable_target_runs: bool,
 }
 
 impl<'a> CaptureParseOptions<'a> {
@@ -34,6 +38,7 @@ impl<'a> CaptureParseOptions<'a> {
             explicit_destination: false,
             has_global_destination: false,
             recognize_lists: true,
+            enable_target_runs: false,
         }
     }
 
@@ -53,6 +58,9 @@ impl<'a> CaptureParseOptions<'a> {
 pub(crate) struct EditorParseOptions<'a> {
     pub(crate) url_routing: Option<&'a UrlRoutingPolicy>,
     pub(crate) has_global_destination: bool,
+    /// Temporary internal staging for capture target runs. `false` at all
+    /// production entry points; new grammar unit tests opt in explicitly.
+    pub(crate) enable_target_runs: bool,
 }
 
 impl<'a> EditorParseOptions<'a> {
@@ -61,6 +69,7 @@ impl<'a> EditorParseOptions<'a> {
         Self {
             url_routing: None,
             has_global_destination: false,
+            enable_target_runs: false,
         }
     }
 }

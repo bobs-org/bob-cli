@@ -60,6 +60,155 @@ impl From<String> for CaptureItemParseError {
     }
 }
 
+/// Attempt run-aware parent-line resolution when the internal target-runs
+/// staging is enabled. Returns `None` to fall back to the singleton
+/// `resolve_line` path (single-target or literal), `Some(Ok)` for a valid
+/// multi-target run (first member as the route, remaining tokens as body),
+/// and `Some(Err)` for duplicate/split refusals or malformed members using
+/// their existing strict messages.
+fn try_resolve_parent_target_run<'a>(
+    mut tokens: Vec<Token<'a>>,
+    detect_route: bool,
+) -> Option<Result<LineOutcome<'a>, String>> {
+    use super::target_runs;
+    let declarations = take_global_declarations(&mut tokens);
+    let (markers, _) =
+        target_runs::extract_terminal_markers_crossing_runs(&mut tokens);
+    if let Some(retired) = &markers.retired_priority {
+        return Some(Err(retired_priority_marker_error(&retired.token)));
+    }
+    if tokens.is_empty() {
+        return None;
+    }
+    let refusal =
+        target_runs::detect_target_refusals(&tokens, true, detect_route);
+    if let Some((_, message, _)) = target_runs::strict_refusal_parts(&refusal) {
+        return Some(Err(message));
+    }
+    let selection =
+        target_runs::select_target_run(&tokens, true, detect_route)?;
+    if selection.members.len() < 2 {
+        return None;
+    }
+    if let Err(message) =
+        target_runs::validate_selected_members(&selection.members)
+    {
+        return Some(Err(message));
+    }
+    let first_text = selection.members.first()?.marker_text.clone();
+    let route_token = match parse_terminal_route_token(&first_text) {
+        Ok(Some(token)) => token,
+        Ok(None) => return None,
+        Err(message) => return Some(Err(message)),
+    };
+    // Body is everything outside the selected run; the run is contiguous.
+    let first_start = selection.members.first()?.token_index;
+    let last_end = selection.members.last()?.token_index + 1;
+    // Recompute run span on the post-extraction token list by matching the
+    // selected absolute byte ranges back to positions.
+    let mut run_positions = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if selection.members.iter().any(|member| {
+            member.start == token.start && member.end == token.end
+        }) {
+            run_positions.push(index);
+        }
+    }
+    let (run_start, run_end) =
+        match (run_positions.first(), run_positions.last()) {
+            (Some(first), Some(last)) => (*first, last + 1),
+            _ => (first_start.min(tokens.len()), last_end.min(tokens.len())),
+        };
+    let remaining: Vec<Token<'a>> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index < run_start || *index >= run_end)
+        .map(|(_, token)| *token)
+        .collect();
+    let body = join_parse_tokens(&remaining, &markers.priority_escapes);
+    Some(Ok(LineOutcome {
+        body,
+        markers,
+        route: Some(LineRoute {
+            token: route_token,
+            marker_text: first_text,
+        }),
+        declarations,
+    }))
+}
+
+/// Attempt run-aware child-line resolution (trailing runs only). Whole-line
+/// child runs fall back to the singleton path so existing empty-child
+/// diagnostics stay unchanged.
+fn try_resolve_child_target_run<'a>(
+    mut tokens: Vec<Token<'a>>,
+    detect_route: bool,
+) -> Option<Result<LineOutcome<'a>, String>> {
+    use super::target_runs;
+    let declarations = take_global_declarations(&mut tokens);
+    let (markers, _) =
+        target_runs::extract_terminal_markers_crossing_runs(&mut tokens);
+    if let Some(retired) = &markers.retired_priority {
+        return Some(Err(retired_priority_marker_error(&retired.token)));
+    }
+    if tokens.is_empty() {
+        return None;
+    }
+    let refusal =
+        target_runs::detect_target_refusals(&tokens, false, detect_route);
+    if let Some((_, message, _)) = target_runs::strict_refusal_parts(&refusal) {
+        return Some(Err(message));
+    }
+    let selection =
+        target_runs::select_target_run(&tokens, false, detect_route)?;
+    if selection.members.len() < 2 {
+        return None;
+    }
+    if selection.position == target_runs::TargetRunPosition::WholeLine {
+        return None;
+    }
+    if let Err(message) =
+        target_runs::validate_selected_members(&selection.members)
+    {
+        return Some(Err(message));
+    }
+    let first_text = selection.members.first()?.marker_text.clone();
+    let route_token = match parse_terminal_route_token(&first_text) {
+        Ok(Some(token)) => token,
+        Ok(None) => return None,
+        Err(message) => return Some(Err(message)),
+    };
+    let mut run_positions = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if selection.members.iter().any(|member| {
+            member.start == token.start && member.end == token.end
+        }) {
+            run_positions.push(index);
+        }
+    }
+    let (run_start, run_end) =
+        match (run_positions.first(), run_positions.last()) {
+            (Some(first), Some(last)) => (*first, last + 1),
+            _ => return None,
+        };
+    let remaining: Vec<Token<'a>> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index < run_start || *index >= run_end)
+        .map(|(_, token)| *token)
+        .collect();
+    let body = join_parse_tokens(&remaining, &markers.priority_escapes);
+    Some(Ok(LineOutcome {
+        body,
+        markers,
+        route: Some(LineRoute {
+            token: route_token,
+            marker_text: first_text,
+        }),
+        declarations,
+    }))
+}
+
 /// Refuse dependency modifiers on Pomodoro operator items (close, start,
 /// adjustment, shift) before any other item parser: they have no
 /// unambiguous single task owner, so the whole batch rolls back instead of
@@ -461,6 +610,18 @@ pub(super) fn parse_capture_item<'a>(
             if error.starts_with("a new task has no drawers:") {
                 return Err(CaptureItemParseError::coded(
                     "invalid_drawer",
+                    error,
+                ));
+            }
+            if error.contains("twice on this line; name each task once") {
+                return Err(CaptureItemParseError::coded(
+                    "duplicate_capture_target",
+                    error,
+                ));
+            }
+            if error.contains("are at opposite ends of the line; put every") {
+                return Err(CaptureItemParseError::coded(
+                    "split_capture_targets",
                     error,
                 ));
             }
@@ -1771,7 +1932,34 @@ fn parse_capture_item_masked<'a>(
         parent_tokens,
         &parent_line_dependencies.escapes,
     );
-    let parent_outcome = resolve_line(parent_tokens, true, detect_route)?;
+    let parent_outcome = if options.enable_target_runs && detect_route {
+        match try_resolve_parent_target_run(parent_tokens, detect_route) {
+            Some(result) => result?,
+            None => {
+                // Re-tokenize for the singleton fallback: the probe above
+                // consumed the original vector.
+                let retry = tokenize_line_with_spans(&parent_line.raw);
+                let retry =
+                    super::pomodoro_literal::merge_leading_literal_token(
+                        &parent_line.raw,
+                        retry,
+                    );
+                let (retry, _) = extract_line_dependencies(
+                    retry,
+                    parent_line.raw.text,
+                    parent_line.raw.start,
+                    true,
+                );
+                let retry = unescape_execution_tokens(
+                    retry,
+                    &parent_line_dependencies.escapes,
+                );
+                resolve_line(retry, true, detect_route)?
+            }
+        }
+    } else {
+        resolve_line(parent_tokens, true, detect_route)?
+    };
     declarations.extend(global_declarations_from_tokens(
         parent_outcome.declarations,
         parent_line.line_number,
@@ -1861,7 +2049,30 @@ fn parse_capture_item_masked<'a>(
         };
         let tokens =
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
-        let outcome = resolve_line(tokens, false, detect_route)?;
+        let outcome = if options.enable_target_runs && detect_route {
+            match try_resolve_child_target_run(tokens, detect_route) {
+                Some(result) => result?,
+                None => {
+                    let retry = tokenize_line_with_spans(&child_line);
+                    let (mut retry, _) = extract_line_dependencies(
+                        retry,
+                        child_line.text,
+                        child_line.start,
+                        false,
+                    );
+                    if parent_takes_ids {
+                        let _ = strip_trailing_task_id(&mut retry);
+                    }
+                    let retry = unescape_execution_tokens(
+                        retry,
+                        &child_line_dependencies.escapes,
+                    );
+                    resolve_line(retry, false, detect_route)?
+                }
+            }
+        } else {
+            resolve_line(tokens, false, detect_route)?
+        };
         declarations.extend(global_declarations_from_tokens(
             outcome.declarations,
             line_number,

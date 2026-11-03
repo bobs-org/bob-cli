@@ -50,6 +50,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
     let options = EditorParseOptions {
         url_routing: None,
         has_global_destination: false,
+        enable_target_runs: false,
     };
     let parsed = CaptureParseResult::new(draft, &options);
     let route = parsed.items.first().and_then(|item| item.route.clone());
@@ -117,6 +118,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
+        enable_target_runs: false,
     };
     let mut result = CaptureParseResult::new(raw_text, &options);
     let theme_keys = theme_component_keys(&result);

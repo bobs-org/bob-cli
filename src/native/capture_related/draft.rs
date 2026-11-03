@@ -37,6 +37,7 @@ pub(super) fn draft_related(
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
+        enable_target_runs: false,
     };
     let parsed =
         capture_language::parse_for_editor_with(&request.draft, &options);

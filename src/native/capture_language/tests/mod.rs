@@ -105,6 +105,7 @@ mod pomodoro_merge;
 mod ref_grammar;
 mod retired_close;
 mod rewrite;
+mod target_runs;
 mod template;
 mod type_marker;
 mod type_marker_editor;

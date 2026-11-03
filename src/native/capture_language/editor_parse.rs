@@ -320,6 +320,9 @@ pub(crate) fn parse_for_editor_with(
     };
     let mut global_spans = Vec::new();
     let mut global_diagnostics = Vec::new();
+    // Staging flag for target runs; the editor phase wires diagnostics.
+    // Reading it here keeps the option carried through the editor path.
+    let _ = options.enable_target_runs;
     let options = EditorParseOptions {
         has_global_destination: options.has_global_destination
             || !draft.declarations.is_empty(),
