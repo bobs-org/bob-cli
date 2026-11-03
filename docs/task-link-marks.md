@@ -98,7 +98,9 @@ A link gets a ring only when **all** of these hold:
    optionally after a `🍅 ` prefix, optionally struck `~~…~~`, and optionally followed
    by a trailing ` #` move-only marker. Deeper bullets, mixed prose, the Events
    section, and every other section **do** get rings. Ledger rows keep their
-   `🍅` / `◐` slot; only prose links in daily notes get rings.
+   `🍅` / `◐` slot; only prose links in daily notes get rings. Ledger rows wear no
+   ring; when their task is off-clock they wear the off-clock link chip instead
+   ([Off-clock link chips](off-clock-link-chips.md)).
 6. **The target is a task.** The link resolves to a file
    (`getFirstLinkpathDest(linkpath, sourcePath)`; an empty linkpath means the source
    note). The block id names exactly one line in that file. That line is a list item

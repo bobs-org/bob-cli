@@ -300,7 +300,7 @@ The root walk starts at a valid task `[root:: NOTE]` target, otherwise at the
 residence note, and follows the same 16-note, cycle-safe parent chain as task
 type defaults. A canonical daily note contributes no default unless `[root::]`
 retargets the walk. Other note kinds are traversed but do not declare a clock
-default. Inherited tags are never written onto task lines.
+default. Inherited tags are never written onto task lines. Obsidian shows an `off` chip after ledger Task Links whose task resolves off-clock, tagged or inherited ([Off-clock link chips](../off-clock-link-chips.md)).
 
 Inbox files are area notes whose `parent` resolves to `inbox.md`
 (`mac_inbox.md`, `gkeep_inbox.md` today), plus `inbox.md` itself.
