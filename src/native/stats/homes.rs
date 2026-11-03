@@ -842,10 +842,11 @@ fn session_drifted(
     }
 }
 
-/// Resolve one counted Task Link to its current task line and read the
-/// `#offclock` tag there. `None` means the link does not pin to exactly
-/// one task: no block id, an ambiguous or missing note, or a missing or
-/// duplicated block id. Same-note empty targets try Event Tasks first,
+/// Resolve one counted Task Link to its current task line and resolve its
+/// effective clock there (`#on`, then `#off` or an alias, then the nearest
+/// area/project `offclock:` default). `None` means the link does not pin
+/// to exactly one task: no block id, an ambiguous or missing note, or a
+/// missing or duplicated block id. Same-note empty targets try Event Tasks first,
 /// then the writer `note_tasks` lookup (embedded links ignore the global
 /// filter). Archived tasks resolve wherever the note index finds them.
 fn resolve_link_clock(
@@ -1211,7 +1212,7 @@ fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
             metric: None,
             date: None,
             message: format!(
-                "{} closed {} with the linked tasks' #offclock tags; closed rows keep their keys",
+                "{} closed {} with the linked tasks' current clocks; closed rows keep their keys",
                 health.clock_drift,
                 if health.clock_drift == 1 {
                     "session disagrees"

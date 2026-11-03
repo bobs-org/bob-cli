@@ -437,7 +437,10 @@ counts with the latest timestamp and day), and `health.homes` (in-window
 `unlinked_minutes` / `unlinked_sessions` / additive `untracked_sessions` /
 `unfiled_links` /
 `ambiguous_links` / `unresolved_links`, plus global
-`area_color_invalid` and hue-collision lists, and additive
+`area_color_invalid` and hue-collision lists, additive
+`note_offclock_invalid` / `note_offclock_ignored` lists (`{path, raw}` for an
+area/project `offclock:` value that is not `true`/`false`, or an `offclock:`
+key on a note that is neither area nor project), and additive
 `root_field_invalid` / `root_field_not_root` lists keyed by
 `(path, line)`). The clock diagnostics add `off_clock_sessions` (deprecated
 `untracked_sessions` stays equal to it during the compatibility window),
@@ -449,6 +452,7 @@ date. Same-note pairs omit `paths`; a cross-note pair adds `paths` aligned
 with `lines`, ordered by source date then line. Zero counts and empty
 lists are omitted. Matching
 `warning <message>  <code>` lines use `area_color_invalid`,
+`note_offclock_invalid`, `note_offclock_ignored`,
 `area_hue_collision`, `root_field_invalid`,
 `root_field_not_root`, `clock_conflict`, `clock_drift`, `clock_unstamped`, and
 `clock_overlap`, once each. `invalid_dates` counts a task

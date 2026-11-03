@@ -79,7 +79,6 @@ impl ClockTag {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn deprecated(&self) -> &[String] {
         match self {
             Self::Off { deprecated } | Self::Conflict { deprecated } => {

@@ -3343,7 +3343,7 @@ qualifies, the first future placeholder starts as before. Named starts
 (`=build`) always start what they name; a bare `=` while a session runs
 still restarts that session.
 
-Worked examples, with Swings! at 0800-0815 `#offclock` in MEET's lineup and
+Worked examples, with Swings! at 0800-0815 `#off` in MEET's lineup and
 a closed BUILD ending at 0800:
 
 - At 08:04 (`S` = 0805) `=` writes `(**0800-0815** [off:: 15m]) — MEET`.
