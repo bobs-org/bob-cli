@@ -5,6 +5,42 @@ pub(crate) const ON_TAG: &str = "#on";
 pub(crate) const DEPRECATED_OFF_TAGS: &[&str] =
     &["#offclock", "#off-clock", "#untracked"];
 
+/// Whether a type name is reserved for an explicit clock tag. Keep this
+/// alongside the clock spelling table so config and type-edit commands use
+/// exactly the same vocabulary.
+pub(crate) fn is_reserved_type_name(name: &str) -> bool {
+    let key = crate::native::plan_budget::normalize_component(name);
+    [OFF_TAG, ON_TAG]
+        .into_iter()
+        .chain(DEPRECATED_OFF_TAGS.iter().copied())
+        .any(|tag| key == tag.trim_start_matches('#'))
+}
+
+/// Match a capture-edge token using the same case and right punctuation
+/// boundary rules as Obsidian clock tags. `start` points at the `#`.
+pub(crate) fn capture_edge_tag_end(text: &str, start: usize) -> Option<usize> {
+    let tail = text.get(start..)?;
+    if !tail.starts_with('#') {
+        return None;
+    }
+    let token_end = tail.find(char::is_whitespace).unwrap_or(tail.len());
+    let token = &tail[..token_end];
+    let matched = [OFF_TAG, ON_TAG]
+        .into_iter()
+        .chain(DEPRECATED_OFF_TAGS.iter().copied())
+        .find(|tag| {
+            token
+                .get(..tag.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(tag))
+                && token
+                    .get(tag.len()..)
+                    .and_then(|rest| rest.chars().next())
+                    .is_none_or(is_tag_right_boundary)
+        })?;
+    let end = start + matched.len();
+    Some(end)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ClockTag {
     None,

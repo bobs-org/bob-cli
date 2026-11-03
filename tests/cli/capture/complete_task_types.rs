@@ -138,6 +138,21 @@ fn configured_menu_uses_config_order_and_carries_task_effects() {
 }
 
 #[test]
+fn clock_tag_spellings_never_appear_as_type_completion_choices() {
+    let temp = TempDir::new("bob-cli-complete-task-types-clock-tags");
+    let (vault, config) = fixture(temp.path(), false);
+    write_file(
+        &vault.join("2026/20261029.md"),
+        "## Pomodoros\n- [x] () — OFF\n- [x] () — OFFCLOCK\n- [x] () — UNTRACKED\n",
+    );
+    let result = complete_end(temp.path(), &vault, &config, "Fix it #o");
+    let offered = names(&result);
+    for reserved in ["OFF", "ON", "OFFCLOCK", "OFF-CLOCK", "UNTRACKED"] {
+        assert!(!offered.contains(&reserved), "offered {reserved}: {result}");
+    }
+}
+
+#[test]
 fn query_orders_exact_prefix_substring_and_adds_typed_row() {
     let temp = TempDir::new("bob-cli-complete-task-types-rank");
     let (vault, config) = fixture(temp.path(), true);

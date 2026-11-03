@@ -1416,6 +1416,12 @@ Contract: [Typing tasks with `#<type>`](../capture.md#typing-tasks-with-type).
 
 ### `#<type>` {#hash-type}
 
+The clock spellings `#off`, `#on`, `#offclock`, `#off-clock`, and
+`#untracked` are reserved task tags at either item edge. They stay verbatim
+when capturing a new task and are never type markers or completion choices.
+Capture refuses them on an item that selects an existing task and asks you to
+edit that task line directly.
+
 Type a new task at either item edge (`#fix Fix it`, `Fix it #fix`), or retype
 an existing task the item targets. Slugs start with an ASCII letter and use
 letters, digits, and hyphens; quoted literals allow spaces and punctuation

@@ -5,6 +5,7 @@ requested: project
 metadata:
   status: superseded-in-part
   superseded_by:
+    - decisions:capture-reserves-clock-tags
     - decisions:capture-bullets-mirror-the-task-block
 aka:
   - capture sigils say where what how
@@ -48,3 +49,4 @@ restores prefix matching or attached typing.
 
 Superseded in part: a `#` at a first-level bullet start now names a drawer, not a type
 ([[decisions:capture-bullets-mirror-the-task-block]]).
+Superseded in part: free clock tags at capture item edges are literal task tags, not task types; see [[decisions:capture-reserves-clock-tags]].

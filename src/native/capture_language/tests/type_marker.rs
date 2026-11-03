@@ -116,6 +116,26 @@ fn digit_heading_dash_and_midline_hashes_stay_prose() {
 }
 
 #[test]
+fn edge_clock_tags_stay_task_text_and_never_become_type_markers() {
+    for (raw, tag) in [
+        ("Walk the dog #off", "#off"),
+        ("#on Plan the sprint", "#on"),
+        ("Gym #offclock", "#offclock"),
+        ("Gym #off-clock", "#off-clock"),
+        ("Gym #untracked", "#untracked"),
+    ] {
+        assert!(scan_line(raw, 0).is_empty(), "{raw:?}");
+        let parsed = execute(raw).expect("clock tag is ordinary task text");
+        assert_eq!(parsed.body, raw, "{raw:?}");
+        assert!(parsed.type_marker.is_none(), "{raw:?}");
+        assert!(parsed.body.contains(tag), "{raw:?}");
+        assert!(completion_at_raw(raw, raw.len()).is_none(), "{raw:?}");
+    }
+    let escaped = execute("Walk \\#off").expect("escaped hash remains literal");
+    assert_eq!(escaped.body, "Walk #off");
+}
+
+#[test]
 fn escaped_midline_uppercase_and_protected_tokens_remain_body_text() {
     let escaped = execute("\\#fix Fix the parser").unwrap();
     assert_eq!(escaped.body, "#fix Fix the parser");
@@ -163,6 +183,9 @@ fn only_task_subjects_accept_markers() {
     assert!(execute("@sase:fix-x=x #fix")
         .unwrap_err()
         .contains("closes a Pomodoro"));
+    assert!(execute("^sase:fix-x #off")
+        .unwrap_err()
+        .contains("edit the task line to add #off or #on"));
 }
 
 #[test]

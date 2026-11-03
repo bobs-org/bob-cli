@@ -206,6 +206,15 @@ fn validate_old(old_raw: &str) -> Result<(String, String), SplitFailure> {
         ));
     }
     let old_key = normalize_component(old_raw);
+    if crate::native::clock_tags::is_reserved_type_name(old_raw) {
+        return Err(SplitFailure::new(
+            "invalid_name",
+            format!(
+                "{old_raw} is reserved for clock tags (#off, #on, #offclock, #off-clock, #untracked)"
+            ),
+            Some("choose a task type name outside the clock-tag spellings"),
+        ));
+    }
     if old_key.is_empty() {
         return Err(SplitFailure::new(
             "invalid_name",
@@ -675,6 +684,15 @@ fn parse_map_rows(text: &str) -> Result<Vec<MapRow>, SplitFailure> {
             ));
         }
         let theme_key = normalize_component(theme);
+        if crate::native::clock_tags::is_reserved_type_name(theme) {
+            return Err(SplitFailure::new(
+                "invalid_name",
+                format!(
+                    "map line {line_number}: {theme} is reserved for clock tags (#off, #on, #offclock, #off-clock, #untracked)"
+                ),
+                Some("choose a task type name outside the clock-tag spellings"),
+            ));
+        }
         if theme_key.is_empty() {
             return Err(SplitFailure::new(
                 "invalid_name",
@@ -1246,6 +1264,24 @@ mod split_tests {
         let plus =
             parse_map_rows("2026-10-13\t36:abcd1234\tA+B\n").unwrap_err();
         assert_eq!(plus.code, "invalid_name");
+    }
+
+    #[test]
+    fn split_map_refuses_clock_tag_names() {
+        for name in ["OFF", "ON", "OFFCLOCK", "OFF-CLOCK", "UNTRACKED"] {
+            let map = format!("2026-10-13\t36:abcd1234\t{name}\n");
+            let error = parse_map_rows(&map).unwrap_err();
+            assert_eq!(error.code, "invalid_name", "{name}");
+            assert!(
+                error.message.contains("reserved for clock tags"),
+                "{name}: {}",
+                error.message
+            );
+        }
+        assert!(validate_old("OFF")
+            .unwrap_err()
+            .message
+            .contains("reserved for clock tags"));
     }
 
     fn test_change(line: usize, before: &str, after: &str) -> PlannedChange {

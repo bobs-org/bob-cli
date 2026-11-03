@@ -71,6 +71,7 @@ struct Candidate {
     occurrence: TypeMarkerOccurrence,
     edge_start: usize,
     edge_end: usize,
+    clock_tag: bool,
 }
 
 /// Scan an authored physical line for type markers. Child bullet prefixes
@@ -188,6 +189,10 @@ fn scan_line_with_positions(
             }
         }
         index = parsed.edge_end.max(index + 1);
+        let mut parsed = parsed;
+        parsed.clock_tag = !escaped
+            && crate::native::clock_tags::capture_edge_tag_end(body, sigil)
+                .is_some();
         candidates.push(parsed);
     }
 
@@ -242,6 +247,12 @@ fn scan_line_with_positions(
                 &allowed,
             );
             if !leading && !trailing {
+                return None;
+            }
+            // Clock tags are ordinary task text at an item edge, never
+            // task-type markers. Keeping them out of the occurrence list
+            // also keeps editor spans and completion in sync with execution.
+            if candidate.clock_tag {
                 return None;
             }
             let attached =
@@ -525,6 +536,7 @@ fn parse_candidate(
         occurrence,
         edge_start: start,
         edge_end,
+        clock_tag: false,
     }
 }
 
@@ -687,6 +699,51 @@ pub(crate) fn collect_item(
         .into_iter()
         .map(|(occurrence, _)| occurrence)
         .collect()
+}
+
+/// Whether an item carries a reserved clock token at either whitespace edge.
+/// Existing-task capture cannot edit that task line, so callers use this to
+/// return the explicit edit-the-note teaching error.
+pub(crate) fn has_clock_tag_at_item_edge(item: &CaptureItem<'_>) -> bool {
+    item.lines.iter().any(|item_line| {
+        let line = item_line.raw.text;
+        let mut index = 0;
+        while index < line.len() {
+            if line.as_bytes()[index] == b'#'
+                && (index == 0
+                    || line[..index]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace))
+                && !line[..index].ends_with('\\')
+                && let Some(end) =
+                    crate::native::clock_tags::capture_edge_tag_end(line, index)
+            {
+                let left_edge = line[..index].trim().is_empty();
+                let right_edge = line[end..]
+                    .trim_matches(|ch: char| {
+                        ch.is_whitespace()
+                            || matches!(
+                                ch,
+                                ']' | ')'
+                                    | '}'
+                                    | ':'
+                                    | '.'
+                                    | ','
+                                    | ';'
+                                    | '!'
+                                    | '?'
+                            )
+                    })
+                    .is_empty();
+                if left_edge || right_edge {
+                    return true;
+                }
+            }
+            index += char_len(line, index);
+        }
+        false
+    })
 }
 
 fn collect_item_with_positions(
@@ -915,6 +972,9 @@ pub(crate) fn resolve_exact_type_name(
     name: &str,
     literal: bool,
 ) -> Option<ResolvedTypeName> {
+    if crate::native::clock_tags::is_reserved_type_name(name) {
+        return None;
+    }
     let key = normalize_component(name);
     let hyphen_key = key.replace('-', " ");
     let mut candidates = vec![key];
@@ -1131,6 +1191,22 @@ pub(crate) fn is_existing_type_marker_subject(
                 SubBulletTarget::BlockId(_) | SubBulletTarget::Ref { .. }
             )
         }
+        _ => false,
+    }
+}
+
+/// Classify capture gestures that select an already-authored task. Clock tags
+/// on these items cannot be written onto the selected task by capture.
+pub(crate) fn is_existing_task_action(parsed: &ParsedCaptureText) -> bool {
+    use super::model::{CaptureKind, SubBulletTarget};
+    match &parsed.kind {
+        CaptureKind::PomodoroLink { .. }
+        | CaptureKind::TaskToggle { .. }
+        | CaptureKind::TaskComplete { .. } => true,
+        CaptureKind::SubBullet { target, .. } => matches!(
+            target,
+            SubBulletTarget::BlockId(_) | SubBulletTarget::Ref { .. }
+        ),
         _ => false,
     }
 }

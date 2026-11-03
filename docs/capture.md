@@ -166,6 +166,7 @@ anything is written, and any failure rolls the whole batch back.
 | `%` | Incomplete directive: add `%c`, `%n`, `%t`, `%l` or write `\%` to keep a literal `%` |
 | bare `#` / `%` | Open the task-type or directive menu with no row preselected |
 | `#<type>` | Type a new task or retype the existing task it targets (`#fix`); at either item edge, one per item; unknown names are refused |
+| `#off`, `#on`, `#offclock`, `#off-clock`, `#untracked` | At an item edge, keep the clock tag as task text; it never selects a type |
 | `#` | Incomplete `#<type>` at a parent-line or nested-bullet edge: add a type (`#fix`) or write `\#` to keep a literal `#`; a first-level `- #` names a drawer instead; `#`+digit, `##…`, `#-…`, mid-line, and glued hashes stay prose |
 | `#"NAME"` | Same with a quoted name for spaces or punctuation (`#"DEEP WORK"`) |
 | `\#<type>` | Keep a literal hash tag in the body; escaped markers do not open type completion |
@@ -540,6 +541,13 @@ ordinary prose.
 A `#` that begins a first-level authored bullet (`- #future-work`) names a
 drawer, never a type. Nested `  - #fix` still types. Type markers keep
 working at every line's trailing edge and on the parent line.
+
+The clock tags `#off`, `#on`, `#offclock`, `#off-clock`, and `#untracked`
+stay as typed at either item edge and are written onto a newly captured task.
+They are not task types, even if a matching type exists in configuration or
+history. Capture cannot add a clock tag to an existing task: use Obsidian to
+edit that task line. The same spellings are reserved in `types:` and rejected
+by `bob types rename` and `bob types split`.
 
 The marker types a new task with an explicit block ID
 (`Fix it @sase^fix-x #fix`). A separate `#type` token on `@route+block-id`

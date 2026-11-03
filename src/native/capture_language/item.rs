@@ -379,6 +379,18 @@ pub(super) fn parse_capture_item<'a>(
             outcome
         }
         Err(error) => {
+            if super::type_marker::has_clock_tag_at_item_edge(item)
+                && (error.contains(
+                    "`^route:block-id` must be the whole capture item",
+                ) || error
+                    .contains("Pomodoro link capture cannot be combined"))
+            {
+                return Err(CaptureItemParseError::coded(
+                    "clock_tag_on_existing_task",
+                    "capture writes clock tags only on new tasks; edit the task line to add #off or #on"
+                        .to_string(),
+                ));
+            }
             if error == missing_text_error()
                 && let Some(marker_error) = list_header_marker_from_item(
                     item,
@@ -456,6 +468,16 @@ pub(super) fn parse_capture_item<'a>(
 
     apply_directives(&mut outcome.parsed, &directive_occurrences)?;
     refuse_clip_on_incompatible_kind(&outcome.parsed)?;
+
+    if super::type_marker::is_existing_task_action(&outcome.parsed)
+        && super::type_marker::has_clock_tag_at_item_edge(item)
+    {
+        return Err(CaptureItemParseError::coded(
+            "clock_tag_on_existing_task",
+            "capture writes clock tags only on new tasks; edit the task line to add #off or #on"
+                .to_string(),
+        ));
+    }
 
     let markers = occurrences
         .iter()

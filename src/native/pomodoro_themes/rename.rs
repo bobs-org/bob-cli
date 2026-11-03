@@ -618,12 +618,30 @@ fn plan_rename(
             Some("rename one + component at a time"),
         ));
     }
+    if crate::native::clock_tags::is_reserved_type_name(old_raw) {
+        return Err(RenameFailure::new(
+            "invalid_name",
+            format!(
+                "{old_raw} is reserved for clock tags (#off, #on, #offclock, #off-clock, #untracked)"
+            ),
+            Some("choose a task type name outside the clock-tag spellings"),
+        ));
+    }
     let new_key = normalize_component(new_raw);
     if new_key.is_empty() {
         return Err(RenameFailure::new(
             "invalid_name",
             format!("invalid type name: {new_raw}"),
             Some("choose a non-blank type name"),
+        ));
+    }
+    if crate::native::clock_tags::is_reserved_type_name(new_raw) {
+        return Err(RenameFailure::new(
+            "invalid_name",
+            format!(
+                "{new_raw} is reserved for clock tags (#off, #on, #offclock, #off-clock, #untracked)"
+            ),
+            Some("choose a task type name outside the clock-tag spellings"),
         ));
     }
     let old_key = normalize_component(old_raw);

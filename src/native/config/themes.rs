@@ -204,6 +204,11 @@ pub(crate) fn parse_themes_config(
             )));
         }
         let key = normalize_component(&name);
+        if crate::native::clock_tags::is_reserved_type_name(&name) {
+            return Err(ConfigError::Invalid(format!(
+                "{config_key}.{name} in {path_display} is reserved for clock tags (#off, #on, #offclock, #off-clock, #untracked)"
+            )));
+        }
         if let Some(first) = seen.get(&key) {
             return Err(ConfigError::Invalid(format!(
                 "{config_key}.{first} and {config_key}.{name} in {path_display} normalize to the same task type {key:?}"
@@ -336,6 +341,20 @@ mod tests {
                 .expect("configured vocabulary");
             assert_eq!(parsed.len(), 1);
             assert_eq!(parsed.color("build"), Some(Hue::Yellow));
+        }
+    }
+
+    #[test]
+    fn clock_tag_spellings_are_reserved_type_names() {
+        for name in ["OFF", "ON", "OFFCLOCK", "OFF-CLOCK", "UNTRACKED"] {
+            let text = format!("types:\n  {name}: blue\n");
+            let error = parse_themes_config(&text, &path())
+                .expect_err("clock spelling cannot be a type");
+            assert!(
+                error.message().contains("reserved for clock tags"),
+                "{name}: {}",
+                error.message()
+            );
         }
     }
 

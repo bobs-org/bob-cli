@@ -569,4 +569,16 @@ fn exact_name_resolution_prefers_config_then_catalog() {
     assert!(
         resolve_exact_type_name(Some(&vocab), &lookup, "nope", false).is_none()
     );
+    for name in ["OFF", "ON", "OFFCLOCK", "OFF-CLOCK", "UNTRACKED"] {
+        assert!(
+            resolve_exact_type_name(
+                Some(&[configured("off", "OFF")]),
+                &lookup,
+                name,
+                false
+            )
+            .is_none(),
+            "{name} is reserved even when configured"
+        );
+    }
 }

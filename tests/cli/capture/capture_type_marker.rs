@@ -134,7 +134,10 @@ fn project(theme: Option<&str>, tasks: &str) -> String {
 fn inbox_marker_sets_the_explicit_type() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-capture-type-marker-inbox",
-        &project(Some("WRITE"), ""),
+        &project(
+            Some("WRITE"),
+            "- [ ] #task Existing task ^existing-clock-tag\n",
+        ),
         "## Pomodoros\n- [ ] () — FIX\n",
     );
     let (_, json) = capture_json(
@@ -837,6 +840,42 @@ fn marker_errors_keep_their_json_codes() {
             );
         }
     }
+}
+
+#[test]
+fn clock_tags_are_kept_on_new_tasks_and_refused_on_existing_tasks() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-clock-tags",
+        &project(Some("WRITE"), ""),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    for (draft, tag) in [
+        ("Walk the dog #off", "#off"),
+        ("#on Plan the sprint", "#on"),
+        ("Gym #offclock", "#offclock"),
+        ("Gym #off-clock", "#off-clock"),
+        ("Gym #untracked", "#untracked"),
+    ] {
+        let (_, json) =
+            capture_json(&vault, &day_file, &config, &[draft], true);
+        assert!(json["task_line"].as_str().unwrap().contains(tag), "{json}");
+        assert!(json.get("task_theme").is_none(), "{json}");
+    }
+
+    let (_, error) = capture_error_json(
+        &vault,
+        &day_file,
+        &config,
+        &["^sase:existing-clock-tag #off"],
+    );
+    assert_eq!(error["code"], "clock_tag_on_existing_task", "{error:?}");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("edit the task line to add #off or #on"),
+        "{error:?}"
+    );
 }
 
 #[test]

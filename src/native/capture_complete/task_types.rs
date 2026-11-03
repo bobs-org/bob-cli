@@ -258,6 +258,7 @@ fn build_inner(
     if !field.query.is_empty()
         && !exact_match
         && let Some(name) = canonical_theme_name(&field.query)
+        && !crate::native::clock_tags::is_reserved_type_name(&name)
     {
         let key = normalize_component(&name);
         let mut theme = catalog.theme_ref(&key, &name);
@@ -366,6 +367,9 @@ fn rows_in_empty_order(catalog: &Catalog, query: &str) -> Vec<TypeRow> {
     if catalog.configured_themes().is_none() {
         rows.retain(|row| !catalog.is_inventory(&row.key));
     }
+    rows.retain(|row| {
+        !crate::native::clock_tags::is_reserved_type_name(&row.name)
+    });
     if query.is_empty() {
         rows.retain(|row| !row.hidden);
     } else {
