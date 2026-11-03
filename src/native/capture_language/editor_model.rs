@@ -461,6 +461,24 @@ pub(crate) enum DependencyTargetKind {
     ExistingTask,
 }
 
+/// One lexically selected `@route+id` target member with its per-member
+/// resolved mode/route. Emitted only for runs of at least two selected
+/// members (including partial members); omitted otherwise so singleton
+/// JSON stays byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorTarget {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) marker: String,
+    pub(crate) mode: EditorMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) block_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) section: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EditorParse {
     pub(crate) body: String,
@@ -518,6 +536,9 @@ pub(crate) struct EditorParse {
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,
     pub(crate) items: Vec<EditorItemParse>,
     pub(crate) global_destination: Option<EditorGlobalDestination>,
+    /// Additive first-item target-run members, projected from the first
+    /// item. Empty unless the first item is a multi-member run.
+    pub(crate) targets: Vec<EditorTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -580,6 +601,9 @@ pub(crate) struct EditorItemParse {
     /// would name a drawer there. Drives bullet drawer completion.
     pub(crate) drawer_bullet_target:
         Option<super::drawer_bullet::DrawerBulletTarget>,
+    /// Additive target-run members for this item, in source order. Empty
+    /// for singletons and non-run items; never expands `items[]`.
+    pub(crate) targets: Vec<EditorTarget>,
 }
 
 /// One complete local destination marker token an item owns, with the span

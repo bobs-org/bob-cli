@@ -468,6 +468,7 @@ pub(crate) fn parse_for_editor_with(
             sub_bullets: Vec::new(),
             items,
             global_destination,
+            targets: Vec::new(),
         };
     };
 
@@ -500,6 +501,10 @@ pub(crate) fn parse_for_editor_with(
     );
     spans.sort_by_key(|span| (span.start, span.end));
 
+    let targets = items
+        .first()
+        .map(|item| item.targets.clone())
+        .unwrap_or_default();
     EditorParse {
         body,
         mode,
@@ -524,6 +529,7 @@ pub(crate) fn parse_for_editor_with(
         sub_bullets,
         items,
         global_destination,
+        targets,
     }
 }
 
@@ -882,6 +888,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             has_local_destination: true,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -935,6 +942,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             has_local_destination: true,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -993,6 +1001,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             has_local_destination: true,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         })
     };
     match claim {
@@ -1169,6 +1178,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             has_local_destination: true,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -1262,6 +1272,7 @@ fn parse_editor_ref_item<'a>(
                 has_local_destination: false,
                 local_destination_markers: Vec::new(),
                 drawer_bullet_target: None,
+                targets: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -1339,6 +1350,7 @@ fn parse_editor_ref_item<'a>(
                     section: None,
                 }],
                 drawer_bullet_target: None,
+                targets: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -1356,6 +1368,11 @@ pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
+    if options.enable_target_runs
+        && let Some(outcome) = try_parse_editor_target_run(item, options)
+    {
+        return outcome;
+    }
     let occurrences = super::type_marker::collect_item(item);
     let type_masked_source =
         super::type_marker::masked_source(item, &occurrences);
@@ -1455,6 +1472,214 @@ pub(super) fn parse_editor_item_with<'a>(
         attach_list_header_marker_diagnostic(item, &mut outcome.item);
     }
     outcome
+}
+
+/// Target-run fan-in for the editor: reuse shared selection and the
+/// existing classifier once per member, then combine into one
+/// [`EditorItemParse`]. Leading/terminal selection matches execution;
+/// `SeenMarkers` never flags the second member as a cross-line duplicate
+/// because each member parses in its own masked view. Returns `None` when
+/// the item holds no run and no refusal, so the singleton path runs.
+fn try_parse_editor_target_run<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+) -> Option<EditorItemOutcome<'a>> {
+    let (run, refusal) = super::item::find_editor_target_run(item);
+    let Some(run) = run else {
+        let refusal = refusal?;
+        let disabled = EditorParseOptions {
+            enable_target_runs: false,
+            ..*options
+        };
+        let mut outcome = parse_editor_item_with(item, &disabled);
+        if let Some(diagnostic) =
+            super::target_runs::editor_refusal_diagnostic(&refusal)
+            && !outcome.item.diagnostics.iter().any(|existing| {
+                existing.code == diagnostic.code
+                    && existing.range == diagnostic.range
+                    && existing.message == diagnostic.message
+            })
+        {
+            outcome.item.diagnostics.push(diagnostic);
+        }
+        return Some(outcome);
+    };
+    let mut combined = combine_editor_target_members(item, &run, options);
+    if let Some(refusal) = refusal
+        && let Some(diagnostic) =
+            super::target_runs::editor_refusal_diagnostic(&refusal)
+        && !combined.item.diagnostics.iter().any(|existing| {
+            existing.code == diagnostic.code
+                && existing.range == diagnostic.range
+                && existing.message == diagnostic.message
+        })
+    {
+        combined.item.diagnostics.push(diagnostic);
+    }
+    Some(combined)
+}
+
+/// Parse every member view through the established singleton pipeline and
+/// merge into one item. Each view masks every other run member with spaces,
+/// so absolute byte offsets never shift and each member's classifier runs
+/// exactly like its single-target equivalent. Shared spans, diagnostics,
+/// and sub-bullets deduplicate by value; member-specific spans and exact
+/// diagnostics are all kept. Legacy mode/route/section/block-ID,
+/// dependency owner, type-marker subject, and drawer target stay the first
+/// member's values; every local destination marker is retained.
+fn combine_editor_target_members<'a>(
+    item: &CaptureItem<'a>,
+    run: &super::item::TargetRunContext,
+    options: &EditorParseOptions<'_>,
+) -> EditorItemOutcome<'a> {
+    let disabled = EditorParseOptions {
+        enable_target_runs: false,
+        ..*options
+    };
+    let mut members: Vec<EditorItemOutcome<'a>> = Vec::new();
+    for index in 0..run.selection.members.len() {
+        let masked_source = super::target_runs::masked_source_for_member(
+            item.source,
+            &run.selection.members,
+            index,
+        );
+        let lines = item
+            .lines
+            .iter()
+            .map(|line| ItemLine {
+                raw: RawLine {
+                    text: masked_source
+                        .get(line.raw.start..line.raw.end)
+                        .unwrap_or(""),
+                    start: line.raw.start,
+                    end: line.raw.end,
+                },
+                line_number: line.line_number,
+            })
+            .collect::<Vec<_>>();
+        let view = CaptureItem {
+            source: masked_source.as_str(),
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            lines,
+            list: item.list.clone(),
+        };
+        let parsed = parse_editor_item_with(&view, &disabled);
+        let declarations =
+            remap_type_marker_declarations(parsed.declarations, item.source);
+        members.push(EditorItemOutcome {
+            item: parsed.item,
+            declarations,
+        });
+    }
+    let Some(first) = members.first() else {
+        let disabled = EditorParseOptions {
+            enable_target_runs: false,
+            ..*options
+        };
+        return parse_editor_item_with(item, &disabled);
+    };
+    let mut needs: Vec<Need> = Vec::new();
+    for outcome in &members {
+        for need in &outcome.item.needs {
+            if !needs.contains(need) {
+                needs.push(*need);
+            }
+        }
+    }
+    let mut spans: Vec<Span> = Vec::new();
+    for outcome in &members {
+        for span in &outcome.item.spans {
+            if !spans.contains(span) {
+                spans.push(span.clone());
+            }
+        }
+    }
+    spans.sort_by_key(|span| (span.start, span.end));
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    for outcome in &members {
+        for diagnostic in &outcome.item.diagnostics {
+            if !diagnostics.iter().any(|existing| {
+                existing.code == diagnostic.code
+                    && existing.range == diagnostic.range
+                    && existing.message == diagnostic.message
+                    && existing.severity == diagnostic.severity
+            }) {
+                diagnostics.push(diagnostic.clone());
+            }
+        }
+    }
+    let mut sub_bullets: Vec<AuthoredSubBullet> = Vec::new();
+    for outcome in &members {
+        for bullet in &outcome.item.sub_bullets {
+            if !sub_bullets.contains(bullet) {
+                sub_bullets.push(bullet.clone());
+            }
+        }
+    }
+    let mut local_destination_markers: Vec<LocalDestinationMarker> = Vec::new();
+    for outcome in &members {
+        for marker in &outcome.item.local_destination_markers {
+            if !local_destination_markers.contains(marker) {
+                local_destination_markers.push(marker.clone());
+            }
+        }
+    }
+    let targets = run
+        .selection
+        .members
+        .iter()
+        .zip(members.iter())
+        .map(|(member, outcome)| EditorTarget {
+            start: member.start,
+            end: member.end,
+            marker: member.marker_text.clone(),
+            mode: outcome.item.mode,
+            route: outcome.item.route.clone(),
+            block_id: outcome.item.block_id.clone(),
+            section: outcome.item.section.clone(),
+        })
+        .collect::<Vec<_>>();
+    let declarations = first.declarations.clone();
+    let item = EditorItemParse {
+        index: first.item.index,
+        start: first.item.start,
+        end: first.item.end,
+        line_start: first.item.line_start,
+        line_end: first.item.line_end,
+        body: first.item.body.clone(),
+        mode: first.item.mode,
+        route: first.item.route.clone(),
+        section: first.item.section.clone(),
+        block_id: first.item.block_id.clone(),
+        needs,
+        ref_listen: first.item.ref_listen,
+        pomodoro_start: first.item.pomodoro_start.clone(),
+        pomodoro_adjust: first.item.pomodoro_adjust.clone(),
+        pomodoro_shift: first.item.pomodoro_shift.clone(),
+        pomodoro_split: first.item.pomodoro_split.clone(),
+        pomodoro_merge: first.item.pomodoro_merge.clone(),
+        pomodoro_close: first.item.pomodoro_close.clone(),
+        dependencies: first.item.dependencies.clone(),
+        blocked_tasks: first.item.blocked_tasks.clone(),
+        relations: first.item.relations.clone(),
+        dependency_target: first.item.dependency_target.clone(),
+        task_complete: first.item.task_complete.clone(),
+        list: first.item.list.clone(),
+        spans,
+        diagnostics,
+        sub_bullets,
+        has_local_destination: members
+            .iter()
+            .any(|outcome| outcome.item.has_local_destination),
+        local_destination_markers,
+        drawer_bullet_target: first.item.drawer_bullet_target.clone(),
+        targets,
+    };
+    EditorItemOutcome { item, declarations }
 }
 
 /// Refuse two equal task IDs inside one capture list, mirroring the
@@ -2284,6 +2509,7 @@ pub(super) fn list_refusal_item<'a>(
             has_local_destination: true,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -2750,6 +2976,7 @@ pub(super) fn parse_editor_list_item<'a>(
             has_local_destination: true,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations,
     }
@@ -4517,6 +4744,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             has_local_destination,
             local_destination_markers,
             drawer_bullet_target,
+            targets: Vec::new(),
         },
         declarations,
     }

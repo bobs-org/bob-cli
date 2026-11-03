@@ -17,10 +17,10 @@ use super::{
         self, resolve_exact_type_name, scan_line, unmatched_type_display,
         AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
-        EditorParseOptions, ListContext, MoveBullet, Need, PomodoroAdjustSpec,
-        PomodoroCloseSpec, PomodoroMergeSpec, PomodoroShiftSpec,
-        PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
-        RelationEntry, ResolvedTypeName, Severity, Span,
+        EditorParseOptions, EditorTarget, ListContext, MoveBullet, Need,
+        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroMergeSpec,
+        PomodoroShiftSpec, PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId,
+        RelationDirection, RelationEntry, ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -673,6 +673,11 @@ struct CaptureParseResult {
     /// inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
     task_complete: Option<ParseTaskComplete>,
+    /// Additive target-run members for the first item, in source order.
+    /// Omitted unless the first item is a multi-member run, so every
+    /// older input keeps its exact JSON shape.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    targets: Vec<ParseTarget>,
 }
 
 /// One complete `~note:block-id[|label]` modifier with its sigil-inclusive
@@ -789,6 +794,41 @@ struct CaptureParseItem {
     task_complete: Option<ParseTaskComplete>,
     #[serde(skip_serializing_if = "Option::is_none")]
     template_row: Option<TemplateRowParse>,
+    /// Additive target-run members for this item, in source order.
+    /// Omitted unless the item is a multi-member run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    targets: Vec<ParseTarget>,
+}
+
+/// One `@route+id` target member: exact source range, marker text, and the
+/// member's resolved mode/route. Additive schema-version-1 field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ParseTarget {
+    start: usize,
+    end: usize,
+    marker: String,
+    mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    section: Option<String>,
+}
+
+fn parse_targets(targets: &[EditorTarget]) -> Vec<ParseTarget> {
+    targets
+        .iter()
+        .map(|target| ParseTarget {
+            start: target.start,
+            end: target.end,
+            marker: target.marker.clone(),
+            mode: target.mode.label().to_string(),
+            route: target.route.clone(),
+            block_id: target.block_id.clone(),
+            section: target.section.clone(),
+        })
+        .collect()
 }
 
 fn is_no_parse_project_note(
@@ -1124,6 +1164,7 @@ impl CaptureParseResult {
                     },
                 }
             }),
+            targets: parse_targets(&parse.targets),
         }
     }
 
@@ -1287,6 +1328,7 @@ impl CaptureParseResult {
                     list: None,
                     header_range: None,
                     template_row: Some(template_row),
+                    targets: Vec::new(),
                 });
             } else {
                 row_items.push(CaptureParseItem {
@@ -1323,6 +1365,7 @@ impl CaptureParseResult {
                     list: None,
                     header_range: None,
                     template_row: Some(summary.clone()),
+                    targets: Vec::new(),
                 });
             }
             row_summaries.push(summary);
@@ -1540,6 +1583,7 @@ impl CaptureParseResult {
                     },
                 }
             }),
+            targets: parse_targets(&parsed.targets),
         }
     }
 }
@@ -2264,6 +2308,7 @@ fn empty_wire_item() -> CaptureParseItem {
         list: None,
         header_range: None,
         template_row: None,
+        targets: Vec::new(),
     }
 }
 
@@ -2368,6 +2413,7 @@ fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
             }
         }),
         template_row: None,
+        targets: parse_targets(&item.targets),
     }
 }
 
@@ -3169,6 +3215,41 @@ mod tests {
         assert_eq!(value["diagnostics"].as_array().expect("array").len(), 0);
         assert!(value.get("items").is_none(), "{value}");
         assert!(value.get("global_destination").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_reports_targets_only_for_opt_in_runs() {
+        let raw = "@work+a @dev+b note";
+        // Default path stays singleton: no targets, second member in body.
+        let default = json(raw);
+        assert!(default.get("targets").is_none(), "{default}");
+        assert!(default["body"].as_str().unwrap().contains("@dev+b"));
+
+        // Opt-in staging combines one item with additive targets.
+        let options = EditorParseOptions {
+            url_routing: None,
+            has_global_destination: false,
+            enable_target_runs: true,
+        };
+        let result = CaptureParseResult::new(raw.to_string(), &options);
+        let value = serde_json::to_value(&result).unwrap();
+        let targets = value["targets"].as_array().expect("targets");
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0]["marker"], "@work+a");
+        assert_eq!(targets[1]["marker"], "@dev+b");
+        assert_eq!(targets[0]["mode"], "sub_bullet");
+        assert_eq!(targets[0]["route"], "work");
+        assert_eq!(targets[0]["block_id"], "a");
+        assert!(targets[0].get("section").is_none());
+        let first_at = raw.find("@work+a").unwrap();
+        let second_at = raw.find("@dev+b").unwrap();
+        assert_eq!(targets[0]["start"], first_at);
+        assert_eq!(targets[0]["end"], first_at + "@work+a".len());
+        assert_eq!(targets[1]["start"], second_at);
+        assert_eq!(value["body"], "note");
+        assert_eq!(value["route"], "work");
+        // Never expands items[] for a single-item draft.
+        assert!(value.get("items").is_none(), "{value}");
     }
 
     #[test]

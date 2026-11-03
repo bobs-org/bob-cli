@@ -159,6 +159,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -212,6 +213,7 @@ pub(super) fn editor_operator_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -263,6 +265,7 @@ pub(super) fn editor_start_invalid_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -800,6 +803,7 @@ fn editor_named_valid_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -848,6 +852,7 @@ fn editor_start_drop_incomplete_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -895,6 +900,7 @@ fn editor_start_timing_incomplete_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -1033,6 +1039,7 @@ fn editor_named_incomplete_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -1377,6 +1384,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     has_local_destination: false,
                     local_destination_markers: Vec::new(),
                     drawer_bullet_target: None,
+                    targets: Vec::new(),
                 },
                 declarations: Vec::new(),
             })
@@ -1416,6 +1424,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     has_local_destination: false,
                     local_destination_markers: Vec::new(),
                     drawer_bullet_target: None,
+                    targets: Vec::new(),
                 },
                 declarations: Vec::new(),
             })
@@ -1675,6 +1684,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 has_local_destination: false,
                 local_destination_markers: Vec::new(),
                 drawer_bullet_target: None,
+                targets: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -1729,6 +1739,7 @@ pub(super) fn parse_editor_split_item<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -1955,6 +1966,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                 has_local_destination: false,
                 local_destination_markers: Vec::new(),
                 drawer_bullet_target: None,
+                targets: Vec::new(),
             },
             declarations: Vec::new(),
         });
@@ -2009,6 +2021,7 @@ pub(super) fn parse_editor_merge_item<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     })
@@ -2060,6 +2073,7 @@ fn editor_merge_invalid_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -2111,6 +2125,7 @@ fn editor_split_invalid_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }
@@ -3097,6 +3112,7 @@ fn editor_close_outcome<'a>(
             has_local_destination: false,
             local_destination_markers: Vec::new(),
             drawer_bullet_target: None,
+            targets: Vec::new(),
         },
         declarations: Vec::new(),
     }

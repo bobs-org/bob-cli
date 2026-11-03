@@ -92,6 +92,7 @@ pub(crate) use self::editor_model::EditorItemParse;
 pub(crate) use self::editor_model::EditorMode;
 #[cfg(test)]
 pub(crate) use self::editor_model::EditorParse;
+pub(crate) use self::editor_model::EditorTarget;
 pub(crate) use self::editor_model::Need;
 pub(crate) use self::editor_model::RelationDirection;
 pub(crate) use self::editor_model::RelationEntry;

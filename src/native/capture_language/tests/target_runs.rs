@@ -4,6 +4,8 @@
 //! public behavior is unchanged.
 
 use super::super::draft::*;
+use super::super::editor_model::*;
+use super::super::editor_parse::*;
 use super::super::model::*;
 use super::super::target_runs::*;
 
@@ -16,6 +18,22 @@ fn opt_in() -> CaptureParseOptions<'static> {
 
 fn default_options() -> CaptureParseOptions<'static> {
     CaptureParseOptions::routing_off()
+}
+
+fn editor_opt_in() -> EditorParseOptions<'static> {
+    EditorParseOptions {
+        url_routing: None,
+        has_global_destination: false,
+        enable_target_runs: true,
+    }
+}
+
+fn parse_editor_opt_in(raw: &str) -> EditorParse {
+    parse_for_editor_with(raw, &editor_opt_in())
+}
+
+fn parse_editor_default(raw: &str) -> EditorParse {
+    parse_for_editor_with(raw, &EditorParseOptions::routing_off())
 }
 
 fn execute_opt_in(raw: &str) -> Result<ParsedCaptureText, String> {
@@ -605,5 +623,274 @@ fn toggle_member_keeps_relationship_refusal() {
         error.message.contains("relationship-only '@a+x!'"),
         "{}",
         error.message
+    );
+}
+
+#[test]
+fn editor_leading_run_combines_into_one_item_with_targets() {
+    let raw = "@work+a @dev+b note";
+    let parse = parse_editor_opt_in(raw);
+    assert_eq!(parse.items.len(), 1, "{raw}");
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2, "{raw}");
+    assert_eq!(item.body, "note");
+    assert_eq!(item.mode, EditorMode::SubBullet);
+    assert_eq!(item.route.as_deref(), Some("work"));
+    assert_eq!(item.block_id.as_deref(), Some("a"));
+    assert!(item.needs.is_empty(), "{:?}", item.needs);
+    let first_at = raw.find("@work+a").unwrap();
+    let second_at = raw.find("@dev+b").unwrap();
+    assert_eq!(
+        (item.targets[0].start, item.targets[0].end),
+        (first_at, first_at + "@work+a".len())
+    );
+    assert_eq!(
+        (item.targets[1].start, item.targets[1].end),
+        (second_at, second_at + "@dev+b".len())
+    );
+    assert_eq!(&raw[item.targets[0].start..item.targets[0].end], "@work+a");
+    assert_eq!(&raw[item.targets[1].start..item.targets[1].end], "@dev+b");
+    assert_eq!(item.targets[0].mode, EditorMode::SubBullet);
+    assert_eq!(item.targets[1].mode, EditorMode::SubBullet);
+    // Both members' spans are kept at absolute offsets, sorted.
+    let mut spans = item
+        .spans
+        .iter()
+        .map(|span| (span.start, span.end, span.kind))
+        .collect::<Vec<_>>();
+    spans.sort_by_key(|span| (span.0, span.1));
+    assert!(spans.contains(&(
+        first_at,
+        first_at + "@work".len(),
+        SpanKind::SubBulletRoute
+    )));
+    assert!(spans.contains(&(
+        second_at,
+        second_at + "@dev".len(),
+        SpanKind::SubBulletRoute
+    )));
+    // The run claims its route once: no cross-line duplicate.
+    assert!(
+        !item
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "duplicate_capture_marker"),
+        "{:?}",
+        item.diagnostics
+    );
+    // First-item projection mirrors the combined item.
+    assert_eq!(parse.targets, item.targets);
+    assert_eq!(parse.body, item.body);
+    assert_eq!(parse.route, item.route);
+    // Default path stays singleton with no targets.
+    let default = parse_editor_default(raw);
+    assert!(default.items[0].targets.is_empty());
+    assert!(default.targets.is_empty());
+    assert!(default.items[0].body.contains("@dev+b"));
+}
+
+#[test]
+fn editor_trailing_and_whole_line_runs_keep_body_and_offsets() {
+    let trailing = "note @a+x @b+y";
+    let parse = parse_editor_opt_in(trailing);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2);
+    assert_eq!(item.body, "note");
+    assert_eq!(item.route.as_deref(), Some("a"));
+
+    let whole = "@a+x @b+y";
+    let parse = parse_editor_opt_in(whole);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2, "{whole}");
+    assert!(item.body.is_empty(), "{}", item.body);
+}
+
+#[test]
+fn editor_mixed_toggle_and_drawer_spans_are_all_kept() {
+    let raw = "@a+x! @b+y";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2);
+    assert_eq!(item.targets[0].marker, "@a+x!");
+    assert!(
+        item.spans
+            .iter()
+            .any(|span| span.kind == SpanKind::TaskToggleExplicitToggle),
+        "{:?}",
+        item.spans
+    );
+
+    let raw = "@a+x#first @b+y#second note";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2);
+    assert_eq!(item.targets[0].section.as_deref(), Some("first"));
+    assert_eq!(item.targets[1].section.as_deref(), Some("second"));
+    let first_at = raw.find("@a+x#first").unwrap();
+    let second_at = raw.find("@b+y#second").unwrap();
+    assert_eq!(&raw[first_at..first_at + "@a+x#first".len()], "@a+x#first");
+    assert_eq!(
+        &raw[second_at..second_at + "@b+y#second".len()],
+        "@b+y#second"
+    );
+    assert_eq!(item.body, "note");
+}
+
+#[test]
+fn editor_partial_members_union_needs_without_prose() {
+    let raw = "@a+ @b+y note";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2);
+    assert_eq!(item.body, "note");
+    assert!(item.needs.contains(&Need::Task), "{:?}", item.needs);
+    assert_eq!(item.targets[0].mode, EditorMode::Incomplete);
+    assert_eq!(item.targets[1].mode, EditorMode::SubBullet);
+    assert_eq!(parse.needs, item.needs);
+
+    let raw = "@a+x @b+ note";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2);
+    assert!(item.needs.contains(&Need::Task), "{:?}", item.needs);
+    assert_eq!(item.targets[1].mode, EditorMode::Incomplete);
+}
+
+#[test]
+fn editor_terminal_extraction_matches_execution_across_the_run() {
+    for raw in [
+        "note s:3 @a+x @b+y",
+        "note @a+x @b+y s:3",
+        "note @a+x s:3 @b+y",
+    ] {
+        let parse = parse_editor_opt_in(raw);
+        let item = &parse.items[0];
+        assert_eq!(item.targets.len(), 2, "{raw}");
+        assert_eq!(item.body, "note", "{raw}");
+        assert!(
+            item.spans
+                .iter()
+                .any(|span| span.kind == SpanKind::Schedule),
+            "{raw}: {:?}",
+            item.spans
+        );
+    }
+    for raw in [
+        "note $2 @a+x @b+y",
+        "note @a+x @b+y $2",
+        "note @a+x $2 @b+y",
+    ] {
+        let parse = parse_editor_opt_in(raw);
+        let item = &parse.items[0];
+        assert_eq!(item.targets.len(), 2, "{raw}");
+        assert!(
+            item.spans
+                .iter()
+                .any(|span| span.kind == SpanKind::Priority),
+            "{raw}: {:?}",
+            item.spans
+        );
+    }
+}
+
+#[test]
+fn editor_duplicate_and_split_diagnostics_share_strict_evidence() {
+    let raw = "@work+a @work+a note";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2, "{raw}");
+    let diagnostic = item
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "duplicate_capture_target")
+        .expect("duplicate diagnostic");
+    assert_eq!(
+        diagnostic.message,
+        "`@work+a` names ^a twice on this line; name each task once"
+    );
+    let repeated_at = raw.rfind("@work+a").unwrap();
+    assert_eq!(
+        diagnostic.range,
+        Some((repeated_at, repeated_at + "@work+a".len()))
+    );
+
+    let raw = "@a+x note @b+y";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert!(item.targets.is_empty(), "{:?}", item.targets);
+    let diagnostic = item
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "split_capture_targets")
+        .expect("split diagnostic");
+    assert!(diagnostic.message.contains("at opposite ends of the line"));
+    let trailing_at = raw.rfind("@b+y").unwrap();
+    assert_eq!(
+        diagnostic.range,
+        Some((trailing_at, trailing_at + "@b+y".len()))
+    );
+
+    // Default path keeps no new codes and no targets.
+    for raw in ["@work+a @work+a note", "@a+x note @b+y"] {
+        let default = parse_editor_default(raw);
+        assert!(default.items[0].targets.is_empty(), "{raw}");
+        assert!(
+            !default.items[0]
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code
+                    == "duplicate_capture_target"
+                    || diagnostic.code == "split_capture_targets"),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn editor_second_item_offsets_and_unicode_stay_absolute() {
+    let raw = "first\n\nnote @a+x @b+y";
+    let parse = parse_editor_opt_in(raw);
+    assert_eq!(parse.items.len(), 2);
+    let item = &parse.items[1];
+    assert_eq!(item.targets.len(), 2);
+    for target in &item.targets {
+        assert_eq!(&raw[target.start..target.end], target.marker);
+    }
+    assert_eq!(parse.targets, parse.items[0].targets);
+
+    let raw = "café note @a+x @b+y";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert_eq!(item.targets.len(), 2);
+    let first_at = raw.find("@a+x").unwrap();
+    let second_at = raw.find("@b+y").unwrap();
+    assert_eq!(
+        (item.targets[0].start, item.targets[0].end),
+        (first_at, first_at + 4)
+    );
+    assert_eq!(
+        (item.targets[1].start, item.targets[1].end),
+        (second_at, second_at + 4)
+    );
+    for span in &item.spans {
+        assert!(raw.is_char_boundary(span.start));
+        assert!(raw.is_char_boundary(span.end));
+    }
+}
+
+#[test]
+fn editor_separate_route_lines_still_refuse_duplicates() {
+    // A parent route plus a child trailing route is not a target run: the
+    // existing cross-line duplicate stands, and no targets are emitted.
+    let raw = "@a+x note\n- child @b+y";
+    let parse = parse_editor_opt_in(raw);
+    let item = &parse.items[0];
+    assert!(item.targets.is_empty(), "{:?}", item.targets);
+    assert!(
+        item.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "duplicate_capture_marker"),
+        "{:?}",
+        item.diagnostics
     );
 }

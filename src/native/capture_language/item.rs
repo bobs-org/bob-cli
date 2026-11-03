@@ -879,6 +879,169 @@ fn target_run_parse_error(message: String) -> CaptureItemParseError {
     }
 }
 
+/// Editor target-run probe: the same source-preserving masks and line
+/// selectors execution uses, but lexical only. Returns the selected run
+/// (when one line holds at least two members, including partial/malformed
+/// members) plus any duplicate/split refusal evidence with its exact
+/// range. Validation failures never refuse here: each malformed member
+/// receives its existing editor needs/diagnostics through per-member
+/// parsing. Whole-line child runs fall back to the singleton path, exactly
+/// like execution, unless they also refuse.
+pub(super) fn find_editor_target_run(
+    item: &CaptureItem<'_>,
+) -> (
+    Option<TargetRunContext>,
+    Option<super::target_runs::TargetRefusal>,
+) {
+    if item.list.is_some() {
+        return (None, None);
+    }
+    let occurrences = super::type_marker::collect_item(item);
+    let type_masked_source =
+        super::type_marker::masked_source(item, &occurrences);
+    let type_masked_item =
+        super::type_marker::masked_item(item, &type_masked_source);
+    let directive_occurrences =
+        super::directive::collect_item(&type_masked_item);
+    let masked_source = super::directive::masked_source(
+        &type_masked_item,
+        &directive_occurrences,
+    );
+    let mut masked_item =
+        super::directive::masked_item(&type_masked_item, &masked_source);
+    let marker_only =
+        super::type_marker::marker_only_child_lines(item, &occurrences);
+    masked_item
+        .lines
+        .retain(|line| !marker_only.contains(&(line.raw.start, line.raw.end)));
+    let Some((parent_line, child_lines)) = masked_item.lines.split_first()
+    else {
+        return (None, None);
+    };
+
+    let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+    let parent_tokens = super::pomodoro_literal::merge_leading_literal_token(
+        &parent_line.raw,
+        parent_tokens,
+    );
+    let (parent_tokens, parent_dependencies) = extract_line_dependencies(
+        parent_tokens,
+        parent_line.raw.text,
+        parent_line.raw.start,
+        true,
+    );
+    let parent_tokens =
+        unescape_execution_tokens(parent_tokens, &parent_dependencies.escapes);
+    if let Some((run, refusal)) = editor_probe_tokens(
+        parent_tokens.clone(),
+        true,
+        parent_line.line_number,
+    ) && (run.is_some() || refusal.is_some())
+    {
+        return (run, refusal);
+    }
+
+    let parent_route = resolve_line(parent_tokens, true, true)
+        .ok()
+        .and_then(|outcome| outcome.route.map(|route| route.token.kind));
+    let parent_is_project_note =
+        matches!(parent_route, Some(CaptureKind::ProjectNote { .. }));
+    let child_seals_note = child_lines.iter().any(|line| {
+        matches!(
+            classify_authored_line(line.raw),
+            AuthoredLineClass::Item(authored)
+                if child_line_seals_project_note(authored.body)
+        )
+    });
+    let parent_takes_ids = parent_is_project_note || child_seals_note;
+
+    for line in child_lines {
+        let authored = match classify_authored_line(line.raw) {
+            AuthoredLineClass::EmptyOrPlaceholder
+            | AuthoredLineClass::Invalid => continue,
+            AuthoredLineClass::Item(authored) => authored,
+        };
+        let child_line = RawLine {
+            text: authored.body,
+            start: authored.body_start,
+            end: line.raw.end,
+        };
+        let tokens = tokenize_line_with_spans(&child_line);
+        let (mut tokens, dependencies) = extract_line_dependencies(
+            tokens,
+            child_line.text,
+            child_line.start,
+            false,
+        );
+        if parent_takes_ids {
+            let _ = strip_trailing_task_id(&mut tokens);
+        }
+        let tokens = unescape_execution_tokens(tokens, &dependencies.escapes);
+        // Whole-line child runs stay singleton, like execution, unless
+        // they refuse.
+        if let Some((run, refusal)) =
+            editor_probe_tokens(tokens, false, line.line_number)
+            && (run.is_some() || refusal.is_some())
+        {
+            return (run, refusal);
+        }
+    }
+    (None, None)
+}
+
+/// Lexical probe for one line's tokens: global declarations leave, terminal
+/// markers extract across the run, then the shared refusal/selection
+/// helpers decide. Retired priorities defer to the singleton path so the
+/// existing diagnostic survives. Single-member selections are not runs.
+fn editor_probe_tokens(
+    mut tokens: Vec<Token<'_>>,
+    leading: bool,
+    line_number: usize,
+) -> Option<(
+    Option<TargetRunContext>,
+    Option<super::target_runs::TargetRefusal>,
+)> {
+    use super::target_runs as runs;
+    let _ = take_global_declarations(&mut tokens);
+    let (markers, _) =
+        runs::extract_terminal_markers_crossing_runs(&mut tokens);
+    if markers.retired_priority.is_some() {
+        return None;
+    }
+    if tokens.is_empty() {
+        return Some((None, None));
+    }
+    let refusal = runs::detect_target_refusals(&tokens, leading, true);
+    let has_refusal = !matches!(refusal, runs::TargetRefusal::None);
+    let selection = runs::select_target_run(&tokens, leading, true);
+    let Some(selection) = selection else {
+        if has_refusal {
+            return Some((None, Some(refusal)));
+        }
+        return Some((None, None));
+    };
+    if selection.members.len() < 2 {
+        if has_refusal {
+            return Some((None, Some(refusal)));
+        }
+        return Some((None, None));
+    }
+    if !leading
+        && selection.position == runs::TargetRunPosition::WholeLine
+        && !has_refusal
+    {
+        return Some((None, None));
+    }
+    let refusal = if has_refusal { Some(refusal) } else { None };
+    Some((
+        Some(TargetRunContext {
+            line: line_number,
+            selection,
+        }),
+        refusal,
+    ))
+}
+
 /// A route marker plus only item-wide markers on the first line with
 /// bullets below: the header must stand alone. Returns the teaching error
 /// naming the first stray marker, or `None` when the item is not that
