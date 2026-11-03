@@ -42,6 +42,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Task tag marks](../task-tag-marks.md) — Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`
 - [Today marks](../today-marks.md) — Today marks: a display-only tomato on task lines linked under today's open Pomodoros
 - [Frees marks](../frees-marks.md) — Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks
+- [Decay ladder](../decay-ladder.md) — Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip
 
 ## References
 

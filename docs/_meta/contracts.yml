@@ -104,6 +104,9 @@ groups:
       - stem: frees-marks
         summary: "Frees marks: a quiet `🔑 N` after Task Links in today's ledger whose task is the last blocker of N open tasks"
         order: 32
+      - stem: decay-ladder
+        summary: "Decay ladder live verification: isolated Obsidian e2e for keeps, the rung-aware card, step, stay, drop, undo, and batch skip"
+        order: 35
   - title: "References"
     entries:
       - stem: dataview
