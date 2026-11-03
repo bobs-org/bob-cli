@@ -177,6 +177,7 @@ pub(super) fn plan_capture_batch_with_config_path(
             &mut dependency_ctx,
             config_path,
             &mut task_theme_context,
+            &items,
         )
         .map_err(|mut error| {
             error.message = format!("{error_context}: {}", error.message);
@@ -740,6 +741,7 @@ pub(super) fn plan_capture_item(
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
     task_theme_context: &mut CaptureTaskThemeContext,
+    earlier_items: &[PlannedCaptureItem],
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
@@ -1339,6 +1341,8 @@ pub(super) fn plan_capture_item(
         );
     }
     if matches!(parsed.kind, CaptureKind::NotePull { .. }) {
+        let (earlier_keys, earlier_block_ids) =
+            note_pull_earlier_ownership(earlier_items);
         return plan_note_pull_item(
             request,
             parsed,
@@ -1347,6 +1351,9 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
             task_theme_context,
             warnings,
+            parsed_item.index,
+            &earlier_keys,
+            &earlier_block_ids,
         );
     }
     let created = date_string(today);
@@ -2092,6 +2099,7 @@ pub(super) fn plan_capture_item(
                     relation_held: Vec::new(),
                     relation_check: None,
                     relation_groups: Vec::new(),
+                    note_pull: None,
                 },
                 clip_plan,
                 pomodoro_refs: Vec::new(),
@@ -2980,6 +2988,34 @@ pub(super) fn plan_capture_item(
 
 pub(super) fn item_roll_seed(base: u64, item_index: usize) -> u64 {
     base.wrapping_add((item_index as u64).wrapping_mul(0x9E3779B97F4A7C15))
+}
+
+/// Earliest-item ownership for note pulls: every offer key already owned
+/// by an earlier draft item across all successor classes, plus final
+/// `(note_path, block_id)` identities so a selected predecessor that
+/// minted an ID still owns its row after minting.
+fn note_pull_earlier_ownership(
+    earlier_items: &[PlannedCaptureItem],
+) -> (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<(PathBuf, String)>,
+) {
+    let mut keys = std::collections::BTreeSet::new();
+    let mut block_ids = std::collections::BTreeSet::new();
+    for item in earlier_items {
+        for row in super::output::all_offer_rows(&item.result) {
+            if let Some(offer) = row.offer.as_ref() {
+                keys.insert(offer.key.clone());
+            }
+            if !row.block_id.is_empty() {
+                block_ids.insert((
+                    PathBuf::from(&row.note_path),
+                    row.block_id.clone(),
+                ));
+            }
+        }
+    }
+    (keys, block_ids)
 }
 
 /// Join the capture line with its authored children (if any), its clip

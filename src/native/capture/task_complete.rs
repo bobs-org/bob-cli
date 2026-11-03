@@ -1320,6 +1320,30 @@ pub(super) fn apply_successor_net_post_pass(
                 );
             }
         }
+        // Note-pull per-row net filtering (SL20): a later item that
+        // links, completes, re-blocks, or drops an offered task removes
+        // that row. Own picks survive via the linked-row survive check.
+        // No keep-moving whole-group invalidation applies here because a
+        // note pull is a request, not a trigger.
+        for vec in super::output::note_pull_vecs_mut(&mut item.result) {
+            vec.retain(|row| {
+                keep_unblocked_row(
+                    row,
+                    &live,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                )
+            });
+            for row in vec.iter_mut() {
+                refresh_note_pull_row_final_position(
+                    row,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                );
+            }
+        }
     }
     // A group with no surviving selectable row is silent, folds included.
     super::keep_moving_net::prune_empty_folds(items);
@@ -1363,6 +1387,38 @@ fn refresh_relation_row_final_position(
     tasks_settings: &crate::native::task_status_hooks::TasksSettings,
 ) {
     if row.offer.is_none() {
+        return;
+    }
+    let Some(task) =
+        successor_task_lookup(&*row, planner, bob_dir, tasks_settings)
+    else {
+        return;
+    };
+    row.line = task.line_index + 1;
+    if row.status_symbol != task.status {
+        row.status_symbol = task.status;
+        row.status_name = status_name_for(bob_dir, task.status);
+    }
+}
+
+/// Refresh a surviving note-pull row's line (and status spelling) from
+/// the final staged text, including ID-less unselected siblings whose
+/// lines shift when later items insert context or mint IDs.
+fn refresh_note_pull_row_final_position(
+    row: &mut TaskCompleteUnblockedJson,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) {
+    if row.offer.is_none() {
+        return;
+    }
+    if row.trigger != crate::native::task_complete::NOTE_PULL_TRIGGER
+        && row
+            .offer
+            .as_ref()
+            .is_none_or(|offer| offer.group != "note_pull")
+    {
         return;
     }
     let Some(task) =
@@ -1535,21 +1591,20 @@ fn successor_task_lookup(
         });
     }
     if row.trigger == crate::native::task_complete::PROJECT_CREATED_TRIGGER
-        || row
-            .offer
-            .as_ref()
-            .is_some_and(|offer| offer.group == "keep_moving")
+        || row.trigger == crate::native::task_complete::NOTE_PULL_TRIGGER
+        || row.offer.as_ref().is_some_and(|offer| {
+            offer.group == "keep_moving" || offer.group == "note_pull"
+        })
     {
-        // Project-created and keep-moving ID-less rows have no stable block
-        // identity, so resolve by cleaned description plus their duplicate
-        // ordinal among
-        // the tasks that are still ID-less. The planner records that
-        // settled ordinal after the picks have minted their IDs; the
-        // ordinal inside the public key (`path@digest` or
-        // `path@digest~N`) counts the pre-pick render and is only the
-        // fallback. Line numbers shift when later items insert context,
-        // and raw `row.text` keeps inline fields like `[type:: ...]`, so
-        // compare cleaned text on both sides.
+        // Project-created, keep-moving, and note-pull ID-less rows have
+        // no stable block identity, so resolve by cleaned description plus
+        // their duplicate ordinal among the tasks that are still ID-less.
+        // The planner records that settled ordinal after the picks have
+        // minted their IDs; the ordinal inside the public key
+        // (`path@digest` or `path@digest~N`) counts the pre-pick render
+        // and is only the fallback. Line numbers shift when later items
+        // insert context, and raw `row.text` keeps inline fields like
+        // `[type:: ...]`, so compare cleaned text on both sides.
         let settings = note_tasks::read_settings(bob_dir);
         let expected = note_tasks::clean_description(
             &row.text,

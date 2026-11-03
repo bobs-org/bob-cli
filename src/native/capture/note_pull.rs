@@ -35,6 +35,13 @@ use super::{CaptureRequest, CaptureWarning};
 
 /// Plan one lone-`@route` item: classify residents, compute keys, place,
 /// apply explicit picks, and report the additive `note_pull` payload.
+///
+/// `item_index` is the draft position (0-based) used in the offer order
+/// key so draft item order precedes lane, path, and line within the
+/// note-pull rank. `earlier_keys` holds every offer key already owned by
+/// an earlier draft item across all successor classes; `earlier_block_ids`
+/// holds their final `(note_path, block_id)` identities so a selected
+/// predecessor that minted an ID still owns its row after minting.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_note_pull_item(
     request: &CaptureRequest,
@@ -44,6 +51,9 @@ pub(super) fn plan_note_pull_item(
     dependency_ctx: &mut DependencyContext,
     task_theme_context: &mut CaptureTaskThemeContext,
     warnings: &mut Vec<CaptureWarning>,
+    item_index: usize,
+    earlier_keys: &BTreeSet<String>,
+    earlier_block_ids: &BTreeSet<(PathBuf, String)>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let route = match &parsed.kind {
         crate::native::capture_language::CaptureKind::NotePull { route } => {
@@ -62,6 +72,13 @@ pub(super) fn plan_note_pull_item(
     let Some(source_text) = planner.current_contents(&absolute)? else {
         return Err(pull_note_missing_error(&route, &note));
     };
+    // Draft-start preimage for same-draft creation provenance: rows absent
+    // here were created by an earlier item and must not stamp fresh.
+    // `current_contents` ensures the file is loaded, so `loaded_texts`
+    // yields the pre-draft original alongside the staged current text.
+    let original_source_text = planner
+        .loaded_texts(&absolute)
+        .map(|(original, _)| original);
 
     let day_file = crate::native::pomodoro::day_file_for(&request.bob_dir);
     if !planner.currently_exists(&day_file)? {
@@ -183,6 +200,35 @@ pub(super) fn plan_note_pull_item(
     }
 
     // Freeze keys from the staged source before any pick.
+    // Same-draft creation provenance: compare staged residents against
+    // the draft-start preimage with stable occurrence identity (block ID
+    // or cleaned description + ordinal). Raw whole-line inequality is
+    // insufficient because an earlier item may have edited an old row
+    // (mint, status, stamp) without making it new.
+    let original_tasks: Vec<task_status_hooks::TaskLine> = original_source_text
+        .as_deref()
+        .map(|original| {
+            task_status_hooks::parse_tasks(original, &tasks_settings)
+        })
+        .unwrap_or_default();
+    let mut original_by_id: BTreeSet<String> = BTreeSet::new();
+    let mut original_idless_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for task in &original_tasks {
+        if task.block_id.as_deref() == Some("prj") {
+            continue;
+        }
+        if let Some(id) = task.block_id.as_deref() {
+            original_by_id.insert(id.to_string());
+        } else {
+            let cleaned = clean_description(
+                &task.description,
+                &note_settings.global_filter,
+                None,
+            );
+            *original_idless_counts.entry(cleaned).or_insert(0) += 1;
+        }
+    }
+    let mut seen_idless_for_new: BTreeMap<String, usize> = BTreeMap::new();
     let mut ordinal_seen: BTreeMap<String, usize> = BTreeMap::new();
     let mut frozen: Vec<FrozenNotePull> = Vec::new();
     for offer in &offers {
@@ -200,6 +246,39 @@ pub(super) fn plan_note_pull_item(
             &note_settings.global_filter,
             digest_index,
         );
+        // Earliest-item ownership across every successor class: a later
+        // pull omits a row already owned by an earlier item even when it
+        // was unselected. Selected predecessors still own their row after
+        // minting via the final block-ID identity.
+        if earlier_keys.contains(&key) {
+            continue;
+        }
+        if let Some(id) = offer.block_id.as_deref()
+            && earlier_block_ids.contains(&(relative.clone(), id.to_string()))
+        {
+            continue;
+        }
+        // New rows (created by an earlier item) have no draft-start
+        // preimage match: ID rows miss by block ID, ID-less rows miss by
+        // cleaned-description ordinal. An empty preimage (newly staged
+        // source) makes every row new.
+        let is_new = match (
+            original_source_text.as_deref(),
+            offer.block_id.as_deref(),
+        ) {
+            (None, _) => false,
+            (Some(_), Some(id)) => !original_by_id.contains(id),
+            (Some(_), None) => {
+                let count =
+                    seen_idless_for_new.entry(offer.text.clone()).or_insert(0);
+                *count += 1;
+                original_idless_counts
+                    .get(&offer.text)
+                    .copied()
+                    .unwrap_or(0)
+                    < *count
+            }
+        };
         let selected = match &request.selection {
             SuccessorSelection::All => true,
             SuccessorSelection::None => false,
@@ -218,6 +297,114 @@ pub(super) fn plan_note_pull_item(
                     offer.status,
                 ),
             raw: offer.raw_status_line.clone(),
+            is_new,
+            settled_ordinal: None,
+        });
+    }
+    // A later pull whose every row was already owned succeeds empty
+    // (pruned) instead of retroactively refusing the valid batch.
+    if frozen.is_empty() && !earlier_keys.is_empty() {
+        let folded = PullInFoldedJson {
+            hidden: folded_hidden,
+            already_planned: folded_already,
+            sub_projects: 0,
+            blocked: folded_blocked,
+            scheduled: folded_scheduled,
+            already_started: 0,
+            waits_for: 0,
+        };
+        let kind_label = capture_kind_label(&parsed.kind);
+        return Ok(PlannedCaptureItem {
+            result: CaptureItemResult {
+                ok: true,
+                dry_run: request.dry_run,
+                routed: true,
+                route: Some(route.clone()),
+                route_label: route.clone(),
+                relative_target: note.clone(),
+                target: absolute.display().to_string(),
+                text: String::new(),
+                task_line: String::new(),
+                task_theme: None,
+                type_relocation: None,
+                kind: kind_label,
+                created: super::plan::date_string(today),
+                scheduled: None,
+                priority: None,
+                priority_label: None,
+                placement: Placement::Created,
+                sub_bullets: Vec::new(),
+                notes: Vec::new(),
+                drawers: Vec::new(),
+                clip: None,
+                schedule_log: None,
+                block_id: None,
+                day_file: None,
+                block_link: None,
+                pomodoro_link_placement: None,
+                parent_line: None,
+                parent_text: None,
+                drawer: None,
+                parent_status_symbol: None,
+                parent_status_name: None,
+                toggle_direction: None,
+                previous_task_line: None,
+                status_symbol: None,
+                status_name: None,
+                previous_status_symbol: None,
+                previous_status_name: None,
+                pomodoro_name: None,
+                creates_pomodoro: None,
+                pomodoro_already_linked: None,
+                removed_pomodoro_links: None,
+                removed_scheduled: None,
+                pomodoro_selector_unused: None,
+                toggle_behavior: None,
+                status_changed: None,
+                pomodoro_link_action: None,
+                pomodoro_link_source: None,
+                pomodoro_link_destination: None,
+                project_note: None,
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_split: None,
+                pomodoro_merge: None,
+                pomodoro_close: None,
+                pomodoro_reset: None,
+                dependency_update: None,
+                consumed_links: Vec::new(),
+                task_complete: None,
+                r#ref: None,
+                toggle_task_description: None,
+                link_guard: None,
+                dropped_dependencies: Vec::new(),
+                blocks_line_updates: Vec::new(),
+                minted_dependent_block_id: None,
+                dependency_updates: Vec::new(),
+                minted_blocker_block_id: None,
+                relation_updates: Vec::new(),
+                relation_cancels: Vec::new(),
+                relation_completes: Vec::new(),
+                linked_from_line_updates: Vec::new(),
+                minted_relation_block_ids: Vec::new(),
+                mirror_skipped: Vec::new(),
+                list: None,
+                relation_successors: Vec::new(),
+                relation_held: Vec::new(),
+                relation_check: None,
+                relation_groups: Vec::new(),
+                relation_label_hides: Vec::new(),
+                note_pull: Some(NotePullSummaryJson {
+                    note: note.clone(),
+                    route: route.clone(),
+                    successors: Vec::new(),
+                    folded,
+                }),
+            },
+            clip_plan: None,
+            pomodoro_refs: Vec::new(),
+            task_block_refs: Vec::new(),
         });
     }
     // Lane pull order (Pending → Next → Ready), then source line.
@@ -341,9 +528,9 @@ pub(super) fn plan_note_pull_item(
     }
 
     // Apply source edits for picks: status, mint, fresh stamp. Schedules,
-    // `[id::]`, and `[dependsOn::]` are untouched. Same-draft creation is
-    // never stamped; single-item pulls have no creation provenance, so
-    // every pick stamps fresh here (the batch phase owns the exemption).
+    // `[id::]`, and `[dependsOn::]` are untouched. Rows created by an
+    // earlier item of the same draft skip the fresh stamp because
+    // creation never stamps.
     let mut edited_lines: Vec<String> =
         source_text.split('\n').map(str::to_string).collect();
     // Track final block IDs for reporting.
@@ -365,7 +552,9 @@ pub(super) fn plan_note_pull_item(
             updated.push_str(" ^");
             updated.push_str(&actual.block_id);
         }
-        updated = stamp_fresh(&updated, today).line;
+        if !offer.is_new {
+            updated = stamp_fresh(&updated, today).line;
+        }
         if line.ends_with('\r') {
             updated.push('\r');
         }
@@ -374,6 +563,79 @@ pub(super) fn plan_note_pull_item(
     if frozen.iter().any(|offer| offer.selected) {
         planner.stage(&absolute, edited_lines.join("\n"))?;
         planner.stage(&day_file, actual_day.clone())?;
+    }
+    // Settled duplicate ordinals for ID-less rows among the final staged
+    // source: picks above minted IDs, so pre-pick ordinals no longer
+    // address the surviving ID-less population. Line numbers shift when
+    // later items insert context, so the net pass resolves by cleaned
+    // description plus this ordinal.
+    {
+        let final_source = planner
+            .current_contents(&absolute)?
+            .unwrap_or_else(|| source_text.clone());
+        let final_tasks =
+            task_status_hooks::parse_tasks(&final_source, &tasks_settings);
+        // Map each final ID-less task's line to its ordinal among
+        // equal-description ID-less rows.
+        let mut final_ordinal_by_line: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut seen_final: BTreeMap<String, usize> = BTreeMap::new();
+        for task in &final_tasks {
+            if task.block_id.is_some() {
+                continue;
+            }
+            let cleaned = clean_description(
+                &task.description,
+                &note_settings.global_filter,
+                None,
+            );
+            let count = seen_final.entry(cleaned).or_insert(0);
+            *count += 1;
+            final_ordinal_by_line.insert(task.line_index, *count);
+        }
+        for offer in frozen.iter_mut() {
+            if offer.block_id.is_some() {
+                offer.settled_ordinal = None;
+                continue;
+            }
+            // Selected ID-less rows minted IDs: they resolve by block ID.
+            if offer.selected {
+                offer.settled_ordinal = None;
+                continue;
+            }
+            // Unselected ID-less rows survive ID-less at the same staged
+            // line (this item edits in place, never inserts). Fall back
+            // to the pre-pick ordinal when the line moved.
+            if let Some(ordinal) =
+                final_ordinal_by_line.get(&offer.line_index).copied()
+            {
+                offer.settled_ordinal = Some(ordinal);
+            } else {
+                // Line shifted (later items insert): fall back to counting
+                // among final ID-less same-text rows by order. Use the
+                // pre-pick digest ordinal as a last resort.
+                let mut count = 0usize;
+                for task in &final_tasks {
+                    if task.block_id.is_some() {
+                        continue;
+                    }
+                    let cleaned = clean_description(
+                        &task.description,
+                        &note_settings.global_filter,
+                        None,
+                    );
+                    if cleaned == offer.text {
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    // Clamp to surviving population; the net pass falls
+                    // back to key ordinal when this still misses.
+                    offer.settled_ordinal = Some(count.min(
+                        ordinal_seen.get(&offer.text).copied().unwrap_or(1),
+                    ));
+                }
+            }
+        }
     }
 
     // Touched source rows report task blocks with the note-pull role so
@@ -458,9 +720,12 @@ pub(super) fn plan_note_pull_item(
                 0,
             )
         };
+        // Draft item order precedes lane, path, and line within the
+        // note-pull rank; the final `then(item)` tie-break alone is
+        // insufficient when route names sort reverse-lexically (NP20).
         let order_key: crate::native::task_complete::OfferOrderKey = (
             OfferGroup::NotePull as u8,
-            (usize::MAX, usize::MAX),
+            (item_index, 0),
             offer.order_lane,
             relative.clone(),
             offer.line_index,
@@ -504,7 +769,7 @@ pub(super) fn plan_note_pull_item(
                 after: None,
                 destination,
                 order_key,
-                settled_ordinal: None,
+                settled_ordinal: offer.settled_ordinal,
             }),
             relation: None,
         });
@@ -636,6 +901,14 @@ struct FrozenNotePull {
     line_index: usize,
     order_lane: u8,
     raw: String,
+    /// True when the row was created by an earlier item of the same draft
+    /// (absent from the draft-start preimage). Such picks skip the fresh
+    /// stamp because creation never stamps.
+    is_new: bool,
+    /// Settled duplicate ordinal among still-ID-less rows after picks
+    /// mint, for the batch net pass to resolve ID-less rows without
+    /// relying on shifting line numbers.
+    settled_ordinal: Option<usize>,
 }
 
 struct ScratchDest {
@@ -970,6 +1243,8 @@ mod tests {
 
     fn plan(harness: &mut Harness) -> Result<PlannedCaptureItem, CaptureError> {
         let parsed = parsed_pull();
+        let empty_keys = std::collections::BTreeSet::new();
+        let empty_ids = std::collections::BTreeSet::new();
         plan_note_pull_item(
             &harness.request,
             parsed,
@@ -978,6 +1253,9 @@ mod tests {
             &mut harness.dependency_ctx,
             &mut harness.task_theme_context,
             &mut harness.warnings,
+            0,
+            &empty_keys,
+            &empty_ids,
         )
     }
 
@@ -1498,5 +1776,496 @@ mod tests {
             staged(&harness, "day.md"),
             Some("# Day\nno pomodoros here\n".to_string())
         );
+    }
+
+    // ---- Batch phase (NP13–NP20) ----
+
+    struct BatchVault {
+        _temp: tempfile::TempDir,
+        _guard: TestEnvGuard,
+        request: CaptureRequest,
+    }
+
+    fn batch_vault(
+        files: &[(&str, &str)],
+        day: Option<&str>,
+        raw_text: &str,
+    ) -> BatchVault {
+        let temp = tempfile::tempdir().expect("create batch vault");
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("create vault");
+        for (name, contents) in files {
+            let path = vault.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent");
+            }
+            fs::write(&path, contents).expect("write fixture note");
+        }
+        let day_file = vault.join("day.md");
+        if let Some(day) = day {
+            fs::write(&day_file, day).expect("write day file");
+        }
+        let tasks_settings =
+            vault.join(".obsidian/plugins/obsidian-tasks-plugin");
+        fs::create_dir_all(&tasks_settings).expect("create Tasks settings");
+        fs::write(
+            tasks_settings.join("data.json"),
+            r##"{
+          "globalFilter": "#task",
+          "taskFormat": "dataview",
+          "statusSettings": {
+            "coreStatuses": [
+              {"symbol":" ","name":"Ready","nextStatusSymbol":"x","availableAsCommand":true,"type":"TODO"},
+              {"symbol":"x","name":"Done","nextStatusSymbol":" ","availableAsCommand":true,"type":"DONE"}
+            ],
+            "customStatuses": [
+              {"symbol":"/","name":"In Progress","nextStatusSymbol":"x","availableAsCommand":true,"type":"IN_PROGRESS"},
+              {"symbol":"*","name":"Next","nextStatusSymbol":"x","availableAsCommand":true,"type":"ON_HOLD"},
+              {"symbol":"?","name":"Blocked","nextStatusSymbol":" ","availableAsCommand":true,"type":"ON_HOLD"},
+              {"symbol":"-","name":"Canceled","nextStatusSymbol":" ","availableAsCommand":true,"type":"CANCELLED"}
+            ]
+          }
+        }"##,
+        )
+        .expect("write Tasks settings");
+        let missing_config = temp.path().join("missing-bob-config.toml");
+        let guard = TestEnvGuard::set(&[
+            ("BOB_NOW", Some(std::ffi::OsStr::new("2026-09-20 14:31:07"))),
+            ("BOB_DAY_FILE", Some(day_file.as_os_str())),
+            ("BOB_CONFIG_FILE", Some(missing_config.as_os_str())),
+            ("TZ", Some(std::ffi::OsStr::new("UTC0"))),
+        ]);
+        let request = CaptureRequest {
+            bob_dir: vault,
+            dry_run: true,
+            forced_clip: None,
+            forced_destination_flags: Vec::new(),
+            forced_route: None,
+            forced_section: None,
+            forced_sub_bullet_target: None,
+            forced_drawer: None,
+            inbox_routes: Vec::new(),
+            no_clip: false,
+            no_ref: false,
+            pull_in: None,
+            refuse_override: false,
+            require_inbox_route_choice: false,
+            require_pull_in_choice: false,
+            template_origin: None,
+            raw_text: raw_text.to_string(),
+            selection: SuccessorSelection::None,
+        };
+        BatchVault {
+            _temp: temp,
+            _guard: guard,
+            request,
+        }
+    }
+
+    fn batch_offers(
+        batch: &crate::native::capture::plan::PlannedCaptureBatch,
+    ) -> Vec<crate::native::capture::output::TaskCompleteUnblockedJson> {
+        batch
+            .items
+            .iter()
+            .flat_map(|item| {
+                crate::native::capture::output::all_offer_rows(&item.result)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    // NP20: two pulls in item order keep item precedence even when route
+    // names sort reverse-lexically (`sase` first, `dev` second, but
+    // `dev.md` < `sase.md` lexically). Numbers continue across the draft.
+    #[test]
+    fn np20_two_pulls_keep_item_order_and_continue_numbers() {
+        let mut vault = batch_vault(
+            &[
+                ("sase.md", "- [ ] #task Sase row ^sr\n"),
+                ("dev.md", "- [ ] #task Dev row ^dr\n"),
+            ],
+            Some(FIX_DAY),
+            "@sase\n\n@dev",
+        );
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("NP20 plans");
+        assert_eq!(batch.items.len(), 2);
+        let offers = batch_offers(&batch);
+        assert_eq!(offers.len(), 2, "{offers:?}");
+        // Item order wins: sase (item 0) before dev (item 1).
+        assert_eq!(offers[0].note_path, "sase.md");
+        assert_eq!(offers[1].note_path, "dev.md");
+        let ns: Vec<usize> = offers
+            .iter()
+            .filter_map(|row| row.offer.as_ref().map(|offer| offer.n))
+            .collect();
+        assert_eq!(ns, vec![1, 2], "{offers:?}");
+    }
+
+    // NP19: a hand-off recovery owns its row; a later pull omits the
+    // duplicate instead of offering it twice.
+    #[test]
+    fn np19_hand_off_owns_row_later_pull_omits() {
+        let mut vault = batch_vault(
+            &[(
+                "sase.md",
+                "- [ ] #task Dependent [dependsOn:: open1] [id:: dep] ^dep\n- [ ] #task Opener [id:: open1] ^open1\n",
+            )],
+            Some(FIX_DAY),
+            "!sase:open1\n\n@sase",
+        );
+        // Select-all would link the hand-off and the pull; use no picks
+        // to inspect ownership without writes.
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("NP19 plans");
+        let offers = batch_offers(&batch);
+        let dep_rows: Vec<
+            &crate::native::capture::output::TaskCompleteUnblockedJson,
+        > = offers.iter().filter(|row| row.block_id == "dep").collect();
+        // D appears once (in hand_off); the pull omits it.
+        assert_eq!(dep_rows.len(), 1, "{offers:?}");
+        assert_ne!(dep_rows[0].trigger, "note_pull");
+    }
+
+    // NP17: an earlier creation makes its task offerable; picking it
+    // does not stamp fresh.
+    #[test]
+    fn np17_same_draft_creation_offered_without_fresh_stamp() {
+        let mut vault = batch_vault(
+            &[("sase.md", "- [ ] #task Old ^old\n")],
+            Some(FIX_DAY),
+            "Write docs @sase\n\n@sase",
+        );
+        vault.request.selection = SuccessorSelection::All;
+        let batch = crate::native::capture::plan::plan_capture_batch(
+            &vault.request,
+            None,
+        )
+        .expect("NP17 plans");
+        assert_eq!(batch.items.len(), 2);
+        let pull_item = &batch.items[1];
+        let pull = pull_item
+            .result
+            .note_pull
+            .as_ref()
+            .expect("second item is note pull");
+        // Old plus newly created rows are both offered.
+        assert!(
+            pull.successors.len() >= 2,
+            "expected old + created offers: {}",
+            pull.successors.len()
+        );
+        let staged_source = batch
+            .text_files
+            .iter()
+            .find(|file| file.target.ends_with("sase.md"))
+            .map(|file| file.updated_target.clone())
+            .unwrap_or_default();
+        // The created row was picked but carries no fresh stamp.
+        let created_lines: Vec<&str> = staged_source
+            .lines()
+            .filter(|line| line.contains("Write docs"))
+            .collect();
+        assert_eq!(created_lines.len(), 1, "{staged_source}");
+        assert!(
+            !created_lines[0].contains("[fresh::"),
+            "created pick must not stamp: {}",
+            created_lines[0]
+        );
+        // The old row was picked and is stamped.
+        assert!(
+            staged_source.contains("[fresh:: 2026-09-20]"),
+            "{staged_source}"
+        );
+    }
+
+    // NP18: a later explicit link drops the earlier pull's row in the
+    // final net pass (SL20).
+    #[test]
+    fn np18_later_link_drops_earlier_pull_row() {
+        let vault = batch_vault(
+            &[("sase.md", "- [ ] #task Doc row [id:: docs] ^docs\n")],
+            Some(FIX_DAY),
+            "@sase\n\n@sase:docs",
+        );
+        let batch = crate::native::capture::plan::plan_capture_batch(
+            &vault.request,
+            None,
+        )
+        .expect("NP18 plans");
+        assert_eq!(batch.items.len(), 2);
+        let pull_item = &batch.items[0];
+        let pull = pull_item
+            .result
+            .note_pull
+            .as_ref()
+            .expect("first item is note pull");
+        // The later `@sase:docs` link removes A's row from the pull.
+        assert!(
+            pull.successors.is_empty(),
+            "later link should prune the pull row: {:?}",
+            pull.successors
+        );
+    }
+
+    // Duplicate ID-less descriptions keep stable `~k` keys: selecting
+    // only the second of two identical rows links just that occurrence.
+    #[test]
+    fn batch_duplicate_idless_second_row_selects_alone() {
+        let source = "- [ ] #task Same words\n- [ ] #task Same words\n";
+        let mut vault =
+            batch_vault(&[("sase.md", source)], Some(FIX_DAY), "@sase");
+        // Probe keys with no picks, then select only the `~2` key.
+        let (probe, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("probe plans");
+        let keys: Vec<String> = batch_offers(&probe)
+            .iter()
+            .filter_map(|row| row.offer.as_ref().map(|offer| offer.key.clone()))
+            .collect();
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert!(
+            keys[1].contains('~'),
+            "second duplicate needs an ordinal suffix: {keys:?}"
+        );
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::Tokens {
+                numbers: Vec::new(),
+                keys: vec![keys[1].clone()],
+            });
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("key pick plans");
+        let offers = batch_offers(&batch);
+        assert_eq!(offers.len(), 2);
+        let picked: Vec<
+            &crate::native::capture::output::TaskCompleteUnblockedJson,
+        > = offers
+            .iter()
+            .filter(|row| {
+                row.offer.as_ref().is_some_and(|offer| offer.selected)
+            })
+            .collect();
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].offer.as_ref().expect("offer").key, keys[1]);
+        assert!(picked[0].link.is_some());
+    }
+
+    // Repeated source pulls: the earliest item owns each key; the later
+    // pull succeeds empty (pruned) instead of refusing.
+    #[test]
+    fn batch_repeated_source_second_pull_pruned_not_refused() {
+        let mut vault = batch_vault(
+            &[("sase.md", "- [ ] #task Only ^only\n")],
+            Some(FIX_DAY),
+            "@sase\n\n@sase",
+        );
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("repeated pulls plan");
+        assert_eq!(batch.items.len(), 2);
+        let first_count = batch.items[0]
+            .result
+            .note_pull
+            .as_ref()
+            .expect("first pull")
+            .successors
+            .len();
+        let second_count = batch.items[1]
+            .result
+            .note_pull
+            .as_ref()
+            .expect("second pull")
+            .successors
+            .len();
+        assert_eq!(first_count, 1);
+        assert_eq!(second_count, 0);
+        assert_eq!(batch_offers(&batch).len(), 1);
+    }
+
+    // Rollback: a later pull failure aborts the whole draft; no earlier
+    // staged item may commit.
+    #[test]
+    fn batch_later_missing_note_rolls_back_earlier_creation() {
+        let vault = batch_vault(
+            &[("sase.md", "- [ ] #task Old ^old\n")],
+            Some(FIX_DAY),
+            "Write docs @sase\n\n@nosuch",
+        );
+        let Err(error) = crate::native::capture::plan::plan_capture_batch(
+            &vault.request,
+            None,
+        ) else {
+            panic!("missing second source must fail the batch");
+        };
+        assert_eq!(error.code.as_deref(), Some("pull_note_missing"));
+    }
+
+    // NP13: `--require-pull-in-choice` without `-p` refuses
+    // `pull_in_choice_required` with `pull_in` and flat offers.
+    #[test]
+    fn np13_require_choice_without_picks_refuses() {
+        let mut vault =
+            batch_vault(&[("sase.md", PBA)], Some(FIX_DAY), "@sase");
+        vault.request.require_pull_in_choice = true;
+        let Err(error) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        ) else {
+            panic!("NP13 must refuse without picks");
+        };
+        assert_eq!(error.code.as_deref(), Some("pull_in_choice_required"));
+    }
+
+    // NP14: numeric picks, key picks, and the teaching error for
+    // out-of-range picks.
+    #[test]
+    fn np14_numeric_key_and_out_of_range_picks() {
+        let mut vault =
+            batch_vault(&[("sase.md", PBA)], Some(FIX_DAY), "@sase");
+        // Numeric pick `-p 1` selects the Pending row.
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::Tokens {
+                numbers: vec![1],
+                keys: Vec::new(),
+            });
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("numeric pick plans");
+        let picked = batch_offers(&batch)
+            .into_iter()
+            .filter(|row| {
+                row.offer.as_ref().is_some_and(|offer| offer.selected)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].text, "Ship the badge renderer");
+
+        // Key pick selects the same row by key.
+        let mut vault =
+            batch_vault(&[("sase.md", PBA)], Some(FIX_DAY), "@sase");
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::Tokens {
+                numbers: Vec::new(),
+                keys: vec!["sase.md#^ship-renderer".to_string()],
+            });
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("key pick plans");
+        let picked = batch_offers(&batch)
+            .into_iter()
+            .filter(|row| {
+                row.offer.as_ref().is_some_and(|offer| offer.selected)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(picked.len(), 1);
+
+        // Out-of-range `-p 9` is the teaching error with no writes.
+        let mut vault =
+            batch_vault(&[("sase.md", PBA)], Some(FIX_DAY), "@sase");
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::Tokens {
+                numbers: vec![9],
+                keys: Vec::new(),
+            });
+        let Err(error) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        ) else {
+            panic!("out-of-range pick must fail");
+        };
+        assert!(
+            error.message.contains("stale, unknown, or out-of-range"),
+            "{}",
+            error.message
+        );
+    }
+
+    // NP16: a Ready inbox pick is an inbox-route candidate moved in the
+    // same transaction; a picked Next inbox task is not a candidate.
+    #[test]
+    fn np16_inbox_ready_pick_routes_next_pick_does_not() {
+        let inbox_files: &[(&str, &str)] = &[
+            ("inbox.md", "# Inbox\n"),
+            (
+                "mac_inbox.md",
+                "---\ntype: [[area]]\nparent: [[inbox]]\n---\n## Tasks\n- [ ] #task Route me ^route-task\n- [*] #task Already Next ^already-next\n",
+            ),
+            ("health.md", "---\ntype: [[area]]\n---\n## Tasks\n"),
+        ];
+        // Pick the Ready row only: it becomes Next and is a candidate.
+        let BatchVault {
+            _temp: _temp1,
+            _guard: _guard1,
+            mut request,
+        } = batch_vault(inbox_files, Some(FIX_DAY), "@mac_inbox");
+        request.selection = SuccessorSelection::Keys(
+            ["mac_inbox.md#^route-task".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        let batch =
+            crate::native::capture::plan::plan_capture_batch(&request, None)
+                .expect("NP16 Ready pick plans");
+        assert_eq!(batch.inbox_route.candidate_count, 1);
+        assert_eq!(
+            batch.inbox_route.candidates[0].key,
+            "mac_inbox.md#^route-task"
+        );
+
+        // Routing it moves the task in the same batch.
+        let BatchVault {
+            _temp: _temp2,
+            _guard: _guard2,
+            mut request,
+        } = batch_vault(inbox_files, Some(FIX_DAY), "@mac_inbox");
+        request.selection = SuccessorSelection::Keys(
+            ["mac_inbox.md#^route-task".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        request.inbox_routes =
+            vec![crate::native::capture::cli::InboxRoutePick::Answer {
+                selector: "1".to_string(),
+                destination: Some("health".to_string()),
+            }];
+        let batch =
+            crate::native::capture::plan::plan_capture_batch(&request, None)
+                .expect("NP16 routed pick plans");
+        assert_eq!(batch.inbox_route.routed_count, 1);
+
+        // Picking only the already-Next row is no candidate.
+        let BatchVault {
+            _temp: _temp3,
+            _guard: _guard3,
+            mut request,
+        } = batch_vault(inbox_files, Some(FIX_DAY), "@mac_inbox");
+        request.selection = SuccessorSelection::Keys(
+            ["mac_inbox.md#^already-next".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        let batch =
+            crate::native::capture::plan::plan_capture_batch(&request, None)
+                .expect("NP16 Next pick plans");
+        assert_eq!(batch.inbox_route.candidate_count, 0);
     }
 }
