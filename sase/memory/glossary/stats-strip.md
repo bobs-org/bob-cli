@@ -29,5 +29,5 @@ The [[day-strip]] is the day member: it has no parts row and mounts itself in
 `bob-plan`. Facts and lanes open the [[stats-dash]] with the period pinned. bob owns
 every value, and the strip never writes the note.
 
-Not the parts table (`bob-period-parts`), the Stats Dash, `bob stats` terminal
+Not the parts table (`bob-period-parts`), the [[stats-dash]], `bob stats` terminal
 output, or the [[morning-gtd-review-footer]].

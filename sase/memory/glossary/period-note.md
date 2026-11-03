@@ -21,7 +21,7 @@ days. bob creates them, create-only and one week ahead (`bob periods ensure`).
 Each opens with a [[stats-strip]] and a live parts table that summarizes every child
 with its Headline or the root parents it mostly went to. It then holds:
 
-- Bryan's Intentions, Outcomes, or Theme;
+- Bryan's `Intentions`, `Outcomes`, or `Theme`;
 - a `## Review` that an agent may draft only through `bob periods draft`, while it
   is empty or still unedited;
 - Bryan's `## Reflection`;
