@@ -263,3 +263,21 @@ The implementation mirrors this contract in `src/291d-event-link-times.js` (core
 `src/291f-plugin-event-link-times-reading.js` (Live Preview and Reading view), with
 coverage in `scripts/test-ledger-tools-event-link-times.cjs`. The feature has no API
 namespace.
+
+## Live verification
+
+The new isolated harness is `bob-plugins/scripts/obsidian-event-link-times-e2e.cjs`.
+Its offline self-test passed on Apollo with Node v24.15.0, and the registered Node test
+passed 1/1. The harness creates its own scratch vault and profile and never opens the
+live vault.
+
+The real-Obsidian run was skipped on Apollo: `/snap/bin/obsidian` is not installed and
+`xvfb-run` is unavailable. The run report records that skip. No light or dark screenshots
+were produced or visually reviewed, and live refresh timings were not measured. The
+harness records same-frame Event span updates, inherited-clock refresh, and calendar
+refresh timings when run on a host with Obsidian and Xvfb:
+
+```sh
+xvfb-run -a node scripts/obsidian-event-link-times-e2e.cjs \
+  --out <results-directory> --report <report.json>
+```
