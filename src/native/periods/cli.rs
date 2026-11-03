@@ -17,15 +17,18 @@ pub(crate) fn ensure_command() -> ClapCommand {
              date plus seven days. Missing notes are created from the \
              deterministic scaffold; existing notes that are empty or \
              whitespace-only are filled. A note with content is never \
-             touched. A re-run writes nothing. See docs/periods.md for the \
-             calendar, scaffolds, and JSON.",
+             touched. A re-run writes nothing. With -R/--refresh-instructions, \
+             stale agent callouts in existing notes are refreshed in one \
+             commit instead. See docs/periods.md for the calendar, scaffolds, \
+             and JSON.",
         )
         .after_help(
             "Examples:\n  \
              bob periods ensure\n  \
              bob periods ensure -d 2026-12-28\n  \
              bob periods ensure -n -f json\n  \
-             bob periods ensure -q\n\n\
+             bob periods ensure -q\n  \
+             bob periods ensure -R\n\n\
              Environment:\n  \
              BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
              BOB_NOW                   Local datetime override that pins today\n  \
@@ -44,6 +47,7 @@ pub(crate) fn ensure_command() -> ClapCommand {
         .arg(format_arg())
         .arg(help_arg())
         .arg(quiet_arg())
+        .arg(refresh_instructions_arg())
 }
 
 pub(crate) fn list_command() -> ClapCommand {
@@ -81,6 +85,84 @@ pub(crate) fn list_command() -> ClapCommand {
         .arg(kind_arg())
         .arg(problems_arg())
         .arg(year_arg())
+}
+
+pub(crate) fn brief_command() -> ClapCommand {
+    ClapCommand::new("bob periods brief")
+        .about("Print the agent review bundle for a week, quarter, or year")
+        .long_about(
+            "Print the deterministic, versioned agent bundle (brief v1) for \
+             a week, quarter, or year: header, facts, time, parts, finished, \
+             started and dropped, still open, practice (year only), Bryan's \
+             words, this note and its neighbours, off-clock counts, and \
+             caveats. The command is read-only. all_time has no review. See \
+             docs/periods.md for the brief contract and token budgets.",
+        )
+        .after_help(
+            "Examples:\n  \
+             bob periods brief 2026-W45\n  \
+             bob periods brief 2026-Q4 -f json\n  \
+             bob periods brief 2026 -f md\n\n\
+             Environment:\n  \
+             BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
+             BOB_NOW                   Local datetime override that pins today\n  \
+             BOB_CONFIG_FILE           Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
+             NO_COLOR                  Disable colored output\n\n\
+             Exit codes:\n  \
+             0  brief\n  \
+             1  vault I/O failure\n  \
+             2  usage (bad id or flags), or all_time (which has no review)\n\n\
+             See docs/periods.md for the brief contract and token budgets.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(Arg::new("period").value_name("PERIOD").help(
+            "Period id or note path (week, quarter, or year); all_time has no review",
+        ))
+}
+
+pub(crate) fn draft_command() -> ClapCommand {
+    ClapCommand::new("bob periods draft")
+        .about("Draft a period's Review section (never overwrites Bryan)")
+        .long_about(
+            "Replace the `## Review` section of a week, quarter, or year note \
+             with the draft text from -i/--input (a file path, or - for \
+             stdin). The text must open with a `**Headline:**` line and stay \
+             within the kind's word cap (week 250, quarter 400, year 600). \
+             An open or future period, or a Review Bryan already edited or \
+             reflected, is refused unless -F/--force is passed. The note must \
+             exist and contain `## Review`; all_time has no review. See \
+             docs/periods.md for the draft rules and JSON errors.",
+        )
+        .after_help(
+            "Examples:\n  \
+             bob periods draft 2026-W45 -i /tmp/review.md\n  \
+             bob periods draft 2026-Q4 -i - < review.md\n  \
+             bob periods draft 2026-W45 -i review.md -n\n  \
+             bob periods draft 2026-W45 -i review.md -F\n\n\
+             Environment:\n  \
+             BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
+             BOB_NOW                   Local datetime override that pins today\n  \
+             NO_COLOR                  Disable colored output\n\n\
+             Exit codes:\n  \
+             0  drafted (or planned with -n)\n  \
+             1  vault I/O or transaction failure\n  \
+             2  usage (bad id, flags, or draft text)\n  \
+             3  refused (period open, or state edited/reflected)\n\n\
+             See docs/periods.md for the draft rules, word caps, and JSON errors.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(draft_force_arg())
+        .arg(format_arg())
+        .arg(help_arg())
+        .arg(draft_input_arg())
+        .arg(dry_run_arg())
+        .arg(Arg::new("period").value_name("PERIOD").help(
+            "Period id or note path (week, quarter, or year); all_time has no review",
+        ))
 }
 
 pub(crate) fn migrate_command() -> ClapCommand {
@@ -217,6 +299,31 @@ fn show_clock_arg() -> Arg {
         ]))
         .default_value("worked")
         .help("Pomodoro clock: worked, off-clock, or total")
+}
+
+fn draft_force_arg() -> Arg {
+    Arg::new("force")
+        .long("force")
+        .short('F')
+        .action(ArgAction::SetTrue)
+        .help("Draft an open period or overwrite Bryan's edits (Bryan said redo, or asked for so far)")
+}
+
+fn draft_input_arg() -> Arg {
+    Arg::new("input")
+        .long("input")
+        .short('i')
+        .value_name("FILE")
+        .value_parser(OsStringValueParser::new())
+        .help("Draft text file, or - for stdin (required)")
+}
+
+fn refresh_instructions_arg() -> Arg {
+    Arg::new("refresh-instructions")
+        .long("refresh-instructions")
+        .short('R')
+        .action(ArgAction::SetTrue)
+        .help("Refresh stale agent callouts in existing period notes (one commit)")
 }
 
 fn help_arg() -> Arg {

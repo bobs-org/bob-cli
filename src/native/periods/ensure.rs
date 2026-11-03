@@ -15,9 +15,9 @@ use std::time::Duration;
 use chrono::NaiveDate;
 use serde_json::json;
 
-use super::super::{env as bob_env, ob};
+use super::super::{env as bob_env, ob, vault_rewrite};
 use super::calendar::PeriodId;
-use super::scaffold;
+use super::{instructions, note, scaffold};
 
 const COMMAND_NAME: &str = "bob periods ensure";
 const SCHEMA_VERSION: u32 = 1;
@@ -52,6 +52,19 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Err(error) => return print_clap_error(error),
     };
     let format = OutputFormat::from_matches(&matches);
+    if matches.get_flag("refresh-instructions") {
+        return match execute_refresh(&matches) {
+            Ok(report) => {
+                print_refresh_success(
+                    &report,
+                    format,
+                    matches.get_flag("quiet"),
+                );
+                0
+            }
+            Err(error) => print_error(error, format),
+        };
+    }
     match execute(&matches) {
         Ok(report) => {
             print_success(&report, format, matches.get_flag("quiet"));
@@ -362,6 +375,302 @@ fn print_error(error: EnsureError, format: OutputFormat) -> i32 {
         }
     }
     error.exit_code
+}
+
+#[derive(Debug, Default)]
+struct RefreshReport {
+    refreshed: Vec<String>,
+    skipped_reflected: Vec<String>,
+    up_to_date: Vec<String>,
+    dry_run: bool,
+    sha: Option<String>,
+    subject: Option<String>,
+}
+
+/// `-R/--refresh-instructions`: replace stale agent callouts in every
+/// existing period note whose callout version is below
+/// `INSTRUCTIONS_VERSION` and whose Review is not reflected, in one
+/// `vault_rewrite` commit.
+fn execute_refresh(
+    matches: &clap::ArgMatches,
+) -> Result<RefreshReport, EnsureError> {
+    let vault = bob_dir_from_matches(matches);
+    let dry_run = matches.get_flag("dry-run");
+    let mut planned: Vec<(String, String, String)> = Vec::new();
+    let mut report = RefreshReport::default();
+    for (id, target) in discover_period_notes(&vault) {
+        let contents = fs::read_to_string(&target).map_err(|error| {
+            EnsureError::io(format!(
+                "could not read {}: {error}",
+                target.display()
+            ))
+        })?;
+        let version = note::parse_instructions_version(&contents).unwrap_or(0);
+        if version >= instructions::INSTRUCTIONS_VERSION {
+            report.up_to_date.push(display_path(&vault, &target));
+            continue;
+        }
+        if !matches!(
+            note::parse(&contents).review_state,
+            note::ReviewState::Empty
+                | note::ReviewState::Drafted
+                | note::ReviewState::Edited
+        ) {
+            report.skipped_reflected.push(display_path(&vault, &target));
+            continue;
+        }
+        let relative = display_path(&vault, &target);
+        if dry_run {
+            report.refreshed.push(relative);
+            continue;
+        }
+        let refreshed = refresh_callout(&contents, id);
+        planned.push((relative, contents, refreshed));
+    }
+    if dry_run {
+        report.dry_run = true;
+        return Ok(report);
+    }
+    if planned.is_empty() {
+        return Ok(report);
+    }
+    let files: Vec<vault_rewrite::FileRewrite> = planned
+        .iter()
+        .map(|(relative, before, after)| vault_rewrite::FileRewrite {
+            path: relative.clone(),
+            before_contents: Some(before.clone()),
+            after_contents: after.clone(),
+        })
+        .collect();
+    let subject = format!(
+        "periods: refresh agent instructions to v{}",
+        instructions::INSTRUCTIONS_VERSION
+    );
+    let vault_for_verify = vault.clone();
+    let planned_for_verify = planned.clone();
+    let child_env = ob::child_env();
+    let outcome = vault_rewrite::run(
+        &vault,
+        &child_env,
+        COMMAND_NAME,
+        "period-note instruction refresh",
+        true,
+        false,
+        move || {
+            Ok(vault_rewrite::ReadyPlan {
+                files,
+                subject: subject.clone(),
+                post_write: Box::new(|| Ok(Vec::new())),
+                verify: Box::new(move || {
+                    verify_refresh(&vault_for_verify, &planned_for_verify)
+                }),
+                on_committed: Box::new(|| {}),
+                context: (),
+            })
+        },
+    )
+    .map_err(|failure| {
+        EnsureError::io(format!("{}: {}", failure.code, failure.message))
+    })?;
+    for (relative, _, _) in &planned {
+        report.refreshed.push(relative.clone());
+    }
+    report.sha = Some(outcome.sha);
+    report.subject = Some(outcome.subject);
+    Ok(report)
+}
+
+fn verify_refresh(
+    vault: &Path,
+    planned: &[(String, String, String)],
+) -> Result<(), String> {
+    for (relative, _, _) in planned {
+        let contents =
+            fs::read_to_string(vault.join(relative)).map_err(|error| {
+                format!("could not re-read {relative}: {error}")
+            })?;
+        let version = note::parse_instructions_version(&contents).unwrap_or(0);
+        if version != instructions::INSTRUCTIONS_VERSION {
+            return Err(format!("{relative} still carries callout v{version}"));
+        }
+    }
+    Ok(())
+}
+
+/// Every period note in the vault: year notes and `all_time.md` at
+/// the root, week and quarter notes under `YYYY/` directories.
+fn discover_period_notes(vault: &Path) -> Vec<(PeriodId, PathBuf)> {
+    let mut notes = Vec::new();
+    if let Ok(entries) = fs::read_dir(vault) {
+        let mut roots: Vec<PathBuf> =
+            entries.flatten().map(|entry| entry.path()).collect();
+        roots.sort();
+        for path in roots {
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name == "all_time.md" {
+                notes.push((PeriodId::AllTime, path));
+            } else if name.len() == 7 && name.ends_with(".md") {
+                let stem = &name[..4];
+                if let Ok(id) = PeriodId::parse(stem)
+                    && matches!(id, PeriodId::Year(_))
+                {
+                    notes.push((id, path));
+                }
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(vault) {
+        let mut dirs: Vec<PathBuf> =
+            entries.flatten().map(|entry| entry.path()).collect();
+        dirs.sort();
+        for dir in dirs {
+            if !dir.is_dir() {
+                continue;
+            }
+            let Ok(inner) = fs::read_dir(&dir) else {
+                continue;
+            };
+            let mut files: Vec<PathBuf> =
+                inner.flatten().map(|entry| entry.path()).collect();
+            files.sort();
+            for note_path in files {
+                if !note_path.is_file() {
+                    continue;
+                }
+                let Some(name) = note_path.file_name().and_then(|n| n.to_str())
+                else {
+                    continue;
+                };
+                if !name.ends_with(".md") {
+                    continue;
+                }
+                let stem = name.trim_end_matches(".md");
+                if !stem.contains('-') {
+                    continue;
+                }
+                if let Ok(id) = PeriodId::parse(stem)
+                    && !matches!(id, PeriodId::Year(_) | PeriodId::AllTime)
+                {
+                    notes.push((id, note_path));
+                }
+            }
+        }
+    }
+    notes
+}
+
+/// Replace the callout block (title line through the contiguous `>`
+/// lines) with the current scaffold callout, or insert it before
+/// `## Archive` or at EOF when it is missing.
+fn refresh_callout(contents: &str, id: PeriodId) -> String {
+    let fresh = instructions::render(id);
+    let lines: Vec<&str> = contents.lines().collect();
+    if let Some(title) = lines
+        .iter()
+        .position(|line| line.contains("Agent instructions ·"))
+    {
+        let mut end = title + 1;
+        while end < lines.len() && lines[end].starts_with('>') {
+            end += 1;
+        }
+        let mut head: Vec<&str> = lines[..title].to_vec();
+        while head.last().is_some_and(|line| line.trim().is_empty()) {
+            head.pop();
+        }
+        let mut tail: Vec<&str> = lines[end..].to_vec();
+        while tail.first().is_some_and(|line| line.trim().is_empty()) {
+            tail.remove(0);
+        }
+        let mut out = String::new();
+        if !head.is_empty() {
+            out.push_str(&head.join("\n"));
+            out.push_str("\n\n");
+        }
+        out.push_str(&fresh);
+        out.push('\n');
+        if !tail.is_empty() {
+            out.push('\n');
+            out.push_str(&tail.join("\n"));
+            out.push('\n');
+        }
+        return out;
+    }
+    let mut head: Vec<&str>;
+    let mut tail: Vec<&str> = Vec::new();
+    let mut archive_at = None;
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim_end() == "## Archive" {
+            archive_at = Some(index);
+            break;
+        }
+    }
+    match archive_at {
+        Some(at) => {
+            head = lines[..at].to_vec();
+            tail = lines[at..].to_vec();
+        }
+        None => {
+            head = lines.to_vec();
+        }
+    }
+    while head.last().is_some_and(|line| line.trim().is_empty()) {
+        head.pop();
+    }
+    while tail.first().is_some_and(|line| line.trim().is_empty()) {
+        tail.remove(0);
+    }
+    let mut out = String::new();
+    if !head.is_empty() {
+        out.push_str(&head.join("\n"));
+        out.push_str("\n\n");
+    }
+    out.push_str(&fresh);
+    out.push('\n');
+    if !tail.is_empty() {
+        out.push('\n');
+        out.push_str(&tail.join("\n"));
+        out.push('\n');
+    }
+    out
+}
+
+fn print_refresh_success(
+    report: &RefreshReport,
+    format: OutputFormat,
+    quiet: bool,
+) {
+    match format {
+        OutputFormat::Human => {
+            if quiet && report.refreshed.is_empty() {
+                return;
+            }
+            for path in &report.refreshed {
+                if report.dry_run {
+                    println!("would refresh {path}");
+                } else {
+                    println!("refreshed {path}");
+                }
+            }
+        }
+        OutputFormat::Json => {
+            let body = json!({
+                "ok": true,
+                "schema_version": SCHEMA_VERSION,
+                "refreshed": report.refreshed,
+                "skipped_reflected": report.skipped_reflected,
+                "up_to_date": report.up_to_date,
+                "dry_run": report.dry_run,
+                "sha": report.sha,
+                "subject": report.subject,
+            });
+            println!("{}", serde_json::to_string(&body).unwrap_or_default());
+        }
+    }
 }
 
 #[cfg(test)]

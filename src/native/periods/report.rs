@@ -38,15 +38,15 @@ const FACT_IDS: [&str; 5] =
     ["worked", "reviewed", "done", "created", "review_closed"];
 
 #[derive(Debug, Clone)]
-struct ShowError {
-    code: String,
-    message: String,
-    hint: String,
-    exit_code: i32,
+pub(crate) struct ShowError {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) hint: String,
+    pub(crate) exit_code: i32,
 }
 
 impl ShowError {
-    fn usage(message: impl Into<String>) -> Self {
+    pub(crate) fn usage(message: impl Into<String>) -> Self {
         Self {
             code: "invalid_period".to_string(),
             message: message.into(),
@@ -56,7 +56,7 @@ impl ShowError {
         }
     }
 
-    fn io(message: impl Into<String>) -> Self {
+    pub(crate) fn io(message: impl Into<String>) -> Self {
         Self {
             code: "io_error".to_string(),
             message: message.into(),
@@ -65,7 +65,7 @@ impl ShowError {
         }
     }
 
-    fn config(message: impl Into<String>) -> Self {
+    pub(crate) fn config(message: impl Into<String>) -> Self {
         Self {
             code: "config_error".to_string(),
             message: message.into(),
@@ -74,7 +74,7 @@ impl ShowError {
         }
     }
 
-    fn from_stats(error: StatsError) -> Self {
+    pub(crate) fn from_stats(error: StatsError) -> Self {
         Self {
             code: error.code().to_string(),
             message: error.message().to_string(),
@@ -87,7 +87,7 @@ impl ShowError {
         }
     }
 
-    fn json(&self) -> Value {
+    pub(crate) fn json(&self) -> Value {
         json!({
             "ok": false,
             "schema_version": SCHEMA_VERSION,
@@ -101,9 +101,9 @@ impl ShowError {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Span {
-    start: NaiveDate,
-    end: NaiveDate,
+pub(crate) struct Span {
+    pub(crate) start: NaiveDate,
+    pub(crate) end: NaiveDate,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -228,7 +228,7 @@ fn execute(matches: &ArgMatches) -> Result<Value, ShowError> {
     build_report(&vault, config::config_path(), id, now, clock)
 }
 
-fn build_report(
+pub(crate) fn build_report(
     vault: &Path,
     config_path: PathBuf,
     id: PeriodId,
@@ -373,7 +373,7 @@ fn daily_metrics_from_report(report: StatsReport) -> DailyMetrics {
     }
 }
 
-fn period_span(
+pub(crate) fn period_span(
     id: PeriodId,
     vault: &Path,
     today: NaiveDate,

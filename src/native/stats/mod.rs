@@ -7,7 +7,7 @@ pub(crate) mod clock;
 pub(crate) mod compute;
 pub(crate) mod error;
 pub(crate) mod formula;
-mod homes;
+pub(crate) mod homes;
 pub(crate) mod index;
 pub(crate) mod journal;
 pub(crate) mod metrics;

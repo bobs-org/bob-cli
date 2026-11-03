@@ -158,19 +158,26 @@ pub(crate) fn parse_reflection_lead(reflection_body: &str) -> Option<String> {
 /// `Agent instructions · <kind> v<N>`.
 pub(crate) fn parse_instructions_version(contents: &str) -> Option<u32> {
     for line in contents.lines() {
-        if line.contains("Agent instructions ·")
-            && line.contains('v')
-            && let Some(marker) = line.find("Agent instructions ·")
-        {
-            let tail = &line[marker..];
-            if let Some(vpos) = tail.rfind('v') {
-                let digits: String = tail[vpos + 1..]
-                    .chars()
-                    .take_while(|ch| ch.is_numeric())
-                    .collect();
-                if let Ok(version) = digits.parse::<u32>() {
-                    return Some(version);
-                }
+        let Some(marker) = line.find("Agent instructions ·") else {
+            continue;
+        };
+        let tail = &line[marker..];
+        // The version is the `v<N>` right after the kind word; later
+        // `v` letters in the heading prose (Nov, Review, have) do not
+        // count.
+        for (index, _) in tail.match_indices('v') {
+            let before = &tail[..index];
+            if !before.ends_with(' ') {
+                continue;
+            }
+            let digits: String = tail[index + 1..]
+                .chars()
+                .take_while(|ch| ch.is_numeric())
+                .collect();
+            if !digits.is_empty()
+                && let Ok(version) = digits.parse::<u32>()
+            {
+                return Some(version);
             }
         }
     }

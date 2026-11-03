@@ -5,8 +5,10 @@
 //! adopts the vault; later phases add the report, brief/draft, and the
 //! strips.
 
+pub(crate) mod brief;
 pub(crate) mod calendar;
 pub(crate) mod cli;
+pub(crate) mod draft;
 pub(crate) mod ensure;
 pub(crate) mod instructions;
 pub(crate) mod labels;

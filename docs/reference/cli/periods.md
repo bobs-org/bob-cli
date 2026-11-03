@@ -16,6 +16,8 @@ Bare `bob periods` runs the read-only list. ensure creates missing period notes 
 Usage: bob periods [COMMAND]
 
 Commands:
+  brief    Print the agent review bundle for a week, quarter, or year
+  draft    Draft a period's Review section (never overwrites Bryan)
   ensure   Create missing period notes one week ahead
   list     List period notes with review states (default)
   migrate  Adopt the period-note tree (dry run by default)
@@ -27,6 +29,8 @@ Options:
 Bare `bob periods` runs the read-only list.
 
 Examples:
+  bob periods brief 2026-W45     Print the agent review bundle for a week
+  bob periods draft 2026-W45 -i review.md  Draft the week's Review section
   bob periods ensure             Create missing notes one week ahead
   bob periods                    List period notes with review states
   bob periods list -k week       List only weekly notes
@@ -41,12 +45,112 @@ See docs/periods.md for the calendar, scaffolds, reports, and JSON.
 Run 'bob periods <command> --help' for more information on a command.
 ```
 
+## bob periods brief
+
+Print the agent review bundle for a week, quarter, or year
+
+```text title="bob periods brief --help"
+Print the deterministic, versioned agent bundle (brief v1) for a week, quarter, or year: header, facts, time, parts, finished, started and dropped, still open, practice (year only), Bryan's words, this note and its neighbours, off-clock counts, and caveats. The command is read-only. all_time has no review. See docs/periods.md for the brief contract and token budgets.
+
+Usage: bob periods brief [OPTIONS] [PERIOD]
+
+Arguments:
+  [PERIOD]
+          Period id or note path (week, quarter, or year); all_time has no review
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -f, --format <FORMAT>
+          Output format: human or json
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+Examples:
+  bob periods brief 2026-W45
+  bob periods brief 2026-Q4 -f json
+  bob periods brief 2026 -f md
+
+Environment:
+  BOB_DIR                   Bob vault root when --bob-dir is omitted
+  BOB_NOW                   Local datetime override that pins today
+  BOB_CONFIG_FILE           Exact Bob config file; defaults to ~/.config/bob/config.yml
+  NO_COLOR                  Disable colored output
+
+Exit codes:
+  0  brief
+  1  vault I/O failure
+  2  usage (bad id or flags), or all_time (which has no review)
+
+See docs/periods.md for the brief contract and token budgets.
+```
+
+## bob periods draft
+
+Draft a period's Review section (never overwrites Bryan)
+
+```text title="bob periods draft --help"
+Replace the `## Review` section of a week, quarter, or year note with the draft text from -i/--input (a file path, or - for stdin). The text must open with a `**Headline:**` line and stay within the kind's word cap (week 250, quarter 400, year 600). An open or future period, or a Review Bryan already edited or reflected, is refused unless -F/--force is passed. The note must exist and contain `## Review`; all_time has no review. See docs/periods.md for the draft rules and JSON errors.
+
+Usage: bob periods draft [OPTIONS] [PERIOD]
+
+Arguments:
+  [PERIOD]
+          Period id or note path (week, quarter, or year); all_time has no review
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -F, --force
+          Draft an open period or overwrite Bryan's edits (Bryan said redo, or asked for so far)
+
+  -f, --format <FORMAT>
+          Output format: human or json
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -i, --input <FILE>
+          Draft text file, or - for stdin (required)
+
+  -n, --dry-run
+          Plan without writing files
+
+Examples:
+  bob periods draft 2026-W45 -i /tmp/review.md
+  bob periods draft 2026-Q4 -i - < review.md
+  bob periods draft 2026-W45 -i review.md -n
+  bob periods draft 2026-W45 -i review.md -F
+
+Environment:
+  BOB_DIR                   Bob vault root when --bob-dir is omitted
+  BOB_NOW                   Local datetime override that pins today
+  NO_COLOR                  Disable colored output
+
+Exit codes:
+  0  drafted (or planned with -n)
+  1  vault I/O or transaction failure
+  2  usage (bad id, flags, or draft text)
+  3  refused (period open, or state edited/reflected)
+
+See docs/periods.md for the draft rules, word caps, and JSON errors.
+```
+
 ## bob periods ensure
 
 Create missing period notes one week ahead
 
 ```text title="bob periods ensure --help"
-Create missing period notes one week ahead: the week, quarter, year, and all-time chains for today (or --date) and for that date plus seven days. Missing notes are created from the deterministic scaffold; existing notes that are empty or whitespace-only are filled. A note with content is never touched. A re-run writes nothing. See docs/periods.md for the calendar, scaffolds, and JSON.
+Create missing period notes one week ahead: the week, quarter, year, and all-time chains for today (or --date) and for that date plus seven days. Missing notes are created from the deterministic scaffold; existing notes that are empty or whitespace-only are filled. A note with content is never touched. A re-run writes nothing. With -R/--refresh-instructions, stale agent callouts in existing notes are refreshed in one commit instead. See docs/periods.md for the calendar, scaffolds, and JSON.
 
 Usage: bob periods ensure [OPTIONS]
 
@@ -72,11 +176,15 @@ Options:
   -q, --quiet
           Print nothing unless files were written
 
+  -R, --refresh-instructions
+          Refresh stale agent callouts in existing period notes (one commit)
+
 Examples:
   bob periods ensure
   bob periods ensure -d 2026-12-28
   bob periods ensure -n -f json
   bob periods ensure -q
+  bob periods ensure -R
 
 Environment:
   BOB_DIR                   Bob vault root when --bob-dir is omitted

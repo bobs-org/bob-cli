@@ -144,6 +144,22 @@ const TABLE: &[Entry] = &[
         arg: "period",
         kind: Kind::VaultNote,
     },
+    Entry {
+        path: &["periods", "brief"],
+        arg: "period",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["periods", "draft"],
+        arg: "period",
+        kind: Kind::VaultNote,
+    },
+    // A draft text file, or `-` for stdin.
+    Entry {
+        path: &["periods", "draft"],
+        arg: "input",
+        kind: Kind::Files(None),
+    },
     // Directories.
     Entry {
         path: &[],

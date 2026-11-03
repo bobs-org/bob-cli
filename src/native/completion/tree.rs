@@ -95,6 +95,12 @@ impl NativeCommand {
             NativeCommand::Notify => {
                 crate::native::notify::completion_descriptor()
             }
+            NativeCommand::PeriodsBrief => {
+                crate::native::periods::cli::brief_command()
+            }
+            NativeCommand::PeriodsDraft => {
+                crate::native::periods::cli::draft_command()
+            }
             NativeCommand::PeriodsEnsure => {
                 crate::native::periods::cli::ensure_command()
             }

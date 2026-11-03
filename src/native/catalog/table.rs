@@ -619,6 +619,32 @@ pub(crate) const ENTRIES: &[Row] = &[
         )
     },
     Row {
+        slots: &[("PERIOD", "text"), ("period", "text")],
+        ..reads(
+            "periods-brief",
+            &["periods", "brief"],
+            "Agent review bundle",
+            &[
+                "periods", "period", "brief", "review", "week", "quarter",
+                "year",
+            ],
+            Presentation::Report,
+            120,
+        )
+    },
+    Row {
+        invalidates: &["tasks"],
+        ..writes(
+            "periods-draft",
+            &["periods", "draft"],
+            "Draft a period Review",
+            &["periods", "draft", "week", "quarter", "year", "review"],
+            Policy::Run,
+            Some(DRY_RUN),
+            60,
+        )
+    },
+    Row {
         invalidates: &["tasks"],
         ..writes(
             "periods-ensure",
