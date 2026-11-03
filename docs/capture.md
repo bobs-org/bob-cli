@@ -96,6 +96,9 @@ anything is written, and any failure rolls the whole batch back.
 | `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
 | `@route` with task text | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `@route` alone on its line, with no bullets or other markers | Pull the note's unlinked, unblocked Pending, Next, and Ready tasks into today's Pomodoros through the explicit Pull-In choice; see [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) |
+| `- ^<id>` in a sealed project-note item | Move that open top-level task from the parent note into this slot in the new project's `## Tasks` section; see [Moving parent tasks in](#moving-parent-tasks-in) |
+| `- :<id>` in a sealed project-note item | Move the parent task into this slot, make it Next, and link it into today's plan (or the selected `#name`); see [Moving parent tasks in](#moving-parent-tasks-in) |
+| `- ^` / `- :` in a sealed project-note item | Incomplete move picker (`capture-parse` needs `project_task_move`); `bob capture` refuses until an ID is selected |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
 | `@route` on its line, bullets below | Task list: each first-level bullet below becomes its own task in `<route>.md` (see [Lists](#lists-several-tasks-or-notes-at-once)) |
@@ -1082,7 +1085,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 7`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 8`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -5247,18 +5250,21 @@ reserved. A bare trailing `:` or `^` is an unfinished ID and fails with a
 message naming the ` :<block-id>` / ` ^<block-id>` spelling.
 
 A project note with at least one ` :` task reads the daily note and needs a
-`## Pomodoros` section; with none, the daily note is never read (the offer
-form also reads it when a task is eligible to be offered, as described
-under [Offer a new project's tasks](#offer-a-new-projects-tasks)). Missing
+`## Pomodoros` section; with none, it does not read the daily note for ledger
+placement (the offer form also reads it when a task is eligible to be offered,
+as described under [Offer a new project's tasks](#offer-a-new-projects-tasks)).
+A move can still rewrite daily notes during vault-wide link repair, even when
+the item creates no ` :` link. Missing
 file, no eligible Pomodoro, multiple open timed entries, and "ledger already
 contains `[[…]]`" errors reuse the existing Pomodoro-task messages. The note
 and the daily note are staged together, so any failure writes nothing, and
 later batch items see the staged daily note. Only one named Pomodoro may be
 created per item, and every link lands under it in source order.
 
-A `#pomodoro` name with no ` :` task is rejected: `` `#admin` picks the
-Pomodoro for ` :<id>` task links, but no task bullet ends with ` :<id>`; add
-one or remove `#admin` ``. A task ID anywhere else in a project-note item —
+A `#pomodoro` name with no ` :` task or `- :<id>` move bullet is rejected:
+`` `#admin` picks the Pomodoro for ` :<id>` task links, but no task bullet
+ends with ` :<id>`; add one or remove `#admin` ``. A `- :<id>` move bullet
+also satisfies the name. A task ID anywhere else in a project-note item —
 on the parent line, or on a nested bullet — is rejected as misplaced: the
 project's own task is always `^prj` and is never linked. Other violations
 fail before any write: an invalid or reserved ID (`` task ID `draft_memo`
@@ -5303,9 +5309,11 @@ fails with `... note is a <status> project`. Parent reads see earlier batch
 items, so a later item can parent onto a note an earlier item created. When
 `<route>_<id>.md` already exists on disk or was already staged earlier in the
 same batch, capture fails with `project note already exists: <path>` and
-writes nothing. The parent note itself is never modified: `bob projects sync`
-owns the generated `- 🧩 **Sub-projects:** [[...]]` line, which is
-machine-owned and rewritten there.
+writes nothing. A move edits the parent only to remove the moved blocks and
+repair their inbound links; it replaces the parent after the new note and all
+other move destinations. `bob projects sync` still owns the generated
+`- 🧩 **Sub-projects:** [[...]]` line, which is machine-owned and rewritten
+there.
 
 Project-note capture cannot be combined with clipboard input:
 `%c` fails with
@@ -5324,6 +5332,172 @@ declaration: @@ takes a route (@@foo)`; and an empty block ID
 (`@<route>^@`, `@<route>:@`) fails with the family's existing "requires a
 block ID" wording. A solo `@<route>:<block-id>@` with no body gets the
 missing-text error; it is never read as a link.
+
+#### Moving parent tasks in {#moving-parent-tasks-in}
+
+A first-level bullet in a sealed project-note item can move an existing open
+top-level task from the item's parent note into the new note. The sigil is the
+whole bullet body, with no task text before or after it:
+
+| First-level bullet body | Meaning |
+| --- | --- |
+| `<text> ^<id>` / `<text> :<id>` | Unchanged: create a new Ready / Next task with that ID |
+| `^<id>` | Move the parent's open top-level task into this slot |
+| `:<id>` | Move it, make it Next, and link it as `@<new-note>:<id>` would |
+| lone `^` / lone `:` | Unfinished move; the editor opens a picker and `bob capture` refuses it |
+| `^<id>` / `:<id>` followed by anything | Teaching error; put new-task text before a trailing ID instead |
+| lone `^` / lone `:` followed by other words | Unchanged prose; it is not claimed as a move |
+
+For example, this draft moves two tasks out of `cash.md`, keeping the first
+task between the two newly authored tasks and linking the second under
+`ADMIN`:
+
+```text
+Finish the Google exit packet @cash^goog-exit@#admin
+- Draft the resignation memo :draft-memo
+- ^equity-docs
+- :call-ms
+- Book the lawyer
+```
+
+The generated `cash_goog_exit.md` has those tasks in draft order under
+`## Tasks`. Existing moved blocks keep their children, drawers, and IDs; task
+links to moved tasks follow the new path. Each moved open task is stamped
+fresh, like Ctrl+Shift+M, and move-only drafts do not leave the generated task
+placeholder. The `:` move uses the existing-task link behavior: it becomes
+Next and the link lands under `#admin`, or under the task's effective type
+when the item has no `#name`. An already-linked task keeps its existing link
+in place after path repair and does not gain a second link.
+
+Only first-level `-`, `*`, or `+` bullets in a sealed project-note item are
+move bullets. IDs use the shared `A-Za-z0-9-` block-ID rule; `prj` in any
+letter case is reserved. Moved IDs share a namespace with IDs authored in
+the same item. A shared lexer claims move bullets from the raw line before
+trailing task IDs are stripped, so item-wide modifiers cannot turn a line
+into a move. Escapes, inline code, and wikilinks keep precedence: `- \^a`
+creates a task whose text is `^a`. Nested `  - ^` lines, note lists,
+`@route+id` items, and non-project-note items keep their existing meanings.
+An item's `#pomodoro` name treats `- :<id>` and an unfinished `- :` as a
+link for the unused-name rule; a complete `- :<id>` reports
+`pomodoro_project_note` mode.
+
+Moves require a movable root in the parent: a column-zero `#task` outside
+frontmatter and fences, with open status `[ ]`, `[*]`, `[/]`, or `[?]`, and
+not `^prj`. A task without a block ID can be selected in the editor after
+Bob offers an ID suggestion. Closed, nested, missing, ambiguous, and `^prj`
+tasks cannot move. A future `s:<N>` project can accept only `[?]` tasks;
+an already Blocked `- :<id>` remains unlinked until the project starts.
+Capture resolves moves against staged parent notes, so earlier items in the
+same batch can create a parent for later moves. Any refusal leaves the whole
+batch unchanged.
+
+Lexical diagnostics and execution refusals keep stable codes. The lexical
+messages below are shared byte-for-byte by `capture-parse` and `bob capture`;
+the parent route and new-note name come from the item's seal:
+
+| Code | Trigger | Message |
+| --- | --- | --- |
+| `move_bullet_text` | Words after a move token | `` `- ^call-ms` moves a task from cash.md and takes no other text; to write a new task, put the ID last: `- tweak it ^call-ms` `` |
+| `move_bullet_marker` | `s:`, `$`, `%`, `#type`, or `@…` after it | `a moved task keeps its own schedule, priority, and type; remove s:2` |
+| `move_bullet_checkbox` | `- [x] ^id` | `a moved task keeps its own checkbox; remove [x]` |
+| `move_bullet_nested` | Nested bullets under a move bullet | `notes under a moved task are not supported yet; add them after capture with @cash_goog_exit+call-ms` |
+| `move_bullet_duplicate` | Same parent route and ID moved twice in one item | `` `^call-ms` is already moved on line 3 `` |
+| `move_bullet_id_collision` | Move ID also appears on an authored task | ``task ID `call-ms` is moved from cash.md on line 3; rename the new task on line 5`` |
+| `move_bullet_cross_note` | `- ^route:id` or `- :route:id` | ``moving from another note is not supported yet; `- ^<id>` moves from cash.md`` |
+| `move_bullet_reserved` | `- ^prj` | `` `^prj` is a project's own task and never moves; pick one of cash.md's open tasks `` |
+| `move_bullet_unfinished` | Lone sigil submitted to `bob capture` | `` `- ^` needs a task from cash.md; pick one or delete the bullet `` (`- :` works the same way) |
+| `invalid_project_task_id` | Invalid ID characters, such as `- ^a_b` | Existing block-ID validation message |
+
+Vault-dependent refusals use these codes and messages (the parent and new-note
+names come from the item's seal):
+
+| Code | Message |
+| --- | --- |
+| `move_task_missing` | ``cash.md has no open task `^draft-mem`; type `^` after `- ` to pick one of its open tasks`` |
+| `move_task_closed` | `` `^pay-cc` in cash.md is done; only open tasks move into a new project `` |
+| `move_task_nested` | `` `^sub` is nested under `^parent` in cash.md; move `^parent` to bring the whole block `` |
+| `move_task_ambiguous` | ``cash.md has 2 tasks ending `^call-ms`; give one a new ID before moving it`` |
+| `move_task_blocked_birth` | `` `s:3` starts cash_goog_exit on 2026-11-06, so it cannot take Ready task `^draft-memo` yet; drop `s:3` or move the task after it starts `` |
+| `move_task_already_moved` | `` `^call-ms` already moved to cash_goog_exit.md in item 1 `` |
+| `move_task_id_collision` | `` `^notes` under moved `^call-ms` collides with task ID `notes` on line 5; rename the new task `` |
+
+The parser and completion commands expose the same draft shape:
+
+- `capture-parse` uses grammar revision 8. A complete `- ^id` has a
+  `project_task_move_marker` span over `^`; `- :id` uses
+  `project_task_move_link_marker` over `:`. `project_task_move_block_id`
+  covers the ID, including a partial ID. A lone sigil is `incomplete`, needs
+  `project_task_move`, and has both marker and `interactive_placeholder`
+  spans; it no longer asks for `block_id`. `sub_bullet_moves` runs beside
+  `sub_bullet_task_ids` at the top level and per item when any entry is
+  non-null; entries are null or `{sigil, block_id, range}`, with `range`
+  covering the sigil and ID and a null ID while unfinished. Move bodies are
+  empty and their task-ID entry is null.
+  Completed items report `project_note`, or `pomodoro_project_note` when a
+  `:` move is present. Human output says `move ^id` or
+  `move & link :id`.
+- `capture-complete` serves `project_task_move` when the cursor is inside a
+  move token, from its sigil through its ID. `query` is the typed ID prefix
+  up to the cursor and
+  `replacement` covers only the ID (an empty range after a lone sigil).
+  Its picker descriptor is
+  `{kind: "project_task_move", scope: "note", scope_token: "^"|":",
+  note_target, destination, marker_range, trigger_removal_range,
+  continuation}`. The continuation is a newline, the bullet's indentation and
+  marker, and the same sigil, such as `"\n- ^"`. The response header reports
+  `project_task_move: {parent, parent_route, destination, sigil, open_count,
+  pomodoro_name}`. Rows use the `@route+` `TaskCandidate` fields
+  `replacement`, `ref`, `block_id`, `route`, `requires_block_id`,
+  `block_id_suggestions`, `status_symbol`, `status_name`, `status_type`,
+  `text`, `section`, `line`, `child_count`, and `pomodoro`, plus
+  `scheduled`, `hidden`, `consequence`, and `disabled_reason`. They include
+  every movable parent root, including ID-less and `#hide` rows. Empty-query
+  order is document order; a typed query uses the `@route+` ranking, with
+  identified rows first on ties. `initial_selection` is the first enabled
+  row. Missing parents yield no rows and a warning; shell completion offers
+  only identified, enabled rows.
+- `bob capture` keeps `schema_version` unchanged. `project_note.moved_tasks`
+  reports each move in draft order with `sigil`, UTF-8 `draft_range`,
+  `item_line`, `source`, `source_line`, landing `line`, `block_id`, `text`,
+  previous and resulting status symbols and names, `fresh`, `planned`, `link`,
+  `not_linked`, and Bob-authored `detail`. `move_summary` reports parent,
+  moved count, repaired-link and note counts, and `needs_reconcile`;
+  `repaired_files` records `path`, `link_count`, and
+  `dependency_token_count`. Offer rows add
+  `moved_from`, moved rows count in `project_note.tasks`, and a project with
+  no move bullets can report `move_hint: {parent, open_count}` when its parent
+  has movable tasks. Human output adds `· N moved from cash.md`, a
+  `would move` / `moved` line for each task with its source line and landing
+  ID, a `would repair` / `repaired` summary, and a `hint:` line when present. Dry-run
+  output equals the real result except for `dry_run`.
+
+**Move-bullet conformance vectors.** The implementing phases use these vectors
+as their contract:
+
+| ID | Draft / state | Expected |
+| --- | --- | --- |
+| MV1 | `@cash^x@` + `- ^a` (Ready) | `^a` lands in slot 1 and is stamped with keeps cleared; `cash.md` loses the block; links are repaired; dry-run JSON equals real JSON apart from `dry_run` |
+| MV2 | `- New` / `- ^a` / `- Other` | `## Tasks` order is New, a, Other; an all-move draft writes no placeholder |
+| MV3 | `^a` is `[*]`, linked under WORK | Link rewrites to `[[cash_x#^a]]`, stays under WORK, no duplicate link, and `planned` is reported |
+| MV4 | `@cash^x@#admin` + `- :a` (Ready) | `^a` moves, becomes `[*]`, links under ADMIN, and satisfies `#admin` |
+| MV5 | `@cash:x@` + `- ^a` + `- New` | Both are offered; `^a` has `moved_from`; `-p all` equals `- :a` + `- New :new` |
+| MV6 | `^a` is closed, nested, missing, or duplicated in `cash.md` | `move_task_*` refusal; vault remains byte-identical |
+| MV7 | Duplicate move, move plus authored `:a`, or imported descendant ID collision | `move_bullet_duplicate`, `move_bullet_id_collision` at parse/capture, or `move_task_id_collision` |
+| MV8 | `- ^a tweak`, `- ^a s:2`, `- [x] ^a`, `- ^a` plus nested bullet, `- ^r:a`, or `- ^prj` | Matching `move_bullet_*` diagnostic |
+| MV9 | `s:3` with Ready `- ^a`, Blocked `- ^b`, and Blocked `- :b` | `^a` refuses; `^b` moves; `:b` moves and remains unlinked with `project_schedule` |
+| MV10 | Item 1 moves `^a`; item 2 moves `^a` from `cash` too | `move_task_already_moved`; whole batch rolls back |
+| MV11 | Item 2 creates `cash_x_y` under `cash_x` and moves `^a` from it | Works using staged parent reads |
+| MV12 | A repaired file changes during planning | `NoteChanged`; nothing is written |
+| MV13 | Staged-file order includes a move | New note and every other destination are replaced before `cash.md`; injected failure rolls back |
+| MV14 | `^a` depends on `[[#^b]]` left behind; `^c` stays and depends on `^a` | First link rebases to `[[cash#^b]]`; `^c` rebases to `[[cash_x#^a]]`; fields update |
+| MV15 | Parent is an area | Same behavior as a project parent |
+| MV16 | `- :a` moves a task Blocked only by its own open prerequisite | Prerequisite drops under the capture-link decision; `^a` becomes Next and links |
+| MV17 | Project-note item has no moves; parent has 12 open roots | `move_hint {parent, open_count: 12}` and human `hint:` line |
+| MC1 | `capture-complete` at `- ^` | `project_task_move` context; document-order rows including ID-less suggestions; `^prj` and closed rows absent; no `block_id` need |
+| MC2 | `- ^dr` | Query is `dr`; replacement covers only `dr`; marker span remains |
+| MC3 | Nested `  - ^`, `- ^` in non-project item, or `@file` list | Existing behavior is unchanged |
+| MC4 | `- :` with `#admin` | Picker has `scope_token: ":"`, `continuation: "\n- :"`, and `Moves in · becomes Next · links under ADMIN` |
+| MC5 | `@^x@` + `- ^`, or `@nope^x@` + `- ^` | No rows and the matching warning |
 
 #### Offer a new project's tasks {#offer-a-new-projects-tasks}
 
@@ -6794,12 +6968,16 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 7` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 8` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
 will succeed. Wikilink highlighting is syntax-only and additive; it does
 not change capture routing or diagnostics.
+
+Grammar 8 adds move bullets to sealed project-note items. See
+[Moving parent tasks in](#moving-parent-tasks-in) for the `sub_bullet_moves`
+shape, move-marker and ID spans, shared lexical diagnostics, and human output.
 
 A lone `@route` header reports mode `note_pull`, the resolved `route`, no
 needs or diagnostics, and the header's usual route spans. It retains the
@@ -7138,7 +7316,7 @@ per token: each `range` covers its token, and all entries share the physical
 line's `line_start`/`line_end`. Each entry has a one-based `index`, a `range` with global UTF-8
 `start`/`end` offsets into `input`, `line_start`/`line_end` physical line
 numbers, the item's `body`, `mode`, `route`, `section`, `block_id`, `needs`,
-and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift`/`pomodoro_close`/`dependencies`/`blocked_tasks`/`dependency_target`/`task_complete`. Real item indices and ranges
+and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`sub_bullet_moves`/`pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift`/`pomodoro_close`/`dependencies`/`blocked_tasks`/`dependency_target`/`task_complete`. Real item indices and ranges
 exclude declaration-only `@@` lines but still index the original draft. Top-level and
 per-item `route`, `mode`, and `block_id` are the item's effective destination
 after inheritance. The legacy top-level fields continue to describe the first
@@ -7942,7 +8120,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 7`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 8`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 
@@ -8091,7 +8269,7 @@ JSON output is a single versioned object:
 `replacement` is the half-open UTF-8 byte range a chosen candidate replaces in
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
-`context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `pomodoro_start_name`, `task`,
+`context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `project_task_move`, `pomodoro_name`, `pomodoro_start_name`, `task`,
 `drawer`, `active_task`, `task_type`, `directive`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
@@ -8100,7 +8278,7 @@ scoped `@route+id` with only the ID span replaced and the typed ID query.
 returns the whole marker span plus its decoded type-name query. Its top-level
 `subject` is `new` or `existing`; candidates describe the current and inherited
 type and the `set`, `clear`, or `keep` effect. `query` is present only for
-`directive`, `task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `task_type`, `wikilink_task`, `relation_to`, `relation_from`, and `relation_label`; it
+`directive`, `task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `task_type`, `project_task_move`, `wikilink_task`, `relation_to`, `relation_from`, and `relation_label`; it
 contains the selector text after its sigil (and a decoded locator for a
 dependency, blocked-task, or relation query). `blocked_task` is the `*` twin of
 `task_dependency`: same owner and replacement-range rules, `*` replacements,
@@ -8154,6 +8332,16 @@ cursor 13:
   ]
 }
 ```
+
+`project_task_move` covers a lone or partial move token on a first-level bullet
+in a sealed project-note item. Its `query` is the typed ID prefix and its
+replacement covers only the ID, empty immediately after a lone `^` or `:`.
+The picker identifies the parent, destination, sigil, marker and trigger
+ranges, and Bob-authored continuation; the response header reports the
+parent route, open-root count, and optional Pomodoro name. Rows include
+ID-less and hidden open roots, task section and status, consequences,
+disabled reasons, and stale-safe refs. Empty queries follow document order;
+typed queries use the `@route+` ranking.
 
 `task_block_id` covers `@route^prefix` once the route resolves;
 `candidates` is always `[]`. `project_task_block_id` covers a cursor inside a

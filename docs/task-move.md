@@ -79,6 +79,16 @@ the move also needs its interactive promotion and today's Task Link pruning.
 The command does not reconcile status or project blocking automatically; run
 `bob task reconcile` when the report says reconciliation is pending.
 
+Capture project-note move bullets reuse the task-move engine with two
+capture-only rules. `- ^id` and `- :id` place the existing task block at the
+bullet's draft-order slot in the destination `## Tasks` section; normal
+`bob task move` and inbox routing keep their intake placement. Capture refuses
+an incoming task or descendant ID collision instead of applying the command's
+suffix-renaming rule. The shared movable-root eligibility check exposes open,
+top-level `#task` rows (including rows without IDs) and excludes closed,
+nested, ambiguous, and `^prj` tasks. A blocked-at-birth project accepts only
+Blocked tasks.
+
 ## Identity and reference repair
 
 Existing task status, title, priority, schedule, `[fresh::]`, `[keeps::]`,
@@ -88,6 +98,8 @@ or run reconcile. A task without `[id::]` remains without it.
 
 If an incoming block id collides with an anchor already in the destination, the
 moved block gets the next available suffix. The report lists every rename.
+Capture move bullets use refuse-on-collision so the authored destination IDs
+remain stable and the task is never silently renamed.
 Existing canonical `[id::]` fields and exact matching `[dependsOn::]` tokens
 are updated to the destination path and final block id. Links to moved blocks
 are repaired across Markdown notes, including `done/`, daily notes, and `ref/`:
@@ -107,7 +119,10 @@ quiet period, and retry a fresh scan and plan after concurrent-change,
 quiet-period, or unstable-read failures while budget remains.
 
 The destination is written first, repaired link-only notes next, and the source
-last. Replacements are atomic per file; a multi-file move is not one atomic
+last. Capture batches extend this to a stable topological order: every move
+destination is replaced before its source, including chained project-note
+moves and inbox routing through the shared capture helper. Other touched files
+retain first-touch order. Replacements are atomic per file; a multi-file move is not one atomic
 transaction. If a write stops partway through, the command does not replay the
 selectors. It reports exactly which paths were applied and deferred, preserves
 the writer's recovery directory, and requires inspection before another move

@@ -68,11 +68,15 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 7` revision. Clients can use it to distinguish
+additive top-level `grammar: 8` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 7 treats an exactly lone `@route` task-list header as a
-note pull; `@route` with bullets remains a list, and a lone
-`@route#section` remains an empty-list refusal.
+envelope. Grammar 8 keeps grammar 7's note-pull behavior: an exactly lone
+`@route` task-list header is a note pull, `@route` with bullets remains a
+list, and a lone `@route#section` remains an empty-list refusal. Grammar 8
+also gives `- ^<id>` and `- :<id>` move meanings inside sealed project-note
+items. At that position a lone `- ^` or `- :` now needs `project_task_move`
+instead of the former `block_id` picker need, so editor clients must handle
+that context before enabling the grammar.
 
 ## Runtime dependencies
 

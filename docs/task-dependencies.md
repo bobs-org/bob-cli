@@ -3536,7 +3536,7 @@ entry, and fixed `BOB_NOW`. Select-all applies unless a row says otherwise.
 | NP24 | `@sase` then `- Call the bank` | A task list, unchanged |
 | NP25 | `@sase#Ideas` alone | `empty_list`, unchanged |
 | NP26 | `@dev` directly followed by `@cash` then `- b` | `@dev` is a note pull; `@cash` is a task list |
-| NP27 | `bob capture-parse -f json -- @sase` | Mode `note_pull`, `needs: []`, list `count: 0`, `grammar: 7` |
+| NP27 | `bob capture-parse -f json -- @sase` | Mode `note_pull`, `needs: []`, list `count: 0`, `grammar: 8` |
 | NP28 | Same vault and flags, dry run vs real run | Identical JSON apart from `dry_run` and preview wording |
 
 ## 13. Project dependencies
