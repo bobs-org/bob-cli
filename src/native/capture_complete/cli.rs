@@ -259,6 +259,14 @@ key- or slug-prefix matches first, then substring matches, in document order \
 inside each tier. Rows carry Bob-authored `detail` and `consequence` copy, \
 `creates`, `cursor_after`, and a `refused` reason straight from the commit's \
 resolver; the response adds `target` and the decoded `query`.\n\n\
+On a first-level `- ^` or `- :` bullet in a sealed project-note creation, \
+the `project_task_move` context lists the parent's open top-level tasks, \
+including ID-less rows that require the explicit Add block ID flow. The \
+query contains the ID prefix and replacement covers only the ID. The response \
+adds `project_task_move` parent/destination metadata and a note-scoped picker \
+descriptor with Bob-authored marker ranges and the shift-return continuation. \
+Rows carry stale-safe refs, today's Pomodoro chips, schedule and hidden state, \
+Bob-authored consequences, and disabled reasons; the picker never scans the vault.\n\n\
 When the cursor is inside an Obsidian wikilink, wikilink completion takes \
 precedence over capture-marker completion. Note completion covers `[[note` \
 and offers Markdown note paths, stems, and aliases. Heading and block \
@@ -277,7 +285,7 @@ nothing for this field. The replacement covers the `((query` token \
 up to the cursor.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, drawer, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
+            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, project_task_move, pomodoro_name, pomodoro_start_name, task, drawer, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())

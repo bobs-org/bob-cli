@@ -3,9 +3,9 @@ use serde_json::json;
 use super::model::{
     BlockedTaskCandidate, Candidates, CaptureCompleteResult, CompleteError,
     DependencyCandidate, OutputFormat, PomodoroNameCandidate,
-    RelationCandidate, RelationLabelSuggestion, TaskCompleteCandidate,
-    TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
-    TaskTypeCandidate,
+    ProjectTaskMoveCandidate, RelationCandidate, RelationLabelSuggestion,
+    TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
+    TaskParentCandidate, TaskTypeCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::capture_task_wikilinks::WikilinkTaskCandidate;
@@ -216,6 +216,42 @@ pub(super) fn task_parent_line(item: &TaskParentCandidate) -> (String, String) {
     } else {
         item.replacement.clone()
     };
+    (label, detail)
+}
+
+/// Human row for a project-note move picker. Guarded and ID-less rows stay
+/// visible with the server-authored reason/consequence that explains their
+/// next step.
+pub(super) fn project_task_move_line(
+    item: &ProjectTaskMoveCandidate,
+) -> (String, String) {
+    let label = if let Some(id) = item.block_id.as_deref() {
+        format!("{}{id}", item.sigil)
+    } else {
+        match item.block_id_suggestions.first() {
+            Some(suggestion) => format!("⊕ {}{suggestion}", item.sigil),
+            None => format!("{}…", item.sigil),
+        }
+    };
+    let mut detail = format!(
+        "[{}] {}  · {}",
+        item.status_symbol, item.text, item.consequence
+    );
+    if let Some(pomodoro) = item.pomodoro.as_ref() {
+        detail.push_str(&format!(
+            "  · today {}",
+            pomodoro.name.as_deref().unwrap_or("Planned")
+        ));
+    }
+    if let Some(scheduled) = item.scheduled.as_deref() {
+        detail.push_str(&format!("  · scheduled {scheduled}"));
+    }
+    if item.hidden {
+        detail.push_str("  · hidden");
+    }
+    if let Some(reason) = item.disabled_reason.as_deref() {
+        detail.push_str(&format!("  · {reason}"));
+    }
     (label, detail)
 }
 
@@ -489,6 +525,9 @@ pub(super) fn candidate_lines(
         Candidates::TaskParent(items) => {
             items.iter().map(task_parent_line).collect()
         }
+        Candidates::ProjectTaskMove(items) => {
+            items.iter().map(project_task_move_line).collect()
+        }
         Candidates::Dependency(items) => {
             items.iter().map(dependency_line).collect()
         }
@@ -670,6 +709,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::PomodoroBlockId => "pomodoro_block_id",
         CompletionContext::TaskBlockId => "task_block_id",
         CompletionContext::ProjectTaskBlockId => "project_task_block_id",
+        CompletionContext::ProjectTaskMove => "project_task_move",
         CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::PomodoroStartName => "pomodoro_start_name",
         CompletionContext::Task => "task",

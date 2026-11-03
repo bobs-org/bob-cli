@@ -3,9 +3,10 @@ use std::path::Path;
 use super::{
     candidates::{
         active_task_candidates, blocked_task_candidates, link_candidates,
-        relation_candidates, relation_label_suggestions, route_candidates,
-        section_candidates, task_candidates, task_complete_candidates,
-        task_link_candidates, task_parent_candidates, TaskSearch,
+        project_task_move_candidates, relation_candidates,
+        relation_label_suggestions, route_candidates, section_candidates,
+        task_candidates, task_complete_candidates, task_link_candidates,
+        task_parent_candidates, TaskSearch,
     },
     model::{Candidates, RouteCandidateKind},
     pomodoros::{apply_bare_start_name_replacements, pomodoro_candidates},
@@ -691,6 +692,32 @@ pub(crate) fn shell_completion(
                     full,
                     description: item.text.clone(),
                     group: "parent tasks".to_string(),
+                });
+            }
+        }
+        CompletionContext::ProjectTaskMove => {
+            let detail = capture_language::project_task_move_detail(
+                raw_text,
+                cursor,
+                field.replacement,
+            )
+            .ok_or_else(|| {
+                "invalid project_task_move completion field".to_string()
+            })?;
+            let built = project_task_move_candidates(bob_dir, &detail, "");
+            for item in built.rows {
+                if item.requires_block_id
+                    || item.disabled_reason.is_some()
+                    || item.replacement.is_empty()
+                {
+                    continue;
+                }
+                let full = format!("{marker_prefix}{}", item.replacement);
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description: item.text,
+                    group: "project task moves".to_string(),
                 });
             }
         }

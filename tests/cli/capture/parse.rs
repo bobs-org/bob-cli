@@ -1662,7 +1662,7 @@ fn capture_parse_json_reports_move_bullets() {
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-parse JSON");
-    assert_eq!(json["grammar"], 7);
+    assert_eq!(json["grammar"], 8);
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["needs"], serde_json::json!(["project_task_move"]));
     assert_eq!(

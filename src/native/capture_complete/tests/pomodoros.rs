@@ -654,6 +654,7 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
         picker: None,
         hidden_count: None,
         one_off: None,
+        project_task_move: None,
     })
     .expect("creation json");
 
@@ -726,6 +727,7 @@ fn pomodoro_start_name_orders_repeated_completed_names_newest_first() {
         picker: None,
         hidden_count: None,
         one_off: None,
+        project_task_move: None,
     })
     .expect("start-name json");
     let names = json["candidates"]

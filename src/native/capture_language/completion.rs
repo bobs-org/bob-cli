@@ -26,6 +26,8 @@ pub(crate) enum CompletionContext {
     PomodoroBlockId,
     TaskBlockId,
     ProjectTaskBlockId,
+    /// A first-level `- ^id` / `- :id` move bullet in a sealed project note.
+    ProjectTaskMove,
     PomodoroName,
     PomodoroStartName,
     Task,
@@ -1424,6 +1426,16 @@ pub(crate) fn completion_field_at(
     {
         return None;
     }
+    // A first-level move bullet in a project-note creation item owns the
+    // sigil before the trailing project-task-ID path can claim it. The
+    // latter still handles task bullets and nested lines unchanged.
+    if line_index > 0
+        && let Some(field) = project_task_move_completion_field_at(
+            item, line_index, line, cursor,
+        )
+    {
+        return Some(field);
+    }
     // A trailing task ID on a task-list bullet or project-note task bullet
     // completes the ID itself; a cursor elsewhere falls through to the `@`
     // marker path below.
@@ -1604,6 +1616,210 @@ fn project_task_completion_field(
         query,
         replacement: (info.token.start + 1, info.token.end),
         bare_name: false,
+    })
+}
+
+/// Completion context for a first-level move bullet in a project-note
+/// creation item. The replacement owns only the ID; the sigil and bullet
+/// remain authored by the draft.
+fn project_task_move_completion_field_at(
+    item: &CaptureItem<'_>,
+    line_index: usize,
+    line: RawLine<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    if line_index == 0 {
+        return None;
+    }
+    let parsed = parse_editor_item(item).item;
+    if !has_project_note_create_marker(&parsed) {
+        return None;
+    }
+    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+        return None;
+    };
+    if authored.depth != AuthoredDepth::First {
+        return None;
+    }
+    let hit = super::move_bullet::scan_move_bullet(
+        authored.body,
+        authored.body_start,
+        item.source,
+    )?;
+    let (start, end, id_start, id_end) = match hit {
+        super::move_bullet::MoveBulletHit::Complete {
+            id_span, span, ..
+        } => (span.start, span.end, id_span.0, id_span.1),
+        super::move_bullet::MoveBulletHit::Unfinished { span, .. } => {
+            (span.start, span.end, span.end, span.end)
+        }
+        super::move_bullet::MoveBulletHit::Invalid { .. } => return None,
+    };
+    if cursor < start || cursor > end {
+        return None;
+    }
+    let query_end = cursor.clamp(id_start, id_end);
+    let query = item.source.get(id_start..query_end)?.to_string();
+    Some(CompletionField {
+        context: CompletionContext::ProjectTaskMove,
+        route: parsed.route,
+        block_id: None,
+        query,
+        replacement: (id_start, id_end),
+        bare_name: false,
+    })
+}
+
+fn has_project_note_create_marker(item: &EditorItemParse) -> bool {
+    item.spans.iter().any(|span| {
+        span.kind == SpanKind::ProjectNoteMarker
+            && span.project_note == Some(ProjectNoteForm::Create)
+    })
+}
+
+/// Draft details shared by the completion response and its picker
+/// descriptor. Ranges are UTF-8 byte offsets into the original draft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectTaskMoveDetail {
+    pub(crate) parent_route: Option<String>,
+    pub(crate) parent: Option<String>,
+    pub(crate) destination: Option<String>,
+    pub(crate) pomodoro_name: Option<String>,
+    pub(crate) sigil: char,
+    pub(crate) marker_range: (usize, usize),
+    pub(crate) continuation: String,
+    pub(crate) item_index: usize,
+    pub(crate) current_line: usize,
+    pub(crate) project_start: Option<String>,
+    pub(crate) existing_moves: Vec<ProjectTaskMoveOccurrence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectTaskMoveOccurrence {
+    pub(crate) block_id: String,
+    pub(crate) line: usize,
+    pub(crate) item_index: usize,
+}
+
+/// Resolve the project-note context behind a previously detected
+/// `project_task_move` field.
+pub(crate) fn project_task_move_detail(
+    raw_text: &str,
+    cursor: usize,
+    replacement: (usize, usize),
+) -> Option<ProjectTaskMoveDetail> {
+    let draft = split_capture_draft(raw_text);
+    let (item, line_index, line) = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                cursor >= line.raw.start && cursor <= line.raw.end
+            })
+            .map(|(line_index, line)| (item, line_index, line.raw))
+    })?;
+    let field =
+        project_task_move_completion_field_at(item, line_index, line, cursor)?;
+    if field.replacement != replacement {
+        return None;
+    }
+    let parsed = parse_editor_item(item).item;
+    if !has_project_note_create_marker(&parsed) {
+        return None;
+    }
+    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+        return None;
+    };
+    let hit = super::move_bullet::scan_move_bullet(
+        authored.body,
+        authored.body_start,
+        raw_text,
+    )?;
+    let (sigil, marker_range) = match hit {
+        super::move_bullet::MoveBulletHit::Complete { sigil, span, .. }
+        | super::move_bullet::MoveBulletHit::Unfinished { sigil, span } => {
+            (sigil, (span.start, span.end))
+        }
+        super::move_bullet::MoveBulletHit::Invalid { .. } => return None,
+    };
+    let prefix_end = authored.body_start.checked_sub(line.start)?;
+    let prefix = line.text.get(..prefix_end)?;
+    let continuation = format!("\n{prefix}{sigil}");
+    let parent_route = parsed.route.clone();
+    let parent = parent_route
+        .as_deref()
+        .map(crate::native::capture::route_label);
+    let destination = parent_route
+        .as_deref()
+        .zip(parsed.block_id.as_deref())
+        .map(|(route, id)| {
+            crate::native::capture_project_note::project_note_basename(
+                route, id,
+            )
+        });
+    let project_start = parsed.spans.iter().find_map(|span| {
+        if span.kind != SpanKind::Schedule {
+            return None;
+        }
+        let token = raw_text.get(span.start..span.end)?;
+        let offset = token.strip_prefix("s:")?.parse::<i64>().ok()?;
+        let today = crate::native::env::current_datetime().date();
+        let date = today.checked_add_signed(chrono::Duration::days(offset))?;
+        if date <= today {
+            return None;
+        }
+        Some(date.format("%b %-d").to_string())
+    });
+
+    let mut existing_moves = Vec::new();
+    if let Some(route) = parent_route.as_deref() {
+        for candidate_item in &draft.items {
+            let candidate = parse_editor_item(candidate_item).item;
+            if candidate.route.as_deref() != Some(route)
+                || !has_project_note_create_marker(&candidate)
+            {
+                continue;
+            }
+            for child in candidate_item.lines.iter().skip(1) {
+                let AuthoredLineClass::Item(authored) =
+                    classify_authored_line(child.raw)
+                else {
+                    continue;
+                };
+                if authored.depth != AuthoredDepth::First {
+                    continue;
+                }
+                let Some(super::move_bullet::MoveBulletHit::Complete {
+                    id,
+                    ..
+                }) = super::move_bullet::scan_move_bullet(
+                    authored.body,
+                    authored.body_start,
+                    raw_text,
+                )
+                else {
+                    continue;
+                };
+                existing_moves.push(ProjectTaskMoveOccurrence {
+                    block_id: id,
+                    line: child.line_number,
+                    item_index: candidate_item.index,
+                });
+            }
+        }
+    }
+    Some(ProjectTaskMoveDetail {
+        parent_route,
+        parent,
+        destination,
+        pomodoro_name: parsed.section,
+        sigil,
+        marker_range,
+        continuation,
+        item_index: item.index,
+        current_line: item.lines.get(line_index)?.line_number,
+        project_start,
+        existing_moves,
     })
 }
 

@@ -173,7 +173,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 7` for the capture-language revision while \
+Success JSON reports `grammar: 8` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
@@ -3150,7 +3150,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 7);
+        assert_eq!(value["grammar"], 8);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3173,12 +3173,12 @@ mod tests {
     fn lone_route_reports_note_pull_mode() {
         // NP27: `bob capture-parse -f json -- @sase` reports mode
         // `note_pull` with no needs, the route, and the ordinary list
-        // summary (`kind: "tasks"`, `count: 0`) under grammar 7. A lone
+        // summary (`kind: "tasks"`, `count: 0`) under grammar 8. A lone
         // header keeps its task-list metadata so clients can still offer
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 7);
+        assert_eq!(value["grammar"], 8);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());

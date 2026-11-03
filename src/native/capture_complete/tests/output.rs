@@ -240,12 +240,13 @@ fn json_shape_is_stable() {
         picker: None,
         hidden_count: None,
         one_off: None,
+        project_task_move: None,
     })
     .expect("pomodoro json");
 
     assert_eq!(pomodoro_json["context"], "pomodoro_name");
     assert_eq!(pomodoro_json["schema_version"], 1);
-    assert_eq!(pomodoro_json["grammar"], 7);
+    assert_eq!(pomodoro_json["grammar"], 8);
     assert_eq!(pomodoro_json["candidates"][0]["replacement"], "memory");
     assert_eq!(pomodoro_json["candidates"][0]["name"], "MEMORY");
     assert_eq!(pomodoro_json["candidates"][0]["requires_name"], false);
@@ -296,6 +297,7 @@ fn json_shape_is_stable() {
         picker: None,
         hidden_count: None,
         one_off: None,
+        project_task_move: None,
     })
     .expect("json");
 
@@ -609,6 +611,7 @@ fn human_output_is_plain_without_color() {
             picker: None,
             hidden_count: None,
             one_off: None,
+            project_task_move: None,
         },
         &styler,
     );

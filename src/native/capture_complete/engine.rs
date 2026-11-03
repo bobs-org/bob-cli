@@ -100,6 +100,7 @@ fn build_result_inner(
             | CompletionContext::PomodoroBlockId
             | CompletionContext::TaskBlockId
             | CompletionContext::ProjectTaskBlockId
+            | CompletionContext::ProjectTaskMove
             | CompletionContext::PomodoroName
             | CompletionContext::PomodoroStartName
             | CompletionContext::Task
@@ -152,6 +153,7 @@ fn build_result_inner(
             picker: None,
             hidden_count: None,
             one_off: None,
+            project_task_move: None,
         });
     }
 
@@ -207,11 +209,14 @@ fn build_result_inner(
                     start: field.replacement.0 + 1,
                     end: field.replacement.1,
                 },
+                destination: None,
+                continuation: None,
                 action_continuation_keys: None,
                 relationship: None,
             }),
             hidden_count: None,
             one_off: None,
+            project_task_move: None,
         });
     }
 
@@ -219,6 +224,67 @@ fn build_result_inner(
     else {
         return Ok(CaptureCompleteResult::empty(cursor));
     };
+
+    if field.context == CompletionContext::ProjectTaskMove {
+        let detail = capture_language::project_task_move_detail(
+            raw_text,
+            cursor,
+            field.replacement,
+        )
+        .expect("project_task_move field has matching detail");
+        let built = super::candidates::project_task_move_candidates(
+            bob_dir,
+            &detail,
+            &field.query,
+        );
+        let marker_range = Replacement {
+            start: detail.marker_range.0,
+            end: detail.marker_range.1,
+        };
+        let initial_selection =
+            (!built.rows.iter().any(|row| row.disabled_reason.is_none()))
+                .then_some("none");
+        return Ok(CaptureCompleteResult {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            grammar: capture_language::GRAMMAR_REVISION,
+            cursor,
+            replacement: Replacement {
+                start: field.replacement.0,
+                end: field.replacement.1,
+            },
+            context: Some(field.context),
+            initial_selection,
+            subject: None,
+            candidates: Candidates::ProjectTaskMove(built.rows),
+            target: None,
+            theme_suggestion: None,
+            r#override: None,
+            block_id: None,
+            warnings: built.warnings,
+            query: Some(field.query),
+            owner: None,
+            relation: None,
+            relation_cancel: None,
+            relation_complete: None,
+            relation_successor: None,
+            one_off: None,
+            picker: Some(PickerDescriptor {
+                kind: PickerKind::ProjectTaskMove,
+                scope: PickerScope::Note,
+                scope_token: detail.sigil.to_string(),
+                note_target: detail.parent.clone(),
+                marker_range,
+                trigger_removal_range: marker_range,
+                destination: detail.destination.clone(),
+                continuation: Some(detail.continuation),
+                action_continuation_keys: None,
+                relationship: None,
+            }),
+            project_task_move: Some(built.context),
+            hidden_count: None,
+        });
+    }
 
     if matches!(
         field.context,
@@ -293,6 +359,7 @@ fn build_result_inner(
             picker: None,
             hidden_count: None,
             one_off: None,
+            project_task_move: None,
         });
     }
 
@@ -402,6 +469,9 @@ fn build_result_inner(
         }
         CompletionContext::TaskParent => {
             task_parent_candidates(bob_dir, &field.query)
+        }
+        CompletionContext::ProjectTaskMove => {
+            unreachable!("project task move handled above")
         }
         CompletionContext::TaskComplete => {
             // The unfiltered snapshot comes back when the cursor sits
@@ -765,6 +835,7 @@ fn build_result_inner(
         picker,
         hidden_count,
         one_off: one_off.then_some(true),
+        project_task_move: None,
     })
 }
 
@@ -858,6 +929,17 @@ fn initial_selection(
     raw_text: &str,
     result: &CaptureCompleteResult,
 ) -> Option<&'static str> {
+    if matches!(result.context, Some(CompletionContext::ProjectTaskMove)) {
+        return match &result.candidates {
+            Candidates::ProjectTaskMove(rows)
+                if rows.iter().any(|row| row.disabled_reason.is_none()) =>
+            {
+                None
+            }
+            Candidates::ProjectTaskMove(_) => Some("none"),
+            _ => None,
+        };
+    }
     if matches!(result.context, Some(CompletionContext::PomodoroMergeSrc))
         && result.replacement.start == result.replacement.end
     {
@@ -986,9 +1068,14 @@ fn picker_descriptor(
                 note_target: None,
                 marker_range,
                 trigger_removal_range: marker_range,
+                destination: None,
+                continuation: None,
                 action_continuation_keys,
                 relationship: None,
             })
+        }
+        CompletionContext::ProjectTaskMove => {
+            unreachable!("project task move handled above")
         }
         CompletionContext::TaskComplete => {
             // The replacement already covers the whole `!` token,
@@ -1010,6 +1097,8 @@ fn picker_descriptor(
                 note_target: None,
                 marker_range,
                 trigger_removal_range: marker_range,
+                destination: None,
+                continuation: None,
                 action_continuation_keys: bare
                     .then(|| vec!["!".to_string(), "[".to_string()]),
                 relationship: None,
@@ -1049,6 +1138,8 @@ fn picker_descriptor(
                     start: plus_start,
                     end: field.replacement.1,
                 },
+                destination: None,
+                continuation: None,
                 action_continuation_keys: None,
                 relationship: None,
             })

@@ -455,6 +455,50 @@ pub(super) struct TaskParentCandidate {
     pub(super) task_kind: Option<&'static str>,
 }
 
+/// One row in the note-scoped `project_task_move` picker. Identified rows
+/// carry an ID replacement; ID-less rows stay empty until the client runs
+/// the explicit Add block ID flow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectTaskMoveCandidate {
+    pub(super) replacement: String,
+    pub(super) sigil: char,
+    #[serde(rename = "ref")]
+    pub(super) task_ref: String,
+    pub(super) block_id: Option<String>,
+    pub(super) route: String,
+    pub(super) requires_block_id: bool,
+    pub(super) block_id_suggestions: Vec<String>,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) status_type: &'static str,
+    pub(super) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
+    pub(super) section: Option<String>,
+    pub(super) depth: usize,
+    pub(super) child_count: usize,
+    pub(super) line: usize,
+    pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+    pub(super) scheduled: Option<String>,
+    pub(super) hidden: bool,
+    pub(super) consequence: String,
+}
+
+/// Bob-authored parent and destination metadata for one active move picker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectTaskMoveContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) parent_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) destination: Option<String>,
+    pub(super) sigil: char,
+    pub(super) open_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_name: Option<String>,
+}
+
 /// One `task_complete` (`!` picker) candidate: any open task in the
 /// vault-wide completable catalog. The JSON keys match the picker
 /// contract: `replacement` is the Bob-authored `!note:block-id` (or
@@ -555,6 +599,7 @@ pub(super) struct DirectiveCandidate {
 #[serde(rename_all = "snake_case")]
 pub(super) enum PickerKind {
     ParentTask,
+    ProjectTaskMove,
     TaskComplete,
     WikilinkTask,
 }
@@ -577,6 +622,10 @@ pub(super) struct PickerDescriptor {
     pub(super) note_target: Option<String>,
     pub(super) marker_range: Replacement,
     pub(super) trigger_removal_range: Replacement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) destination: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) continuation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) action_continuation_keys: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -707,6 +756,7 @@ pub(super) enum Candidates {
     TaskLink(Vec<TaskLinkCandidate>),
     TaskGoto(Vec<TaskGotoCandidate>),
     TaskParent(Vec<TaskParentCandidate>),
+    ProjectTaskMove(Vec<ProjectTaskMoveCandidate>),
     Dependency(Vec<DependencyCandidate>),
     BlockedTask(Vec<BlockedTaskCandidate>),
     Relation(Vec<RelationCandidate>),
@@ -736,6 +786,7 @@ impl Candidates {
             Self::TaskLink(items) => items.len(),
             Self::TaskGoto(items) => items.len(),
             Self::TaskParent(items) => items.len(),
+            Self::ProjectTaskMove(items) => items.len(),
             Self::Dependency(items) => items.len(),
             Self::BlockedTask(items) => items.len(),
             Self::Relation(items) => items.len(),
@@ -853,6 +904,10 @@ pub(super) struct CaptureCompleteResult {
     /// completion context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) picker: Option<PickerDescriptor>,
+    /// Parent and destination information for `project_task_move`; omitted
+    /// from every other completion context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project_task_move: Option<ProjectTaskMoveContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) hidden_count: Option<usize>,
 }
@@ -884,6 +939,7 @@ impl CaptureCompleteResult {
             relation_complete: None,
             relation_successor: None,
             picker: None,
+            project_task_move: None,
             hidden_count: None,
             one_off: None,
         }

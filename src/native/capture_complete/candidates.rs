@@ -7,21 +7,22 @@ use std::{
 use super::model::{
     ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
     Candidates, CompleteError, DependencyCandidate, PickerRelationEntry,
-    PickerRelationship, PickerRelationshipEntry, RelationCandidate,
-    RelationLabelSuggestion, RouteCandidate, SectionCandidate, TaskCandidate,
-    TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
-    TaskParentCandidate,
+    PickerRelationship, PickerRelationshipEntry, ProjectTaskMoveCandidate,
+    ProjectTaskMoveContext, RelationCandidate, RelationLabelSuggestion,
+    RouteCandidate, SectionCandidate, TaskCandidate, TaskCompleteCandidate,
+    TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
     capture_completable_tasks, capture_dependency_tasks,
     capture_language::{
         DependencyEntry, DependencyTarget, DependencyTargetKind,
-        EditorItemParse, RelationDirection, RelationEntry,
+        EditorItemParse, ProjectTaskMoveDetail, RelationDirection,
+        RelationEntry,
     },
     capture_link_tasks, capture_targets, capture_tasks, config, note_tasks,
-    pomodoro, project_dependencies, task_complete, task_relations,
-    task_status_hooks,
+    pomodoro, project_dependencies, task_complete, task_fields, task_move,
+    task_relations, task_status_hooks,
 };
 
 pub(super) fn route_candidates(
@@ -176,6 +177,322 @@ pub(super) fn task_candidates(
             })
             .collect(),
     ))
+}
+
+pub(super) struct ProjectTaskMoveRows {
+    pub(super) context: ProjectTaskMoveContext,
+    pub(super) rows: Vec<ProjectTaskMoveCandidate>,
+    pub(super) warnings: Vec<String>,
+}
+
+/// Build note-local move candidates from the shared task-move eligibility
+/// API. The only ledger read is today's daily note, for the same Pomodoro
+/// chips used by scoped task completion.
+pub(super) fn project_task_move_candidates(
+    bob_dir: &Path,
+    detail: &ProjectTaskMoveDetail,
+    query: &str,
+) -> ProjectTaskMoveRows {
+    let mut warnings = Vec::new();
+    let Some(route) = detail.parent_route.as_deref() else {
+        warnings.push("choose the parent note first".to_string());
+        return ProjectTaskMoveRows {
+            context: project_task_move_context(detail, 0),
+            rows: Vec::new(),
+            warnings,
+        };
+    };
+    let parent = detail
+        .parent
+        .clone()
+        .unwrap_or_else(|| capture::route_label(route));
+    let target = bob_dir.join(&parent);
+    let contents = match fs::read_to_string(&target) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            warnings.push(format!(
+                "{parent} does not exist (run 'bob capture-targets' to list routable notes)"
+            ));
+            return ProjectTaskMoveRows {
+                context: project_task_move_context(detail, 0),
+                rows: Vec::new(),
+                warnings,
+            };
+        }
+        Err(error) => {
+            warnings.push(capture_active_tasks::bounded_warning(format!(
+                "failed to read {parent}: {error}"
+            )));
+            return ProjectTaskMoveRows {
+                context: project_task_move_context(detail, 0),
+                rows: Vec::new(),
+                warnings,
+            };
+        }
+    };
+
+    let settings = note_tasks::read_settings(bob_dir);
+    let scan = note_tasks::scan(&contents, &settings);
+    let roots = task_move::movable_roots(Path::new(&parent), &contents);
+    let used_ids = capture_block_ids::collect_used(&contents, &settings);
+    let used: HashSet<&str> =
+        used_ids.iter().map(|entry| entry.id.as_str()).collect();
+    let ledger = capture_active_tasks::read_ledger(
+        &pomodoro::day_file_for(bob_dir),
+        &mut warnings,
+    );
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut id_counts = HashMap::<String, usize>::new();
+    for task in scan.tasks() {
+        if let Some(id) = &task.block_id {
+            *id_counts.entry(id.clone()).or_default() += 1;
+        }
+    }
+
+    let mut ranked = Vec::new();
+    let mut open_count = 0;
+    for (document_order, root) in roots.iter().enumerate() {
+        if root
+            .block_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case("prj"))
+        {
+            continue;
+        }
+        let Some(task) = scan.task_at(root.line.saturating_sub(1)) else {
+            continue;
+        };
+        if !task.status_type.is_open() {
+            continue;
+        }
+        open_count += 1;
+        let block_id = root.block_id.clone();
+        let raw_line = lines
+            .get(root.line.saturating_sub(1))
+            .copied()
+            .unwrap_or_default();
+        let scheduled = task_fields::inline_fields(raw_line, "scheduled")
+            .into_iter()
+            .find_map(|field| {
+                task_fields::parse_strict_calendar_date(&field.value)
+                    .map(|_| field.value)
+            });
+        let hidden =
+            crate::native::capture_dependency_tasks::has_hide_tag(raw_line);
+        let suggestions = if block_id.is_none() {
+            capture_block_ids::suggest_ids_with_used(
+                &task.description,
+                '^',
+                &used,
+            )
+        } else {
+            Vec::new()
+        };
+        let duplicate_count = block_id
+            .as_ref()
+            .and_then(|id| id_counts.get(id))
+            .copied()
+            .unwrap_or_default();
+        let moved = block_id.as_deref().and_then(|id| {
+            detail.existing_moves.iter().find(|occurrence| {
+                occurrence.block_id == id
+                    && !(occurrence.item_index == detail.item_index
+                        && occurrence.line == detail.current_line)
+            })
+        });
+        let source_reason = root.disabled_reason.clone();
+        let duplicate_reason = (duplicate_count > 1).then(|| {
+            format!(
+                "{duplicate_count} tasks end ^{} in {parent}",
+                block_id.as_deref().unwrap_or_default()
+            )
+        });
+        let moved_reason = moved.map(|occurrence| {
+            if occurrence.item_index == detail.item_index {
+                format!("already moving on line {}", occurrence.line)
+            } else if occurrence.item_index < detail.item_index {
+                format!("already moved in item {}", occurrence.item_index + 1)
+            } else {
+                format!("already moving in item {}", occurrence.item_index + 1)
+            }
+        });
+        let project_reason = detail.project_start.as_ref().and_then(|date| {
+            (root.status != '?').then(|| {
+                format!(
+                    "project starts {date} — only Blocked tasks can move in"
+                )
+            })
+        });
+        let disabled_reason = duplicate_reason
+            .or(moved_reason)
+            .or(project_reason)
+            .or(source_reason);
+        let replacement = if disabled_reason.is_none() {
+            block_id.clone().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let pomodoro = block_id.as_ref().and_then(|id| {
+            ledger
+                .owners
+                .get(&(route.to_string(), id.clone()))
+                .map(|entry| ActiveTaskPomodoroCandidate {
+                    line: entry.line,
+                    name: entry.name.clone(),
+                    time_range: entry.time_range.clone(),
+                    is_current: entry.is_current,
+                })
+        });
+        let consequence = project_move_consequence(
+            detail,
+            root.status,
+            block_id.is_none(),
+            suggestions.first(),
+            pomodoro.as_ref(),
+        );
+        let row = ProjectTaskMoveCandidate {
+            replacement,
+            sigil: detail.sigil,
+            task_ref: task.task_ref(),
+            block_id,
+            route: route.to_string(),
+            requires_block_id: root.block_id.is_none(),
+            block_id_suggestions: suggestions,
+            status_symbol: root.status,
+            status_name: task.status_name.clone(),
+            status_type: capture_tasks::status_type_label(task.status_type),
+            text: task.description.clone(),
+            disabled_reason,
+            section: task.section.clone(),
+            depth: capture_tasks::indentation_depth(&task.indentation),
+            child_count: task.child_count,
+            line: root.line,
+            pomodoro,
+            scheduled,
+            hidden,
+            consequence,
+        };
+        let rank = project_move_match_rank(&row, query);
+        if let Some(rank) = rank {
+            ranked.push((rank, row.requires_block_id, document_order, row));
+        }
+    }
+    if query.is_empty() {
+        ranked.sort_by_key(|(_, _, document_order, _)| *document_order);
+    } else {
+        ranked.sort_by_key(|(rank, requires_id, document_order, _)| {
+            (*rank, *requires_id, *document_order)
+        });
+    }
+    let rows = ranked.into_iter().map(|(_, _, _, row)| row).collect();
+    let context = project_task_move_context(detail, open_count);
+    ProjectTaskMoveRows {
+        context,
+        rows,
+        warnings,
+    }
+}
+
+fn project_task_move_context(
+    detail: &ProjectTaskMoveDetail,
+    open_count: usize,
+) -> ProjectTaskMoveContext {
+    ProjectTaskMoveContext {
+        parent: detail.parent.clone(),
+        parent_route: detail.parent_route.clone(),
+        destination: detail.destination.clone(),
+        sigil: detail.sigil,
+        open_count,
+        pomodoro_name: detail.pomodoro_name.clone(),
+    }
+}
+
+fn project_move_consequence(
+    detail: &ProjectTaskMoveDetail,
+    status: char,
+    requires_block_id: bool,
+    suggestion: Option<&String>,
+    pomodoro: Option<&ActiveTaskPomodoroCandidate>,
+) -> String {
+    let consequence = if detail.sigil == '^' {
+        let destination =
+            detail.destination.as_deref().unwrap_or("the new note");
+        let mut text = format!("Moves into {destination}");
+        if let Some(name) = pomodoro.and_then(|item| item.name.as_deref()) {
+            text.push_str(&format!(
+                " · its {} link follows",
+                name.to_uppercase()
+            ));
+        }
+        text
+    } else {
+        let mut text = "Moves in".to_string();
+        if status != '*' {
+            text.push_str(" · becomes Next");
+        }
+        if let Some(name) = detail.pomodoro_name.as_deref() {
+            text.push_str(&format!(" · links under {}", name.to_uppercase()));
+        } else {
+            text.push_str(" · links into today's plan");
+        }
+        text
+    };
+    if !requires_block_id {
+        return consequence;
+    }
+    let mut text = match suggestion {
+        Some(suggestion) => format!("Needs an ID first · ⊕ ^{suggestion}"),
+        None => "Needs an ID first".to_string(),
+    };
+    text.push_str(" · ");
+    text.push_str(&consequence);
+    text
+}
+
+fn project_move_match_rank(
+    row: &ProjectTaskMoveCandidate,
+    query: &str,
+) -> Option<u8> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let query = query.to_lowercase();
+    if row
+        .block_id
+        .as_deref()
+        .is_some_and(|id| id.to_lowercase().starts_with(&query))
+    {
+        return Some(0);
+    }
+    let fields = [
+        row.block_id.as_deref().unwrap_or_default(),
+        row.text.as_str(),
+        row.section.as_deref().unwrap_or_default(),
+        row.status_name.as_str(),
+    ];
+    if fields.iter().any(|field| {
+        field
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|word| word.to_lowercase().starts_with(&query))
+    }) {
+        return Some(1);
+    }
+    if fields
+        .iter()
+        .any(|field| field.to_lowercase().contains(&query))
+    {
+        return Some(2);
+    }
+    if fields.iter().any(|field| {
+        let lowered = field.to_lowercase();
+        let mut chars = lowered.chars();
+        query
+            .chars()
+            .all(|needle| chars.any(|candidate| candidate == needle))
+    }) {
+        return Some(3);
+    }
+    None
 }
 
 /// Link-only candidates for `pomodoro_block_id` with `link` intent:
