@@ -2255,15 +2255,12 @@ fn print_pull_in_hint(result: &CaptureResult) {
             .collect();
         numbers.sort_unstable();
         numbers.dedup();
-        let picks = numbers
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let hint = if numbers.len() == 1 {
-            format!("nothing pulled in · choose with -p {picks}")
-        } else {
-            format!("nothing pulled in · choose with -p {picks} or -p all")
+        let hint = match numbers.as_slice() {
+            [] => return,
+            [only] => format!("nothing pulled in · choose with -p {only}"),
+            [first, .., last] => {
+                format!("nothing pulled in · choose with -p {first},{last} or -p all")
+            }
         };
         println!("  {}", styler.dim(&hint));
         return;

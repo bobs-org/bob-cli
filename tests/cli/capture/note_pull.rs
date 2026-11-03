@@ -289,3 +289,66 @@ fn np28_dry_run_parity_and_refusal_paths_are_write_free() {
     );
     assert_eq!(real["dry_run"], false);
 }
+
+#[test]
+fn note_pull_human_subset_two_notes_and_mixed_groups() {
+    // Subset pick links only the picked row and reports partial selection
+    // without the no-pick hint.
+    let (_temp, vault, day, _) = fixture("np1");
+    let subset = run_human(&vault, &day, &["-p", "2"], "@sase", true);
+    assert_success(&subset);
+    let text = stdout(&subset);
+    assert!(
+        text.contains("Pull from sase · 1 of 3 pulled in"),
+        "subset header: {text}"
+    );
+    assert!(
+        !text.contains("nothing pulled in"),
+        "subset must not hint: {text}"
+    );
+    assert!(
+        text.contains("not pulled in  offer 1"),
+        "subset reports unpicked: {text}"
+    );
+
+    // Two notes continue numbers across the draft and the no-pick hint
+    // uses the first and last numbers.
+    let (_two_temp, two_vault, two_day, _) = fixture("np1");
+    fs::write(two_vault.join("dev.md"), "- [ ] #task Dev row ^dev-row\n")
+        .expect("write second pull source");
+    let two = run_human(&two_vault, &two_day, &[], "@sase\n\n@dev", true);
+    assert_success(&two);
+    let two_text = stdout(&two);
+    assert!(
+        two_text.contains("Pull from sase · 3 ready tasks"),
+        "two-note sase header: {two_text}"
+    );
+    assert!(
+        two_text.contains("Pull from dev · 1 ready task"),
+        "two-note dev header: {two_text}"
+    );
+    assert!(
+        two_text.contains("nothing pulled in · choose with -p 1,4 or -p all"),
+        "two-note hint uses first/last: {two_text}"
+    );
+
+    // A mixed pull plus hand-off draft keeps the mixed-group copy and does
+    // not print the pull-only hint.
+    let (_mixed_temp, mixed_vault, mixed_day, _) = fixture("np1");
+    fs::write(
+        mixed_vault.join("other.md"),
+        concat!(
+            "- [ ] #task Dependent [dependsOn:: pre] [id:: dep] ^dep\n",
+            "- [ ] #task Prereq [id:: pre] ^pre\n",
+        ),
+    )
+    .expect("write hand-off source");
+    let mixed =
+        run_human(&mixed_vault, &mixed_day, &[], "@sase\n\n!other:pre", true);
+    assert_success(&mixed);
+    let mixed_text = stdout(&mixed);
+    assert!(
+        !mixed_text.contains("nothing pulled in · choose with -p"),
+        "mixed groups keep their own copy: {mixed_text}"
+    );
+}

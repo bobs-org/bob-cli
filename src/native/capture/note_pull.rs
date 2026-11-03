@@ -132,8 +132,13 @@ pub(super) fn plan_note_pull_item(
         ),
     };
 
-    // Prerequisite proof is needed only when a candidate carries a
-    // non-empty `[dependsOn::]` (the KM31 gate).
+    // Prerequisite proof follows the same first-match rules as
+    // classification below: known blocked symbols and project tags
+    // short-circuit without proof, while ignored/closed/custom rows never
+    // trigger it. Every remaining dependency-bearing row needs proof even
+    // when a later scheduled, hidden, or already-planned filter would
+    // exclude it; otherwise a hidden row with a closed prerequisite would
+    // fold as blocked when the snapshot is skipped.
     let needs_snapshot = tasks.iter().any(|task| {
         if task.depends_on.is_empty()
             || task.block_id.as_deref() == Some("prj")
@@ -149,23 +154,40 @@ pub(super) fn plan_note_pull_item(
         if task.status == '?' || has_prj_is_blocked_tag(&raw) {
             return false;
         }
-        if task.scheduled.is_some_and(|date| date > today) || has_hide_tag(&raw)
-        {
-            return false;
-        }
-        if let Some(block_id) = task.block_id.as_deref()
-            && live.contains(&(relative.clone(), block_id.to_string()))
-        {
-            return false;
-        }
         true
     });
     let snapshot_state: Option<SnapshotProof> = if needs_snapshot {
+        let mut needed_ids = BTreeSet::new();
+        for task in &tasks {
+            if task.depends_on.is_empty()
+                || task.block_id.as_deref() == Some("prj")
+                || !task.status_recognized
+                || !matches!(task.status, ' ' | '*' | '/' | '?')
+            {
+                continue;
+            }
+            let raw = crate::native::task_complete::successors::raw_task_line(
+                &source_text,
+                task.line_index,
+            );
+            if task.status == '?' || has_prj_is_blocked_tag(&raw) {
+                continue;
+            }
+            needed_ids.extend(task.depends_on.iter().cloned());
+        }
+        if let Some(prj) = tasks
+            .iter()
+            .find(|task| task.block_id.as_deref() == Some("prj"))
+        {
+            needed_ids.extend(prj.depends_on.iter().cloned());
+        }
         Some(prepare_snapshot_proof(
             dependency_ctx,
             planner,
             &request.bob_dir,
             &tasks_settings,
+            &needed_ids,
+            &relative,
         ))
     } else {
         None
@@ -237,6 +259,212 @@ pub(super) fn plan_note_pull_item(
     }
 
     if offers.is_empty() {
+        // Selected repeated-pull ownership: a genuinely empty source
+        // refuses, but a later pull whose every otherwise-offerable row
+        // belongs to earlier offers prunes instead of retroactively
+        // refusing the valid batch. Only already-planned folds can carry
+        // ownership (they need a block id for the live link); blocked,
+        // scheduled, and hidden folds never do. An empty made solely by
+        // an earlier explicit link that was not an offer keeps its
+        // refusal because that link owns no offer key.
+        if folded_already > 0 {
+            let mut owned = 0usize;
+            let mut total_already = 0usize;
+            for task in &tasks {
+                if task.block_id.as_deref() == Some("prj") {
+                    continue;
+                }
+                if !matches!(task.status, ' ' | '*' | '/' | '?') {
+                    continue;
+                }
+                if !task.status_recognized {
+                    continue;
+                }
+                let raw =
+                    crate::native::task_complete::successors::raw_task_line(
+                        &source_text,
+                        task.line_index,
+                    );
+                if task.status == '?' || has_prj_is_blocked_tag(&raw) {
+                    continue;
+                }
+                if !task.depends_on.is_empty() {
+                    let blocked = match snapshot_state.as_ref() {
+                        None => true,
+                        Some(proof) => proof.is_blocked(&relative, task),
+                    };
+                    if blocked {
+                        continue;
+                    }
+                }
+                if task.scheduled.is_some_and(|date| date > today) {
+                    continue;
+                }
+                if has_hide_tag(&raw) {
+                    continue;
+                }
+                let Some(block_id) = task.block_id.as_deref() else {
+                    continue;
+                };
+                if !live.contains(&(relative.clone(), block_id.to_string())) {
+                    continue;
+                }
+                total_already += 1;
+                let key = stable_task_key(
+                    &relative,
+                    Some(block_id),
+                    &clean_description(
+                        &task.description,
+                        &note_settings.global_filter,
+                        Some(block_id),
+                    ),
+                    &note_settings.global_filter,
+                    1,
+                );
+                if earlier_keys.contains(&key)
+                    || earlier_block_ids
+                        .contains(&(relative.clone(), block_id.to_string()))
+                {
+                    owned += 1;
+                }
+            }
+            if total_already > 0 && owned == total_already {
+                let folded = PullInFoldedJson {
+                    hidden: folded_hidden,
+                    already_planned: folded_already,
+                    sub_projects: 0,
+                    blocked: folded_blocked,
+                    scheduled: folded_scheduled,
+                    already_started: 0,
+                    waits_for: 0,
+                };
+                let kind_label = capture_kind_label(&parsed.kind);
+                return Ok(PlannedCaptureItem {
+                    result: CaptureItemResult {
+                        ok: true,
+                        dry_run: request.dry_run,
+                        routed: true,
+                        route: Some(route.clone()),
+                        route_label: route.clone(),
+                        relative_target: note.clone(),
+                        target: absolute.display().to_string(),
+                        text: String::new(),
+                        task_line: String::new(),
+                        task_theme: None,
+                        type_relocation: None,
+                        kind: kind_label,
+                        created: super::plan::date_string(today),
+                        scheduled: None,
+                        priority: None,
+                        priority_label: None,
+                        placement: Placement::Created,
+                        sub_bullets: Vec::new(),
+                        notes: Vec::new(),
+                        drawers: Vec::new(),
+                        clip: None,
+                        schedule_log: None,
+                        block_id: None,
+                        day_file: None,
+                        block_link: None,
+                        pomodoro_link_placement: None,
+                        parent_line: None,
+                        parent_text: None,
+                        drawer: None,
+                        parent_status_symbol: None,
+                        parent_status_name: None,
+                        toggle_direction: None,
+                        previous_task_line: None,
+                        status_symbol: None,
+                        status_name: None,
+                        previous_status_symbol: None,
+                        previous_status_name: None,
+                        pomodoro_name: None,
+                        creates_pomodoro: None,
+                        pomodoro_already_linked: None,
+                        removed_pomodoro_links: None,
+                        removed_scheduled: None,
+                        pomodoro_selector_unused: None,
+                        toggle_behavior: None,
+                        status_changed: None,
+                        pomodoro_link_action: None,
+                        pomodoro_link_source: None,
+                        pomodoro_link_destination: None,
+                        project_note: None,
+                        pomodoro_start: None,
+                        pomodoro_adjust: None,
+                        pomodoro_shift: None,
+                        pomodoro_split: None,
+                        pomodoro_merge: None,
+                        pomodoro_close: None,
+                        pomodoro_reset: None,
+                        dependency_update: None,
+                        consumed_links: Vec::new(),
+                        task_complete: None,
+                        r#ref: None,
+                        toggle_task_description: None,
+                        link_guard: None,
+                        dropped_dependencies: Vec::new(),
+                        blocks_line_updates: Vec::new(),
+                        minted_dependent_block_id: None,
+                        dependency_updates: Vec::new(),
+                        minted_blocker_block_id: None,
+                        relation_updates: Vec::new(),
+                        relation_cancels: Vec::new(),
+                        relation_completes: Vec::new(),
+                        linked_from_line_updates: Vec::new(),
+                        minted_relation_block_ids: Vec::new(),
+                        mirror_skipped: Vec::new(),
+                        list: None,
+                        relation_successors: Vec::new(),
+                        relation_held: Vec::new(),
+                        relation_check: None,
+                        relation_groups: Vec::new(),
+                        relation_label_hides: Vec::new(),
+                        note_pull: Some(NotePullSummaryJson {
+                            note: note.clone(),
+                            route: route.clone(),
+                            successors: Vec::new(),
+                            folded,
+                        }),
+                    },
+                    clip_plan: None,
+                    pomodoro_refs: Vec::new(),
+                    task_block_refs: Vec::new(),
+                });
+            }
+        }
+        // Lazy project proof for the refusal reason: classification needed
+        // no snapshot, but a `^prj` with prerequisites still needs proven
+        // open counts. Build the narrow proof here so the refusal names
+        // only truly open prerequisites.
+        let lazy_proof;
+        let proof_for_reason = if let Some(proof) = snapshot_state.as_ref() {
+            Some(proof)
+        } else if tasks.iter().any(|task| {
+            task.block_id.as_deref() == Some("prj")
+                && !task.depends_on.is_empty()
+        }) && blocked_project_reason(&tasks, today, &relative, None)
+            .is_some()
+        {
+            let mut needed_ids = BTreeSet::new();
+            if let Some(prj) = tasks
+                .iter()
+                .find(|task| task.block_id.as_deref() == Some("prj"))
+            {
+                needed_ids.extend(prj.depends_on.iter().cloned());
+            }
+            lazy_proof = prepare_snapshot_proof(
+                dependency_ctx,
+                planner,
+                &request.bob_dir,
+                &tasks_settings,
+                &needed_ids,
+                &relative,
+            );
+            Some(&lazy_proof)
+        } else {
+            None
+        };
         return Err(nothing_to_pull_in_error(
             &tasks,
             &note,
@@ -246,6 +474,8 @@ pub(super) fn plan_note_pull_item(
             folded_blocked,
             folded_scheduled,
             folded_hidden,
+            &relative,
+            proof_for_reason,
         ));
     }
 
@@ -1025,6 +1255,25 @@ impl SnapshotProof {
         )
         .is_empty()
     }
+
+    fn proven_open_prj_ids(
+        &self,
+        relative: &Path,
+        prj: &task_status_hooks::TaskLine,
+    ) -> Option<Vec<String>> {
+        let source = self
+            .files
+            .iter()
+            .position(|file| file.relative_path == relative)?;
+        let state = self.states.get(&(source, prj.line_index))?;
+        Some(
+            crate::native::project_dependencies::blocking_open_dependency_ids(
+                &self.files[source],
+                prj,
+                &state.open_dependency_ids,
+            ),
+        )
+    }
 }
 
 fn prepare_snapshot_proof(
@@ -1032,6 +1281,8 @@ fn prepare_snapshot_proof(
     planner: &CaptureBatchPlanner,
     bob_dir: &Path,
     tasks_settings: &task_status_hooks::TasksSettings,
+    needed_ids: &BTreeSet<String>,
+    source_relative: &Path,
 ) -> SnapshotProof {
     let staged = super::task_complete::staged_overlay_map(bob_dir, planner);
     let snapshot = dependency_ctx.dependents_snapshot();
@@ -1041,7 +1292,18 @@ fn prepare_snapshot_proof(
             states: BTreeMap::new(),
         };
     }
-    let overlaid = snapshot.overlaid(staged);
+    // Narrow the vault-wide proof to the source note plus notes that can
+    // name one of the needed prerequisite ids. Any note holding an open
+    // task with one of those ids contains the id substring (its `[id::]`
+    // identity), so substring retention keeps every note that can affect
+    // the verdict while skipping unrelated dependency-relevant notes.
+    // Staged text supersedes disk via the shared overlay rules.
+    let overlaid = snapshot.overlaid_matching(&staged, |relative, text| {
+        if relative == source_relative {
+            return true;
+        }
+        needed_ids.iter().any(|id| text.contains(id.as_str()))
+    });
     let files: Vec<FileScan> = overlaid
         .into_iter()
         .map(|(relative_path, contents)| {
@@ -1081,6 +1343,8 @@ fn nothing_to_pull_in_error(
     blocked: usize,
     scheduled: usize,
     hidden: usize,
+    relative: &Path,
+    proof: Option<&SnapshotProof>,
 ) -> CaptureError {
     let mut extra = serde_json::Map::new();
     extra.insert(
@@ -1102,7 +1366,8 @@ fn nothing_to_pull_in_error(
         .expect("serialize note_pull"),
     );
     let message = if blocked > 0
-        && let Some(reason) = blocked_project_reason(tasks, today)
+        && let Some(reason) =
+            blocked_project_reason(tasks, today, relative, proof)
     {
         format!(
             "nothing to pull in from {note}: the project is blocked ({reason})"
@@ -1133,6 +1398,8 @@ fn nothing_to_pull_in_error(
 fn blocked_project_reason(
     tasks: &[task_status_hooks::TaskLine],
     today: NaiveDate,
+    relative: &Path,
+    proof: Option<&SnapshotProof>,
 ) -> Option<String> {
     let prj = tasks
         .iter()
@@ -1145,7 +1412,26 @@ fn blocked_project_reason(
         return Some(format!("is scheduled for {date}"));
     }
     if !prj.depends_on.is_empty() {
-        let count = prj.depends_on.len();
+        // Prove which prerequisites remain open using the same
+        // completeness rule as classification: unavailable proof stays
+        // blocked, and staged overlays are already applied. Never report
+        // a closed prerequisite as waiting.
+        let open_count = proof
+            .and_then(|proof| proof.proven_open_prj_ids(relative, prj))
+            .map(|ids| ids.len());
+        let count = match open_count {
+            Some(count) if count > 0 => count,
+            Some(_) => {
+                // Proven closed: fall through to the `?` wording when the
+                // project line itself is blocked, otherwise no project
+                // reason.
+                if prj.status == '?' {
+                    return Some("its ^prj is blocked".to_string());
+                }
+                return None;
+            }
+            None => prj.depends_on.len(),
+        };
         let task_word = if count == 1 { "task" } else { "tasks" };
         return Some(format!("its ^prj waits on {count} {task_word}"));
     }
@@ -1720,6 +2006,163 @@ mod tests {
         );
     }
 
+    // Fold gating: a hidden, scheduled, or already-planned row with a
+    // closed prerequisite folds under its later filter, not as blocked.
+    // A source holding only such a row refuses with that fold, and adding
+    // an unrelated eligible dependency row must not change the first
+    // row's fold.
+    #[test]
+    fn fold_gating_closed_prereq_keeps_later_filter() {
+        let closed = "- [x] #task Done [id:: closed1] ^closed1\n";
+        for (name, source, day, expect_hidden, expect_scheduled, expect_already) in [
+            (
+                "hidden",
+                "- [ ] #task Hidden [dependsOn:: closed1] #hide ^hi\n".to_string(),
+                FIX_DAY.to_string(),
+                1usize,
+                0usize,
+                0usize,
+            ),
+            (
+                "scheduled",
+                "- [ ] #task Later [dependsOn:: closed1] [scheduled:: 2026-09-21] ^lt\n"
+                    .to_string(),
+                FIX_DAY.to_string(),
+                0usize,
+                1usize,
+                0usize,
+            ),
+            (
+                "already",
+                "- [ ] #task Live [dependsOn:: closed1] ^live\n".to_string(),
+                format!("{FIX_DAY}  - [[sase#^live]]\n"),
+                0usize,
+                0usize,
+                1usize,
+            ),
+        ] {
+            let mut harness = vault_harness(
+                &[("sase.md", &source), ("other.md", closed)],
+                Some(&day),
+                SuccessorSelection::None,
+            );
+            let Err(error) = plan(&mut harness) else {
+                panic!("{name} with only a filtered row must refuse");
+            };
+            assert_eq!(
+                error.code.as_deref(),
+                Some("nothing_to_pull_in"),
+                "{name}"
+            );
+            let payload = error
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.get("note_pull"))
+                .expect("refusal carries note_pull");
+            let folded_count = |key: &str| -> u64 {
+                payload
+                    .get("folded")
+                    .and_then(|folded| folded.get(key))
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0)
+            };
+            assert_eq!(folded_count("hidden"), expect_hidden as u64, "{name} hidden");
+            assert_eq!(
+                folded_count("scheduled"),
+                expect_scheduled as u64,
+                "{name} scheduled"
+            );
+            assert_eq!(
+                folded_count("already_planned"),
+                expect_already as u64,
+                "{name} already"
+            );
+            assert_eq!(folded_count("blocked"), 0, "{name} blocked");
+            // Same source plus an unrelated eligible row keeps the first
+            // row's fold while offering the new row.
+            let mut extended = source.clone();
+            extended.push_str("- [ ] #task Plain ^pl\n");
+            let mut harness = vault_harness(
+                &[("sase.md", &extended), ("other.md", closed)],
+                Some(&day),
+                SuccessorSelection::None,
+            );
+            let planned =
+                plan(&mut harness).expect("extended source plans");
+            let pull = summary(&planned);
+            assert_eq!(pull.folded.hidden, expect_hidden, "{name} extended");
+            assert_eq!(
+                pull.folded.scheduled, expect_scheduled,
+                "{name} extended"
+            );
+            assert_eq!(
+                pull.folded.already_planned, expect_already,
+                "{name} extended"
+            );
+            assert_eq!(pull.folded.blocked, 0, "{name} extended blocked");
+            assert!(
+                pull.successors.iter().any(|row| row.text == "Plain"),
+                "{name} extended offers plain"
+            );
+        }
+    }
+
+    // Blocked-project reason counts only truly open prerequisites: one
+    // closed and one open prerequisite reports one task, and a staged
+    // close of the open prerequisite removes the project reason.
+    #[test]
+    fn blocked_project_counts_only_open_prerequisites() {
+        let mut harness = vault_harness(
+            &[
+                (
+                    "sase.md",
+                    concat!(
+                        "- [?] #task #prj Sase [dependsOn:: open1, closed1] ^prj\n",
+                        "- [ ] #task Resident #prj_is_blocked ^r\n",
+                    ),
+                ),
+                ("other.md", "- [ ] #task Opener [id:: open1] ^open1\n"),
+                ("closed.md", "- [x] #task Done [id:: closed1] ^closed1\n"),
+            ],
+            Some(FIX_DAY),
+            SuccessorSelection::All,
+        );
+        let Err(error) = plan(&mut harness) else {
+            panic!("blocked project refuses");
+        };
+        assert_eq!(
+            error.message,
+            "nothing to pull in from sase.md: the project is blocked \
+             (its ^prj waits on 1 task)"
+        );
+        // Staging a close of the open prerequisite proves the project
+        // unblocked for the reason: the `?` line still blocks, so the
+        // refusal keeps the generic blocked wording without a count.
+        let mut harness = vault_harness(
+            &[
+                (
+                    "sase.md",
+                    concat!(
+                        "- [?] #task #prj Sase [dependsOn:: open1, closed1] ^prj\n",
+                        "- [ ] #task Resident #prj_is_blocked ^r\n",
+                    ),
+                ),
+                ("other.md", "- [x] #task Opener [id:: open1] ^open1\n"),
+                ("closed.md", "- [x] #task Done [id:: closed1] ^closed1\n"),
+            ],
+            Some(FIX_DAY),
+            SuccessorSelection::All,
+        );
+        let Err(error) = plan(&mut harness) else {
+            panic!("staged-closed project refuses");
+        };
+        assert_eq!(
+            error.message,
+            "nothing to pull in from sase.md: the project is blocked \
+             (its ^prj is blocked)"
+        );
+    }
+
     // NP12: a missing source note refuses `pull_note_missing` and writes
     // nothing.
     #[test]
@@ -2207,6 +2650,125 @@ mod tests {
         assert_eq!(first_count, 1);
         assert_eq!(second_count, 0);
         assert_eq!(batch_offers(&batch).len(), 1);
+    }
+
+    // Selected repeated pulls own via stable keys and post-mint block
+    // ids: `-p all`, numeric, and key picks prune the second pull instead
+    // of refusing, including ID-less minting and duplicate descriptions.
+    // A genuinely empty source made empty by an earlier explicit link
+    // still refuses.
+    #[test]
+    fn batch_repeated_source_selected_ownership_prunes() {
+        for (name, source) in [
+            ("id", "- [ ] #task Only ^only\n"),
+            ("idless", "- [ ] #task Only words\n"),
+            (
+                "duplicates",
+                "- [ ] #task Same words\n- [ ] #task Same words\n",
+            ),
+        ] {
+            // `-p all` links every row in the first pull; the second
+            // pull's rows are already planned via the staged day link.
+            let mut vault = batch_vault(
+                &[("sase.md", source)],
+                Some(FIX_DAY),
+                "@sase\n\n@sase",
+            );
+            vault.request.pull_in =
+                Some(crate::native::capture::cli::PullInPicks::All);
+            let (batch, _) =
+                crate::native::capture::pull_in::plan_with_pull_in(
+                    &mut vault.request,
+                    None,
+                )
+                .expect("selected repeated pulls plan");
+            assert_eq!(batch.items.len(), 2, "{name}");
+            let first_picked = batch.items[0]
+                .result
+                .note_pull
+                .as_ref()
+                .expect("first pull")
+                .successors
+                .iter()
+                .filter(|row| {
+                    row.offer.as_ref().is_some_and(|offer| offer.selected)
+                })
+                .count();
+            let second_count = batch.items[1]
+                .result
+                .note_pull
+                .as_ref()
+                .expect("second pull")
+                .successors
+                .len();
+            assert!(first_picked > 0, "{name} first picks");
+            assert_eq!(second_count, 0, "{name} second pruned");
+            // One offer owner and one link per selected task.
+            let links = batch_offers(&batch)
+                .iter()
+                .filter(|row| row.link.is_some())
+                .count();
+            assert_eq!(links, first_picked, "{name} links");
+        }
+        // Numeric probe then key replan keeps stable numbers/keys.
+        let mut vault = batch_vault(
+            &[("sase.md", "- [ ] #task Only ^only\n")],
+            Some(FIX_DAY),
+            "@sase\n\n@sase",
+        );
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::Tokens {
+                numbers: vec![1],
+                keys: Vec::new(),
+            });
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("numeric repeated pulls plan");
+        assert_eq!(batch.items.len(), 2);
+        assert_eq!(batch_offers(&batch).len(), 1);
+        // An earlier explicit link that owns no offer key still refuses.
+        let mut vault = batch_vault(
+            &[("sase.md", "- [ ] #task Only ^only\n")],
+            Some(FIX_DAY),
+            "@sase:only\n\n@sase",
+        );
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::All);
+        let Err(error) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        ) else {
+            panic!("explicit-link emptied pull must refuse");
+        };
+        assert_eq!(error.code.as_deref(), Some("nothing_to_pull_in"));
+    }
+
+    // Selected hand-off owns its row; a later pull omits it even when
+    // the hand-off was selected.
+    #[test]
+    fn batch_selected_handoff_owns_row_later_pull_omits() {
+        let mut vault = batch_vault(
+            &[(
+                "sase.md",
+                "- [ ] #task Dependent [dependsOn:: open1] [id:: dep] ^dep\n- [ ] #task Opener [id:: open1] ^open1\n",
+            )],
+            Some(FIX_DAY),
+            "!sase:open1\n\n@sase",
+        );
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::All);
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("selected handoff then pull plans");
+        let offers = batch_offers(&batch);
+        let dep_rows: Vec<_> =
+            offers.iter().filter(|row| row.block_id == "dep").collect();
+        assert_eq!(dep_rows.len(), 1, "{offers:?}");
+        assert_ne!(dep_rows[0].trigger, "note_pull");
     }
 
     // Rollback: a later pull failure aborts the whole draft; no earlier

@@ -1272,6 +1272,59 @@ pub(super) fn apply_successor_net_post_pass(
     };
     let tasks_settings =
         crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    // Cross-group earliest-wins ownership for explicit offer keys: one row
+    // per key per draft across hand-off, relation, and note-pull groups.
+    // The earliest item that offers a key owns it; later duplicates are
+    // omitted even when unselected. Later explicit links still win via the
+    // live-link net checks below (they carry no offer key), so NP18-style
+    // drops are preserved.
+    {
+        use std::collections::BTreeSet;
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for item in items.iter_mut() {
+            for vec in super::output::unblocked_vecs_mut(&mut item.result) {
+                vec.retain(|row| {
+                    let Some(offer) = row.offer.as_ref() else {
+                        return true;
+                    };
+                    !seen.contains(&offer.key)
+                });
+                for row in vec.iter() {
+                    if let Some(offer) = row.offer.as_ref() {
+                        seen.insert(offer.key.clone());
+                    }
+                }
+            }
+            for vec in
+                super::output::relation_successors_vecs_mut(&mut item.result)
+            {
+                vec.retain(|row| {
+                    let Some(offer) = row.offer.as_ref() else {
+                        return true;
+                    };
+                    !seen.contains(&offer.key)
+                });
+                for row in vec.iter() {
+                    if let Some(offer) = row.offer.as_ref() {
+                        seen.insert(offer.key.clone());
+                    }
+                }
+            }
+            for vec in super::output::note_pull_vecs_mut(&mut item.result) {
+                vec.retain(|row| {
+                    let Some(offer) = row.offer.as_ref() else {
+                        return true;
+                    };
+                    !seen.contains(&offer.key)
+                });
+                for row in vec.iter() {
+                    if let Some(offer) = row.offer.as_ref() {
+                        seen.insert(offer.key.clone());
+                    }
+                }
+            }
+        }
+    }
     for item in items.iter_mut() {
         for vec in super::output::unblocked_vecs_mut(&mut item.result) {
             vec.retain(|row| {
