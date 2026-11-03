@@ -274,3 +274,50 @@ existing lineup (exclude MEET event-run cases, close cases, and cases whose toke
 adds links; the test lists each excluded id and why), `clockVerdict` over the chip
 facts of that session's links equals `expected_off_clock`, and a link wears a chip
 iff its fact is off-clock.
+
+## Live verification (real-Obsidian e2e, bob-plugins `scripts/obsidian-off-clock-link-chips-e2e.cjs`)
+
+The offline `--self-test` plus `scripts/test-ledger-tools-off-clock-link-chips.cjs`
+cover the OC/OR/OT/OP/OV vectors, shared Event Task look, writer parity, and the
+source-text freshness update.
+
+Verified 88/88 in an isolated scratch vault (light and dark, Live Preview and
+Reading) with screenshots reviewed against Anatomy and look. Dashed `timer-off`
+`off` chip after off-clock ledger links, matching Event Task outline style,
+outline color, ink, font size, and mask; 🔓 then 🔑 then the chip on the both-marks
+row; Events and Notes prose links stay unchipped. CSS metrics from the landing
+pass: link chip `font-size` 14.08px (`0.88em`), `outline-style: dashed`,
+`outline-color: color(srgb 0.360784 0.360784 0.360784 / 0.55)`,
+`color: rgb(92, 92, 92)`, `vertical-align: baseline`,
+`margin-inline-start: 5.632px` (`0.4em`); row height 26.375px with the gate on
+and off. No CSS values changed.
+
+Environment: Obsidian 1.15.0 (`/snap/bin/obsidian`) on Athena, `xvfb-run -a`,
+never the live vault. Tasks plugin `taskFormat: dataview` so `[id::]` /
+`[dependsOn::]` parse.
+
+- OC1–OC6, OC10, OR1–OR3, OR5, OR11, OR12, OP2, and OP5 render the chip in Live
+  Preview; OC14, OR4, OR6, embeds, mixed prose, Events, and Notes stay bare
+- Reading view paints the same chips and OP2 order (`link`, 🔓, 🔑, chip); OP3
+  places the host after `a.internal-link`
+- OP6 computed styles of the ledger chip match the Event Task chip on the same
+  page (dashed outline, muted ink, timer-off mask)
+- a CDP hover plus `Input.dispatchMouseEvent` shows the visible `.tooltip` text
+  for OT1: `Off-clock · tagged #off`
+- plain click writes nothing and places the caret at the exact link-end column
+  (`ch=18` on `\t- [[love#^lunch]]`); Mod+click opens `love.md` in a tab
+- setting `fun.md` to `offclock: true` adds its chip in 262 ms, and adding `#off`
+  to a closed `bob.md` task adds its chip in 263 ms (1 s target, 500 ms
+  documented tolerance); an unsaved same-note `#off` edit shows on the same
+  frame in 167 ms
+- the session toggle removes every chip, leaves row height unchanged, then
+  restores the chips in Live Preview, Reading, and a popout; turning calendar
+  event painting off leaves link chips visible
+
+Reading-view status rings still appear on ledger rows, including the unchipped
+parser link; Live Preview keeps those rows ring-free. Reading view also did not
+expose a `bob-progress-mark` on the in-progress lunch row (Live Preview did).
+Those gaps predate the chip and stay out of this contract's pass.
+
+Still pending: iOS glyph rendering and a 100-link ledger scroll. Prose-link
+chips stay deferred per this contract.
