@@ -48,6 +48,7 @@ mod parse_blocked_task;
 mod parse_dependency;
 mod parse_pomodoro;
 mod parse_pomodoro_close;
+mod parse_pomodoro_past;
 mod parse_pomodoro_start_drop;
 mod parse_relation;
 mod parse_template;

@@ -1897,6 +1897,9 @@ fn refuse_clip_on_incompatible_kind(
         CaptureKind::PomodoroClose { .. } => {
             "Pomodoro close `x` cannot be combined with %c; capture the close alone"
         }
+        CaptureKind::PomodoroPast { .. } => {
+            "Pomodoro past `x=` cannot be combined with %c; capture the past alone"
+        }
         CaptureKind::PomodoroStart { .. } => {
             "Pomodoro start `=<X>` cannot be combined with %c; capture the start alone"
         }
@@ -3309,11 +3312,62 @@ pub(crate) fn session_operator_token(
     None
 }
 
+/// Byte length of a past unquoted name part: ends at whitespace, `!`,
+/// `=`, `@`, or `~`. Unlike [`start_name_extent`], `!` and `=` also end
+/// the name so `x=fix!2` keeps `fix` as the name and `!2` as the glued
+/// suffix.
+pub(crate) fn past_name_extent(text: &str) -> usize {
+    text.find(|character: char| {
+        character.is_ascii_whitespace()
+            || character == '!'
+            || character == '='
+            || character == '@'
+            || character == '~'
+    })
+    .unwrap_or(text.len())
+}
+
+/// Byte length of the `x=` past token at the start of `text`, including a
+/// spaced exact-name literal through its closing quote plus glued `@D`,
+/// `!`, and `=X` suffixes. Returns `None` when `text` does not start with
+/// lowercase `x=`. Otherwise claims the token up to whitespace (or through
+/// the literal), even when malformed, so every `x=` prefix becomes a past
+/// token instead of prose.
+pub(crate) fn past_token_len(text: &str) -> Option<usize> {
+    if !text.starts_with("x=") {
+        return None;
+    }
+    let first_len = text
+        .split_whitespace()
+        .next()
+        .map(str::len)
+        .unwrap_or(text.len());
+    let first = &text[..first_len.min(text.len())];
+    if let Some(hash_pos) = first.find('#') {
+        let after_hash_in_first = &first[hash_pos + 1..];
+        if opens_exact_name(after_hash_in_first) {
+            let after_hash_full = &text[hash_pos + 1..];
+            if let Some(lex) =
+                lex_exact_name_after_hash(after_hash_full, after_hash_full.len())
+            {
+                let literal_end = hash_pos + 1 + lex.literal_len;
+                let after_literal = &text[literal_end..];
+                let suffix_len = after_literal
+                    .find(|c: char| c.is_ascii_whitespace())
+                    .unwrap_or(after_literal.len());
+                return Some(literal_end + suffix_len);
+            }
+        }
+    }
+    Some(first_len)
+}
+
 /// A whole-item session token: either a close (a bare `x`, or a retired
 /// `=x`/`=*`/`=!` spelling that teaches it), a split (`=/` plus an
-/// optional bare base plus `#name`/`#"Literal"` selectors), or a start
-/// (`=` plus an `<X>`-shaped suffix and optional `#name` or bare `name`
-/// part).
+/// optional bare base plus `#name`/`#"Literal"` selectors), a past
+/// (`x=` plus its `E` part, optional repair `!`, and optional `=X` close
+/// part), or a start (`=` plus an `<X>`-shaped suffix and optional `#name`
+/// or bare `name` part).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EqualsToken {
     /// A whole-item `=/` Pomodoro split: `base` is the optional bare base
@@ -3337,6 +3391,15 @@ pub(crate) enum EqualsToken {
     /// spellings stay claimed so they fail with a teaching error instead of
     /// becoming a task.
     Close,
+    /// A leading lowercase `x=` past token. `len` is the token's byte length
+    /// including `x=`, the `E` part, an optional repair `!`, and an optional
+    /// second `=` plus its close selection. The length runs through a quoted
+    /// exact-name literal's closing quote (spaces inside included) plus any
+    /// glued `@D`, `!`, and `=X` suffixes. Every `x=` prefix is claimed,
+    /// valid or not, so the whole-item parser reports `invalid_pomodoro_past`
+    /// instead of falling through to prose. Detailed `E` validation lives in
+    /// the shared past lexer used by both execution and editor adapters.
+    Past { len: usize },
     /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
     /// `#name` or bare `name` part, plus optional `@<X>` timing and `~<K>`
     /// drop parts in either order. `suffix` excludes the sigil (the leading
@@ -3603,6 +3666,14 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     if classify_whole_item_close(first).is_some() || first.starts_with("x#") {
         return Some(EqualsToken::Close);
     }
+    // Past `x=` claims every lowercase prefix at an item start or chain
+    // token boundary, including malformed tokens, before merge and retired
+    // handling. Never reparse `E` by prepending `=` and invoking this
+    // function: that would allow start, merge, split, or retired-close
+    // semantics. `X=3` and mid-body `Plan x=3` never reach here as `x=`.
+    if let Some(len) = past_token_len(text) {
+        return Some(EqualsToken::Past { len });
+    }
     // Merge-shaped `=*` (letter, `#`, quote, or bare) claims the token
     // before retired close, so `=*build#fix` merges and `=*1` still
     // teaches `x*1`. `retired_whole_item_close_rewrite("=*")` stays Some
@@ -3844,6 +3915,7 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
         }
         Some(EqualsToken::Split { len, .. }) => len == token.len(),
         Some(EqualsToken::Merge { len, .. }) => len == token.len(),
+        Some(EqualsToken::Past { len }) => len == token.len(),
         Some(EqualsToken::Close) => {
             // A `==`-prefixed close tail (`==x`, `==X1`, `==*`, `==!2`) is
             // a claimed teaching near miss, so it chains like any other
@@ -4427,6 +4499,275 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 Vec::new(),
                 None,
             )))
+        }
+        EqualsToken::Past { len } => {
+            use crate::native::capture_language::past::{
+                split_past_token, validate_past_e, PastEOutcome,
+            };
+            const PAST_FORCED_ERROR: &str = "Pomodoro past `x=` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the past alone";
+            let raw_token =
+                parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+            let Some(split) = split_past_token(raw_token) else {
+                return Ok(None);
+            };
+            let valid = match validate_past_e(raw_token, &split) {
+                PastEOutcome::Invalid(message) => {
+                    return Err(message);
+                }
+                PastEOutcome::Incomplete { message, .. } => {
+                    return Err(message);
+                }
+                PastEOutcome::Valid(valid) => valid,
+            };
+            if forced_route.is_some() || forced_section.is_some() {
+                return Err(PAST_FORCED_ERROR.to_string());
+            }
+            let leading = parent_line.raw.text.len()
+                - parent_line.raw.text.trim_start().len();
+            let token_abs_start = parent_line.raw.start + leading;
+            let close_base = token_abs_start + split.close_offset;
+            let lexed_selection = match lex_close_selection(
+                &split.close_text,
+                close_base,
+                raw_token,
+            ) {
+                Ok(CloseSelectionOutcome::Valid(lex)) => lex,
+                Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                    return Err(close_selection_incomplete_error(
+                        raw_token,
+                        incomplete.separator,
+                    ));
+                }
+                Err(error) => return Err(error.message),
+            };
+            let single_token_parent = parent_trimmed == raw_token;
+            if single_token_parent && item.lines.len() == 1 {
+                let mut close =
+                    close_spec_from_lex(split.close_text.clone(), &lexed_selection);
+                close.log = Vec::new();
+                let spec = PomodoroPastSpec {
+                    raw: raw_token.to_string(),
+                    name: valid.name.clone(),
+                    name_is_literal: valid.name_is_literal,
+                    blocks: valid.blocks,
+                    blocks_typed: valid.blocks_typed,
+                    repair: split.repair,
+                    close,
+                    stack: PastStackPos {
+                        index: 1,
+                        size: 1,
+                        offset_blocks: 0,
+                    },
+                };
+                let body = parent_trimmed.to_string();
+                return Ok(Some(parsed_capture_item_outcome(
+                    item,
+                    ParsedCaptureText {
+                        body,
+                        clip: None,
+                        route: None,
+                        kind: CaptureKind::PomodoroPast { spec },
+                        scheduled_offset: None,
+                        priority_level: None,
+                        sub_bullets: Vec::new(),
+                        dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
+                        dependency_target: None,
+                        type_marker: None,
+                    },
+                    Vec::new(),
+                    None,
+                )));
+            }
+            if single_token_parent {
+                let lexed = match lex_close_selection(
+                    &split.close_text,
+                    close_base,
+                    raw_token,
+                ) {
+                    Ok(CloseSelectionOutcome::Valid(lex)) => lex,
+                    Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+                        return Err(close_selection_incomplete_error(
+                            raw_token,
+                            incomplete.separator,
+                        ));
+                    }
+                    Err(error) => return Err(error.message),
+                };
+                match lex_close_log_bullets_with_all(
+                    &item.lines[1..],
+                    raw_token,
+                    lexed.in_progress.as_deref(),
+                    &lexed.park,
+                    &lexed.complete,
+                    &lexed.drop,
+                    lexed.park_all,
+                    lexed.complete_all,
+                ) {
+                    Err(error) => return Err(error.message),
+                    Ok(lexed_bullets) => {
+                        if let Some(dangling) = lexed_bullets.dangling.first() {
+                            return Err(match dangling.index {
+                                Some(index) => close_log_dangling_error(
+                                    &format!("- {index}"),
+                                    index,
+                                ),
+                                None => close_log_star_dangling_error(),
+                            });
+                        }
+                        let mut close = close_spec_from_lex(
+                            split.close_text.clone(),
+                            &lexed,
+                        );
+                        close.log =
+                            log_entries_from_lex(&lexed_bullets.entries);
+                        let spec = PomodoroPastSpec {
+                            raw: raw_token.to_string(),
+                            name: valid.name.clone(),
+                            name_is_literal: valid.name_is_literal,
+                            blocks: valid.blocks,
+                            blocks_typed: valid.blocks_typed,
+                            repair: split.repair,
+                            close,
+                            stack: PastStackPos {
+                                index: 1,
+                                size: 1,
+                                offset_blocks: 0,
+                            },
+                        };
+                        let body = parent_trimmed.to_string();
+                        return Ok(Some(parsed_capture_item_outcome(
+                            item,
+                            ParsedCaptureText {
+                                body,
+                                clip: None,
+                                route: None,
+                                kind: CaptureKind::PomodoroPast { spec },
+                                scheduled_offset: None,
+                                priority_level: None,
+                                sub_bullets: Vec::new(),
+                                dependencies: Vec::new(),
+                                blocked_tasks: Vec::new(),
+                                relations: Vec::new(),
+                                dependency_target: None,
+                                type_marker: None,
+                            },
+                            Vec::new(),
+                            None,
+                        )));
+                    }
+                }
+            }
+            let default_index = default_log_index_with_all(
+                lexed_selection.in_progress.as_deref(),
+                &lexed_selection.park,
+                &lexed_selection.complete,
+                &lexed_selection.drop,
+                lexed_selection.park_all,
+                lexed_selection.complete_all,
+            );
+            let has_bullet_child = item.lines[1..].iter().any(|line| {
+                !matches!(
+                    classify_authored_line(line.raw),
+                    AuthoredLineClass::EmptyOrPlaceholder
+                )
+            });
+            let tail_text = parent_trimmed
+                .get(raw_token.len()..)
+                .unwrap_or("");
+            let tail_start = token_abs_start + raw_token.len();
+            let tail_raw = RawLine {
+                text: tail_text,
+                start: tail_start,
+                end: tail_start + tail_text.len(),
+            };
+            let tail_tokens = tokenize_line_with_spans(&tail_raw);
+            match lex_close_inline_entry_with_all(
+                &tail_tokens,
+                raw_token,
+                lexed_selection.in_progress.as_deref(),
+                &lexed_selection.park,
+                &lexed_selection.complete,
+                &lexed_selection.drop,
+                lexed_selection.park_all,
+                lexed_selection.complete_all,
+            ) {
+                Err(error) => Err(error.message),
+                Ok(CloseInlineLex::Dangling { index, .. }) => {
+                    if has_bullet_child {
+                        let bullet = format!("- {index}");
+                        return Err(close_inline_mixing_error(&bullet));
+                    }
+                    let head = format!("{raw_token} {index}");
+                    Err(close_inline_dangling_error(&head, index, false))
+                }
+                Ok(entry @ CloseInlineLex::Entry { .. }) => {
+                    let (index, index_range, text) = match &entry {
+                        CloseInlineLex::Entry {
+                            index,
+                            index_range,
+                            text,
+                            ..
+                        } => (*index, *index_range, text.clone()),
+                        CloseInlineLex::Dangling { .. } => unreachable!(),
+                    };
+                    if has_bullet_child {
+                        let bullet = if index_range.is_none()
+                            && close_first_bullet_is_unnumbered(
+                                &item.lines[1..],
+                            ) {
+                            format!("- {text}")
+                        } else {
+                            format!("- {} {text}", index.unwrap_or(1))
+                        };
+                        return Err(close_inline_mixing_error(&bullet));
+                    }
+                    let mut close = close_spec_from_lex(
+                        split.close_text.clone(),
+                        &lexed_selection,
+                    );
+                    close.log = vec![log_entry_from_inline(
+                        &entry,
+                        raw_token,
+                        default_index,
+                    )];
+                    let spec = PomodoroPastSpec {
+                        raw: raw_token.to_string(),
+                        name: valid.name.clone(),
+                        name_is_literal: valid.name_is_literal,
+                        blocks: valid.blocks,
+                        blocks_typed: valid.blocks_typed,
+                        repair: split.repair,
+                        close,
+                        stack: PastStackPos {
+                            index: 1,
+                            size: 1,
+                            offset_blocks: 0,
+                        },
+                    };
+                    let body = raw_token.to_string();
+                    Ok(Some(parsed_capture_item_outcome(
+                        item,
+                        ParsedCaptureText {
+                            body,
+                            clip: None,
+                            route: None,
+                            kind: CaptureKind::PomodoroPast { spec },
+                            scheduled_offset: None,
+                            priority_level: None,
+                            sub_bullets: Vec::new(),
+                            dependencies: Vec::new(),
+                            blocked_tasks: Vec::new(),
+                            relations: Vec::new(),
+                            dependency_target: None,
+                            type_marker: None,
+                        },
+                        Vec::new(),
+                        None,
+                    )))
+                }
+            }
         }
         EqualsToken::Close => {
             let Some(first) = parent_trimmed.split_whitespace().next() else {

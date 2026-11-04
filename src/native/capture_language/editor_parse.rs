@@ -446,6 +446,26 @@ pub(crate) fn parse_for_editor_with(
         .into_iter()
         .map(|outcome| outcome.item)
         .collect::<Vec<_>>();
+    // Past stacks: maximal runs of consecutive valid Past items. Invalid
+    // or unfinished items break runs and never fabricate durations.
+    {
+        let blocks: Vec<Option<u32>> = items
+            .iter()
+            .map(|it| {
+                if it.mode == EditorMode::PomodoroPast {
+                    it.pomodoro_past.as_ref().map(|s| s.blocks)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let stacks = super::past::compute_past_stacks(&blocks);
+        for (it, st) in items.iter_mut().zip(stacks) {
+            if let Some(spec) = it.pomodoro_past.as_mut() {
+                spec.stack = st;
+            }
+        }
+    }
     if let Some(global) =
         global_destination.as_ref().filter(|global| global.inherit)
     {
@@ -465,6 +485,7 @@ pub(crate) fn parse_for_editor_with(
                 || item.mode == EditorMode::PomodoroSplit
                 || item.mode == EditorMode::PomodoroMerge
                 || item.mode == EditorMode::PomodoroClose
+                || item.mode == EditorMode::PomodoroPast
                 || item.mode == EditorMode::PomodoroStart
                 || item.mode == EditorMode::Ref
                 || item.mode == EditorMode::TaskComplete
@@ -472,6 +493,7 @@ pub(crate) fn parse_for_editor_with(
                 || item.needs == [Need::TaskGoto]
                 || item.needs == [Need::TaskComplete]
                 || item.pomodoro_close.is_some()
+                || item.pomodoro_past.is_some()
                 || item.pomodoro_start.is_some()
                 || item.spans.iter().any(|span| {
                     matches!(
@@ -513,6 +535,7 @@ pub(crate) fn parse_for_editor_with(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -541,6 +564,7 @@ pub(crate) fn parse_for_editor_with(
     let pomodoro_split = first.pomodoro_split.clone();
     let pomodoro_merge = first.pomodoro_merge.clone();
     let pomodoro_close = first.pomodoro_close.clone();
+    let pomodoro_past = first.pomodoro_past.clone();
     let dependencies = first.dependencies.clone();
     let blocked_tasks = first.blocked_tasks.clone();
     let relations = first.relations.clone();
@@ -575,6 +599,7 @@ pub(crate) fn parse_for_editor_with(
         pomodoro_split,
         pomodoro_merge,
         pomodoro_close,
+        pomodoro_past,
         dependencies,
         blocked_tasks,
         relations,
@@ -846,6 +871,7 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         | EditorMode::PomodoroSplit
         | EditorMode::PomodoroMerge => "Pomodoro session-operator",
         EditorMode::PomodoroClose => "Pomodoro-close",
+        EditorMode::PomodoroPast => "Pomodoro-past",
         EditorMode::PomodoroStart => "Pomodoro-start",
         EditorMode::TaskComplete => "task-complete",
         EditorMode::Ref => "reference",
@@ -990,6 +1016,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -1044,6 +1071,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -1110,6 +1138,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -1287,6 +1316,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: found.dependency_entries(),
             blocked_tasks: found.blocked_task_entries(),
             relations: found.relation_entries(),
@@ -1374,6 +1404,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_split: None,
                 pomodoro_merge: None,
                 pomodoro_close: None,
+                pomodoro_past: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
                 relations: Vec::new(),
@@ -1434,6 +1465,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_split: None,
                 pomodoro_merge: None,
                 pomodoro_close: None,
+                pomodoro_past: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
                 relations: Vec::new(),
@@ -1772,6 +1804,7 @@ fn empty_editor_item(
         pomodoro_split: None,
         pomodoro_merge: None,
         pomodoro_close: None,
+        pomodoro_past: None,
         dependencies: Vec::new(),
         blocked_tasks: Vec::new(),
         relations: Vec::new(),
@@ -2187,6 +2220,7 @@ fn combine_editor_target_members<'a>(
         pomodoro_split: first.item.pomodoro_split.clone(),
         pomodoro_merge: first.item.pomodoro_merge.clone(),
         pomodoro_close: first.item.pomodoro_close.clone(),
+        pomodoro_past: first.item.pomodoro_past.clone(),
         dependencies: first.item.dependencies.clone(),
         blocked_tasks: first.item.blocked_tasks.clone(),
         relations: first.item.relations.clone(),
@@ -3021,6 +3055,7 @@ pub(super) fn list_refusal_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -3489,6 +3524,7 @@ pub(super) fn parse_editor_list_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -5316,6 +5352,7 @@ pub(super) fn parse_editor_item_inner<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close,
+            pomodoro_past: None,
             dependencies: item_dependencies.dependency_entries(),
             blocked_tasks: item_dependencies.blocked_task_entries(),
             relations: item_dependencies.relation_entries(),

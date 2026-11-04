@@ -23,6 +23,8 @@ pub(crate) enum SpanKind {
     PomodoroCloseComplete,
     PomodoroCloseDrop,
     PomodoroCloseLogIndex,
+    PomodoroPast,
+    PomodoroPastRepair,
     ActiveTaskRoute,
     ActiveTaskBlockId,
     PomodoroAdjust,
@@ -108,6 +110,8 @@ impl SpanKind {
             Self::PomodoroCloseComplete => "pomodoro_close_complete",
             Self::PomodoroCloseDrop => "pomodoro_close_drop",
             Self::PomodoroCloseLogIndex => "pomodoro_close_log_index",
+            Self::PomodoroPast => "pomodoro_past",
+            Self::PomodoroPastRepair => "pomodoro_past_repair",
             Self::ActiveTaskRoute => "active_task_route",
             Self::ActiveTaskBlockId => "active_task_block_id",
             Self::PomodoroAdjust => "pomodoro_adjust",
@@ -235,6 +239,8 @@ pub(crate) enum EditorMode {
     PomodoroMerge,
     PomodoroLink,
     PomodoroClose,
+    /// Whole-item `x=` past Pomodoro.
+    PomodoroPast,
     /// Whole-item `=`/`=<X>` start.
     PomodoroStart,
     /// A dependency-only action: prerequisites for an explicitly selected
@@ -268,6 +274,7 @@ impl EditorMode {
             Self::PomodoroMerge => "pomodoro_merge",
             Self::PomodoroLink => "pomodoro_link",
             Self::PomodoroClose => "pomodoro_close",
+            Self::PomodoroPast => "pomodoro_past",
             Self::PomodoroStart => "pomodoro_start",
             Self::TaskDependency => "task_dependency",
             Self::TaskComplete => "task_complete",
@@ -531,6 +538,9 @@ pub(crate) struct EditorParse {
     /// whole item carries one. `None` for every older input, so
     /// version-tolerant readers see no change. Purely lexical.
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
+    /// Validated additive whole-item `x=` past spec, when the item is an
+    /// exact past token. `None` for every older input. Purely lexical.
+    pub(crate) pomodoro_past: Option<PomodoroPastSpec>,
     /// Complete `&note:block-id` modifiers on the first item, in source
     /// order. Empty for every older input.
     pub(crate) dependencies: Vec<DependencyEntry>,
@@ -647,6 +657,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) pomodoro_split: Option<PomodoroSplitSpec>,
     pub(crate) pomodoro_merge: Option<PomodoroMergeSpec>,
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
+    pub(crate) pomodoro_past: Option<PomodoroPastSpec>,
     /// Complete `&note:block-id` modifiers on this item, in source order.
     pub(crate) dependencies: Vec<DependencyEntry>,
     /// Complete `*note:block-id` modifiers on this item, in source order.

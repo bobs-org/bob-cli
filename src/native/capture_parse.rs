@@ -19,9 +19,9 @@ use super::{
         EditorGlobalDestination, EditorItemParse, EditorMode,
         EditorParseOptions, EditorTarget, ListContext, MoveBullet,
         MoveChoiceBullet, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
-        PomodoroMergeSpec, PomodoroShiftSpec, PomodoroSplitSpec,
-        PomodoroStartSpec, ProjectTaskId, RelationDirection, RelationEntry,
-        ResolvedTypeName, Severity, Span,
+        PomodoroMergeSpec, PomodoroPastSpec, PomodoroShiftSpec,
+        PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId,
+        RelationDirection, RelationEntry, ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -175,7 +175,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 11` for the capture-language revision while \
+Success JSON reports `grammar: 12` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
@@ -347,6 +347,7 @@ and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' (or \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
 list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
 `=name` items, and neither is ever rewritten. \
+A whole-item `x=` past (`x=` starts now, `x` stops now, `x=` records what already happened: everything before the second `=` is time, everything after it is tasks) is lowercase only and must start an item or sit inside a same-line session chain; `X=3` and mid-body `Plan x=3` stay prose, while every `x=` token is claimed as valid, invalid, or unfinished, never prose. It reports mode 'pomodoro_past' with `section` carrying the typed name and a `pomodoro_past` object (`raw` exactly as typed, `name` (null when unnamed), `name_is_literal`, `blocks` (default 5), `minutes` (`blocks` times 5), `repair`, `stack` (`index` 1-based in typed order, `size`, `offset_blocks` summed from later members), and `close` in the existing close-spec shape including `log`). Bare names need an ASCII letter and must not be close-shaped (digit-led needs `#x=#2fa`); unquoted names end at `!`, `=`, `@`, `~`, and whitespace, while `#'literal'` quotes (straight or curly) match by key equality and run through the closing quote (so `!`/`=` inside quotes stay name content). The repair `!` binds to `E`, and everything after the second `=` goes to the close lexer unchanged (including `x=3=1,` needing `pomodoro_close_task` and `x= 2` needing `pomodoro_close_log_text`); an `x=` token counts as a close for chain ownership, inline entries, and child bullets. Spans cover `x=` plus a leading count (`pomodoro_past`), `@D` (`pomodoro_past`), the name only (`pomodoro_name`), the repair `!` (`pomodoro_past_repair`), the second `=` (`pomodoro_close`), plus the existing close sub-spans and `pomodoro_close_log_index` entries. Malformed `E` reports `invalid_pomodoro_past` (usage error from `bob capture`): `x=3-1`/`x=-2`/`x=3-`/`x=build@3-1` take no offset (`x=3`, `x=`, `x=3`, `x=build@3`); `x=3#fix@2` gives the count once (`x=3#fix` or `x=fix@3`); `x=~2`/`x=3~2`/`x=build~2` drop after a second `=` (`x==~2`, `x=3=~2`, `x=build=~2`); `x=*3` parks after a second `=` (`x==*3`); `x=0`/`x=build@0` need one block (`x=1`, `x=build@1`); `x=/…`/`x=*build` never split/merge; `x=1!2`/`x=!2` select after a second `=` (`x==1!2`, `x==!2`); `x=fix!2` selects after a second `=` (`x=fix=!2`, repair `x=fix!=!2`); `x=3x`/`x=3build` need `#` (`x=3#x`, `x=3#build`); oversized counts reuse the start `too large` wording; `x=#`/`x=3#`/`x=#\"DEEP` need `pomodoro_name` and `x=build@` needs `pomodoro_start_timing`. \
 A '@^id@' marker already carries the project-note intent: it reports mode \
 'project_note' with a 'route' need until the \
 route is typed. A '@:id@' marker is the offer form: it reports mode \
@@ -462,7 +463,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type",
+            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_past, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, drawer, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -660,6 +661,12 @@ struct CaptureParseResult {
     /// current ledger times.
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSpec>,
+    /// Validated whole-item `x=` past spec: `raw` is the trimmed past token
+    /// exactly as typed, plus canonical `name`, `blocks`/`minutes`,
+    /// `repair`, `stack`, and the existing close-spec `close`. Omitted for
+    /// every older input. Purely lexical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_past: Option<PastWire>,
     /// Complete transfer syntax, omitted for ordinary items.
     #[serde(skip_serializing_if = "Option::is_none")]
     transfer: Option<capture_language::EditorTransfer>,
@@ -800,6 +807,8 @@ struct CaptureParseItem {
     pomodoro_merge: Option<PomodoroMergeSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pomodoro_past: Option<PastWire>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     dependencies: Vec<ParseDependency>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -816,6 +825,47 @@ struct CaptureParseItem {
     /// Omitted unless the item is a multi-member run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     targets: Vec<ParseTarget>,
+}
+
+/// Wire projection of a validated whole-item `x=` past spec. `minutes` is
+/// `blocks * 5`; `blocks_typed` stays internal and is never serialized.
+/// `name` is `null` when unnamed. `stack` carries the text-only run
+/// position (`index` 1-based, `size`, `offset_blocks` summed from later
+/// members). `close` reuses the existing close-spec shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PastWire {
+    raw: String,
+    name: Option<String>,
+    name_is_literal: bool,
+    blocks: u32,
+    minutes: u64,
+    repair: bool,
+    stack: PastStackWire,
+    close: PomodoroCloseSpec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PastStackWire {
+    index: u32,
+    size: u32,
+    offset_blocks: u32,
+}
+
+fn past_wire(spec: &PomodoroPastSpec) -> PastWire {
+    PastWire {
+        raw: spec.raw.clone(),
+        name: spec.name.clone(),
+        name_is_literal: spec.name_is_literal,
+        blocks: spec.blocks,
+        minutes: spec.blocks as u64 * 5,
+        repair: spec.repair,
+        stack: PastStackWire {
+            index: spec.stack.index,
+            size: spec.stack.size,
+            offset_blocks: spec.stack.offset_blocks,
+        },
+        close: spec.close.clone(),
+    }
 }
 
 /// One `@route+id` target member: exact source range, marker text, and the
@@ -1180,6 +1230,7 @@ impl CaptureParseResult {
             pomodoro_split: parse.pomodoro_split,
             pomodoro_merge: parse.pomodoro_merge,
             pomodoro_close: parse.pomodoro_close,
+            pomodoro_past: parse.pomodoro_past.as_ref().map(past_wire),
             transfer,
             dependencies: parse_dependencies(&parse.dependencies),
             blocked_tasks: parse_dependencies(&parse.blocked_tasks),
@@ -1271,6 +1322,7 @@ impl CaptureParseResult {
                     row_parse.mode,
                     &row_parse.pomodoro_start,
                     &row_parse.pomodoro_close,
+                    &row_parse.pomodoro_past,
                     &row_parse.items,
                     (row.range.start, row.range.end),
                     &instance.text,
@@ -1354,6 +1406,7 @@ impl CaptureParseResult {
                     pomodoro_split: None,
                     pomodoro_merge: None,
                     pomodoro_close: None,
+                    pomodoro_past: None,
                     transfer: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
@@ -1394,6 +1447,7 @@ impl CaptureParseResult {
                     pomodoro_split: None,
                     pomodoro_merge: None,
                     pomodoro_close: None,
+                    pomodoro_past: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
@@ -1501,6 +1555,7 @@ impl CaptureParseResult {
             parsed.mode,
             &parsed.pomodoro_start,
             &parsed.pomodoro_close,
+            &parsed.pomodoro_past,
             &parsed.items,
             (template_range.start, template_range.end),
             &masked,
@@ -1607,6 +1662,7 @@ impl CaptureParseResult {
             pomodoro_split: parsed.pomodoro_split,
             pomodoro_merge: parsed.pomodoro_merge,
             pomodoro_close: parsed.pomodoro_close,
+            pomodoro_past: parsed.pomodoro_past.as_ref().map(past_wire),
             transfer: None,
             dependencies: parse_dependencies(&parsed.dependencies),
             blocked_tasks: parse_dependencies(&parsed.blocked_tasks),
@@ -2279,6 +2335,7 @@ fn refusal_diagnostic(
     mode: EditorMode,
     pomodoro_start: &Option<PomodoroStartSpec>,
     pomodoro_close: &Option<PomodoroCloseSpec>,
+    pomodoro_past: &Option<PomodoroPastSpec>,
     items: &[EditorItemParse],
     fallback_range: (usize, usize),
     source: &str,
@@ -2303,19 +2360,26 @@ fn refusal_diagnostic(
     }
     let is_session = |mode: EditorMode,
                       start: &Option<PomodoroStartSpec>,
-                      close: &Option<PomodoroCloseSpec>| {
+                      close: &Option<PomodoroCloseSpec>,
+                      past: &Option<PomodoroPastSpec>| {
         matches!(
             mode,
             EditorMode::PomodoroAdjust
                 | EditorMode::PomodoroShift
                 | EditorMode::PomodoroClose
+                | EditorMode::PomodoroPast
                 | EditorMode::PomodoroStart
         ) || matches!(mode, EditorMode::PomodoroTask | EditorMode::PomodoroLink)
-            && (start.is_some() || close.is_some())
+            && (start.is_some() || close.is_some() || past.is_some())
     };
-    let session = is_session(mode, pomodoro_start, pomodoro_close)
+    let session = is_session(mode, pomodoro_start, pomodoro_close, pomodoro_past)
         || items.iter().any(|item| {
-            is_session(item.mode, &item.pomodoro_start, &item.pomodoro_close)
+            is_session(
+                item.mode,
+                &item.pomodoro_start,
+                &item.pomodoro_close,
+                &item.pomodoro_past,
+            )
         });
     if !session {
         return None;
@@ -2328,6 +2392,8 @@ fn refusal_diagnostic(
                 SpanKind::PomodoroAdjust
                     | SpanKind::PomodoroShift
                     | SpanKind::PomodoroClose
+                    | SpanKind::PomodoroPast
+                    | SpanKind::PomodoroPastRepair
                     | SpanKind::PomodoroStart
             )
         })
@@ -2378,6 +2444,7 @@ fn empty_wire_item() -> CaptureParseItem {
         pomodoro_split: None,
         pomodoro_merge: None,
         pomodoro_close: None,
+        pomodoro_past: None,
         dependencies: Vec::new(),
         blocked_tasks: Vec::new(),
         relations: Vec::new(),
@@ -2488,6 +2555,7 @@ fn wire_item(
         pomodoro_split: item.pomodoro_split.clone(),
         pomodoro_merge: item.pomodoro_merge.clone(),
         pomodoro_close: item.pomodoro_close.clone(),
+        pomodoro_past: item.pomodoro_past.as_ref().map(past_wire),
         dependencies: parse_dependencies(&item.dependencies),
         blocked_tasks: parse_dependencies(&item.blocked_tasks),
         relations: parse_relations(&item.relations),
@@ -2682,6 +2750,9 @@ fn print_human_success_with_styler(
     }
     if let Some(close) = result.pomodoro_close.as_ref() {
         print_field(styler, "close", &format_pomodoro_close(close));
+    }
+    if let Some(past) = result.pomodoro_past.as_ref() {
+        print_field(styler, "past", &format_pomodoro_past(past));
     }
     if !result.needs.is_empty() {
         let needs = result
@@ -3042,6 +3113,134 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
     format!("{base} ({})", parts.join(" · "))
 }
 
+/// Render a validated `x=` past for human output: the trimmed past token
+/// exactly as typed plus the text-only summary. The parenthetical lists the
+/// canonical name (when typed), minutes, stack position (only when the run
+/// has more than one member), `repair` (when typed), and the close summary
+/// (when the close carries work). For example `x=fix@3!=*3` with a second
+/// stack member reads `past x=fix@3!=*3 (FIX · 15m · 2 of 2 · repair ·
+/// close: parked 3 · defer the rest)`.
+fn format_pomodoro_past(past: &PastWire) -> String {
+    let base = past.raw.clone();
+    let mut parts = Vec::new();
+    if let Some(name) = past.name.as_deref() {
+        parts.push(name.to_string());
+    }
+    parts.push(format!("{}m", past.minutes));
+    if past.stack.size > 1 {
+        parts.push(format!("{} of {}", past.stack.index, past.stack.size));
+    }
+    if past.repair {
+        parts.push("repair".to_string());
+    }
+    if let Some(summary) = format_past_close_summary(&past.close) {
+        parts.push(format!("close: {summary}"));
+    }
+    format!("{base} ({})", parts.join(" · "))
+}
+
+/// Close summary for a past human line, without the close `raw`: `None`
+/// for a plain close with no logs, otherwise the work summary (`parked`,
+/// `complete`, `drop`, `log`, `defer the rest`, `in progress none`).
+fn format_past_close_summary(close: &PomodoroCloseSpec) -> Option<String> {
+    let log_part = if close.log.is_empty() {
+        None
+    } else {
+        let entries = close
+            .log
+            .iter()
+            .map(|entry| {
+                let head = if entry.all {
+                    format!("* {:?}", entry.text)
+                } else {
+                    match entry.index {
+                        Some(index) => format!("{index} {:?}", entry.text),
+                        None => format!("{:?}", entry.text),
+                    }
+                };
+                if entry.details.is_empty() {
+                    head
+                } else {
+                    let noun = if entry.details.len() == 1 {
+                        "detail"
+                    } else {
+                        "details"
+                    };
+                    format!("{head} (+{} {noun})", entry.details.len())
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!("log {entries}"))
+    };
+    let has_work_selection = close.in_progress.is_some()
+        || !close.park.is_empty()
+        || close.park_all
+        || close.complete_all;
+    if !has_work_selection {
+        let mut parts = Vec::new();
+        if !close.complete.is_empty() {
+            parts.push(format!("complete {}", join_numbers(&close.complete)));
+        }
+        if !close.drop.is_empty() {
+            parts.push(format!("drop {}", join_numbers(&close.drop)));
+        }
+        if let Some(log) = log_part {
+            parts.push(log);
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        return Some(parts.join(" · "));
+    }
+    let mut parts = Vec::new();
+    if let Some(in_progress) = close.in_progress.as_ref() {
+        if in_progress.is_empty() {
+            if close.park.is_empty() && !close.park_all && !close.complete_all
+            {
+                parts.push("in progress none".to_string());
+            }
+        } else {
+            parts.push(format!("in progress {}", join_numbers(in_progress)));
+        }
+    }
+    let has_explicit_exceptions = close
+        .in_progress
+        .as_ref()
+        .is_some_and(|numbers| !numbers.is_empty())
+        || !close.park.is_empty()
+        || !close.complete.is_empty()
+        || !close.drop.is_empty();
+    if close.park_all {
+        parts.push(if has_explicit_exceptions {
+            "parked the remaining links".to_string()
+        } else {
+            "parked all".to_string()
+        });
+    } else if !close.park.is_empty() {
+        parts.push(format!("parked {}", join_numbers(&close.park)));
+    }
+    if close.complete_all {
+        parts.push(if has_explicit_exceptions {
+            "complete the remaining links".to_string()
+        } else {
+            "complete all".to_string()
+        });
+    } else if !close.complete.is_empty() {
+        parts.push(format!("complete {}", join_numbers(&close.complete)));
+    }
+    if !close.drop.is_empty() {
+        parts.push(format!("drop {}", join_numbers(&close.drop)));
+    }
+    if let Some(log) = log_part {
+        parts.push(log);
+    }
+    if !close.park_all && !close.complete_all {
+        parts.push("defer the rest".to_string());
+    }
+    Some(parts.join(" · "))
+}
+
 fn join_numbers(numbers: &[u32]) -> String {
     numbers
         .iter()
@@ -3312,7 +3511,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 11);
+        assert_eq!(value["grammar"], 12);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3370,12 +3569,12 @@ mod tests {
     fn lone_route_reports_note_pull_mode() {
         // NP27: `bob capture-parse -f json -- @sase` reports mode
         // `note_pull` with no needs, the route, and the ordinary list
-        // summary (`kind: "tasks"`, `count: 0`) under grammar 11. A lone
+        // summary (`kind: "tasks"`, `count: 0`) under grammar 12. A lone
         // header keeps its task-list metadata so clients can still offer
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 11);
+        assert_eq!(value["grammar"], 12);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());

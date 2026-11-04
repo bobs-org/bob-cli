@@ -156,6 +156,12 @@ pub(crate) enum CaptureKind {
     PomodoroClose {
         spec: PomodoroCloseSpec,
     },
+    /// A whole-item `x=` past Pomodoro: record already-happened work.
+    /// `blocks` defaults to 5 (25 minutes) when untyped. `stack` is filled
+    /// by the shared post-pass; the lexer leaves index/size/offset at zero.
+    PomodoroPast {
+        spec: PomodoroPastSpec,
+    },
     /// A whole-item `=`/`=<X>` Pomodoro start. The item must contain only
     /// the start token and have exactly one physical line; any extra text,
     /// marker, or child line on a counted token is an invalid start, never
@@ -426,6 +432,49 @@ pub(crate) struct PomodoroStartSpec {
     /// start-drop grammar lands; the lineup engine already applies it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) drop: Vec<u32>,
+}
+
+/// A whole-item `x=` past Pomodoro specification. `raw` is the trimmed
+/// past token exactly as typed (for example `x=fix@2=*3`). `name` holds
+/// the canonical upper-cased name when a name was typed; `None` is unnamed.
+/// `blocks` is the 5-minute block count (default 5 when untyped);
+/// `blocks_typed` records whether a count was typed (internal only, never
+/// a JSON contract field). `repair` is the `!` before the second `=`.
+/// `close` is the existing close-spec shape for `<X>` after the second `=`.
+/// `stack` is filled by `assign_past_stacks`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PomodoroPastSpec {
+    /// Trimmed past token exactly as typed.
+    pub(crate) raw: String,
+    /// Canonical name when typed, upper-cased; `None` when unnamed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<String>,
+    /// True when `name` came from a `#"…"` literal: key equality only.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) name_is_literal: bool,
+    /// Number of 5-minute blocks (default 5 when untyped).
+    pub(crate) blocks: u32,
+    /// Whether a block count was typed. Internal only; excluded from JSON
+    /// via the wire projection in `capture_parse.rs`.
+    #[serde(skip)]
+    pub(crate) blocks_typed: bool,
+    /// True when the repair `!` before the second `=` was typed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) repair: bool,
+    /// Close selection after the second `=`, in the existing close shape.
+    pub(crate) close: PomodoroCloseSpec,
+    /// Stack position within a maximal run of consecutive past items.
+    pub(crate) stack: PastStackPos,
+}
+
+/// Stack position of one past member inside its maximal consecutive run.
+/// `index` is 1-based in typed order; `size` is the run length;
+/// `offset_blocks` is the sum of later members' blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct PastStackPos {
+    pub(crate) index: u32,
+    pub(crate) size: u32,
+    pub(crate) offset_blocks: u32,
 }
 
 /// One `=/` split selector: a `#name` or `#"Literal"` type part.

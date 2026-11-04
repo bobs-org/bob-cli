@@ -405,14 +405,97 @@ fn push_list_items<'a>(
     }
 }
 
+/// Merge spaced exact-name past tokens (`x=#"DEEP WORK"@3`) that
+/// `masked_tokens` split on whitespace. Only `x=` tokens with an
+/// unterminated literal in their first whitespace piece expand through the
+/// closing quote plus glued `@D`, `!`, and `=X` suffixes (up to the next
+/// whitespace), preserving absolute offsets. The following inline entry or
+/// next session token is never swallowed.
+fn merge_past_literal_tokens<'a>(
+    raw: &RawLine<'a>,
+    mut tokens: Vec<Token<'a>>,
+) -> Vec<Token<'a>> {
+    use super::pomodoro_literal::{lex_exact_name_after_hash, opens_exact_name};
+    let mut index = 0;
+    while index < tokens.len() {
+        let first = tokens[index].text;
+        if !first.starts_with("x=") {
+            index += 1;
+            continue;
+        }
+        let Some(hash_rel) = first.find('#') else {
+            index += 1;
+            continue;
+        };
+        let after_hash_in_first = &first[hash_rel + 1..];
+        if !opens_exact_name(after_hash_in_first) {
+            index += 1;
+            continue;
+        }
+        // Already whole when the literal closes inside the first piece.
+        if lex_exact_name_after_hash(
+            after_hash_in_first,
+            after_hash_in_first.len(),
+        )
+        .is_some_and(|lex| lex.complete)
+        {
+            index += 1;
+            continue;
+        }
+        let rel_start = tokens[index].start.saturating_sub(raw.start);
+        let from = raw.text.get(rel_start..).unwrap_or(first);
+        if !from.starts_with(first) {
+            index += 1;
+            continue;
+        }
+        let Some(hash_in_from) = from.find('#') else {
+            index += 1;
+            continue;
+        };
+        let after_hash_full = &from[hash_in_from + 1..];
+        let Some(lex) =
+            lex_exact_name_after_hash(after_hash_full, after_hash_full.len())
+        else {
+            index += 1;
+            continue;
+        };
+        let literal_end = hash_in_from + 1 + lex.literal_len;
+        let after_literal = from.get(literal_end..).unwrap_or("");
+        let suffix_len = after_literal
+            .find(|c: char| c.is_ascii_whitespace())
+            .unwrap_or(after_literal.len());
+        let expanded_len = literal_end + suffix_len;
+        if expanded_len <= first.len() {
+            index += 1;
+            continue;
+        }
+        let expanded = from.get(..expanded_len).unwrap_or(first);
+        let consumed_end = tokens[index].start + expanded_len;
+        let mut end = index + 1;
+        while end < tokens.len() && tokens[end].start < consumed_end {
+            end += 1;
+        }
+        tokens[index] = Token {
+            text: expanded,
+            start: tokens[index].start,
+            end: tokens[index].start + expanded_len,
+        };
+        tokens.drain(index + 1..end);
+        index += 1;
+    }
+    tokens
+}
+
 /// Return the line's whitespace-separated tokens when the parent line is
 /// a session-operator chain: at least two tokens, every one passing
 /// [`is_session_chain_token`]. A single token is never a chain, so the
-/// existing single-token path stays byte-identical.
+/// existing single-token path stays byte-identical. Past tokens with spaced
+/// exact names stay whole via [`merge_past_literal_tokens`].
 pub(super) fn session_chain_tokens<'a>(
     line: &RawLine<'a>,
 ) -> Option<Vec<Token<'a>>> {
     let tokens = super::type_marker::masked_tokens(line);
+    let tokens = merge_past_literal_tokens(line, tokens);
     if tokens.len() >= 2
         && tokens
             .iter()
@@ -424,12 +507,15 @@ pub(super) fn session_chain_tokens<'a>(
     }
 }
 
-/// Whether a chain token is a whole-item close: a bare `x`, `x<N>…`, or
-/// `x#…`, or a retired `=x`/`=*`/`=!` spelling that teaches the rewrite.
+/// Whether a chain token is a whole-item close: a bare `x`, `x<N>…`,
+/// `x#…`, a past `x=` token, or a retired `=x`/`=*`/`=!` spelling that
+/// teaches the rewrite. Past counts as a close so it owns inline entries
+/// and child bullets.
 fn is_chain_close_token(token: &str) -> bool {
     matches!(
         super::item::session_equals_token(token),
         Some(super::item::EqualsToken::Close)
+            | Some(super::item::EqualsToken::Past { .. })
     )
 }
 
@@ -632,7 +718,10 @@ pub(super) fn push_capture_item<'a>(
         current.clear();
         return;
     }
-    let parent_tokens = super::type_marker::masked_tokens(&first.raw);
+    let parent_tokens = merge_past_literal_tokens(
+        &first.raw,
+        super::type_marker::masked_tokens(&first.raw),
+    );
     if let Some(split) = split_inline_close_tokens(&parent_tokens) {
         let lead_before = &parent_tokens[..split.owner_index];
         let trail = &parent_tokens[split.trail_start..];
@@ -1271,6 +1360,25 @@ fn parse_ordinary_draft(
             fanout: outcome.fanout,
         });
     }
+    // Past stacks: maximal runs of consecutive Past items, across same-line
+    // chains and blank-line boundaries. Every other item interrupts runs.
+    // Invalid items already returned errors above, so every Past here is
+    // valid; still, only Past kinds join runs.
+    {
+        let blocks: Vec<Option<u32>> = items
+            .iter()
+            .map(|it| match &it.parsed.kind {
+                CaptureKind::PomodoroPast { spec } => Some(spec.blocks),
+                _ => None,
+            })
+            .collect();
+        let stacks = super::past::compute_past_stacks(&blocks);
+        for (it, st) in items.iter_mut().zip(stacks) {
+            if let CaptureKind::PomodoroPast { spec } = &mut it.parsed.kind {
+                spec.stack = st;
+            }
+        }
+    }
 
     Ok(ParsedCaptureDraft {
         global,
@@ -1831,6 +1939,7 @@ fn is_template_session_kind(kind: &CaptureKind) -> bool {
         | CaptureKind::PomodoroSplit { .. }
         | CaptureKind::PomodoroMerge { .. }
         | CaptureKind::PomodoroStart { .. }
+        | CaptureKind::PomodoroPast { .. }
         | CaptureKind::PomodoroClose { .. } => true,
         CaptureKind::Pomodoro { start, close, .. }
         | CaptureKind::PomodoroLink { start, close, .. } => {

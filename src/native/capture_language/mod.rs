@@ -30,6 +30,7 @@ mod line;
 mod markers;
 mod model;
 mod move_bullet;
+pub(crate) mod past;
 mod pomodoro_literal;
 mod project_tasks;
 mod relations;
@@ -42,7 +43,7 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 11;
+pub(crate) const GRAMMAR_REVISION: u32 = 12;
 
 #[cfg(test)]
 mod tests;
@@ -150,7 +151,9 @@ pub(crate) use self::model::ParsedRelation;
 pub(crate) use self::model::PomodoroAdjustSpec;
 pub(crate) use self::model::PomodoroCloseSpec;
 pub(crate) use self::model::PomodoroLinkSpelling;
+pub(crate) use self::model::PastStackPos;
 pub(crate) use self::model::PomodoroMergeSpec;
+pub(crate) use self::model::PomodoroPastSpec;
 pub(crate) use self::model::PomodoroShiftSpec;
 pub(crate) use self::model::PomodoroSplitSpec;
 pub(crate) use self::model::PomodoroStartSpec;

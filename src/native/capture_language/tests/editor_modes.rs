@@ -1178,6 +1178,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::PomodoroMerge { .. } => EditorMode::PomodoroMerge,
             CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
             CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
+            CaptureKind::PomodoroPast { .. } => EditorMode::PomodoroPast,
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,
             CaptureKind::TaskComplete { .. } => EditorMode::TaskComplete,
             CaptureKind::Ref(_) => EditorMode::Ref,
@@ -2226,4 +2227,16 @@ fn editor_reports_task_complete_modes_needs_and_diagnostics() {
         assert_ne!(parsed.needs, vec![Need::TaskComplete], "{raw}");
         assert_eq!(codes(&parsed), Vec::<&str>::new(), "{raw}");
     }
+}
+
+#[test]
+fn editor_reports_pomodoro_past_mode() {
+    let parsed = editor("x=3");
+    assert_eq!(parsed.mode, EditorMode::PomodoroPast);
+    assert_eq!(parsed.section.as_deref(), None);
+    assert!(parsed.pomodoro_past.is_some());
+    assert!(parsed.diagnostics.is_empty());
+    let named = editor("x=fix@2");
+    assert_eq!(named.mode, EditorMode::PomodoroPast);
+    assert_eq!(named.section.as_deref(), Some("FIX"));
 }

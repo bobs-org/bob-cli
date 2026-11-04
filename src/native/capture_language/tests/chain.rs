@@ -726,3 +726,21 @@ fn bang_claim_beats_dependency_errors() {
     let error = execute_draft("!sase:x &foo").expect_err("claimed invalid");
     assert!(error.contains("remove `&foo`"), "unexpected error: {error}");
 }
+
+#[test]
+fn past_chains_split_and_stack() {
+    // `x x=3!` is a close plus a one-member past stack.
+    let draft = execute_draft("x x=3!").expect("close plus past");
+    assert_eq!(draft.items.len(), 2);
+    assert!(matches!(
+        draft.items[0].parsed.kind,
+        CaptureKind::PomodoroClose { .. }
+    ));
+    let spec = match &draft.items[1].parsed.kind {
+        CaptureKind::PomodoroPast { spec } => spec,
+        other => panic!("second not past: {other:?}"),
+    };
+    assert_eq!(spec.blocks, 3);
+    assert!(spec.repair);
+    assert_eq!((spec.stack.index, spec.stack.size), (1, 1));
+}

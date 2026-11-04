@@ -101,6 +101,7 @@ mod goto;
 mod grammar;
 mod lists;
 mod move_bullet;
+mod past;
 mod pomodoro_merge;
 mod ref_grammar;
 mod retired_close;

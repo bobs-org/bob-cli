@@ -1072,6 +1072,7 @@ impl TypeMarkerSubject {
             CaptureKind::PomodoroLink { close: None, .. } => Self::ExistingLink,
             CaptureKind::TaskToggle { .. } => Self::TaskToggle,
             CaptureKind::PomodoroClose { .. } => Self::Close,
+            CaptureKind::PomodoroPast { .. } => Self::Close,
             CaptureKind::PomodoroStart { .. } => Self::Start,
             CaptureKind::PomodoroAdjust { .. } => Self::Adjust,
             CaptureKind::PomodoroShift { .. } => Self::Shift,

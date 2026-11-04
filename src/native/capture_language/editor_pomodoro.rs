@@ -147,6 +147,7 @@ pub(super) fn parse_editor_adjust_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -196,6 +197,7 @@ pub(super) fn editor_operator_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -248,6 +250,7 @@ pub(super) fn editor_start_invalid_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -791,6 +794,7 @@ fn editor_named_valid_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -840,6 +844,7 @@ fn editor_start_drop_incomplete_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -888,6 +893,7 @@ fn editor_start_timing_incomplete_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -1027,6 +1033,7 @@ fn editor_named_incomplete_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -1372,6 +1379,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     pomodoro_split: None,
                     pomodoro_merge: None,
                     pomodoro_close: None,
+                    pomodoro_past: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
@@ -1412,6 +1420,7 @@ pub(super) fn parse_editor_start_item<'a>(
                     pomodoro_split: None,
                     pomodoro_merge: None,
                     pomodoro_close: None,
+                    pomodoro_past: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
@@ -1672,6 +1681,7 @@ pub(super) fn parse_editor_split_item<'a>(
                 pomodoro_split: Some(spec),
                 pomodoro_merge: None,
                 pomodoro_close: None,
+                pomodoro_past: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
                 relations: Vec::new(),
@@ -1727,6 +1737,7 @@ pub(super) fn parse_editor_split_item<'a>(
             pomodoro_split: Some(spec),
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -1954,6 +1965,7 @@ pub(super) fn parse_editor_merge_item<'a>(
                 pomodoro_split: None,
                 pomodoro_merge: Some(spec),
                 pomodoro_close: None,
+                pomodoro_past: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
                 relations: Vec::new(),
@@ -2009,6 +2021,7 @@ pub(super) fn parse_editor_merge_item<'a>(
             pomodoro_split: None,
             pomodoro_merge: Some(spec),
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -2056,6 +2069,7 @@ fn editor_merge_invalid_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -2108,6 +2122,7 @@ fn editor_split_invalid_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),
@@ -2240,6 +2255,9 @@ pub(super) fn parse_editor_close_item<'a>(
                 dests,
                 len,
             );
+        }
+        EqualsToken::Past { len } => {
+            return parse_editor_past_item(item, parent_trimmed, len);
         }
         EqualsToken::Close => {}
     }
@@ -2985,6 +3003,90 @@ pub(crate) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
         let Some(head) = trimmed.split_whitespace().next() else {
             continue;
         };
+        // Past tokens (including spaced exact names) suppress completion
+        // in their inline entries and child logs the same way closes do.
+        // Check Past first so `x=` never falls through to the Close path
+        // below (which would truncate a spaced literal at `head`).
+        if let Some(past_len) = super::item::past_token_len(trimmed)
+        {
+            let raw_token =
+                trimmed.get(..past_len).unwrap_or(trimmed);
+            let Some(split) =
+                super::past::split_past_token(raw_token)
+            else {
+                continue;
+            };
+            match super::past::validate_past_e(raw_token, &split) {
+                super::past::PastEOutcome::Valid(_) => {}
+                _ => continue,
+            };
+            let token_abs = parent.raw.start
+                + (parent.raw.text.len()
+                    - parent.raw.text.trim_start().len());
+            let close_base = token_abs + split.close_offset;
+            let (in_progress, park, complete, drop, park_all, complete_all) =
+                match super::close_selection::lex_close_selection(
+                    &split.close_text,
+                    close_base,
+                    raw_token,
+                ) {
+                    Ok(super::close_selection::CloseSelectionOutcome::Valid(
+                        lex,
+                    )) => (
+                        lex.in_progress,
+                        lex.park,
+                        lex.complete,
+                        lex.drop,
+                        lex.park_all,
+                        lex.complete_all,
+                    ),
+                    _ => continue,
+                };
+            let tail_text =
+                trimmed.get(raw_token.len()..).unwrap_or("");
+            if tail_text.is_empty() {
+                continue;
+            }
+            let tail_start = token_abs + raw_token.len();
+            let tail_raw = RawLine {
+                text: tail_text,
+                start: tail_start,
+                end: tail_start + tail_text.len(),
+            };
+            let tail = tokenize_line_with_spans(&tail_raw);
+            if tail.is_empty() {
+                continue;
+            }
+            match lex_close_inline_entry_with_all(
+                &tail,
+                raw_token,
+                in_progress.as_deref(),
+                &park,
+                &complete,
+                &drop,
+                park_all,
+                complete_all,
+            ) {
+                Ok(CloseInlineLex::Entry {
+                    index_range,
+                    text_range,
+                    ..
+                }) => {
+                    let start =
+                        index_range.map(|(s, _)| s).unwrap_or(text_range.0);
+                    if cursor >= start && cursor <= parent.raw.end {
+                        return true;
+                    }
+                }
+                Ok(CloseInlineLex::Dangling { index_range, .. }) => {
+                    if cursor >= index_range.0 && cursor <= parent.raw.end {
+                        return true;
+                    }
+                }
+                Err(_) => {}
+            }
+            return false;
+        }
         if !matches!(
             super::item::session_equals_token(head),
             Some(super::item::EqualsToken::Close)
@@ -3067,6 +3169,678 @@ pub(crate) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
     false
 }
 
+/// Build a whole-item past outcome for the live editor.
+fn editor_past_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    mode: EditorMode,
+    pomodoro_past: Option<PomodoroPastSpec>,
+    section: Option<String>,
+    spans: Vec<Span>,
+    needs: Vec<Need>,
+    diagnostics: Vec<Diagnostic>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode,
+            route: None,
+            section,
+            block_id: None,
+            needs,
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            pomodoro_past,
+            dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
+            relations: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            list: None,
+            spans,
+            diagnostics,
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+            drawer_bullet_target: None,
+            targets: Vec::new(),
+        },
+        declarations: Vec::new(),
+    }
+}
+
+/// Whole-item `x=` past Pomodoro for the live editor. Mirrors the execution
+/// Past branch but never fails: valid tokens report `pomodoro_past` with the
+/// spec and `section` set to the typed name, malformed `E` reports
+/// `pomodoro_past` plus one `invalid_pomodoro_past` diagnostic, and unfinished
+/// input reports `incomplete` with the existing needs. Spans cover exactly
+/// the table in the plan: `pomodoro_past` over `x=` plus a leading count and
+/// over `@D`, `pomodoro_name` over the name only, `pomodoro_past_repair`
+/// over the repair `!`, `pomodoro_close` over the second `=`, plus the
+/// existing close selection/log spans.
+fn parse_editor_past_item<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    len: usize,
+) -> Option<EditorItemOutcome<'a>> {
+    use super::past::{
+        split_past_token, validate_past_e, PastEOutcome, PastNeed,
+    };
+    let parent = item.lines.first().expect("nonempty item");
+    let parent_text = parent.raw.text;
+    let leading = parent_text.len() - parent_text.trim_start().len();
+    let token_start = parent.raw.start + leading;
+    let raw_token = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+    let token_end = token_start + raw_token.len();
+    let mk_span = |start: usize, end: usize, kind: SpanKind| Span {
+        start,
+        end,
+        kind,
+        project_note: None,
+        title: None,
+        key: None,
+    };
+    // Base Past spans for a valid `E` (leading count, name, repair,
+    // second `=`). Used for valid outcomes; invalid outcomes use a single
+    // token span plus a diagnostic.
+    let past_token_spans = |valid: &super::past::PastEValid,
+                            split: &super::past::PastSplit|
+     -> Vec<Span> {
+        let mut spans = Vec::new();
+        // `x=` plus a leading count.
+        let leading_end = if let Some((s, e)) = valid.blocks_range {
+            if s == 2 {
+                token_start + e
+            } else {
+                token_start + 2
+            }
+        } else {
+            token_start + 2
+        };
+        spans.push(mk_span(
+            token_start,
+            leading_end,
+            SpanKind::PomodoroPast,
+        ));
+        // `@D` timing suffix as a second `pomodoro_past`.
+        if let Some((s, e)) = valid.blocks_range {
+            if s != 2 {
+                // `@D` range covers digits only; include the `@`.
+                spans.push(mk_span(
+                    token_start + s - 1,
+                    token_start + e,
+                    SpanKind::PomodoroPast,
+                ));
+            }
+        }
+        // Name only.
+        if let Some((s, e)) = valid.name_range {
+            // For literals the range already covers quotes.
+            spans.push(mk_span(
+                token_start + s,
+                token_start + e,
+                SpanKind::PomodoroName,
+            ));
+        }
+        // Repair `!` only.
+        if split.repair {
+            if let Some(off) = split.repair_offset {
+                spans.push(mk_span(
+                    token_start + off,
+                    token_start + off + 1,
+                    SpanKind::PomodoroPastRepair,
+                ));
+            }
+        }
+        // Second `=` only.
+        if split.has_second_eq {
+            if let Some(off) = split.second_eq_offset {
+                spans.push(mk_span(
+                    token_start + off,
+                    token_start + off + 1,
+                    SpanKind::PomodoroClose,
+                ));
+            }
+        }
+        spans
+    };
+    let Some(split) = split_past_token(raw_token) else {
+        return None;
+    };
+    let valid = match validate_past_e(raw_token, &split) {
+        PastEOutcome::Invalid(message) => {
+            return Some(editor_past_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroPast,
+                None,
+                None,
+                vec![mk_span(token_start, token_end, SpanKind::PomodoroPast)],
+                Vec::new(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_past",
+                    message,
+                    range: Some((token_start, token_end)),
+                }],
+            ));
+        }
+        PastEOutcome::Incomplete { need, message: _ } => {
+            let needs = match need {
+                PastNeed::Name => vec![Need::PomodoroName],
+                PastNeed::Timing => vec![Need::PomodoroStartTiming],
+            };
+            // Placeholder treatment mirrors named starts: an empty `#`
+            // gets an interactive placeholder over `#`, an unterminated
+            // literal gets spans for what was typed, and a dangling `@`
+            // gets a placeholder over `@`.
+            let mut spans =
+                vec![mk_span(token_start, token_end, SpanKind::PomodoroPast)];
+            if raw_token.ends_with('#') {
+                let hash_at = token_end - 1;
+                spans.push(mk_span(
+                    hash_at,
+                    hash_at + 1,
+                    SpanKind::InteractivePlaceholder,
+                ));
+            } else if raw_token.ends_with('@') {
+                let at_at = token_end - 1;
+                spans.push(mk_span(
+                    at_at,
+                    at_at + 1,
+                    SpanKind::InteractivePlaceholder,
+                ));
+            }
+            // Timing incomplete keeps the typed name as section.
+            let section = match need {
+                PastNeed::Timing => {
+                    // Re-derive the bare name (if any) for section.
+                    // `validate` already rejected malformed names, so the
+                    // prefix before `@` is the typed name when present.
+                    let e = split.e_raw.as_str();
+                    if let Some(at) = e.find('@') {
+                        let name_part = &e[..at];
+                        if name_part.is_empty() || name_part == "#" {
+                            None
+                        } else if let Some(stripped) =
+                            name_part.strip_prefix('#')
+                        {
+                            if stripped.is_empty() {
+                                None
+                            } else {
+                                Some(stripped.to_ascii_uppercase())
+                            }
+                        } else {
+                            Some(name_part.to_ascii_uppercase())
+                        }
+                    } else {
+                        None
+                    }
+                }
+                PastNeed::Name => None,
+            };
+            spans.sort_by_key(|s| (s.start, s.end));
+            return Some(editor_past_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::Incomplete,
+                None,
+                section,
+                spans,
+                needs,
+                Vec::new(),
+            ));
+        }
+        PastEOutcome::Valid(valid) => valid,
+    };
+    let section = valid.name.clone();
+    let base_past_spans = past_token_spans(&valid, &split);
+    // Lex the close part after the second `=` with absolute offsets.
+    let close_base = token_start + split.close_offset;
+    let lexed_selection = match lex_close_selection(
+        &split.close_text,
+        close_base,
+        raw_token,
+    ) {
+        Ok(CloseSelectionOutcome::Valid(lex)) => lex,
+        Ok(CloseSelectionOutcome::Incomplete(incomplete)) => {
+            // Dangling `,`/`~`/`@` in the close part: incomplete needing
+            // `pomodoro_close_task` with a partial Past spec and a
+            // placeholder over the separator.
+            let mut spans = base_past_spans.clone();
+            // Close sub-spans for what was typed.
+            if let Some((s, e)) = incomplete.in_progress_range {
+                spans.push(mk_span(s, e, SpanKind::PomodoroCloseInProgress));
+            }
+            if let Some((s, e)) = incomplete.park_range {
+                spans.push(mk_span(s, e, SpanKind::PomodoroClosePark));
+            }
+            if let Some((s, e)) = incomplete.complete_range {
+                spans.push(mk_span(s, e, SpanKind::PomodoroCloseComplete));
+            }
+            if let Some((s, e)) = incomplete.drop_range {
+                spans.push(mk_span(s, e, SpanKind::PomodoroCloseDrop));
+            }
+            spans.push(mk_span(
+                incomplete.separator_range.0,
+                incomplete.separator_range.1,
+                SpanKind::InteractivePlaceholder,
+            ));
+            spans.sort_by_key(|s| (s.start, s.end));
+            let partial_close = close_spec_from_incomplete(
+                split.close_text.clone(),
+                &incomplete,
+            );
+            let spec = PomodoroPastSpec {
+                raw: raw_token.to_string(),
+                name: valid.name.clone(),
+                name_is_literal: valid.name_is_literal,
+                blocks: valid.blocks,
+                blocks_typed: valid.blocks_typed,
+                repair: split.repair,
+                close: partial_close,
+                stack: PastStackPos {
+                    index: 0,
+                    size: 0,
+                    offset_blocks: 0,
+                },
+            };
+            return Some(editor_past_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::Incomplete,
+                Some(spec),
+                section,
+                spans,
+                vec![Need::PomodoroCloseTask],
+                Vec::new(),
+            ));
+        }
+        Err(error) => {
+            let mut spans = base_past_spans.clone();
+            spans.sort_by_key(|s| (s.start, s.end));
+            return Some(editor_past_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroPast,
+                None,
+                None,
+                spans,
+                Vec::new(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_past",
+                    message: error.message,
+                    range: Some(error.range),
+                }],
+            ));
+        }
+    };
+    // Close sub-spans for the valid selection.
+    let mut close_sub_spans = Vec::new();
+    if let Some((s, e)) = lexed_selection.in_progress_range {
+        close_sub_spans.push(mk_span(s, e, SpanKind::PomodoroCloseInProgress));
+    }
+    if let Some((s, e)) = lexed_selection.park_range {
+        close_sub_spans.push(mk_span(s, e, SpanKind::PomodoroClosePark));
+    }
+    if let Some((s, e)) = lexed_selection.complete_range {
+        close_sub_spans
+            .push(mk_span(s, e, SpanKind::PomodoroCloseComplete));
+    }
+    if let Some((s, e)) = lexed_selection.drop_range {
+        close_sub_spans.push(mk_span(s, e, SpanKind::PomodoroCloseDrop));
+    }
+    let single_token_parent = parent_trimmed == raw_token;
+    if single_token_parent && item.lines.len() == 1 {
+        let mut spans = base_past_spans.clone();
+        spans.extend(close_sub_spans.clone());
+        spans.sort_by_key(|s| (s.start, s.end));
+        let close =
+            close_spec_from_lex(split.close_text.clone(), &lexed_selection);
+        let spec = PomodoroPastSpec {
+            raw: raw_token.to_string(),
+            name: valid.name.clone(),
+            name_is_literal: valid.name_is_literal,
+            blocks: valid.blocks,
+            blocks_typed: valid.blocks_typed,
+            repair: split.repair,
+            close,
+            stack: PastStackPos {
+                index: 0,
+                size: 0,
+                offset_blocks: 0,
+            },
+        };
+        return Some(editor_past_outcome(
+            item,
+            parent_trimmed,
+            EditorMode::PomodoroPast,
+            Some(spec),
+            section,
+            spans,
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
+    if single_token_parent {
+        match lex_close_log_bullets_with_all(
+            &item.lines[1..],
+            raw_token,
+            lexed_selection.in_progress.as_deref(),
+            &lexed_selection.park,
+            &lexed_selection.complete,
+            &lexed_selection.drop,
+            lexed_selection.park_all,
+            lexed_selection.complete_all,
+        ) {
+            Ok(lexed) => {
+                let mut spans = base_past_spans.clone();
+                spans.extend(close_sub_spans.clone());
+                for entry in &lexed.entries {
+                    if let Some((s, e)) = entry.index_range {
+                        spans.push(mk_span(
+                            s,
+                            e,
+                            SpanKind::PomodoroCloseLogIndex,
+                        ));
+                    }
+                }
+                if lexed.dangling.is_empty() {
+                    spans.sort_by_key(|s| (s.start, s.end));
+                    let mut close = close_spec_from_lex(
+                        split.close_text.clone(),
+                        &lexed_selection,
+                    );
+                    close.log = log_entries_from_lex(&lexed.entries);
+                    let spec = PomodoroPastSpec {
+                        raw: raw_token.to_string(),
+                        name: valid.name.clone(),
+                        name_is_literal: valid.name_is_literal,
+                        blocks: valid.blocks,
+                        blocks_typed: valid.blocks_typed,
+                        repair: split.repair,
+                        close,
+                        stack: PastStackPos {
+                            index: 0,
+                            size: 0,
+                            offset_blocks: 0,
+                        },
+                    };
+                    return Some(editor_past_outcome(
+                        item,
+                        parent_trimmed,
+                        EditorMode::PomodoroPast,
+                        Some(spec),
+                        section,
+                        spans,
+                        Vec::new(),
+                        Vec::new(),
+                    ));
+                }
+                for dangling in &lexed.dangling {
+                    spans.push(mk_span(
+                        dangling.index_range.0,
+                        dangling.index_range.1,
+                        SpanKind::InteractivePlaceholder,
+                    ));
+                }
+                spans.sort_by_key(|s| (s.start, s.end));
+                let mut close = close_spec_from_lex(
+                    split.close_text.clone(),
+                    &lexed_selection,
+                );
+                close.log = log_entries_from_lex(&lexed.entries);
+                let spec = PomodoroPastSpec {
+                    raw: raw_token.to_string(),
+                    name: valid.name.clone(),
+                    name_is_literal: valid.name_is_literal,
+                    blocks: valid.blocks,
+                    blocks_typed: valid.blocks_typed,
+                    repair: split.repair,
+                    close,
+                    stack: PastStackPos {
+                        index: 0,
+                        size: 0,
+                        offset_blocks: 0,
+                    },
+                };
+                return Some(editor_past_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::Incomplete,
+                    Some(spec),
+                    section,
+                    spans,
+                    vec![Need::PomodoroCloseLogText],
+                    Vec::new(),
+                ));
+            }
+            Err(error) => {
+                let mut spans = base_past_spans.clone();
+                spans.extend(close_sub_spans.clone());
+                spans.sort_by_key(|s| (s.start, s.end));
+                return Some(editor_past_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroPast,
+                    None,
+                    None,
+                    spans,
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_past",
+                        message: error.message,
+                        range: Some(error.range),
+                    }],
+                ));
+            }
+        }
+    }
+    // Inline entry: tail after the Past token.
+    let tail_text = parent_trimmed.get(raw_token.len()..).unwrap_or("");
+    let tail_start = token_start + raw_token.len();
+    let tail_raw = RawLine {
+        text: tail_text,
+        start: tail_start,
+        end: tail_start + tail_text.len(),
+    };
+    let tail_tokens = tokenize_line_with_spans(&tail_raw);
+    let default_index = default_log_index_with_all(
+        lexed_selection.in_progress.as_deref(),
+        &lexed_selection.park,
+        &lexed_selection.complete,
+        &lexed_selection.drop,
+        lexed_selection.park_all,
+        lexed_selection.complete_all,
+    );
+    let has_bullet_child = item.lines[1..].iter().any(|line| {
+        !matches!(
+            classify_authored_line(line.raw),
+            AuthoredLineClass::EmptyOrPlaceholder
+        )
+    });
+    match lex_close_inline_entry_with_all(
+        &tail_tokens,
+        raw_token,
+        lexed_selection.in_progress.as_deref(),
+        &lexed_selection.park,
+        &lexed_selection.complete,
+        &lexed_selection.drop,
+        lexed_selection.park_all,
+        lexed_selection.complete_all,
+    ) {
+        Err(error) => {
+            let mut spans = base_past_spans.clone();
+            spans.extend(close_sub_spans.clone());
+            spans.sort_by_key(|s| (s.start, s.end));
+            return Some(editor_past_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroPast,
+                None,
+                None,
+                spans,
+                Vec::new(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_past",
+                    message: error.message,
+                    range: Some(error.range),
+                }],
+            ));
+        }
+        Ok(CloseInlineLex::Dangling {
+            index,
+            index_range,
+        }) => {
+            if has_bullet_child {
+                let bullet = format!("- {index}");
+                let mut spans = base_past_spans.clone();
+                spans.extend(close_sub_spans.clone());
+                spans.sort_by_key(|s| (s.start, s.end));
+                return Some(editor_past_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroPast,
+                    None,
+                    None,
+                    spans,
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_past",
+                        message: close_inline_mixing_error(&bullet),
+                        range: Some((token_start, token_end)),
+                    }],
+                ));
+            }
+            let mut spans = base_past_spans.clone();
+            spans.extend(close_sub_spans.clone());
+            spans.push(mk_span(
+                index_range.0,
+                index_range.1,
+                SpanKind::PomodoroCloseLogIndex,
+            ));
+            spans.sort_by_key(|s| (s.start, s.end));
+            let mut close = close_spec_from_lex(
+                split.close_text.clone(),
+                &lexed_selection,
+            );
+            close.log = Vec::new();
+            let spec = PomodoroPastSpec {
+                raw: raw_token.to_string(),
+                name: valid.name.clone(),
+                name_is_literal: valid.name_is_literal,
+                blocks: valid.blocks,
+                blocks_typed: valid.blocks_typed,
+                repair: split.repair,
+                close,
+                stack: PastStackPos {
+                    index: 0,
+                    size: 0,
+                    offset_blocks: 0,
+                },
+            };
+            return Some(editor_past_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::Incomplete,
+                Some(spec),
+                section,
+                spans,
+                vec![Need::PomodoroCloseLogText],
+                Vec::new(),
+            ));
+        }
+        Ok(entry @ CloseInlineLex::Entry { .. }) => {
+            let (index, index_range, text) = match &entry {
+                CloseInlineLex::Entry {
+                    index,
+                    index_range,
+                    text,
+                    ..
+                } => (*index, *index_range, text.clone()),
+                CloseInlineLex::Dangling { .. } => unreachable!(),
+            };
+            if has_bullet_child {
+                let bullet = if index_range.is_none()
+                    && close_first_bullet_is_unnumbered(&item.lines[1..])
+                {
+                    format!("- {text}")
+                } else {
+                    format!("- {} {text}", index.unwrap_or(1))
+                };
+                let mut spans = base_past_spans.clone();
+                spans.extend(close_sub_spans.clone());
+                spans.sort_by_key(|s| (s.start, s.end));
+                return Some(editor_past_outcome(
+                    item,
+                    parent_trimmed,
+                    EditorMode::PomodoroPast,
+                    None,
+                    None,
+                    spans,
+                    Vec::new(),
+                    vec![Diagnostic {
+                        severity: Severity::Error,
+                        code: "invalid_pomodoro_past",
+                        message: close_inline_mixing_error(&bullet),
+                        range: Some((token_start, token_end)),
+                    }],
+                ));
+            }
+            let mut spans = base_past_spans.clone();
+            spans.extend(close_sub_spans.clone());
+            if let Some((s, e)) = index_range {
+                spans.push(mk_span(s, e, SpanKind::PomodoroCloseLogIndex));
+            }
+            spans.sort_by_key(|s| (s.start, s.end));
+            let mut close = close_spec_from_lex(
+                split.close_text.clone(),
+                &lexed_selection,
+            );
+            close.log =
+                vec![log_entry_from_inline(&entry, raw_token, default_index)];
+            let spec = PomodoroPastSpec {
+                raw: raw_token.to_string(),
+                name: valid.name.clone(),
+                name_is_literal: valid.name_is_literal,
+                blocks: valid.blocks,
+                blocks_typed: valid.blocks_typed,
+                repair: split.repair,
+                close,
+                stack: PastStackPos {
+                    index: 0,
+                    size: 0,
+                    offset_blocks: 0,
+                },
+            };
+            return Some(editor_past_outcome(
+                item,
+                parent_trimmed,
+                EditorMode::PomodoroPast,
+                Some(spec),
+                section,
+                spans,
+                Vec::new(),
+                Vec::new(),
+            ));
+        }
+    }
+}
+
 /// Build a whole-item close outcome for the live editor: the mode, the
 /// additive spec (or none for a near miss), the `x`/list spans, the needs,
 /// and at most one diagnostic.
@@ -3100,6 +3874,7 @@ fn editor_close_outcome<'a>(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close,
+            pomodoro_past: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
             relations: Vec::new(),

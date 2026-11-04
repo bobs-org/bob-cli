@@ -1082,7 +1082,8 @@ fn capture_parse_pomodoro_start_human_and_help() {
             && help.contains("'=3'")
             && help.contains("printf 'x")
             && help.contains("Modes:")
-            && help.contains("pomodoro_close, pomodoro_start"),
+            && help.contains("pomodoro_close")
+            && help.contains("pomodoro_past"),
         "expected start help:\n{help}"
     );
 

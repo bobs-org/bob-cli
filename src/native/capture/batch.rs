@@ -576,6 +576,11 @@ pub(super) fn plan_capture_to_target(
                 "pomodoro start capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::PomodoroPast { .. } => {
+            return Err(CaptureError::io(
+                "pomodoro past capture invariant failed: wrong write planner",
+            ));
+        }
         CaptureKind::TaskComplete { .. } => {
             return Err(CaptureError::io(
                 "task complete capture invariant failed: wrong write planner",

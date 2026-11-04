@@ -1133,6 +1133,13 @@ pub(super) fn plan_capture_item(
             warnings,
         );
     }
+    // Grammar lands before record: a parsed valid Past never mutates the
+    // vault until the record phase removes this refusal.
+    if let CaptureKind::PomodoroPast { .. } = parsed.kind {
+        return Err(CaptureError::usage(
+            "recording past Pomodoros (x=) is not available yet".to_string(),
+        ));
+    }
     if let Some(target) = request.forced_sub_bullet_target.as_ref() {
         parsed.kind = CaptureKind::SubBullet {
             target: target.clone(),
@@ -1751,6 +1758,9 @@ pub(super) fn plan_capture_item(
         }
         CaptureKind::PomodoroStart { .. } => {
             unreachable!("pomodoro start capture is planned before this point")
+        }
+        CaptureKind::PomodoroPast { .. } => {
+            unreachable!("pomodoro past capture is refused before this point")
         }
         CaptureKind::TaskComplete { .. } => {
             unreachable!("task complete capture is planned before this point")
@@ -3423,6 +3433,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::PomodoroLink { .. } => "pomodoro_link",
         CaptureKind::PomodoroClose { .. } => "pomodoro_close",
         CaptureKind::PomodoroStart { .. } => "pomodoro_start",
+        CaptureKind::PomodoroPast { .. } => "pomodoro_past",
         CaptureKind::TaskComplete { .. } => "task_complete",
         CaptureKind::Ref(_) => "ref",
         CaptureKind::NotePull { .. } => "note_pull",

@@ -184,3 +184,15 @@ fn bare_close_suppresses_marker_completion_in_work_log_text() {
         assert_eq!(completion_field_at(raw, raw.len()), None, "{raw}");
     }
 }
+
+#[test]
+fn past_bare_token_is_not_a_close() {
+    // `x=` never parses as a bare close; it is always a past token.
+    let parsed = execute("x=").expect("past parses");
+    assert!(matches!(
+        parsed.kind,
+        CaptureKind::PomodoroPast { .. }
+    ));
+    let edit = editor("x=");
+    assert_eq!(edit.mode, EditorMode::PomodoroPast);
+}

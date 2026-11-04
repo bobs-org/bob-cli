@@ -1914,6 +1914,9 @@ pub(crate) fn resolve_execution_ownership(
         CaptureKind::PomodoroStart { .. } => {
             Err(unsupported_target_relation_error("Pomodoro-start", sigil))
         }
+        CaptureKind::PomodoroPast { .. } => {
+            Err(unsupported_target_relation_error("Pomodoro-past", sigil))
+        }
         CaptureKind::Transfer { .. } => {
             Err(unsupported_target_relation_error("task transfer", sigil))
         }

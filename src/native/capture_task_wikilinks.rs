@@ -88,10 +88,12 @@ fn is_whole_item_action(item: &capture_language::EditorItemParse) -> bool {
         EditorMode::PomodoroAdjust
             | EditorMode::PomodoroShift
             | EditorMode::PomodoroClose
+            | EditorMode::PomodoroPast
             | EditorMode::PomodoroStart
             | EditorMode::TaskComplete
             | EditorMode::Ref
     ) || item.pomodoro_close.is_some()
+        || item.pomodoro_past.is_some()
         || item.pomodoro_start.is_some()
         || matches!(
             item.needs.as_slice(),
