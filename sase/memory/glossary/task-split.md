@@ -1,3 +1,10 @@
+---
+keyword: Task Split
+title: Task Split
+summary: Promote splittable bullets into new tasks with live stubs in the
+  parent. Distinct from splitting a Pomodoro time record.
+---
+
 # Task Split
 
 aka split, split out

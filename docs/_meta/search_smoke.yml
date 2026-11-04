@@ -30,6 +30,8 @@
   location: /reference/capture-syntax/#template
 - query: "@route+id @route+id applies to several tasks"
   location: /reference/capture-syntax/#plus-child-target-run
+- query: "@route+id @route+id"
+  location: /reference/capture-syntax/#plus-child-target-run
 - query: "@a+x @b+y > @c"
   location: /reference/capture-syntax/#transfer
 - query: "@a+x @b+y > @c+id"

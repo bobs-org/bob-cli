@@ -140,7 +140,6 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `!` | `x!` | Complete Task Links on close |
 | `%` | bare `%` | Incomplete directive |
 | `%` | trailing `%c` / `%c<N>` | Clipboard capture |
-| `%` | trailing `%` | Incomplete directive |
 
 Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
 
@@ -1235,7 +1234,7 @@ Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-exi
 
 ### Target run {#plus-child-target-run}
 
-Targets repeat one capture.
+A `@route+id @route+id` run applies one capture to several tasks, in marker order.
 
 ```bash
 bob capture '@work+one @work+two Ship it'
@@ -1261,6 +1260,13 @@ bob capture '@mac_inbox+ws-proto > @dev#future-work'
 ```text { .no-copy title="Output" }
 ↪ Moved 2 tasks into db.md › Tasks
 ⤵ merged 2 tasks into “Upgrade Postgres to 17” · db.md
+```
+
+```text { .no-copy title="Shapes" }
+@a+x @b+y > @c        move into a note
+@a+x @b+y > @c+id     merge into a task
+@a+x > @c+id#drawer   merge into a drawer
+@a+x > @c#section     merge into a section
 ```
 
 Contract: [Moving and merging tasks with `>`](../capture.md#moving-and-merging-tasks-with).

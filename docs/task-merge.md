@@ -9,17 +9,12 @@ back into tasks (see [Split bullets out into tasks](task-split.md)). Merge
 labels committed through capture `~` / `~~` or the Obsidian Links stage run
 this same engine (see [Task relations](task-relations.md#21-merge-labels)).
 
-> [!NOTE] The pure Rust merge engine is implemented in
-> `src/native/task_merge/` and its MG1–MG20 conformance coverage is recorded
-> below. Configurable merge labels and capture transfer/dispatch are still
-> pending their sibling phases; those sections below remain their contract.
-
 This file is the contract every implementation cites. The pure planner is
-`plan_task_merge` in `src/native/task_merge/`. Later adapters compose it for
-capture `>` transfer lines, capture relation merges, and `bob task merge`.
-The Obsidian Links stage previews and commits through `bob task merge` and
-never reimplements the merge. If an implementation disagrees with a vector,
-fix this doc first in the same change.
+`plan_task_merge` in `src/native/task_merge/`; capture `>` transfer lines,
+capture relation merges, and `bob task merge` all compose it, and the
+Obsidian Links stage previews and commits through `bob task merge` without
+reimplementing it. If an implementation disagrees with a vector, fix this
+doc first in the same change.
 
 ## 1. The rule
 
@@ -293,8 +288,7 @@ Property tests (Rust) must hold for merge, split, and many-source move:
 
 Each MG row names the preimage, the gesture, and the byte-exact postimage
 expectation. The implementation tests live in
-[`src/native/task_merge/tests.rs`](../src/native/task_merge/tests.rs); MG19's
-four-list YAML wiring remains part of the later `merge-label` phase.
+`src/native/task_merge/tests.rs`.
 
 | ID | Covers | Preimage → gesture → postimage |
 | --- | --- | --- |

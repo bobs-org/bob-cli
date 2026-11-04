@@ -626,6 +626,21 @@ label and no gestures, it is never a closing label, and it never enters the
 label catalog. Nothing is written on S except a silent `^id`. A dependency
 or an authored relation on the pair wins. See `docs/task-relations.md` §19.
 
+### Task Merge {#task-merge}
+
+# Task Merge
+
+aka merge, merged into
+
+Task Merge folds one or more source tasks into a target task, one of its drawers, or a
+note section through `bob task merge`, capture's `>`, or the configured `merged into`
+relation. It cuts the selected source blocks and appends their notes to the destination,
+retiring each source as a cancelled tombstone rather than copying and deleting it.
+Dependent tasks and affected links are repaired, and the source records the target in
+its `🪢 LINKS: merged into` line. See `docs/task-merge.md` for the contract and edge
+cases. This task-outline operation is distinct from a [Merged Pomodoro](#merged-pomodoro), which
+combines work sessions.
+
 ### Task Relation {#task-relation}
 
 *Aliases: relation, LINKS line, LINKED FROM line.*
@@ -639,15 +654,30 @@ the source task's 🪢 **LINKS:** line and mirrored on the target task's generat
 (`(💬 mentions)` entries), which are not relations. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
 gestures. A relation is distinct from a Pomodoro [Task Link](#task-link): it never blocks a task,
 counts as a Pomodoro Task Link, or changes its schedule, priority, or freshness.
-The status exceptions are committing a configured cancel label through capture or
-the Links stage, which cancels the source task at commit time, and committing a
-configured complete label through capture or the Links stage, which marks the source
-task Done at commit time.
+Committing a configured cancel, complete, or merge label through capture or the Links
+stage cancels the source, completes it, or merges it into the target (moving its notes
+and cancelling it), respectively, at commit time; see [Task Merge](#task-merge).
 
 A relation whose label is a configured successor label (such as `starts after`) also
 offers its source as a [Successor Offer](#successor-offer) when its target is parked (left Pending with
 no live Task Link today) or done; it still never blocks, and its mirror reads
 `starts before`.
+
+### Task Split {#task-split}
+
+# Task Split
+
+aka split, split out
+
+Task Split promotes a splittable note under a task or eligible note section into a new
+task. A task's selected bullet becomes a live task-link stub, and each new task gets a
+generated mention back-link; a section bullet has no owning task to mention. Split does
+not write a `split from` relation. Use `bob task split` or Ctrl+Shift+T. On a task line,
+Ctrl+Shift+T opens a Tab-mark picker; on a drawer title, it scopes the picker to that
+drawer. A daily-note task sends new tasks to its root note's `## Tasks` intake, or the
+default inbox when it has no root; cross-note writes have a guarded Undo notice. See
+`docs/task-split.md` for the contract and exact edits. This creates task identities,
+distinct from splitting one [Pomodoro](#pomodoro) session's time record.
 
 ### Task Successor {#task-successor}
 

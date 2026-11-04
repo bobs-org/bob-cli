@@ -1,3 +1,10 @@
+---
+keyword: Task Merge
+title: Task Merge
+summary: Fold source tasks into a target task, drawer, or note section,
+  retiring each source as a cancelled tombstone. Distinct from a Merged Pomodoro.
+---
+
 # Task Merge
 
 aka merge, merged into
