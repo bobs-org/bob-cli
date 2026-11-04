@@ -368,6 +368,11 @@ token; Bryan's words, then caveats, are trimmed first). Sections:
    with its display and share, and its top 3 tasks by linked minutes;
    for a quarter, root-parent shares beside the previous quarter's;
    for a year, root shares by quarter. Then the folded types.
+   A session's minutes split across its Task Links with the same
+   splitter the `root_parent` lanes use, so task rows under a root sum
+   to no more than that root. Either the original or the `done/`
+   archive spelling resolves to one task identity, and archived tasks
+   render their `done/` link. This changes values, not JSON shape.
 4. **Parts**: one line per child with Worked, review state, Headline,
    and Reflection lead; days get `mostly` and closeout instead. A
    child without a review reads "not reviewed".

@@ -839,6 +839,115 @@ fn brief_closed_week_reports_every_section() {
 }
 
 #[test]
+fn brief_attributes_archived_and_splits_multi_link() {
+    let vault = vault_dir("brief-attribution");
+    write_dataview_tasks_settings(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-26", "-q"]);
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-27", "-q"]);
+    fs::create_dir_all(vault.path().join("2026")).unwrap();
+    fs::create_dir_all(vault.path().join("done")).unwrap();
+    fs::write(
+        vault.path().join("a.md"),
+        "- [ ] #task Alpha [created:: 2026-10-20] ^ta\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("b.md"),
+        "- [ ] #task Beta [created:: 2026-10-20] ^tb\n",
+    )
+    .unwrap();
+    fs::write(vault.path().join("sase.md"), "# sase\n").unwrap();
+    fs::write(
+        vault.path().join("done/sase_done.md"),
+        "- [x] #task Archived thing [created:: 2026-10-20] [completion:: 2026-10-27] ^arch\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("2026/20261026.md"),
+        "---\nparent: '[[2026/2026-W44]]'\n---\n\n\
+         [[2026/20261025|prev]] · [[2026/2026-W44|W44]] · [[2026/20261027|next]]\n\n\
+         ## Pomodoros\n\n\
+         - [x] (**08:00 - 08:40** [t:: 40m]) — PLAN\n\
+         \t- [[a#^ta]]\n\
+         \t- [[b#^tb]]\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("2026/20261027.md"),
+        "---\nparent: '[[2026/2026-W44]]'\n---\n\n\
+         [[2026/20261026|prev]] · [[2026/2026-W44|W44]] · [[2026/20261028|next]]\n\n\
+         ## Pomodoros\n\n\
+         - [x] (**09:00 - 09:30** [t:: 30m]) — PLAN\n\
+         \t- [[done/sase_done#^arch]]\n\n\
+         - [x] (**10:00 - 10:30** [t:: 30m]) — PLAN\n\
+         \t- [[sase#^arch]]\n\
+         \t- [[done/sase_done#^arch]]\n",
+    )
+    .unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    let mut minutes_by_block: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
+    let mut arch_link = String::new();
+    for root in body["time"]["roots"].as_array().expect("time roots") {
+        for task in root["tasks"].as_array().expect("root tasks") {
+            let link = task["link"].as_str().unwrap_or_default().to_string();
+            let minutes = task["minutes"].as_u64().unwrap_or(0);
+            if link.contains("#^ta") {
+                minutes_by_block.insert("ta".to_string(), minutes);
+            } else if link.contains("#^tb") {
+                minutes_by_block.insert("tb".to_string(), minutes);
+            } else if link.contains("#^arch") {
+                minutes_by_block.insert("arch".to_string(), minutes);
+                arch_link = link;
+            }
+        }
+    }
+    assert_eq!(
+        minutes_by_block.get("ta").copied().unwrap_or(0),
+        20,
+        "40m across two links splits 20/20: {}",
+        body["time"]
+    );
+    assert_eq!(
+        minutes_by_block.get("tb").copied().unwrap_or(0),
+        20,
+        "40m across two links splits 20/20: {}",
+        body["time"]
+    );
+    assert_eq!(
+        minutes_by_block.get("arch").copied().unwrap_or(0),
+        60,
+        "archived task gets 30m plus a once-counted 30m duplicate: {}",
+        body["time"]
+    );
+    assert!(
+        arch_link.contains("done/sase_done"),
+        "archived task renders its done/ home: {arch_link}"
+    );
+    let finished = body["finished"].as_array().expect("finished");
+    let archived_row = finished
+        .iter()
+        .find(|row| row["link"].as_str().unwrap_or_default().contains("#^arch"))
+        .expect("archived completion in finished");
+    assert!(
+        archived_row["link"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("done/sase_done"),
+        "finished renders the done/ link: {}",
+        body["finished"]
+    );
+    assert_eq!(
+        archived_row["minutes"].as_u64().unwrap_or(0),
+        60,
+        "finished ranks by split minutes: {}",
+        body["finished"]
+    );
+}
+
+#[test]
 fn brief_output_is_deterministic() {
     let vault = vault_dir("brief-deterministic");
     write_reviews_fixture(vault.path());

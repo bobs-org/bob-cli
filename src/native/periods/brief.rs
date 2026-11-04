@@ -8,7 +8,7 @@
 //! the same content. `all_time` has no review.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
     io,
     path::{Path, PathBuf},
@@ -23,6 +23,7 @@ use super::{
 };
 use crate::native::{
     config, env as bob_env,
+    pomodoro_homes::split_minutes,
     stats::{
         clock::StatsClock,
         homes::HomesEngine,
@@ -156,7 +157,8 @@ struct Ctx {
     report: Value,
     index: StatsIndex,
     buffers: HashMap<String, String>,
-    /// On-clock linked minutes per task key (`source_path || block_id`).
+    /// On-clock linked minutes per task key (`source_path || block_id`),
+    /// split across a session's links so tasks never outrank their root.
     linked: HashMap<String, u32>,
     /// Minutes per root key across on-clock sessions in the observed span.
     _roots: BTreeMap<String, u32>,
@@ -254,6 +256,8 @@ fn execute(matches: &clap::ArgMatches) -> Result<Bundle, BriefError> {
 }
 
 /// Canonical key for matching a session task link to its task row.
+/// Archived tasks live in `done/` but keep their original `source_path`
+/// as the identity: either spelling resolves to this one key.
 fn task_key(source_path: &str, block_id: &str) -> String {
     format!(
         "{} || {}",
@@ -268,13 +272,36 @@ fn normalize_target(target: &str) -> String {
     stem.trim().to_ascii_lowercase()
 }
 
-/// On-clock minutes in the observed span, credited in full to every
-/// task linked from the session.
+/// Where a task row lives on disk: the `done/` archive when the task
+/// moved, otherwise its original note.
+fn task_effective_path(task: &IndexedTask) -> &str {
+    task.archive_path.as_deref().unwrap_or(&task.source_path)
+}
+
+/// Whether a normalized link target names this task through either its
+/// original note or its `done/` archive.
+fn task_matches_target(task: &IndexedTask, target: &str) -> bool {
+    if normalize_target(&task.source_path) == target {
+        return true;
+    }
+    if let Some(archive) = task.archive_path.as_deref()
+        && normalize_target(archive) == target
+    {
+        return true;
+    }
+    false
+}
+
+/// On-clock minutes in the observed span, split across a session's links
+/// with the same splitter the stats `root_parent` lanes use, so task rows
+/// under a root never outrank that root. Either the original or the
+/// `done/` archive spelling resolves to one task identity, and each
+/// session–task match counts once even when two spellings name it.
 fn linked_minutes(ctx: &Ctx) -> HashMap<String, u32> {
     let Some(end) = ctx.observed_end else {
         return HashMap::new();
     };
-    // Task lookup by lower-cased block id: sessions link tasks by
+    // Task lookup by trimmed lower-cased block id: sessions link tasks by
     // `(target, block_id)`, and tasks are unique per note.
     let mut by_block: HashMap<String, Vec<&IndexedTask>> = HashMap::new();
     for task in &ctx.index.tasks {
@@ -282,7 +309,7 @@ fn linked_minutes(ctx: &Ctx) -> HashMap<String, u32> {
             && !block.trim().is_empty()
         {
             by_block
-                .entry(block.to_ascii_lowercase())
+                .entry(block.trim().to_ascii_lowercase())
                 .or_default()
                 .push(task);
         }
@@ -292,6 +319,7 @@ fn linked_minutes(ctx: &Ctx) -> HashMap<String, u32> {
         if *date < ctx.span_start || *date > end {
             continue;
         }
+        let daily_path = Path::new(&daily.path);
         for session in &daily.closed_pomodoros {
             if session.stats_clock() != Some(StatsClock::Worked) {
                 continue;
@@ -299,35 +327,90 @@ fn linked_minutes(ctx: &Ctx) -> HashMap<String, u32> {
             let Some(minutes) = session.counted_minutes() else {
                 continue;
             };
+            // Deduplicate the session's links by resolved note plus block,
+            // mirroring the homes attribution: a bare `[[#^block]]` link
+            // targets the daily note itself.
+            let mut seen_raw: HashSet<(String, String)> = HashSet::new();
+            let mut deduped: Vec<(String, String)> = Vec::new();
             for link in &session.links {
                 if link.block_id.trim().is_empty() {
                     continue;
                 }
-                let Some(candidates) =
-                    by_block.get(&link.block_id.to_ascii_lowercase())
-                else {
-                    continue;
-                };
-                // A bare `[[#^block]]` link targets the daily note
-                // itself, matching the homes attribution.
-                let target = if link.target.trim().is_empty() {
-                    normalize_target(&daily.path)
+                let block_lower = link.block_id.trim().to_ascii_lowercase();
+                let resolved = ctx
+                    .index
+                    .note_index
+                    .resolve(Some(daily_path), &link.target)
+                    .map(|path| normalize_target(&path.to_string_lossy()))
+                    .unwrap_or_else(|| {
+                        if link.target.trim().is_empty() {
+                            normalize_target(&daily.path)
+                        } else {
+                            normalize_target(&link.target)
+                        }
+                    });
+                if seen_raw.insert((resolved.clone(), block_lower.clone())) {
+                    deduped.push((resolved, block_lower));
+                }
+            }
+            if deduped.is_empty() {
+                continue;
+            }
+            // Map each deduped link to its task identity, collapsing two
+            // spellings of the same archived task to one entry.
+            let mut seen_tasks: HashSet<String> = HashSet::new();
+            let mut final_entries: Vec<Option<String>> = Vec::new();
+            for (target, block_lower) in deduped {
+                let mut matched: Option<String> = None;
+                if let Some(candidates) = by_block.get(&block_lower) {
+                    for task in candidates {
+                        if task_matches_target(task, &target)
+                            && let Some(block) = task.block_id.as_deref()
+                        {
+                            matched = Some(task_key(&task.source_path, block));
+                            break;
+                        }
+                    }
+                }
+                if let Some(canonical) = matched {
+                    if seen_tasks.insert(canonical.clone()) {
+                        final_entries.push(Some(canonical));
+                    }
                 } else {
-                    normalize_target(&link.target)
-                };
-                for task in candidates {
-                    let source = normalize_target(&task.source_path);
-                    if source != target {
+                    final_entries.push(None);
+                }
+            }
+            let total = final_entries.len();
+            if total == 0 {
+                continue;
+            }
+            let shares = split_minutes(minutes, total);
+            for (index, entry) in final_entries.into_iter().enumerate() {
+                if let Some(canonical) = entry {
+                    let share = shares.get(index).copied().unwrap_or(0);
+                    if share == 0 {
                         continue;
                     }
-                    if let Some(block) = task.block_id.as_deref() {
-                        *linked
-                            .entry(task_key(&task.source_path, block))
-                            .or_insert(0) += minutes;
-                    }
+                    *linked.entry(canonical).or_insert(0) += share;
                 }
             }
         }
+    }
+    // Alias the archive spelling to the same minutes so freshness paths
+    // (which name the `done/` file) resolve without a second lookup.
+    let mut aliases = Vec::new();
+    for task in &ctx.index.tasks {
+        if let (Some(archive), Some(block)) =
+            (task.archive_path.as_deref(), task.block_id.as_deref())
+        {
+            let canonical = task_key(&task.source_path, block);
+            if let Some(minutes) = linked.get(&canonical).copied() {
+                aliases.push((task_key(archive, block), minutes));
+            }
+        }
+    }
+    for (alias, minutes) in aliases {
+        linked.entry(alias).or_insert(minutes);
     }
     linked
 }
@@ -340,6 +423,37 @@ fn linked_for(task: &IndexedTask, ctx: &Ctx) -> u32 {
         .get(&task_key(&task.source_path, block))
         .copied()
         .unwrap_or(0)
+}
+
+/// Minutes for a freshness-lane row, whose path names the on-disk file:
+/// resolve through either the source or the archive spelling to the one
+/// canonical identity.
+fn linked_for_path(path: &str, block: &str, ctx: &Ctx) -> u32 {
+    if block.trim().is_empty() {
+        return 0;
+    }
+    let direct = task_key(path, block);
+    if let Some(minutes) = ctx.linked.get(&direct).copied() {
+        return minutes;
+    }
+    let target = normalize_target(path);
+    let block_lower = block.trim().to_ascii_lowercase();
+    for task in &ctx.index.tasks {
+        let task_block = task.block_id.as_deref().unwrap_or_default();
+        if task_block.trim().to_ascii_lowercase() != block_lower {
+            continue;
+        }
+        if task_matches_target(task, &target)
+            && let Some(canonical_block) = task.block_id.as_deref()
+        {
+            return ctx
+                .linked
+                .get(&task_key(&task.source_path, canonical_block))
+                .copied()
+                .unwrap_or(0);
+        }
+    }
+    0
 }
 
 fn stem_of(path: &str) -> &str {
@@ -357,8 +471,9 @@ fn short_description(text: &str, max_chars: usize) -> String {
 }
 
 /// A ready-to-paste task link: `[[stem#^block|description]]`.
+/// Archived tasks render their `done/` home so the link resolves.
 fn task_link(task: &IndexedTask) -> String {
-    let stem = stem_of(&task.source_path);
+    let stem = stem_of(task_effective_path(task));
     let description =
         short_description(&clean_task_text(&task.description), 120);
     match task.block_id.as_deref() {
@@ -598,7 +713,7 @@ fn week_time(ctx: &mut Ctx) -> Value {
         BTreeMap::new();
     for (task, minutes) in scored {
         let home = engine.home_for_task(
-            &task.source_path,
+            task_effective_path(task),
             task.line_number,
             &task.line,
         );
@@ -864,7 +979,7 @@ fn finished_section(ctx: &mut Ctx) -> Value {
             let mut row = task_row(task, ctx);
             if group_by_area {
                 let home = engine.home_for_task(
-                    &task.source_path,
+                    task_effective_path(task),
                     task.line_number,
                     &task.line,
                 );
@@ -940,7 +1055,7 @@ fn still_open_section(ctx: &Ctx) -> Value {
                 continue;
             }
             seen.insert(key.clone(), true);
-            let minutes = ctx.linked.get(&key).copied().unwrap_or(0);
+            let minutes = linked_for_path(&task.path, block, ctx);
             if minutes == 0 {
                 let link = if block.trim().is_empty() {
                     note_link(&task.path, &short_description(&task.text, 120))
@@ -1044,7 +1159,7 @@ fn is_blocked(task: &IndexedTask) -> bool {
 fn index_block_reason(ctx: &Ctx, task: &IndexedTask) -> String {
     block_reason(
         ctx,
-        &task.source_path,
+        task_effective_path(task),
         task.line_number,
         task.scheduled.date,
     )
@@ -1105,7 +1220,7 @@ fn wikilinks(line: &str) -> Vec<String> {
 
 /// The latest Rotten Log entry under a task, `""` when it kept none.
 fn index_rotten_log_reason(ctx: &Ctx, task: &IndexedTask) -> String {
-    rotten_log_reason(ctx, &task.source_path, task.line_number)
+    rotten_log_reason(ctx, task_effective_path(task), task.line_number)
 }
 
 fn rotten_log_reason(ctx: &Ctx, path: &str, line_1based: usize) -> String {
