@@ -410,6 +410,7 @@ fn merge_context<'a>(
     note_index: &'a NoteIndex,
     drawer_catalog: &'a BTreeMap<String, capture_drawers::DrawerCatalogRecord>,
     relation_policy: &'a MergeRelationPolicy,
+    successor_labels: &'a [config::relations::CancelLabel],
 ) -> (MergeContext<'a>, PathBuf) {
     let daily_abs = pomodoro::day_file_for(vault);
     let daily_rel = daily_abs
@@ -425,6 +426,7 @@ fn merge_context<'a>(
         note_index,
         drawer_catalog,
         relation_policy: *relation_policy,
+        successor_labels,
     };
     let _ = snapshot;
     (context, daily_rel)
@@ -466,6 +468,7 @@ fn plan_once(
         &note_index,
         &drawer_catalog,
         &relation_policy,
+        &relation_settings.successor_labels,
     );
     let request = MergeRequest {
         sources,
@@ -597,6 +600,7 @@ fn execute_live(
             &note_index,
             &drawer_catalog,
             &relation_policy,
+            &relation_settings.successor_labels,
         );
         let initial = MergeRequest {
             sources,

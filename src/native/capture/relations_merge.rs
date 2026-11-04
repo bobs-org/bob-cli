@@ -148,6 +148,7 @@ pub(super) fn plan_relation_merges(
             note_index: &note_index,
             drawer_catalog: &drawers,
             relation_policy,
+            successor_labels: ctx.successor_labels(),
         };
         let before = snapshot.clone();
         let mut plan =

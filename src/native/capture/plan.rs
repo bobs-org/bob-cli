@@ -92,14 +92,19 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
-    if parsed_draft
-        .items
-        .iter()
-        .any(|item| matches!(&item.parsed.kind, CaptureKind::Transfer { .. }))
-    {
+    if parsed_draft.items.iter().any(|item| {
+        matches!(
+            &item.parsed.kind,
+            CaptureKind::Transfer { destination, .. }
+            if !matches!(
+                destination.kind,
+                capture_language::transfer::TransferDestinationKind::Note
+            )
+        )
+    }) {
         return Err(CaptureError::usage_code(
-            "capture transfer execution is not available yet; no changes were made",
-            "transfer_execution_unavailable",
+            super::transfer::TRANSFER_EXECUTION_UNAVAILABLE_MESSAGE,
+            super::transfer::TRANSFER_EXECUTION_UNAVAILABLE_CODE,
         ));
     }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
@@ -816,6 +821,7 @@ fn plan_ref_item(
             relation_cancels: Vec::new(),
             relation_completes: Vec::new(),
             relation_merge_output: Default::default(),
+            transfer_move_output: Default::default(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
@@ -960,6 +966,18 @@ pub(super) fn plan_capture_item(
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let item_index = parsed_item.index;
     let fanout_item = parsed_item.fanout.is_some();
+    // Staged `>` transfers run before every other planner: a bare-note
+    // destination moves through `batch_move`, while task/drawer/section
+    // destinations keep the temporary refusal until the merges phase.
+    if matches!(parsed_item.parsed.kind, CaptureKind::Transfer { .. }) {
+        return super::transfer::plan_transfer_item(
+            request,
+            parsed_item,
+            today,
+            planner,
+            warnings,
+        );
+    }
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.
@@ -1366,6 +1384,7 @@ pub(super) fn plan_capture_item(
                 relation_cancels: Vec::new(),
                 relation_completes: Vec::new(),
                 relation_merge_output: Default::default(),
+                transfer_move_output: Default::default(),
                 linked_from_line_updates: Vec::new(),
                 minted_relation_block_ids: Vec::new(),
                 mirror_skipped: Vec::new(),
@@ -2334,6 +2353,7 @@ pub(super) fn plan_capture_item(
                     relation_cancels: Vec::new(),
                     relation_completes: Vec::new(),
                     relation_merge_output: Default::default(),
+                    transfer_move_output: Default::default(),
                     linked_from_line_updates: Vec::new(),
                     minted_relation_block_ids: Vec::new(),
                     mirror_skipped: Vec::new(),
@@ -3216,6 +3236,7 @@ pub(super) fn plan_capture_item(
             relation_cancels,
             relation_completes,
             relation_merge_output,
+            transfer_move_output: Default::default(),
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
@@ -4419,6 +4440,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             relation_cancels,
             relation_completes,
             relation_merge_output,
+            transfer_move_output: Default::default(),
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

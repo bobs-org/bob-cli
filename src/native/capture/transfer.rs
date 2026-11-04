@@ -1,0 +1,491 @@
+//! Staged `>` transfer moves to bare notes (`docs/task-move.md`).
+//!
+//! Bare-note destinations move each source through the shared move engine
+//! (`capture/batch_move.rs`), one `plan_task_move` per source in typed
+//! order on staged snapshots. Task, drawer, and section destinations keep
+//! the temporary execution refusal until the merges phase lands.
+
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+};
+
+use chrono::NaiveDate;
+
+use super::batch_move::{apply_batch_move, BatchMoveError};
+use super::*;
+use crate::native::capture_language::transfer as lexer;
+use crate::native::task_move::{
+    IdCollisionPolicy, MovePlacement, MoveRequest, MoveSelector, PlanError,
+    VaultSnapshot,
+};
+use crate::native::vault_links::{target_to_markdown_path, NoteIndex};
+
+pub(super) const TRANSFER_OVERLAPPING_SOURCES_CODE: &str =
+    "transfer_overlapping_sources";
+pub(super) const TRANSFER_EXECUTION_UNAVAILABLE_CODE: &str =
+    "transfer_execution_unavailable";
+pub(super) const TRANSFER_EXECUTION_UNAVAILABLE_MESSAGE: &str =
+    "capture transfer execution is not available yet; no changes were made";
+
+/// One moved task in a transfer item result. This mirrors the
+/// `bob task move` `MoveRecord` JSON shape exactly (same keys, same
+/// nulls for absent optionals) so Mac clients share one decoder.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(super) struct TransferMoveJson {
+    pub(super) source_path: String,
+    pub(super) destination_path: String,
+    pub(super) source_line: usize,
+    pub(super) title: String,
+    pub(super) old_block_id: Option<String>,
+    pub(super) new_block_id: Option<String>,
+    pub(super) old_dependency_id: Option<String>,
+    pub(super) new_dependency_id: Option<String>,
+}
+
+/// One vault-wide repair row in a transfer item result. Same shape as
+/// the `bob task move` `repaired_files[]` entries.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(super) struct TransferRepairedFileJson {
+    pub(super) path: String,
+    pub(super) link_count: usize,
+    pub(super) dependency_token_count: usize,
+}
+
+/// Grouped transfer-move output flattened onto [`CaptureItemResult`].
+/// Defaulted so ordinary items omit both keys and stay byte-identical.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub(super) struct TransferMoveOutput {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) moves: Vec<TransferMoveJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) repaired_files: Vec<TransferRepairedFileJson>,
+}
+
+/// Plan one bare-note transfer item. Merge destinations keep the
+/// temporary refusal; the batch-level pre-check refuses mixed drafts
+/// before any item stages so the whole draft rolls back together.
+pub(super) fn plan_transfer_item(
+    request: &CaptureRequest,
+    parsed_item: ParsedCaptureItem,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    let ParsedCaptureText { kind, route, .. } = &parsed_item.parsed;
+    let (sources, destination) = match kind {
+        CaptureKind::Transfer {
+            sources,
+            destination,
+            ..
+        } => (sources.clone(), destination.clone()),
+        _ => {
+            return Err(CaptureError::io(
+                "transfer capture invariant failed: wrong capture kind",
+            ));
+        }
+    };
+    if !matches!(
+        destination.kind,
+        crate::native::capture_language::transfer::TransferDestinationKind::Note
+    ) {
+        return Err(CaptureError::usage_code(
+            TRANSFER_EXECUTION_UNAVAILABLE_MESSAGE,
+            TRANSFER_EXECUTION_UNAVAILABLE_CODE,
+        ));
+    }
+    // Resolve every identity against the staged snapshot before any
+    // source stages, so aliases, duplicates, and overlaps refuse with
+    // no partial move.
+    let snapshot =
+        super::batch_move::destination_snapshot(&request.bob_dir, planner)?;
+    let dest_path = resolve_transfer_note(&snapshot, &destination.route)
+        .map_err(|error| {
+            CaptureError::usage_code(error.to_string(), error.code())
+        })?;
+    let mut resolved_sources = Vec::with_capacity(sources.len());
+    for source in &sources {
+        let path = resolve_transfer_note(&snapshot, &source.route).map_err(
+            |error| CaptureError::usage_code(error.to_string(), error.code()),
+        )?;
+        resolved_sources.push((source.clone(), path));
+    }
+    let settings = note_tasks::read_settings(&request.bob_dir);
+    refuse_resolved_duplicates(&resolved_sources)?;
+    refuse_overlapping_sources(&snapshot, &resolved_sources, &settings)?;
+    // A source already moved by an earlier item in this batch gets the
+    // same already-moved teaching error as project-note move bullets.
+    for (source, path) in &resolved_sources {
+        let absolute = request.bob_dir.join(path);
+        if let Some(previous) =
+            planner.moved_origin(&absolute, &source.block_id)
+        {
+            let destination = previous
+                .destination
+                .strip_prefix(&request.bob_dir)
+                .unwrap_or(&previous.destination);
+            return Err(CaptureError::usage_code(
+                format!(
+                    "`^{}` already moved to {} in item {}",
+                    source.block_id,
+                    super::dependencies::display_relative(destination),
+                    previous.item_number
+                ),
+                "move_task_already_moved",
+            ));
+        }
+    }
+    let dest_display = super::dependencies::display_relative(&dest_path);
+    let dest_absolute = request.bob_dir.join(&dest_path);
+    let item_number = parsed_item.index + 1;
+    let mut moves = Vec::new();
+    let mut repaired: BTreeMap<PathBuf, (usize, usize)> = BTreeMap::new();
+    let mut needs_reconcile = false;
+    for (source, path) in &resolved_sources {
+        let source_display = super::dependencies::display_relative(path);
+        let move_request = MoveRequest {
+            source: source_display,
+            dest: dest_display.clone(),
+            selectors: vec![MoveSelector::Block(source.block_id.clone())],
+            allow_closed: false,
+            placement: MovePlacement::Append,
+            id_collision: IdCollisionPolicy::Refuse,
+        };
+        let plan = match apply_batch_move(
+            planner,
+            &request.bob_dir,
+            &settings,
+            today,
+            &move_request,
+        ) {
+            Ok(plan) => plan,
+            Err(BatchMoveError::Plan(error)) => {
+                return Err(CaptureError::usage_code(
+                    error.to_string(),
+                    error.code(),
+                ));
+            }
+            Err(BatchMoveError::Capture(error)) => return Err(error),
+        };
+        for movement in &plan.moves {
+            moves.push(TransferMoveJson {
+                source_path: super::dependencies::display_relative(
+                    &movement.source_path,
+                ),
+                destination_path: super::dependencies::display_relative(
+                    &movement.dest_path,
+                ),
+                source_line: movement.source_line,
+                title: movement.title.clone(),
+                old_block_id: movement.old_block_id.clone(),
+                new_block_id: movement.new_block_id.clone(),
+                old_dependency_id: movement.old_dependency_id.clone(),
+                new_dependency_id: movement.new_dependency_id.clone(),
+            });
+        }
+        for file in &plan.repaired_files {
+            let entry = repaired.entry(file.path.clone()).or_insert((0, 0));
+            entry.0 += file.link_count;
+            entry.1 += file.dependency_token_count;
+        }
+        needs_reconcile |= plan.needs_reconcile;
+        // Later items see the new identity through the staged overlay;
+        // a repeat of the old identity gets the already-moved error
+        // above instead of the engine's missing-selector refusal.
+        for movement in &plan.moves {
+            if let Some(old) = movement.old_block_id.as_deref() {
+                planner.record_moved_origin(
+                    &request.bob_dir.join(&movement.source_path),
+                    old,
+                    &request.bob_dir.join(&movement.dest_path),
+                    item_number,
+                );
+            }
+        }
+    }
+    let repaired_files = repaired
+        .into_iter()
+        .map(|(path, (link_count, dependency_token_count))| {
+            TransferRepairedFileJson {
+                path: super::dependencies::display_relative(&path),
+                link_count,
+                dependency_token_count,
+            }
+        })
+        .collect::<Vec<_>>();
+    if needs_reconcile {
+        warnings.push(CaptureWarning::Text(
+            "Project blocking changed; run bob task reconcile.".to_string(),
+        ));
+    }
+    let created = super::plan::date_string(today);
+    let kind_label = super::plan::capture_kind_label(&parsed_item.parsed.kind);
+    let route_label = dest_display.clone();
+    let route_stem = dest_path
+        .with_extension("")
+        .to_string_lossy()
+        .replace('\\', "/");
+    // Keep the lexical destination route when it already names the
+    // resolved note (the common root-note case); otherwise report the
+    // resolved stem so subdir destinations stay truthful.
+    let result_route = if destination.route == route_stem {
+        destination.route.clone()
+    } else if route.as_deref() == Some(route_stem.as_str()) {
+        route.clone().unwrap_or(route_stem.clone())
+    } else {
+        route_stem.clone()
+    };
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            note_pull: None,
+            task_theme: None,
+            type_relocation: None,
+            ok: true,
+            dry_run: request.dry_run,
+            routed: true,
+            route: Some(result_route),
+            route_label,
+            relative_target: dest_display,
+            target: dest_absolute.display().to_string(),
+            text: String::new(),
+            task_line: String::new(),
+            kind: kind_label,
+            fanout: None,
+            created,
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Updated,
+            sub_bullets: Vec::new(),
+            notes: Vec::new(),
+            drawers: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: None,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            drawer: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: None,
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_split: None,
+            pomodoro_merge: None,
+            pomodoro_close: None,
+            pomodoro_reset: None,
+            dependency_update: None,
+            consumed_links: Vec::new(),
+            task_complete: None,
+            toggle_task_description: None,
+            r#ref: None,
+            link_guard: None,
+            dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
+            dependency_updates: Vec::new(),
+            minted_blocker_block_id: None,
+            relation_updates: Vec::new(),
+            relation_cancels: Vec::new(),
+            relation_completes: Vec::new(),
+            relation_merge_output: Default::default(),
+            transfer_move_output: TransferMoveOutput {
+                moves,
+                repaired_files,
+            },
+            relation_label_hides: Vec::new(),
+            linked_from_line_updates: Vec::new(),
+            minted_relation_block_ids: Vec::new(),
+            mirror_skipped: Vec::new(),
+            list: None,
+            relation_successors: Vec::new(),
+            relation_held: Vec::new(),
+            relation_check: None,
+            relation_groups: Vec::new(),
+        },
+        clip_plan: None,
+        pomodoro_refs: Vec::new(),
+        task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
+    })
+}
+
+/// Resolve one transfer route against the staged snapshot's vault
+/// index. This adapts route resolution instead of assuming routes
+/// equal filesystem paths: basename stems match case-insensitively
+/// across subdirectories, mirroring `plan_task_move`.
+fn resolve_transfer_note(
+    snapshot: &VaultSnapshot,
+    query: &str,
+) -> Result<PathBuf, PlanError> {
+    use std::path::Component;
+    if query.trim().is_empty()
+        || target_to_markdown_path(query).is_none()
+        || Path::new(query)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(PlanError::InvalidPath {
+            query: query.to_string(),
+        });
+    }
+    let index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+    if query.contains('/')
+        || Path::new(query)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+    {
+        let Some(candidate) = target_to_markdown_path(query) else {
+            return Err(PlanError::InvalidPath {
+                query: query.to_string(),
+            });
+        };
+        let mut exact: Vec<PathBuf> = index
+            .relative_paths()
+            .filter(|path| *path == candidate)
+            .map(Path::to_path_buf)
+            .collect();
+        if exact.is_empty() {
+            exact = index
+                .relative_paths()
+                .filter(|path| {
+                    path.as_os_str().to_string_lossy().eq_ignore_ascii_case(
+                        &candidate.as_os_str().to_string_lossy(),
+                    )
+                })
+                .map(Path::to_path_buf)
+                .collect();
+        }
+        return match exact.as_slice() {
+            [path] => Ok(path.clone()),
+            [] => Err(PlanError::MissingNote {
+                query: query.to_string(),
+            }),
+            _ => Err(PlanError::AmbiguousNote {
+                query: query.to_string(),
+                candidates: exact,
+            }),
+        };
+    }
+    let mut candidates = index.basename_candidates(query);
+    candidates.sort();
+    candidates.dedup();
+    match candidates.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(PlanError::MissingNote {
+            query: query.to_string(),
+        }),
+        _ => Err(PlanError::AmbiguousNote {
+            query: query.to_string(),
+            candidates,
+        }),
+    }
+}
+
+/// Refuse resolved duplicate source identities, catching aliases the
+/// lexical lower-cased route check cannot see.
+fn refuse_resolved_duplicates(
+    resolved: &[(lexer::TransferSource, PathBuf)],
+) -> Result<(), CaptureError> {
+    let mut seen: HashMap<(PathBuf, String), &lexer::TransferSource> =
+        HashMap::new();
+    for (source, path) in resolved {
+        let key = (path.clone(), source.block_id.clone());
+        if let Some(_first) = seen.get(&key) {
+            return Err(CaptureError::usage_code(
+                crate::native::capture_language::target_runs::duplicate_target_message(
+                    &source.marker,
+                    &source.block_id,
+                ),
+                lexer::TRANSFER_DUPLICATE_CODE,
+            ));
+        }
+        seen.insert(key, source);
+    }
+    Ok(())
+}
+
+/// Refuse a source nested inside another source's task block before
+/// any source stages. Column-zero siblings never overlap; a hit means
+/// one source names a parent and another names its descendant.
+fn refuse_overlapping_sources(
+    snapshot: &VaultSnapshot,
+    resolved: &[(lexer::TransferSource, PathBuf)],
+    settings: &note_tasks::NoteTaskSettings,
+) -> Result<(), CaptureError> {
+    let mut by_path: BTreeMap<
+        &PathBuf,
+        Vec<&(lexer::TransferSource, PathBuf)>,
+    > = BTreeMap::new();
+    for entry in resolved {
+        by_path.entry(&entry.1).or_default().push(entry);
+    }
+    for (path, entries) in by_path {
+        if entries.len() < 2 {
+            continue;
+        }
+        let Some(contents) = snapshot.notes.get(path) else {
+            continue;
+        };
+        let scan = note_tasks::scan(contents, settings);
+        let inclusive: Vec<&str> = contents.split_inclusive('\n').collect();
+        let mut ranges: Vec<(&lexer::TransferSource, usize, usize)> =
+            Vec::new();
+        for (source, _) in entries {
+            let line = match scan.by_block_id(&source.block_id) {
+                note_tasks::BlockIdLookup::Found(task) => task.line_index,
+                _ => continue,
+            };
+            let end = crate::native::collect_done::task_block_end(
+                &inclusive, line, 0,
+            );
+            ranges.push((source, line, end.max(line + 1)));
+        }
+        for i in 0..ranges.len() {
+            for j in 0..ranges.len() {
+                if i == j {
+                    continue;
+                }
+                let (outer, outer_start, outer_end) = ranges[i];
+                let (inner, inner_start, _) = ranges[j];
+                if inner_start >= outer_start && inner_start < outer_end {
+                    // Skip the exact-duplicate case; the duplicate
+                    // check above already owns it.
+                    if outer.block_id == inner.block_id {
+                        continue;
+                    }
+                    return Err(CaptureError::usage_code(
+                        format!(
+                            "`{}` is nested under `{}`; move the parent to bring the whole block",
+                            inner.marker, outer.marker
+                        ),
+                        TRANSFER_OVERLAPPING_SOURCES_CODE,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}

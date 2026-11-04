@@ -103,6 +103,7 @@ mod task_theme;
 mod task_toggle;
 #[cfg(test)]
 mod tests;
+mod transfer;
 
 use batch::*;
 use block_diff::*;

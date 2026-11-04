@@ -748,6 +748,10 @@ pub(super) struct CaptureItemResult {
     /// `merges` key is flattened to preserve the capture item contract.
     #[serde(flatten)]
     pub(super) relation_merge_output: RelationMergeOutput,
+    /// Bare-note `>` transfer moves and vault-wide repairs. Flattened
+    /// and defaulted so ordinary items omit both keys.
+    #[serde(flatten)]
+    pub(super) transfer_move_output: super::transfer::TransferMoveOutput,
     /// Per-item `||` one-off hides (`docs/task-relations.md` RV6): one
     /// entry per distinct hidden label key this item typed, in typed
     /// order. Present on dry runs too; the journal append happens only
@@ -3306,6 +3310,13 @@ pub(super) fn print_human_item_success(
     if result.note_pull.is_some() {
         return;
     }
+    if result.kind == "task_move"
+        && !result.transfer_move_output.moves.is_empty()
+    {
+        print_human_transfer_moves(result, &styler);
+        print_consumed_links(result, &styler);
+        return;
+    }
     let verb = if result.dry_run {
         "would capture"
     } else {
@@ -3567,6 +3578,70 @@ fn print_human_project_note_moves(
                 "hint: '- ^' moves one of {}'s {} open {} into this project",
                 hint.parent, hint.open_count, task_word
             ))
+        );
+    }
+}
+
+/// Human rows for a bare-note `>` transfer: the shared move header plus
+/// one row per source in typed order and the canonical repair row.
+/// Dry runs use the `Would move` / `would repair` wording.
+fn print_human_transfer_moves(result: &CaptureItemResult, styler: &Styler) {
+    let output = &result.transfer_move_output;
+    let count = output.moves.len();
+    let task_word = if count == 1 { "task" } else { "tasks" };
+    let destination = if result.relative_target.is_empty() {
+        result.route_label.clone()
+    } else {
+        result.relative_target.clone()
+    };
+    let header_verb = if result.dry_run {
+        "Would move"
+    } else {
+        "Moved"
+    };
+    println!(
+        "{}",
+        styler.bold(&format!(
+            "↪ {header_verb} {count} {task_word} into {destination} › Tasks"
+        ))
+    );
+    for movement in &output.moves {
+        let identity = match (&movement.old_block_id, &movement.new_block_id) {
+            (Some(old), Some(new)) if old != new => {
+                format!("^{old} → ^{new}")
+            }
+            (Some(id), _) => format!("^{id}"),
+            _ => "(no block id)".to_string(),
+        };
+        println!(
+            "  {} {}:{} → {}  {}",
+            styler.cyan(&identity),
+            movement.source_path,
+            movement.source_line,
+            movement.destination_path,
+            movement.title
+        );
+    }
+    let repaired_links: usize = output
+        .repaired_files
+        .iter()
+        .map(|file| file.link_count)
+        .sum();
+    let repaired_notes = output
+        .repaired_files
+        .iter()
+        .filter(|file| file.link_count > 0)
+        .count();
+    if repaired_links > 0 {
+        let repair_verb = if result.dry_run {
+            "would repair"
+        } else {
+            "repaired"
+        };
+        let link_word = if repaired_links == 1 { "link" } else { "links" };
+        let note_word = if repaired_notes == 1 { "note" } else { "notes" };
+        println!(
+            "  ↻ {repair_verb} {repaired_links} {link_word} in {repaired_notes} {note_word}"
         );
     }
 }
@@ -6791,6 +6866,7 @@ mod tests {
             relation_cancels: Vec::new(),
             relation_completes: Vec::new(),
             relation_merge_output: Default::default(),
+            transfer_move_output: Default::default(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),

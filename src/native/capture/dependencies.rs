@@ -3629,6 +3629,7 @@ pub(super) fn plan_dependency_only_item(
             relation_cancels,
             relation_completes,
             relation_merge_output,
+            transfer_move_output: Default::default(),
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

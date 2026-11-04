@@ -844,6 +844,7 @@ pub(super) fn plan_pomodoro_split_item(
             relation_cancels: Vec::new(),
             relation_completes: Vec::new(),
             relation_merge_output: Default::default(),
+            transfer_move_output: Default::default(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
