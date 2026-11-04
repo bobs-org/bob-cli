@@ -11,6 +11,8 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+// The planner integration phase will consume this preparation entry point.
+#[allow(unused_imports)]
 pub(crate) use payload::prepare_task_merge;
 // Later planner phases consume these crate-internal preparation records.
 #[allow(unused_imports)]

@@ -438,8 +438,10 @@ fn same_note_destinations_and_nested_sources_are_rebased_after_cuts() {
     )
     .expect("nested source is eligible");
     let postimage = post(&plan, "same.md");
-    assert!(postimage.contains("  - [ ] #task Source ^source\n"));
-    assert!(postimage.contains("\t- Source\n\t\t- Note\n"));
+    assert_eq!(
+        postimage,
+        "- [ ] #task Parent ^parent\n  - [ ] #task Source ^source\n- [ ] #task Target ^target\n  - Source\n    - Note\n"
+    );
 }
 
 #[test]
