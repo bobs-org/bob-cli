@@ -1147,10 +1147,10 @@ bob capture '@work^intake-flow@' 'Ship the intake flow'
 
 Contract: [Project notes](../capture.md#project-notes).
 
-The `@` seal marks the ID as a new project note. Editors that run
-[`capture-rewrite`](../capture.md#bob-capture-rewrite) switch the sealed forms
-with `:` or `^` typed right after the seal (`@route^id@:` becomes
-`@route:id@`), while `+` after `@route^id` becomes `@route+id`.
+The `@` seal marks a new project note. Editors running
+[`capture-rewrite`](../capture.md#bob-capture-rewrite) switch sealed forms
+with `:`/`^` right after the seal, `+` after `@route^id` gives `@route+id`,
+and `- .`/`- ;`/`- ^.` rewrite the same way on Move bullets.
 
 ### `@route:block-id@` {#project-note-offer}
 

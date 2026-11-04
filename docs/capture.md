@@ -5570,7 +5570,8 @@ missing-text error; it is never read as a link.
 #### Moving parent tasks in {#moving-parent-tasks-in}
 
 A first-level bullet in a sealed project-note item can move an existing open
-top-level task from the item's parent note into the new note. The sigil is the
+top-level task from the item's parent note into the new note. The `- ^` / `- :`
+picker works with both the `@<route>^<id>@` and `@<route>:<id>@` seals. The sigil is the
 whole bullet body, with no task text before or after it:
 
 | First-level bullet body | Meaning |
@@ -5604,7 +5605,9 @@ when the item has no `#name`. An already-linked task keeps its existing link
 in place after path repair and does not gain a second link.
 
 Only first-level `-`, `*`, or `+` bullets in a sealed project-note item are
-move bullets. IDs use the shared `A-Za-z0-9-` block-ID rule; `prj` in any
+move bullets. A sealed project-note bullet starting with `.` becomes `^`
+(`- .` types `- ^`, `- ;` types `- :`, and `- ^.` types `- ^^`), and Undo
+restores the literal key. IDs use the shared `A-Za-z0-9-` block-ID rule; `prj` in any
 letter case is reserved. Moved IDs share a namespace with IDs authored in
 the same item. A shared lexer claims move bullets from the raw line before
 trailing task IDs are stripped, so item-wide modifiers cannot turn a line
@@ -5673,8 +5676,11 @@ clients do not mistake it for an unfinished `- ^`. Human parse output says
 `move choice ^^`. The capture grammar revision advances from 10 to 11.
 
 At a lone `- ^` with an empty query, `capture-complete` adds
-`action_continuation_keys: ["^"]`; the key is not offered for `- :`, a
-non-empty query, or text outside a sealed project-note item. At `- ^^`,
+`action_continuation_keys: ["^"]` and
+`action_continuation_aliases: {".": "^"}`; the key is not offered for `- :`, a
+non-empty query, or text outside a sealed project-note item. With the picker
+open and an empty filter, typing `.` inserts `^` exactly as the continuation
+key does, leaving `- ^^`. At `- ^^`,
 including with the cursor on either caret, no `project_task_move` context is
 returned and the picker stays closed.
 
@@ -5829,7 +5835,10 @@ The parser and completion commands expose the same draft shape:
   Its picker descriptor is
   `{kind: "project_task_move", scope: "note", scope_token: "^"|":",
   note_target, destination, marker_range, trigger_removal_range,
-  continuation}`. The continuation is a newline, the bullet's indentation and
+  continuation, action_continuation_keys, action_continuation_aliases}`.
+  `action_continuation_aliases` is present only alongside
+  `action_continuation_keys: ["^"]`, as `{".": "^"}`; every other picker
+  omits it. The continuation is a newline, the bullet's indentation and
   marker, and the same sigil, such as `"\n- ^"`. The response header reports
   `project_task_move: {parent, parent_route, destination, sigil, open_count,
   pomodoro_name}`. Rows use the `@route+` `TaskCandidate` fields
@@ -8270,8 +8279,11 @@ literal `@file:id+` text.
 **Sigil alias.** With `--cursor`, typing `.` immediately after `@route`
 becomes `^`, and typing `;` there becomes `:` when the candidate opens the
 same Block ID picker as the real sigil. A whole-item `;` becomes `:` when
-the candidate opens the Task Link picker. For example, `@errands.` becomes
-`@errands^`, `@errands;` becomes `@errands:`, and `;` becomes `:`. Bob's
+the candidate opens the Task Link picker. A `- .` or `- ;` first-level bullet
+in a sealed project-note item becomes `- ^` or `- :` where the Move picker
+would open, and `- ^.` becomes `- ^^`. For example, `@errands.` becomes
+`@errands^`, `@errands;` becomes `@errands:`, `;` becomes `:`, and
+`@cash^goog-exit@` plus `- .` becomes `- ^`. Bob's
 completion grammar decides eligibility, so prose and other picker contexts
 stay unchanged. The caret stays just past the sigil. This is an editor assist:
 `bob capture` and `bob capture-parse` keep the literal text. Feeding the

@@ -809,6 +809,106 @@ fn rewrite_draft_sigil_aliases_exclude_other_contexts() {
 }
 
 #[test]
+fn rewrite_draft_expands_move_bullet_sigil_aliases() {
+    for (raw, expected) in [
+        ("@cash^goog-exit@\n- .", "@cash^goog-exit@\n- ^"),
+        ("@cash^goog-exit@\n- ;", "@cash^goog-exit@\n- :"),
+        ("@cash:goog-exit@\n- .", "@cash:goog-exit@\n- ^"),
+        ("@cash:goog-exit@\n- ;", "@cash:goog-exit@\n- :"),
+        ("@cash^goog-exit@\n* .", "@cash^goog-exit@\n* ^"),
+        ("@cash^goog-exit@\n+ ;", "@cash^goog-exit@\n+ :"),
+        (
+            "Create\n- detail @cash^goog-exit@\n- .",
+            "Create\n- detail @cash^goog-exit@\n- ^",
+        ),
+        (
+            "caf\u{e9} @cash^goog-exit@\n- .",
+            "caf\u{e9} @cash^goog-exit@\n- ^",
+        ),
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor));
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].start, cursor - 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].end, cursor, "{raw:?}");
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+    // Summaries match the route-position aliases.
+    let dot = rewrite_draft(
+        "@cash^goog-exit@\n- .",
+        Some("@cash^goog-exit@\n- .".len()),
+    );
+    assert_eq!(dot.summary.as_deref(), Some("Typed ^ for ."));
+    let semi = rewrite_draft(
+        "@cash:goog-exit@\n- ;",
+        Some("@cash:goog-exit@\n- ;".len()),
+    );
+    assert_eq!(semi.summary.as_deref(), Some("Typed : for ;"));
+}
+
+#[test]
+fn rewrite_draft_expands_move_choice_dot_alias() {
+    for (raw, expected) in [
+        ("@cash^goog-exit@\n- ^.", "@cash^goog-exit@\n- ^^"),
+        ("@cash:goog-exit@\n- ^.", "@cash:goog-exit@\n- ^^"),
+    ] {
+        let cursor = raw.len();
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(rewrite.summary.as_deref(), Some("Typed ^ for ."));
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+    }
+    for raw in [
+        "@cash^goog-exit@\n- ^;",
+        "@cash^goog-exit@\n- :.",
+        "@cash^goog-exit@\n  - ^.",
+        "@cash^goog-exit@\n- ^^.",
+        "@cash^goog-exit@\n- [ ] ^.",
+    ] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_leaves_non_move_bullet_dots_literal() {
+    for raw in [
+        "@cash^goog-exit@\n  - .",
+        "@cash^goog-exit@\n- [ ] .",
+        "@cash^goog-exit@\n- \\.",
+        "@cash^goog-exit@\n- .bashrc",
+        "@cash^goog-exit@\n- . foo",
+        "@cash\n- .",
+        "@cash+id\n- .",
+        "Create @cash^x\n- .",
+        "@cash:goog-exit@\n  - ;",
+        "@cash:goog-exit@\n- [ ] ;",
+    ] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+}
+
+#[test]
 fn rewrite_draft_separator_toggle_parses_as_the_switched_mode() {
     let caret = switch_at("Do work @file:id^");
     let parsed = parse_for_editor(&caret.text);

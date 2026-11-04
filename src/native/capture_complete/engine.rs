@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{
@@ -221,6 +222,7 @@ fn build_result_inner(
                 destination: None,
                 continuation: None,
                 action_continuation_keys: None,
+                action_continuation_aliases: None,
                 relationship: None,
             }),
             hidden_count: None,
@@ -257,10 +259,14 @@ fn build_result_inner(
         // key so a second `^` leaves `- ^^`. The key is not offered for
         // `- :`, for a non-empty query, or outside a sealed project-note
         // item (the detail only exists there). At `- ^^` there is no
-        // `project_task_move` context at all.
+        // `project_task_move` context at all. The `.` alias is offered
+        // alongside `^` so an empty-filter `.` also leaves `- ^^`.
         let action_continuation_keys = (detail.sigil == '^'
             && field.query.is_empty())
         .then(|| vec!["^".to_string()]);
+        let action_continuation_aliases = action_continuation_keys
+            .as_ref()
+            .map(|_| BTreeMap::from([(".".to_string(), "^".to_string())]));
         return Ok(CaptureCompleteResult {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -297,6 +303,7 @@ fn build_result_inner(
                 destination: detail.destination.clone(),
                 continuation: Some(detail.continuation),
                 action_continuation_keys,
+                action_continuation_aliases,
                 relationship: None,
             }),
             project_task_move: Some(built.context),
@@ -1139,6 +1146,7 @@ fn picker_descriptor(
                 destination: None,
                 continuation: None,
                 action_continuation_keys,
+                action_continuation_aliases: None,
                 relationship: None,
             })
         }
@@ -1169,6 +1177,7 @@ fn picker_descriptor(
                 continuation: None,
                 action_continuation_keys: bare
                     .then(|| vec!["!".to_string(), "[".to_string()]),
+                action_continuation_aliases: None,
                 relationship: None,
             })
         }
@@ -1209,6 +1218,7 @@ fn picker_descriptor(
                 destination: None,
                 continuation: None,
                 action_continuation_keys: None,
+                action_continuation_aliases: None,
                 relationship: None,
             })
         }

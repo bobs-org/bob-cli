@@ -2192,7 +2192,7 @@ fn project_task_move_completion_field_at(
         return None;
     }
     let parsed = parse_editor_item(item).item;
-    if !has_project_note_create_marker(&parsed) {
+    if !has_sealed_project_note_marker(&parsed) {
         return None;
     }
     let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
@@ -2231,10 +2231,12 @@ fn project_task_move_completion_field_at(
     })
 }
 
-fn has_project_note_create_marker(item: &EditorItemParse) -> bool {
+pub(crate) fn has_sealed_project_note_marker(item: &EditorItemParse) -> bool {
     item.spans.iter().any(|span| {
-        span.kind == SpanKind::ProjectNoteMarker
-            && span.project_note == Some(ProjectNoteForm::Create)
+        (span.kind == SpanKind::ProjectNoteMarker
+            && span.project_note == Some(ProjectNoteForm::Create))
+            || (span.kind == SpanKind::ProjectNoteOfferMarker
+                && span.project_note == Some(ProjectNoteForm::Offer))
     })
 }
 
@@ -2285,7 +2287,7 @@ pub(crate) fn project_task_move_detail(
         return None;
     }
     let parsed = parse_editor_item(item).item;
-    if !has_project_note_create_marker(&parsed) {
+    if !has_sealed_project_note_marker(&parsed) {
         return None;
     }
     let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
@@ -2338,7 +2340,7 @@ pub(crate) fn project_task_move_detail(
         for candidate_item in &draft.items {
             let candidate = parse_editor_item(candidate_item).item;
             if candidate.route.as_deref() != Some(route)
-                || !has_project_note_create_marker(&candidate)
+                || !has_sealed_project_note_marker(&candidate)
             {
                 continue;
             }

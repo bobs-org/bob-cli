@@ -278,7 +278,7 @@ it, and trailing text past the destination complete nothing.\n\n\
 At `> +` or `> +query`, the vault-wide `task_parent` picker drops typed source \
 tasks and ID-less rows; each remaining identified task carries its merge \
 consequence. Accepting one replaces the selector with `@route+id`.\n\n\
-On a first-level `- ^` or `- :` bullet in a sealed project-note creation, \
+On a first-level `- ^` or `- :` bullet in a sealed project-note item (`@<route>^<id>@` or `@<route>:<id>@`), \
 the `project_task_move` context lists the parent's open top-level tasks, \
 including ID-less rows that require the explicit Add block ID flow. The \
 query contains the ID prefix and replacement covers only the ID. The response \

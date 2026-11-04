@@ -1497,3 +1497,19 @@ fn transfer_arrow_and_gaps_offer_no_completion() {
     assert_eq!(at_end.context, CompletionContext::Task);
     assert_eq!(at_end.query, "bench");
 }
+
+#[test]
+fn move_bullet_completion_opens_under_both_seals() {
+    for raw in ["@cash^exit@\n- ^", "@cash:exit@\n- ^"] {
+        let cursor = raw.len();
+        let completion = field(raw, cursor).expect("move field");
+        assert_eq!(
+            completion.context,
+            CompletionContext::ProjectTaskMove,
+            "{raw:?}"
+        );
+        assert_eq!(completion.query, "", "{raw:?}");
+        // The replacement owns only the ID: an empty range after a lone sigil.
+        assert_eq!(completion.replacement, (cursor, cursor), "{raw:?}");
+    }
+}

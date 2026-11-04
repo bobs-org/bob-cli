@@ -366,3 +366,90 @@ fn choice_continuation_key_only_on_lone_caret_and_no_context_on_choice() {
         );
     }
 }
+
+#[test]
+fn offer_seal_twins_serve_same_rows_and_picker() {
+    let temp = TempDir::new("bob-cli-complete-project-task-move-offer");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_move_fixture(&vault);
+
+    // Twin of MC1 under the offer seal.
+    let draft = "Create packet @cash:exit@#admin\n- ^";
+    let value = complete_json(&vault, &day_file, draft, draft.len());
+    assert_eq!(value["context"], "project_task_move");
+    assert_eq!(value["project_task_move"]["parent"], "cash.md");
+    assert_eq!(value["project_task_move"]["parent_route"], "cash");
+    assert_eq!(value["project_task_move"]["destination"], "cash_exit.md");
+    assert_eq!(value["project_task_move"]["sigil"], "^");
+    assert_eq!(value["project_task_move"]["pomodoro_name"], "admin");
+    assert_eq!(value["picker"]["kind"], "project_task_move");
+    assert_eq!(value["picker"]["scope"], "note");
+    assert_eq!(value["picker"]["scope_token"], "^");
+    assert_eq!(value["picker"]["note_target"], "cash.md");
+    assert_eq!(value["picker"]["destination"], "cash_exit.md");
+    assert_eq!(value["picker"]["continuation"], "\n- ^");
+    let texts: Vec<&str> = rows(&value)
+        .iter()
+        .map(|candidate| candidate["text"].as_str().expect("row text"))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Call Morgan Stanley about the 401k",
+            "Draft resignation memo",
+            "Review benefits",
+            "Draft the agreement",
+            "Archive the agreement",
+        ]
+    );
+    // A lone `- ^` under an offer seal still offers the `^` continuation key.
+    assert_eq!(
+        value["picker"]["action_continuation_keys"],
+        serde_json::json!(["^"])
+    );
+
+    // Twin of MC4 under the offer seal.
+    let colon_draft = "Create packet @cash:exit@#admin\n- :";
+    let colon =
+        complete_json(&vault, &day_file, colon_draft, colon_draft.len());
+    assert_eq!(colon["context"], "project_task_move");
+    assert_eq!(colon["picker"]["scope_token"], ":");
+    assert_eq!(colon["picker"]["continuation"], "\n- :");
+    assert_eq!(
+        row(&colon, "Call Morgan Stanley about the 401k")["consequence"],
+        "Moves in · keeps its WORK link"
+    );
+}
+
+#[test]
+fn move_picker_continuation_aliases_only_on_lone_caret() {
+    let temp = TempDir::new("bob-cli-move-continuation-aliases");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_move_fixture(&vault);
+
+    let lone = "Create packet @cash^exit@\n- ^";
+    let value = complete_json(&vault, &day_file, lone, lone.len());
+    assert_eq!(value["context"], "project_task_move");
+    assert_eq!(
+        value["picker"]["action_continuation_aliases"],
+        serde_json::json!({".": "^"})
+    );
+
+    let link = "Create packet @cash^exit@\n- :";
+    let value = complete_json(&vault, &day_file, link, link.len());
+    assert_eq!(value["context"], "project_task_move");
+    assert!(
+        value["picker"].get("action_continuation_aliases").is_none()
+            || value["picker"]["action_continuation_aliases"].is_null()
+    );
+
+    let query = "Create packet @cash^exit@\n- ^dr";
+    let value = complete_json(&vault, &day_file, query, query.len());
+    assert_eq!(value["context"], "project_task_move");
+    assert!(
+        value["picker"].get("action_continuation_aliases").is_none()
+            || value["picker"]["action_continuation_aliases"].is_null()
+    );
+}

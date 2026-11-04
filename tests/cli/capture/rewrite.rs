@@ -129,6 +129,39 @@ fn capture_rewrite_json_expands_a_route_sigil_alias() {
 }
 
 #[test]
+fn capture_rewrite_json_expands_a_move_bullet_sigil_alias() {
+    let draft = "@cash:goog-exit@\n- ;";
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-rewrite move sigil alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["input"], draft);
+    assert_eq!(json["text"], "@cash:goog-exit@\n- :");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], draft.len());
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": draft.len() - 1, "end": draft.len() }, "replacement": ":" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed : for ;");
+}
+
+#[test]
 fn capture_rewrite_json_leaves_a_third_at_alone() {
     let output = bob_command()
         .arg("capture-rewrite")

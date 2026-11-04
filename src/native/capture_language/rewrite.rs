@@ -110,7 +110,8 @@ pub(crate) fn rewrite_draft(
 /// Typing `.` or `;` in a position where its real sigil would open a picker
 /// swaps that byte to `^` or `:`. The candidate is checked by the ordinary
 /// completion grammar, keeping the assist lexical and aligned with picker
-/// eligibility. Only the selected route-scope contexts are accepted.
+/// eligibility. Route-scope contexts plus lone move-bullet sigils are
+/// accepted; a `.` that completes a `- ^^` choice marker is also accepted.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
@@ -127,23 +128,86 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }
     let mut candidate = raw_text.to_string();
     candidate.replace_range(start..cursor, &sigil.to_string());
-    let field = super::completion::completion_field_at(&candidate, cursor)?;
-    let allowed = match alias {
-        "." => {
-            field.context == allowed_context && field.replacement.0 == cursor
+    if let Some(field) =
+        super::completion::completion_field_at(&candidate, cursor)
+    {
+        let allowed =
+            match alias {
+                "." => (field.context == allowed_context
+                    && field.replacement.0 == cursor)
+                    || (field.context
+                        == super::completion::CompletionContext::ProjectTaskMove
+                        && field.replacement == (cursor, cursor)),
+                ";" if field.context == allowed_context => {
+                    field.replacement.0 == cursor
+                }
+                ";" => (field.context
+                    == super::completion::CompletionContext::TaskLink
+                    && field.replacement == (start, cursor))
+                    || (field.context
+                        == super::completion::CompletionContext::ProjectTaskMove
+                        && field.replacement == (cursor, cursor)),
+                _ => false,
+            };
+        if allowed {
+            return Some(finish_sigil_alias(
+                raw_text, &candidate, start, cursor, sigil, alias,
+            ));
         }
-        ";" if field.context == allowed_context => {
-            field.replacement.0 == cursor
-        }
-        ";" => {
-            field.context == super::completion::CompletionContext::TaskLink
-                && field.replacement == (start, cursor)
-        }
-        _ => false,
-    };
-    if !allowed {
+    }
+    // Choice alias: `.` that completes a `- ^^` marker while the picker is
+    // closed. `;` never aliases here: `- ::` is the `move_choice_colon`
+    // teaching error. Lexical only: the candidate line must be a first-level
+    // bullet in a sealed project-note item whose move scan is a Choice
+    // ending at the cursor.
+    if alias != "." {
         return None;
     }
+    let draft = split_capture_draft(&candidate);
+    let (item, line_index, line) = draft.items.iter().find_map(|item| {
+        item.lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                cursor >= line.raw.start && cursor <= line.raw.end
+            })
+            .map(|(line_index, line)| (item, line_index, line.raw))
+    })?;
+    if line_index == 0 {
+        return None;
+    }
+    let parsed = parse_editor_item(item).item;
+    if !super::completion::has_sealed_project_note_marker(&parsed) {
+        return None;
+    }
+    let AuthoredLineClass::Item(authored) = classify_authored_line(line) else {
+        return None;
+    };
+    if authored.depth != AuthoredDepth::First {
+        return None;
+    }
+    match super::move_bullet::scan_move_bullet(
+        authored.body,
+        authored.body_start,
+        &candidate,
+    )? {
+        super::move_bullet::MoveBulletHit::Choice { span }
+            if span.end == cursor => {}
+        _ => return None,
+    }
+    Some(finish_sigil_alias(
+        raw_text, &candidate, start, cursor, sigil, alias,
+    ))
+}
+
+fn finish_sigil_alias(
+    raw_text: &str,
+    candidate: &str,
+    start: usize,
+    cursor: usize,
+    sigil: char,
+    alias: &str,
+) -> DraftRewrite {
     let replacement = sigil.to_string();
     let edits = vec![TextEdit {
         start,
@@ -152,14 +216,14 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }];
     let text = apply_text_edits(raw_text, &edits);
     debug_assert_eq!(text, candidate);
-    Some(DraftRewrite {
+    DraftRewrite {
         rule: Some(RewriteRule::ExpandSigilAlias),
         edits,
         text,
         cursor: Some(cursor),
         summary: Some(format!("Typed {sigil} for {alias}")),
         notices: Vec::new(),
-    })
+    }
 }
 
 fn absorb_bare_declaration(

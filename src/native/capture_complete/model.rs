@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use crate::native::{
     capture_block_ids,
@@ -664,6 +665,8 @@ pub(super) struct PickerDescriptor {
     pub(super) continuation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) action_continuation_keys: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) action_continuation_aliases: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) relationship: Option<PickerRelationship>,
 }
