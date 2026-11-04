@@ -67,6 +67,7 @@ pub(crate) struct RetirementReports {
     pub(crate) prerequisites_left: Vec<String>,
     pub(crate) successors_orphaned: Vec<String>,
     pub(crate) dependents_repointed: Vec<String>,
+    pub(crate) links_pruned: usize,
 }
 
 /// Normalize the caller-supplied merge label with the shared relation
@@ -513,6 +514,57 @@ fn remove_blocks_entry(
     staged.insert(owner.0.clone(), updated);
 }
 
+/// Remove generated prerequisite mirrors for a dependent once it is
+/// cancelled. Its Depends-On child remains on the tombstone as history;
+/// reconciliation no longer projects a closed dependent into BLOCKS.
+fn remove_cancelled_prerequisite_mirrors(
+    staged: &mut BTreeMap<PathBuf, String>,
+    dependent: &(PathBuf, String),
+    context: &MergeContext<'_>,
+) {
+    let Some(contents) = staged.get(&dependent.0).cloned() else {
+        return;
+    };
+    let lines: Vec<&str> = contents.lines().collect();
+    if lines.is_empty() {
+        return;
+    }
+    let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
+    let scan = note_tasks::scan(&contents, context.task_settings);
+    let Some(task) = scan
+        .tasks()
+        .iter()
+        .find(|task| task.block_id.as_deref() == Some(dependent.1.as_str()))
+    else {
+        return;
+    };
+    let Some(child) =
+        dependency_parse::dependency_child_of(&lines, &fenced, task.line_index)
+    else {
+        return;
+    };
+    let dependency_parse::DependencyLine::Accepted { links, .. } =
+        &child.parsed
+    else {
+        return;
+    };
+    let index = context.note_index.with_additional(staged.keys().cloned());
+    let prerequisites = links
+        .iter()
+        .filter_map(|link| {
+            resolve_dependency_identity(
+                &index,
+                &dependent.0,
+                &link.target,
+                &link.block_id,
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for prerequisite in prerequisites {
+        remove_blocks_entry(staged, &prerequisite, dependent, context);
+    }
+}
+
 /// Add `dependent` to `owner`'s BLOCKS line, creating the line when
 /// absent. Entries are deduplicated by resolved identity.
 fn add_blocks_entry(
@@ -781,7 +833,7 @@ pub(crate) fn classify_source(
             &located.path,
             &located.task.line_index,
             note,
-            &selector.text,
+            selector,
             context,
         ),
     };
@@ -856,7 +908,7 @@ fn section_log_matches(
     source_path: &Path,
     source_line: &usize,
     note: &str,
-    heading: &str,
+    selector: &super::super::capture_language::DrawerSelector,
     context: &MergeContext<'_>,
 ) -> bool {
     let Some(contents) = snapshot.notes.get(source_path) else {
@@ -866,9 +918,17 @@ fn section_log_matches(
     let Ok(note_path) = section_note_path(snapshot, note, context) else {
         return false;
     };
+    let Some(note_contents) = snapshot.notes.get(&note_path) else {
+        return false;
+    };
+    let Ok(heading) =
+        super::containers::section_selector_title(note_contents, selector)
+    else {
+        return false;
+    };
     let note_target =
         note_path.with_extension("").to_string_lossy().into_owned();
-    let reason = section_provenance_reason(&note_target, heading);
+    let reason = section_provenance_reason(&note_target, &heading);
     // The Cancel Log holds dated entries; match the reason suffix.
     lines
         .iter()
@@ -1275,7 +1335,15 @@ pub(crate) fn cancel_source(
             task_cancel::DailyReadState::Failed(error.clone())
         }
         super::types::DailyNoteReadState::Read(text) => {
-            task_cancel::DailyReadState::Present(text.clone())
+            task_cancel::DailyReadState::Present(
+                daily_override
+                    .as_deref()
+                    .or_else(|| {
+                        staged.get(&context.daily_path).map(String::as_str)
+                    })
+                    .unwrap_or(text)
+                    .to_string(),
+            )
         }
         super::types::DailyNoteReadState::Missing => {
             task_cancel::DailyReadState::Absent
@@ -1400,13 +1468,16 @@ pub(crate) fn apply_retirement(
             .collect();
         validate_repoint_cycles(&staged, &repoints, context)?;
         // Stage graph changes before cancellation recovery.
-        repoint_dependents(
+        let repointed = repoint_dependents(
             &mut staged,
             &dependents,
             &sources,
             target,
             context,
         )?;
+        if !repointed.is_empty() {
+            stamp_target_dependency_id(&mut staged, target, context);
+        }
     }
 
     // Provenance + cancellation per open source, in typed order.
@@ -1419,6 +1490,7 @@ pub(crate) fn apply_retirement(
         let identity = (source.path.clone(), source.block_id.clone());
         let prerequisites = source_prerequisites(&staged, &identity, context);
         let orphans = successor_orphans(&staged, &identity, context);
+        let mut links_pruned = 0usize;
         if let Some(target) = &target_identity {
             stage_task_provenance(
                 &mut staged,
@@ -1434,6 +1506,7 @@ pub(crate) fn apply_retirement(
             );
             let plan =
                 cancel_source(&mut staged, &identity, &reason, context, None)?;
+            links_pruned = plan.removed_pomodoro_links;
             staged.insert(identity.0.clone(), plan.source_postimage.clone());
             if let Some(daily) = plan.daily_postimage {
                 staged.insert(context.daily_path.clone(), daily);
@@ -1457,6 +1530,7 @@ pub(crate) fn apply_retirement(
             // change without adding the same reason twice.
             let plan =
                 cancel_source(&mut staged, &identity, "", context, None)?;
+            links_pruned = plan.removed_pomodoro_links;
             staged.insert(identity.0.clone(), plan.source_postimage.clone());
             if let Some(daily) = plan.daily_postimage {
                 staged.insert(context.daily_path.clone(), daily);
@@ -1465,6 +1539,7 @@ pub(crate) fn apply_retirement(
                 staged.insert(path, text);
             }
         }
+        remove_cancelled_prerequisite_mirrors(&mut staged, &identity, context);
         let repointed_here: Vec<String> = dependents
             .iter()
             .filter(|dependent| {
@@ -1493,6 +1568,7 @@ pub(crate) fn apply_retirement(
             prerequisites_left: prerequisites,
             successors_orphaned: orphans,
             dependents_repointed: repointed_here,
+            links_pruned,
         });
     }
     // Idempotency guard for the gesture variants lives in
@@ -1509,6 +1585,60 @@ pub(crate) fn apply_retirement(
         }
     }
     Ok((staged, reports))
+}
+
+/// Reconciliation assigns an encodable canonical id to a task the first
+/// time another task depends on it. Keep that projection in the merge
+/// postimage so the production dependency reconciler is already a no-op.
+fn stamp_target_dependency_id(
+    staged: &mut BTreeMap<PathBuf, String>,
+    target: &(PathBuf, String),
+    context: &MergeContext<'_>,
+) {
+    let Some(contents) = staged.get(&target.0).cloned() else {
+        return;
+    };
+    let Some(line_index) = note_tasks::scan(&contents, context.task_settings)
+        .tasks()
+        .iter()
+        .find(|task| task.block_id.as_deref() == Some(target.1.as_str()))
+        .map(|task| task.line_index)
+    else {
+        return;
+    };
+    let Some(line) = contents.lines().nth(line_index) else {
+        return;
+    };
+    let metadata = task_status_hooks::task_metadata(line, Some(&target.1));
+    if metadata.task_id.is_some() {
+        return;
+    }
+    let Ok(canonical) = task_dependencies::dependency_id(&target.0, &target.1)
+    else {
+        return;
+    };
+    let mut lines = contents
+        .split_inclusive('\n')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let Some(line) = lines.get_mut(line_index) else {
+        return;
+    };
+    let ending = if line.ends_with("\r\n") {
+        "\r\n"
+    } else if line.ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+    let body = line.strip_suffix(ending).unwrap_or(line);
+    let updated = task_status_hooks::set_task_fields(
+        body,
+        Some(&canonical),
+        &metadata.depends_on,
+    );
+    *line = format!("{updated}{ending}");
+    staged.insert(target.0.clone(), lines.concat());
 }
 
 fn pre_repoint_waited_on(

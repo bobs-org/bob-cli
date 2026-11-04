@@ -408,6 +408,20 @@ fn resolve_section_title(
     })
 }
 
+/// Resolve a section selector to the title the container writer would use.
+/// Retirement classification uses this to recognize a completed section
+/// merge when the original request used a slug.
+pub(crate) fn section_selector_title(
+    contents: &str,
+    selector: &capture_language::DrawerSelector,
+) -> Result<String, MergeError> {
+    resolve_section_title(
+        &capture_drawers::project_h2_drawers(contents),
+        selector,
+    )
+    .map(|title| title.title)
+}
+
 fn append_section(contents: &str, title: &str) -> String {
     let ending = transplant::document_line_ending(contents);
     let double = format!("{ending}{ending}");

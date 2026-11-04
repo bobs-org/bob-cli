@@ -75,6 +75,17 @@ pub(crate) enum SuccessorSelection {
     Keys(BTreeSet<String>),
 }
 
+impl SuccessorSelection {
+    /// Match the regular keyed offer-selection rule for one stable key.
+    pub(crate) fn selects(&self, key: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::None => false,
+            Self::Keys(keys) => keys.contains(key),
+        }
+    }
+}
+
 /// Draft-list sort key: group, anchor/target order, lane, note path, line.
 /// Lane is 0 for existing groups so their relative order is unchanged;
 /// keep-moving uses Pending → Next → Ready (`keep_moving_lane`);
@@ -189,6 +200,9 @@ pub(crate) struct OfferReport {
     pub destination: OfferDestination,
     pub selected: bool,
     pub block_id_needed: bool,
+    /// Merge origin for the additive hand-off metadata. Existing offers
+    /// leave this absent, preserving their serialized shape.
+    pub merged_from: Option<String>,
     /// Crate-private draft order; never a JSON field.
     pub order_key: OfferOrderKey,
     /// Relation second-reason or winning-group metadata. Capture
@@ -603,7 +617,7 @@ fn in_done_archive(relative: &Path) -> bool {
 pub(crate) struct DayEntry {
     line: usize,
     pub(crate) name: String,
-    open: bool,
+    pub(crate) open: bool,
 }
 
 /// Slot anchor: insert after an anchor bullet's subtree.
@@ -2380,6 +2394,11 @@ fn successor_order_key(
                 bullet_end,
                 ..
             } => (*entry_index, *bullet_end),
+            SuccessorTarget::ExactSlot {
+                entry_index,
+                line_index,
+                ..
+            } => (*entry_index, *line_index),
             SuccessorTarget::Closing { entry_index, .. } => {
                 (entry_index.unwrap_or(usize::MAX), 0)
             }
@@ -2877,11 +2896,7 @@ fn apply_selection(
         let Some(offer) = verdict.offer.as_mut() else {
             continue;
         };
-        let picked = match selection {
-            SuccessorSelection::All => true,
-            SuccessorSelection::None => false,
-            SuccessorSelection::Keys(keys) => keys.contains(&offer.key),
-        };
+        let picked = selection.selects(&offer.key);
         offer.selected = picked;
         if picked {
             if let Some(reason) = offer.placement_refusal {
@@ -3063,6 +3078,7 @@ fn route_successor_offers(
 fn successor_target_entry_index(target: &SuccessorTarget) -> Option<usize> {
     match target {
         SuccessorTarget::Slot { entry_index, .. } => Some(*entry_index),
+        SuccessorTarget::ExactSlot { entry_index, .. } => Some(*entry_index),
         SuccessorTarget::Closing { entry_index, .. } => *entry_index,
     }
 }
@@ -3161,6 +3177,7 @@ pub(crate) fn offer_report(
         destination: offer.destination.clone(),
         selected: offer.selected,
         block_id_needed: offer.block_id_needed,
+        merged_from: None,
         order_key: offer.order_key.clone(),
         relation: relation.cloned(),
     }
@@ -3192,6 +3209,13 @@ pub(crate) enum SuccessorTarget {
     Slot {
         entry_index: usize,
         bullet_end: usize,
+        indent: String,
+    },
+    /// Insert at a concrete line slot computed from a pre-prune ledger
+    /// anchor. Merge uses this when the original source bullet was removed.
+    ExactSlot {
+        entry_index: usize,
+        line_index: usize,
         indent: String,
     },
     Closing {
@@ -3734,6 +3758,18 @@ pub(crate) fn insert_successor_links(
             } => jobs.push(Job {
                 order,
                 insert_at: bullet_end,
+                entry: Some(entry_index),
+                created: false,
+                created_name: None,
+                bullet: format!("{indent}- {}", placement.block_link),
+            }),
+            SuccessorTarget::ExactSlot {
+                entry_index,
+                line_index,
+                indent,
+            } => jobs.push(Job {
+                order,
+                insert_at: line_index,
                 entry: Some(entry_index),
                 created: false,
                 created_name: None,

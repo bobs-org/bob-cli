@@ -436,6 +436,48 @@ pub(super) fn offer_json(
         },
         order_key: offer.order_key.clone(),
         moved_from: None,
+        merged_from: offer.merged_from.clone(),
         settled_ordinal: None,
+    }
+}
+
+#[cfg(test)]
+mod offer_json_tests {
+    use super::*;
+    use crate::native::task_complete::successors::{
+        EntryRole, OfferDestination,
+    };
+    use crate::native::task_complete::{OfferGroup, OfferReport};
+
+    fn report(merged_from: Option<&str>) -> OfferReport {
+        OfferReport {
+            key: "dest.md#^target".to_string(),
+            n: 1,
+            group: OfferGroup::HandOff,
+            project: None,
+            destination: OfferDestination {
+                day_file: PathBuf::from("daily/2026-11-03.md"),
+                entry_name: "BUILD".to_string(),
+                entry_role: EntryRole::Slot,
+                fallback: false,
+            },
+            selected: false,
+            block_id_needed: false,
+            merged_from: merged_from.map(str::to_string),
+            order_key: (0, (0, 0), 0, PathBuf::from("dest.md"), 0),
+            relation: None,
+        }
+    }
+
+    #[test]
+    fn merged_from_is_additive_and_absent_for_existing_offers() {
+        let existing = serde_json::to_value(offer_json(&report(None)))
+            .expect("serialize existing offer");
+        assert!(existing.get("merged_from").is_none());
+
+        let merge =
+            serde_json::to_value(offer_json(&report(Some("src.md#^source"))))
+                .expect("serialize merge offer");
+        assert_eq!(merge["merged_from"], "src.md#^source");
     }
 }

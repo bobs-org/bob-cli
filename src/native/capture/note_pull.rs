@@ -1050,6 +1050,7 @@ pub(super) fn plan_note_pull_item(
                 project: None,
                 after: None,
                 moved_from: None,
+                merged_from: None,
                 destination,
                 order_key,
                 settled_ordinal: offer.settled_ordinal,

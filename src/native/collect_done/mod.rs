@@ -52,6 +52,30 @@ pub(crate) use transform::{
     task_block_end, vault_relative_link_target,
 };
 
+/// Return changed note bytes from the production archive planner for a
+/// temporary fixture. Tests call the planner directly, without invoking the
+/// disk-facing command or applying its write plan.
+#[cfg(test)]
+pub(crate) fn collection_postimages_for_tests(
+    vault: &Path,
+    threshold: usize,
+) -> io::Result<BTreeMap<PathBuf, String>> {
+    let plan = plan::build_collection_plan(vault, threshold)?;
+    let mut postimages = BTreeMap::new();
+    for file in plan.files {
+        if file.writes_source() {
+            postimages.insert(file.relative_source_path, file.source_contents);
+        }
+        if let Some(contents) = file.archive_contents {
+            postimages.insert(file.relative_archive_path, contents);
+        }
+    }
+    for repair in plan.link_repairs {
+        postimages.insert(repair.relative_path, repair.contents);
+    }
+    Ok(postimages)
+}
+
 pub(super) const COMMAND_NAME: &str = "bob task archive";
 pub(crate) const DEFAULT_THRESHOLD: usize = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

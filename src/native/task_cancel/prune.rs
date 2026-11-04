@@ -24,15 +24,31 @@ pub(crate) struct PruneResult {
     pub(crate) removed_bullet_count: usize,
     pub(crate) removed_entry_count: usize,
     pub(crate) unresolved_count: usize,
+    /// Every matched live link in an open Pomodoro, with its insertion
+    /// position in `content`. Callers that replace a retired link can keep
+    /// the offer at the exact slot even when pruning removed earlier lines.
+    pub(crate) removed_slots: Vec<PrunedLinkSlot>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrunedLinkSlot {
+    pub(crate) task: TaskIdentity,
+    pub(crate) entry_index: usize,
+    pub(crate) original_line: usize,
+    pub(crate) insertion_line: usize,
+    pub(crate) indentation: String,
+}
+
+#[derive(Debug, Clone)]
 struct Match {
     start: usize,
     end: usize,
     bullet_line: usize,
     subtree_end: usize,
     dedicated: bool,
+    task: TaskIdentity,
+    entry_index: usize,
+    indentation: String,
 }
 
 pub(crate) fn prune_daily(
@@ -49,6 +65,7 @@ pub(crate) fn prune_daily(
             removed_bullet_count: 0,
             removed_entry_count: 0,
             unresolved_count: 0,
+            removed_slots: Vec::new(),
         };
     };
     let lines = logical_lines(content);
@@ -84,6 +101,9 @@ pub(crate) fn prune_daily(
                     bullet_line: bullet.line_index,
                     subtree_end: bullet.end_line,
                     dedicated: false,
+                    task: identity.expect("matched identity"),
+                    entry_index: bullet.entry_index,
+                    indentation: bullet.indentation.clone(),
                 });
             } else if identity.is_none()
                 && targets
@@ -172,13 +192,32 @@ pub(crate) fn prune_daily(
         }
         *segment = format!("{updated}{ending}");
     }
-    let output = segments
-        .into_iter()
-        .enumerate()
-        .filter_map(|(line, segment)| {
-            (!deleted_lines.contains(&line)).then_some(segment)
+    let mut output = String::new();
+    let mut original_to_output = vec![0usize; segments.len() + 1];
+    let mut output_line = 0usize;
+    for (line, segment) in segments.into_iter().enumerate() {
+        original_to_output[line] = output_line;
+        if !deleted_lines.contains(&line) {
+            output.push_str(&segment);
+            output_line += 1;
+        }
+    }
+    let end_index = original_to_output.len() - 1;
+    original_to_output[end_index] = output_line;
+    let removed_slots = matches
+        .iter()
+        .filter_map(|matched| {
+            original_to_output.get(matched.bullet_line).copied().map(
+                |insertion_line| PrunedLinkSlot {
+                    task: matched.task.clone(),
+                    entry_index: matched.entry_index,
+                    original_line: matched.bullet_line,
+                    insertion_line,
+                    indentation: matched.indentation.clone(),
+                },
+            )
         })
-        .collect::<String>();
+        .collect();
     PruneResult {
         changed: output != content,
         content: Some(output),
@@ -186,6 +225,7 @@ pub(crate) fn prune_daily(
         removed_bullet_count,
         removed_entry_count: 0,
         unresolved_count: unresolved,
+        removed_slots,
     }
 }
 
@@ -197,6 +237,7 @@ fn unchanged(content: &str) -> PruneResult {
         removed_bullet_count: 0,
         removed_entry_count: 0,
         unresolved_count: 0,
+        removed_slots: Vec::new(),
     }
 }
 

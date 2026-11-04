@@ -4,6 +4,7 @@ use std::{
 };
 
 use chrono::NaiveDate;
+use serde::Serialize;
 
 use super::super::{
     capture_drawers::DrawerCatalogRecord,
@@ -113,6 +114,7 @@ pub(crate) struct PreparedSource {
     pub(crate) line: usize,
     pub(crate) block_id: String,
     pub(crate) title: String,
+    pub(crate) previous_status: char,
     pub(crate) disposition: SourceDisposition,
     pub(crate) moved_lines: usize,
     pub(crate) moved_notes: usize,
@@ -154,6 +156,88 @@ pub(crate) struct PreparedMerge {
     pub(crate) repaired_files: Vec<RepairedFile>,
     pub(crate) read_paths: BTreeSet<PathBuf>,
     pub(crate) warnings: Vec<String>,
+}
+
+/// Fully composed pure merge plan. Only changed postimages are present;
+/// `write_order` keeps destination-before-source staging deterministic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MergePlan {
+    pub(crate) postimages: BTreeMap<PathBuf, String>,
+    pub(crate) write_order: Vec<PathBuf>,
+    pub(crate) records: Vec<MergeRecord>,
+    pub(crate) renamed_block_ids: Vec<RenameRecord>,
+    pub(crate) repaired_files: Vec<RepairedFile>,
+    pub(crate) warnings: Vec<String>,
+    /// Every note consulted from the supplied snapshot. The adapter adds
+    /// its vault scan-path set to this read set before guarded writes.
+    pub(crate) read_paths: BTreeSet<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MergeOutcome {
+    Merged,
+    Unchanged,
+    AlreadyClosed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MergeTaskDescriptor {
+    pub(crate) path: PathBuf,
+    pub(crate) block_id: String,
+    pub(crate) line: usize,
+    pub(crate) title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MergeTargetDescriptor {
+    pub(crate) path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) block_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) drawer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) section: Option<String>,
+    pub(crate) kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MergeOffer {
+    pub(crate) key: String,
+    pub(crate) n: usize,
+    pub(crate) group: String,
+    pub(crate) selected: bool,
+    pub(crate) entry_name: String,
+    pub(crate) entry_role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) merged_from: Option<String>,
+}
+
+/// One source result in source argument order, shared by command and
+/// capture adapters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MergeRecord {
+    pub(crate) source: MergeTaskDescriptor,
+    pub(crate) target: MergeTargetDescriptor,
+    pub(crate) label: String,
+    pub(crate) outcome: MergeOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) previous_status: Option<char>,
+    pub(crate) moved_lines: usize,
+    pub(crate) moved_notes: usize,
+    pub(crate) dependents_repointed: Vec<String>,
+    pub(crate) prerequisites_left: Vec<String>,
+    pub(crate) successors_orphaned: Vec<String>,
+    pub(crate) links_pruned: usize,
+    pub(crate) offers: Vec<MergeOffer>,
+    pub(crate) message: String,
 }
 
 impl From<&LocatedTask> for SourceDisposition {

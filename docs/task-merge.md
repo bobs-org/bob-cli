@@ -9,17 +9,18 @@ back into tasks (see [Split bullets out into tasks](task-split.md)). Merge
 labels committed through capture `~` / `~~` or the Obsidian Links stage run
 this same engine (see [Task relations](task-relations.md#21-merge-labels)).
 
-> [!NOTE] Contract only: the `merge-engine`, `merge-cli`, and `merge-label`
-> phases land the Rust engine, the `bob task merge` command, and the
-> configurable merge labels. Until then this page pins the contract they must
-> pass.
+> [!NOTE] The pure Rust merge engine is implemented in
+> `src/native/task_merge/` and its MG1–MG20 conformance coverage is recorded
+> below. The `bob task merge` command, configurable merge labels, and capture
+> transfer/dispatch are still pending their sibling phases; the command and
+> configuration sections below remain their contract.
 
-This file is the contract every implementation cites. The Rust side will be
-`src/native/task_merge/` (pure planner), composed by capture `>` transfer
-lines, capture relation merges, and `bob task merge`. The Obsidian Links stage
-previews and commits through `bob task merge` and never reimplements the
-merge. If an implementation disagrees with a vector, fix this doc first in
-the same change.
+This file is the contract every implementation cites. The pure planner is
+`plan_task_merge` in `src/native/task_merge/`. Later adapters compose it for
+capture `>` transfer lines, capture relation merges, and `bob task merge`.
+The Obsidian Links stage previews and commits through `bob task merge` and
+never reimplements the merge. If an implementation disagrees with a vector,
+fix this doc first in the same change.
 
 ## 1. The rule
 
@@ -290,8 +291,10 @@ Property tests (Rust) must hold for merge, split, and many-source move:
 
 ## 12. MG vector index
 
-The `merge-engine` phase turns these into tests. Each MG row names the
-preimage, the gesture, and the byte-exact postimage expectation.
+Each MG row names the preimage, the gesture, and the byte-exact postimage
+expectation. The implementation tests live in
+[`src/native/task_merge/tests.rs`](../src/native/task_merge/tests.rs); MG19's
+four-list YAML wiring remains part of the later `merge-label` phase.
 
 | ID | Covers | Preimage → gesture → postimage |
 | --- | --- | --- |
@@ -315,3 +318,28 @@ preimage, the gesture, and the byte-exact postimage expectation.
 | MG18 | Nightly archive | A tombstone archived by `bob task archive` keeps T's _merged from_ entry rewritten to the `done/` path |
 | MG19 | Label in two effect lists | A key in `merge_labels` and any of `cancel_labels`, `complete_labels`, or `successor_labels` has no effect and is dropped from all lists with one warning |
 | MG20 | Payload order | Several sources land as separate groups in typed order after the container's existing entries |
+
+The current test names for those vectors are:
+
+| ID | Test |
+| --- | --- |
+| MG1 | `mg1_title_only_source_is_prepared_as_one_plain_child` |
+| MG2 | `mg2_nested_drawers_travel_under_the_source_title_without_flattening` |
+| MG3 | `mg3_descendant_anchor_collision_repairs_external_links` |
+| MG4 | `mg4_tables_and_fences_are_rebased_as_authored_payload` |
+| MG5 | `mg5_open_dependents_repoint_with_mirrors_and_provenance`, `mg5_shared_dependent_dedups_to_one_target_link` |
+| MG6 | `mg6_target_prerequisite_on_source_is_never_repointed` |
+| MG7 | `mg7_repoint_cycle_refuses_the_whole_batch` |
+| MG8 | `mg8_starts_after_successors_are_reported_untouched` |
+| MG9 | `mg9_repoint_lands_before_cancel_without_transient_recovery`, `mg9_source_prerequisites_are_retained_and_reported` |
+| MG10 | `mg10_existing_target_link_suppresses_merge_offer` |
+| MG11 | `mg11_blocked_target_is_not_offered_after_pruning` |
+| MG12 | `mg12_offer_uses_earliest_removed_slot_and_selected_pick_semantics` |
+| MG13 | `mg13_section_merge_with_open_dependents_refuses`, `mg13_section_provenance_writes_one_cancel_log_entry` |
+| MG14 | `mg14_section_slug_near_duplicate_refuses` |
+| MG15 | `mg15_section_slug_title_cases_and_exact_literal_preserves_text` |
+| MG16 | `mg16_rerun_against_same_target_is_unchanged`, `mg16_public_planner_rerun_has_no_writes_and_serializes_source_order` |
+| MG17 | `mg17_production_reconciliation_is_a_noop_after_merge` |
+| MG18 | `mg18_archive_planner_repairs_merged_from_to_tombstone_archive` |
+| MG19 | `mg19_shared_key_with_merge_labels_drops_everywhere_once`, `mg19_three_list_warnings_stay_byte_identical` |
+| MG20 | `mg20_source_groups_keep_typed_order_after_existing_entries` |

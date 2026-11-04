@@ -1749,6 +1749,7 @@ pub(super) fn plan_project_note_item(
                                         project: Some(basename.clone()),
                                         after: None,
                                         moved_from: offer.moved_from.clone(),
+                                        merged_from: None,
                                         destination:
                                             TaskCompleteOfferDestinationJson {
                                                 day_file: day_relative
@@ -1867,6 +1868,7 @@ pub(super) fn plan_project_note_item(
                                     project: Some(basename.clone()),
                                     after: None,
                                     moved_from: offer.moved_from.clone(),
+                                    merged_from: None,
                                     destination:
                                         TaskCompleteOfferDestinationJson {
                                             day_file: day_relative

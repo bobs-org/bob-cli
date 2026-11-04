@@ -347,6 +347,86 @@ pub(crate) fn reconcile_for_scanner_isolation(contents: &str) -> String {
     );
     files.remove(0).contents
 }
+
+/// Run the production Depends-On, BLOCKS, and LINKED FROM reconciliation
+/// planners over an in-memory note set for task-merge invariants.
+#[cfg(test)]
+pub(crate) fn reconcile_merge_snapshot_for_tests(
+    notes: &BTreeMap<PathBuf, String>,
+    settings: &TasksSettings,
+) -> BTreeMap<PathBuf, String> {
+    let vault = Path::new("/task-merge-test-vault");
+    let mut files = notes
+        .iter()
+        .map(|(relative_path, contents)| FileScan {
+            path: vault.join(relative_path),
+            relative_path: relative_path.clone(),
+            contents: contents.clone(),
+            tasks: parse_tasks(contents, settings),
+        })
+        .collect::<Vec<_>>();
+    let note_index = NoteIndex::from_paths(
+        files.iter().map(|file| file.relative_path.clone()),
+    );
+    let contexts = files
+        .iter()
+        .map(super::project_dependencies::ProjectContext::for_note)
+        .collect::<Vec<_>>();
+    let reasons = vec![
+        super::project_dependencies::ProjectBlockReasons::default(
+        );
+        files.len()
+    ];
+    let project_tree = super::project_dependencies::ProjectTree::build(
+        &files,
+        &contexts,
+        &reasons,
+        &note_index,
+    );
+    let mut inputs = Vec::new();
+    let dependencies = reconcile_dependencies(
+        vault,
+        &mut files,
+        &note_index,
+        &project_tree,
+        settings,
+        None,
+        &mut inputs,
+    );
+    for file_index in &dependencies.touched_files {
+        let file = &mut files[*file_index];
+        file.tasks = parse_tasks(&file.contents, settings);
+    }
+    let empty = BTreeSet::new();
+    let blocks = reconcile_blocks_lines(
+        &mut files,
+        &note_index,
+        settings,
+        &dependencies.explicit_edges,
+        &dependencies.uncertain_dependents,
+        None,
+        &empty,
+        true,
+    );
+    for file_index in &blocks.touched_files {
+        let file = &mut files[*file_index];
+        file.tasks = parse_tasks(&file.contents, settings);
+    }
+    reconcile_relation_lines(
+        &mut files,
+        &note_index,
+        &[],
+        settings,
+        None,
+        &empty,
+        true,
+        true,
+    );
+    files
+        .into_iter()
+        .map(|file| (file.relative_path, file.contents))
+        .collect()
+}
 pub(crate) use pomodoro::{
     apply_empty_pomodoro_plan, plan_empty_pomodoro_removals,
     plan_empty_pomodoro_removals_with_options, scan_pomodoros,

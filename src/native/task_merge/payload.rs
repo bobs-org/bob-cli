@@ -109,6 +109,7 @@ pub(crate) fn prepare_task_merge(
                 &context.task_settings.global_filter,
                 located.task.block_id.as_deref(),
             ),
+            previous_status: located.task.status_symbol,
             disposition,
             moved_lines: 0,
             moved_notes: 0,

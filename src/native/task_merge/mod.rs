@@ -1,11 +1,11 @@
 //! Pure task-merge planning primitives.
 //!
-//! The payload phase intentionally exposes only its internal preparation
-//! result. Later phases compose dependency retirement, cancellation, and
-//! ledger offers before adding the complete `plan_task_merge` entry point.
+//! The module exposes a complete pure planner alongside the internal helpers
+//! that prepare payloads, retire sources, and compose ledger offers.
 
 mod containers;
 mod payload;
+mod plan;
 mod retirement;
 mod types;
 
@@ -15,6 +15,9 @@ mod tests;
 // The planner integration phase will consume this preparation entry point.
 #[allow(unused_imports)]
 pub(crate) use payload::prepare_task_merge;
+// The parent merge-label phase will call the planner through this module.
+#[allow(unused_imports)]
+pub(crate) use plan::plan_task_merge;
 // Later planner phases consume these crate-internal preparation records.
 #[allow(unused_imports)]
 pub(crate) use retirement::{
@@ -26,7 +29,8 @@ pub(crate) use retirement::{
 #[allow(unused_imports)]
 pub(crate) use types::{
     DailyNoteReadState, MergeContainer, MergeContext, MergeError, MergeGesture,
-    MergeRelationPolicy, MergeRequest, PreparedContainer,
-    PreparedContainerKind, PreparedMerge, PreparedPayload, PreparedSource,
-    SourceDisposition,
+    MergeOffer, MergeOutcome, MergePlan, MergeRecord, MergeRelationPolicy,
+    MergeRequest, MergeTargetDescriptor, MergeTaskDescriptor,
+    PreparedContainer, PreparedContainerKind, PreparedMerge, PreparedPayload,
+    PreparedSource, SourceDisposition,
 };

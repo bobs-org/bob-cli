@@ -1,5 +1,6 @@
 //! Shared fragment transplant primitives used by task move, merge, and split.
 
+use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -20,14 +21,16 @@ use super::super::{
 
 use super::plan::IdCollisionPolicy;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RenameRecord {
     pub(crate) path: PathBuf,
     pub(crate) old_block_id: String,
     pub(crate) new_block_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RepairedFile {
     pub(crate) path: PathBuf,
     pub(crate) link_count: usize,
