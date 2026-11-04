@@ -16,7 +16,6 @@ pub(super) enum BatchMoveError {
     Capture(CaptureError),
 }
 
-#[allow(dead_code)] // Used by the project-note execution phase.
 pub(super) fn apply_batch_move(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,

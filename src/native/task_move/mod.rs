@@ -13,7 +13,6 @@ pub(crate) mod transplant;
 pub(crate) use command::{build_cli, run};
 #[cfg(test)]
 pub(crate) use plan::load_vault_snapshot;
-#[allow(unused_imports)]
 pub(crate) use plan::{
     list_task_move_destinations, movable_roots, plan_task_move,
     resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot, MovePlacement,

@@ -79,7 +79,6 @@ pub(crate) struct MoveRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // Capture slot placement is consumed by project-note moves.
 pub(crate) enum MovePlacement {
     Append,
     CaptureSlots(Vec<usize>),
@@ -245,7 +244,6 @@ pub(crate) struct TaskCandidate {
 /// any source-side reason the move engine would refuse it. Destination rules
 /// are checked when the move is planned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[allow(dead_code)] // Capture completion consumes these eligibility rows.
 pub(crate) struct MovableRoot {
     pub(crate) line: usize,
     pub(crate) title: String,
@@ -258,7 +256,6 @@ pub(crate) struct MovableRoot {
 /// List movable-root candidates using the same source-side eligibility checks
 /// as `plan_task_move`. ID-less tasks remain eligible and are returned with no
 /// block ID so capture can offer its Add block ID flow.
-#[allow(dead_code)] // Capture completion consumes this shared eligibility API.
 pub(crate) fn movable_roots(
     source_path: &Path,
     contents: &str,
