@@ -277,7 +277,8 @@ pub(super) struct PomodoroCloseSummaryJson {
 }
 
 /// Recorded past session: the nested close summary plus record identity.
-/// `trims` stays empty in the record phase (h2.4 fills it).
+/// `trims` holds the edge trims attributed to the first overlapping member
+/// in typed order; empty on members that report no trim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroPastSummaryJson {
     pub(super) raw: String,
@@ -292,8 +293,23 @@ pub(super) struct PomodoroPastSummaryJson {
     pub(super) closed_at: String,
     pub(super) line: usize,
     #[serde(default)]
-    pub(super) trims: Vec<serde_json::Value>,
+    pub(super) trims: Vec<PomodoroPastTrimJson>,
     pub(super) close: Box<PomodoroCloseSummaryJson>,
+}
+
+/// One trimmed closed edge: the span rewrite staged before any member
+/// recorded. `minutes` is the old span minus the new one (what the whole
+/// stack took); the human line shows the remaining piece in parentheses.
+/// `calendar` flags MEET rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroPastTrimJson {
+    pub(super) line: usize,
+    pub(super) name: String,
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) minutes: u64,
+    pub(super) clock: String,
+    pub(super) calendar: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1979,6 +1995,41 @@ fn format_styled_pomodoro_task_destination(
     plain.replacen(name, &rendered, 1)
 }
 
+fn past_trim_remaining(after: &str) -> u64 {
+    let Some((s, e)) = after.split_once('-') else {
+        return 0;
+    };
+    let parse = |v: &str| -> Option<i64> {
+        if v.len() != 4 || !v.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let h: i64 = v[..2].parse().ok()?;
+        let m: i64 = v[2..].parse().ok()?;
+        (h < 24 && m < 60).then_some(h * 60 + m)
+    };
+    let (Some(s), Some(e)) = (parse(s), parse(e)) else {
+        return 0;
+    };
+    (e - s).rem_euclid(1440) as u64
+}
+
+fn print_human_past_trims(trims: &[PomodoroPastTrimJson]) {
+    for trim in trims {
+        let remaining = past_trim_remaining(&trim.after);
+        let calendar_suffix = if trim.calendar { " (calendar)" } else { "" };
+        println!(
+            "⚠ took {}m from {} · {} → {} ({}m){} · line {}",
+            trim.minutes,
+            trim.name,
+            trim.before,
+            trim.after,
+            remaining,
+            calendar_suffix,
+            trim.line,
+        );
+    }
+}
+
 pub(super) fn print_human_success(result: &CaptureResult) {
     if let Some(global) = &result.global_destination {
         print_global_destination_summary(global);
@@ -1995,6 +2046,9 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     if result.captures.is_empty() {
         print_list_summary(&result.item);
         print_human_item_success(result, None, &result.theme_refs);
+        if let Some(past) = result.item.pomodoro_past.as_ref() {
+            print_human_past_trims(&past.trims);
+        }
         let rows = note_pull_rows(result);
         print_human_note_pull_groups(
             &result.pull_in.groups,
@@ -2021,6 +2075,13 @@ pub(super) fn print_human_success(result: &CaptureResult) {
             &result.theme_refs,
         );
     }
+    let past_trims: Vec<PomodoroPastTrimJson> = result
+        .captures
+        .iter()
+        .filter_map(|item| item.pomodoro_past.as_ref())
+        .flat_map(|past| past.trims.clone())
+        .collect();
+    print_human_past_trims(&past_trims);
     let rows = note_pull_rows(result);
     print_human_note_pull_groups(
         &result.pull_in.groups,

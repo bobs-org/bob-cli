@@ -281,7 +281,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                     error.message = format!("{}: {}", ctx, error.message);
                     error
                 })?;
-            super::pomodoro_past::preflight_overlaps(
+            let trim_plans = super::pomodoro_past::preflight_overlaps(
                 &preflight,
                 &pre_stack_contents,
                 &stack_specs,
@@ -295,7 +295,33 @@ pub(super) fn plan_capture_batch_with_config_path(
                 error.message = format!("{}: {}", ctx, error.message);
                 error
             })?;
-            // Record members in typed order, one batch item at a time.
+            // Each trim is one structured warning and one `trimmed` block
+            // role; each trim's JSON lives on its first overlapping member.
+            for trim in &trim_plans {
+                let calendar_suffix =
+                    if trim.calendar { " (calendar)" } else { "" };
+                let message = format!(
+                    "took {}m from {} · {} → {} ({}m){calendar_suffix} · line {}",
+                    trim.taken,
+                    trim.name,
+                    trim.before,
+                    trim.after,
+                    trim.remaining,
+                    trim.line,
+                );
+                warnings.push(CaptureWarning::Structured(
+                    super::output::StructuredCaptureWarning {
+                        code: "pomodoro_past_trim",
+                        label: None,
+                        count: None,
+                        message,
+                    },
+                ));
+            }
+            // Record members in typed order, one batch item at a time. Trims
+            // stage inside the stack's first item so block tracking sees the
+            // original span versus the filed result; the whole batch still
+            // rolls back on any later failure.
             for (offset, member) in preflight.members.iter().enumerate() {
                 let parsed_item = parsed_items[item_start + offset].clone();
                 let fanout_context = parsed_item.fanout.clone();
@@ -305,6 +331,18 @@ pub(super) fn plan_capture_batch_with_config_path(
                     capture_error_context(item_number, &parsed_item);
                 let pre_day = planner.peek_text(&day_file);
                 planner.begin_item(pre_day.clone());
+                if offset == 0 && !trim_plans.is_empty() {
+                    super::pomodoro_past::stage_trim_plans(
+                        &mut planner,
+                        &day_file,
+                        &trim_plans,
+                    )
+                    .map_err(|mut error| {
+                        error.message =
+                            format!("{error_context}: {}", error.message);
+                        error
+                    })?;
+                }
                 let pre_tasks = task_tracker.snapshot_pre(&planner);
                 let staged = planner.read_existing(&day_file).map_err(
                     |mut error: CaptureError| {
@@ -323,6 +361,20 @@ pub(super) fn plan_capture_batch_with_config_path(
                         format!("{error_context}: {}", error.message);
                     error
                 })?;
+                let member_trims: Vec<super::output::PomodoroPastTrimJson> =
+                    trim_plans
+                        .iter()
+                        .filter(|trim| trim.first_member == offset)
+                        .map(|trim| super::output::PomodoroPastTrimJson {
+                            line: trim.line,
+                            name: trim.name.clone(),
+                            before: trim.before.clone(),
+                            after: trim.after.clone(),
+                            minutes: trim.taken,
+                            clock: trim.clock.clone(),
+                            calendar: trim.calendar,
+                        })
+                        .collect();
                 let mut planned = super::pomodoro_past::record_one_member(
                     request,
                     &stack_bodies[offset],
@@ -339,12 +391,39 @@ pub(super) fn plan_capture_batch_with_config_path(
                         &request.bob_dir,
                         &super::pomodoro::day_file_for(&request.bob_dir),
                     ),
+                    member_trims,
                 )
                 .map_err(|mut error| {
                     error.message =
                         format!("{error_context}: {}", error.message);
                     error
                 })?;
+                // All trimmed edges ride on the stack's first item for block
+                // tracking; the tracker forwards them through later filings.
+                // JSON trims stay per first overlapping member above. The
+                // headline bytes changed, so pin `after` by text search
+                // instead of the line map.
+                if offset == 0 && !trim_plans.is_empty() {
+                    let post_text =
+                        planner.read_existing(&day_file).unwrap_or_default();
+                    let post_lines: Vec<&str> = post_text.lines().collect();
+                    for trim in &trim_plans {
+                        let before_idx = trim.line.saturating_sub(1);
+                        let after_idx = post_lines
+                            .iter()
+                            .position(|line| {
+                                *line == trim.new_headline.as_str()
+                            })
+                            .unwrap_or(before_idx);
+                        planned
+                            .pomodoro_refs
+                            .push(super::pomodoro_blocks::PomodoroBlockRef::at(
+                            super::pomodoro_blocks::PomodoroBlockRole::Trimmed,
+                            before_idx,
+                            after_idx,
+                        ));
+                    }
+                }
                 planned.result.list = item_list;
                 planned.result.fanout = fanout_context;
                 planned.result.consumed_links = planner.take_consumed_links();

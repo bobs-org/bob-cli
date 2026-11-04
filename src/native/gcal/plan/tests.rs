@@ -2997,3 +2997,56 @@ fn context_upgrade_resolves_the_upgraded_line() {
         plan.contents
     );
 }
+
+#[test]
+fn trimmed_closed_meet_survives_later_sync() {
+    // A past `x=` trim rewrites only the MEET headline span (edge trim,
+    // clock and links preserved). A later `bob gcal sync` must leave the
+    // trimmed closed MEET row alone: no span rewrite, no duplicate.
+    let occ = with_phase(
+        occurrence("evt", "Planning", true, "0855-0920", 535),
+        LinkPhase::Past,
+    );
+    let first = run(empty_ledger(), vec![occ.clone()]);
+    let pomodoros = first.contents.split("## Pomodoros\n").nth(1).expect("P");
+    assert!(
+        pomodoros.contains("(**0855-0920**"),
+        "seed creates 0855-0920 MEET: {pomodoros}"
+    );
+    // Simulate the past-record edge trim: 0855-0920 (25m) → 0855-0910 (15m).
+    // Only the MEET headline span changes; the Events task keeps 0855-0920.
+    let trimmed = first
+        .contents
+        .replace("(**0855-0920** [t:: 25m])", "(**0855-0910** [t:: 15m])");
+    let trimmed_pomodoros = trimmed.split("## Pomodoros\n").nth(1).expect("P");
+    assert!(
+        trimmed_pomodoros.contains("(**0855-0910** [t:: 15m]) — MEET"),
+        "{trimmed_pomodoros}"
+    );
+    assert!(
+        !trimmed_pomodoros.contains("(**0855-0920**"),
+        "{trimmed_pomodoros}"
+    );
+    // A later sync with the same event leaves the trimmed row alone.
+    let second = run(&trimmed, vec![occ]);
+    let second_pomodoros =
+        second.contents.split("## Pomodoros\n").nth(1).expect("P");
+    assert!(
+        second_pomodoros.contains("(**0855-0910** [t:: 15m]) — MEET"),
+        "trimmed MEET survives: {second_pomodoros}"
+    );
+    assert!(
+        !second_pomodoros.contains("(**0855-0920**"),
+        "no rewrite to the original MEET span (the Events task keeps 0855-0920): {second_pomodoros}"
+    );
+    assert_eq!(
+        second_pomodoros.matches("— MEET").count(),
+        trimmed
+            .split("## Pomodoros\n")
+            .nth(1)
+            .expect("P")
+            .matches("— MEET")
+            .count(),
+        "no duplicate MEET: {second_pomodoros}"
+    );
+}

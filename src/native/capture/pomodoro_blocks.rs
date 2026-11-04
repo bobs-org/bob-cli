@@ -28,6 +28,7 @@ pub(super) enum PomodoroBlockRole {
     Changed,
     Removed,
     Recorded,
+    Trimmed,
 }
 
 /// Where a ref's headline sat before its item ran. Indices are 0-based

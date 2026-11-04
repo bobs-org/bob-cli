@@ -223,6 +223,7 @@ struct TimedRow {
     start: i64,
     end: i64,
     is_open: bool,
+    line_text: String,
 }
 
 fn parse_range_minutes(range: &str) -> Option<(i64, i64)> {
@@ -241,7 +242,10 @@ fn parse_range_minutes(range: &str) -> Option<(i64, i64)> {
 }
 
 fn collect_timed_rows(contents: &str) -> Vec<TimedRow> {
+    use crate::native::capture::line_spans;
     let scan = capture_pomodoros::scan(contents);
+    let lines = line_spans(contents);
+    let line_texts: Vec<&str> = lines.iter().map(|line| line.text).collect();
     let mut rows = Vec::new();
     for entry in scan.entries {
         let Some(range) = entry.time_range.clone() else {
@@ -257,12 +261,11 @@ fn collect_timed_rows(contents: &str) -> Vec<TimedRow> {
         if e <= s {
             // Genuine midnight-ending spans wrap across 1440.
             e += 1440;
-            // Distinguish full-day (00-00 already skipped as zero-length).
         }
-        // Normalize midnight-ending 0000 to 1440 when start != 0: s != e
-        // already, and e==0 becomes 1440 via the wrap above? e==0 with
-        // s!=0 gives e=0 <= s, so e+=1440 => e=1440. Good.
-        let _ = s;
+        let line_text = line_texts
+            .get(entry.line.saturating_sub(1))
+            .unwrap_or(&"")
+            .to_string();
         rows.push(TimedRow {
             line: entry.line,
             name: entry.name.clone(),
@@ -270,23 +273,14 @@ fn collect_timed_rows(contents: &str) -> Vec<TimedRow> {
             start: s,
             end: e,
             is_open: entry.state == PomodoroState::Open,
+            line_text,
         });
     }
     rows
 }
 
 fn overlaps(a_start: i64, a_end: i64, b_start: i64, b_end: i64) -> bool {
-    // Half-open: touching endpoints never conflict. Zero-length already
-    // skipped. Member windows never wrap; history may extend past 1440.
-    // Compare in unwrapped space: member [a_start, a_end), history
-    // [b_start, b_end). For history wrapping past midnight (b_end>1440),
-    // also test the wrapped copy? Member is within [0,1440], history
-    // wrapping overlaps only if member is at start of day and history
-    // extends past midnight? Example history 2330-0010 (1410-1450)
-    // overlaps member 0000-0010 (0-10)? In unwrapped space, 0-10 vs
-    // 1410-1450 does not overlap, but wall-clock they do (0000-0010 is
-    // 1440-1450). To catch that, also test member shifted by +1440 when
-    // history extends past midnight.
+    // Half-open: touching endpoints never conflict.
     if a_start.max(b_start) < a_end.min(b_end) {
         return true;
     }
@@ -306,20 +300,127 @@ fn display_name(name: Option<&str>) -> String {
         .to_string()
 }
 
+/// One closed row the whole stack trims: the span rewrite staged before
+/// any member records. `line` is the 1-based pre-stack headline; `before`
+/// and `after` are wall-clock `HHMM-HHMM` ranges; `taken` is the old span
+/// minus the new one; `remaining` is the new span length.
+#[derive(Debug, Clone)]
+pub(super) struct TrimPlan {
+    pub(super) line: usize,
+    pub(super) name: String,
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) taken: u64,
+    pub(super) remaining: u64,
+    pub(super) clock: String,
+    pub(super) calendar: bool,
+    pub(super) new_headline: String,
+    pub(super) first_member: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClosedFate {
+    Untouched,
+    Trimmable { new_start: i64, new_end: i64 },
+    Erased,
+    Split,
+}
+
+/// Rewrite `raw` with the repair `!` present (`want=true`) or absent.
+/// Uses the past splitter so `!`/`=` inside `#"…"` literals stay name
+/// content. Falls back to a simple first-`!` edit when splitting fails.
+fn with_repair(raw: &str, want: bool) -> String {
+    use crate::native::capture_language::past::split_past_token;
+    if let Some(split) = split_past_token(raw) {
+        if want && !split.repair {
+            if let Some(eq) = split.second_eq_offset {
+                let mut out = raw.to_string();
+                out.insert(eq, '!');
+                return out;
+            }
+            let mut out = raw.to_string();
+            out.push('!');
+            return out;
+        }
+        if !want
+            && split.repair
+            && let Some(offset) = split.repair_offset
+        {
+            let mut out = raw.to_string();
+            out.remove(offset);
+            return out;
+        }
+        return raw.to_string();
+    }
+    if want && !raw.contains('!') {
+        return format!("{raw}!");
+    }
+    if !want {
+        return raw.replacen('!', "", 1);
+    }
+    raw.to_string()
+}
+
+fn row_clock_and_calendar(row: &TimedRow) -> (String, bool) {
+    use crate::native::capture::pomodoro_adjust::session_clock;
+    use crate::native::capture::pomodoro_adjust::SessionClock;
+    use crate::native::pomodoro_themes::routing::is_meet_name;
+    let clock = match session_clock(&row.line_text) {
+        SessionClock::Worked { .. } => "t".to_string(),
+        SessionClock::OffClock { .. } => "off".to_string(),
+        SessionClock::Placeholder => "off".to_string(),
+    };
+    let calendar = is_meet_name(row.name.as_deref());
+    (clock, calendar)
+}
+
+/// Classify one closed row against the whole-stack union `[stack_start,
+/// stack_end)`. The union never wraps; a wrapping history row is tested
+/// against both the union and its +1440 copy. Returns the remaining
+/// interval(s) in the row's own coordinate frame.
+fn classify_closed_row(
+    row_start: i64,
+    row_end: i64,
+    stack_start: i64,
+    stack_end: i64,
+) -> ClosedFate {
+    for shift in [0, 1440] {
+        let us = stack_start + shift;
+        let ue = stack_end + shift;
+        if us.max(row_start) >= ue.min(row_end) {
+            continue;
+        }
+        let left = us > row_start;
+        let right = ue < row_end;
+        match (left, right) {
+            (false, false) => return ClosedFate::Erased,
+            (true, true) => return ClosedFate::Split,
+            (true, false) => {
+                return ClosedFate::Trimmable {
+                    new_start: row_start,
+                    new_end: us,
+                };
+            }
+            (false, true) => {
+                return ClosedFate::Trimmable {
+                    new_start: ue,
+                    new_end: row_end,
+                };
+            }
+        }
+    }
+    ClosedFate::Untouched
+}
+
+/// Whole-stack overlap guard with per-token `!` repair. Checks every member
+/// against history as it stood before the stack, all members at once, and
+/// returns the edge trims to stage before any member records. One refusal
+/// lists every offending member so a single retry fixes the whole draft.
 pub(super) fn preflight_overlaps(
     preflight: &PastPreflight,
     pre_stack_contents: &str,
     specs: &[PomodoroPastSpec],
-) -> Result<(), CaptureError> {
-    // Every repair member refuses in this phase.
-    for spec in specs {
-        if spec.repair {
-            return Err(CaptureError::usage(format!(
-                "{}: repair (!) is not available yet",
-                spec.raw,
-            )));
-        }
-    }
+) -> Result<Vec<TrimPlan>, CaptureError> {
     // Require Pomodoros section.
     let scan = capture_pomodoros::scan(pre_stack_contents);
     if !scan.has_section {
@@ -328,42 +429,231 @@ pub(super) fn preflight_overlaps(
         ));
     }
     let rows = collect_timed_rows(pre_stack_contents);
-    let mut offending: Vec<String> = Vec::new();
-    // Truncated now for open-row teaching.
     let now_min = preflight.now_truncated.hour() as i64 * 60
         + preflight.now_truncated.minute() as i64;
-    for member in &preflight.members {
-        let a_start = member.start_min;
-        // Member end may be 1440; keep unwrapped for overlap math.
+    let stack_start =
+        preflight.members.first().map(|m| m.start_min).unwrap_or(0);
+    let mut stack_end = preflight
+        .members
+        .last()
+        .map(|m| {
+            if m.end_min == 0 && m.start_min != 0 {
+                1440
+            } else {
+                m.end_min
+            }
+        })
+        .unwrap_or(0);
+    if stack_end == 0 && stack_start != 0 {
+        stack_end = 1440;
+    }
+    // Closed-row fates from the union of all stack windows.
+    let mut fates: Vec<(usize, ClosedFate)> = Vec::new();
+    for (idx, row) in rows.iter().enumerate() {
+        if row.is_open {
+            continue;
+        }
+        let fate =
+            classify_closed_row(row.start, row.end, stack_start, stack_end);
+        fates.push((idx, fate));
+    }
+    // Per-member overlaps for the `!` rule.
+    let mut member_open: Vec<Vec<usize>> = vec![Vec::new(); specs.len()];
+    let mut member_closed: Vec<Vec<usize>> = vec![Vec::new(); specs.len()];
+    for (mi, member) in preflight.members.iter().enumerate() {
         let mut a_end = member.end_min;
-        if a_end == 0 && a_start != 0 {
+        if a_end == 0 && member.start_min != 0 {
             a_end = 1440;
         }
-        for row in &rows {
-            if !overlaps(a_start, a_end, row.start, row.end) {
+        for (ri, row) in rows.iter().enumerate() {
+            if !overlaps(member.start_min, a_end, row.start, row.end) {
                 continue;
             }
-            let name = display_name(row.name.as_deref());
             if row.is_open {
-                // Open timed overlap: teach closing first.
-                let started = row.start <= now_min;
-                let bang = if started { "!" } else { "" };
-                offending.push(format!(
-                    "{} overlaps {name} {} which is still open (line {}); close it first: x {}{}",
-                    member.spec.raw, row.range, row.line, member.spec.raw, bang,
-                ));
+                member_open[mi].push(ri);
             } else {
+                member_closed[mi].push(ri);
+            }
+        }
+    }
+    let mut offending: Vec<String> = Vec::new();
+    for (mi, spec) in specs.iter().enumerate() {
+        // Open overlaps always refuse.
+        for &ri in &member_open[mi] {
+            let row = &rows[ri];
+            let name = display_name(row.name.as_deref());
+            let started = row.start <= now_min;
+            let suggestion = with_repair(&spec.raw, started);
+            offending.push(format!(
+                "{} overlaps {name} {} which is still open (line {}); close it first: x {suggestion}",
+                spec.raw, row.range, row.line,
+            ));
+        }
+        // Closed overlaps: erase/split always refuse; trimmable needs `!`.
+        for &ri in &member_closed[mi] {
+            let row = &rows[ri];
+            let name = display_name(row.name.as_deref());
+            let fate = fates
+                .iter()
+                .find(|(idx, _)| *idx == ri)
+                .map(|(_, fate)| *fate)
+                .unwrap_or(ClosedFate::Untouched);
+            match fate {
+                ClosedFate::Erased => {
+                    offending.push(format!(
+                        "{} would take all of {name} {} (line {}); ! only trims a session's edge",
+                        spec.raw, row.range, row.line,
+                    ));
+                }
+                ClosedFate::Split => {
+                    offending.push(format!(
+                        "{} would split {name} {} (line {}) in two; ! only trims a session's edge",
+                        spec.raw, row.range, row.line,
+                    ));
+                }
+                ClosedFate::Trimmable { new_start, new_end } => {
+                    if !spec.repair {
+                        let taken = ((row.end - row.start)
+                            - (new_end - new_start))
+                            .max(0) as u64;
+                        let after = format!(
+                            "{:02}{:02}-{:02}{:02}",
+                            (new_start.rem_euclid(1440)) / 60,
+                            (new_start.rem_euclid(1440)) % 60,
+                            (new_end.rem_euclid(1440)) / 60,
+                            (new_end.rem_euclid(1440)) % 60,
+                        );
+                        let rewrite = with_repair(&spec.raw, true);
+                        offending.push(format!(
+                            "{} would take {taken}m from {name} {} (line {}); add ! to take it: {rewrite} ({name} becomes {after})",
+                            spec.raw, row.range, row.line,
+                        ));
+                    }
+                }
+                ClosedFate::Untouched => {}
+            }
+        }
+        // Unneeded `!`: repair present but no closed overlap and no started
+        // open overlap that would still need it.
+        if spec.repair && member_closed[mi].is_empty() {
+            let any_started_open =
+                member_open[mi].iter().any(|&ri| rows[ri].start <= now_min);
+            if !any_started_open {
+                let rewrite = with_repair(&spec.raw, false);
                 offending.push(format!(
-                    "{} would overlap {name} {} (line {})",
-                    member.spec.raw, row.range, row.line,
+                    "{} takes no time from another session; drop the !: {rewrite}",
+                    spec.raw,
                 ));
             }
         }
     }
     if !offending.is_empty() {
-        // One refusal lists every offending member/row.
         return Err(CaptureError::usage(offending.join("\n")));
     }
+    // Build trim plans for trimmable rows.
+    let mut trims: Vec<TrimPlan> = Vec::new();
+    for (ri, fate) in fates {
+        let ClosedFate::Trimmable { new_start, new_end } = fate else {
+            continue;
+        };
+        let row = &rows[ri];
+        // First overlapping member in typed order owns the trim report.
+        let mut overlapping: Vec<usize> = Vec::new();
+        for (mi, member) in preflight.members.iter().enumerate() {
+            let mut a_end = member.end_min;
+            if a_end == 0 && member.start_min != 0 {
+                a_end = 1440;
+            }
+            if overlaps(member.start_min, a_end, row.start, row.end) {
+                overlapping.push(mi);
+            }
+        }
+        if overlapping.is_empty() {
+            continue;
+        }
+        let taken =
+            ((row.end - row.start) - (new_end - new_start)).max(0) as u64;
+        let remaining = (new_end - new_start).max(0) as u64;
+        let after = format!(
+            "{:02}{:02}-{:02}{:02}",
+            (new_start.rem_euclid(1440)) / 60,
+            (new_start.rem_euclid(1440)) % 60,
+            (new_end.rem_euclid(1440)) / 60,
+            (new_end.rem_euclid(1440)) % 60,
+        );
+        let (clock, calendar) = row_clock_and_calendar(row);
+        // Span rewrite only: keep clock key, name, checkbox, block ID,
+        // children, and links. Close effects are never re-run.
+        use crate::native::capture::pomodoro_adjust::{
+            format_adjusted_range, parse_adjustment_range,
+        };
+        let new_headline = match parse_adjustment_range(&row.line_text) {
+            Some(range) => {
+                let new_start_mod = new_start.rem_euclid(1440) as u64;
+                let new_end_mod = new_end.rem_euclid(1440) as u16;
+                let new_range_text = format_adjusted_range(
+                    new_start_mod,
+                    new_end_mod,
+                    remaining,
+                    &range.metadata,
+                );
+                let mut out = row.line_text.clone();
+                out.replace_range(
+                    range.start_ch..range.end_ch,
+                    &new_range_text,
+                );
+                out
+            }
+            None => continue,
+        };
+        let first_member = *overlapping.iter().min().unwrap_or(&0);
+        trims.push(TrimPlan {
+            line: row.line,
+            name: display_name(row.name.as_deref()),
+            before: row.range.clone(),
+            after,
+            taken,
+            remaining,
+            clock,
+            calendar,
+            new_headline,
+            first_member,
+        });
+    }
+    Ok(trims)
+}
+
+/// Stage whole-stack trims on the planner before any member records.
+/// Rewrites only the headline spans; the line count never changes, so the
+/// whole batch rolls back on any later failure.
+pub(super) fn stage_trim_plans(
+    planner: &mut super::batch::CaptureBatchPlanner,
+    day_file: &std::path::Path,
+    trims: &[TrimPlan],
+) -> Result<(), CaptureError> {
+    if trims.is_empty() {
+        return Ok(());
+    }
+    let staged = planner.read_existing(day_file)?;
+    let mut lines: Vec<String> =
+        staged.lines().map(|s| s.to_string()).collect();
+    let had_final = staged.ends_with('\n');
+    for trim in trims {
+        let idx = trim.line.saturating_sub(1);
+        if idx < lines.len() {
+            lines[idx] = trim.new_headline.clone();
+        }
+    }
+    let ending = if staged.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut rebuilt = lines.join(ending);
+    if had_final {
+        rebuilt.push_str(ending);
+    }
+    planner.stage(day_file, rebuilt)?;
     Ok(())
 }
 
@@ -627,6 +917,7 @@ pub(super) fn record_one_member(
     today: NaiveDate,
     day_file: &Path,
     rel: &str,
+    trims: Vec<super::output::PomodoroPastTrimJson>,
 ) -> Result<super::plan::PlannedCaptureItem, CaptureError> {
     let (mut target_index, resolved_name, source, suggestion_warning) = target;
     if let Some(warning) = suggestion_warning {
@@ -891,7 +1182,7 @@ pub(super) fn record_one_member(
         },
         closed_at: member.closed_at.clone(),
         line: summary.pomodoro_line,
-        trims: Vec::new(),
+        trims,
         close: Box::new(summary),
     };
     let task_line = filed_text
