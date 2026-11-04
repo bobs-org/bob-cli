@@ -6174,6 +6174,17 @@ existing draft-level `pull_in`: offer T once at the earliest lost
 source-link slot, and `-p` picks link, raise to Next, and stamp fresh through
 existing pick semantics.
 
+When a `--dry-run -f json` fails because a transfer destination is unfinished,
+the ordinary failure envelope also includes `transfer_pending`. Its 1-based
+`item` identifies the failing transfer in a multi-item draft; `need` is
+`transfer_destination`, `block_id`, `drawer`, or `section`; and `sources` lists
+each typed source with its resolved `path`, `line`, `title`, and task status.
+A source that cannot resolve has an `error: {code, message}` instead. `forms`
+lists the note, task, drawer, and section destination spellings, with `active`
+marking the form currently being completed. The payload is read-only and only
+appears on dry-run JSON failures; human output and live failures keep their
+existing shape.
+
 Human output prints `↪ Moved N tasks into <note> › Tasks` for moves and
 `⤵ merged N tasks into “<target>”` for merges (with `Would move` / `would
 merge` under `--dry-run`), plus per-task lines, dependent repoints,

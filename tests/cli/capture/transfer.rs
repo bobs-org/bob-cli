@@ -167,6 +167,140 @@ fn capture_refuses_unresolved_transfer_task_picker_without_writing() {
 }
 
 #[test]
+fn dry_run_pending_transfer_describes_needs_and_resolves_sources() {
+    let (_temp, vault, day_file) =
+        setup_move_vault("bob-cli-transfer-pending-needs");
+    for (draft, code, need, active) in [
+        (
+            "@inbox+bench > ",
+            "incomplete_transfer",
+            "transfer_destination",
+            None,
+        ),
+        (
+            "@inbox+bench > @",
+            "incomplete_transfer",
+            "transfer_destination",
+            None,
+        ),
+        (
+            "@inbox+bench > @db+",
+            "incomplete_transfer_block_id",
+            "block_id",
+            Some("@note+task"),
+        ),
+        (
+            "@inbox+bench > +",
+            "incomplete_transfer_task",
+            "block_id",
+            Some("@note+task"),
+        ),
+        (
+            "@inbox+bench > @db+pgdump#",
+            "incomplete_transfer_drawer",
+            "drawer",
+            Some("@note+task#drawer"),
+        ),
+        (
+            "@inbox+bench > @db#",
+            "incomplete_transfer_section",
+            "section",
+            Some("@note#section"),
+        ),
+    ] {
+        let output = capture_json(&vault, &day_file, draft, true);
+        assert!(!output.status.success(), "{draft}: {output:?}");
+        let json = json_body(&output);
+        assert_eq!(json["code"], code, "{draft}: {json}");
+        assert_eq!(json["transfer_pending"]["item"], 1, "{draft}: {json}");
+        assert_eq!(json["transfer_pending"]["need"], need, "{draft}: {json}");
+        assert_eq!(
+            json["transfer_pending"]["sources"][0]["marker"],
+            "@inbox+bench"
+        );
+        assert_eq!(json["transfer_pending"]["sources"][0]["block_id"], "bench");
+        assert_eq!(json["transfer_pending"]["sources"][0]["path"], "inbox.md");
+        assert_eq!(json["transfer_pending"]["sources"][0]["line"], 5);
+        assert_eq!(
+            json["transfer_pending"]["sources"][0]["title"],
+            "Benchmark logical replication"
+        );
+        assert_eq!(
+            json["transfer_pending"]["sources"][0]["status_symbol"],
+            " "
+        );
+        assert_eq!(
+            json["transfer_pending"]["sources"][0]["status_name"],
+            "Ready"
+        );
+        let forms = json["transfer_pending"]["forms"].as_array().unwrap();
+        assert_eq!(forms.len(), 4);
+        assert_eq!(
+            forms.iter().filter(|form| form["active"] == true).count(),
+            usize::from(active.is_some()),
+            "{draft}: {forms:?}"
+        );
+        if let Some(active) = active {
+            assert!(
+                forms.iter().any(
+                    |form| form["form"] == active && form["active"] == true
+                ),
+                "{draft}: {forms:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn pending_transfer_reports_source_errors_item_number_and_only_on_dry_run_json()
+{
+    let (_temp, vault, day_file) =
+        setup_move_vault("bob-cli-transfer-pending-sources");
+    for (draft, expected_code) in [
+        ("@inbox+typo > ", "missing_task"),
+        ("@missing+bench > ", "move_missing_note"),
+    ] {
+        let output = capture_json(&vault, &day_file, draft, true);
+        let json = json_body(&output);
+        assert_eq!(
+            json["transfer_pending"]["sources"][0]["error"]["code"],
+            expected_code,
+            "{json}"
+        );
+        assert!(json["transfer_pending"]["sources"][0]["error"]["message"]
+            .is_string());
+    }
+
+    let two_sources = capture_json(
+        &vault,
+        &day_file,
+        "@inbox+bench @work+pgdump > @db+",
+        true,
+    );
+    let sources = json_body(&two_sources)["transfer_pending"]["sources"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[1]["title"], "Dump production");
+
+    let multi =
+        capture_json(&vault, &day_file, "First task\n\n@inbox+bench > ", true);
+    assert_eq!(json_body(&multi)["transfer_pending"]["item"], 2);
+
+    let real = capture_json(&vault, &day_file, "@inbox+bench > ", false);
+    let real_json = json_body(&real);
+    assert_eq!(real_json["code"], "incomplete_transfer");
+    assert!(real_json.get("transfer_pending").is_none());
+
+    let human = capture_human(&vault, &day_file, "@inbox+bench > ");
+    assert!(!human.status.success());
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("transfer needs a destination"), "{stderr}");
+    assert!(!stderr.contains("transfer_pending"), "{stderr}");
+}
+
+#[test]
 fn shell_guard_refuses_at_redirect_before_mutation() {
     let temp = TempDir::new("bob-cli-transfer-shell-guard");
     let vault = temp.path().join("vault");

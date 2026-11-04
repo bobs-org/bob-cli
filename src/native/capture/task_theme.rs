@@ -1009,7 +1009,12 @@ impl CaptureTaskThemeContext {
         let running =
             capture_pomodoro_close::find_running_pomodoro(day_contents).ok()?;
         self.close_types_for_entry(
-            planner, vault, day_file, day_contents, &running, warnings,
+            planner,
+            vault,
+            day_file,
+            day_contents,
+            &running,
+            warnings,
         )
     }
 

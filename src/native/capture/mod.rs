@@ -107,6 +107,7 @@ mod task_toggle;
 #[cfg(test)]
 mod tests;
 mod transfer;
+mod transfer_pending;
 
 use batch::*;
 use block_diff::*;
@@ -219,12 +220,18 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Err(error) => return print_capture_error(error, output_format),
     };
 
+    let pending_request = request.clone();
     match capture(request) {
         Ok(result) => {
             print_success(&result, output_format);
             0
         }
-        Err(error) => print_capture_error(error, output_format),
+        Err(mut error) => {
+            if output_format == OutputFormat::Json {
+                transfer_pending::attach(&mut error, &pending_request);
+            }
+            print_capture_error(error, output_format)
+        }
     }
 }
 

@@ -340,7 +340,7 @@ pub(super) fn plan_transfer_item(
 /// index. This adapts route resolution instead of assuming routes
 /// equal filesystem paths: basename stems match case-insensitively
 /// across subdirectories, mirroring `plan_task_move`.
-fn resolve_transfer_note(
+pub(super) fn resolve_transfer_note(
     snapshot: &VaultSnapshot,
     query: &str,
 ) -> Result<PathBuf, PlanError> {
