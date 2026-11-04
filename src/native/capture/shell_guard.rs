@@ -121,7 +121,6 @@ fn fd_is_regular_file() -> bool {
     }
     #[cfg(target_os = "macos")]
     {
-        use std::os::unix::io::AsRawFd;
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
         let ret = unsafe { libc::fstat(1, &mut stat) };
         if ret != 0 {
@@ -131,7 +130,7 @@ fn fd_is_regular_file() -> bool {
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        return false;
+        false
     }
 }
 
