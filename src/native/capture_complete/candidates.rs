@@ -1805,7 +1805,7 @@ struct TaskLinks {
 /// Relation label rows for one `relation_label` probe. `one_off` is true
 /// when the probe sits in a `||` label: `replacement` then keeps the
 /// `||` spelling while `hide_replacement` is always the `||` form.
-/// Configured closing labels mark their rows with their effect flag, and
+/// Configured effect labels mark their rows with their effect flag, and
 /// zero-use configured labels appear as a trailing `configured` overlay
 /// that respects hiding.
 pub(super) fn relation_label_suggestions(
@@ -1852,6 +1852,7 @@ pub(super) fn relation_label_suggestions(
             hidden: None,
             cancels_source: policy.is_cancel_label(&record.key),
             completes_source: policy.is_complete_label(&record.key),
+            merges_source: policy.is_merge_label(&record.key),
             configured: false,
             offers_source: policy.is_successor_label(&record.key),
         })
@@ -1864,6 +1865,13 @@ pub(super) fn relation_label_suggestions(
         policy,
     );
     append_complete_overlay(
+        &mut suggestions,
+        &catalog,
+        &normalized_query,
+        one_off,
+        policy,
+    );
+    append_merge_overlay(
         &mut suggestions,
         &catalog,
         &normalized_query,
@@ -1942,6 +1950,7 @@ pub(super) fn relation_label_suggestions(
                 hidden: Some(hidden),
                 cancels_source: policy.is_cancel_label(&key),
                 completes_source: policy.is_complete_label(&key),
+                merges_source: policy.is_merge_label(&key),
                 configured: false,
                 offers_source: policy.is_successor_label(&key),
             },
@@ -2019,6 +2028,7 @@ fn append_cancel_overlay(
             hidden: None,
             cancels_source: true,
             completes_source: false,
+            merges_source: false,
             configured: true,
             offers_source: false,
         });
@@ -2085,6 +2095,73 @@ fn append_complete_overlay(
             hidden: None,
             cancels_source: false,
             completes_source: true,
+            merges_source: false,
+            configured: true,
+            offers_source: false,
+        });
+    }
+}
+
+/// Zero-use configured merge labels, in config order, ranked last.
+/// Hidden labels stay out; a typed query still matches through the typed row.
+fn append_merge_overlay(
+    suggestions: &mut Vec<RelationLabelSuggestion>,
+    catalog: &crate::native::relation_labels::Catalog,
+    normalized_query: &str,
+    one_off: bool,
+    policy: &config::RelationsConfig,
+) {
+    if policy.merge_labels.is_empty() {
+        return;
+    }
+    let query_key = crate::native::task_relations::label::collapse_label_text(
+        normalized_query,
+    )
+    .to_lowercase();
+    for merge in &policy.merge_labels {
+        if suggestions.iter().any(|item| item.key == merge.key)
+            || catalog.get(&merge.key).is_some()
+            || catalog.is_hidden(&merge.key)
+        {
+            continue;
+        }
+        if !query_key.is_empty()
+            && !crate::native::task_relations::label::collapse_label_text(
+                &merge.name,
+            )
+            .to_lowercase()
+            .contains(&query_key)
+        {
+            continue;
+        }
+        suggestions.push(RelationLabelSuggestion {
+            replacement: if one_off {
+                crate::native::task_relations::label::relation_label_hide_form(
+                    &merge.name,
+                )
+            } else {
+                crate::native::task_relations::label::relation_label_quoted_form(
+                    &merge.name,
+                )
+            },
+            hide_replacement:
+                crate::native::task_relations::label::relation_label_hide_form(
+                    &merge.name,
+                ),
+            label: merge.name.clone(),
+            key: merge.key.clone(),
+            inverse:
+                crate::native::task_relations::label::inverse_phrase(
+                    &merge.name,
+                ),
+            count: None,
+            typed: false,
+            disabled_reason: None,
+            existing: None,
+            hidden: None,
+            cancels_source: false,
+            completes_source: false,
+            merges_source: true,
             configured: true,
             offers_source: false,
         });
@@ -2150,6 +2227,7 @@ fn append_successor_overlay(
             hidden: None,
             cancels_source: false,
             completes_source: false,
+            merges_source: false,
             configured: true,
             offers_source: true,
         });

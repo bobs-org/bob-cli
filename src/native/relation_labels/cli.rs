@@ -217,6 +217,8 @@ struct ListLabel {
     #[serde(skip_serializing_if = "is_false")]
     completes_source: bool,
     #[serde(skip_serializing_if = "is_false")]
+    merges_source: bool,
+    #[serde(skip_serializing_if = "is_false")]
     offers_source: bool,
     #[serde(skip_serializing_if = "is_false")]
     configured: bool,
@@ -247,6 +249,8 @@ struct ListReport {
     complete_labels: usize,
     #[serde(skip_serializing_if = "is_zero")]
     successor_labels: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    merge_labels: usize,
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -278,6 +282,7 @@ fn load_close_policy() -> bob_config::RelationsConfig {
             linked_from_mentions: false,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
+            merge_labels: Vec::new(),
             successor_labels: Vec::new(),
             warnings: vec![format!(
                 "invalid relations config: {error}; no relation effects apply"
@@ -320,6 +325,7 @@ fn build_report(
                 hide_replacement: record.hide_replacement(),
                 cancels_source: cancels,
                 completes_source: policy.is_complete_label(&record.key),
+                merges_source: policy.is_merge_label(&record.key),
                 configured: false,
                 offers_source: policy.is_successor_label(&record.key),
             }
@@ -342,6 +348,7 @@ fn build_report(
         cancel_labels: policy.cancel_labels.len(),
         complete_labels: policy.complete_labels.len(),
         successor_labels: policy.successor_labels.len(),
+        merge_labels: policy.merge_labels.len(),
         labels,
         renamed_reappeared: super::rename::renamed_reappeared(
             &request.bob_dir,
@@ -364,6 +371,7 @@ fn append_configured_overlay(
     if policy.cancel_labels.is_empty()
         && policy.complete_labels.is_empty()
         && policy.successor_labels.is_empty()
+        && policy.merge_labels.is_empty()
     {
         return;
     }
@@ -419,6 +427,7 @@ fn append_configured_overlay(
             hide_replacement,
             cancels_source: true,
             completes_source: false,
+            merges_source: false,
             configured: true,
             offers_source: false,
         });
@@ -469,6 +478,57 @@ fn append_configured_overlay(
             hide_replacement,
             cancels_source: false,
             completes_source: true,
+            merges_source: false,
+            configured: true,
+            offers_source: false,
+        });
+    }
+    let selected_keys: std::collections::BTreeSet<String> =
+        labels.iter().map(|label| label.key.clone()).collect();
+    for merge in &policy.merge_labels {
+        if selected_keys.contains(&merge.key)
+            || catalog.get(&merge.key).is_some()
+        {
+            continue;
+        }
+        let hidden = catalog.is_hidden(&merge.key);
+        if request.hidden_only && !hidden {
+            continue;
+        }
+        if !request.all && hidden {
+            continue;
+        }
+        if !query_key.is_empty()
+            && !crate::native::task_relations::label::collapse_label_text(
+                &merge.name,
+            )
+            .to_lowercase()
+            .contains(&query_key)
+        {
+            continue;
+        }
+        let replacement =
+            crate::native::task_relations::label::relation_label_quoted_form(
+                &merge.name,
+            );
+        let hide_replacement =
+            crate::native::task_relations::label::relation_label_hide_form(
+                &merge.name,
+            );
+        labels.push(ListLabel {
+            key: merge.key.clone(),
+            name: merge.name.clone(),
+            count: 0,
+            hidden,
+            inverse: crate::native::task_relations::label::inverse_phrase(
+                &merge.name,
+            ),
+            spellings: Vec::new(),
+            replacement,
+            hide_replacement,
+            cancels_source: false,
+            completes_source: false,
+            merges_source: true,
             configured: true,
             offers_source: false,
         });
@@ -518,6 +578,7 @@ fn append_configured_overlay(
             hide_replacement,
             cancels_source: false,
             completes_source: false,
+            merges_source: false,
             configured: true,
             offers_source: true,
         });
@@ -573,6 +634,13 @@ fn print_human(report: &ListReport) {
             report.successor_labels,
         ));
     }
+    if report.merge_labels > 0 {
+        counts.push_str(&format!(
+            " {} {} merge",
+            styler.separator(),
+            report.merge_labels,
+        ));
+    }
     println!("{heading}  {counts}");
     if report.labels.is_empty() {
         println!("  (no relation labels)");
@@ -596,6 +664,9 @@ fn print_human(report: &ListReport) {
             }
             if label.completes_source {
                 meta.push_str("     ✓ completes source");
+            }
+            if label.merges_source {
+                meta.push_str("     ⤵ merges");
             }
             if label.offers_source {
                 meta.push_str("     🪢 offers source");

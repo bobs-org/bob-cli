@@ -202,13 +202,16 @@ or `|\"multi word\"` replacements. A `||label` probe keeps the `||` spelling \
 in `replacement`, gains `one_off: true`, and every row also carries \
 `hide_replacement` (always the `||` form). A typed invalid label stays first with a \
 `disabled_reason` and an empty replacement. \
-Configured cancel, complete, and successor labels mark rows with \
-`cancels_source`, `completes_source`, and `offers_source`; zero-use configured \
-labels are overlaid unless hidden. A configured successor label or its \
+Configured cancel, complete, merge, and successor labels mark rows with \
+`cancels_source`, `completes_source`, `merges_source`, and `offers_source`; \
+zero-use configured labels are overlaid unless hidden. A configured merge \
+label disables its row when the source is new or recurring. A configured successor label or its \
 inverse spelling adds `relation_successor` with the offer verdict, an already- \
 released caveat, or a `starts before` hint. \
 When configured, the response includes `relation_cancel` and/or \
-`relation_complete` with the source task, verdict, and consequence message. \
+`relation_complete` with the source task, verdict, and consequence message, \
+and `relation_merge` with the source task, merge verdict, and consequence \
+message. \
 A solo leading '^' token completes active tasks instead: the \
 `route:block-id` part offers In Progress and Next tasks with block IDs, \
 ordered by today's open-Pomodoro Task Links (queued first, then In \

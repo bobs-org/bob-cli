@@ -744,6 +744,10 @@ pub(super) struct CaptureItemResult {
         serialize_with = "serialize_relation_completes"
     )]
     pub(super) relation_completes: Vec<RelationCompleteJson>,
+    /// Relation-label merges and their hidden pull-in rows. The public
+    /// `merges` key is flattened to preserve the capture item contract.
+    #[serde(flatten)]
+    pub(super) relation_merge_output: RelationMergeOutput,
     /// Per-item `||` one-off hides (`docs/task-relations.md` RV6): one
     /// entry per distinct hidden label key this item typed, in typed
     /// order. Present on dry runs too; the journal append happens only
@@ -782,6 +786,14 @@ pub(super) struct CaptureItemResult {
     /// (`docs/task-dependencies.md` §12.20). Additive: omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) note_pull: Option<NotePullSummaryJson>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(super) struct RelationMergeOutput {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) merges: Vec<crate::native::task_merge::MergeRecord>,
+    #[serde(skip)]
+    pub(super) offer_rows: Vec<TaskCompleteUnblockedJson>,
 }
 
 /// Note-pull payload on a lone `@route` item
@@ -1418,6 +1430,9 @@ pub(super) struct RelationUpdateJson {
     /// unchanged edges and labels that complete nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) complete_effect: Option<RelationCompleteEffect>,
+    /// Merge-label outcome for an Added/Relabeled edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) merge_effect: Option<RelationMergeEffect>,
     /// Successor-label consequence at authoring time. Omitted when the
     /// label is not configured or the target state could not be resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1451,6 +1466,13 @@ pub(super) enum RelationCancelEffect {
 #[serde(rename_all = "snake_case")]
 pub(super) enum RelationCompleteEffect {
     Completed,
+    AlreadyClosed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RelationMergeEffect {
+    Merged,
     AlreadyClosed,
 }
 
@@ -2675,6 +2697,7 @@ pub(super) fn all_offer_rows(
         .chain(all_relation_successors(item))
         .chain(all_keep_moving(item))
         .chain(all_note_pull(item))
+        .chain(item.relation_merge_output.offer_rows.iter())
 }
 
 /// Every note-pull row an item reports (`docs/task-dependencies.md`
@@ -6767,6 +6790,7 @@ mod tests {
             relation_updates: Vec::new(),
             relation_cancels: Vec::new(),
             relation_completes: Vec::new(),
+            relation_merge_output: Default::default(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
@@ -6989,6 +7013,7 @@ mod tests {
             action: RelationAction::Added,
             cancel_effect: None,
             complete_effect: None,
+            merge_effect: None,
             offer_effect: None,
         };
         let value = to_value(&update).expect("serialize");

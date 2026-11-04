@@ -281,6 +281,7 @@ fn load_close_policy() -> bob_config::RelationsConfig {
             linked_from_mentions: false,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
+            merge_labels: Vec::new(),
             successor_labels: Vec::new(),
             warnings: vec![format!(
                 "invalid relations config: {error}; closing nothing"
@@ -1560,6 +1561,16 @@ fn plan_reverse(
             "“{new_name}” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels"
         ));
     }
+    if close_policy.is_merge_label(&old_key) {
+        warnings.push(format!(
+            "“{old_display}” is a merge label in config.yml — update relations.merge_labels"
+        ));
+    }
+    if new_key != old_key && close_policy.is_merge_label(&new_key) {
+        warnings.push(format!(
+            "“{new_name}” is a merge label in config.yml — update relations.merge_labels"
+        ));
+    }
     // Same-key closing-label warning when the key itself closes: the
     // two branches above skip the NEW side for old==new, so add it here.
     if old_key == new_key
@@ -1583,7 +1594,8 @@ fn plan_reverse(
     }
 
     let is_closing_new = close_policy.is_cancel_label(&new_key)
-        || close_policy.is_complete_label(&new_key);
+        || close_policy.is_complete_label(&new_key)
+        || close_policy.is_merge_label(&new_key);
     let mut stay_open: Vec<MoveEndpoint> = Vec::new();
     if is_closing_new {
         // New sources are the original targets. List the open ones that

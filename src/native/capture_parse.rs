@@ -65,6 +65,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             themes: span.themes,
             cancels_source: span.cancels_source,
             completes_source: span.completes_source,
+            merges_source: span.merges_source,
             offers_source: span.offers_source,
             project_note: span.project_note,
             title: span.title.clone(),
@@ -435,8 +436,9 @@ executes recognized `~` / `~~` modifiers through the staged batch writer: it \
 appends or relabels the source task's managed 🪢 LINKS line, mints any block \
 IDs the edge needs, and stages the target's generated 🪢 LINKED FROM mirror; \
 configured cancel and complete relation labels mark their `relation_label` \
-spans with `cancels_source` and `completes_source`; configured successor \
-labels mark them with `offers_source`. Relations never block, \
+spans with `cancels_source` and `completes_source`; configured merge labels \
+mark them with `merges_source`, and configured successor labels mark them \
+with `offers_source`. Relations never block, \
 consume, promote, or schedule anything. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A `%n` directive reports mode \
@@ -857,6 +859,10 @@ pub(crate) struct CaptureParseSpan {
     /// its source task (`relations.complete_labels`). Omitted otherwise.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) completes_source: bool,
+    /// True when a `relation_label` span's label is configured to merge
+    /// its source into the target task.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) merges_source: bool,
     /// True when a `relation_label` span's label is a configured successor
     /// label (`relations.successor_labels`). Omitted otherwise.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1073,6 +1079,7 @@ impl CaptureParseResult {
         let close_policy = load_close_policy();
         stamp_cancel_spans(&mut spans, &input, &close_policy);
         stamp_complete_spans(&mut spans, &input, &close_policy);
+        stamp_merge_spans(&mut spans, &input, &close_policy);
         stamp_successor_spans(&mut spans, &input, &close_policy);
         let items = parse_items(&parse.items);
         let ref_parent = ref_parent_for(
@@ -1390,6 +1397,7 @@ impl CaptureParseResult {
         let close_policy = load_close_policy();
         stamp_cancel_spans(&mut spans, &masked, &close_policy);
         stamp_complete_spans(&mut spans, &masked, &close_policy);
+        stamp_merge_spans(&mut spans, &masked, &close_policy);
         stamp_successor_spans(&mut spans, &masked, &close_policy);
 
         // A header in the template body is refused in execution
@@ -1652,6 +1660,7 @@ fn load_close_policy() -> crate::native::config::RelationsConfig {
             linked_from_mentions: false,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
+            merge_labels: Vec::new(),
             successor_labels: Vec::new(),
             warnings: vec![format!(
                 "invalid relations config: {error}; closing nothing"
@@ -1682,6 +1691,32 @@ fn stamp_complete_spans(
             &crate::native::relation_labels::relation_label_key(text),
         ) {
             span.completes_source = true;
+        }
+    }
+}
+
+/// Mark `relation_label` spans whose label is configured to merge the
+/// source into its target task. Omitted (false) everywhere else.
+fn stamp_merge_spans(
+    spans: &mut [CaptureParseSpan],
+    input: &str,
+    policy: &crate::native::config::RelationsConfig,
+) {
+    if policy.merge_labels.is_empty() {
+        return;
+    }
+    for span in spans.iter_mut() {
+        if span.kind != crate::native::capture_language::SpanKind::RelationLabel
+        {
+            continue;
+        }
+        let Some(text) = input.get(span.start..span.end) else {
+            continue;
+        };
+        if policy.is_merge_label(
+            &crate::native::relation_labels::relation_label_key(text),
+        ) {
+            span.merges_source = true;
         }
     }
 }
@@ -1785,6 +1820,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            merges_source: false,
             offers_source: false,
             project_note: span.project_note,
             title: span.title.clone(),
@@ -1824,6 +1860,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                     themes: Vec::new(),
                     cancels_source: false,
                     completes_source: false,
+                    merges_source: false,
                     offers_source: false,
                     project_note: candidate.project_note,
                     title: candidate.title.clone(),
@@ -1846,6 +1883,7 @@ fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
                 themes: Vec::new(),
                 cancels_source: false,
                 completes_source: false,
+                merges_source: false,
                 offers_source: false,
                 project_note: candidate.project_note,
                 title: candidate.title.clone(),
@@ -1946,6 +1984,7 @@ fn template_spans(
                     themes: Vec::new(),
                     cancels_source: false,
                     completes_source: false,
+                    merges_source: false,
                     offers_source: false,
                     project_note: span.project_note,
                     title: span.title.clone(),
@@ -1965,6 +2004,7 @@ fn template_spans(
                 themes: Vec::new(),
                 cancels_source: false,
                 completes_source: false,
+                merges_source: false,
                 offers_source: false,
                 project_note: span.project_note,
                 title: span.title.clone(),
@@ -1984,6 +2024,7 @@ fn template_spans(
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            merges_source: false,
             offers_source: false,
             project_note: None,
             title: None,
@@ -2001,6 +2042,7 @@ fn template_spans(
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            merges_source: false,
             offers_source: false,
             project_note: None,
             title: None,
@@ -2018,6 +2060,7 @@ fn template_spans(
             themes: Vec::new(),
             cancels_source: false,
             completes_source: false,
+            merges_source: false,
             offers_source: false,
             project_note: None,
             title: None,

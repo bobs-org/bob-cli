@@ -186,6 +186,20 @@ fn number_draft_offers(
                 }
             }
         }
+        for row in &mut item.result.relation_merge_output.offer_rows {
+            if let Some(offer) = row.offer.as_mut()
+                && let Some(&n) = n_map.get(&offer.key)
+            {
+                offer.n = n;
+            }
+        }
+        for merge in &mut item.result.relation_merge_output.merges {
+            for offer in &mut merge.offers {
+                if let Some(&n) = n_map.get(&offer.key) {
+                    offer.n = n;
+                }
+            }
+        }
     }
 }
 
@@ -196,6 +210,12 @@ fn completion_summary_count(
     if result.task_complete.is_some() {
         count += 1;
     }
+    count += result
+        .relation_merge_output
+        .merges
+        .iter()
+        .filter(|merge| !merge.offers.is_empty())
+        .count();
     count += result
         .relation_completes
         .iter()

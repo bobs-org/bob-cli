@@ -66,6 +66,7 @@ pub(super) struct DependencyContext {
         Vec<config::relations::CancelLabel>,
         Vec<config::relations::CompleteLabel>,
         Vec<config::relations::CancelLabel>,
+        Vec<config::relations::CancelLabel>,
         Option<String>,
     )>,
     close_policy_consulted: AtomicBool,
@@ -306,6 +307,7 @@ impl DependencyContext {
         Vec<config::relations::CancelLabel>,
         Vec<config::relations::CompleteLabel>,
         Vec<config::relations::CancelLabel>,
+        Vec<config::relations::CancelLabel>,
         Option<String>,
     ) {
         self.close_policy.get_or_init(load_close_policy)
@@ -338,6 +340,13 @@ impl DependencyContext {
         self.close_policy().2.as_slice()
     }
 
+    /// Effective merge labels (`docs/task-relations.md` §21) from the
+    /// shared config parse. Overlapping or invalid entries are removed.
+    pub(super) fn merge_labels(&self) -> &[config::relations::CancelLabel] {
+        self.close_policy_consulted.store(true, Ordering::Relaxed);
+        self.close_policy().3.as_slice()
+    }
+
     /// The invalid-config warning for the close policy (cancel labels,
     /// complete labels, and both-lists overlap), when the batch planned
     /// relations and the value was invalid.
@@ -347,7 +356,7 @@ impl DependencyContext {
         }
         self.close_policy
             .get()
-            .and_then(|(_, _, _, warning)| warning.clone())
+            .and_then(|(_, _, _, _, warning)| warning.clone())
     }
 
     /// The close-effect already recorded for this source in the current
@@ -411,9 +420,13 @@ impl DependencyContext {
         &self,
         labels: Vec<config::relations::CancelLabel>,
     ) {
-        let _ = self
-            .close_policy
-            .set((Vec::new(), Vec::new(), labels, None));
+        let _ = self.close_policy.set((
+            Vec::new(),
+            Vec::new(),
+            labels,
+            Vec::new(),
+            None,
+        ));
     }
 
     #[cfg(test)]
@@ -425,6 +438,7 @@ impl DependencyContext {
                 key: "starts-after".to_string(),
                 name: "starts after".to_string(),
             }],
+            Vec::new(),
             Some("invalid relations config".to_string()),
         ));
     }
@@ -3472,6 +3486,7 @@ pub(super) fn plan_dependency_only_item(
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
     let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
     let mut relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut relation_merge_output = RelationMergeOutput::default();
     let mut close_day_file: Option<String> = None;
     if !parsed.relations.is_empty() {
         let relation_owner = RelationOwner::from_dependent(
@@ -3506,6 +3521,10 @@ pub(super) fn plan_dependency_only_item(
         )?;
         relation_cancels = close.cancels;
         relation_completes = close.completes;
+        relation_merge_output = RelationMergeOutput {
+            merges: close.merges,
+            offer_rows: close.merge_offer_rows,
+        };
         pomodoro_refs.extend(close.pomodoro_refs);
         task_block_refs.extend(close.task_block_refs);
         close_day_file = close.day_file;
@@ -3609,6 +3628,7 @@ pub(super) fn plan_dependency_only_item(
             relation_updates,
             relation_cancels,
             relation_completes,
+            relation_merge_output,
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

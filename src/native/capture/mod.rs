@@ -91,6 +91,7 @@ mod relations_cancel;
 mod relations_close;
 mod relations_complete;
 mod relations_mentions;
+mod relations_merge;
 mod relations_mirror;
 mod sections;
 mod start_output;

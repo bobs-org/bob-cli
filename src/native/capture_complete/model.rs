@@ -270,6 +270,9 @@ pub(super) struct RelationLabelSuggestion {
     /// (`relations.complete_labels`). Omitted otherwise.
     #[serde(skip_serializing_if = "is_false")]
     pub(super) completes_source: bool,
+    /// True when this key is configured in `relations.merge_labels`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) merges_source: bool,
     /// True on zero-use overlay rows synthesized from config (never a
     /// vault use). Omitted when false.
     #[serde(skip_serializing_if = "is_false")]
@@ -305,6 +308,26 @@ pub(super) struct RelationComplete {
     pub(super) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) hint: Option<String>,
+}
+
+/// The merge consequence of the `relation_label` token under the cursor
+/// (`docs/task-relations.md` §21). It resolves only the source task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationMerge {
+    pub(super) source: RelationMergeSource,
+    /// `merged` | `already_closed` | `recurring` | `new_task`.
+    pub(super) verdict: &'static str,
+    pub(super) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationMergeSource {
+    pub(super) path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id: Option<String>,
+    pub(super) text: String,
 }
 
 /// The source task a complete label would complete.
@@ -891,6 +914,9 @@ pub(super) struct CaptureCompleteResult {
     /// Present only when complete labels are configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) relation_complete: Option<RelationComplete>,
+    /// The merge consequence of a configured merge-label token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation_merge: Option<RelationMerge>,
     /// Successor-label authoring consequence or inverse spelling hint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) relation_successor: Option<RelationSuccessor>,
@@ -937,6 +963,7 @@ impl CaptureCompleteResult {
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_merge: None,
             relation_successor: None,
             picker: None,
             project_task_move: None,

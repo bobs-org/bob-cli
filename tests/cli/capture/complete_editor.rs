@@ -1688,3 +1688,46 @@ fn capture_complete_relation_label_reports_cancel_cue() {
         "⊘ Cancels “Sell stocks!” · Todo → Cancelled"
     );
 }
+
+#[test]
+fn capture_complete_relation_label_reports_merge_cue() {
+    let temp = TempDir::new("bob-cli-capture-complete-merge-cue");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Sell stocks! ^sell\n");
+    write_file(
+        &vault.join("invest.md"),
+        "- [ ] #task Sell stocks now! ^now\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(&config, "relations:\n  merge_labels: [merged into]\n");
+    let draft = "Use this @cash+sell ~invest:now|mer";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run merge cue completion");
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["context"], "relation_label");
+    let row = json["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .find(|row| row["key"] == "merged into")
+        .expect("merge-label overlay row");
+    assert_eq!(row["merges_source"], true);
+    assert_eq!(row["configured"], true);
+    assert_eq!(json["relation_merge"]["verdict"], "merged");
+    assert_eq!(json["relation_merge"]["source"]["path"], "cash.md");
+}

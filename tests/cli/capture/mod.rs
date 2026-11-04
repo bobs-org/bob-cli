@@ -87,6 +87,7 @@ mod relation_successors;
 mod relations;
 mod relations_cancel;
 mod relations_complete;
+mod relations_merge;
 mod retype_closeout;
 mod rewrite;
 mod routing;

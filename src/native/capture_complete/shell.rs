@@ -593,6 +593,22 @@ pub(crate) fn shell_completion(
                     })
                     .is_some_and(|plan| plan.row_disable.is_some())
             };
+            let merge_refused = if policy.merge_labels.is_empty() {
+                false
+            } else {
+                capture_language::editor_item_at(raw_text, cursor)
+                    .and_then(|editor_item| {
+                        super::merge::plan_relation_merge(
+                            bob_dir,
+                            raw_text,
+                            field.replacement.0,
+                            Some(&editor_item),
+                            &field.query,
+                            &policy,
+                        )
+                    })
+                    .is_some_and(|plan| plan.row_disable.is_some())
+            };
             for item in items {
                 if item.disabled_reason.is_some() || item.replacement.is_empty()
                 {
@@ -602,6 +618,9 @@ pub(crate) fn shell_completion(
                     continue;
                 }
                 if complete_refused && item.completes_source {
+                    continue;
+                }
+                if merge_refused && item.merges_source {
                     continue;
                 }
                 let Some(target_prefix) =
@@ -617,6 +636,9 @@ pub(crate) fn shell_completion(
                 }
                 if item.completes_source {
                     description.push_str(" · completes source");
+                }
+                if item.merges_source {
+                    description.push_str(" · merges source");
                 }
                 if item.offers_source {
                     description.push_str(" · 🪢 offers");

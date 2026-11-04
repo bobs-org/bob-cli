@@ -149,6 +149,7 @@ fn build_result_inner(
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_merge: None,
             relation_successor: None,
             picker: None,
             hidden_count: None,
@@ -198,6 +199,7 @@ fn build_result_inner(
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_merge: None,
             relation_successor: None,
             picker: Some(PickerDescriptor {
                 kind: PickerKind::WikilinkTask,
@@ -267,6 +269,7 @@ fn build_result_inner(
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_merge: None,
             relation_successor: None,
             one_off: None,
             picker: Some(PickerDescriptor {
@@ -355,6 +358,7 @@ fn build_result_inner(
             relation: None,
             relation_cancel: None,
             relation_complete: None,
+            relation_merge: None,
             relation_successor: None,
             picker: None,
             hidden_count: None,
@@ -374,6 +378,7 @@ fn build_result_inner(
     let mut hidden_count = None;
     let mut relation_cancel = None;
     let mut relation_complete = None;
+    let mut relation_merge = None;
     let mut relation_successor = None;
     let mut subject = None;
     // A `||` probe is the `relation_label` context with `one_off`: the
@@ -648,6 +653,28 @@ fn build_result_inner(
                 }
                 relation_complete = Some(plan.response);
             }
+            if !policy.merge_labels.is_empty()
+                && let Some(plan) = super::merge::plan_relation_merge(
+                    bob_dir,
+                    raw_text,
+                    field.replacement.0,
+                    editor_item.as_ref(),
+                    &field.query,
+                    &policy,
+                )
+            {
+                if let Candidates::RelationLabel(rows) = &mut candidates
+                    && let Some(reason) = plan.row_disable.as_deref()
+                {
+                    for row in rows.iter_mut() {
+                        if row.merges_source {
+                            row.disabled_reason = Some(reason.to_string());
+                            row.replacement.clear();
+                        }
+                    }
+                }
+                relation_merge = Some(plan.response);
+            }
             if !policy.successor_labels.is_empty()
                 && let Some(plan) = super::successor::plan_relation_successor(
                     bob_dir,
@@ -831,6 +858,7 @@ fn build_result_inner(
         relation,
         relation_cancel,
         relation_complete,
+        relation_merge,
         relation_successor,
         picker,
         hidden_count,

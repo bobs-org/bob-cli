@@ -155,6 +155,7 @@ fn key_vectors_cover_effects_inverse_hints_and_legacy_close_views() {
             parsed.label_effect(&key).map(|effect| match effect {
                 LabelEffect::Cancel => "cancel",
                 LabelEffect::Complete => "complete",
+                LabelEffect::Merge => "merge",
                 LabelEffect::Successor => "successor",
             });
         assert_eq!(actual_effect, expected_effect, "{id} effect");

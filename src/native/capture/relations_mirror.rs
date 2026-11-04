@@ -45,7 +45,8 @@ impl MirrorSkipReason {
 }
 
 /// Load the shared relation-effect policy (`relations.cancel_labels`,
-/// `relations.complete_labels`, and `relations.successor_labels`),
+/// `relations.complete_labels`, `relations.successor_labels`, and
+/// `relations.merge_labels`),
 /// failing toward fewer effects and warning through the existing capture
 /// warning path on invalid values. A missing key, `null`, or `[]` is a
 /// valid empty policy; overlap and anything else invalid yields the valid
@@ -53,6 +54,7 @@ impl MirrorSkipReason {
 pub(super) fn load_close_policy() -> (
     Vec<config::relations::CancelLabel>,
     Vec<config::relations::CompleteLabel>,
+    Vec<config::relations::CancelLabel>,
     Vec<config::relations::CancelLabel>,
     Option<String>,
 ) {
@@ -65,22 +67,26 @@ pub(super) fn load_close_policy() -> (
                     warning.contains("relations.cancel_labels")
                         || warning.contains("relations.complete_labels")
                         || warning.contains("relations.successor_labels")
+                        || warning.contains("relations.merge_labels")
                         || warning.contains(
                             "is in both cancel_labels and complete_labels",
                         )
                         || warning.contains(
                             "is in more than one of cancel_labels, complete_labels, successor_labels",
                         )
+                        || warning.contains("merge_labels and another effect list")
                 })
                 .map(|warning| format!("invalid relations config: {warning}"));
             (
                 loaded.cancel_labels,
                 loaded.complete_labels,
                 loaded.successor_labels,
+                loaded.merge_labels,
                 warning,
             )
         }
         Err(error) => (
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

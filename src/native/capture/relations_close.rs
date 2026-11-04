@@ -3,9 +3,9 @@
 //! ordered grouping by resolved source identity, and source-action
 //! conflict analysis. Cancel and complete still run their own writers.
 
-use std::collections::HashSet;
 use std::path::Path;
 
+use super::relations_merge::plan_relation_merges;
 use super::*;
 use crate::native::{
     capture_active_tasks,
@@ -30,6 +30,8 @@ pub(super) struct ClosingEdge {
 pub(super) struct RelationCloseReports {
     pub(super) cancels: Vec<RelationCancelJson>,
     pub(super) completes: Vec<RelationCompleteJson>,
+    pub(super) merges: Vec<crate::native::task_merge::MergeRecord>,
+    pub(super) merge_offer_rows: Vec<TaskCompleteUnblockedJson>,
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) task_block_refs: Vec<TaskBlockRef>,
     pub(super) day_file: Option<String>,
@@ -214,9 +216,9 @@ pub(super) struct ItemRelationReports {
     pub(super) close: RelationCloseReports,
 }
 
-/// Stage the item's relation writes, then its cancel- and complete-label
+/// Stage the item's relation writes, then its cancel-, complete-, and merge-label
 /// commits against the same overlays. `writes.updates` carries the
-/// per-edge `cancel_effect` / `complete_effect` marks on return.
+/// per-edge effect marks on return.
 pub(super) fn plan_item_relations(
     ctx: &mut DependencyContext,
     planner: &mut CaptureBatchPlanner,
@@ -249,7 +251,7 @@ pub(super) fn plan_item_relations(
     Ok(ItemRelationReports { writes, close })
 }
 
-/// Plan cancel-label and complete-label commits for one item's already
+/// Plan cancel-, complete-, and merge-label commits for one item's already
 /// staged relation writes. Prefights opposite effects on the same
 /// source (this item and earlier items in the draft) before either
 /// writer runs, so a later staged closed status cannot mask a
@@ -278,15 +280,23 @@ pub(super) fn plan_relation_close_effects(
         .iter()
         .map(|label| label.key.clone())
         .collect();
+    let merge_keys: Vec<String> = ctx
+        .merge_labels()
+        .iter()
+        .map(|label| label.key.clone())
+        .collect();
     let cancel_edges =
         collect_closing_edges(updates, &cancel_keys, CloseEffect::Cancel);
     let complete_edges =
         collect_closing_edges(updates, &complete_keys, CloseEffect::Complete);
+    let merge_edges =
+        collect_closing_edges(updates, &merge_keys, CloseEffect::Merge);
     refuse_opposite_close_effects(
         ctx,
         updates,
         &cancel_edges,
         &complete_edges,
+        &merge_edges,
     )?;
     let cancels = plan_relation_cancels(
         ctx,
@@ -308,6 +318,16 @@ pub(super) fn plan_relation_close_effects(
         now,
         warnings,
     )?;
+    let merges = plan_relation_merges(
+        ctx,
+        planner,
+        request,
+        parsed,
+        updates,
+        existing_owner,
+        merge_edges,
+        warnings,
+    )?;
     plan_relation_successor_indications(
         ctx,
         planner,
@@ -318,6 +338,8 @@ pub(super) fn plan_relation_close_effects(
     Ok(RelationCloseReports {
         cancels,
         completes: complete.completes,
+        merges: merges.records,
+        merge_offer_rows: merges.offer_rows,
         pomodoro_refs: complete.pomodoro_refs,
         task_block_refs: complete.task_block_refs,
         day_file: complete.day_file,
@@ -439,37 +461,44 @@ fn refuse_opposite_close_effects(
     updates: &[RelationUpdateJson],
     cancel_edges: &[ClosingEdge],
     complete_edges: &[ClosingEdge],
+    merge_edges: &[ClosingEdge],
 ) -> Result<(), CaptureError> {
-    if cancel_edges.is_empty() && complete_edges.is_empty() {
+    if cancel_edges.is_empty()
+        && complete_edges.is_empty()
+        && merge_edges.is_empty()
+    {
         return Ok(());
     }
-    let cancel_keys: HashSet<(String, String)> = cancel_edges
+    let edges = cancel_edges
         .iter()
-        .map(|edge| source_registry_key(&updates[edge.update_index]))
-        .collect();
-    let complete_keys: HashSet<(String, String)> = complete_edges
-        .iter()
-        .map(|edge| source_registry_key(&updates[edge.update_index]))
-        .collect();
-    for edge in complete_edges.iter().chain(cancel_edges.iter()) {
+        .chain(complete_edges)
+        .chain(merge_edges)
+        .collect::<Vec<_>>();
+    for edge in &edges {
         let key = source_registry_key(&updates[edge.update_index]);
-        let both_this_item =
-            cancel_keys.contains(&key) && complete_keys.contains(&key);
         let prior = ctx.close_intent(&key.0, &key.1);
-        let opposite = match edge.effect {
-            CloseEffect::Complete => {
-                both_this_item || prior == Some(CloseEffect::Cancel)
-            }
-            CloseEffect::Cancel => prior == Some(CloseEffect::Complete),
+        let has_effect = |effect| {
+            edges.iter().any(|other| {
+                other.effect == effect
+                    && source_registry_key(&updates[other.update_index]) == key
+            }) || prior == Some(effect)
         };
-        if !opposite {
+        let cancel = has_effect(CloseEffect::Cancel);
+        let complete = has_effect(CloseEffect::Complete);
+        let merge = has_effect(CloseEffect::Merge);
+        if !(cancel && complete || cancel && merge || complete && merge) {
             continue;
         }
         let source = &updates[edge.update_index].source.text;
+        let conflict = match (cancel, complete, merge) {
+            (true, true, true) => "can't be cancelled, completed, and merged",
+            (true, true, false) => "can't be both cancelled and completed",
+            (true, false, true) => "can't be both cancelled and merged",
+            (false, true, true) => "can't be both completed and merged",
+            _ => unreachable!("at least two close effects were checked"),
+        };
         return Err(CaptureError::usage_code(
-            format!(
-                "“{source}” can't be both cancelled and completed in one commit"
-            ),
+            format!("“{source}” {conflict} in one commit"),
             "relation_close_effects_conflict",
         ));
     }

@@ -428,18 +428,23 @@ pub(super) fn relation_label_line(
     } else {
         ""
     };
+    let merges_suffix = if item.merges_source {
+        " · ⤵ merges"
+    } else {
+        ""
+    };
     let offers_suffix = if item.offers_source {
         " · 🪢 offers"
     } else {
         ""
     };
     let detail = if let Some(reason) = &item.disabled_reason {
-        format!("typed label · {reason}{cancels_suffix}{completes_suffix}{offers_suffix}")
+        format!("typed label · {reason}{cancels_suffix}{completes_suffix}{merges_suffix}{offers_suffix}")
     } else if item.typed {
-        format!("typed label · canonical spelling{cancels_suffix}{completes_suffix}{offers_suffix}")
+        format!("typed label · canonical spelling{cancels_suffix}{completes_suffix}{merges_suffix}{offers_suffix}")
     } else {
         format!(
-            "{} use{}{cancels_suffix}{completes_suffix}{offers_suffix}",
+            "{} use{}{cancels_suffix}{completes_suffix}{merges_suffix}{offers_suffix}",
             item.count.unwrap_or_default(),
             if item.count == Some(1) { "" } else { "s" }
         )

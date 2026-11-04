@@ -20,12 +20,14 @@ pub(crate) type CompleteLabel = CancelLabel;
 pub(crate) enum CloseEffect {
     Cancel,
     Complete,
+    Merge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabelEffect {
     Cancel,
     Complete,
+    Merge,
     Successor,
 }
 
@@ -35,6 +37,7 @@ pub(crate) struct RelationsConfig {
     pub(crate) linked_from_mentions: bool,
     pub(crate) cancel_labels: Vec<CancelLabel>,
     pub(crate) complete_labels: Vec<CompleteLabel>,
+    pub(crate) merge_labels: Vec<CancelLabel>,
     pub(crate) successor_labels: Vec<CancelLabel>,
     pub(crate) warnings: Vec<String>,
 }
@@ -46,6 +49,7 @@ impl Default for RelationsConfig {
             linked_from_mentions: true,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
+            merge_labels: Vec::new(),
             successor_labels: Vec::new(),
             warnings: Vec::new(),
         }
@@ -64,6 +68,11 @@ impl RelationsConfig {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn is_merge_label(&self, key: &str) -> bool {
+        self.merge_labels.iter().any(|label| label.key == key)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn is_successor_label(&self, key: &str) -> bool {
         self.successor_labels.iter().any(|label| label.key == key)
     }
@@ -74,6 +83,8 @@ impl RelationsConfig {
             Some(LabelEffect::Cancel)
         } else if self.is_complete_label(key) {
             Some(LabelEffect::Complete)
+        } else if self.is_merge_label(key) {
+            Some(LabelEffect::Merge)
         } else if self.is_successor_label(key) {
             Some(LabelEffect::Successor)
         } else {
@@ -86,6 +97,7 @@ impl RelationsConfig {
         match self.label_effect(key) {
             Some(LabelEffect::Cancel) => Some(CloseEffect::Cancel),
             Some(LabelEffect::Complete) => Some(CloseEffect::Complete),
+            Some(LabelEffect::Merge) => Some(CloseEffect::Merge),
             Some(LabelEffect::Successor) | None => None,
         }
     }
@@ -105,6 +117,7 @@ impl RelationsConfig {
             .and_then(|(label, effect)| match effect {
                 LabelEffect::Cancel => Some((label, CloseEffect::Cancel)),
                 LabelEffect::Complete => Some((label, CloseEffect::Complete)),
+                LabelEffect::Merge => Some((label, CloseEffect::Merge)),
                 LabelEffect::Successor => None,
             })
     }
@@ -126,6 +139,11 @@ impl RelationsConfig {
                 self.successor_labels
                     .iter()
                     .map(|label| (label, LabelEffect::Successor)),
+            )
+            .chain(
+                self.merge_labels
+                    .iter()
+                    .map(|label| (label, LabelEffect::Merge)),
             )
             .find_map(|(label, effect)| {
                 crate::native::task_relations::label::inverse_phrase(
@@ -178,6 +196,7 @@ pub(crate) fn parse_relations_config(
     let mentions_key = Value::String("linked_from_mentions".to_string());
     let cancel_key = Value::String("cancel_labels".to_string());
     let complete_key = Value::String("complete_labels".to_string());
+    let merge_key = Value::String("merge_labels".to_string());
     let successor_key = Value::String("successor_labels".to_string());
     let mut warnings = Vec::new();
     let linked_from_lines = match mapping.get(&key) {
@@ -216,6 +235,13 @@ pub(crate) fn parse_relations_config(
         "completing",
         &mut warnings,
     );
+    let mut merge_labels = parse_effect_labels(
+        mapping.get(&merge_key),
+        &path_display.to_string(),
+        "merge_labels",
+        "merging nothing",
+        &mut warnings,
+    );
     let mut successor_labels = parse_effect_labels(
         mapping.get(&successor_key),
         &path_display.to_string(),
@@ -223,11 +249,7 @@ pub(crate) fn parse_relations_config(
         "offering successors",
         &mut warnings,
     );
-    // Shared overlap rule (MG19): one effect per label. The pure
-    // helper below owns the key/warning computation so the later
-    // merge-label phase can pass its fourth parsed list through the
-    // same rule; this parser keeps its three lists and byte-identical
-    // warnings.
+    // One effect per normalized key across all four configured lists.
     let (overlap_keys, mut overlap_warnings) =
         crate::native::task_merge::overlapping_effect_keys(
             &path_display.to_string(),
@@ -253,6 +275,13 @@ pub(crate) fn parse_relations_config(
                         .map(|label| (label.key.clone(), label.name.clone()))
                         .collect::<Vec<_>>(),
                 ),
+                (
+                    "merge_labels",
+                    merge_labels
+                        .iter()
+                        .map(|label| (label.key.clone(), label.name.clone()))
+                        .collect::<Vec<_>>(),
+                ),
             ],
         );
     // The helper visits keys in first-use order across the three
@@ -261,6 +290,7 @@ pub(crate) fn parse_relations_config(
     if !overlap_keys.is_empty() {
         cancel_labels.retain(|label| !overlap_keys.contains(&label.key));
         complete_labels.retain(|label| !overlap_keys.contains(&label.key));
+        merge_labels.retain(|label| !overlap_keys.contains(&label.key));
         successor_labels.retain(|label| !overlap_keys.contains(&label.key));
     }
     Ok(RelationsConfig {
@@ -268,6 +298,7 @@ pub(crate) fn parse_relations_config(
         linked_from_mentions,
         cancel_labels,
         complete_labels,
+        merge_labels,
         successor_labels,
         warnings,
     })
@@ -508,6 +539,69 @@ mod tests {
             Some(("verified by", CloseEffect::Complete))
         );
         assert_eq!(parsed.cancel_label_for_inverse("verifies"), None);
+    }
+
+    #[test]
+    fn merge_labels_parse_and_participate_in_four_list_overlap() {
+        let parsed = parse_relations_config(
+            "relations:\n  cancel_labels: [duplicate of]\n  complete_labels: [implemented by, superseded by]\n  successor_labels: [starts after]\n  merge_labels: [' Merged  Into: ', duplicate of, starts after, superseded by]\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid merge policy");
+        assert_eq!(
+            parsed.merge_labels,
+            [CancelLabel {
+                key: "merged into".into(),
+                name: "Merged Into".into(),
+            }]
+        );
+        assert_eq!(
+            parsed.label_effect("merged into"),
+            Some(LabelEffect::Merge)
+        );
+        assert_eq!(
+            parsed.close_effect("merged into"),
+            Some(CloseEffect::Merge)
+        );
+        assert_eq!(
+            parsed.label_for_inverse("merged from"),
+            Some(("Merged Into", LabelEffect::Merge))
+        );
+        assert_eq!(
+            parsed.close_label_for_inverse("merged from"),
+            Some(("Merged Into", CloseEffect::Merge))
+        );
+        assert_eq!(
+            parsed.warnings,
+            [
+                "relations: “duplicate of” is in merge_labels and another effect list in /config.yml; it has no effect",
+                "relations: “superseded by” is in merge_labels and another effect list in /config.yml; it has no effect",
+                "relations: “starts after” is in merge_labels and another effect list in /config.yml; it has no effect",
+            ]
+        );
+        assert!(!parsed.is_successor_label("starts after"));
+        assert!(!parsed.is_complete_label("superseded by"));
+        assert!(!parsed.is_cancel_label("duplicate of"));
+        assert!(!parsed.is_cancel_label("superseded by"));
+    }
+
+    #[test]
+    fn invalid_merge_policy_fails_toward_no_merge() {
+        let parsed = parse_relations_config(
+            "relations:\n  merge_labels: ['good label', 1, 'bad | label']\n",
+            Path::new("/config.yml"),
+        )
+        .expect("invalid merge entries are warnings");
+        assert_eq!(parsed.merge_labels.len(), 1);
+        assert_eq!(parsed.merge_labels[0].key, "good label");
+        assert_eq!(parsed.warnings.len(), 2);
+        let invalid_list = parse_relations_config(
+            "relations:\n  merge_labels: not-a-list\n",
+            Path::new("/config.yml"),
+        )
+        .expect("invalid list is a warning");
+        assert!(invalid_list.merge_labels.is_empty());
+        assert_eq!(invalid_list.warnings.len(), 1);
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod complete;
 mod directives;
 mod drawers;
 mod engine;
+mod merge;
 mod model;
 mod pomodoros;
 mod render;

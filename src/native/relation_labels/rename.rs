@@ -375,6 +375,7 @@ fn load_close_policy() -> bob_config::RelationsConfig {
             linked_from_mentions: false,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
+            merge_labels: Vec::new(),
             successor_labels: Vec::new(),
             warnings: vec![format!(
                 "invalid relations config: {error}; no relation effects apply"
@@ -552,6 +553,16 @@ fn plan_rename(
     if new_key != old_key && close_policy.is_complete_label(&new_key) {
         warnings.push(format!(
             "“{new_name}” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels"
+        ));
+    }
+    if close_policy.is_merge_label(&old_key) {
+        warnings.push(format!(
+            "“{old_display}” is a merge label in config.yml — update relations.merge_labels"
+        ));
+    }
+    if new_key != old_key && close_policy.is_merge_label(&new_key) {
+        warnings.push(format!(
+            "“{new_name}” is a merge label in config.yml — update relations.merge_labels"
         ));
     }
     if close_policy.is_successor_label(&old_key) {

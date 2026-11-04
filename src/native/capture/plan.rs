@@ -805,6 +805,7 @@ fn plan_ref_item(
             relation_updates: Vec::new(),
             relation_cancels: Vec::new(),
             relation_completes: Vec::new(),
+            relation_merge_output: Default::default(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
@@ -1354,6 +1355,7 @@ pub(super) fn plan_capture_item(
                 relation_updates: Vec::new(),
                 relation_cancels: Vec::new(),
                 relation_completes: Vec::new(),
+                relation_merge_output: Default::default(),
                 linked_from_line_updates: Vec::new(),
                 minted_relation_block_ids: Vec::new(),
                 mirror_skipped: Vec::new(),
@@ -2318,6 +2320,7 @@ pub(super) fn plan_capture_item(
                     relation_updates: Vec::new(),
                     relation_cancels: Vec::new(),
                     relation_completes: Vec::new(),
+                    relation_merge_output: Default::default(),
                     linked_from_line_updates: Vec::new(),
                     minted_relation_block_ids: Vec::new(),
                     mirror_skipped: Vec::new(),
@@ -2832,6 +2835,7 @@ pub(super) fn plan_capture_item(
     let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
     let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
     let mut relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut relation_merge_output = RelationMergeOutput::default();
     let mut close_day_file: Option<String> = None;
     let mut close_task_block_refs: Vec<TaskBlockRef> = Vec::new();
     let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
@@ -2871,6 +2875,10 @@ pub(super) fn plan_capture_item(
         dependency_block_refs.extend(reports.source_refs);
         relation_cancels = close.cancels;
         relation_completes = close.completes;
+        relation_merge_output = RelationMergeOutput {
+            merges: close.merges,
+            offer_rows: close.merge_offer_rows,
+        };
         pomodoro_refs.extend(close.pomodoro_refs);
         close_task_block_refs = close.task_block_refs;
         close_day_file = close.day_file;
@@ -3194,6 +3202,7 @@ pub(super) fn plan_capture_item(
             relation_updates,
             relation_cancels,
             relation_completes,
+            relation_merge_output,
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
@@ -4203,6 +4212,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
     let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
     let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
     let mut relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut relation_merge_output = RelationMergeOutput::default();
     let mut close_day_file: Option<String> = None;
     let mut close_task_block_refs: Vec<TaskBlockRef> = Vec::new();
     let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
@@ -4247,6 +4257,10 @@ pub(super) fn plan_multi_note_sub_bullet_item(
         dependency_block_refs.extend(reports.source_refs);
         relation_cancels = close.cancels;
         relation_completes = close.completes;
+        relation_merge_output = RelationMergeOutput {
+            merges: close.merges,
+            offer_rows: close.merge_offer_rows,
+        };
         pomodoro_refs.extend(close.pomodoro_refs);
         close_task_block_refs = close.task_block_refs;
         close_day_file = close.day_file;
@@ -4385,6 +4399,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             relation_updates,
             relation_cancels,
             relation_completes,
+            relation_merge_output,
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
