@@ -13,7 +13,7 @@
 use super::markers::is_route_token;
 use super::model::{RawLine, Token};
 use super::pomodoro_literal::{lex_exact_name_after_hash, opens_exact_name};
-use super::tokens::is_block_id;
+use super::tokens::{is_block_id, is_parent_task_selector_token};
 
 /// One complete transfer source: `@route+id` with absolute byte offsets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +61,7 @@ pub(crate) struct TransferDestination {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransferNeed {
     Destination,
+    Task,
     BlockId,
     Drawer,
     Section,
@@ -71,6 +72,7 @@ impl TransferNeed {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Destination => "transfer_destination",
+            Self::Task => "task_parent",
             Self::BlockId => "block_id",
             Self::Drawer => "drawer",
             Self::Section => "section",
@@ -340,12 +342,32 @@ fn scan_with_arrow(
         };
     }
     let dest_token = &after[0];
-    if crate::native::capture_links::is_protected_markup_range(
-        source,
-        dest_token.start,
-        dest_token.end,
-    ) {
+    let destination_is_protected =
+        crate::native::capture_links::is_protected_markup_range(
+            source,
+            dest_token.start,
+            dest_token.end,
+        );
+    if destination_is_protected && !dest_token.text.starts_with('+') {
         return TransferScan::Unclaimed;
+    }
+    if after.len() == 1 && is_parent_task_selector_token(dest_token, source) {
+        let span = (dest_token.start, dest_token.end);
+        return TransferScan::Incomplete {
+            sources,
+            arrow,
+            need: TransferNeed::Task,
+            span,
+            message: "transfer destination needs a task: pick one with +, or type @route+id"
+                .to_string(),
+        };
+    }
+    if destination_is_protected {
+        return TransferScan::Invalid {
+            code: TRANSFER_DESTINATION_MARKER_CODE,
+            message: TRANSFER_DESTINATION_MARKER_MESSAGE.to_string(),
+            span: (dest_token.start, dest_token.end),
+        };
     }
     match parse_destination_token(dest_token) {
         Ok(destination) => {

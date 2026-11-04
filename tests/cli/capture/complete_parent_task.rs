@@ -273,6 +273,14 @@ fn plus_picker_accepts_insert_and_preserves_operators() {
     let prose_json = complete_json(&vault, &day_file, prose.len(), prose);
     assert_eq!(prose_json["context"], "task_parent");
     assert!(prose_json["picker"]["action_continuation_keys"].is_null());
+    assert!(
+        prose_json["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("consequence").is_none()),
+        "{prose_json}"
+    );
     let prose_draft = accept(&prose_json, prose, "@cash+goog-exit");
     assert_eq!(prose_draft, "Called the bank @cash+goog-exit");
     let append = dry_run_json(&vault, &day_file, &prose_draft);

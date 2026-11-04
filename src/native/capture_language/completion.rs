@@ -1344,6 +1344,9 @@ pub(crate) enum TransferCompletionRole {
         route: String,
         exclude: Vec<(String, String)>,
     },
+    VaultMergeTarget {
+        exclude: Vec<(String, String)>,
+    },
     Drawer {
         route: String,
         block_id: String,
@@ -1541,7 +1544,18 @@ fn transfer_role_for_incomplete(
     if cursor < fragment.0 || cursor > fragment.1 {
         return None;
     }
-    let _ = need;
+    if need == super::transfer::TransferNeed::Task {
+        let (start, end) = transfer_destination_fragment(parent, arrow.end)?;
+        if cursor < start || cursor > end {
+            return None;
+        }
+        return Some(TransferCompletionRole::VaultMergeTarget {
+            exclude: sources
+                .iter()
+                .map(|source| (source.route.clone(), source.block_id.clone()))
+                .collect(),
+        });
+    }
     // A partial destination completes through the same components as a
     // whole marker: routes, task IDs, drawers, and sections.
     let text = parent.text.get(

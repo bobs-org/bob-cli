@@ -864,6 +864,7 @@ pub(super) fn task_parent_candidates(
                 status_type: task.status_type,
                 text: task.text.clone(),
                 disabled_reason: None,
+                consequence: None,
                 section: task.section.clone(),
                 depth: task.depth,
                 line: task.line,

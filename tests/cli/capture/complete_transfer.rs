@@ -1,6 +1,7 @@
 //! `bob capture-complete` on `>` transfer lines: sources narrow to
 //! movable-or-mergeable tasks, destinations list routes with the `+` hint,
 //! `@c+` lists merge targets minus the sources with a merge consequence,
+//! `> +` opens the vault-wide parent-task picker scoped as merge targets,
 //! `@c+id#` lists drawers, and `@c#` lists sections with creation and the
 //! §3.4 near-duplicate refusal.
 
@@ -36,9 +37,17 @@ fn transfer_vault(temp: &TempDir) -> std::path::PathBuf {
             "\t- FUTURE WORK\n",
             "\t\t- existing note\n",
             "- [ ] #task Legacy cleanup ^legacy\n",
+            "- [ ] #task Unidentified cleanup\n",
             "## Future Work\n",
             "\n",
             "## Someday\n",
+        ),
+    );
+    write_file(
+        &vault.join("bob.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+            "- [ ] #task Jumper keymaps ^ch-jumper-keymaps\n",
         ),
     );
     vault
@@ -83,6 +92,14 @@ fn warnings_of(json: &Value) -> Vec<&str> {
 
 fn complete_end(temp: &TempDir, vault: &Path, draft: &str) -> Value {
     complete_at(temp, vault, draft, draft.len())
+}
+
+fn accept(json: &Value, draft: &str, replacement: &str) -> String {
+    let start = json["replacement"]["start"].as_u64().unwrap() as usize;
+    let end = json["replacement"]["end"].as_u64().unwrap() as usize;
+    let mut accepted = draft.to_string();
+    accepted.replace_range(start..end, replacement);
+    accepted
 }
 
 fn block_ids(json: &Value) -> Vec<String> {
@@ -203,6 +220,83 @@ fn transfer_merge_targets_drop_sources_and_carry_consequences() {
             "row should carry the merge label, got {row:?}"
         );
     }
+}
+
+#[test]
+fn transfer_plus_picker_filters_merge_targets_and_round_trips() {
+    let temp = TempDir::new("bob-cli-transfer-plus-picker");
+    let vault = transfer_vault(&temp);
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    let draft = "@bob+ch-jumper-keymaps > +";
+    let json = complete_end(&temp, &vault, draft);
+    assert_eq!(json["context"], "task_parent", "{json}");
+    assert_eq!(json["picker"]["scope"], "vault", "{json}");
+    assert_eq!(json["picker"]["scope_token"], "+", "{json}");
+    let rows = json["candidates"].as_array().expect("candidate rows");
+    assert!(!rows.is_empty(), "{json}");
+    assert!(rows.iter().all(|row| row["block_id"].is_string()), "{json}");
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row["block_id"] == "ch-jumper-keymaps"),
+        "typed source must be excluded: {json}"
+    );
+    assert!(
+        rows.iter().all(|row| {
+            let route = row["route"].as_str().unwrap_or_default();
+            let id = row["block_id"].as_str().unwrap_or_default();
+            row["consequence"]
+                == format!(
+                    "⤵ merge into [[{route}#^{id}]] — cuts the source notes under this task and retires the source"
+                )
+        }),
+        "every identified target carries the merge consequence: {json}"
+    );
+
+    let upgrade = rows
+        .iter()
+        .find(|row| row["block_id"] == "upgrade")
+        .expect("db upgrade merge target");
+    let accepted = accept(
+        &json,
+        draft,
+        upgrade["replacement"].as_str().expect("replacement"),
+    );
+    assert_eq!(accepted, "@bob+ch-jumper-keymaps > @db+upgrade");
+
+    let parsed = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(&accepted)
+        .output()
+        .expect("run capture-parse after accepting target");
+    assert_success(&parsed);
+    let parsed: Value = serde_json::from_str(stdout(&parsed).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(parsed["mode"], "task_merge", "{parsed}");
+
+    let dry_run = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(&accepted)
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-11-03 09:30:00")
+        .output()
+        .expect("run accepted transfer dry-run");
+    assert_success(&dry_run);
+    let dry_run: Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("capture dry-run JSON");
+    assert_eq!(dry_run["kind"], "task_merge", "{dry_run}");
+    assert_eq!(dry_run["dry_run"], true, "{dry_run}");
+    assert_eq!(dry_run["merges"].as_array().unwrap().len(), 1, "{dry_run}");
 }
 
 #[test]

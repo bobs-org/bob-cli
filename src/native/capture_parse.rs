@@ -388,7 +388,9 @@ modifiers leave (leading `+ &foo:bar` or trailing `&foo:bar +`) is an \
 unresolved parent-task selector: it reports `incomplete` needing \
 `task_parent` with a placeholder over the full token, keeps the modifiers, \
 and capture refuses it until a task is selected. An exact lone `+` remains the existing \
-Pomodoro adjustment in parsing. An `&note:block-id` modifier names a prerequisite task link \
+Pomodoro adjustment in parsing. On a transfer line, terminal `+` or `+query` \
+reports the same `task_parent` need; capture refuses it until a merge target is selected. \
+An `&note:block-id` modifier names a prerequisite task link \
 (`&projects/foo:bar`; quote notes with spaces: `&\"Shopping List\":bar`): \
 one or more modifiers lead or trail the parent line (interleaving with \
 destination, schedule, priority, and `%` directives in either order) or \

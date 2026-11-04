@@ -1505,6 +1505,9 @@ fn parse_transfer_claim<'a>(
                         super::transfer::TransferNeed::Destination => {
                             "incomplete_transfer"
                         }
+                        super::transfer::TransferNeed::Task => {
+                            "incomplete_transfer_task"
+                        }
                         super::transfer::TransferNeed::BlockId => {
                             "incomplete_transfer_block_id"
                         }

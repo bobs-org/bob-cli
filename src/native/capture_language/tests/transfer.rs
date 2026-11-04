@@ -89,6 +89,51 @@ fn incomplete_transfer_is_never_reinterpreted_as_capture_text() {
 }
 
 #[test]
+fn transfer_plus_selector_is_an_incomplete_task_picker() {
+    for (input, selector, selector_span) in [
+        ("@inbox+bench > +", "+", (15, 16)),
+        ("@inbox+bench > +up", "+up", (15, 18)),
+    ] {
+        let editor = super::super::parse_for_editor(input);
+        assert_eq!(editor.mode, super::super::EditorMode::Incomplete);
+        assert_eq!(editor.needs, [super::super::Need::TaskParent]);
+        assert!(editor.transfers.is_empty());
+        assert!(editor.spans.iter().any(|span| {
+            span.kind == super::super::SpanKind::TransferSource
+                && (span.start, span.end) == (0, 12)
+        }));
+        assert!(editor.spans.iter().any(|span| {
+            span.kind == super::super::SpanKind::TransferArrow
+                && (span.start, span.end) == (13, 14)
+        }));
+        assert!(editor.spans.iter().any(|span| {
+            span.kind == super::super::SpanKind::InteractivePlaceholder
+                && (span.start, span.end) == selector_span
+        }));
+        assert!(!editor.spans.iter().any(
+            |span| span.kind == super::super::SpanKind::TransferDestination
+        ));
+        let diagnostic = editor.diagnostics.first().expect("diagnostic");
+        assert_eq!(diagnostic.code, "incomplete_transfer");
+        assert_eq!(diagnostic.message, "transfer destination needs a task: pick one with +, or type @route+id");
+        assert_eq!(diagnostic.range, Some(selector_span));
+        assert_eq!(&input[selector_span.0..selector_span.1], selector);
+
+        let error = super::super::parse_capture_draft_with_options_coded(
+            input,
+            None,
+            None,
+            &super::super::CaptureParseOptions::routing_off(),
+        )
+        .expect_err("execution refuses an unresolved transfer task picker");
+        assert_eq!(error.code, Some("incomplete_transfer_task"));
+        assert!(error
+            .message
+            .ends_with("transfer destination needs a task: pick one with +, or type @route+id"));
+    }
+}
+
+#[test]
 fn escaped_arrow_drops_only_its_escape_and_skips_transfer_claiming() {
     let input = "@inbox+bench \\> @db";
     let editor = super::super::parse_for_editor(input);
@@ -251,6 +296,40 @@ fn partial_right_hand_sides_report_needs() {
         };
         assert_eq!(*hit_need, need, "{text:?}");
     }
+}
+
+#[test]
+fn plus_transfer_destinations_only_open_the_picker_for_selector_tokens() {
+    for (text, expected_span) in
+        [("@a+x > +", (7, 8)), ("@a+x @b+y > +up", (12, 15))]
+    {
+        let parsed = scan(text);
+        let TransferScan::Incomplete {
+            sources,
+            arrow,
+            need,
+            span,
+            message,
+        } = parsed
+        else {
+            panic!("expected task picker need for {text:?}, got {parsed:?}");
+        };
+        assert_eq!(need, TransferNeed::Task, "{text:?}");
+        assert_eq!(span, expected_span, "{text:?}");
+        assert_eq!(message, "transfer destination needs a task: pick one with +, or type @route+id");
+        assert_eq!(arrow.start, text.find('>').unwrap());
+        assert!(!sources.is_empty());
+    }
+
+    for text in ["@a+x > +5", "@a+x > ++", "@a+x > +-x", "@a+x > +up more"] {
+        let parsed = scan(text);
+        let TransferScan::Invalid { code, .. } = parsed else {
+            panic!("expected destination marker error for {text:?}, got {parsed:?}");
+        };
+        assert_eq!(code, "transfer_destination_marker", "{text:?}");
+    }
+
+    assert!(matches!(scan("@a+x \\> +"), TransferScan::Escaped { .. }));
 }
 
 #[test]
@@ -420,6 +499,7 @@ fn prose_code_and_blockquotes_stay_unclaimed() {
 #[test]
 fn transfer_needs_use_editor_labels() {
     assert_eq!(TransferNeed::Destination.label(), "transfer_destination");
+    assert_eq!(TransferNeed::Task.label(), "task_parent");
     assert_eq!(TransferNeed::BlockId.label(), "block_id");
     assert_eq!(TransferNeed::Drawer.label(), "drawer");
     assert_eq!(TransferNeed::Section.label(), "section");

@@ -1870,6 +1870,10 @@ Pomodoro operators. A prose-terminal `+` is always a task selector. Shell
 completion lists only identified `@route+block-id` rows and never assigns an
 ID or writes the vault.
 
+On a transfer line, `> +` and `> +query` use this same vault-wide picker to
+choose the merge target; see [Moving and merging tasks with
+`>`](#moving-and-merging-tasks-with).
+
 ### Adding prerequisites with '&'
 
 `&note:block-id` means "the task I am capturing or explicitly targeting
@@ -6132,8 +6136,10 @@ section merges (see [Merging tasks](task-merge.md)).
 A transfer is recognized before target-run fan-out, so it never fans out and
 never runs Ensure Next. One source is enough. Once claimed, a malformed or
 partial right-hand side never becomes note text: it is an `incomplete` draft
-(needing `transfer_destination`, `block_id`, `drawer`, or `section`) or a
-teaching error with an exact byte range.
+(needing `transfer_destination`, `task_parent`, `block_id`, `drawer`, or
+`section`) or a teaching error with an exact byte range. A terminal `> +` or
+`> +query` opens the vault-wide task picker for a merge target. Accepting a row
+inserts its `@route+id`; `bob capture` refuses the unresolved selector.
 
 A transfer item carries nothing else. Child bullets, body text, schedule
 (`s:<N>`), priority (`$<N>`), type (`#`), clipboard (`%`), dependency (`&`),
@@ -8633,7 +8639,10 @@ around it, and trailing text past the destination complete nothing. For
 example, `bob capture-complete -c 7 -- '@inbox+ > @db'` lists inbox's
 movable-or-mergeable tasks, and
 `bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'` lists db's
-tasks minus `bench`, each with its merge consequence.
+tasks minus `bench`, each with its merge consequence. At `> +`, the vault-wide
+`task_parent` picker drops typed sources and ID-less rows and adds a merge
+consequence to every remaining row. For example,
+`bob capture-complete -c 16 -f json -- '@inbox+bench > +'` lists merge targets.
 
 When the cursor is inside a valid Obsidian wikilink component, link completion
 takes precedence over marker completion so `@` and `%` inside link text remain

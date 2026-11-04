@@ -480,6 +480,8 @@ pub(super) struct TaskParentCandidate {
     pub(super) text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) disabled_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) consequence: Option<String>,
     pub(super) section: Option<String>,
     pub(super) depth: usize,
     pub(super) line: usize,

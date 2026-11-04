@@ -453,6 +453,30 @@ pub(super) struct ParentTaskSelectorToken<'a> {
     pub(super) dual_use_adjustment: bool,
 }
 
+/// Whether one terminal `+query` token is eligible to open the parent-task
+/// picker. The caller establishes that this is the final token on the
+/// relevant line; this shared predicate owns the sigil, query, and protected
+/// markup rules used by ordinary capture selectors and transfer destinations.
+pub(super) fn is_parent_task_selector_token(
+    token: &Token<'_>,
+    source: &str,
+) -> bool {
+    let Some(query) = token.text.strip_prefix('+') else {
+        return false;
+    };
+    !query.starts_with('+')
+        && !query.starts_with('-')
+        && !query
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_digit())
+        && !crate::native::capture_links::is_protected_markup_range(
+            source,
+            token.start,
+            token.end,
+        )
+}
+
 /// Shared lexical claim for bare-plus task selectors. A selector is the
 /// final remaining whitespace-delimited token on the parent line, or on an
 /// eligible authored child line, after relationship modifiers leave.
@@ -514,24 +538,9 @@ pub(super) fn parent_task_selector_tokens<'a>(
         let Some(token) = tokens.last().copied() else {
             continue;
         };
-        let Some(query) = token.text.strip_prefix('+') else {
-            continue;
-        };
-        // Operator runs and numeric prefixes still belong to the
-        // adjustment/shift grammar. A typed query such as `+bank` is a
-        // picker seed; `+-` remains ordinary prose like other mixed runs.
-        if query.starts_with('+')
-            || query.starts_with('-')
-            || query
-                .as_bytes()
-                .first()
-                .is_some_and(|byte| byte.is_ascii_digit())
-            || crate::native::capture_links::is_protected_markup_range(
-                item.source,
-                token.start,
-                token.end,
-            )
-        {
+        // Operator runs and numeric prefixes still belong to adjustment
+        // or shift grammar.
+        if !is_parent_task_selector_token(&token, item.source) {
             continue;
         }
 

@@ -89,6 +89,84 @@ fn json_body(output: &std::process::Output) -> serde_json::Value {
 }
 
 #[test]
+fn capture_parse_reports_task_picker_spans_for_transfer_destinations() {
+    for (draft, selector_span) in [
+        ("@inbox+bench > +", [15, 16]),
+        ("@inbox+bench > +up", [15, 18]),
+    ] {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("capture-parse JSON");
+        assert_eq!(json["mode"], "incomplete", "{draft}: {json}");
+        assert_eq!(json["needs"], serde_json::json!(["task_parent"]));
+        assert_eq!(
+            json["spans"],
+            serde_json::json!([
+                {"start": 0, "end": 12, "kind": "transfer_source"},
+                {"start": 13, "end": 14, "kind": "transfer_arrow"},
+                {"start": selector_span[0], "end": selector_span[1], "kind": "interactive_placeholder"}
+            ]),
+            "{draft}: {json}"
+        );
+        assert_eq!(json["diagnostics"].as_array().unwrap().len(), 1);
+        assert_eq!(json["diagnostics"][0]["code"], "incomplete_transfer");
+        assert_eq!(
+            json["diagnostics"][0]["message"],
+            "transfer destination needs a task: pick one with +, or type @route+id"
+        );
+        assert_eq!(
+            json["diagnostics"][0]["range"],
+            serde_json::json!(selector_span)
+        );
+        assert!(
+            !json.as_object().unwrap().contains_key("transfers"),
+            "{json}"
+        );
+    }
+}
+
+#[test]
+fn capture_refuses_unresolved_transfer_task_picker_without_writing() {
+    let (_temp, vault, day_file) =
+        setup_move_vault("bob-cli-transfer-task-picker-refusal");
+    let before = ["inbox.md", "db.md", "referrer.md", "day.md"]
+        .map(|name| fs::read_to_string(vault.join(name)).expect("read before"));
+    for dry_run in [false, true] {
+        let output =
+            capture_json(&vault, &day_file, "@inbox+bench > +", dry_run);
+        assert!(!output.status.success(), "{output:?}");
+        let json = json_body(&output);
+        assert_eq!(json["code"], "incomplete_transfer_task", "{json}");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("transfer destination needs a task: pick one with +, or type @route+id"),
+            "{json}"
+        );
+        for (name, expected) in ["inbox.md", "db.md", "referrer.md", "day.md"]
+            .into_iter()
+            .zip(before.iter())
+        {
+            assert_eq!(
+                fs::read_to_string(vault.join(name)).expect("read after"),
+                *expected,
+                "{name} unchanged for dry_run={dry_run}"
+            );
+        }
+    }
+}
+
+#[test]
 fn shell_guard_refuses_at_redirect_before_mutation() {
     let temp = TempDir::new("bob-cli-transfer-shell-guard");
     let vault = temp.path().join("vault");

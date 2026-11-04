@@ -44,6 +44,11 @@ pub(super) fn apply(
                 scope_merge_targets(&route, &exclude, candidates);
             }
         }
+        Role::VaultMergeTarget { exclude } => {
+            if matches!(field.context, CompletionContext::TaskParent) {
+                scope_vault_merge_targets(&exclude, candidates);
+            }
+        }
         Role::Drawer { .. } => {}
         Role::Section { route } => {
             if matches!(field.context, CompletionContext::Section) {
@@ -166,10 +171,47 @@ fn scope_merge_targets(
     });
     for item in items.iter_mut() {
         let id = item.block_id.as_deref().unwrap_or_default();
-        item.consequence = Some(format!(
-            "⤵ merge into [[{route}#^{id}]] — cuts the source notes under this task and retires the source",
-        ));
+        item.consequence = Some(merge_consequence(route, id));
     }
+}
+
+/// Vault-wide merge targets for the `> +` picker: identified rows only,
+/// excluding any typed source by note identity and block ID.
+fn scope_vault_merge_targets(
+    exclude: &[(String, String)],
+    candidates: &mut Candidates,
+) {
+    let Candidates::TaskParent(items) = candidates else {
+        return;
+    };
+    items.retain(|item| {
+        if item.requires_block_id {
+            return false;
+        }
+        let Some(id) = item.block_id.as_deref() else {
+            return false;
+        };
+        !exclude.iter().any(|(source_route, source_id)| {
+            source_id == id && same_route(source_route, &item.route)
+        })
+    });
+    for item in items.iter_mut() {
+        if let Some(id) = item.block_id.as_deref() {
+            item.consequence = Some(merge_consequence(&item.route, id));
+        }
+    }
+}
+
+fn same_route(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+        || capture::route_label(left)
+            .eq_ignore_ascii_case(&capture::route_label(right))
+}
+
+fn merge_consequence(route: &str, id: &str) -> String {
+    format!(
+        "⤵ merge into [[{route}#^{id}]] — cuts the source notes under this task and retires the source",
+    )
 }
 
 /// The `+ merge into a task` hint on a complete bare destination.

@@ -1470,6 +1470,22 @@ fn transfer_merge_targets_drawers_and_sections_complete() {
 }
 
 #[test]
+fn transfer_plus_picker_uses_vault_merge_target_role() {
+    let text = "@inbox+bench > +up";
+    let completion =
+        field(text, text.len()).expect("transfer parent-task picker");
+    assert_eq!(completion.context, CompletionContext::TaskParent);
+    assert_eq!(completion.query, "up");
+    assert_eq!(completion.replacement, (15, 18));
+    assert_eq!(
+        transfer_completion_role(text, text.len()),
+        Some(TransferCompletionRole::VaultMergeTarget {
+            exclude: vec![("inbox".to_string(), "bench".to_string())],
+        })
+    );
+}
+
+#[test]
 fn transfer_arrow_and_gaps_offer_no_completion() {
     // The `>` arrow and the whitespace around it own no completion field,
     // and neither does trailing whitespace past a complete destination.

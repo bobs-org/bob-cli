@@ -652,6 +652,48 @@ running sessions.
 Evidence: `plan:202611/off_clock_pomodoros.md`; `docs/task-status-hooks.md`;
 `docs/gcal.md` § Off-clock events.
 
+## ended-synced-meetings-are-born-done {#ended-synced-meetings-are-born-done}
+
+**Status:** Accepted
+
+Event Tasks first synced after their buffered span ends are born `[x]` with the note-day completion date and a struck 🍅 link under their closed MEET.
+
+# Ended Synced Meetings Are Born Done
+
+**Applies to.** bob-cli and the vault.
+
+**Claim.** Whenever `bob gcal sync` creates an Event Task for a Past-phase
+meeting — a new row or a Maybe context row upgraded in place, on any note day
+— it writes `[x]` with `[completion:: YYYY-MM-DD]` for the note's day, then
+files a struck `🍅 ~~[[#^id]]~~` link under the closed MEET. Current and
+Future rows stay `[*]`, and sync never changes an existing row's checkbox.
+
+**Why.** Bryan's 2026-11-04 request follows the `^swings` row in
+`2026/20261104.md`: synced at 11:06 for an 08:15–08:30 event, it stayed `[/]`
+in an already over-cap Pending lane even though its closed MEET was correct.
+Completing the row follows reconcile's completion of ended off-clock events.
+
+Rejected alternatives:
+
+- **Keep `[/]`.** It parks finished meetings in Pending.
+- **Use the sync day as completion date.** It miscounts `-D yesterday` rows.
+- **Leave the 🍅 link plain.** Reconcile rewrites it after sync.
+
+**Cost.** A skipped meeting is born done and counted; uncheck or cancel it by
+hand.
+
+**Reopens when.** Sync can learn attendance, or skipped meetings should stay
+open for review.
+
+Evidence: `plan:202611/gcal_past_events_born_done.md`; `docs/gcal.md` § Sync;
+`tests/gcal_sync.rs`.
+
+[Synced Meetings Are Linked By Phase At Birth](#synced-meetings-link-by-phase)
+
+[Ended Off-Clock Events Settle Into Closed Sessions](#ended-off-clock-events-settle)
+
+[Event Task](../reference/glossary.md#event-task)
+
 ## Event Buffers Widen The Occupied Span {#event-buffers-widen-the-span}
 
 **Status:** Superseded in part by [Buffer Reasons Ride The Description Bullets](#buffer-reasons-ride-description-bullets)
@@ -2409,7 +2451,7 @@ Evidence: `plan:202611/gcal_sort_event_task_links.md`; `docs/gcal.md` § Sync;
 
 ## Synced Meetings Are Linked By Phase At Birth {#synced-meetings-link-by-phase}
 
-**Status:** Superseded in part by [Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field), [Event Buffers Widen The Occupied Span](#event-buffers-widen-the-span), [sync-sorts-event-task-links](#sync-sorts-event-task-links)
+**Status:** Superseded in part by [Untracked Sessions Omit T Field](#untracked-sessions-omit-t-field), [Event Buffers Widen The Occupied Span](#event-buffers-widen-the-span), [sync-sorts-event-task-links](#sync-sorts-event-task-links), [ended-synced-meetings-are-born-done](#ended-synced-meetings-are-born-done)
 
 A new Event Task is filed under a past, running, or planned MEET at birth: closed clusters for ended meetings, one open MEET for current and future.
 
@@ -2480,6 +2522,10 @@ time. The meeting span in the bold label is unchanged. See
 Superseded in part: sync no longer only appends links; every run reorders
 each entry's Event Task links by meeting time. See
 [sync-sorts-event-task-links](#sync-sorts-event-task-links).
+
+Superseded in part: Past rows are now born `[x]` with a completion date and a
+struck 🍅 link, and the `[x]` rejection is retired. See
+[ended-synced-meetings-are-born-done](#ended-synced-meetings-are-born-done).
 
 [Calendar Events Are Daily-Note Event Tasks](#calendar-events-are-daily-note-event-tasks)
 

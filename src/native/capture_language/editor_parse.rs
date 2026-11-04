@@ -1636,11 +1636,13 @@ fn parse_editor_transfer_item<'a>(
             } else {
                 span
             };
-            spans.push(transfer_span(
-                destination_range.0,
-                destination_range.1,
-                SpanKind::TransferDestination,
-            ));
+            if need != super::transfer::TransferNeed::Task {
+                spans.push(transfer_span(
+                    destination_range.0,
+                    destination_range.1,
+                    SpanKind::TransferDestination,
+                ));
+            }
             add_incomplete_transfer_selector_span(
                 &mut spans,
                 item.source,
@@ -1839,6 +1841,7 @@ fn transfer_span(start: usize, end: usize, kind: SpanKind) -> Span {
 fn transfer_need(need: super::transfer::TransferNeed) -> Need {
     match need {
         super::transfer::TransferNeed::Destination => Need::TransferDestination,
+        super::transfer::TransferNeed::Task => Need::TaskParent,
         super::transfer::TransferNeed::BlockId => Need::BlockId,
         super::transfer::TransferNeed::Drawer => Need::Drawer,
         super::transfer::TransferNeed::Section => Need::Section,
@@ -1854,6 +1857,14 @@ fn add_incomplete_transfer_selector_span(
     let Some(token) = source.get(range.0..range.1) else {
         return;
     };
+    if need == super::transfer::TransferNeed::Task {
+        spans.push(transfer_span(
+            range.0,
+            range.1,
+            SpanKind::InteractivePlaceholder,
+        ));
+        return;
+    }
     let Some(hash) = token.find('#') else {
         if need == super::transfer::TransferNeed::BlockId
             && let Some(plus) = token.find('+')
@@ -1878,7 +1889,8 @@ fn add_incomplete_transfer_selector_span(
             let start = range.0 + hash + 1;
             spans.push(transfer_span(start, range.1, SpanKind::Section));
         }
-        super::transfer::TransferNeed::Destination => {}
+        super::transfer::TransferNeed::Destination
+        | super::transfer::TransferNeed::Task => {}
     }
 }
 
