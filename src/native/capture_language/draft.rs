@@ -919,20 +919,18 @@ pub(crate) fn parse_capture_text_with_options(
     }
     let options = options.with_global(!draft.declarations.is_empty());
 
-    let item_outcomes = draft
-        .items
-        .iter()
-        .map(|item| {
-            parse_capture_item(
+    let mut item_outcomes = Vec::new();
+    for item in &draft.items {
+        item_outcomes.extend(
+            parse_capture_item_members(
                 item,
                 forced_route,
                 forced_section,
                 &options,
-                None,
             )
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.message)?;
+            .map_err(|error| error.message)?,
+        );
+    }
     let mut declarations = draft.declarations;
     for outcome in &item_outcomes {
         declarations.extend(outcome.declarations.iter().copied());
@@ -1263,6 +1261,142 @@ fn capture_item_error_at(
 /// byte-preserving member view. Every emitted item retains the source item's
 /// identity and receives its own fanout context.
 fn parse_capture_item_members<'a>(
+    item: &CaptureItem<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<Vec<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+    if forced_route.is_none()
+        && forced_section.is_none()
+        && !options.explicit_destination
+    {
+        let Some(parent) = item.lines.first().map(|line| line.raw) else {
+            return Err(missing_text_error().into());
+        };
+        let scan = super::transfer::scan_transfer_line(
+            &parent,
+            item.source,
+            item.lines.len() > 1,
+        );
+        if !matches!(&scan, super::transfer::TransferScan::Unclaimed) {
+            if let Some(list) = item.list.as_ref() {
+                let header = list
+                    .section
+                    .as_deref()
+                    .map(|section| format!("@{}#{section}", list.route))
+                    .unwrap_or_else(|| format!("@{}", list.route));
+                let marker = parent.text.trim();
+                let suggestion = format!(
+                    "give it its own item (a blank line, then `{marker}`)"
+                );
+                return Err(CaptureItemParseError::coded(
+                    "list_bullet_marker",
+                    super::project_tasks::list_bullet_marker_error(
+                        &header,
+                        &format!("{}.md", list.route),
+                        marker,
+                        &suggestion,
+                    ),
+                ));
+            }
+            match scan {
+                super::transfer::TransferScan::Unclaimed => unreachable!(),
+                super::transfer::TransferScan::Escaped {
+                    backslash_span,
+                    ..
+                } => {
+                    let mut escaped = item.source.to_string();
+                    escaped
+                        .replace_range(backslash_span.0..backslash_span.1, " ");
+                    let view = capture_item_source_view(item, &escaped);
+                    let outcomes = parse_capture_item_members_legacy(
+                        &view,
+                        forced_route,
+                        forced_section,
+                        options,
+                    )?;
+                    return Ok(outcomes
+                        .into_iter()
+                        .map(|outcome| {
+                            rebind_capture_item_declarations(
+                                outcome,
+                                item.source,
+                            )
+                        })
+                        .collect());
+                }
+                super::transfer::TransferScan::Incomplete {
+                    need,
+                    message,
+                    ..
+                } => {
+                    let code = match need {
+                        super::transfer::TransferNeed::Destination => {
+                            "incomplete_transfer"
+                        }
+                        super::transfer::TransferNeed::BlockId => {
+                            "incomplete_transfer_block_id"
+                        }
+                        super::transfer::TransferNeed::Drawer => {
+                            "incomplete_transfer_drawer"
+                        }
+                        super::transfer::TransferNeed::Section => {
+                            "incomplete_transfer_section"
+                        }
+                    };
+                    return Err(CaptureItemParseError::coded(code, message));
+                }
+                super::transfer::TransferScan::Invalid {
+                    code,
+                    message,
+                    ..
+                } => {
+                    return Err(CaptureItemParseError::coded(code, message));
+                }
+                super::transfer::TransferScan::Valid {
+                    sources,
+                    arrow,
+                    destination,
+                } => {
+                    let route = destination.route.clone();
+                    let parsed = ParsedCaptureText {
+                        body: String::new(),
+                        clip: None,
+                        route: Some(route),
+                        kind: CaptureKind::Transfer {
+                            sources,
+                            arrow,
+                            destination,
+                        },
+                        scheduled_offset: None,
+                        priority_level: None,
+                        sub_bullets: Vec::new(),
+                        dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
+                        dependency_target: None,
+                        type_marker: None,
+                    };
+                    return Ok(vec![parsed_capture_item_outcome(
+                        item,
+                        parsed,
+                        Vec::new(),
+                        None,
+                    )]);
+                }
+            }
+        }
+    }
+
+    parse_capture_item_members_legacy(
+        item,
+        forced_route,
+        forced_section,
+        options,
+    )
+}
+
+fn parse_capture_item_members_legacy<'a>(
     item: &CaptureItem<'a>,
     forced_route: Option<&str>,
     forced_section: Option<&str>,

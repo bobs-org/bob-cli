@@ -7,10 +7,8 @@
 //! claim the same parent lines before target-run fan-out, so this module
 //! owns the single pure scanner they will call in the next phase.
 //!
-//! The scanner is intentionally test-gated: it is compiled only for tests
-//! until `transfer-resolvers` wires both consumers. Production behavior in
-//! this phase is limited to the stdout shell guard at the capture entry
-//! point (see `capture::shell_guard`).
+//! Both execution and editor parsing call this scanner before target-run
+//! fan-out, so a claimed transfer cannot fall through to ordinary capture.
 
 use super::markers::is_route_token;
 use super::model::{RawLine, Token};
@@ -35,7 +33,8 @@ pub(crate) struct TransferArrow {
 }
 
 /// Which destination shape a transfer targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum TransferDestinationKind {
     Note,
     Task,
@@ -68,6 +67,7 @@ pub(crate) enum TransferNeed {
 }
 
 impl TransferNeed {
+    #[cfg(test)]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Destination => "transfer_destination",

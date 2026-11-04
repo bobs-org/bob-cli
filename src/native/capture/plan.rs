@@ -92,6 +92,16 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
+    if parsed_draft
+        .items
+        .iter()
+        .any(|item| matches!(&item.parsed.kind, CaptureKind::Transfer { .. }))
+    {
+        return Err(CaptureError::usage_code(
+            "capture transfer execution is not available yet; no changes were made",
+            "transfer_execution_unavailable",
+        ));
+    }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
         return Err(CaptureError::usage_code(
             "a template can't capture the clipboard: `%c` would repeat once per row",
@@ -1655,6 +1665,9 @@ pub(super) fn plan_capture_item(
             priority_field,
             scheduled.as_deref(),
         ),
+        CaptureKind::Transfer { .. } => {
+            unreachable!("transfer capture is refused before item planning")
+        }
         CaptureKind::TaskWithBlockId { block_id } => {
             format_task_with_block_id_line(
                 &parsed.body,
@@ -3366,6 +3379,12 @@ pub(super) fn render_authored_sub_bullets(
 pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
     match kind {
         CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => "task",
+        CaptureKind::Transfer { destination, .. } => match destination.kind {
+            capture_language::transfer::TransferDestinationKind::Note => {
+                "task_move"
+            }
+            _ => "task_merge",
+        },
         CaptureKind::Bullet { .. } => "bullet",
         CaptureKind::Pomodoro { .. } => "pomodoro_task",
         CaptureKind::SubBullet { .. } => "sub_bullet",

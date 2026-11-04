@@ -103,7 +103,7 @@ fn empty_move_field_serves_parent_rows_and_json_picker_metadata() {
     let draft = "Create packet @cash^exit@#admin\n- ^";
     let value = complete_json(&vault, &day_file, draft, draft.len());
     assert_eq!(value["context"], "project_task_move");
-    assert_eq!(value["grammar"], 9);
+    assert_eq!(value["grammar"], 10);
     assert_eq!(value["query"], "");
     assert_eq!(
         value["replacement"],

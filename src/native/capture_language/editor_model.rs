@@ -32,6 +32,9 @@ pub(crate) enum SpanKind {
     SubBulletRoute,
     SubBulletBlockId,
     Drawer,
+    TransferSource,
+    TransferArrow,
+    TransferDestination,
     TaskToggleRoute,
     TaskToggleBlockId,
     TaskToggleExplicitToggle,
@@ -111,6 +114,9 @@ impl SpanKind {
             Self::SubBulletRoute => "sub_bullet_route",
             Self::SubBulletBlockId => "sub_bullet_block_id",
             Self::Drawer => "drawer",
+            Self::TransferSource => "transfer_source",
+            Self::TransferArrow => "transfer_arrow",
+            Self::TransferDestination => "transfer_destination",
             Self::TaskToggleRoute => "task_toggle_route",
             Self::TaskToggleBlockId => "task_toggle_block_id",
             Self::TaskToggleExplicitToggle => "task_toggle_explicit_toggle",
@@ -208,6 +214,8 @@ pub(crate) struct Diagnostic {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum EditorMode {
     Task,
+    TaskMove,
+    TaskMerge,
     Bullet,
     PomodoroTask,
     PomodoroNote,
@@ -239,6 +247,8 @@ impl EditorMode {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Task => "task",
+            Self::TaskMove => "task_move",
+            Self::TaskMerge => "task_merge",
             Self::Bullet => "bullet",
             Self::PomodoroTask => "pomodoro_task",
             Self::PomodoroNote => "pomodoro_note",
@@ -301,6 +311,7 @@ pub(crate) enum Need {
     DependencyTarget,
     /// A completion picker is still open: a `!` token is partial.
     TaskComplete,
+    TransferDestination,
     /// A `=/` split is still open: a trailing `#` needs a task type.
     PomodoroSplitType,
     /// A `=*` merge is still open: a destination after `#` is missing.
@@ -342,6 +353,7 @@ impl Need {
             Self::RelationLabel => "relation_label",
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",
+            Self::TransferDestination => "transfer_destination",
             Self::PomodoroSplitType => "pomodoro_split_type",
             Self::PomodoroMergeDest => "pomodoro_merge_dest",
             Self::TemplateRow => "template_row",
@@ -539,6 +551,61 @@ pub(crate) struct EditorParse {
     /// Additive first-item target-run members, projected from the first
     /// item. Empty unless the first item is a multi-member run.
     pub(crate) targets: Vec<EditorTarget>,
+    /// Complete transfer directives, keyed by capture-item index. The
+    /// parser output projects these onto the matching `items[]` rows and
+    /// the first item's singleton surface.
+    pub(crate) transfers: Vec<EditorTransferItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EditorTransferItem {
+    pub(crate) index: usize,
+    pub(crate) transfer: EditorTransfer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorTransfer {
+    pub(crate) sources: Vec<EditorTransferSource>,
+    pub(crate) arrow: EditorTransferArrow,
+    pub(crate) destination: EditorTransferDestination,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorTransferSource {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) marker: String,
+    pub(crate) route: String,
+    pub(crate) block_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorTransferArrow {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum EditorTransferDestinationKind {
+    Note,
+    Task,
+    Drawer,
+    Section,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct EditorTransferDestination {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) kind: EditorTransferDestinationKind,
+    pub(crate) route: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) block_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) drawer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) section: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

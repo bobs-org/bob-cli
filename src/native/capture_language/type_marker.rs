@@ -1059,6 +1059,7 @@ impl TypeMarkerSubject {
             CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {
                 Self::NewTask
             }
+            CaptureKind::Transfer { .. } => Self::NewTask,
             CaptureKind::Pomodoro { close: Some(_), .. } => Self::Close,
             CaptureKind::Pomodoro { close: None, .. } => Self::NewTask,
             CaptureKind::Bullet { .. } => Self::Bullet,

@@ -38,12 +38,11 @@ mod start_selection;
 pub(crate) mod target_runs;
 pub(crate) mod template;
 mod tokens;
-#[cfg(test)]
 pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 9;
+pub(crate) const GRAMMAR_REVISION: u32 = 10;
 
 #[cfg(test)]
 mod tests;
@@ -95,6 +94,8 @@ pub(crate) use self::editor_model::EditorMode;
 #[cfg(test)]
 pub(crate) use self::editor_model::EditorParse;
 pub(crate) use self::editor_model::EditorTarget;
+pub(crate) use self::editor_model::EditorTransfer;
+pub(crate) use self::editor_model::EditorTransferItem;
 pub(crate) use self::editor_model::Need;
 pub(crate) use self::editor_model::RelationDirection;
 pub(crate) use self::editor_model::RelationEntry;

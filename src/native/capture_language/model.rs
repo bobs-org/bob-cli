@@ -68,6 +68,13 @@ impl<'a> EditorParseOptions<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CaptureKind {
     Task,
+    /// A complete capture transfer. Execution refuses it until the staged
+    /// transfer adapter lands.
+    Transfer {
+        sources: Vec<super::transfer::TransferSource>,
+        arrow: super::transfer::TransferArrow,
+        destination: super::transfer::TransferDestination,
+    },
     /// A whole-item bare URL admitted by the routing policy, queued for
     /// the reading queue by the capture planner. The wrapped intent
     /// carries the classified URL plus whether `%l` requested companion

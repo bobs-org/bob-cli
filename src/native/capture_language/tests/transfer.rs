@@ -1,12 +1,113 @@
-//! Transfer lexer table tests: span-aware recognition, grammar vectors,
-//! and refusal codes. The scanner stays test-gated until transfer-resolvers
-//! wires both consumers.
+//! Transfer scanner, execution resolver, and editor contract tests.
 
 use super::super::model::RawLine;
 use super::super::transfer::*;
 
 fn scan(text: &str) -> TransferScan {
     scan_with_base(text, 0, text, false)
+}
+
+#[test]
+fn execution_resolver_claims_transfer_before_target_run_fanout() {
+    let parsed = super::super::parse_capture_draft_with_options_coded(
+        "@inbox+bench @work+pgdump > @db",
+        None,
+        None,
+        &super::super::CaptureParseOptions::routing_off(),
+    )
+    .expect("complete transfer parse");
+    assert_eq!(parsed.items.len(), 1);
+    assert!(parsed.items[0].fanout.is_none());
+    let super::super::CaptureKind::Transfer {
+        sources,
+        destination,
+        ..
+    } = &parsed.items[0].parsed.kind
+    else {
+        panic!(
+            "expected transfer kind, got {:?}",
+            parsed.items[0].parsed.kind
+        );
+    };
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[0].block_id, "bench");
+    assert_eq!(sources[1].block_id, "pgdump");
+    assert_eq!(destination.route, "db");
+}
+
+#[test]
+fn editor_transfer_contract_has_modes_spans_and_destination_fields() {
+    let input = "@inbox+bench > @db+upgrade#future-work";
+    let parsed = super::super::parse_for_editor(input);
+    assert_eq!(parsed.mode, super::super::EditorMode::TaskMerge);
+    assert_eq!(parsed.route.as_deref(), Some("db"));
+    assert_eq!(parsed.block_id.as_deref(), Some("upgrade"));
+    assert_eq!(parsed.section.as_deref(), Some("future-work"));
+    let transfer = &parsed.transfers[0].transfer;
+    assert_eq!(transfer.sources.len(), 1);
+    assert_eq!(transfer.sources[0].marker, "@inbox+bench");
+    assert_eq!(
+        transfer.destination.kind,
+        super::super::editor_model::EditorTransferDestinationKind::Drawer
+    );
+    assert_eq!(transfer.destination.drawer.as_deref(), Some("future-work"));
+    assert_eq!(transfer.destination.block_id.as_deref(), Some("upgrade"));
+    let kinds = parsed
+        .spans
+        .iter()
+        .map(|span| span.kind)
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&super::super::SpanKind::TransferSource));
+    assert!(kinds.contains(&super::super::SpanKind::TransferArrow));
+    assert!(kinds.contains(&super::super::SpanKind::TransferDestination));
+    assert!(kinds.contains(&super::super::SpanKind::Drawer));
+    for span in &parsed.spans {
+        assert!(input.is_char_boundary(span.start));
+        assert!(input.is_char_boundary(span.end));
+    }
+}
+
+#[test]
+fn incomplete_transfer_is_never_reinterpreted_as_capture_text() {
+    let input = "@inbox+bench > @db+";
+    let editor = super::super::parse_for_editor(input);
+    assert_eq!(editor.mode, super::super::EditorMode::Incomplete);
+    assert_eq!(editor.needs, [super::super::Need::BlockId]);
+    assert!(editor.spans.iter().any(|span| {
+        span.kind == super::super::SpanKind::TransferDestination
+    }));
+    assert_eq!(editor.diagnostics[0].code, "incomplete_transfer");
+
+    let error = super::super::parse_capture_draft_with_options_coded(
+        input,
+        None,
+        None,
+        &super::super::CaptureParseOptions::routing_off(),
+    )
+    .expect_err("execution refuses an incomplete transfer");
+    assert_eq!(error.code, Some("incomplete_transfer_block_id"));
+}
+
+#[test]
+fn escaped_arrow_drops_only_its_escape_and_skips_transfer_claiming() {
+    let input = "@inbox+bench \\> @db";
+    let editor = super::super::parse_for_editor(input);
+    assert_eq!(editor.mode, super::super::EditorMode::SubBullet);
+    assert_eq!(editor.body, "> @db");
+    assert!(editor.transfers.is_empty());
+
+    let parsed = super::super::parse_capture_draft_with_options_coded(
+        input,
+        None,
+        None,
+        &super::super::CaptureParseOptions::routing_off(),
+    )
+    .expect("escaped arrow remains ordinary capture text");
+    assert!(matches!(
+        &parsed.items[0].parsed.kind,
+        super::super::CaptureKind::SubBullet { .. }
+    ));
+    assert_eq!(parsed.items[0].parsed.body, "> @db");
 }
 
 fn scan_with_base(

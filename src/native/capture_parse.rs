@@ -174,7 +174,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 9` for the capture-language revision while \
+Success JSON reports `grammar: 10` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
@@ -653,6 +653,9 @@ struct CaptureParseResult {
     /// current ledger times.
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_close: Option<PomodoroCloseSpec>,
+    /// Complete transfer syntax, omitted for ordinary items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transfer: Option<capture_language::EditorTransfer>,
     /// Complete `&note:block-id` modifiers on the first item, in source
     /// order: each carries its raw text, decoded note and block ID, and
     /// its sigil-inclusive range. Omitted when the draft names none, so
@@ -754,6 +757,8 @@ struct CaptureParseItem {
     route: Option<String>,
     section: Option<String>,
     block_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transfer: Option<capture_language::EditorTransfer>,
     needs: Vec<Need>,
     /// The capture list this bullet belongs to, when split from a lone
     /// `@route` / `@route#section` header. Additive: omitted otherwise.
@@ -1081,7 +1086,14 @@ impl CaptureParseResult {
         stamp_complete_spans(&mut spans, &input, &close_policy);
         stamp_merge_spans(&mut spans, &input, &close_policy);
         stamp_successor_spans(&mut spans, &input, &close_policy);
-        let items = parse_items(&parse.items);
+        let items = parse_items(&parse.items, &parse.transfers);
+        let transfer = parse.items.first().and_then(|item| {
+            parse
+                .transfers
+                .iter()
+                .find(|transfer| transfer.index == item.index)
+                .map(|transfer| transfer.transfer.clone())
+        });
         let ref_parent = ref_parent_for(
             parse.mode,
             parse.route.as_deref(),
@@ -1157,6 +1169,7 @@ impl CaptureParseResult {
             pomodoro_split: parse.pomodoro_split,
             pomodoro_merge: parse.pomodoro_merge,
             pomodoro_close: parse.pomodoro_close,
+            transfer,
             dependencies: parse_dependencies(&parse.dependencies),
             blocked_tasks: parse_dependencies(&parse.blocked_tasks),
             relations,
@@ -1329,6 +1342,7 @@ impl CaptureParseResult {
                     pomodoro_split: None,
                     pomodoro_merge: None,
                     pomodoro_close: None,
+                    transfer: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
                     relations: Vec::new(),
@@ -1353,6 +1367,7 @@ impl CaptureParseResult {
                     route: None,
                     section: None,
                     block_id: None,
+                    transfer: None,
                     needs: Vec::new(),
                     ref_parent: None,
                     ref_listen: false,
@@ -1494,7 +1509,7 @@ impl CaptureParseResult {
         let mut template_item = parsed
             .items
             .first()
-            .map(wire_item)
+            .map(|item| wire_item(item, &parsed.transfers))
             .unwrap_or_else(empty_wire_item);
         template_item.index = 1;
         template_item.range = SourceRange {
@@ -1577,6 +1592,7 @@ impl CaptureParseResult {
             pomodoro_split: parsed.pomodoro_split,
             pomodoro_merge: parsed.pomodoro_merge,
             pomodoro_close: parsed.pomodoro_close,
+            transfer: None,
             dependencies: parse_dependencies(&parsed.dependencies),
             blocked_tasks: parse_dependencies(&parsed.blocked_tasks),
             relations,
@@ -2332,6 +2348,7 @@ fn empty_wire_item() -> CaptureParseItem {
         route: None,
         section: None,
         block_id: None,
+        transfer: None,
         needs: Vec::new(),
         ref_parent: None,
         ref_listen: false,
@@ -2395,17 +2412,26 @@ fn ref_parent_for(
     }
 }
 
-fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
+fn parse_items(
+    items: &[EditorItemParse],
+    transfers: &[capture_language::EditorTransferItem],
+) -> Vec<CaptureParseItem> {
     // One `items[]` entry per list bullet, even when a lone header carries
     // a single bullet: the list object lives on the entry, not the batch.
     if items.len() <= 1 && items.first().is_none_or(|item| item.list.is_none())
     {
         return Vec::new();
     }
-    items.iter().map(wire_item).collect()
+    items
+        .iter()
+        .map(|item| wire_item(item, transfers))
+        .collect()
 }
 
-fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
+fn wire_item(
+    item: &EditorItemParse,
+    transfers: &[capture_language::EditorTransferItem],
+) -> CaptureParseItem {
     CaptureParseItem {
         index: item.index + 1,
         range: SourceRange {
@@ -2419,6 +2445,10 @@ fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
         route: item.route.clone(),
         section: item.section.clone(),
         block_id: item.block_id.clone(),
+        transfer: transfers
+            .iter()
+            .find(|transfer| transfer.index == item.index)
+            .map(|transfer| transfer.transfer.clone()),
         needs: item.needs.clone(),
         list: item.list.clone(),
         header_range: item.list.as_ref().map(|list| SourceRange {
@@ -3243,7 +3273,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 9);
+        assert_eq!(value["grammar"], 10);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3301,12 +3331,12 @@ mod tests {
     fn lone_route_reports_note_pull_mode() {
         // NP27: `bob capture-parse -f json -- @sase` reports mode
         // `note_pull` with no needs, the route, and the ordinary list
-        // summary (`kind: "tasks"`, `count: 0`) under grammar 9. A lone
+        // summary (`kind: "tasks"`, `count: 0`) under grammar 10. A lone
         // header keeps its task-list metadata so clients can still offer
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 9);
+        assert_eq!(value["grammar"], 10);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());

@@ -362,6 +362,19 @@ pub(crate) fn parse_for_editor_with(
         }
     }
     attach_list_duplicate_id_diagnostics(&mut item_outcomes);
+    let transfers = draft
+        .items
+        .iter()
+        .zip(item_outcomes.iter())
+        .filter_map(|(raw_item, outcome)| {
+            matches!(
+                outcome.item.mode,
+                EditorMode::TaskMove | EditorMode::TaskMerge
+            )
+            .then(|| editor_transfer_item(raw_item))
+            .flatten()
+        })
+        .collect::<Vec<_>>();
     let mut declarations = draft.declarations;
     for outcome in &item_outcomes {
         declarations.extend(outcome.declarations.iter().copied());
@@ -411,6 +424,8 @@ pub(crate) fn parse_for_editor_with(
             // but never turns an operator, close, start, or query into a task
             // or changes its destination.
             if item.mode == EditorMode::PomodoroAdjust
+                || item.mode == EditorMode::TaskMove
+                || item.mode == EditorMode::TaskMerge
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroSplit
                 || item.mode == EditorMode::PomodoroMerge
@@ -423,6 +438,14 @@ pub(crate) fn parse_for_editor_with(
                 || item.needs == [Need::TaskComplete]
                 || item.pomodoro_close.is_some()
                 || item.pomodoro_start.is_some()
+                || item.spans.iter().any(|span| {
+                    matches!(
+                        span.kind,
+                        SpanKind::TransferSource
+                            | SpanKind::TransferArrow
+                            | SpanKind::TransferDestination
+                    )
+                })
             {
                 continue;
             }
@@ -466,6 +489,7 @@ pub(crate) fn parse_for_editor_with(
             items,
             global_destination,
             targets: Vec::new(),
+            transfers: Vec::new(),
         };
     };
 
@@ -527,6 +551,70 @@ pub(crate) fn parse_for_editor_with(
         items,
         global_destination,
         targets,
+        transfers,
+    }
+}
+
+fn editor_transfer_item(item: &CaptureItem<'_>) -> Option<EditorTransferItem> {
+    let parent = item.lines.first()?.raw;
+    let super::transfer::TransferScan::Valid {
+        sources,
+        arrow,
+        destination,
+    } = super::transfer::scan_transfer_line(
+        &parent,
+        item.source,
+        item.lines.len() > 1,
+    )
+    else {
+        return None;
+    };
+    Some(EditorTransferItem {
+        index: item.index,
+        transfer: EditorTransfer {
+            sources: sources
+                .into_iter()
+                .map(|source| EditorTransferSource {
+                    start: source.start,
+                    end: source.end,
+                    marker: source.marker,
+                    route: source.route,
+                    block_id: source.block_id,
+                })
+                .collect(),
+            arrow: EditorTransferArrow {
+                start: arrow.start,
+                end: arrow.end,
+            },
+            destination: EditorTransferDestination {
+                start: destination.start,
+                end: destination.end,
+                kind: editor_transfer_destination_kind(destination.kind),
+                route: destination.route,
+                block_id: destination.block_id,
+                drawer: destination.drawer,
+                section: destination.section,
+            },
+        },
+    })
+}
+
+fn editor_transfer_destination_kind(
+    kind: super::transfer::TransferDestinationKind,
+) -> EditorTransferDestinationKind {
+    match kind {
+        super::transfer::TransferDestinationKind::Note => {
+            EditorTransferDestinationKind::Note
+        }
+        super::transfer::TransferDestinationKind::Task => {
+            EditorTransferDestinationKind::Task
+        }
+        super::transfer::TransferDestinationKind::Drawer => {
+            EditorTransferDestinationKind::Drawer
+        }
+        super::transfer::TransferDestinationKind::Section => {
+            EditorTransferDestinationKind::Section
+        }
     }
 }
 
@@ -732,6 +820,7 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         EditorMode::TaskToggle
         | EditorMode::SubBullet
         | EditorMode::TaskDependency => "task-toggle",
+        EditorMode::TaskMove | EditorMode::TaskMerge => "task transfer",
         EditorMode::Task | EditorMode::Incomplete | EditorMode::NotePull => {
             "task"
         }
@@ -1365,10 +1454,390 @@ pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
+    let transfer = item.lines.first().map(|parent| {
+        super::transfer::scan_transfer_line(
+            &parent.raw,
+            item.source,
+            item.lines.len() > 1,
+        )
+    });
+    if let Some(scan) = transfer {
+        match scan {
+            super::transfer::TransferScan::Unclaimed => {}
+            super::transfer::TransferScan::Escaped {
+                backslash_span, ..
+            } => {
+                let mut escaped = item.source.to_string();
+                escaped.replace_range(backslash_span.0..backslash_span.1, " ");
+                let lines = item
+                    .lines
+                    .iter()
+                    .map(|line| ItemLine {
+                        raw: RawLine {
+                            text: escaped
+                                .get(line.raw.start..line.raw.end)
+                                .unwrap_or(""),
+                            start: line.raw.start,
+                            end: line.raw.end,
+                        },
+                        line_number: line.line_number,
+                    })
+                    .collect();
+                let view = CaptureItem {
+                    source: escaped.as_str(),
+                    index: item.index,
+                    start: item.start,
+                    end: item.end,
+                    line_start: item.line_start,
+                    line_end: item.line_end,
+                    lines,
+                    list: item.list.clone(),
+                };
+                let outcome =
+                    parse_editor_item_without_transfer(&view, options);
+                return EditorItemOutcome {
+                    item: outcome.item,
+                    declarations: remap_type_marker_declarations(
+                        outcome.declarations,
+                        item.source,
+                    ),
+                };
+            }
+            claimed => return parse_editor_transfer_item(item, claimed),
+        }
+    }
+    parse_editor_item_without_transfer(item, options)
+}
+
+fn parse_editor_item_without_transfer<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+) -> EditorItemOutcome<'a> {
     if let Some(outcome) = try_parse_editor_target_run(item, options) {
         return outcome;
     }
     parse_editor_item_singleton_with(item, options)
+}
+
+fn parse_editor_transfer_item<'a>(
+    item: &CaptureItem<'a>,
+    scan: super::transfer::TransferScan,
+) -> EditorItemOutcome<'a> {
+    if let Some(list) = item.list.as_ref() {
+        let parent = item.lines.first().map(|line| line.raw);
+        let marker = parent.map(|line| line.text.trim()).unwrap_or_default();
+        let header = list
+            .section
+            .as_deref()
+            .map(|section| format!("@{}#{section}", list.route))
+            .unwrap_or_else(|| format!("@{}", list.route));
+        let suggestion =
+            format!("give it its own item (a blank line, then `{marker}`)");
+        let message = super::project_tasks::list_bullet_marker_error(
+            &header,
+            &format!("{}.md", list.route),
+            marker,
+            &suggestion,
+        );
+        return list_refusal_item(
+            item,
+            list,
+            Some(("list_bullet_marker", message)),
+            parent.map(|line| (line.start, line.end)),
+        );
+    }
+
+    use super::transfer::TransferScan;
+    let mut spans = Vec::new();
+    let mut diagnostics = Vec::new();
+    let (mode, route, section, block_id, needs, transfer) = match scan {
+        TransferScan::Incomplete {
+            sources,
+            arrow,
+            need,
+            span,
+            message,
+        } => {
+            spans.extend(sources.iter().map(transfer_source_span));
+            spans.push(transfer_span(
+                arrow.start,
+                arrow.end,
+                SpanKind::TransferArrow,
+            ));
+            let destination_range = if span == (arrow.start, arrow.end) {
+                (arrow.end, arrow.end)
+            } else {
+                span
+            };
+            spans.push(transfer_span(
+                destination_range.0,
+                destination_range.1,
+                SpanKind::TransferDestination,
+            ));
+            add_incomplete_transfer_selector_span(
+                &mut spans,
+                item.source,
+                destination_range,
+                need,
+            );
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "incomplete_transfer",
+                message,
+                range: Some(span),
+            });
+            (
+                EditorMode::Incomplete,
+                None,
+                None,
+                None,
+                vec![transfer_need(need)],
+                None,
+            )
+        }
+        TransferScan::Invalid {
+            code,
+            message,
+            span,
+        } => {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code,
+                message,
+                range: Some(span),
+            });
+            (EditorMode::Incomplete, None, None, None, Vec::new(), None)
+        }
+        TransferScan::Valid {
+            sources,
+            arrow,
+            destination,
+        } => {
+            spans.extend(sources.iter().map(transfer_source_span));
+            spans.push(transfer_span(
+                arrow.start,
+                arrow.end,
+                SpanKind::TransferArrow,
+            ));
+            spans.push(transfer_span(
+                destination.start,
+                destination.end,
+                SpanKind::TransferDestination,
+            ));
+            add_transfer_selector_spans(&mut spans, &destination);
+            let mode = match destination.kind {
+                super::transfer::TransferDestinationKind::Note => {
+                    EditorMode::TaskMove
+                }
+                super::transfer::TransferDestinationKind::Task
+                | super::transfer::TransferDestinationKind::Drawer
+                | super::transfer::TransferDestinationKind::Section => {
+                    EditorMode::TaskMerge
+                }
+            };
+            let section = destination
+                .drawer
+                .clone()
+                .or_else(|| destination.section.clone());
+            let transfer = EditorTransfer {
+                sources: sources
+                    .into_iter()
+                    .map(|source| EditorTransferSource {
+                        start: source.start,
+                        end: source.end,
+                        marker: source.marker,
+                        route: source.route,
+                        block_id: source.block_id,
+                    })
+                    .collect(),
+                arrow: EditorTransferArrow {
+                    start: arrow.start,
+                    end: arrow.end,
+                },
+                destination: EditorTransferDestination {
+                    start: destination.start,
+                    end: destination.end,
+                    kind: match destination.kind {
+                        super::transfer::TransferDestinationKind::Note => {
+                            EditorTransferDestinationKind::Note
+                        }
+                        super::transfer::TransferDestinationKind::Task => {
+                            EditorTransferDestinationKind::Task
+                        }
+                        super::transfer::TransferDestinationKind::Drawer => {
+                            EditorTransferDestinationKind::Drawer
+                        }
+                        super::transfer::TransferDestinationKind::Section => {
+                            EditorTransferDestinationKind::Section
+                        }
+                    },
+                    route: destination.route.clone(),
+                    block_id: destination.block_id.clone(),
+                    drawer: destination.drawer.clone(),
+                    section: destination.section.clone(),
+                },
+            };
+            (
+                mode,
+                Some(destination.route),
+                section,
+                destination.block_id,
+                Vec::new(),
+                Some(transfer),
+            )
+        }
+        TransferScan::Unclaimed | TransferScan::Escaped { .. } => {
+            unreachable!("only claimed transfer scans reach this parser")
+        }
+    };
+    spans.sort_by_key(|span| (span.start, span.end));
+    let item_parse = empty_editor_item(
+        item,
+        mode,
+        route,
+        section,
+        block_id,
+        needs,
+        spans,
+        diagnostics,
+    );
+    let _ = transfer;
+    EditorItemOutcome {
+        item: item_parse,
+        declarations: Vec::new(),
+    }
+}
+
+fn empty_editor_item(
+    item: &CaptureItem<'_>,
+    mode: EditorMode,
+    route: Option<String>,
+    section: Option<String>,
+    block_id: Option<String>,
+    needs: Vec<Need>,
+    spans: Vec<Span>,
+    diagnostics: Vec<Diagnostic>,
+) -> EditorItemParse {
+    EditorItemParse {
+        index: item.index,
+        start: item.start,
+        end: item.end,
+        line_start: item.line_start,
+        line_end: item.line_end,
+        body: String::new(),
+        mode,
+        route,
+        section,
+        block_id,
+        needs,
+        ref_listen: false,
+        pomodoro_start: None,
+        pomodoro_adjust: None,
+        pomodoro_shift: None,
+        pomodoro_split: None,
+        pomodoro_merge: None,
+        pomodoro_close: None,
+        dependencies: Vec::new(),
+        blocked_tasks: Vec::new(),
+        relations: Vec::new(),
+        dependency_target: None,
+        task_complete: None,
+        list: item.list.clone(),
+        spans,
+        diagnostics,
+        sub_bullets: Vec::new(),
+        has_local_destination: false,
+        local_destination_markers: Vec::new(),
+        drawer_bullet_target: None,
+        targets: Vec::new(),
+    }
+}
+
+fn transfer_source_span(source: &super::transfer::TransferSource) -> Span {
+    transfer_span(source.start, source.end, SpanKind::TransferSource)
+}
+
+fn transfer_span(start: usize, end: usize, kind: SpanKind) -> Span {
+    Span {
+        start,
+        end,
+        kind,
+        project_note: None,
+        title: None,
+        key: None,
+    }
+}
+
+fn transfer_need(need: super::transfer::TransferNeed) -> Need {
+    match need {
+        super::transfer::TransferNeed::Destination => Need::TransferDestination,
+        super::transfer::TransferNeed::BlockId => Need::BlockId,
+        super::transfer::TransferNeed::Drawer => Need::Drawer,
+        super::transfer::TransferNeed::Section => Need::Section,
+    }
+}
+
+fn add_incomplete_transfer_selector_span(
+    spans: &mut Vec<Span>,
+    source: &str,
+    range: (usize, usize),
+    need: super::transfer::TransferNeed,
+) {
+    let Some(token) = source.get(range.0..range.1) else {
+        return;
+    };
+    let Some(hash) = token.find('#') else {
+        if need == super::transfer::TransferNeed::BlockId
+            && let Some(plus) = token.find('+')
+        {
+            let at = range.0 + plus + 1;
+            spans.push(transfer_span(at, at, SpanKind::TaskBlockId));
+        }
+        return;
+    };
+    match need {
+        super::transfer::TransferNeed::BlockId => {
+            let end = range.0 + hash;
+            let plus = token.find('+').map(|plus| range.0 + plus + 1);
+            let start = plus.unwrap_or(end).min(end);
+            spans.push(transfer_span(start, end, SpanKind::TaskBlockId));
+        }
+        super::transfer::TransferNeed::Drawer => {
+            let start = range.0 + hash + 1;
+            spans.push(transfer_span(start, range.1, SpanKind::Drawer));
+        }
+        super::transfer::TransferNeed::Section => {
+            let start = range.0 + hash + 1;
+            spans.push(transfer_span(start, range.1, SpanKind::Section));
+        }
+        super::transfer::TransferNeed::Destination => {}
+    }
+}
+
+fn add_transfer_selector_spans(
+    spans: &mut Vec<Span>,
+    destination: &super::transfer::TransferDestination,
+) {
+    let Some(hash) = destination.marker.find('#') else {
+        return;
+    };
+    let start = destination.start + hash + 1;
+    let end = destination.end;
+    if let Some(drawer) = destination.drawer.as_deref() {
+        let title = if destination.drawer_exact {
+            drawer.to_string()
+        } else {
+            super::normalize_task_text(&drawer.replace('-', " "))
+                .to_ascii_uppercase()
+        };
+        let key = crate::native::capture_drawers::drawer_key(&title);
+        let mut span = transfer_span(start, end, SpanKind::Drawer);
+        span.title = Some(title);
+        span.key = Some(key);
+        spans.push(span);
+    } else if destination.section.is_some() {
+        spans.push(transfer_span(start, end, SpanKind::Section));
+    }
 }
 
 fn parse_editor_item_singleton_with<'a>(

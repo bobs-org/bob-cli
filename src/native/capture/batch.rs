@@ -456,6 +456,11 @@ pub(super) fn plan_capture_to_target(
                 "task toggle capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::Transfer { .. } => {
+            return Err(CaptureError::io(
+                "transfer capture invariant failed: execution was not rejected before planning",
+            ));
+        }
         CaptureKind::PomodoroAdjust { .. } => {
             return Err(CaptureError::io(
                 "pomodoro adjustment capture invariant failed: wrong write planner",

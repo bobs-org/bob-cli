@@ -1,9 +1,7 @@
 //! Transfer shell guard: `>` eaten by the shell must refuse before mutation.
 //!
-//! Phase transfer-lexer wires only the stdout regular-file guard; full
-//! transfer execution lands in later phases. These CLI tests prove the
-//! guard refuses when stdout is a regular `@` file and stays quiet for
-//! normal files and pipes.
+//! Transfer parsing refuses execution until the staged adapter lands, and
+//! the shell guard catches redirects eaten before Bob receives the draft.
 
 use crate::support::*;
 use std::fs;
@@ -81,4 +79,34 @@ fn shell_guard_lets_normal_files_and_pipes_through() {
         .output()
         .expect("run capture with piped stdout");
     assert_success(&piped);
+}
+
+#[test]
+fn recognized_transfer_refuses_before_capture_mutation() {
+    let temp = TempDir::new("bob-cli-transfer-unavailable");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    let before = fs::read(&day_file).expect("read day before");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@inbox+bench > @db")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-11-03 09:30:00")
+        .output()
+        .expect("run capture with a transfer draft");
+    assert!(!output.status.success());
+    let error: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture JSON error");
+    assert_eq!(error["code"], "transfer_execution_unavailable");
+    assert_eq!(
+        fs::read(&day_file).expect("read day after"),
+        before,
+        "transfer refusal writes nothing"
+    );
 }

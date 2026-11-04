@@ -1151,6 +1151,13 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {
                 EditorMode::Task
             }
+            CaptureKind::Transfer { destination, .. } => match destination.kind
+            {
+                super::super::transfer::TransferDestinationKind::Note => {
+                    EditorMode::TaskMove
+                }
+                _ => EditorMode::TaskMerge,
+            },
             CaptureKind::Bullet { .. } => EditorMode::Bullet,
             CaptureKind::Pomodoro { .. } => EditorMode::PomodoroTask,
             CaptureKind::SubBullet { .. } => EditorMode::SubBullet,

@@ -4,6 +4,77 @@ use crate::support::*;
 use std::fs;
 
 #[test]
+fn capture_parse_json_exposes_transfer_contract_and_partial_needs() {
+    let parse = |raw: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(raw)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    let raw = "@inbox+bench > @db";
+    let moved = parse(raw);
+    assert_eq!(moved["schema_version"], 1);
+    assert_eq!(moved["grammar"], 10);
+    assert_eq!(moved["mode"], "task_move");
+    assert_eq!(moved["route"], "db");
+    assert!(moved["block_id"].is_null());
+    assert_eq!(
+        moved["transfer"],
+        serde_json::json!({
+            "sources": [{
+                "start": 0,
+                "end": 12,
+                "marker": "@inbox+bench",
+                "route": "inbox",
+                "block_id": "bench"
+            }],
+            "arrow": { "start": 13, "end": 14 },
+            "destination": {
+                "start": 15,
+                "end": 18,
+                "kind": "note",
+                "route": "db"
+            }
+        })
+    );
+    assert_eq!(
+        moved["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 12, "kind": "transfer_source" },
+            { "start": 13, "end": 14, "kind": "transfer_arrow" },
+            { "start": 15, "end": 18, "kind": "transfer_destination" },
+        ])
+    );
+    assert!(moved.get("targets").is_none());
+
+    let drawer = parse("@inbox+bench > @db+upgrade#future-work");
+    assert_eq!(drawer["mode"], "task_merge");
+    assert_eq!(drawer["route"], "db");
+    assert_eq!(drawer["block_id"], "upgrade");
+    assert_eq!(drawer["transfer"]["destination"]["kind"], "drawer");
+    assert_eq!(drawer["transfer"]["destination"]["drawer"], "future-work");
+    assert!(drawer["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|span| { span["kind"] == "transfer_destination" }));
+
+    let partial = parse("@inbox+bench > @db+");
+    assert_eq!(partial["mode"], "incomplete");
+    assert_eq!(partial["needs"], serde_json::json!(["block_id"]));
+    assert_eq!(partial["diagnostics"][0]["code"], "incomplete_transfer");
+    assert!(partial.get("transfer").is_none());
+}
+
+#[test]
 fn capture_parse_human_output_is_plain_and_concise() {
     let output = bob_command()
         .arg("capture-parse")
@@ -94,7 +165,7 @@ fn capture_parse_json_reports_public_target_runs_and_batch_offsets() {
 
     let leading_raw = "@work+a @dev+b note";
     let leading = parse(leading_raw);
-    assert_eq!(leading["grammar"], 9);
+    assert_eq!(leading["grammar"], 10);
     assert_eq!(leading["body"], "note");
     assert_eq!(leading["route"], "work");
     assert!(leading.get("items").is_none(), "{leading}");
@@ -328,7 +399,7 @@ fn capture_parse_and_dry_run_use_the_same_public_target_run_in_scratch_vault() {
     assert_success(&parsed);
     let parsed_json: serde_json::Value =
         serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
-    assert_eq!(parsed_json["grammar"], 9);
+    assert_eq!(parsed_json["grammar"], 10);
     assert_eq!(parsed_json["body"], "note");
     assert_eq!(parsed_json["targets"].as_array().unwrap().len(), 2);
 
@@ -2033,7 +2104,7 @@ fn capture_parse_json_reports_move_bullets() {
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-parse JSON");
-    assert_eq!(json["grammar"], 9);
+    assert_eq!(json["grammar"], 10);
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["needs"], serde_json::json!(["project_task_move"]));
     assert_eq!(

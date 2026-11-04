@@ -765,6 +765,8 @@ pub(super) fn classify_local_marker(
         | EditorMode::PomodoroStart
         | EditorMode::TaskDependency
         | EditorMode::TaskComplete
+        | EditorMode::TaskMove
+        | EditorMode::TaskMerge
         | EditorMode::Ref
         | EditorMode::NotePull
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
@@ -868,6 +870,10 @@ pub(super) fn non_absorbable_marker_notice(
         // `@@` would change which task gets completed.
         EditorMode::TaskComplete => format!(
             "@@ cannot take a task completion: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::TaskMove | EditorMode::TaskMerge => format!(
+            "@@ cannot take a capture transfer: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Ref => format!(
