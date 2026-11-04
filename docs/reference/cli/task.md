@@ -177,6 +177,8 @@ Examples:
                                  Move many tasks into one note
   bob task move -d -f json old-note new-note -b work-item
                                  Print a machine-readable preview
+  bob capture '@inbox+bench @work+pgdump > @db'
+                                 Move tasks from capture (quote the `>`)
 
 Run 'bob task reconcile' after a move when the report says
 reconciliation is pending.

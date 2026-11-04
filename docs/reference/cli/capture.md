@@ -19,6 +19,8 @@ All items are planned against in-memory note snapshots before commit. Later item
 
 A maximal adjacent run of two or more @route+id targets at one end of a parent line applies that line to every named task in marker order, in the same atomic capture. Duplicate task identities are refused before staging. A target run shares each clipboard read and each rolled priority date; errors name the failing target. Human output shows a 'targets  @route+id · @route+id' header, and JSON adds per-member fanout context.
 
+Move or merge whole tasks with `@a+x @b+y > @dest`, quoting the draft so the shell keeps the `>` (for example `bob capture '@inbox+bench > @db+upgrade'`). One or more `@route+id` sources precede a standalone `>` and one destination follows it: a bare `@route` moves the tasks into that note keeping their IDs, `@route+id` merges them into that task, `@route+id#drawer` merges into its drawer (an H2 section on `^prj`), and `@route#section` merges into that note section. The line carries nothing else: no body text, child bullets, schedule, priority, type, clipboard, dependency, relation, or completion markers. A glued arrow, extra text, children, or any other destination shape fails with a teaching error before anything is written. Later items see the staged move or merge, dry-run plans identically, and any failure rolls the whole batch back. Human output prints `↪ Moved N tasks into <note> › Tasks` for moves and `⤵ merged N tasks into “<target>”` for merges; JSON adds `moves[]` or `merges[]` plus `repaired_files[]`. When stdout is a regular file whose name starts with `@`, capture refuses with `shell_ate_transfer_arrow`: the shell ate an unquoted `>`.
+
 A draft whose first item carries the `%t` directive expands one capture per later row. Write one capture item with `{0}`, `{1}`, and so on, put `%t` at either edge of any of its lines, then a blank line and one row of values per capture; each row must supply exactly one value per placeholder index; quote fields containing spaces. A template that uses only `{0}` takes one capture per value, so `bar baz bam` on one line is three captures. Capturing a template is exactly capturing its expansion, and the whole run still plans and writes atomically. Use `{{` and `}}` for literal braces, or the `--expand` option to print the expanded text without capturing. Templates refuse `%c` and Pomodoro session operators because those actions cannot safely repeat across rows.
 
 Append a trailing lowercase 's:<N>' token, where N is a non-negative integer, to schedule the capture N days from today. The token is removed from the task text and rendered as [scheduled::YYYY-MM-DD] after [created::YYYY-MM-DD]. It may appear before or after a trailing @route token and is recognized only at the very end of the input. Checkbox-bearing captures with a resolved scheduled property start Blocked as '[?]', including s:0; ordinary bullet and sub-bullet forms stay checkbox-free.
@@ -202,6 +204,10 @@ Examples:
   bob capture '*job:cleanup @body+work'
   bob capture '&foo:bar @body+excercise'
   bob capture '^body:excercise &foo:bar'
+  bob capture '@inbox+bench @work+pgdump > @db'
+  bob capture '@inbox+bench @work+pgdump > @db+upgrade'
+  bob capture '@inbox+bench > @db+upgrade#future-work'
+  bob capture '@mac_inbox+ws-proto > @dev#future-work'
 
 Environment:
   BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json

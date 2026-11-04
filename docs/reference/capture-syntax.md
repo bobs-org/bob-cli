@@ -90,6 +90,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `^id` | Project-note child: name only | [`^id` child](#project-caret-child) |
 | `@route+block-id` | Child bullet under an existing task | [`@route+block-id`](#plus-child) |
 | `@route+id @route+id` | Target run | [Target run](#plus-child-target-run) |
+| `@a+x @b+y > @c` / `@a+x @b+y > @c+id` / `@a+x > @c+id#drawer` / `@a+x > @c#section` | Move or merge tasks with `>` | [`>` transfer](#transfer) |
 | `@route+block-id#drawer` | Child inside a task drawer | [`@route+block-id#drawer`](#plus-child-section) |
 | `- #drawer` with nested notes | First-level drawer bullet | [Drawer bullets](#drawer-bullets) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
@@ -101,9 +102,6 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `#<type>` | Type a new task or retype its existing target | [`#<type>`](#hash-type) |
 
 ## Overloaded markers
-
-These characters mean different things in different positions. Read them by
-what they attach to, not as one global operator.
 
 | Marker | Context | Meaning |
 | --- | --- | --- |
@@ -145,10 +143,6 @@ what they attach to, not as one global operator.
 | `%` | trailing `%` | Incomplete directive |
 
 Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
-
-**Mnemonic: `~` on its own ties two tasks; `~` inside `x` / `=` drops.**
-
-**`=` then a word starts that Pomodoro; `#` only after a number.** `=bugs` and `=#bugs` are one token; write `#` only when a number comes first (`=3#bugs`) or the name starts with a digit or reads as a close (`=#2fa`, `=#x2`).
 
 ## Incomplete input versus executable syntax
 
@@ -1250,6 +1244,26 @@ bob capture '@work+one @work+two Ship it'
 ```text { .no-copy title="Output" }
 targets  @work+one · @work+two
 ```
+
+### `>` transfer {#transfer}
+
+Move or merge whole tasks: `@route+id` sources, `>`, then the
+destination — a bare `@route` moves, the rest merge. Quote the draft so
+the shell keeps the `>`.
+
+```bash
+bob capture '@inbox+bench @work+pgdump > @db'
+bob capture '@inbox+bench @work+pgdump > @db+upgrade'
+bob capture '@inbox+bench > @db+upgrade#future-work'
+bob capture '@mac_inbox+ws-proto > @dev#future-work'
+```
+
+```text { .no-copy title="Output" }
+↪ Moved 2 tasks into db.md › Tasks
+⤵ merged 2 tasks into “Upgrade Postgres to 17” · db.md
+```
+
+Contract: [Moving and merging tasks with `>`](../capture.md#moving-and-merging-tasks-with).
 
 ### `@route+block-id#drawer` {#plus-child-section}
 

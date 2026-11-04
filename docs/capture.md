@@ -58,6 +58,7 @@ workflow guide.
   - [Project notes](#project-notes)
     - [Offer a new project's tasks](#offer-a-new-projects-tasks)
   - [Sub-bullets under existing tasks](#sub-bullets-under-existing-tasks)
+    - [Moving and merging tasks with `>`](#moving-and-merging-tasks-with)
   - [Task Link toggle](#task-link-toggle)
   - [Pomodoro notes](#pomodoro-notes)
   - [Section bullets](#section-bullets)
@@ -1165,7 +1166,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 9`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 10`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -5512,7 +5513,7 @@ names come from the item's seal):
 
 The parser and completion commands expose the same draft shape:
 
-- `capture-parse` uses grammar revision 9. A complete `- ^id` has a
+- `capture-parse` uses grammar revision 10. A complete `- ^id` has a
   `project_task_move_marker` span over `^`; `- :id` uses
   `project_task_move_link_marker` over `:`. `project_task_move_block_id`
   covers the ID, including a partial ID. A lone sigil is `incomplete`, needs
@@ -5917,6 +5918,90 @@ Every sub-bullet batch also reports its parent tasks once, in final state,
 in the batch-level `task_blocks` array; see
 [Task blocks](#task-blocks).
 
+#### Moving and merging tasks with `>`
+
+Move or merge whole tasks without retyping them. A transfer line names one or
+more complete `@route+id` sources, a standalone `>` arrow, and one
+destination. Always quote the draft so the shell keeps the `>`: an unquoted
+`bob capture @a+x > @c` is a shell redirect, and bob sees only `@a+x`.
+
+```bash
+bob capture '@inbox+bench @work+pgdump > @db'
+bob capture '@inbox+bench @work+pgdump > @db+upgrade'
+bob capture '@inbox+bench > @db+upgrade#future-work'
+bob capture '@mac_inbox+ws-proto > @dev#future-work'
+```
+
+The destination decides the verb. A bare note moves; a task, drawer, or
+section merges (see [Merging tasks](task-merge.md)).
+
+| Destination | Verb | Effect |
+| --- | --- | --- |
+| `@c` | Move | Each source moves into `c.md`'s Tasks area through the move engine, keeping its `^id` with repaired links, relocated Task Links, and freshness stamps. A source already in `c.md` is refused (`move_same_note`). |
+| `@c+id` | Merge into task | Each source merges into `^id` at its plain-child anchor in typed order, retiring as a cancelled tombstone with `merged into [[T]]` provenance. |
+| `@c+id#drawer` | Merge into drawer | Each source merges into that task's ALL-CAPS drawer (`#future-work` matches `FUTURE WORK`; quoted `#”...”` selectors allow spaces). On a `^prj` task the drawer is an `##` section. Missing drawers are created; near-duplicates are refused. |
+| `@c#section` | Merge into section | Each source merges into that note's `##` section, created in Title Case when missing. Works on area and project notes. |
+
+A transfer is recognized before target-run fan-out, so it never fans out and
+never runs Ensure Next. One source is enough. Once claimed, a malformed or
+partial right-hand side never becomes note text: it is an `incomplete` draft
+(needing `transfer_destination`, `block_id`, `drawer`, or `section`) or a
+teaching error with an exact byte range.
+
+A transfer item carries nothing else. Child bullets, body text, schedule
+(`s:<N>`), priority (`$<N>`), type (`#`), clipboard (`%`), dependency (`&`),
+blocking (`*`), relation (`~`), completion (`!`), and any trailing text all
+fail with `transfer_extra_text`. Other malformed shapes have their own codes:
+glued arrows (`transfer_arrow_spacing`), a source with `#drawer` or `!`
+(`transfer_source_suffix`), a source written `@route:id`, `@route^id`, or
+`^route:id` (`transfer_source_marker`), and any other destination shape
+(`transfer_destination_marker`). `\>` at the arrow position escapes the
+transfer and writes a literal `>` (dropping the backslash); elsewhere `\>`
+stays verbatim. Mid-line comparisons (`called Bob > 3 times`), line-initial
+blockquotes, and code stay unchanged. Forced `-r`/`--task`/`--drawer` keep
+every `@` literal, a `@@` declaration never applies to a transfer item, and
+list bullets under a lone `@route` header refuse transfers with
+`list_bullet_marker`.
+
+Sources resolve in typed order against the staged snapshot. Naming the same
+task twice is refused (`duplicate_capture_target`; the planner also catches
+aliases that resolve to one `(path, id)`), a destination task that is also a
+source is refused (`transfer_destination_is_source`), and a source nested
+inside another source is refused (`transfer_overlapping_sources`).
+
+Execution is atomic with the rest of the draft. Bare-note moves run through
+the move engine one source at a time; merges run through the merge engine
+with Explicit gesture semantics and the first configured merge label (falling
+back to `merged into`), preserving write order (target, dependents, repairs,
+daily note, then sources). Later draft items see the staged move or merge,
+`--dry-run` plans identically except for `dry_run`, an unchanged re-run
+writes nothing, and any parse, plan, or guarded-commit failure rolls the
+whole batch back. Merge warnings and successor offers flow through the
+existing draft-level `pull_in`: offer T once at the earliest lost
+source-link slot, and `-p` picks link, raise to Next, and stamp fresh through
+existing pick semantics.
+
+Human output prints `↪ Moved N tasks into <note> › Tasks` for moves and
+`⤵ merged N tasks into “<target>”` for merges (with `Would move` / `would
+merge` under `--dry-run`), plus per-task lines, dependent repoints,
+prerequisite warnings, and offer rows. `capture-parse -f json` reports mode
+`task_move` or `task_merge` with an additive `transfer` object (`sources[]`
+with `start`, `end`, `marker`, `route`, `block_id`; `arrow` with `start`,
+`end`; `destination` with `start`, `end`, `kind: note|task|drawer|section`,
+plus `route`, `block_id`, `drawer`, or `section`), `transfer_source`,
+`transfer_arrow`, and `transfer_destination` spans, and the legacy
+`route`/`block_id` fields describing the destination. `bob capture -f json`
+adds `moves[]` (the `bob task move` record shape) or `merges[]` (the merge
+record shape) plus `repaired_files[]`; ordinary items omit the empty fields.
+`capture-parse` and `capture-complete` report grammar revision 10 while
+`schema_version` stays 1 (see [Capture-language
+revision](reference/compatibility.md#capture-language-revision)).
+
+When stdout is a regular file whose basename starts with `@`, capture refuses
+before planning with `shell_ate_transfer_arrow`: `your shell ate “>”: quote
+the draft (bob capture '@a+x > @c') and delete the empty file “@c”`. Pipes,
+TTYs, and the Mac panel are unaffected.
+
 ### Task Link toggle
 
 A capture item that is exactly `@route+block-id`, with no body text and no
@@ -6297,7 +6382,7 @@ drafts without `%t` it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
-`"pomodoro_close"`, `"pomodoro_link"`, `"note_pull"`, `"task_dependency"`, `"task_complete"`, or `"ref"`, and
+`"pomodoro_close"`, `"pomodoro_link"`, `"note_pull"`, `"task_dependency"`, `"task_complete"`, `"task_move"`, `"task_merge"`, or `"ref"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
@@ -6511,6 +6596,19 @@ source/destination endpoint objects described under
 any Pomodoro a link-direction toggle insert or unlink cleanup touches — also
 appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
+
+Transfer results use kind `"task_move"` for a bare-note destination and
+`"task_merge"` for a task, drawer, or section destination, with
+`placement: "updated"`. The legacy `route`/`block_id` fields
+describe the destination. A move adds `moves[]` (one `bob task move` record
+per source in typed order) and a merge adds `merges[]` (one merge record per
+source in typed order), plus `repaired_files[]`; ordinary items omit the
+empty fields. Merge warnings and successor offers join the batch-level
+`pull_in` offers like any other offer source. Human output prints `↪ Moved N
+tasks into <note> › Tasks` for moves and `⤵ merged N tasks into “<target>”`
+for merges (dry-run: `Would move` / `would merge`), with per-task lines,
+dependent repoints, prerequisite warnings, and offer rows; see [Moving and
+merging tasks with `>`](#moving-and-merging-tasks-with).
 
 When the link guard consumes a link or Ensure Next gesture, `link_guard`
 describes why the target stayed unlinked and which prerequisites rose. For
@@ -7065,7 +7163,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 9` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 10` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -7073,7 +7171,11 @@ will succeed. Wikilink highlighting is syntax-only and additive; it does
 not change capture routing or diagnostics.
 
 Grammar 8 added move bullets to sealed project-note items. Grammar 9 adds
-target runs. `targets` is present only for two or more selected members and
+target runs. Grammar 10 adds `>` transfer lines: a complete transfer reports
+mode `task_move` or `task_merge` with the `transfer` object and the
+`transfer_source`, `transfer_arrow`, and `transfer_destination` spans, and the
+legacy `route`/`block_id` fields describe the destination (see [Moving and
+merging tasks with `>`](#moving-and-merging-tasks-with)). `targets` is present only for two or more selected members and
 contains `[{start, end, marker, mode, route, block_id, section}, ...]` with
 absolute UTF-8 byte ranges. The legacy `mode`, `route`, `section`, and
 `block_id` describe the first member; `needs` is the ordered union of member
@@ -8236,7 +8338,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 9`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 10`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 
