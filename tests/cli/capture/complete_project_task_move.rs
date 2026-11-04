@@ -103,7 +103,7 @@ fn empty_move_field_serves_parent_rows_and_json_picker_metadata() {
     let draft = "Create packet @cash^exit@#admin\n- ^";
     let value = complete_json(&vault, &day_file, draft, draft.len());
     assert_eq!(value["context"], "project_task_move");
-    assert_eq!(value["grammar"], 10);
+    assert_eq!(value["grammar"], 11);
     assert_eq!(value["query"], "");
     assert_eq!(
         value["replacement"],
@@ -292,4 +292,43 @@ fn move_rows_report_draft_conflicts_future_start_and_missing_parent() {
         missing["warnings"][0],
         "missing.md does not exist (run 'bob capture-targets' to list routable notes)"
     );
+}
+
+#[test]
+fn choice_continuation_key_only_on_lone_caret_and_no_context_on_choice() {
+    // cli-grammar MQ4: a lone `- ^` offers `^` as a continuation key; the
+    // key is absent for `- :`, for a non-empty query, and at `- ^^` there
+    // is no `project_task_move` context at all.
+    let temp = TempDir::new("bob-cli-choice-continuation");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_move_fixture(&vault);
+
+    let lone = "Create packet @cash^exit@\n- ^";
+    let value = complete_json(&vault, &day_file, lone, lone.len());
+    assert_eq!(value["context"], "project_task_move");
+    assert_eq!(
+        value["picker"]["action_continuation_keys"],
+        serde_json::json!(["^"])
+    );
+
+    let link = "Create packet @cash^exit@\n- :";
+    let value = complete_json(&vault, &day_file, link, link.len());
+    assert_eq!(value["context"], "project_task_move");
+    assert!(value["picker"]["action_continuation_keys"].is_null());
+
+    let query = "Create packet @cash^exit@\n- ^dr";
+    let value = complete_json(&vault, &day_file, query, query.len());
+    assert_eq!(value["context"], "project_task_move");
+    assert!(value["picker"]["action_continuation_keys"].is_null());
+
+    let choice = "Create packet @cash^exit@\n- ^^";
+    for cursor in [choice.len() - 1, choice.len()] {
+        let value = complete_json(&vault, &day_file, choice, cursor);
+        assert!(value["context"].is_null(), "{cursor}");
+        assert!(
+            value.get("project_task_move").is_none()
+                || value["project_task_move"].is_null()
+        );
+    }
 }

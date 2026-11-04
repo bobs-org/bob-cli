@@ -1698,7 +1698,8 @@ fn project_task_move_completion_field_at(
         super::move_bullet::MoveBulletHit::Unfinished { span, .. } => {
             (span.start, span.end, span.end, span.end)
         }
-        super::move_bullet::MoveBulletHit::Invalid { .. } => return None,
+        super::move_bullet::MoveBulletHit::Choice { .. }
+        | super::move_bullet::MoveBulletHit::Invalid { .. } => return None,
     };
     if cursor < start || cursor > end {
         return None;
@@ -1785,7 +1786,8 @@ pub(crate) fn project_task_move_detail(
         | super::move_bullet::MoveBulletHit::Unfinished { sigil, span } => {
             (sigil, (span.start, span.end))
         }
-        super::move_bullet::MoveBulletHit::Invalid { .. } => return None,
+        super::move_bullet::MoveBulletHit::Choice { .. }
+        | super::move_bullet::MoveBulletHit::Invalid { .. } => return None,
     };
     let prefix_end = authored.body_start.checked_sub(line.start)?;
     let prefix = line.text.get(..prefix_end)?;

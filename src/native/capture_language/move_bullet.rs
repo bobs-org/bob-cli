@@ -27,6 +27,9 @@ pub(crate) enum MoveBulletHit {
     /// A lone `^` / `:` with nothing after it: the editor opens the move
     /// picker, and `bob capture` refuses it.
     Unfinished { sigil: char, span: Range<usize> },
+    /// An exact `- ^^` choice marker: answered after Return, before any
+    /// write. The span covers both carets.
+    Choice { span: Range<usize> },
     /// A move-shaped line that breaks a lexical rule. The span covers the
     /// sigil plus its first word.
     Invalid {
@@ -51,6 +54,10 @@ pub(crate) enum MoveBulletInvalid {
     Reserved { sigil: char, id: String },
     /// A first word that starts like an ID but fails the block-ID charset.
     BadId { raw: String },
+    /// Words after a `- ^^` choice marker.
+    ChoiceText,
+    /// A `- ::` line, which teaches `- ^^`.
+    ChoiceColon,
 }
 
 /// Scan a first-level authored body (bullet marker already stripped) for a
@@ -85,6 +92,58 @@ pub(crate) fn scan_move_bullet(
         return None;
     }
     let after = &rest[1..];
+    // A doubled sigil claims the line before the alphanumeric check below,
+    // so `- ^^` never falls through as prose. `- ::` is the reserved shape
+    // pointing at `- ^^`.
+    if after.as_bytes().first() == Some(&(sigil as u8)) {
+        let first_word_end = token_end(rest, 0);
+        let first_word = &rest[..first_word_end];
+        let span = sigil_abs..sigil_abs + first_word_end;
+        let remainder = &rest[first_word_end..];
+        // A checkbox still reports first, like every other move shape,
+        // but only for exact choice shapes; `::x` stays prose.
+        if let Some(status) = checkbox {
+            let exact = if sigil == '^' {
+                first_word.starts_with("^^")
+            } else {
+                first_word == "::" && remainder.trim().is_empty()
+            };
+            if exact {
+                return Some(MoveBulletHit::Invalid {
+                    code: "move_bullet_checkbox",
+                    kind: MoveBulletInvalid::Checkbox { status },
+                    span,
+                });
+            }
+            return None;
+        }
+        if sigil == ':' {
+            // Only an exact `- ::` teaches `- ^^`; `::x` and friends keep
+            // today's prose meaning.
+            if first_word == "::" && remainder.trim().is_empty() {
+                return Some(MoveBulletHit::Invalid {
+                    code: "move_choice_colon",
+                    kind: MoveBulletInvalid::ChoiceColon,
+                    span,
+                });
+            }
+            return None;
+        }
+        if first_word == "^^" && remainder.trim().is_empty() {
+            let span = sigil_abs..sigil_abs + 2;
+            return Some(MoveBulletHit::Choice { span });
+        }
+        // Any `^^`-prefixed first word (`^^^`, `^^x`, `^^ text`) teaches
+        // the exact shape.
+        if first_word.starts_with("^^") {
+            return Some(MoveBulletHit::Invalid {
+                code: "move_choice_text",
+                kind: MoveBulletInvalid::ChoiceText,
+                span,
+            });
+        }
+        return None;
+    }
     let after_trimmed = after.trim_start();
     if after_trimmed.is_empty() {
         let span = sigil_abs..sigil_abs + 1;
@@ -318,6 +377,26 @@ bullet"
     )
 }
 
+pub(crate) fn move_choice_text_error(route: &str) -> String {
+    format!(
+        "`- ^^` takes no other text; leave it alone on its line to choose \
+tasks from {route}.md"
+    )
+}
+
+pub(crate) fn move_choice_nested_error() -> String {
+    "notes under `- ^^` are not supported; add them after capture".to_string()
+}
+
+pub(crate) fn move_choice_duplicate_error(first_line: usize) -> String {
+    format!("only one `- ^^` per capture; the first is on line {first_line}")
+}
+
+pub(crate) fn move_choice_colon_error() -> String {
+    "`- ::` is not a picker; write `- ^^` and choose `^` or `:` for each task"
+        .to_string()
+}
+
 /// Map a move-bullet refusal message back to its diagnostic code, mirroring
 /// how the execution parser strings its errors while the editor parser sets
 /// codes directly.
@@ -358,6 +437,20 @@ pub(crate) fn code_for_message(message: &str) -> Option<&'static str> {
         && message.contains("; pick one or delete the bullet")
     {
         Some("move_bullet_unfinished")
+    } else if message.starts_with("`- ^^` takes no other text; leave it alone")
+        && message.contains("to choose tasks from ")
+    {
+        Some("move_choice_text")
+    } else if message
+        == "notes under `- ^^` are not supported; add them after capture"
+    {
+        Some("move_choice_nested")
+    } else if message.starts_with("only one `- ^^` per capture; the first is on line ") {
+        Some("move_choice_duplicate")
+    } else if message
+        == "`- ::` is not a picker; write `- ^^` and choose `^` or `:` for each task"
+    {
+        Some("move_choice_colon")
     } else {
         None
     }

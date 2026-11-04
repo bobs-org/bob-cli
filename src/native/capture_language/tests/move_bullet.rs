@@ -1,8 +1,10 @@
-//! Move bullets (`- ^<id>` / `- :<id>`): lexer, execution/editor agreement,
-//! and capture-parse shape.
+//! Move bullets (`- ^<id>` / `- :<id>`) and `- ^^` choice markers:
+//! lexer, execution/editor agreement, and capture-parse shape.
 
 use super::super::move_bullet::{
-    scan_move_bullet, MoveBulletHit, MoveBulletInvalid,
+    move_choice_colon_error, move_choice_duplicate_error,
+    move_choice_nested_error, move_choice_text_error, scan_move_bullet,
+    MoveBulletHit, MoveBulletInvalid,
 };
 use super::*;
 
@@ -369,4 +371,194 @@ fn nested_and_foreign_lines_keep_todays_meaning() {
     let escaped = editor("Finish @cash^x@\n- \\^a");
     assert!(escaped.diagnostics.is_empty());
     assert_eq!(escaped.sub_bullets[0].move_task, None);
+}
+
+// --- `- ^^` move-choice markers (cli-grammar MQ1-MQ4) ---
+
+#[test]
+fn choice_lexer_claims_exact_shape_before_alphanumeric_check() {
+    // MQ1 lexer: an exact `- ^^` is a Choice spanning both carets.
+    let hit = scan("^^").expect("choice");
+    let MoveBulletHit::Choice { span } = hit else {
+        panic!("expected choice: {hit:?}");
+    };
+    assert_eq!(span, 0..2);
+    // Trailing spaces are still the exact shape.
+    let padded = scan_at("  ^^  ", 10, "  ^^  ").expect("choice");
+    let MoveBulletHit::Choice { span } = padded else {
+        panic!("expected choice: {padded:?}");
+    };
+    assert_eq!(span, 12..14);
+
+    // MQ2 lexer: `^^` with other text teaches the exact shape.
+    for body in ["^^ text", "^^^", "^^x", "^^a-b"] {
+        let hit = scan(body).expect("choice text");
+        let MoveBulletHit::Invalid { code, kind, .. } = hit else {
+            panic!("expected invalid for {body:?}: {hit:?}");
+        };
+        assert_eq!(code, "move_choice_text", "{body:?}");
+        assert!(matches!(kind, MoveBulletInvalid::ChoiceText), "{kind:?}");
+    }
+
+    // A checkbox on an exact choice still reports the checkbox first.
+    for (body, status) in [("[ ] ^^", ' '), ("[x] ^^", 'x')] {
+        let hit = scan(body).expect("checkbox");
+        let MoveBulletHit::Invalid { code, kind, .. } = hit else {
+            panic!("expected invalid for {body:?}: {hit:?}");
+        };
+        assert_eq!(code, "move_bullet_checkbox", "{body:?}");
+        let MoveBulletInvalid::Checkbox { status: hit } = kind else {
+            panic!("expected checkbox: {kind:?}");
+        };
+        assert_eq!(hit, status);
+    }
+
+    // MQ3 lexer: an exact `- ::` teaches `- ^^`.
+    let colon = scan("::").expect("colon");
+    let MoveBulletHit::Invalid { code, kind, .. } = colon else {
+        panic!("expected invalid: {colon:?}");
+    };
+    assert_eq!(code, "move_choice_colon");
+    assert!(matches!(kind, MoveBulletInvalid::ChoiceColon));
+
+    // `::x` keeps today's prose meaning.
+    assert_eq!(scan("::x"), None);
+}
+
+#[test]
+fn choice_complete_parse_has_no_needs_and_spans_both_carets() {
+    // MQ1: a sealed project-note item with one `- ^^` is complete with
+    // no needs and a choice-marker span over both carets.
+    let parsed = editor("Finish @cash^x@\n- ^^");
+    assert_eq!(parsed.mode, EditorMode::ProjectNote);
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    assert!(parsed.needs.is_empty());
+    assert_eq!(parsed.sub_bullets.len(), 1);
+    assert_eq!(parsed.sub_bullets[0].body, "");
+    assert_eq!(parsed.sub_bullets[0].move_task, None);
+    let choice = parsed.sub_bullets[0].move_choice.as_ref().expect("choice");
+    assert_eq!(choice.range, (18, 20));
+    let kinds: Vec<SpanKind> =
+        parsed.spans.iter().map(|span| span.kind).collect();
+    assert!(kinds.contains(&SpanKind::ProjectTaskMoveChoiceMarker));
+    let marker = parsed
+        .spans
+        .iter()
+        .find(|span| span.kind == SpanKind::ProjectTaskMoveChoiceMarker)
+        .expect("marker");
+    assert_eq!((marker.start, marker.end), (18, 20));
+
+    // The execution parser agrees on the empty body and choice range.
+    let executed = execute("Finish @cash^x@\n- ^^").expect("exec accepts");
+    assert_eq!(executed.sub_bullets.len(), 1);
+    assert_eq!(executed.sub_bullets[0].body, "");
+    assert_eq!(executed.sub_bullets[0].move_task, None);
+    assert_eq!(
+        executed.sub_bullets[0]
+            .move_choice
+            .as_ref()
+            .map(|choice| choice.range),
+        Some((18, 20))
+    );
+
+    // An explicit `:` link elsewhere upgrades the mode but the choice
+    // itself never adds a need. A lone choice with an unused `#name`
+    // stays complete because the choice counts as a possible link.
+    let linked = editor("Finish @cash^x@#admin\n- ^^");
+    assert_eq!(linked.mode, EditorMode::ProjectNote);
+    assert!(linked.diagnostics.is_empty());
+    let offer = editor("Finish @cash:x@\n- ^^");
+    assert_eq!(offer.mode, EditorMode::PomodoroProjectNote);
+}
+
+#[test]
+fn choice_teaching_errors_agree_across_parsers() {
+    // MQ2: words after the marker, triple carets, and suffixes teach.
+    for (raw, code) in [
+        ("Finish @cash^x@\n- ^^ tax", "move_choice_text"),
+        ("Finish @cash^x@\n- ^^^", "move_choice_text"),
+        ("Finish @cash^x@\n- ^^x", "move_choice_text"),
+        ("Finish @cash^x@\n- [ ] ^^", "move_bullet_checkbox"),
+        ("Finish @cash^x@\n- ^^", "move_choice_nested"),
+    ] {
+        if code == "move_choice_nested" {
+            continue;
+        }
+        let message = execute(raw).expect_err("execution refuses");
+        let parsed = editor(raw);
+        assert_eq!(parsed.diagnostics.len(), 1, "{raw:?}");
+        assert_eq!(parsed.diagnostics[0].code, code, "{raw:?}");
+        assert_eq!(parsed.diagnostics[0].message, message, "{raw:?}");
+        if code == "move_choice_text" {
+            assert_eq!(message, move_choice_text_error("cash"));
+        }
+    }
+    // Nested bullets under the choice teach without a route.
+    let nested = "Finish @cash^x@\n- ^^\n  - detail";
+    let message = execute(nested).expect_err("nested refuses");
+    assert_eq!(message, move_choice_nested_error());
+    let parsed = editor(nested);
+    assert_eq!(codes(&parsed), vec!["move_choice_nested"]);
+    assert_eq!(parsed.diagnostics[0].message, message);
+
+    // Checkbox and colon messages match byte for byte.
+    let checkbox = execute("Finish @cash^x@\n- [ ] ^^").expect_err("checkbox");
+    let parsed = editor("Finish @cash^x@\n- [ ] ^^");
+    assert_eq!(parsed.diagnostics[0].message, checkbox);
+    let colon = execute("Finish @cash^x@\n- ::").expect_err("colon");
+    assert_eq!(colon, move_choice_colon_error());
+    let parsed = editor("Finish @cash^x@\n- ::");
+    assert_eq!(codes(&parsed), vec!["move_choice_colon"]);
+    assert_eq!(parsed.diagnostics[0].message, colon);
+}
+
+#[test]
+fn choice_duplicate_names_first_line_across_parsers() {
+    // MQ3: a second `- ^^` in one item names the first line.
+    let raw = "Finish @cash^x@\n- ^^\n- ^^";
+    let message = execute(raw).expect_err("duplicate refuses");
+    assert_eq!(message, move_choice_duplicate_error(2));
+    let parsed = editor(raw);
+    assert_eq!(codes(&parsed), vec!["move_choice_duplicate"]);
+    assert_eq!(parsed.diagnostics[0].message, message);
+
+    // MQ3: a second `- ^^` across items names the first line.
+    let across = "Finish @cash^x@\n- ^^\n\nFinish @cash^y@\n- ^^";
+    let message = execute_draft(across).expect_err("across refuses");
+    assert!(
+        message.contains(&move_choice_duplicate_error(2)),
+        "{message:?}"
+    );
+    let parsed = editor(across);
+    let all: Vec<&str> = parsed
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect();
+    assert!(all.contains(&"move_choice_duplicate"), "{all:?}");
+}
+
+#[test]
+fn choice_foreign_shapes_keep_todays_meaning() {
+    // MQ4: escapes, inline code, nested bullets, and foreign items keep
+    // their existing meaning with no choice slot.
+    for raw in [
+        "Finish @cash^x@\n- \\^^",
+        "Finish @cash^x@\n- `^^`",
+        "Finish @cash^x@\n- Draft\n  - ^^",
+        "Do work @cash\n- ^^",
+    ] {
+        let parsed = editor(raw);
+        assert!(
+            parsed
+                .sub_bullets
+                .iter()
+                .all(|bullet| bullet.move_choice.is_none()),
+            "{raw:?}"
+        );
+        assert!(!codes(&parsed).contains(&"move_choice_text"), "{raw:?}");
+    }
+    // A nested `^^` keeps the trailing-ID meaning.
+    let nested = editor("Finish @cash^x@\n- Draft\n  - ^^");
+    assert!(nested.sub_bullets[0].move_choice.is_none());
 }

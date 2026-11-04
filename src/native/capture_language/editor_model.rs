@@ -50,6 +50,9 @@ pub(crate) enum SpanKind {
     ProjectTaskMoveLinkMarker,
     /// A move bullet's block ID, including a partial ID while typing.
     ProjectTaskMoveBlockId,
+    /// A `- ^^` choice marker in a sealed project-note item, covering both
+    /// carets.
+    ProjectTaskMoveChoiceMarker,
     GlobalRoute,
     Schedule,
     Priority,
@@ -128,6 +131,9 @@ impl SpanKind {
             Self::ProjectTaskMoveMarker => "project_task_move_marker",
             Self::ProjectTaskMoveLinkMarker => "project_task_move_link_marker",
             Self::ProjectTaskMoveBlockId => "project_task_move_block_id",
+            Self::ProjectTaskMoveChoiceMarker => {
+                "project_task_move_choice_marker"
+            }
             Self::GlobalRoute => "global_route",
             Self::Schedule => "schedule",
             Self::Priority => "priority",

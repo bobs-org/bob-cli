@@ -1147,6 +1147,36 @@ fn parse_ordinary_draft(
         .map_err(|error| capture_item_error_at(item, error))?;
         item_outcomes.extend(outcomes);
     }
+    // A second `- ^^` anywhere in the draft names the first line, across
+    // items. Per-item duplicates already refused above.
+    {
+        let mut first_choice_line: Option<usize> = None;
+        for outcome in &item_outcomes {
+            for sub_bullet in &outcome.parsed.sub_bullets {
+                let Some(choice) = sub_bullet.move_choice.as_ref() else {
+                    continue;
+                };
+                let line = raw_text[..choice.range.0.min(raw_text.len())]
+                    .matches('\n')
+                    .count()
+                    + 1;
+                if let Some(first) = first_choice_line {
+                    let inner =
+                        super::move_bullet::move_choice_duplicate_error(first);
+                    return Err(CaptureItemParseError::coded(
+                        "move_choice_duplicate",
+                        format!(
+                            "capture item {} starting on line {}: {}",
+                            outcome.index + 1,
+                            outcome.line_start,
+                            inner,
+                        ),
+                    ));
+                }
+                first_choice_line = Some(line);
+            }
+        }
+    }
 
     let mut declarations = draft.declarations;
     let mut seen_declarations = std::collections::HashSet::new();

@@ -17,10 +17,11 @@ use super::{
         self, resolve_exact_type_name, scan_line, unmatched_type_display,
         AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
-        EditorParseOptions, EditorTarget, ListContext, MoveBullet, Need,
-        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroMergeSpec,
-        PomodoroShiftSpec, PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId,
-        RelationDirection, RelationEntry, ResolvedTypeName, Severity, Span,
+        EditorParseOptions, EditorTarget, ListContext, MoveBullet,
+        MoveChoiceBullet, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
+        PomodoroMergeSpec, PomodoroShiftSpec, PomodoroSplitSpec,
+        PomodoroStartSpec, ProjectTaskId, RelationDirection, RelationEntry,
+        ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -174,7 +175,7 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 10` for the capture-language revision while \
+Success JSON reports `grammar: 11` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
@@ -364,7 +365,7 @@ the `:` and a `project_task_block_id` span over the ID (` ^id` spans only the ID
 `section` carries the marker's Pomodoro name. Misplaced, invalid, reserved, empty, or checkbox-carrying IDs report \
 `misplaced_project_task_id` or `invalid_project_task_id`, a repeated ID reports `duplicate_project_task_id`, and a \
 `#pomodoro` name with no ` :` task reports `unused_project_note_pomodoro` (or the offer wording when the marker is sealed with ':'). A lone trailing `:` or `^` is an unfinished \
-ID: mode 'incomplete' needing `block_id` with an `interactive_placeholder` span over the sigil and no diagnostic. In a sealed project-note item, a first-level bullet holding only `^id` or `:id` moves that open task from the parent note into this slot instead: `:id` additionally makes it Next and links it, reporting mode 'pomodoro_project_note' with a `project_task_move_marker` span over the `^` (`project_task_move_link_marker` for `:`) and a `project_task_move_block_id` span over the ID. Move bullets appear with empty bodies in `sub_bullets` and a parallel `sub_bullet_moves` array of `null` or `{\"sigil\", \"block_id\", \"range\"}` entries (`range` covers the sigil plus ID, and `block_id` is null while unfinished). A lone `^` or `:` filling its first-level bullet is an unfinished move: mode 'incomplete' needing `project_task_move` with both the marker and an `interactive_placeholder` span over the sigil and no diagnostic. Move IDs share a namespace with authored task IDs: a repeated move reports `move_bullet_duplicate`, a move matching an authored ID reports `move_bullet_id_collision`, and words, markers, checkboxes, nested bullets, a cross-note `^route:id` shape, or `^prj` after the token reports its matching `move_bullet_*` diagnostic. \
+ID: mode 'incomplete' needing `block_id` with an `interactive_placeholder` span over the sigil and no diagnostic. In a sealed project-note item, a first-level bullet holding only `^id` or `:id` moves that open task from the parent note into this slot instead: `:id` additionally makes it Next and links it, reporting mode 'pomodoro_project_note' with a `project_task_move_marker` span over the `^` (`project_task_move_link_marker` for `:`) and a `project_task_move_block_id` span over the ID. Move bullets appear with empty bodies in `sub_bullets` and a parallel `sub_bullet_moves` array of `null` or `{\"sigil\", \"block_id\", \"range\"}` entries (`range` covers the sigil plus ID, and `block_id` is null while unfinished). A lone `^` or `:` filling its first-level bullet is an unfinished move: mode 'incomplete' needing `project_task_move` with both the marker and an `interactive_placeholder` span over the sigil and no diagnostic. Move IDs share a namespace with authored task IDs: a repeated move reports `move_bullet_duplicate`, a move matching an authored ID reports `move_bullet_id_collision`, and words, markers, checkboxes, nested bullets, a cross-note `^route:id` shape, or `^prj` after the token reports its matching `move_bullet_*` diagnostic. An exact `- ^^` choice marker stays complete with a `project_task_move_choice_marker` span over both carets, an empty body, and a parallel `sub_bullet_move_choices` entry; its `sub_bullet_moves` entry stays null. \
 Outside project-note items these words stay literal text. A solo '@route:block-id[#pomodoro][=<X>]' item links an existing task into \
 today's Pomodoro ledger instead of creating one, and parses as \
 'pomodoro_link' with the same spans and `pomodoro_start` object; anything \
@@ -613,6 +614,12 @@ struct CaptureParseResult {
     /// non-null, so every older input keeps its exact JSON shape.
     #[serde(skip_serializing_if = "all_moves_none")]
     sub_bullet_moves: Vec<Option<MoveBullet>>,
+    /// Additive schema-version-1 field aligned one-to-one with
+    /// `sub_bullets`: each entry is `null` or `{"range"}` for an exact
+    /// `- ^^` choice marker. Emitted only when at least one entry is
+    /// non-null, so every older input keeps its exact JSON shape.
+    #[serde(skip_serializing_if = "all_choices_none")]
+    sub_bullet_move_choices: Vec<Option<MoveChoiceBullet>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     items: Vec<CaptureParseItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -779,6 +786,8 @@ struct CaptureParseItem {
     sub_bullet_task_ids: Vec<Option<ProjectTaskId>>,
     #[serde(skip_serializing_if = "all_moves_none")]
     sub_bullet_moves: Vec<Option<MoveBullet>>,
+    #[serde(skip_serializing_if = "all_choices_none")]
+    sub_bullet_move_choices: Vec<Option<MoveChoiceBullet>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoro_start: Option<PomodoroStartSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1104,6 +1113,7 @@ impl CaptureParseResult {
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
         let sub_bullet_moves = sub_bullet_moves(&sub_bullets);
+        let sub_bullet_move_choices = sub_bullet_move_choices(&sub_bullets);
         let mut diagnostics = Vec::new();
         if let Some(warning) =
             missing_template_directive_hint(&input, &parse.items)
@@ -1157,6 +1167,7 @@ impl CaptureParseResult {
             sub_bullet_depths,
             sub_bullet_task_ids,
             sub_bullet_moves,
+            sub_bullet_move_choices,
             items,
             template: None,
             global_destination: parse
@@ -1336,6 +1347,7 @@ impl CaptureParseResult {
                     sub_bullet_depths: Vec::new(),
                     sub_bullet_task_ids: Vec::new(),
                     sub_bullet_moves: Vec::new(),
+                    sub_bullet_move_choices: Vec::new(),
                     pomodoro_start: None,
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
@@ -1375,6 +1387,7 @@ impl CaptureParseResult {
                     sub_bullet_depths: Vec::new(),
                     sub_bullet_task_ids: Vec::new(),
                     sub_bullet_moves: Vec::new(),
+                    sub_bullet_move_choices: Vec::new(),
                     pomodoro_start: None,
                     pomodoro_adjust: None,
                     pomodoro_shift: None,
@@ -1557,6 +1570,7 @@ impl CaptureParseResult {
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
         let sub_bullet_moves = sub_bullet_moves(&sub_bullets);
+        let sub_bullet_move_choices = sub_bullet_move_choices(&sub_bullets);
 
         let relation_grammar = relation_grammar_for(&input);
         let relations = parse_relations(&parsed.relations);
@@ -1583,6 +1597,7 @@ impl CaptureParseResult {
             sub_bullet_depths,
             sub_bullet_task_ids,
             sub_bullet_moves,
+            sub_bullet_move_choices,
             items,
             template: Some(template),
             global_destination: None,
@@ -2356,6 +2371,7 @@ fn empty_wire_item() -> CaptureParseItem {
         sub_bullet_depths: Vec::new(),
         sub_bullet_task_ids: Vec::new(),
         sub_bullet_moves: Vec::new(),
+        sub_bullet_move_choices: Vec::new(),
         pomodoro_start: None,
         pomodoro_adjust: None,
         pomodoro_shift: None,
@@ -2465,6 +2481,7 @@ fn wire_item(
         sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
         sub_bullet_task_ids: sub_bullet_task_ids(&item.sub_bullets),
         sub_bullet_moves: sub_bullet_moves(&item.sub_bullets),
+        sub_bullet_move_choices: sub_bullet_move_choices(&item.sub_bullets),
         pomodoro_start: item.pomodoro_start.clone(),
         pomodoro_adjust: item.pomodoro_adjust.clone(),
         pomodoro_shift: item.pomodoro_shift.clone(),
@@ -2541,12 +2558,25 @@ fn sub_bullet_moves(
         .collect()
 }
 
+fn sub_bullet_move_choices(
+    sub_bullets: &[AuthoredSubBullet],
+) -> Vec<Option<MoveChoiceBullet>> {
+    sub_bullets
+        .iter()
+        .map(|item| item.move_choice.clone())
+        .collect()
+}
+
 fn all_task_ids_none(ids: &[Option<ProjectTaskId>]) -> bool {
     ids.iter().all(Option::is_none)
 }
 
 fn all_moves_none(moves: &[Option<MoveBullet>]) -> bool {
     moves.iter().all(Option::is_none)
+}
+
+fn all_choices_none(choices: &[Option<MoveChoiceBullet>]) -> bool {
+    choices.iter().all(Option::is_none)
 }
 
 fn is_false(value: &bool) -> bool {
@@ -2721,6 +2751,15 @@ fn print_human_success_with_styler(
                 } else {
                     println!("    {indentation}- move ^{id}");
                 }
+                continue;
+            }
+            if result
+                .sub_bullet_move_choices
+                .get(index)
+                .and_then(|entry| entry.as_ref())
+                .is_some()
+            {
+                println!("    {indentation}- move choice ^^");
                 continue;
             }
             let task_id = result
@@ -3273,7 +3312,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 10);
+        assert_eq!(value["grammar"], 11);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3331,12 +3370,12 @@ mod tests {
     fn lone_route_reports_note_pull_mode() {
         // NP27: `bob capture-parse -f json -- @sase` reports mode
         // `note_pull` with no needs, the route, and the ordinary list
-        // summary (`kind: "tasks"`, `count: 0`) under grammar 10. A lone
+        // summary (`kind: "tasks"`, `count: 0`) under grammar 11. A lone
         // header keeps its task-list metadata so clients can still offer
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 10);
+        assert_eq!(value["grammar"], 11);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());

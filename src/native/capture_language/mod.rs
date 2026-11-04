@@ -42,7 +42,7 @@ pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 10;
+pub(crate) const GRAMMAR_REVISION: u32 = 11;
 
 #[cfg(test)]
 mod tests;
@@ -137,6 +137,7 @@ pub(crate) use self::model::FanoutContext;
 pub(crate) use self::model::ListContext;
 pub(crate) use self::model::ListKind;
 pub(crate) use self::model::MoveBullet;
+pub(crate) use self::model::MoveChoiceBullet;
 pub(crate) use self::model::ParsedCaptureDraft;
 pub(crate) use self::model::ParsedCaptureItem;
 pub(crate) use self::model::ParsedCaptureText;

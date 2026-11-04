@@ -246,6 +246,14 @@ fn build_result_inner(
         let initial_selection =
             (!built.rows.iter().any(|row| row.disabled_reason.is_none()))
                 .then_some("none");
+        // A lone `- ^` with an empty query offers `^` as a continuation
+        // key so a second `^` leaves `- ^^`. The key is not offered for
+        // `- :`, for a non-empty query, or outside a sealed project-note
+        // item (the detail only exists there). At `- ^^` there is no
+        // `project_task_move` context at all.
+        let action_continuation_keys = (detail.sigil == '^'
+            && field.query.is_empty())
+        .then(|| vec!["^".to_string()]);
         return Ok(CaptureCompleteResult {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -281,7 +289,7 @@ fn build_result_inner(
                 trigger_removal_range: marker_range,
                 destination: detail.destination.clone(),
                 continuation: Some(detail.continuation),
-                action_continuation_keys: None,
+                action_continuation_keys,
                 relationship: None,
             }),
             project_task_move: Some(built.context),

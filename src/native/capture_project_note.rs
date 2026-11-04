@@ -594,6 +594,7 @@ mod tests {
             depth,
             task_id: None,
             move_task: None,
+            move_choice: None,
             drawer: None,
         }
     }
@@ -612,6 +613,7 @@ mod tests {
                 link,
             }),
             move_task: None,
+            move_choice: None,
             drawer: None,
         }
     }

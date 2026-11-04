@@ -88,6 +88,20 @@ pub(super) fn plan_project_note_item(
         ));
     };
     let mut parsed = parsed;
+    // Interim `cli-grammar` refusal: any `- ^^` is write-free refused until
+    // `cli-report` builds the report. `cli-report` deletes this check and
+    // its test.
+    if parsed
+        .sub_bullets
+        .iter()
+        .any(|sub_bullet| sub_bullet.move_choice.is_some())
+    {
+        return Err(CaptureError::usage_code(
+            "choosing parent tasks with - ^^ is not available in this build \
+yet",
+            "move_choice_unavailable",
+        ));
+    }
     // The grammar rejects a Create `#pomodoro` name with no ` :` task
     // before planning; this guards planners that bypass it. Offer defers
     // the check until after the pre-pick render, so a name is valid when
@@ -101,6 +115,7 @@ pub(super) fn plan_project_note_item(
                     .move_task
                     .as_ref()
                     .is_some_and(|movement| movement.sigil == ':')
+                || sub_bullet.move_choice.is_some()
         });
         if !has_link {
             return Err(CaptureError::usage(
@@ -2817,6 +2832,7 @@ mod tests {
             depth,
             task_id: None,
             move_task: None,
+            move_choice: None,
             drawer: None,
         }
     }
@@ -2835,6 +2851,7 @@ mod tests {
                 link,
             }),
             move_task: None,
+            move_choice: None,
             drawer: None,
         }
     }

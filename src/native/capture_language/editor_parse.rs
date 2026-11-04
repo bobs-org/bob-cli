@@ -361,6 +361,41 @@ pub(crate) fn parse_for_editor_with(
             .item;
         }
     }
+    // A second `- ^^` anywhere in the draft names the first line, across
+    // items. Per-item duplicates already diagnosed above.
+    {
+        let mut first_choice_line: Option<usize> = None;
+        for outcome in &mut item_outcomes {
+            // Collect second-choice ranges first to avoid borrowing the
+            // outcome while pushing its diagnostic.
+            let mut second_ranges: Vec<(usize, usize)> = Vec::new();
+            for sub_bullet in &outcome.item.sub_bullets {
+                let Some(choice) = sub_bullet.move_choice.as_ref() else {
+                    continue;
+                };
+                let line = raw_text[..choice.range.0.min(raw_text.len())]
+                    .matches('\n')
+                    .count()
+                    + 1;
+                if first_choice_line.is_some() {
+                    second_ranges.push(choice.range);
+                } else {
+                    first_choice_line = Some(line);
+                }
+            }
+            for range in second_ranges {
+                let first = first_choice_line.unwrap_or(1);
+                outcome.item.diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "move_choice_duplicate",
+                    message: super::move_bullet::move_choice_duplicate_error(
+                        first,
+                    ),
+                    range: Some(range),
+                });
+            }
+        }
+    }
     attach_list_duplicate_id_diagnostics(&mut item_outcomes);
     let transfers = draft
         .items
@@ -3429,6 +3464,7 @@ pub(super) fn parse_editor_list_item<'a>(
             depth,
             task_id: None,
             move_task: None,
+            move_choice: None,
             drawer: None,
         });
     }
@@ -3534,6 +3570,12 @@ fn interpret_editor_move(
                 MoveBulletInvalid::BadId { raw } => {
                     invalid_project_task_id_charset_error(raw)
                 }
+                MoveBulletInvalid::ChoiceText => {
+                    super::move_bullet::move_choice_text_error(route)
+                }
+                MoveBulletInvalid::ChoiceColon => {
+                    super::move_bullet::move_choice_colon_error()
+                }
             };
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -3541,6 +3583,45 @@ fn interpret_editor_move(
                 message,
                 range: Some((span.start, span.end)),
             });
+        }
+        MoveBulletHit::Choice { span } => {
+            if sub_bullets
+                .get(index + 1)
+                .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+            {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "move_choice_nested",
+                    message: super::move_bullet::move_choice_nested_error(),
+                    range: Some((span.start, span.end)),
+                });
+                return;
+            }
+            if let Some(first) = pass.register_choice(line_number) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: "move_choice_duplicate",
+                    message: super::move_bullet::move_choice_duplicate_error(
+                        first,
+                    ),
+                    range: Some((span.start, span.end)),
+                });
+                return;
+            }
+            // A choice counts as a possible link for the unused-`#pomodoro`
+            // rule, like an unfinished `- :`, but never upgrades the mode.
+            *has_pending_colon_link = true;
+            sub_bullets[index].body.clear();
+            sub_bullets[index].move_choice =
+                Some(super::model::MoveChoiceBullet {
+                    range: (span.start, span.end),
+                });
+            push_span(
+                spans,
+                span.start,
+                span.end,
+                SpanKind::ProjectTaskMoveChoiceMarker,
+            );
         }
         MoveBulletHit::Unfinished { sigil, span } => {
             *mode = EditorMode::Incomplete;
@@ -3557,6 +3638,7 @@ fn interpret_editor_move(
                 sigil,
                 block_id: None,
                 range: (span.start, span.end),
+                via: super::model::MoveVia::Bullet,
             });
             let marker = if sigil == ':' {
                 SpanKind::ProjectTaskMoveLinkMarker
@@ -3606,6 +3688,7 @@ fn interpret_editor_move(
                         sigil,
                         block_id: Some(id),
                         range,
+                        via: super::model::MoveVia::Bullet,
                     });
                     let marker = if sigil == ':' {
                         SpanKind::ProjectTaskMoveLinkMarker
@@ -4044,6 +4127,7 @@ pub(super) fn parse_editor_item_inner<'a>(
                     depth: authored.depth,
                     task_id: None,
                     move_task: None,
+                    move_choice: None,
                     drawer,
                 });
                 if authored.depth == AuthoredDepth::First {

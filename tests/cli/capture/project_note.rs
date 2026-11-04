@@ -2964,3 +2964,40 @@ fn capture_move_landing_repairs_moved_reports_after_child_edits() {
         assert_eq!(reported, actual, "{json} {dest} stale line for ^{id}");
     }
 }
+
+#[test]
+fn capture_project_note_choice_is_unavailable_until_cli_report() {
+    // Interim cli-grammar refusal: any `- ^^` is write-free refused with
+    // `move_choice_unavailable` until `cli-report` builds the report.
+    // `cli-report` deletes this test.
+    let temp = TempDir::new("bob-cli-choice-unavailable");
+    let vault = temp.path().join("vault");
+    let source = vault.join("cash.md");
+    let source_before = "---\ntype: \"[[area]]\"\n---\n- [ ] #task A ^a\n";
+    write_file(&source, source_before);
+    for dry_run in [true, false] {
+        let output = project_note_move_capture(
+            &vault,
+            "Finish @cash^x@\n- ^^\n",
+            dry_run,
+            None,
+        );
+        assert!(!output.status.success(), "{dry_run:?}");
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("choice JSON");
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["code"], "move_choice_unavailable");
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap()
+                .contains("choosing parent tasks with - ^^ is not available"),
+            "{json}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(&source).expect("source unchanged"),
+        source_before
+    );
+    assert!(!vault.join("cash_x.md").exists());
+}

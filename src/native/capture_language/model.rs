@@ -650,6 +650,30 @@ pub(crate) struct MoveBullet {
     pub(crate) block_id: Option<String>,
     /// UTF-8 byte range covering the sigil plus ID in the draft.
     pub(crate) range: (usize, usize),
+    /// How the move was authored. Only `Bullet` exists until `cli-execute`
+    /// splices synthetic `Choice` moves.
+    #[serde(skip)]
+    pub(crate) via: MoveVia,
+}
+
+/// How a move bullet was authored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(dead_code)]
+pub(crate) enum MoveVia {
+    /// An authored `- ^<id>` / `- :<id>` bullet.
+    #[default]
+    Bullet,
+    /// A synthetic move spliced from a `- ^^` answer.
+    Choice,
+}
+
+/// An exact `- ^^` choice marker in a sealed project-note item. The range
+/// covers both carets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct MoveChoiceBullet {
+    /// UTF-8 byte range covering `^^` in the draft.
+    pub(crate) range: (usize, usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -660,6 +684,10 @@ pub(crate) struct AuthoredSubBullet {
     /// A first-level move bullet, when the shared move lexer claimed this
     /// line. Move bodies stay empty and their `task_id` stays `None`.
     pub(crate) move_task: Option<MoveBullet>,
+    /// An exact first-level `- ^^` choice marker, when the shared move
+    /// lexer claimed this line. Choice bodies stay empty and both
+    /// `task_id` and `move_task` stay `None`.
+    pub(crate) move_choice: Option<MoveChoiceBullet>,
     /// Leading `#slug` / `#"TITLE"` drawer shortcut, when this first-level
     /// bullet names a drawer. Literal ALL-CAPS drawer bullets gain this
     /// after grouping. Nested notes keep `None`.

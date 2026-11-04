@@ -22,7 +22,7 @@ fn capture_parse_json_exposes_transfer_contract_and_partial_needs() {
     let raw = "@inbox+bench > @db";
     let moved = parse(raw);
     assert_eq!(moved["schema_version"], 1);
-    assert_eq!(moved["grammar"], 10);
+    assert_eq!(moved["grammar"], 11);
     assert_eq!(moved["mode"], "task_move");
     assert_eq!(moved["route"], "db");
     assert!(moved["block_id"].is_null());
@@ -165,7 +165,7 @@ fn capture_parse_json_reports_public_target_runs_and_batch_offsets() {
 
     let leading_raw = "@work+a @dev+b note";
     let leading = parse(leading_raw);
-    assert_eq!(leading["grammar"], 10);
+    assert_eq!(leading["grammar"], 11);
     assert_eq!(leading["body"], "note");
     assert_eq!(leading["route"], "work");
     assert!(leading.get("items").is_none(), "{leading}");
@@ -399,7 +399,7 @@ fn capture_parse_and_dry_run_use_the_same_public_target_run_in_scratch_vault() {
     assert_success(&parsed);
     let parsed_json: serde_json::Value =
         serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
-    assert_eq!(parsed_json["grammar"], 10);
+    assert_eq!(parsed_json["grammar"], 11);
     assert_eq!(parsed_json["body"], "note");
     assert_eq!(parsed_json["targets"].as_array().unwrap().len(), 2);
 
@@ -2104,7 +2104,7 @@ fn capture_parse_json_reports_move_bullets() {
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-parse JSON");
-    assert_eq!(json["grammar"], 10);
+    assert_eq!(json["grammar"], 11);
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["needs"], serde_json::json!(["project_task_move"]));
     assert_eq!(
@@ -2178,4 +2178,50 @@ fn capture_parse_json_reports_move_bullets() {
         json["diagnostics"][0]["message"],
         serde_json::json!("`^a` is already moved on line 2")
     );
+}
+
+#[test]
+fn capture_parse_json_reports_move_choice() {
+    // cli-grammar MQ1/MQ5: an exact `- ^^` is complete, carries a
+    // `project_task_move_choice_marker` span over both carets, an empty
+    // body, a null `sub_bullet_moves` entry, and a `sub_bullet_move_choices`
+    // entry; grammar is 11.
+    let vault_temp = TempDir::new("bob-cli-capture-parse-choice");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Finish @cash^x@\n- ^^")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob capture-parse choice");
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["grammar"], 11);
+    assert_eq!(json["mode"], "project_note");
+    assert!(json["needs"].as_array().unwrap().is_empty());
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 7, "end": 12, "kind": "task_block_id_route", "project_note": "create" },
+            { "start": 12, "end": 13, "kind": "project_note_separator", "project_note": "create" },
+            { "start": 13, "end": 14, "kind": "task_block_id", "project_note": "create" },
+            { "start": 14, "end": 15, "kind": "project_note_marker", "project_note": "create" },
+            { "start": 18, "end": 20, "kind": "project_task_move_choice_marker" },
+        ])
+    );
+    assert_eq!(json["sub_bullets"], serde_json::json!([""]));
+    assert!(
+        json["sub_bullet_moves"].is_null()
+            || json["sub_bullet_moves"] == serde_json::json!([null])
+    );
+    assert_eq!(
+        json["sub_bullet_move_choices"],
+        serde_json::json!([{"range": [18, 20]}])
+    );
+    assert!(json["diagnostics"].as_array().unwrap().is_empty());
 }

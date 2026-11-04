@@ -1539,6 +1539,7 @@ fn parse_list_bullet_item<'a>(
             depth,
             task_id: None,
             move_task: None,
+            move_choice: None,
             drawer: None,
         });
     }
@@ -1965,10 +1966,17 @@ fn type_marker_not_applicable_error(name: &str, kind: &CaptureKind) -> String {
     )
 }
 
+/// One accepted move-bullet post-pass outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExecutionMoveOutcome {
+    Move(MoveBullet),
+    Choice(MoveChoiceBullet),
+}
+
 /// Interpret one move-bullet lexer hit in the project-note post-pass, in
-/// source order. Returns the recorded move on success and the refusal
-/// message otherwise. The caller clears the bullet body and records the
-/// move.
+/// source order. Returns the recorded move or choice on success and the
+/// refusal message otherwise. The caller clears the bullet body and records
+/// the outcome.
 #[allow(clippy::too_many_arguments)]
 fn interpret_execution_move(
     hit: MoveBulletHit,
@@ -1978,7 +1986,7 @@ fn interpret_execution_move(
     line_number: usize,
     route: &str,
     new_id: &str,
-) -> Result<MoveBullet, String> {
+) -> Result<ExecutionMoveOutcome, String> {
     let invalid = |kind: &MoveBulletInvalid| -> String {
         match kind {
             MoveBulletInvalid::Text { sigil, id } => {
@@ -2003,10 +2011,32 @@ fn interpret_execution_move(
             MoveBulletInvalid::BadId { raw } => {
                 invalid_project_task_id_charset_error(raw)
             }
+            MoveBulletInvalid::ChoiceText => {
+                super::move_bullet::move_choice_text_error(route)
+            }
+            MoveBulletInvalid::ChoiceColon => {
+                super::move_bullet::move_choice_colon_error()
+            }
         }
     };
     match hit {
         MoveBulletHit::Invalid { kind, .. } => Err(invalid(&kind)),
+        MoveBulletHit::Choice { span } => {
+            if sub_bullets
+                .get(index + 1)
+                .is_some_and(|next| next.depth == AuthoredDepth::Nested)
+            {
+                return Err(super::move_bullet::move_choice_nested_error());
+            }
+            if let Some(first) = pass.register_choice(line_number) {
+                return Err(super::move_bullet::move_choice_duplicate_error(
+                    first,
+                ));
+            }
+            Ok(ExecutionMoveOutcome::Choice(MoveChoiceBullet {
+                range: (span.start, span.end),
+            }))
+        }
         MoveBulletHit::Unfinished { sigil, .. } => Err(
             super::move_bullet::move_bullet_unfinished_error(sigil, route),
         ),
@@ -2031,11 +2061,14 @@ fn interpret_execution_move(
                 ));
             }
             match pass.register_move(sigil, &id, line_number) {
-                MoveIdOutcome::Accept => Ok(MoveBullet {
-                    sigil,
-                    block_id: Some(id),
-                    range: (sigil_span.0, id_span.1),
-                }),
+                MoveIdOutcome::Accept => {
+                    Ok(ExecutionMoveOutcome::Move(MoveBullet {
+                        sigil,
+                        block_id: Some(id),
+                        range: (sigil_span.0, id_span.1),
+                        via: super::model::MoveVia::Bullet,
+                    }))
+                }
                 MoveIdOutcome::Duplicate { first_line } => {
                     Err(super::move_bullet::move_bullet_duplicate_error(
                         sigil, &id, first_line,
@@ -2538,6 +2571,7 @@ fn parse_capture_item_masked<'a>(
             depth: authored.depth,
             task_id: None,
             move_task: None,
+            move_choice: None,
             drawer,
         });
         sub_bullet_lines.push(line_number);
@@ -2892,9 +2926,13 @@ fn parse_capture_item_masked<'a>(
                     route_name,
                     new_id.unwrap_or_default(),
                 ) {
-                    Ok(move_bullet) => {
+                    Ok(ExecutionMoveOutcome::Move(move_bullet)) => {
                         sub_bullets[index].body.clear();
                         sub_bullets[index].move_task = Some(move_bullet);
+                    }
+                    Ok(ExecutionMoveOutcome::Choice(choice)) => {
+                        sub_bullets[index].body.clear();
+                        sub_bullets[index].move_choice = Some(choice);
                     }
                     Err(message) => return Err(message),
                 }

@@ -401,6 +401,7 @@ pub(crate) enum MoveIdOutcome {
 pub(crate) struct ProjectTaskPass {
     seen: Vec<(String, usize)>,
     seen_moves: Vec<(String, usize)>,
+    choice_line: Option<usize>,
     pub(crate) has_link: bool,
 }
 
@@ -445,6 +446,21 @@ impl ProjectTaskPass {
             .iter()
             .find(|(seen_id, _)| seen_id == id)
             .map(|(_, line)| *line)
+    }
+
+    /// Register an exact `- ^^` choice marker. The second choice in one
+    /// item reports the first line; draft-wide duplicates are detected by
+    /// the draft parsers. A choice counts as a possible link for the
+    /// unused-`#pomodoro` rule, like an unfinished `- :`.
+    pub(crate) fn register_choice(
+        &mut self,
+        line_number: usize,
+    ) -> Option<usize> {
+        if let Some(first) = self.choice_line {
+            return Some(first);
+        }
+        self.choice_line = Some(line_number);
+        None
     }
 
     /// Step 2 of the evaluation order: the parent line. A well-formed or
