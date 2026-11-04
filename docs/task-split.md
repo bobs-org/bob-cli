@@ -147,11 +147,24 @@ text.
 
 Ctrl+Shift+T splits the bullet under the cursor, the counted bullets
 (`N<Ctrl+Shift+T>`), or every splittable bullet a visual selection touches;
-on a task line or drawer title it opens the Tab-mark picker; section
-bullets promote to `## Tasks`. Same-note splits are one editor transaction
-(one Ctrl+Z); cross-note splits stage destination-first writes with an Undo
-notice. The full gesture contract, picker, cursor landing, and notices land
-in the `nav-split` and `nav-split-picker` phases.
+on a task line it opens a picker for all splittable notes, and on a drawer title
+it opens the same picker scoped to that drawer. Nothing starts marked. `Tab`
+marks or unmarks the highlighted row and advances; `Enter` splits marked rows,
+or just the highlighted row if none are marked; `Esc` closes without writing.
+Section bullets promote into that note's `## Tasks` intake and leave their live
+link stub under the section.
+
+Same-note splits are one editor transaction (one Ctrl+Z). A daily-note owner
+routes new tasks to its `[root::]` note's `## Tasks` intake, or to the default
+inbox when it has no root. Bob writes the destination first and guards each
+file write against its planned preimage, rolling back a partial write when
+possible. A cross-note split shows an **Undo split** notice action; it restores
+the saved postimages only while every affected note still matches, and lists
+the paths when edits make Undo unsafe. The cursor lands on the first new task,
+and `Ctrl+O` returns to the source note; if Bob cannot open the destination, it
+reports the destination path. Split never advances the review walk. The full
+gesture contract and cursor landing are documented in this section and the
+Obsidian keymap reference.
 
 ## 5. Canonical copy
 
