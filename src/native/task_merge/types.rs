@@ -49,6 +49,7 @@ pub(crate) struct MergeRequest {
 /// Daily-note state captured by the command adapter. A required read failure
 /// stays distinct from an absent daily note; the planner never performs I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum DailyNoteReadState {
     NotRead,
     Missing,

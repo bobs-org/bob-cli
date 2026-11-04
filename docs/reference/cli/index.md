@@ -44,8 +44,9 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob relations list`](relations.md#bob-relations-list) | List relation labels in the vault (default) |
 | [`bob relations rename`](relations.md#bob-relations-rename) | Rename a relation label everywhere in one commit |
 | [`bob relations unhide`](relations.md#bob-relations-unhide) | Show hidden relation labels in suggestions again |
-| [`bob task`](task.md) | Vault-wide task maintenance: archive, move, reconcile, reroll, split |
+| [`bob task`](task.md) | Vault-wide task maintenance: archive, merge, move, reconcile, reroll, split |
 | [`bob task archive`](task.md#bob-task-archive) | Move done and canceled tasks into done/ archives and repair links |
+| [`bob task merge`](task.md#bob-task-merge) | Fold tasks into a task, drawer, or note section |
 | [`bob task move`](task.md#bob-task-move) | Move open tasks between notes and repair vault links |
 | [`bob task reconcile`](task.md#bob-task-reconcile) | Reconcile task statuses from the Pomodoro ledger and dependencies |
 | [`bob task reroll`](task.md#bob-task-reroll) | Re-roll due prioritized tasks within their priority windows |
@@ -131,8 +132,8 @@ Daily workflow:
 Tasks and projects:
   projects     List and sync project notes via their ^prj tasks
   relations    List, hide, unhide, and rename relation labels
-  task         Vault-wide task maintenance: archive, move, reconcile, reroll,
-               split
+  task         Vault-wide task maintenance: archive, merge, move, reconcile,
+               reroll, split
 
 Vault:
   articles     Format and inspect article notes with bob-owned section numbers

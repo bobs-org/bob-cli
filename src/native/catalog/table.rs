@@ -562,6 +562,18 @@ pub(crate) const ENTRIES: &[Row] = &[
     Row {
         invalidates: &["tasks"],
         ..writes(
+            "task-merge",
+            &["task", "merge"],
+            "Fold tasks into a task",
+            &["merge", "task", "fold", "combine"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
+        )
+    },
+    Row {
+        invalidates: &["tasks"],
+        ..writes(
             "task-split",
             &["task", "split"],
             "Split task notes",

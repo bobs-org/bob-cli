@@ -178,6 +178,14 @@ const TASK_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "merge",
+        about: "Fold tasks into a task, drawer, or note section",
+        leaf: Leaf {
+            native_command: NativeCommand::TaskMerge,
+            script_command: None,
+        },
+    },
+    Member {
         name: "move",
         about: "Move open tasks between notes and repair vault links",
         leaf: Leaf {
@@ -242,6 +250,7 @@ const POMODORO_MEMBERS: &[Member] = &[
 const TASK_AFTER_HELP: &str = "\
 Examples:
   bob task archive               Archive done and canceled tasks
+  bob task merge --dry-run       Preview folding tasks into another task
   bob task move --dry-run        Preview moving tasks and repairing links
   bob task split --dry-run       Preview splitting task notes into tasks
   bob task reconcile --dry-run   Preview task status reconciliation
@@ -736,7 +745,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "task",
-        about: "Vault-wide task maintenance: archive, move, reconcile, reroll, split",
+        about: "Vault-wide task maintenance: archive, merge, move, reconcile, reroll, split",
         section: Section::TasksAndProjects,
         target: Target::Group(Group {
             members: TASK_MEMBERS,
@@ -2242,6 +2251,7 @@ mod tests {
             NativeCommand::Query,
             NativeCommand::Highlights,
             NativeCommand::MoveDoneTasks,
+            NativeCommand::TaskMerge,
             NativeCommand::TaskMove,
             NativeCommand::TaskSplit,
             NativeCommand::Nightly,

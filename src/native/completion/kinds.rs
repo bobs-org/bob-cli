@@ -626,6 +626,41 @@ const TABLE: &[Entry] = &[
         kind: Kind::Files(None),
     },
     Entry {
+        path: &["task", "merge"],
+        arg: "into",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "merge"],
+        arg: "drawer",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "merge"],
+        arg: "section",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "merge"],
+        arg: "pull-in",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "merge"],
+        arg: "sources",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "move"],
+        arg: "to",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "move"],
+        arg: "extra",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["task", "split"],
         arg: "owner",
         kind: Kind::FreeText,

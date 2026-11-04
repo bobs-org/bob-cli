@@ -643,6 +643,40 @@ impl fmt::Display for PlanError {
     }
 }
 
+impl PlanError {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::NoSelectors => "move_no_selectors",
+            Self::InvalidPath { .. } => "move_invalid_path",
+            Self::MissingNote { .. } => "move_missing_note",
+            Self::AmbiguousNote { .. } => "move_ambiguous_note",
+            Self::SameSourceAndDest { .. } => "move_same_note",
+            Self::ArchivePath { .. } => "move_archive_path",
+            Self::DestKind { .. } => "move_dest_kind",
+            Self::ProjectWithoutTasks { .. } => "move_project_without_tasks",
+            Self::SelectorZero { .. } => "move_selector_zero",
+            Self::SelectorAmbiguous { .. } => "move_selector_ambiguous",
+            Self::ClosedTask { .. } => "move_closed_task",
+            Self::NestedTask { .. } => "move_nested_task",
+            Self::ProjectTask { .. } => "move_project_task",
+            Self::UnsupportedCheckbox { .. } => "move_unsupported_checkbox",
+            Self::InvalidCaptureSlots { .. } => "move_invalid_capture_slots",
+            Self::BlockIdCollision { .. } => "move_block_id_collision",
+            Self::NotATask { .. } => "move_not_a_task",
+            Self::DependsOnDestPrj { .. } => "move_depends_on_dest_prj",
+            Self::DestBlocked { .. } => "move_dest_blocked",
+            Self::AmbiguousIdentity { .. } => "move_ambiguous_identity",
+            Self::NonCanonicalId { .. } => "move_non_canonical_id",
+            Self::EncodedIdentityCollision { .. } => {
+                "move_encoded_identity_collision"
+            }
+            Self::UnrepresentableIdentity { .. } => {
+                "move_unrepresentable_identity"
+            }
+        }
+    }
+}
+
 fn format_candidate(candidate: &TaskCandidate) -> String {
     let id = candidate
         .block_id

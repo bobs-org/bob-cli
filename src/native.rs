@@ -98,8 +98,6 @@ mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
 mod task_locator;
-#[allow(dead_code)]
-// The phase helper stays internal until planner integration.
 mod task_merge;
 mod task_move;
 pub(crate) mod task_relations;
@@ -148,6 +146,7 @@ pub(crate) enum NativeCommand {
     Query,
     Highlights,
     MoveDoneTasks,
+    TaskMerge,
     TaskMove,
     TaskSplit,
     Nightly,
@@ -234,6 +233,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),
+        NativeCommand::TaskMerge => task_merge::run(args),
         NativeCommand::TaskMove => task_move::run(args),
         NativeCommand::TaskSplit => task_split::run(args),
         NativeCommand::Nightly => nightly::run(args),

@@ -1,6 +1,7 @@
 //! Live command adapter for the snapshot-only task-move planner.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     iter,
     path::{Path, PathBuf},
@@ -27,6 +28,7 @@ use crate::native::{
         WritePlan,
     },
     task_theme::parse_task_theme,
+    vault_links::NoteIndex,
     vault_sync::CycleReport,
 };
 
@@ -34,6 +36,8 @@ use super::{
     plan_task_move, IdCollisionPolicy, MovePlacement, MovePlan, MoveRequest,
     MoveSelector, VaultSnapshot,
 };
+
+use crate::native::task_locator::TaskLocator;
 
 const COMMAND_NAME: &str = "bob task move";
 const DEFAULT_RETRY_TIMEOUT_SECS: u64 = 60;
@@ -48,20 +52,6 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Err(error) => return print_clap_error(error),
     };
 
-    let request = MoveRequest {
-        source: matches
-            .get_one::<String>("source")
-            .cloned()
-            .unwrap_or_default(),
-        dest: matches
-            .get_one::<String>("dest")
-            .cloned()
-            .unwrap_or_default(),
-        selectors: selectors_from_matches(&matches),
-        allow_closed: false,
-        placement: MovePlacement::Append,
-        id_collision: IdCollisionPolicy::Rename,
-    };
     let dry_run = matches.get_flag("dry-run");
     let offline = matches.get_flag("offline");
     let retry_secs = matches
@@ -70,9 +60,71 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         .unwrap_or(DEFAULT_RETRY_TIMEOUT_SECS);
     let format = OutputFormat::from_matches(&matches);
     let mut report = Report::new(format, dry_run, offline, retry_secs);
+    if let Some(dest) = matches.get_one::<String>("to").cloned() {
+        let tasks = many_tasks_from_matches(&matches);
+        if tasks.is_empty() {
+            eprintln!(
+                "{COMMAND_NAME}: the following required arguments were not provided:\n  <TASK>..."
+            );
+            return 2;
+        }
+        report.many = true;
+        report.many_dest = Some(dest.clone());
+        let exit = execute_many(&mut report, &dest, &tasks);
+        print_report(&report);
+        return exit;
+    }
+    let source = matches.get_one::<String>("source").cloned();
+    let dest = matches.get_one::<String>("dest").cloned();
+    let extra: Vec<String> = matches
+        .get_many::<String>("extra")
+        .map(|values| values.cloned().collect())
+        .unwrap_or_default();
+    let (Some(source), Some(dest)) = (source, dest) else {
+        eprintln!(
+            "{COMMAND_NAME}: the following required arguments were not provided:\n  <SOURCE> <DEST>"
+        );
+        return 2;
+    };
+    if !extra.is_empty() {
+        eprintln!(
+            "{COMMAND_NAME}: unexpected argument '{}' found\n\nFor more information, try '--help'.",
+            extra[0]
+        );
+        return 2;
+    }
+    let selectors = selectors_from_matches(&matches);
+    if selectors.is_empty() {
+        eprintln!(
+            "{COMMAND_NAME}: the following required arguments were not provided:\n  (-b <ID> | -m <TEXT>)..."
+        );
+        return 2;
+    }
+    let request = MoveRequest {
+        source,
+        dest,
+        selectors,
+        allow_closed: false,
+        placement: MovePlacement::Append,
+        id_collision: IdCollisionPolicy::Rename,
+    };
     let exit = execute(&mut report, &request);
     print_report(&report);
     exit
+}
+
+fn many_tasks_from_matches(matches: &ArgMatches) -> Vec<String> {
+    let mut tasks = Vec::new();
+    if let Some(source) = matches.get_one::<String>("source") {
+        tasks.push(source.clone());
+    }
+    if let Some(dest) = matches.get_one::<String>("dest") {
+        tasks.push(dest.clone());
+    }
+    if let Some(extra) = matches.get_many::<String>("extra") {
+        tasks.extend(extra.cloned());
+    }
+    tasks
 }
 
 fn selectors_from_matches(matches: &ArgMatches) -> Vec<MoveSelector> {
@@ -105,21 +157,24 @@ pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
         .about("Move open tasks between notes and repair vault links")
         .long_about("Move selected open task blocks to another eligible note, preserving task state while repairing block links and dependency identities throughout the vault.\n\nA live run holds the shared maintenance lock, syncs before and after the move, and commits exactly the changed Markdown files. Use --dry-run to inspect the same plan without locking, syncing, probing Git, or writing. Use --offline to skip both sync cycles while keeping the lock and scoped local commit.")
-        .after_help("Examples:\n  bob task move --dry-run old-note new-note -b work-item\n                                 Preview a move selected by block id\n  bob task move old-note new-note -m 'Prepare release'\n                                 Move a task selected by literal line text\n  bob task move -d -f json old-note new-note -b work-item\n                                 Print a machine-readable preview\n\nRun 'bob task reconcile' after a move when the report says\nreconciliation is pending.")
+        .after_help("Examples:\n  bob task move --dry-run old-note new-note -b work-item\n                                 Preview a move selected by block id\n  bob task move old-note new-note -m 'Prepare release'\n                                 Move a task selected by literal line text\n  bob task move -t db inbox:bench work:pgdump\n                                 Move many tasks into one note\n  bob task move -d -f json old-note new-note -b work-item\n                                 Print a machine-readable preview\n\nRun 'bob task reconcile' after a move when the report says\nreconciliation is pending.")
+        .override_usage("bob task move [OPTIONS] <SOURCE> <DEST> (-b ID | -m TEXT)...\n       bob task move [OPTIONS] -t <NOTE> <TASK>...")
         .disable_help_flag(true)
-        .arg(Arg::new("source").value_name("SOURCE").required(true).index(1).help("Source note stem or vault-relative path"))
-        .arg(Arg::new("dest").value_name("DEST").required(true).index(2).help("Destination note stem or vault-relative path"))
-        .arg(Arg::new("block").long("block").short('b').value_name("ID").action(ArgAction::Append).help("Select a task by trailing block id without ^; repeatable"))
+        .arg(Arg::new("source").value_name("SOURCE").required(false).index(1).help("Source note stem or vault-relative path"))
+        .arg(Arg::new("dest").value_name("DEST").required(false).index(2).help("Destination note stem or vault-relative path"))
+        .arg(Arg::new("extra").value_name("TASK").required(false).num_args(1..).index(3).help("Additional tasks for --to mode"))
+        .arg(Arg::new("block").long("block").short('b').value_name("ID").action(ArgAction::Append).conflicts_with("to").help("Select a task by trailing block id without ^; repeatable"))
         .arg(Arg::new("dry-run").long("dry-run").short('d').action(ArgAction::SetTrue).help("Plan and print only; do not lock, sync, probe Git, or write"))
         .arg(Arg::new("format").long("format").short('f').value_name("FORMAT").value_parser(["human", "json"]).default_value("human").help("Output format: human or json"))
         .arg(Arg::new("help").long("help").short('h').action(ArgAction::Help).help("Show help"))
-        .arg(Arg::new("match").long("match").short('m').value_name("TEXT").action(ArgAction::Append).help("Select the task whose line contains this literal text; repeatable"))
+        .arg(Arg::new("match").long("match").short('m').value_name("TEXT").action(ArgAction::Append).conflicts_with("to").help("Select the task whose line contains this literal text; repeatable"))
         .arg(Arg::new("offline").long("offline").short('o').action(ArgAction::SetTrue).help("Skip both sync cycles; commit locally without pushing"))
         .arg(Arg::new("retry-timeout").long("retry-timeout").short('r').value_name("SECONDS").value_parser(clap::value_parser!(u64)).default_value("60").help("Lock wait and re-plan budget after concurrent edits; 0 fails fast"))
+        .arg(Arg::new("to").long("to").short('t').value_name("NOTE").help("Many-task mode: move each TASK locator into NOTE"))
         .group(
             ArgGroup::new("selector")
                 .args(["block", "match"])
-                .required(true)
+                .required(false)
                 .multiple(true),
         )
 }
@@ -145,6 +200,7 @@ impl OutputFormat {
 #[derive(Debug, Clone)]
 struct StageError {
     stage: &'static str,
+    code: String,
     message: String,
     hint: Option<String>,
 }
@@ -213,6 +269,8 @@ struct Report {
     recovery_directory: Option<String>,
     error: Option<StageError>,
     relocated: Vec<RelocatedInfo>,
+    many: bool,
+    many_dest: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -255,12 +313,15 @@ impl Report {
             recovery_directory: None,
             error: None,
             relocated: Vec::new(),
+            many: false,
+            many_dest: None,
         }
     }
 
     fn fail(
         &mut self,
         stage: &'static str,
+        code: &str,
         message: impl Into<String>,
         hint: Option<&str>,
     ) {
@@ -268,6 +329,7 @@ impl Report {
         if self.error.is_none() {
             self.error = Some(StageError {
                 stage,
+                code: code.to_string(),
                 message,
                 hint: hint.map(str::to_string),
             });
@@ -333,11 +395,16 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
                         report.relocated = relocated;
                     }
                     Err(error) => {
-                        report.fail("plan", error, None);
+                        report.fail(
+                            "plan",
+                            "move_relocation_failed",
+                            error,
+                            None,
+                        );
                     }
                 }
             }
-            Err(error) => report.fail("plan", error, None),
+            Err((code, error)) => report.fail("plan", &code, error, None),
         }
         return if report.error.is_some() { 1 } else { 0 };
     }
@@ -351,7 +418,7 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
     ) {
         Ok(shell) => shell,
         Err(error) => {
-            report.fail("lock", error.to_string(), Some("wait for the current maintenance run to finish, then retry"));
+            report.fail("lock", "maintenance_lock", error.to_string(), Some("wait for the current maintenance run to finish, then retry"));
             return 1;
         }
     };
@@ -373,6 +440,7 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
         if !cycle.ok {
             report.fail(
                 "pre_sync",
+                "vault_sync_failed",
                 format!(
                     "pre-sync failed: {}",
                     cycle.error.clone().unwrap_or_else(|| {
@@ -400,6 +468,363 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
     finish_after_writes(report, &applied, partial, worktree, &child_env)
 }
 
+fn execute_many(report: &mut Report, dest_raw: &str, tasks: &[String]) -> i32 {
+    if TaskLocator::parse(dest_raw).is_some() {
+        report.fail(
+            "plan",
+            "move_to_task",
+            format!(
+                "to fold tasks into {dest_raw}, use `bob task merge -i {dest_raw} …`"
+            ),
+            None,
+        );
+        return 1;
+    }
+    if report.dry_run {
+        match plan_many_once(&report.vault, dest_raw, tasks) {
+            Ok((scan, plan, dest_display)) => {
+                report.many_dest = Some(dest_display);
+                report.plan = Some(plan.clone());
+                match compute_move_relocation(
+                    &report.vault,
+                    &scan.snapshot,
+                    &plan,
+                ) {
+                    Ok((_, relocated)) => {
+                        report.relocated = relocated;
+                    }
+                    Err(error) => {
+                        report.fail(
+                            "plan",
+                            "move_relocation_failed",
+                            error,
+                            None,
+                        );
+                    }
+                }
+            }
+            Err((code, error)) => report.fail("plan", &code, error, None),
+        }
+        return if report.error.is_some() { 1 } else { 0 };
+    }
+
+    let retry_timeout = Duration::from_secs(report.retry_secs);
+    let shell = match TaskCommandShell::start(
+        &report.vault,
+        retry_timeout,
+        report.offline,
+        report.format == OutputFormat::Json,
+    ) {
+        Ok(shell) => shell,
+        Err(error) => {
+            report.fail(
+                "lock",
+                "maintenance_lock",
+                error.to_string(),
+                Some(
+                    "wait for the current maintenance run to finish, then retry",
+                ),
+            );
+            return 1;
+        }
+    };
+    let child_env = shell.child_env.clone();
+    let worktree = shell.worktree;
+    if let Some(warning) = shell.warning.as_deref() {
+        report.mode = GitMode::NotAWorktree;
+        report.warn(warning);
+    } else if report.offline {
+        report.mode = GitMode::Offline;
+    } else {
+        report.mode = GitMode::Sync;
+    }
+
+    if let Some(cycle) = &shell.pre_sync {
+        let section = SyncSection::from_report(cycle, true);
+        report.progress(&pre_sync_detail(&section));
+        report.pre_sync = Some(section);
+        if !cycle.ok {
+            report.fail(
+                "pre_sync",
+                "vault_sync_failed",
+                format!(
+                    "pre-sync failed: {}",
+                    cycle.error.clone().unwrap_or_else(|| {
+                        "vault sync reported failure".to_string()
+                    })
+                ),
+                Some("resolve the sync problem before retrying the move"),
+            );
+            return 1;
+        }
+    }
+    if report.offline {
+        report.progress("offline: skipped vault sync");
+    }
+
+    let (applied, partial) =
+        match plan_and_apply_many(report, dest_raw, tasks, &retry_timeout) {
+            Some(outcome) => outcome,
+            None => return 1,
+        };
+    if applied.is_empty() {
+        return if report.error.is_some() { 1 } else { 0 };
+    }
+
+    finish_after_writes(report, &applied, partial, worktree, &child_env)
+}
+
+fn plan_many_once(
+    vault: &Path,
+    dest_raw: &str,
+    tasks: &[String],
+) -> Result<(Scan, MovePlan, String), (String, String)> {
+    let scan = scan_vault(vault)
+        .map_err(|error| ("move_scan_failed".to_string(), error.message()))?;
+    let settings = crate::native::note_tasks::read_settings(vault);
+    let (plan, dest_display) =
+        plan_many_from_scan(&scan, dest_raw, tasks, &settings)?;
+    Ok((scan, plan, dest_display))
+}
+
+fn plan_many_from_scan(
+    scan: &Scan,
+    dest_raw: &str,
+    tasks: &[String],
+    settings: &crate::native::note_tasks::NoteTaskSettings,
+) -> Result<(MovePlan, String), (String, String)> {
+    use crate::native::vault_links::LinkResolution;
+    let mut staged = scan.snapshot.notes.clone();
+    let note_index = NoteIndex::from_paths(scan.snapshot.notes.keys().cloned());
+    let dest_path = match note_index.resolve_detailed(None, dest_raw) {
+        LinkResolution::Found(path) => path,
+        LinkResolution::Ambiguous => {
+            return Err((
+                "move_ambiguous_note".to_string(),
+                format!("note {dest_raw:?} is ambiguous"),
+            ));
+        }
+        LinkResolution::Missing => {
+            return Err((
+                "move_missing_note".to_string(),
+                format!("note {dest_raw:?} was not found in the vault"),
+            ));
+        }
+    };
+    let dest_display = dest_path.display().to_string();
+    let mut locators = Vec::with_capacity(tasks.len());
+    for raw in tasks {
+        let locator = TaskLocator::parse(raw).ok_or_else(|| {
+            (
+                "task_not_found".to_string(),
+                format!(
+                    "`{raw}` is not a task locator; use note:block-id or [[note#^block-id]]"
+                ),
+            )
+        })?;
+        locators.push(locator);
+    }
+    let mut seen: BTreeSet<(PathBuf, String)> = BTreeSet::new();
+    let mut combined_postimages: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let mut combined_moves = Vec::new();
+    let mut combined_renamed = Vec::new();
+    let mut combined_repaired: BTreeMap<PathBuf, (usize, usize)> =
+        BTreeMap::new();
+    let mut needs_reconcile = false;
+    for locator in &locators {
+        let locator_text = format!("{}:{}", locator.note, locator.block_id);
+        let located = crate::native::task_locator::resolve_task(
+            &staged,
+            &locator_text,
+            settings,
+        )
+        .map_err(|error| (error.code.to_string(), error.message))?;
+        if located.path == dest_path {
+            return Err((
+                "move_same_note".to_string(),
+                format!(
+                    "task ^{} is already in {}",
+                    locator.block_id,
+                    dest_path.display()
+                ),
+            ));
+        }
+        let key = (
+            located.path.clone(),
+            located.task.block_id.clone().unwrap_or_default(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        let request = MoveRequest {
+            source: located.path.to_string_lossy().into_owned(),
+            dest: dest_path.to_string_lossy().into_owned(),
+            selectors: vec![MoveSelector::Block(locator.block_id.clone())],
+            allow_closed: false,
+            placement: MovePlacement::Append,
+            id_collision: IdCollisionPolicy::Rename,
+        };
+        let staged_snapshot = VaultSnapshot::from_notes(
+            staged
+                .iter()
+                .map(|(path, text)| (path.clone(), text.clone())),
+        );
+        let plan = plan_task_move(&staged_snapshot, &request)
+            .map_err(|error| (error.code().to_string(), error.to_string()))?;
+        for (path, contents) in &plan.postimages {
+            staged.insert(path.clone(), contents.clone());
+            combined_postimages.insert(path.clone(), contents.clone());
+        }
+        combined_moves.extend(plan.moves);
+        combined_renamed.extend(plan.renamed_block_ids);
+        for file in &plan.repaired_files {
+            let entry =
+                combined_repaired.entry(file.path.clone()).or_insert((0, 0));
+            entry.0 += file.link_count;
+            entry.1 += file.dependency_token_count;
+        }
+        needs_reconcile |= plan.needs_reconcile;
+    }
+    if combined_moves.is_empty() {
+        return Err((
+            "move_selector_zero".to_string(),
+            "no movable tasks selected".to_string(),
+        ));
+    }
+    let repaired_files = combined_repaired
+        .into_iter()
+        .map(|(path, (link_count, dependency_token_count))| {
+            crate::native::task_move::transplant::RepairedFile {
+                path,
+                link_count,
+                dependency_token_count,
+            }
+        })
+        .collect();
+    Ok((
+        MovePlan {
+            postimages: combined_postimages,
+            moves: combined_moves,
+            renamed_block_ids: combined_renamed,
+            repaired_files,
+            needs_reconcile,
+        },
+        dest_display,
+    ))
+}
+
+fn plan_and_apply_many(
+    report: &mut Report,
+    dest_raw: &str,
+    tasks: &[String],
+    retry_timeout: &Duration,
+) -> Option<(Vec<PathBuf>, bool)> {
+    let started = Instant::now();
+    loop {
+        let scan = match scan_vault(&report.vault) {
+            Ok(scan) => scan,
+            Err(ScanError::Retryable(message))
+                if started.elapsed() < *retry_timeout =>
+            {
+                report.progress(
+                    "vault changed during scan; rescanning and retrying",
+                );
+                let _ = message;
+                continue;
+            }
+            Err(error) => {
+                report.fail("plan", "move_scan_failed", error.message(), None);
+                return None;
+            }
+        };
+        let settings = crate::native::note_tasks::read_settings(&report.vault);
+        let mut plan =
+            match plan_many_from_scan(&scan, dest_raw, tasks, &settings) {
+                Ok((plan, dest_display)) => {
+                    report.many_dest = Some(dest_display);
+                    plan
+                }
+                Err((code, error)) => {
+                    report.fail("plan", &code, error, None);
+                    return None;
+                }
+            };
+        match compute_move_relocation(&report.vault, &scan.snapshot, &plan) {
+            Ok((daily_edit, relocated)) => {
+                report.relocated = relocated;
+                if let Some((rel_path, new_contents)) = daily_edit {
+                    plan.postimages.insert(rel_path, new_contents);
+                }
+            }
+            Err(error) => {
+                report.fail("plan", "move_relocation_failed", error, None);
+                return None;
+            }
+        }
+        report.plan = Some(plan.clone());
+        let write_plan = match build_write_plan(report, &scan, &plan) {
+            Ok(write_plan) => write_plan,
+            Err(error) => {
+                report.fail("apply", "write_plan_failed", error, None);
+                return None;
+            }
+        };
+        let vault = report.vault.clone();
+        let rescan_vault = vault.clone();
+        let mut session = ApplySession::production(Box::new(move || {
+            link_repair_markdown_files(&rescan_vault)
+        }));
+        session.tool = TOOL_NAME;
+        match apply_plan(&write_plan, &session) {
+            Ok(ApplyOutcome::NoOp) => return Some((Vec::new(), false)),
+            Ok(ApplyOutcome::Applied {
+                applied_files,
+                recovery_directory,
+            }) => {
+                report.applied_paths = display_paths(&vault, &applied_files);
+                report.recovery_directory =
+                    Some(recovery_directory.display().to_string());
+                report.progress(&format!(
+                    "applied {} note(s)",
+                    applied_files.len()
+                ));
+                return Some((applied_files, false));
+            }
+            Err(error) => {
+                let retryable = matches!(
+                    error.reason,
+                    ReasonCode::VaultChanged
+                        | ReasonCode::QuietPeriod
+                        | ReasonCode::UnstableRead
+                ) && error.applied_files.is_empty();
+                if retryable && started.elapsed() < *retry_timeout {
+                    report.progress("vault changed during planning; rescanning and retrying");
+                    continue;
+                }
+                report.applied_paths =
+                    display_paths(&vault, &error.applied_files);
+                report.deferred_paths =
+                    display_paths(&vault, &error.deferred_files);
+                if let Some(recovery) = &error.recovery_directory {
+                    report.recovery_directory =
+                        Some(recovery.display().to_string());
+                }
+                if error.applied_files.is_empty() {
+                    report.fail("apply", "guarded_write_failed", error.message, Some("no move files were written; resolve the reported condition and retry"));
+                    return None;
+                }
+                report.fail(
+                    "apply",
+                    "partial_write",
+                    format!("{}; applied [{}], deferred [{}]", error.message, report.applied_paths.join(", "), report.deferred_paths.join(", ")),
+                    Some("inspect the recovery directory and applied files before retrying; selectors are not replayed automatically"),
+                );
+                return Some((error.applied_files, true));
+            }
+        }
+    }
+}
+
 fn finish_after_writes(
     report: &mut Report,
     applied: &[PathBuf],
@@ -412,6 +837,7 @@ fn finish_after_writes(
             Ok(commit) => report.commit = commit,
             Err(error) => report.fail(
                 "commit",
+                "git_commit_failed",
                 format!("commit moved notes: {error}"),
                 Some(
                     "the local files are written; resolve the Git failure before retrying",
@@ -432,16 +858,18 @@ fn finish_after_writes(
 fn plan_once(
     vault: &Path,
     request: &MoveRequest,
-) -> Result<(Scan, MovePlan), String> {
-    let scan = scan_vault(vault).map_err(ScanError::message)?;
+) -> Result<(Scan, MovePlan), (String, String)> {
+    let scan = scan_vault(vault)
+        .map_err(|error| ("move_scan_failed".to_string(), error.message()))?;
     plan_from_scan(&scan, request).map(|plan| (scan, plan))
 }
 
 fn plan_from_scan(
     scan: &Scan,
     request: &MoveRequest,
-) -> Result<MovePlan, String> {
-    plan_task_move(&scan.snapshot, request).map_err(|error| error.to_string())
+) -> Result<MovePlan, (String, String)> {
+    plan_task_move(&scan.snapshot, request)
+        .map_err(|error| (error.code().to_string(), error.to_string()))
 }
 
 fn scan_vault(vault: &Path) -> Result<Scan, ScanError> {
@@ -545,14 +973,14 @@ fn plan_and_apply_with_hooks(
                 continue;
             }
             Err(error) => {
-                report.fail("plan", error.message(), None);
+                report.fail("plan", "move_scan_failed", error.message(), None);
                 return None;
             }
         };
         let mut plan = match plan_from_scan(&scan, request) {
             Ok(plan) => plan,
-            Err(error) => {
-                report.fail("plan", error, None);
+            Err((code, error)) => {
+                report.fail("plan", &code, error, None);
                 return None;
             }
         };
@@ -564,7 +992,7 @@ fn plan_and_apply_with_hooks(
                 }
             }
             Err(error) => {
-                report.fail("plan", error, None);
+                report.fail("plan", "move_relocation_failed", error, None);
                 return None;
             }
         }
@@ -572,7 +1000,7 @@ fn plan_and_apply_with_hooks(
         let write_plan = match build_write_plan(report, &scan, &plan) {
             Ok(write_plan) => write_plan,
             Err(error) => {
-                report.fail("apply", error, None);
+                report.fail("apply", "write_plan_failed", error, None);
                 return None;
             }
         };
@@ -614,11 +1042,12 @@ fn plan_and_apply_with_hooks(
                         Some(recovery.display().to_string());
                 }
                 if error.applied_files.is_empty() {
-                    report.fail("apply", error.message, Some("no move files were written; resolve the reported condition and retry"));
+                    report.fail("apply", "guarded_write_failed", error.message, Some("no move files were written; resolve the reported condition and retry"));
                     return None;
                 }
                 report.fail(
                     "apply",
+                    "partial_write",
                     format!("{}; applied [{}], deferred [{}]", error.message, report.applied_paths.join(", "), report.deferred_paths.join(", ")),
                     Some("inspect the recovery directory and applied files before retrying; selectors are not replayed automatically"),
                 );
@@ -824,12 +1253,24 @@ fn commit_applied(
         .first()
         .ok_or_else(|| "move plan has no selected tasks".to_string())?;
     let count = plan.moves.len();
-    let subject = format!(
-        "bob task move {} -> {} ({count} {})",
-        first.source_path.display(),
-        first.dest_path.display(),
-        if count == 1 { "task" } else { "tasks" }
-    );
+    let subject = if report.many {
+        let dest = report
+            .many_dest
+            .as_deref()
+            .map(dest_stem)
+            .unwrap_or_else(|| first.dest_path.display().to_string());
+        format!(
+            "bob task move -> {dest} ({count} {})",
+            if count == 1 { "task" } else { "tasks" }
+        )
+    } else {
+        format!(
+            "bob task move {} -> {} ({count} {})",
+            first.source_path.display(),
+            first.dest_path.display(),
+            if count == 1 { "task" } else { "tasks" }
+        )
+    };
     let committed = task_command_shell::commit_paths(
         &report.vault,
         child_env,
@@ -847,13 +1288,30 @@ fn commit_applied(
     }))
 }
 
+fn dest_stem(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let inner = trimmed
+        .strip_prefix("[[")
+        .and_then(|s| s.strip_suffix("]]"))
+        .unwrap_or(trimmed);
+    let base = inner.rsplit('/').next().unwrap_or(inner);
+    let base = base.rsplit(':').next().unwrap_or(base);
+    let base = base.split('#').next().unwrap_or(base);
+    let base = base.trim().trim_end_matches(".md");
+    if base.is_empty() {
+        trimmed.to_string()
+    } else {
+        base.to_string()
+    }
+}
+
 fn post_sync(report: &mut Report, child_env: &ChildEnv) -> i32 {
     let cycle = task_command_shell::run_post_sync(child_env);
     report.post_sync = Some(SyncSection::from_report(&cycle, false));
     if !cycle.conflicts.is_empty() {
         let mut conflicts = cycle.conflicts.clone();
         conflicts.sort();
-        report.fail("post_sync", format!("post-sync conflict in {}: the remote copy wins in place; inspect _conflicts/ before retrying", conflicts.join(", ")), Some("resolve the _conflicts/ copy and inspect the local move before another attempt"));
+        report.fail("post_sync", "post_sync_conflict", format!("post-sync conflict in {}: the remote copy wins in place; inspect _conflicts/ before retrying", conflicts.join(", ")), Some("resolve the _conflicts/ copy and inspect the local move before another attempt"));
         return 1;
     }
     if cycle.ok {
@@ -867,6 +1325,7 @@ fn post_sync(report: &mut Report, child_env: &ChildEnv) -> i32 {
         .unwrap_or("unknown");
     report.fail(
         "post_sync",
+        "vault_sync_failed",
         format!(
             "post-sync failed ({}); local commit {sha} remains",
             cycle
@@ -984,18 +1443,46 @@ fn json_document(report: &Report) -> Value {
         "applied_paths": report.applied_paths,
         "deferred_paths": report.deferred_paths,
         "recovery_directory": report.recovery_directory,
-        "error": report.error.as_ref().map(|error| json!({"stage": error.stage, "message": error.message, "hint": error.hint})),
+        "error": report.error.as_ref().map(|error| json!({"stage": error.stage, "code": error.code, "message": error.message, "hint": error.hint})),
     })
 }
 
 fn print_human(report: &Report) {
     let styler = Styler::detect();
-    let action = if report.dry_run { "Plan" } else { "Move" };
-    let mut title = format!("{} {COMMAND_NAME}", styler.bold(action));
-    if report.dry_run {
-        title.push_str(" · dry run");
+    if report.many {
+        let count = report
+            .plan
+            .as_ref()
+            .map(|plan| plan.moves.len())
+            .unwrap_or(0);
+        let dest = report
+            .many_dest
+            .as_deref()
+            .map(|raw| {
+                let stem = dest_stem(raw);
+                format!("{stem}.md")
+            })
+            .unwrap_or_default();
+        let action = if report.dry_run {
+            "Would move"
+        } else {
+            "Moved"
+        };
+        println!(
+            "{}",
+            styler.bold(&format!(
+                "↪ {action} {count} {} into {dest} › Tasks",
+                if count == 1 { "task" } else { "tasks" }
+            ))
+        );
+    } else {
+        let action = if report.dry_run { "Plan" } else { "Move" };
+        let mut title = format!("{} {COMMAND_NAME}", styler.bold(action));
+        if report.dry_run {
+            title.push_str(" · dry run");
+        }
+        println!("{title}");
     }
-    println!("{title}");
     if let Some(plan) = &report.plan {
         println!();
         for item in &plan.moves {
@@ -1311,18 +1798,28 @@ mod tests {
     }
 
     #[test]
-    fn clap_still_requires_at_least_one_selector() {
-        let error = build_cli()
+    fn clap_defers_selector_validation_to_run() {
+        let matches = build_cli()
             .try_get_matches_from([COMMAND_NAME, "src", "dest"])
-            .expect_err("missing selector");
-        assert_eq!(error.exit_code(), 2);
+            .expect("selector validation happens in run");
+        assert!(selectors_from_matches(&matches).is_empty());
     }
 
     #[test]
     fn fail_keeps_the_primary_error_and_warns_about_later_failures() {
         let mut report = Report::new(OutputFormat::Json, false, true, 5);
-        report.fail("apply", "partial write", Some("inspect recovery"));
-        report.fail("commit", "hook rejected the commit", Some("fix git"));
+        report.fail(
+            "apply",
+            "partial_write",
+            "partial write",
+            Some("inspect recovery"),
+        );
+        report.fail(
+            "commit",
+            "git_commit_failed",
+            "hook rejected the commit",
+            Some("fix git"),
+        );
         assert_eq!(
             report.error.as_ref().map(|error| error.stage),
             Some("apply")

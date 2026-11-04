@@ -3,6 +3,7 @@
 //! The module exposes a complete pure planner alongside the internal helpers
 //! that prepare payloads, retire sources, and compose ledger offers.
 
+mod command;
 mod containers;
 mod payload;
 mod plan;
@@ -13,6 +14,7 @@ mod types;
 mod tests;
 
 // The planner integration phase will consume this preparation entry point.
+pub(crate) use command::{build_cli, run};
 #[allow(unused_imports)]
 pub(crate) use payload::prepare_task_merge;
 // The parent merge-label phase will call the planner through this module.

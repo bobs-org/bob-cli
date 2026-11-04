@@ -11,9 +11,8 @@ this same engine (see [Task relations](task-relations.md#21-merge-labels)).
 
 > [!NOTE] The pure Rust merge engine is implemented in
 > `src/native/task_merge/` and its MG1–MG20 conformance coverage is recorded
-> below. The `bob task merge` command, configurable merge labels, and capture
-> transfer/dispatch are still pending their sibling phases; the command and
-> configuration sections below remain their contract.
+> below. Configurable merge labels and capture transfer/dispatch are still
+> pending their sibling phases; those sections below remain their contract.
 
 This file is the contract every implementation cites. The pure planner is
 `plan_task_merge` in `src/native/task_merge/`. Later adapters compose it for

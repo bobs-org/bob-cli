@@ -71,10 +71,7 @@ destination (`@a+x > @c`) and `bob task move -t` share this path; a task,
 drawer, or section destination (`> @c+id[#drawer]`, `> @c#section`) merges
 instead (see [Merge tasks into a task, drawer, or section](task-merge.md)).
 The command commits as `bob task move -> db (2 tasks)` and reuses the move
-report with a `↻ Moved N tasks into db.md › Tasks` header.
-
-> [!NOTE] Contract only: the `merge-cli` phase lands `-t` alongside
-> `bob task merge`. Until then this section pins the contract it must pass.
+report with a `↪ Moved N tasks into db.md › Tasks` header.
 
 ## Refusals and placement
 

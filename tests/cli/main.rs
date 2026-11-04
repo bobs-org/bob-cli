@@ -31,6 +31,7 @@ mod run_env;
 mod stats;
 mod stats_clock;
 mod support;
+mod task_merge;
 mod task_move;
 mod task_status_hooks;
 mod themes;
