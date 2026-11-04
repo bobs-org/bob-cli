@@ -535,7 +535,7 @@ fn project_h2_entries(contents: &str) -> Vec<DrawerCatalogEntry> {
     entries
 }
 
-fn is_structural_h2_key(key: &str) -> bool {
+pub(crate) fn is_structural_h2_key(key: &str) -> bool {
     use crate::native::task_status_groups::{
         TITLE_ACTIVE, TITLE_BLOCKED, TITLE_CLOSED,
     };
@@ -1175,7 +1175,7 @@ fn reserved_drawer_error(key: &str, scope: DrawerScope) -> DrawerResolveError {
     )
 }
 
-fn find_near_duplicate_drawer<'a>(
+pub(crate) fn find_near_duplicate_drawer<'a>(
     drawers: &'a [Drawer],
     slug: &str,
 ) -> Option<&'a Drawer> {

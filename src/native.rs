@@ -97,6 +97,9 @@ mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
 mod task_locator;
+#[allow(dead_code)]
+// The phase helper stays internal until planner integration.
+mod task_merge;
 mod task_move;
 pub(crate) mod task_relations;
 mod task_root;
