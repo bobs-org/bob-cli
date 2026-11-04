@@ -1824,18 +1824,18 @@ carries no `query` field and no `picker` descriptor, exactly like
 `· closed YYYY-MM-DD` for closed rows; the shell format yields no rows,
 because nothing is insertable.
 
-Pass `-C`/`--closed-tasks` to append done and canceled tasks from the whole
-vault after the open rows. Closed rows come from the vault-wide task catalog
+Pass `-C`/`--closed-tasks` to list done and canceled tasks from the whole
+vault instead of the open rows. Closed rows come from the vault-wide task catalog
 (the same catalog the `&` and `((` pickers use, including `done/` archives,
-ref notes, and daily notes), filtered by the query with the same matcher;
-open matches always come first. For an empty query closed rows order newest
+ref notes, and daily notes), filtered by the query with the same matcher.
+For an empty query closed rows order newest
 close date first (the first strict `[completion:: YYYY-MM-DD]` for DONE
 rows, the first strict `[cancelled:: YYYY-MM-DD]` otherwise; undated rows
 last; ties by `note_path`, then `line`); for a non-empty query score comes
 first, then this order. Each closed row carries `group: "completed"`,
 `route` as the catalog locator, no `note_kind`, `scheduled: null`,
-`pomodoro: null`, and `closed` when the line carries a date. Warnings from
-the vault catalog are appended to the response. Without the flag the output
+`pomodoro: null`, and `closed` when the line carries a date. Warnings come
+from the vault catalog. Without the flag the output
 is unchanged. The navigation itself runs through bob-navigation-hotkeys'
 `obsidian://bob-goto-task` URI, whose contract is in the [Go to task URI
 reference](reference/plugins/goto-task-uri.md).

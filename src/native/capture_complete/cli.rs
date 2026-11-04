@@ -248,7 +248,7 @@ Progress) in the routable inbox, area, and non-terminal project notes, in \
 canonical picker order and ranked by the query with ID-less tasks always \
 included; the replacement covers the whole `:` token, sigil included, \
 because accepting rewrites the query into the canonical `@route:block-id` \
-link. A whole-draft `/` token completes `task_goto`: the same rows and order as `task_link`, with `note_path` and absolute `target` for opening the task; the replacement covers the whole token and is never inserted. Pass -C/--closed-tasks to append done and canceled tasks from the whole vault as a trailing `completed` group, newest close date first. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
+link. A whole-draft `/` token completes `task_goto`: the same rows and order as `task_link`, with `note_path` and absolute `target` for opening the task; the replacement covers the whole token and is never inserted. Pass -C/--closed-tasks to list only done and canceled tasks from the whole vault, instead of the open rows, as `completed` rows with the newest close date first. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `@` seal \
 directly after the `^` or `:` block-ID part is never part of the replacement and reports intent `project_note`; a `+` after a `:` block ID is the retired project-note form and offers nothing. A trailing ` :id` or ` ^id` on a \
 first-level bullet of a project-note item completes as `project_task_block_id`, with empty candidates and an additive `block_id` object carrying intent `new`, the project-note stem, the sigil range, the owning task body, used IDs (`prj` plus other task IDs), and suggestions. This prompt also opens on task-list bullets and nested lines, and on nested lines under project-note task bullets. Its object reports `owner_line` and an additive `splice`; list IDs use the header route, destination-note IDs followed by sibling-list IDs, and owner-first suggestions when that ID is free. The splice moves an accepted ID onto its owner line while preserving nested text and returning the caret to the typed line. An empty block-ID component \
@@ -332,7 +332,7 @@ pub(super) fn closed_tasks_arg() -> Arg {
         .short('C')
         .action(ArgAction::SetTrue)
         .help(
-            "Include done and canceled tasks from the whole vault (task_goto context only)",
+            "List done and canceled tasks from the whole vault instead of open tasks (task_goto context only)",
         )
 }
 

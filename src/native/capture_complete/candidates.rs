@@ -714,20 +714,24 @@ pub(super) fn task_link_candidates(
 /// no Add block ID metadata; `note_path` is the exact vault-relative path
 /// and `target` the absolute path for opening the task.
 ///
-/// Behind `closed_tasks`, closed rows from the vault-wide catalog trail
-/// the open rows: filtered by the query with the same `match_score`
-/// matcher, open matches always first, closed rows ordered newest close
-/// date first (undated last, ties by `note_path` then `line`; for a
-/// non-empty query score comes first). Closed rows carry
-/// `group: "completed"`, a `locator` route, no `note_kind`, no
-/// `scheduled`/`pomodoro`, and an optional `closed` date.
+/// Behind `closed_tasks`, the context lists closed rows from the
+/// vault-wide catalog instead of the open rows, with the same filtering,
+/// ordering, and row shape described today: filtered by the query with the
+/// same `match_score` matcher, ordered newest close date first (undated
+/// last, ties by `note_path` then `line`; for a non-empty query score
+/// comes first). Closed rows carry `group: "completed"`, a `locator`
+/// route, no `note_kind`, no `scheduled`/`pomodoro`, and an optional
+/// `closed` date.
 pub(super) fn task_goto_candidates(
     bob_dir: &Path,
     query: &str,
     closed_tasks: bool,
 ) -> (Candidates, Vec<String>) {
+    if closed_tasks {
+        return closed_task_goto_candidates(bob_dir, query);
+    }
     let discovered = capture_link_tasks::discover(bob_dir);
-    let mut candidates: Vec<TaskGotoCandidate> =
+    let candidates: Vec<TaskGotoCandidate> =
         capture_link_tasks::rank(&discovered.tasks, query)
             .into_iter()
             .map(|task| TaskGotoCandidate {
@@ -759,16 +763,17 @@ pub(super) fn task_goto_candidates(
                 task_kind: task.task_kind,
             })
             .collect();
-    let mut warnings = discovered.warnings;
-    if !closed_tasks {
-        return (Candidates::TaskGoto(candidates), warnings);
-    }
+    let warnings = discovered.warnings;
+    (Candidates::TaskGoto(candidates), warnings)
+}
+
+/// Closed-only `task_goto` rows from the vault-wide catalog, newest close
+/// date first (undated last). Warnings come from the vault catalog.
+fn closed_task_goto_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
     let vault = capture_dependency_tasks::discover(bob_dir);
-    for warning in vault.warnings {
-        if !warnings.contains(&warning) {
-            warnings.push(warning);
-        }
-    }
     let mut scored: Vec<(&capture_dependency_tasks::DependencyTask, u32)> =
         vault
             .tasks
@@ -790,28 +795,31 @@ pub(super) fn task_goto_candidates(
                 .cmp(&closed_goto_order_key(right_task))
         })
     });
-    candidates.extend(scored.into_iter().map(|(task, _)| TaskGotoCandidate {
-        replacement: String::new(),
-        task_ref: task.task_ref.clone(),
-        route: task.locator.clone(),
-        note_kind: None,
-        note_path: task.note_path.clone(),
-        target: bob_dir.join(&task.note_path).display().to_string(),
-        block_id: task.block_id.clone(),
-        status_symbol: task.status_symbol,
-        status_name: task.status_name.clone(),
-        status_type: capture_tasks::status_type_label(task.status_type),
-        text: task.text.clone(),
-        section: task.section.clone(),
-        depth: task.depth,
-        line: task.line,
-        group: capture_link_tasks::LinkTaskGroup::Completed,
-        scheduled: None,
-        pomodoro: None,
-        closed: task.closed_on.clone(),
-        task_kind: task.task_kind,
-    }));
-    (Candidates::TaskGoto(candidates), warnings)
+    let candidates: Vec<TaskGotoCandidate> = scored
+        .into_iter()
+        .map(|(task, _)| TaskGotoCandidate {
+            replacement: String::new(),
+            task_ref: task.task_ref.clone(),
+            route: task.locator.clone(),
+            note_kind: None,
+            note_path: task.note_path.clone(),
+            target: bob_dir.join(&task.note_path).display().to_string(),
+            block_id: task.block_id.clone(),
+            status_symbol: task.status_symbol,
+            status_name: task.status_name.clone(),
+            status_type: capture_tasks::status_type_label(task.status_type),
+            text: task.text.clone(),
+            section: task.section.clone(),
+            depth: task.depth,
+            line: task.line,
+            group: capture_link_tasks::LinkTaskGroup::Completed,
+            scheduled: None,
+            pomodoro: None,
+            closed: task.closed_on.clone(),
+            task_kind: task.task_kind,
+        })
+        .collect();
+    (Candidates::TaskGoto(candidates), vault.warnings)
 }
 
 /// Close-date order for a closed Go To row: dated rows first, newest

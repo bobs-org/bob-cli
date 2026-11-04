@@ -618,33 +618,21 @@ fn complete_goto_without_flag_omits_closed_rows() {
 }
 
 #[test]
-fn complete_goto_closed_tasks_appends_newest_first() {
+fn complete_goto_closed_tasks_lists_only_closed_newest_first() {
     let temp = TempDir::new("bob-cli-complete-task-goto-closed");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     let day_file = write_closed_example(&vault);
 
     for flag in ["-C", "--closed-tasks"] {
-        let open = complete_json_with_closed(&vault, &day_file, 1, "/", None);
         let json =
             complete_json_with_closed(&vault, &day_file, 1, "/", Some(flag));
         assert_eq!(json["ok"], true, "{flag}");
         assert_eq!(json["context"], "task_goto", "{flag}");
-        let open_candidates =
-            open["candidates"].as_array().expect("open candidates");
         let candidates =
             json["candidates"].as_array().expect("candidates array");
-        assert_eq!(
-            candidates.len(),
-            open_candidates.len() + 5,
-            "{flag}: {json}"
-        );
-        assert_eq!(
-            candidates[..open_candidates.len()].to_vec(),
-            *open_candidates,
-            "{flag}: open rows must stay unchanged and first"
-        );
-        let closed = &candidates[open_candidates.len()..];
+        assert_eq!(candidates.len(), 5, "{flag}: {json}");
+        let closed = candidates;
         let texts: Vec<&str> = closed
             .iter()
             .map(|candidate| candidate["text"].as_str().expect("text"))
@@ -709,7 +697,7 @@ fn complete_goto_closed_tasks_appends_newest_first() {
 }
 
 #[test]
-fn complete_goto_closed_query_filters_with_open_first() {
+fn complete_goto_closed_query_filters_closed_rows_only() {
     let temp = TempDir::new("bob-cli-complete-task-goto-closed-query");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -722,23 +710,13 @@ fn complete_goto_closed_query_filters_with_open_first() {
         .iter()
         .map(|candidate| candidate["text"].as_str().expect("text"))
         .collect();
-    assert!(texts.contains(&"Fix deep bug"), "{texts:?}");
+    assert!(!texts.contains(&"Fix deep bug"), "{texts:?}");
     assert!(texts.contains(&"Old fix"), "{texts:?}");
-    let first_closed = candidates
-        .iter()
-        .position(|candidate| candidate["group"] == "completed")
-        .expect("closed rows");
     assert!(
-        candidates[..first_closed]
-            .iter()
-            .all(|candidate| candidate["group"] != "completed"),
-        "open matches must come before closed matches: {texts:?}"
-    );
-    assert!(
-        candidates[first_closed..]
+        candidates
             .iter()
             .all(|candidate| candidate["group"] == "completed"),
-        "closed rows must trail: {texts:?}"
+        "closed mode must list completed rows only: {texts:?}"
     );
 }
 
@@ -783,7 +761,8 @@ fn complete_goto_closed_human_lines_show_closed_date() {
     assert_success(&human);
     let out = stdout(&human);
     assert!(out.contains("· closed 2026-10-03"), "{out}");
-    assert!(out.contains("13 candidates"), "{out}");
+    assert!(out.contains("5 candidates"), "{out}");
+    assert!(!out.contains("Fix deep bug"), "{out}");
 }
 
 #[test]

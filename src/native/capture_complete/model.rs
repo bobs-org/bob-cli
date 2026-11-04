@@ -421,10 +421,10 @@ pub(super) struct TaskLinkCandidate {
     pub(super) task_kind: Option<&'static str>,
 }
 
-/// One `task_goto` (Go To picker) candidate: any linkable open task in
+/// One `task_goto` (Go To picker) candidate: either an open row from
 /// the same routable catalog `task_link` uses, in the same rows and order,
-/// plus optional trailing closed rows from the vault-wide catalog behind
-/// `--closed-tasks`. The JSON keys match the picker contract:
+/// or -- behind `--closed-tasks` -- a closed row from the vault-wide
+/// catalog. The JSON keys match the picker contract:
 /// `replacement` is always `""` (clients never insert it; it is kept so
 /// the shared decoder still works), `note_path` is the exact
 /// vault-relative path with extension, and `target` is the absolute path
