@@ -4,11 +4,11 @@
 //! so sync can decide before copying any file of a plugin.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs::{self, File},
-    io,
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 use fs2::FileExt;
@@ -137,8 +137,13 @@ pub(super) enum PriorStamp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum GuardDecision {
-    Permit { stamp_action: StampAction },
-    Refuse { message: String },
+    Permit {
+        stamp_action: StampAction,
+        proving_commit: Option<String>,
+    },
+    Refuse {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -839,6 +844,7 @@ pub(super) fn evaluate_guard(
     if force {
         return GuardDecision::Permit {
             stamp_action: StampAction::Write,
+            proving_commit: None,
         };
     }
 
@@ -850,6 +856,7 @@ pub(super) fn evaluate_guard(
     match prior {
         PriorStamp::Missing => GuardDecision::Permit {
             stamp_action: StampAction::Write,
+            proving_commit: None,
         },
         PriorStamp::Complete { stamp, .. } if exact => {
             if incoming_clean
@@ -860,10 +867,12 @@ pub(super) fn evaluate_guard(
             {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Write,
+                    proving_commit: None,
                 }
             } else {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Leave,
+                    proving_commit: None,
                 }
             }
         }
@@ -877,6 +886,7 @@ pub(super) fn evaluate_guard(
                 match ancestor_of(incoming_repo, stamp.source_head.as_deref()) {
                     Ancestor::Yes => GuardDecision::Permit {
                         stamp_action: StampAction::Write,
+                        proving_commit: None,
                     },
                     _ => GuardDecision::Refuse {
                         message: refuse_message(
@@ -888,13 +898,21 @@ divergent, or unknown history",
                         ),
                     },
                 }
+            } else if incoming_clean
+                && let Some(proving) =
+                    find_inclusion_proof(incoming_repo, plugin_id, stamp)
+            {
+                GuardDecision::Permit {
+                    stamp_action: StampAction::Write,
+                    proving_commit: Some(proving),
+                }
             } else {
                 GuardDecision::Refuse {
                     message: refuse_message(
                         plugin_id,
                         stamp,
-                        "HEAD ancestry cannot prove inclusion of uncommitted \
-changes from another checkout or host",
+                        "no single commit reachable from HEAD holds the \
+stamped bundle byte for byte",
                         incoming_repo,
                     ),
                 }
@@ -907,6 +925,7 @@ changes from another checkout or host",
             match ancestor_of(incoming_repo, stamp.source_head.as_deref()) {
                 Ancestor::Yes => GuardDecision::Permit {
                     stamp_action: StampAction::Write,
+                    proving_commit: None,
                 },
                 _ => GuardDecision::Refuse {
                     message: refuse_message(
@@ -924,10 +943,12 @@ revision",
             if exact && incoming_clean {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Write,
+                    proving_commit: None,
                 }
             } else if exact {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Leave,
+                    proving_commit: None,
                 }
             } else {
                 let cause = match prior {
@@ -954,10 +975,12 @@ revision",
             if exact && incoming_clean {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Write,
+                    proving_commit: None,
                 }
             } else if exact {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Leave,
+                    proving_commit: None,
                 }
             } else {
                 GuardDecision::Refuse {
@@ -975,10 +998,12 @@ overwrite with `bob plugins sync --repo {} -p {plugin_id} -F`.",
             if exact && incoming_clean {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Write,
+                    proving_commit: None,
                 }
             } else if exact {
                 GuardDecision::Permit {
                     stamp_action: StampAction::Leave,
+                    proving_commit: None,
                 }
             } else {
                 GuardDecision::Refuse {
@@ -998,6 +1023,222 @@ deploy stamp version {version}. Preview with `bob plugins sync --repo {} \
 
 fn stamp_root(stamp: &DeployStamp) -> PathBuf {
     canonical_path(Path::new(&stamp.source_root))
+}
+
+/// Inclusion proof for a dirty deploy from another checkout or host.
+///
+/// Walks the commits reachable from the incoming HEAD that touched the
+/// plugin's source directory (`plugins/<id>`), newest first, bounded to 500
+/// commits. Returns the first commit whose tree holds every stamped managed
+/// asset with exactly the stamped `sha256` (assets the stamp marks absent
+/// must be absent). Blob contents are hashed in one `git cat-file --batch`
+/// session, cached by blob id. Per-file matches drawn from different commits
+/// never qualify: such hashes can describe a bundle that never existed.
+fn find_inclusion_proof(
+    incoming_repo: &Path,
+    plugin_id: &str,
+    stamp: &DeployStamp,
+) -> Option<String> {
+    const MAX_COMMITS: usize = 500;
+    let plugin_rel =
+        format!("{}/{}", super::model::REPO_PLUGINS_SUBDIR, plugin_id);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(incoming_repo)
+        .arg("rev-list")
+        .arg(format!("--max-count={MAX_COMMITS}"))
+        .arg("HEAD")
+        .arg("--")
+        .arg(&plugin_rel)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let commits: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    if commits.is_empty() {
+        return None;
+    }
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(incoming_repo)
+        .arg("cat-file")
+        .arg("--batch")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let mut batch = BatchHasher::new(stdin, stdout);
+    let mut found = None;
+    for commit in &commits {
+        if commit_holds_stamp(
+            incoming_repo,
+            plugin_id,
+            &plugin_rel,
+            stamp,
+            commit,
+            &mut batch,
+        ) {
+            found = Some(commit.clone());
+            break;
+        }
+    }
+    batch.shutdown();
+    let _ = child.kill();
+    let _ = child.wait();
+    found
+}
+
+fn commit_holds_stamp(
+    incoming_repo: &Path,
+    plugin_id: &str,
+    plugin_rel: &str,
+    stamp: &DeployStamp,
+    commit: &str,
+    batch: &mut BatchHasher,
+) -> bool {
+    let _ = (incoming_repo, plugin_id);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(incoming_repo)
+        .arg("ls-tree")
+        .arg("-r")
+        .arg(commit)
+        .arg("--")
+        .arg(plugin_rel)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let mut blobs: HashMap<String, String> = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        // `100644 blob <sha>\tplugins/<id>/<file>`
+        let mut parts = line.split_whitespace();
+        let (_mode, kind, sha, path) =
+            match (parts.next(), parts.next(), parts.next(), parts.next()) {
+                (Some(mode), Some(kind), Some(sha), Some(path)) => {
+                    (mode, kind, sha, path)
+                }
+                _ => continue,
+            };
+        if kind != "blob" {
+            continue;
+        }
+        let _ = _mode;
+        if let Some(name) = path.rsplit('/').next() {
+            blobs.insert(name.to_string(), sha.to_string());
+        }
+    }
+    for asset in &stamp.assets {
+        match blobs.get(&asset.name) {
+            None => {
+                if asset.present {
+                    return false;
+                }
+            }
+            Some(blob) => {
+                if !asset.present {
+                    return false;
+                }
+                let Some(expected) = asset.sha256.as_deref() else {
+                    return false;
+                };
+                let Some(actual) = batch.content_sha(blob) else {
+                    return false;
+                };
+                if actual != expected {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Single `git cat-file --batch` session hashing blob contents by id.
+struct BatchHasher {
+    stdin: Option<std::process::ChildStdin>,
+    reader: Option<BufReader<std::process::ChildStdout>>,
+    cache: HashMap<String, Option<String>>,
+}
+
+impl BatchHasher {
+    fn new(
+        stdin: Option<std::process::ChildStdin>,
+        stdout: Option<std::process::ChildStdout>,
+    ) -> Self {
+        Self {
+            stdin,
+            reader: stdout.map(BufReader::new),
+            cache: HashMap::new(),
+        }
+    }
+
+    fn content_sha(&mut self, blob: &str) -> Option<String> {
+        if let Some(cached) = self.cache.get(blob) {
+            return cached.clone();
+        }
+        let sha = self.hash_uncached(blob);
+        self.cache.insert(blob.to_string(), sha.clone());
+        sha
+    }
+
+    fn hash_uncached(&mut self, blob: &str) -> Option<String> {
+        let (stdin, reader) = match (self.stdin.as_mut(), self.reader.as_mut())
+        {
+            (Some(stdin), Some(reader)) => (stdin, reader),
+            _ => return None,
+        };
+        if writeln!(stdin, "{blob}").is_err() {
+            return None;
+        }
+        if stdin.flush().is_err() {
+            return None;
+        }
+        let mut header = String::new();
+        if reader.read_line(&mut header).is_err() {
+            return None;
+        }
+        let header = header.trim();
+        let mut parts = header.split_whitespace();
+        let (_sha, kind, size) =
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some(sha), Some(kind), Some(size)) => (sha, kind, size),
+                _ => return None,
+            };
+        if kind == "missing" {
+            return None;
+        }
+        let size: usize = size.parse().ok()?;
+        let mut bytes = vec![0u8; size];
+        if reader.read_exact(&mut bytes).is_err() {
+            return None;
+        }
+        // Consume the trailing newline after the raw bytes.
+        let mut newline = [0u8; 1];
+        let _ = reader.read_exact(&mut newline);
+        Some(sha256_hex(&bytes))
+    }
+
+    fn shutdown(mut self) {
+        drop(self.stdin.take());
+        drop(self.reader.take());
+    }
 }
 
 fn ancestor_of(repo: &Path, stamped_head: Option<&str>) -> Ancestor {
@@ -1440,7 +1681,8 @@ mod tests {
         assert_eq!(
             decision,
             GuardDecision::Permit {
-                stamp_action: StampAction::Write
+                stamp_action: StampAction::Write,
+                proving_commit: None,
             }
         );
     }
@@ -1474,7 +1716,8 @@ mod tests {
         assert_eq!(
             decision,
             GuardDecision::Permit {
-                stamp_action: StampAction::Write
+                stamp_action: StampAction::Write,
+                proving_commit: None,
             }
         );
     }

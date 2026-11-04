@@ -266,8 +266,12 @@ Without `--force`:
   dirty/unknown/stale stamp. Leftover destination `styles.css` that the source
   does not have is not deleted, and that leftover cannot certify an exact
   match.
-- Dirty stamp from a different canonical checkout or host: refuse even when
-  HEADs match. Ancestry cannot prove inclusion of uncommitted changes.
+- Dirty stamp from a different canonical checkout or host: permit without
+  `--force` only from a verifiably clean checkout when one commit reachable
+  from its HEAD holds the stamped bundle byte for byte; the sync names that
+  proving commit. Otherwise refuse, even when HEADs match. Per-file matches
+  drawn from different commits never qualify, and a vault edited after the
+  deploy (digest mismatch) still refuses.
 - Dirty stamp from the same canonical checkout and host: permit iterative
   deploys only while the stamp still matches the vault and its HEAD is an
   ancestor of the incoming HEAD.
@@ -291,11 +295,13 @@ Same-host syncs to one vault take a nonblocking lock in host-local state keyed
 by the canonical vault path. Contention fails promptly with a retry message.
 List and dry-run take no lock.
 
-To recover an uncommitted deploy that has since been committed and pulled into
-a clean checkout, sync that checkout of the identical bytes: the stamp
-reconciles to the clean revision without `--force`, and a later descendant can
-update normally. If the incoming build differs, review the diff and pass
-`--force` explicitly.
+To recover an uncommitted deploy that has since been committed, sync a clean
+checkout whose HEAD reaches a commit holding the stamped bundle byte for
+byte: the sync overwrites without `--force` and names that proving commit in
+table output and as `proving_commit` in JSON. Syncing the identical bytes
+still reconciles to the clean revision, and a later descendant can update
+normally. If no single commit holds the stamped bundle, review the diff and
+pass `--force` explicitly.
 
 A protection refusal names the plugin and earlier deployment, explains the
 cause, and prints the preview and force commands.
@@ -381,7 +387,9 @@ writes, so installer restart detection is unchanged for stamp-only
 reconciliation. In a dry run, `copied` counts the files that would be copied.
 Each plugin entry also carries `vault_ignore` when its vault folder is not
 ignored or holds tracked files (see [Vault-ignore warnings](#vault-ignore-warnings));
-it is omitted otherwise. On error, including a deploy-protection refusal, JSON mode prints
+it is omitted otherwise. A sync that overwrites a dirty deploy through an
+inclusion proof also carries `proving_commit` (the full commit SHA holding the
+stamped bundle); it is omitted otherwise. On error, including a deploy-protection refusal, JSON mode prints
 `{"ok": false, "error": "..."}` instead of echoing issues to stderr.
 
 ## Examples

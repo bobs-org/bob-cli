@@ -78,7 +78,10 @@ files (manifest.json, main.js, and styles.css) from the repo into the vault \
 plugin folder, never touching data.json or other runtime files. Each real \
 deploy records a `.bob-deploy.json` provenance stamp beside the plugin. Sync \
 refuses to overwrite another checkout's uncommitted or non-ancestor deploy \
-unless --force is given, and it also refuses to overwrite a vault file that \
+unless --force is given, except that a clean checkout overwrites a dirty \
+deploy from another checkout or host without --force when one commit reachable \
+from its HEAD holds the stamped bundle byte for byte; the sync names that \
+proving commit. Sync also refuses to overwrite a vault file that \
 has uncommitted changes in the vault Git repo unless --force is given. For \
 files that would change, sync prints a diff, and every overwritten vault file \
 is backed up before it is replaced. In a Git vault, sync and list also warn \
@@ -129,7 +132,11 @@ Git vault that stamp must be ignored (for example \
 `.obsidian/plugins/*/.bob-deploy.json`); --force does not bypass a tracked or \
 unignored stamp. Sync refuses to overwrite a deploy from another checkout's \
 uncommitted build, a non-ancestor clean revision, or unknown/incomplete \
-provenance unless --force is given. A vault file that has uncommitted changes \
+provenance unless --force is given, except that a clean checkout overwrites a \
+dirty deploy from another checkout or host without --force when one commit \
+reachable from its HEAD holds the stamped bundle byte for byte; the sync \
+names that proving commit and mixed per-file matches from different commits \
+still refuse. A vault file that has uncommitted changes \
 in the vault Git repo is left alone with a warning unless --force is given, \
 so local edits are never clobbered silently. Files that would change are \
 shown as unified diffs; overwritten vault files are copied to a timestamped \

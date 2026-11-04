@@ -167,6 +167,7 @@ fn sync_one_plugin(
             deployment: super::deploy::scan_deployment(&vault_plugin_dir),
             vault_ignore,
             blocked: Some(message),
+            proving_commit: None,
         };
     }
 
@@ -180,6 +181,7 @@ fn sync_one_plugin(
                 deployment: super::deploy::scan_deployment(&vault_plugin_dir),
                 vault_ignore,
                 blocked: Some(message),
+                proving_commit: None,
             };
         }
     };
@@ -206,9 +208,13 @@ fn sync_one_plugin(
                 deployment: deployment_info_from_prior(&prior),
                 vault_ignore,
                 blocked: Some(message),
+                proving_commit: None,
             }
         }
-        GuardDecision::Permit { stamp_action } => apply_plugin(
+        GuardDecision::Permit {
+            stamp_action,
+            proving_commit,
+        } => apply_plugin(
             options,
             id,
             &captured,
@@ -217,6 +223,7 @@ fn sync_one_plugin(
             &stamp_file,
             &prior,
             stamp_action,
+            proving_commit,
             host,
             agent,
             deployed_at,
@@ -237,6 +244,7 @@ fn apply_plugin(
     stamp_file: &Path,
     prior: &PriorStamp,
     stamp_action: StampAction,
+    proving_commit: Option<String>,
     host: &str,
     agent: Option<String>,
     deployed_at: &str,
@@ -295,6 +303,7 @@ fn apply_plugin(
                     deployment: deployment_info_from_prior(prior),
                     vault_ignore: vault_ignore.clone(),
                     blocked: Some(message),
+                    proving_commit: proving_commit.clone(),
                 };
             }
             let stamp_backup = backup_run_dir.join(id).join(STAMP_FILE);
@@ -307,6 +316,7 @@ fn apply_plugin(
                     deployment: deployment_info_from_prior(prior),
                     vault_ignore: vault_ignore.clone(),
                     blocked: Some(message),
+                    proving_commit: proving_commit.clone(),
                 };
             }
         }
@@ -328,6 +338,7 @@ fn apply_plugin(
                 deployment: deployment_info_from_prior(prior),
                 vault_ignore: vault_ignore.clone(),
                 blocked: Some(message),
+                proving_commit: proving_commit.clone(),
             };
         }
     }
@@ -410,6 +421,7 @@ fn apply_plugin(
             deployment,
             vault_ignore,
             blocked: None,
+            proving_commit,
         };
     }
 
@@ -441,6 +453,7 @@ fn apply_plugin(
         deployment,
         vault_ignore,
         blocked: None,
+        proving_commit,
     }
 }
 

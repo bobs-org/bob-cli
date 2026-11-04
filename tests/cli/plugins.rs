@@ -1254,6 +1254,92 @@ fn plugins_sync_clean_landing_reconciles_then_updates() {
 }
 
 #[test]
+fn plugins_sync_committed_dirty_deploy_overwrites_without_force() {
+    let temp = TempDir::new("bob-cli-plugins-guard-proof-cli");
+    let (checkout_a, _checkout_b, vault, backups) =
+        init_two_checkouts_and_vault(&temp);
+    configure_test_git_identity(&checkout_a);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let deployed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("dirty deploy from checkout A");
+    assert_success(&deployed);
+
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "land dirty-a"]);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// later\n");
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "later update"]);
+    let proving_output = git_in(&checkout_a, ["rev-parse", "HEAD~1"]);
+    let proving = String::from_utf8_lossy(&proving_output.stdout)
+        .trim()
+        .to_string();
+    let checkout_c = temp.path().join("c");
+    git(["clone", "-q", path_str(&checkout_a), path_str(&checkout_c)]);
+
+    let json_out = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("-r")
+        .arg(&checkout_c)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("proof dry-run json");
+    assert_success(&json_out);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&json_out)).expect("parse json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["plugins"][0]["proving_commit"], proving.as_str());
+
+    let landed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_c)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("proof sync from clean checkout");
+    assert_success(&landed);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("vault after proof"),
+        "// later\n"
+    );
+    let out = stdout(&landed);
+    assert!(
+        out.contains("inclusion proof") && out.contains(&proving[..7]),
+        "sync output must name the proving commit:\n{}",
+        format_output(&landed)
+    );
+}
+
+#[test]
 fn plugins_list_and_json_report_uncommitted_deployment() {
     let temp = TempDir::new("bob-cli-plugins-list-uncommitted");
     let repo = temp.path().join("repo");

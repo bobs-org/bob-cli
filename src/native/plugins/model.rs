@@ -91,6 +91,7 @@ impl SyncReport {
                         .collect(),
                     deployment: plugin.deployment.clone(),
                     vault_ignore: plugin.vault_ignore.clone(),
+                    proving_commit: plugin.proving_commit.clone(),
                 })
                 .collect(),
         }
@@ -121,6 +122,8 @@ pub(super) struct PluginSyncResult {
     pub(super) deployment: Option<DeploymentInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) vault_ignore: Option<VaultIgnoreInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) proving_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -137,6 +140,7 @@ pub(super) struct PluginSync {
     pub(super) deployment: Option<DeploymentInfo>,
     pub(super) vault_ignore: Option<VaultIgnoreInfo>,
     pub(super) blocked: Option<String>,
+    pub(super) proving_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

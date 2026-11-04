@@ -682,6 +682,225 @@ fn dirty_deploy_from_other_checkout_is_refused() {
 }
 
 #[test]
+fn committed_dirty_bundle_syncs_without_force_and_names_proof() {
+    let temp = TempDir::new("bob-cli-plugins-guard-proof");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+
+    let checkout_a = temp.path().join("a");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    git_config_identity(&checkout_a);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+
+    // Dirty deploy from A.
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// dirty-a\n"
+    );
+
+    // Commit those bytes, then move HEAD one commit past them.
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "land dirty-a"]);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// later\n");
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "later update"]);
+
+    // Fresh clean checkout at the descendant HEAD.
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&checkout_a), path_str(&checkout_b)],
+    );
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let landed = sync_plugins(&opts_b);
+    assert!(landed.issues.is_empty(), "{:?}", landed.issues);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// later\n",
+        "proof must overwrite the dirty deploy without --force"
+    );
+    let stamp = fs::read_to_string(stamp_path(&vault, "alpha")).unwrap();
+    assert!(
+        stamp.contains("\"dirty\": \"clean\""),
+        "proof landing must reconcile to a clean stamp: {stamp}"
+    );
+    let proving = landed.plugins[0].proving_commit.clone().expect("proof");
+    let expected = git_head_sha(&checkout_b, "HEAD~1");
+    assert_eq!(proving, expected, "sync must name the proving commit");
+}
+
+#[test]
+fn unmatched_bytes_still_refuse_with_proof_message() {
+    let temp = TempDir::new("bob-cli-plugins-guard-noproof");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+    let checkout_a = temp.path().join("a");
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_b)],
+    );
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+
+    git_config_identity(&checkout_b);
+    write_file(&checkout_b.join("README.md"), "later\n");
+    run_git(&checkout_b, &["add", "README.md"]);
+    run_git(&checkout_b, &["commit", "-q", "-m", "unrelated"]);
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let refused = sync_plugins(&opts_b);
+    assert!(
+        refused.issues.iter().any(|issue| {
+            issue.contains("refusing to overwrite plugin alpha")
+                && issue.contains("no single commit")
+        }),
+        "unmatched bytes must refuse with the proof message: {:?}",
+        refused.issues
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// dirty-a\n"
+    );
+}
+
+#[test]
+fn mixed_bundle_from_two_commits_refuses() {
+    let temp = TempDir::new("bob-cli-plugins-guard-mixed");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+    let checkout_a = temp.path().join("a");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    git_config_identity(&checkout_a);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+
+    // Dirty bundle M1 + J1.
+    write_file(
+        &checkout_a.join("plugins/alpha/manifest.json"),
+        &manifest_json("alpha", "9.9.9", "Alpha"),
+    );
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// mixed\n");
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+
+    // Commit1 holds M1 + J0: stage only the manifest.
+    run_git(&checkout_a, &["add", "plugins/alpha/manifest.json"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "manifest only"]);
+    // Commit2 holds M0 + J1: revert the manifest, keep the dirty main.
+    write_file(
+        &checkout_a.join("plugins/alpha/manifest.json"),
+        &manifest_json("alpha", "1.0.0", "Alpha"),
+    );
+    run_git(
+        &checkout_a,
+        &[
+            "add",
+            "plugins/alpha/manifest.json",
+            "plugins/alpha/main.js",
+        ],
+    );
+    run_git(&checkout_a, &["commit", "-q", "-m", "main only"]);
+
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&checkout_a), path_str(&checkout_b)],
+    );
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let refused = sync_plugins(&opts_b);
+    assert!(
+        refused.issues.iter().any(|issue| {
+            issue.contains("refusing to overwrite plugin alpha")
+                && issue.contains("no single commit")
+        }),
+        "a bundle mixed from two commits must refuse: {:?}",
+        refused.issues
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// mixed\n",
+        "mixed-bundle refusal must not change vault bytes"
+    );
+}
+
+#[test]
+fn vault_edited_after_deploy_refuses_despite_proof() {
+    let temp = TempDir::new("bob-cli-plugins-guard-digest");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+    let checkout_a = temp.path().join("a");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    git_config_identity(&checkout_a);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "land dirty-a"]);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// later\n");
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "later update"]);
+
+    // Vault edited after the deploy breaks the stamp digest.
+    write_file(
+        &vault.join(".obsidian/plugins/alpha/main.js"),
+        "// local-edit\n",
+    );
+
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&checkout_a), path_str(&checkout_b)],
+    );
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let refused = sync_plugins(&opts_b);
+    assert!(
+        refused.issues.iter().any(|issue| {
+            issue.contains("digest does not match vault bytes")
+        }),
+        "a vault edit after deploy must refuse: {:?}",
+        refused.issues
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// local-edit\n",
+        "digest-mismatch refusal must not change vault bytes"
+    );
+}
+
+#[test]
 fn same_checkout_dirty_iteration_is_permitted() {
     let temp = TempDir::new("bob-cli-plugins-guard-iterate");
     let repo = temp.path().join("repo");
@@ -1498,6 +1717,18 @@ fn run_git(repo: &Path, args: &[&str]) {
 fn path_str(path: &Path) -> &str {
     path.to_str()
         .unwrap_or_else(|| panic!("path is not UTF-8: {}", path.display()))
+}
+
+fn git_head_sha(repo: &Path, rev: &str) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .arg("rev-parse")
+        .arg(rev)
+        .output()
+        .unwrap_or_else(|error| panic!("git rev-parse {rev}: {error}"));
+    assert!(output.status.success(), "git rev-parse {rev} failed");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 fn write_plugin(
