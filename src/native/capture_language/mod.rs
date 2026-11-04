@@ -38,6 +38,8 @@ mod start_selection;
 pub(crate) mod target_runs;
 pub(crate) mod template;
 mod tokens;
+#[cfg(test)]
+pub(crate) mod transfer;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.

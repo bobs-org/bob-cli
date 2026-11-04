@@ -94,6 +94,7 @@ mod relations_mentions;
 mod relations_merge;
 mod relations_mirror;
 mod sections;
+pub(crate) mod shell_guard;
 mod start_output;
 mod sub_bullet;
 mod task_blocks;
@@ -199,6 +200,15 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let output_format = OutputFormat::from_matches(&matches);
     if matches.get_flag("expand") {
         return expand_capture(&matches, output_format);
+    }
+    if shell_guard::stdout_is_redirect_target().is_some() {
+        return print_capture_error(
+            CaptureError::usage_code(
+                shell_guard::SHELL_ATE_TRANSFER_ARROW_MESSAGE,
+                shell_guard::SHELL_ATE_TRANSFER_ARROW_CODE,
+            ),
+            output_format,
+        );
     }
     let request = match CaptureRequest::from_matches(&matches) {
         Ok(request) => request,
