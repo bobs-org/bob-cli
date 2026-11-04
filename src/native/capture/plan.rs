@@ -1339,6 +1339,7 @@ pub(super) fn plan_capture_item(
             planner,
             task_theme_context,
             warnings,
+            dependency_ctx,
         );
     }
     if matches!(parsed.kind, CaptureKind::NotePull { .. }) {

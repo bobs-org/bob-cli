@@ -73,6 +73,7 @@ pub(super) fn plan_project_note_item(
     planner: &mut CaptureBatchPlanner,
     task_theme_context: &mut CaptureTaskThemeContext,
     warnings: &mut Vec<CaptureWarning>,
+    dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let CaptureKind::ProjectNote {
         block_id,
@@ -95,6 +96,10 @@ pub(super) fn plan_project_note_item(
     {
         let has_link = parsed.sub_bullets.iter().any(|sub_bullet| {
             sub_bullet.task_id.as_ref().is_some_and(|task| task.link)
+                || sub_bullet
+                    .move_task
+                    .as_ref()
+                    .is_some_and(|movement| movement.sigil == ':')
         });
         if !has_link {
             return Err(CaptureError::usage(
@@ -107,19 +112,6 @@ pub(super) fn plan_project_note_item(
             "project-note capture invariant failed: route is missing",
         )
     })?;
-    // Colon moves and Offer-form moves also link or settle moved rows. Those
-    // operations land in the next execution phase; caret moves on Create
-    // items can already use the shared atomic move engine.
-    let has_unsupported_move = parsed.sub_bullets.iter().any(|sub_bullet| {
-        sub_bullet.move_task.as_ref().is_some_and(|movement| {
-            movement.sigil != '^' || form == ProjectNoteForm::Offer
-        })
-    });
-    if has_unsupported_move {
-        return Err(CaptureError::usage(
-            "moving tasks into a new project note is not available in this build yet",
-        ));
-    }
     reject_project_note_conflicts(&parsed, request)?;
 
     let created = date_string(today);
@@ -206,24 +198,6 @@ pub(super) fn plan_project_note_item(
         },
     );
 
-    let move_execution = if resolved_moves.is_empty() {
-        None
-    } else {
-        Some(execute_project_note_moves(
-            request,
-            planner,
-            &source_path,
-            &new_target,
-            &route,
-            &basename,
-            &rendered,
-            &resolved_moves,
-            &settings,
-            today,
-            item_index + 1,
-        )?)
-    };
-
     // A future project date blocks the whole note (§13.3, PDG5):
     // `:` tasks render `[?]` plus the tag and stay unlinked, with a
     // `not_linked` report. Only the unblocked `:` tasks link below.
@@ -235,9 +209,9 @@ pub(super) fn plan_project_note_item(
     let mut project_folds: Vec<crate::native::task_complete::ProjectFold> =
         Vec::new();
     if form == ProjectNoteForm::Offer {
-        let already_planned =
+        let mut already_planned =
             rendered.task_rows.iter().filter(|row| row.link).count();
-        let hidden = rendered
+        let mut hidden = rendered
             .task_rows
             .iter()
             .filter(|row| !row.placeholder && row.hidden && !row.link)
@@ -258,11 +232,84 @@ pub(super) fn plan_project_note_item(
                     })
                     .collect()
             };
+        // Moved candidates for Offer (before move): colon moves count as
+        // planned, already-live-linked caret moves fold into planned,
+        // hidden caret moves fold into hidden, Blocked caret moves are
+        // excluded, and the rest are offered with `moved_from`.
+        let mut moved_already_extra: usize = 0;
+        let mut moved_hidden_extra: usize = 0;
+        let mut moved_eligible_indices: Vec<usize> = Vec::new();
+        let mut parent_all_ids: Vec<String> = Vec::new();
+        if form == ProjectNoteForm::Offer && !resolved_moves.is_empty() {
+            if let Some(parent_contents) = planner.peek_text(&source_path) {
+                let parent_scan = note_tasks::scan(&parent_contents, &settings);
+                parent_all_ids = parent_scan
+                    .tasks()
+                    .iter()
+                    .filter_map(|task| task.block_id.clone())
+                    .collect();
+                let day_path = pomodoro::day_file_for(&request.bob_dir);
+                let day_contents = planner.peek_text(&day_path);
+                let parent_lines: Vec<&str> = parent_contents.lines().collect();
+                for (pos, resolved) in resolved_moves.iter().enumerate() {
+                    if resolved.sigil == ':' {
+                        moved_already_extra += 1;
+                        continue;
+                    }
+                    if project_blocked {
+                        continue;
+                    }
+                    // Already-live-linked caret moves fold into planned.
+                    let parent_link = format!(
+                        "[[{route}#^{block_id}]]",
+                        block_id = resolved.block_id
+                    );
+                    if day_contents
+                        .as_deref()
+                        .is_some_and(|day| day.contains(&parent_link))
+                    {
+                        moved_already_extra += 1;
+                        continue;
+                    }
+                    // Hidden rows fold into hidden (muted, still movable).
+                    let hidden = parent_lines
+                        .get(resolved.root.line)
+                        .is_some_and(|line| {
+                            crate::native::capture_dependency_tasks::has_hide_tag(
+                                line,
+                            )
+                        });
+                    if hidden {
+                        moved_hidden_extra += 1;
+                        continue;
+                    }
+                    // Blocked rows are excluded (like new Blocked rows).
+                    let status_name = task_complete::status_name_for(
+                        &request.bob_dir,
+                        resolved.root.status,
+                    );
+                    if status_name.eq_ignore_ascii_case("blocked") {
+                        continue;
+                    }
+                    moved_eligible_indices.push(pos);
+                }
+            } else {
+                // Parent disappeared after resolve; resolve would have
+                // refused already, but keep eligible empty to avoid offering.
+            }
+        }
+        already_planned += moved_already_extra;
+        hidden += moved_hidden_extra;
         let has_colon = parsed.sub_bullets.iter().any(|sub_bullet| {
             sub_bullet.task_id.as_ref().is_some_and(|task| task.link)
+                || sub_bullet
+                    .move_task
+                    .as_ref()
+                    .is_some_and(|movement| movement.sigil == ':')
         });
         if let Some(name) = pomodoro_name.as_deref()
             && offer_rows.is_empty()
+            && moved_eligible_indices.is_empty()
             && !has_colon
         {
             return Err(CaptureError::usage(
@@ -313,8 +360,80 @@ pub(super) fn plan_project_note_item(
                 block_id_needed: row.block_id.is_none(),
                 final_status: row.status,
                 final_line: row.line,
+                moved_from: None,
                 settled_ordinal: None,
             });
+        }
+        // Moved offers for Offer+moves (before move): eligible caret moves
+        // are offered with `moved_from`, keys frozen as `<new>#^<id>`.
+        // Colon moves and already-live-linked/hidden/Blocked moves are not
+        // offered (they count in already_planned/hidden above).
+        if !moved_eligible_indices.is_empty() {
+            let moved_from_label = format!("{route}.md");
+            for pos in &moved_eligible_indices {
+                let resolved = &resolved_moves[*pos];
+                let key = note_tasks::stable_task_key(
+                    &relative,
+                    Some(resolved.block_id.as_str()),
+                    &resolved.root.title,
+                    &settings.global_filter,
+                    1,
+                );
+                let selected = match &request.selection {
+                    crate::native::task_complete::SuccessorSelection::All => {
+                        true
+                    }
+                    crate::native::task_complete::SuccessorSelection::None => {
+                        false
+                    }
+                    crate::native::task_complete::SuccessorSelection::Keys(
+                        keys,
+                    ) => keys.contains(&key),
+                };
+                frozen_offers.push(FrozenOffer {
+                    key,
+                    n: 0,
+                    order_key: (
+                        crate::native::task_complete::OfferGroup::Project as u8,
+                        (usize::MAX, usize::MAX),
+                        0,
+                        relative.clone(),
+                        resolved.source_index,
+                    ),
+                    source_index: Some(resolved.source_index),
+                    pre_status: resolved.root.status,
+                    text: resolved.root.title.clone(),
+                    selected,
+                    final_block_id: Some(resolved.block_id.clone()),
+                    block_id_needed: false,
+                    final_status: resolved.root.status,
+                    final_line: 0,
+                    moved_from: Some(moved_from_label.clone()),
+                    settled_ordinal: None,
+                });
+            }
+            // Draft-order numbering for Offer+moves: new and moved offers
+            // share one number space in source order (final-note order).
+            // New-only drafts keep their row.line order above.
+            frozen_offers
+                .sort_by_key(|offer| offer.source_index.unwrap_or(usize::MAX));
+            for (idx, offer) in frozen_offers.iter_mut().enumerate() {
+                offer.n = idx + 1;
+                if offer.moved_from.is_none() {
+                    // New offers: use source order for global numbering when
+                    // moves exist, preserving row.line order otherwise.
+                    if let Some(source_index) = offer.source_index {
+                        offer.order_key = (
+                            crate::native::task_complete::OfferGroup::Project
+                                as u8,
+                            (usize::MAX, usize::MAX),
+                            0,
+                            relative.clone(),
+                            source_index,
+                        );
+                    }
+                }
+            }
         }
         if frozen_offers.iter().any(|offer| offer.selected) {
             let mut reserved: Vec<String> = parsed
@@ -325,7 +444,15 @@ pub(super) fn plan_project_note_item(
                 })
                 .collect();
             reserved.push("prj".to_string());
-            for offer in frozen_offers.iter_mut().filter(|offer| offer.selected)
+            // Moved and descendant IDs must never collide with minted IDs
+            // for selected ID-less authored tasks.
+            for resolved in resolved_moves.iter() {
+                reserved.push(resolved.block_id.clone());
+            }
+            reserved.extend(parent_all_ids.iter().cloned());
+            for offer in frozen_offers
+                .iter_mut()
+                .filter(|offer| offer.selected && offer.moved_from.is_none())
             {
                 let Some(source_index) = offer.source_index else {
                     continue;
@@ -407,9 +534,52 @@ pub(super) fn plan_project_note_item(
         });
     }
 
+    let mut move_execution = if resolved_moves.is_empty() {
+        None
+    } else {
+        Some(execute_project_note_moves(
+            request,
+            planner,
+            &source_path,
+            &new_target,
+            &route,
+            &basename,
+            &rendered,
+            &resolved_moves,
+            &settings,
+            today,
+            item_index + 1,
+        )?)
+    };
+
+    // Moved offers: final status/line from landed rows after the move
+    // (before any linking, which re-resolves by ID afterwards).
+    if form == ProjectNoteForm::Offer
+        && let Some(execution) = move_execution.as_ref()
+    {
+        for offer in frozen_offers
+            .iter_mut()
+            .filter(|offer| offer.moved_from.is_some())
+        {
+            if let Some(block_id) = offer.final_block_id.clone()
+                && let Some(moved) = execution
+                    .moved_tasks
+                    .iter()
+                    .find(|task| task.block_id == block_id)
+            {
+                offer.final_status = moved.status_symbol;
+                offer.final_line = moved.line;
+                offer.pre_status = moved.previous_status_symbol;
+                offer.text = moved.text.clone();
+            }
+        }
+    }
+
+    let has_colon_move = resolved_moves.iter().any(|m| m.sigil == ':');
     let project_link_guard: Option<LinkGuardJson> = if project_blocked
         && (form == ProjectNoteForm::Offer
-            || rendered.named_tasks.iter().any(|task| task.link))
+            || rendered.named_tasks.iter().any(|task| task.link)
+            || has_colon_move)
     {
         Some(LinkGuardJson {
             reasons: vec!["project_schedule".to_string()],
@@ -435,28 +605,63 @@ pub(super) fn plan_project_note_item(
         .strip_suffix(".md")
         .unwrap_or(rendered.basename.as_str())
         .to_string();
-    let linked: Vec<capture_project_note::RenderedNamedTask> = rendered
+    let linked_all: Vec<capture_project_note::RenderedNamedTask> = rendered
         .named_tasks
         .iter()
         .filter(|task| task.link && !project_blocked)
         .cloned()
         .collect();
+    // For Create with colon moves, and for Offer with any moves, the bulk
+    // new-task path below is skipped (it would link new tasks before moved
+    // ones). The draft-ordered pass after it links new and moved tasks
+    // together in source order.
+    let use_draft_ordered_links = !project_blocked
+        && ((form == ProjectNoteForm::Create && has_colon_move)
+            || (form == ProjectNoteForm::Offer && !resolved_moves.is_empty()));
+    let linked: Vec<capture_project_note::RenderedNamedTask> =
+        if use_draft_ordered_links {
+            Vec::new()
+        } else {
+            linked_all.clone()
+        };
     let note_route: &str = basename.strip_suffix(".md").unwrap_or(&basename);
     // Stage the new note before linking so per-task type resolution (D3)
     // sees the staged residence, including the just-rendered task lines.
     if move_execution.is_none() {
         planner.stage(&new_target, rendered.contents.clone())?;
     }
-    let need_day = !linked.is_empty() || !frozen_offers.is_empty();
+    let need_moved_day = !project_blocked
+        && move_execution.as_ref().is_some_and(|execution| {
+            execution.moved_tasks.iter().any(|task| {
+                // Colon moves link; selected moved offers (Offer, caret
+                // selected) link via the same operation (tracked through
+                // frozen offers, but need_day already covers offers).
+                task.sigil == ':' && task.planned.is_none()
+            })
+        });
+    let need_day =
+        !linked.is_empty() || !frozen_offers.is_empty() || need_moved_day;
     let mut actual_placements: Vec<PlacedProjectLink> = Vec::new();
     let mut scratch_placements: Vec<PlacedProjectLink> = Vec::new();
+    let mut extra_pomodoro_refs: Vec<super::PomodoroBlockRef> = Vec::new();
+    let mut extra_task_block_refs: Vec<super::TaskBlockRef> = Vec::new();
+    let mut extra_dropped: Vec<super::output::DroppedDependencyJson> =
+        Vec::new();
+    let mut extra_blocks_updates: Vec<super::output::BlocksLineUpdateJson> =
+        Vec::new();
+    // Successor-link info for selected moved offers (Offer+moves,
+    // draft-ordered): block ID → (entry name, entry line, created, next_up).
+    let mut moved_selected_successor: std::collections::HashMap<
+        String,
+        (String, usize, bool, bool),
+    > = std::collections::HashMap::new();
     let (
-        day_file,
-        pomodoro_link_placement,
+        mut day_file,
+        mut pomodoro_link_placement,
         mut canonical_pomodoro_name,
-        creates_pomodoro,
+        mut creates_pomodoro,
         mut first_link_destination,
-        day_relative,
+        mut day_relative,
     ) = if !need_day {
         (None, None, None, None, None, None)
     } else {
@@ -696,6 +901,556 @@ pub(super) fn plan_project_note_item(
         }
     }
 
+    // Blocked-at-birth colon moves stay unlinked with a project_schedule
+    // reason; they already moved (when eligible) and need no day file.
+    if project_blocked && let Some(execution) = move_execution.as_mut() {
+        for task in execution.moved_tasks.iter_mut().filter(|task| {
+            task.sigil == ':' && task.planned.is_none() && task.link.is_none()
+        }) {
+            task.not_linked = Some("project_schedule".to_string());
+            task.detail =
+                Some("stays unlinked until the project starts".to_string());
+        }
+    }
+
+    // Draft-ordered links for Create with colon moves: new `:` tasks and
+    // colon moves link in source order through their respective gestures.
+    // The bulk path above was skipped (linked emptied) so placements do not
+    // run new-first; this pass preserves draft order for ledger, task_links,
+    // merges, and reporting.
+    if use_draft_ordered_links && let Some(execution) = move_execution.as_mut()
+    {
+        use crate::native::capture_task_toggle::PomodoroLinkTarget;
+
+        let day_path = pomodoro::day_file_for(&request.bob_dir);
+        // Bulk with empty linked already verified existence when need_day;
+        // re-check for the draft-ordered pass which stages day itself.
+        if !planner.currently_exists(&day_path)? {
+            return Err(CaptureError::io(format!(
+                "Bob daily note does not exist: {}",
+                day_path.display()
+            )));
+        }
+        if paths_refer_to_same_file(&new_target, &day_path) {
+            return Err(CaptureError::io(
+                "routed note and Bob daily note must be different files",
+            ));
+        }
+        let mut day = planner.read_existing(&day_path)?;
+        let mut current_destination = canonical_pomodoro_name.clone();
+        let mut first_link_seen = first_link_destination.is_some();
+        let mut day_file_set = day_file.is_some();
+        let mut creates_bool = creates_pomodoro.unwrap_or(false);
+
+        // Map new tasks by block ID for draft-order lookup.
+        let new_by_id: std::collections::HashMap<
+            &str,
+            &capture_project_note::RenderedNamedTask,
+        > = linked_all
+            .iter()
+            .map(|task| (task.block_id.as_str(), task))
+            .collect();
+        // Map moves that link in draft order: colon moves (both forms)
+        // plus selected moved offers (Offer caret selected). Unselected
+        // caret moves, already-live-linked moves, hidden/Blocked moves,
+        // and project-blocked moves never link here.
+        let mut moved_link_by_source: std::collections::HashMap<
+            usize,
+            &ResolvedProjectMove,
+        > = resolved_moves
+            .iter()
+            .filter(|m| m.sigil == ':')
+            .map(|m| (m.source_index, m))
+            .collect();
+        if form == ProjectNoteForm::Offer {
+            for offer in frozen_offers
+                .iter()
+                .filter(|offer| offer.selected && offer.moved_from.is_some())
+            {
+                if let Some(source_index) = offer.source_index
+                    && let Some(resolved) = resolved_moves
+                        .iter()
+                        .find(|m| m.source_index == source_index)
+                {
+                    moved_link_by_source.insert(source_index, resolved);
+                }
+            }
+        }
+        // Map moved_tasks entries by block ID for updates.
+        let mut moved_index_by_id: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (idx, task) in execution.moved_tasks.iter().enumerate() {
+            moved_index_by_id.insert(task.block_id.clone(), idx);
+        }
+
+        for (source_index, bullet) in parsed.sub_bullets.iter().enumerate() {
+            // New `:` task in draft order.
+            if let Some(task_id) = bullet.task_id.as_ref()
+                && task_id.link
+                && let Some(named) = new_by_id.get(task_id.block_id.as_str())
+            {
+                let named = (*named).clone();
+                // Per-task type placement when no `#name` (D3); named keeps
+                // its deliberate destination (the caller applies D6 below).
+                let placement_type = if pomodoro_name.is_none() {
+                    task_theme_context.placement_for_task(
+                        planner,
+                        note_route,
+                        &named.task_line,
+                        warnings,
+                    )
+                } else {
+                    None
+                };
+                let typed_pair = placement_type.as_ref().map(|placement| {
+                    (placement.as_typed(), placement.placed_type())
+                });
+                let (typed, placed_type) = match typed_pair.as_ref() {
+                    Some((typed, placed)) => {
+                        (Some(typed), Some(placed.clone()))
+                    }
+                    None => (None, None),
+                };
+                let mut insertion = insert_pomodoro_block_link(
+                    &day,
+                    &format!(
+                        "[[{stem}#^{block_id}]]",
+                        block_id = named.block_id
+                    ),
+                    pomodoro_name.as_deref(),
+                    pomodoro_name_is_literal,
+                    typed,
+                )?;
+                if let Some(placed_type) = placed_type {
+                    insertion.destination.placed_type = Some(placed_type);
+                }
+                day = insertion.updated.clone();
+                planner.stage(&day_path, day.clone())?;
+                creates_bool = creates_bool || insertion.creates_pomodoro;
+                if !first_link_seen {
+                    pomodoro_link_placement = Some(insertion.placement);
+                    let mut dest = insertion.destination.clone();
+                    if let Some(placed) = dest.placed_type.clone() {
+                        dest.placed_type = Some(placed);
+                    }
+                    first_link_destination = Some(dest);
+                    first_link_seen = true;
+                }
+                if !day_file_set {
+                    day_file = Some(day_path.display().to_string());
+                    day_file_set = true;
+                }
+                // Task link entry in draft order; task_line updated below
+                // when typing applies.
+                task_links.push(ProjectTaskLinkJson {
+                    block_id: named.block_id.clone(),
+                    block_link: format!(
+                        "[[{stem}#^{block_id}]]",
+                        block_id = named.block_id
+                    ),
+                    text: named.text.clone(),
+                    task_line: named.task_line.clone(),
+                });
+                // Actual placement for Offer selected new offers (successors
+                // preview/link). Explicit `:` tasks and Create need none.
+                if form == ProjectNoteForm::Offer
+                    && frozen_offers.iter().any(|offer| {
+                        offer.selected
+                            && offer.moved_from.is_none()
+                            && offer.final_block_id.as_deref()
+                                == Some(named.block_id.as_str())
+                    })
+                {
+                    actual_placements.push(PlacedProjectLink {
+                        task: named.clone(),
+                        insertion: PomodoroBlockLinkInsertion {
+                            updated: insertion.updated.clone(),
+                            placement: insertion.placement,
+                            destination: insertion.destination.clone(),
+                            creates_pomodoro: insertion.creates_pomodoro,
+                        },
+                        used_typed: typed.is_some(),
+                    });
+                }
+                // Deliberate named-type behavior (D6) for new tasks.
+                if project_link_guard.is_none()
+                    && let Some(dest_name) = current_destination.clone()
+                    && let Some(selector) = pomodoro_name.as_deref()
+                    && let Some(applied) = task_theme_context.apply_new_task(
+                        planner,
+                        &new_target,
+                        note_route,
+                        &named.block_id,
+                        Some(dest_name.as_str()),
+                        Some(selector),
+                        warnings,
+                    )?
+                {
+                    if let Some(link) = task_links
+                        .iter_mut()
+                        .find(|link| link.block_id == named.block_id)
+                    {
+                        link.task_line = applied.task_line.clone();
+                    }
+                    if task_theme.is_none() {
+                        task_theme = applied.theme;
+                    }
+                    if let Some(merge) = applied.merge {
+                        current_destination = Some(merge.after.clone());
+                        project_merges.push(merge);
+                    }
+                }
+                continue;
+            }
+            // Moved link in draft order: colon moves plus selected moved
+            // offers (Offer). Unselected, already-live-linked, hidden and
+            // Blocked moves never reach here.
+            if let Some(resolved) = moved_link_by_source.get(&source_index) {
+                let block_id = resolved.block_id.clone();
+                let Some(moved_idx) = moved_index_by_id.get(&block_id).copied()
+                else {
+                    continue;
+                };
+                // Followed live link stays; no new link, no relocation.
+                if execution.moved_tasks[moved_idx].planned.is_some() {
+                    continue;
+                }
+                // Project already blocks; handled above, skip day work.
+                if project_blocked {
+                    continue;
+                }
+                let ledger_target = match pomodoro_name.as_deref() {
+                    Some(name) if pomodoro_name_is_literal => {
+                        PomodoroLinkTarget::LiteralName(name)
+                    }
+                    Some(name) => PomodoroLinkTarget::Named(name),
+                    None => PomodoroLinkTarget::Implicit,
+                };
+                let nested = plan_existing_task_pomodoro_link_item(
+                    planner,
+                    &request.bob_dir,
+                    request.dry_run,
+                    &new_target,
+                    note_route,
+                    &block_id,
+                    ledger_target,
+                    None,
+                    now,
+                    today,
+                    warnings,
+                    dependency_ctx,
+                    Some(task_theme_context),
+                    false,
+                )?;
+                // Aggregate block/dependency tracking for the batch.
+                extra_pomodoro_refs
+                    .extend(nested.pomodoro_refs.iter().cloned());
+                extra_task_block_refs
+                    .extend(nested.task_block_refs.iter().cloned());
+                extra_dropped
+                    .extend(nested.result.dropped_dependencies.iter().cloned());
+                extra_blocks_updates
+                    .extend(nested.result.blocks_line_updates.iter().cloned());
+                if let Some(guard) = nested.result.link_guard.clone() {
+                    let reason = guard
+                        .reasons
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "blocked".to_string());
+                    let entry = &mut execution.moved_tasks[moved_idx];
+                    entry.not_linked = Some(reason);
+                    entry.detail = guard.detail.clone();
+                    // Sync day for subsequent ops; consumption may have
+                    // staged day changes even without a link.
+                    if let Ok(current) = planner.read_existing(&day_path) {
+                        day = current;
+                    }
+                    continue;
+                }
+                // Link succeeded; deliberate named retype (plan.rs outer).
+                let mut nested_result = nested.result;
+                if pomodoro_name.is_some()
+                    && nested_result.link_guard.is_none()
+                    && let Some(previous) =
+                        nested_result.previous_task_line.clone()
+                    && let Some(resolved_name) = nested_result
+                        .pomodoro_link_destination
+                        .as_ref()
+                        .and_then(|dest| dest.name.clone())
+                    && let Some(selector) = pomodoro_name.as_deref()
+                    && let Some(applied) = task_theme_context
+                        .apply_existing_task(
+                            planner,
+                            &new_target,
+                            note_route,
+                            &block_id,
+                            &previous,
+                            Some(resolved_name.as_str()),
+                            Some(selector),
+                            warnings,
+                        )?
+                {
+                    nested_result.task_line = applied.task_line.clone();
+                    if task_theme.is_none() {
+                        task_theme = applied.theme;
+                    }
+                    if let Some(merge) = applied.merge {
+                        current_destination = Some(merge.after.clone());
+                        project_merges.push(merge);
+                    }
+                }
+                creates_bool = creates_bool
+                    || nested_result.creates_pomodoro.unwrap_or(false);
+                if !first_link_seen {
+                    pomodoro_link_placement =
+                        nested_result.pomodoro_link_placement;
+                    first_link_destination =
+                        nested_result.pomodoro_link_destination.clone();
+                    first_link_seen = true;
+                }
+                if !day_file_set {
+                    day_file = Some(day_path.display().to_string());
+                    day_file_set = true;
+                }
+                // Re-resolve final moved row by ID after mutations.
+                let final_contents = planner.read_existing(&new_target)?;
+                let final_scan = note_tasks::scan(&final_contents, &settings);
+                let (final_status, final_line, final_task_line) =
+                    match final_scan.by_block_id(&block_id) {
+                        BlockIdLookup::Found(task) => {
+                            let line = final_contents
+                                .lines()
+                                .nth(task.line_index)
+                                .unwrap_or_default()
+                                .to_string();
+                            (task.status_symbol, task.line_index + 1, line)
+                        }
+                        _ => {
+                            return Err(CaptureError::io(format!(
+                                "capture move lost block ^{block_id} in {basename} after linking"
+                            )));
+                        }
+                    };
+                let final_status_name = task_complete::status_name_for(
+                    &request.bob_dir,
+                    final_status,
+                );
+                let status_changed = execution.moved_tasks[moved_idx]
+                    .status_symbol
+                    != final_status;
+                // Detail suffix copy (without the `Moves in` prefix).
+                let entry_name = nested_result
+                    .pomodoro_link_destination
+                    .as_ref()
+                    .and_then(|dest| dest.name.clone())
+                    .unwrap_or_default();
+                let detail = if status_changed && final_status == '*' {
+                    if pomodoro_name.is_some() {
+                        Some(format!("becomes Next · links under {entry_name}"))
+                    } else {
+                        Some(
+                            "becomes Next · links into today's plan"
+                                .to_string(),
+                        )
+                    }
+                } else if pomodoro_name.is_some() {
+                    Some(format!("links under {entry_name}"))
+                } else if entry_name.is_empty() {
+                    Some("links into today's plan".to_string())
+                } else {
+                    Some(format!("links under {entry_name}"))
+                };
+                {
+                    let entry = &mut execution.moved_tasks[moved_idx];
+                    entry.status_symbol = final_status;
+                    entry.status_name = final_status_name;
+                    entry.line = final_line;
+                    entry.link = Some(ProjectTaskLinkJson {
+                        block_id: block_id.clone(),
+                        block_link: format!("[[{stem}#^{block_id}]]"),
+                        text: entry.text.clone(),
+                        task_line: final_task_line.clone(),
+                    });
+                    entry.not_linked = None;
+                    entry.detail = detail;
+                }
+                task_links.push(ProjectTaskLinkJson {
+                    block_id: block_id.clone(),
+                    block_link: format!("[[{stem}#^{block_id}]]"),
+                    text: execution.moved_tasks[moved_idx].text.clone(),
+                    task_line: final_task_line.clone(),
+                });
+                // Successor-link info for Offer selected moved offers
+                // (picked rows appear twice: successors with link + task_links).
+                if form == ProjectNoteForm::Offer
+                    && frozen_offers.iter().any(|offer| {
+                        offer.selected
+                            && offer.moved_from.is_some()
+                            && offer.final_block_id.as_deref()
+                                == Some(block_id.as_str())
+                    })
+                    && let Some(destination) =
+                        nested_result.pomodoro_link_destination.as_ref()
+                {
+                    let entry_name =
+                        destination.name.clone().unwrap_or_default();
+                    let entry_line = destination.line;
+                    let entry_created =
+                        nested_result.creates_pomodoro.unwrap_or(false);
+                    let next_up = destination.role == Some("next_up");
+                    moved_selected_successor.insert(
+                        block_id.clone(),
+                        (entry_name, entry_line, entry_created, next_up),
+                    );
+                }
+                // Sync day for subsequent ops.
+                if let Ok(current) = planner.read_existing(&day_path) {
+                    day = current;
+                }
+            }
+        }
+        // Scratch previews for Offer unselected offers (new + moved) on the
+        // final day after actual links (sequential placement after actual).
+        // The bulk path computed new-only scratch on the original day before
+        // actual links; recompute here in frozen-offers order (draft order)
+        // for both new and moved unselected.
+        if form == ProjectNoteForm::Offer
+            && frozen_offers.iter().any(|offer| !offer.selected)
+        {
+            let mut probe_reserved: Vec<String> = parsed
+                .sub_bullets
+                .iter()
+                .filter_map(|bullet| {
+                    bullet.task_id.as_ref().map(|task| task.block_id.clone())
+                })
+                .collect();
+            probe_reserved.push("prj".to_string());
+            for offer in frozen_offers.iter() {
+                if let Some(block_id) = offer.final_block_id.clone() {
+                    probe_reserved.push(block_id);
+                }
+            }
+            for resolved in resolved_moves.iter() {
+                probe_reserved.push(resolved.block_id.clone());
+            }
+            // Final new-note contents after actual links for moved unselected
+            // task lines and reservation of all IDs (including descendants).
+            let final_new_contents =
+                planner.read_existing(&new_target).unwrap_or_default();
+            let final_new_scan =
+                note_tasks::scan(&final_new_contents, &settings);
+            for task in final_new_scan.tasks() {
+                if let Some(block_id) = task.block_id.clone()
+                    && !probe_reserved.contains(&block_id)
+                {
+                    probe_reserved.push(block_id);
+                }
+            }
+            let mut unselected: Vec<capture_project_note::RenderedNamedTask> =
+                Vec::new();
+            for offer in frozen_offers.iter().filter(|offer| !offer.selected) {
+                if offer.moved_from.is_none() {
+                    // New unselected: rendered row + minted preview ID when
+                    // ID-less (like the bulk path, but on final day).
+                    let Some(source_index) = offer.source_index else {
+                        continue;
+                    };
+                    let Some(row) = rendered
+                        .task_rows
+                        .iter()
+                        .find(|row| row.source_index == Some(source_index))
+                    else {
+                        continue;
+                    };
+                    let mut block_id =
+                        offer.final_block_id.clone().unwrap_or_default();
+                    if block_id.is_empty() {
+                        let used: std::collections::HashSet<&str> =
+                            probe_reserved.iter().map(String::as_str).collect();
+                        block_id =
+                            crate::native::capture_block_ids::mint_block_id(
+                                &row.text, &used,
+                            );
+                        probe_reserved.push(block_id.clone());
+                    }
+                    unselected.push(named_task_for_offer(row, &block_id));
+                } else {
+                    // Moved unselected: fake named task from landed row.
+                    let Some(block_id) = offer.final_block_id.clone() else {
+                        continue;
+                    };
+                    let task_line = match final_new_scan.by_block_id(&block_id)
+                    {
+                        BlockIdLookup::Found(task) => final_new_contents
+                            .lines()
+                            .nth(task.line_index)
+                            .map(|line| line.to_string())
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "- [ ] #task {} ^{block_id}",
+                                    offer.text
+                                )
+                            }),
+                        _ => format!("- [ ] #task {} ^{block_id}", offer.text),
+                    };
+                    unselected.push(capture_project_note::RenderedNamedTask {
+                        block_id: block_id.clone(),
+                        link: true,
+                        text: offer.text.clone(),
+                        task_line,
+                    });
+                }
+            }
+            if !unselected.is_empty()
+                && let Ok((_, scratch)) = place_project_task_links(
+                    day.clone(),
+                    &unselected,
+                    &stem,
+                    note_route,
+                    pomodoro_name.as_deref(),
+                    pomodoro_name_is_literal,
+                    planner,
+                    task_theme_context,
+                    warnings,
+                    false,
+                )
+            {
+                scratch_placements = scratch;
+            }
+        }
+        if first_link_seen {
+            creates_pomodoro = Some(creates_bool);
+            // Final canonical from the combined merge chain, mirroring the
+            // new-task path above.
+            if !project_merges.is_empty() {
+                let before = project_merges[0].before.clone();
+                let after =
+                    project_merges[project_merges.len() - 1].after.clone();
+                let added = project_merges
+                    .iter()
+                    .map(|merge| merge.added.clone())
+                    .collect::<Vec<_>>();
+                canonical_pomodoro_name = Some(after.clone());
+                current_destination = canonical_pomodoro_name.clone();
+                if let Some(destination) = first_link_destination.as_mut() {
+                    destination.name = Some(after.clone());
+                    destination.merged = Some(super::batch::MergedPomodoro {
+                        before,
+                        after,
+                        added,
+                    });
+                }
+            }
+            if day_relative.is_none() {
+                day_relative = Some(capture_pomodoros::relative_day_file(
+                    &day_path,
+                    &request.bob_dir,
+                ));
+            }
+        }
+        let _ = current_destination;
+    }
+
     let prj_text = parsed.body.trim().to_string();
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -770,9 +1525,127 @@ pub(super) fn plan_project_note_item(
                 form: (form == ProjectNoteForm::Offer).then_some("offer"),
                 successors: (form == ProjectNoteForm::Offer).then(|| {
                     let mut scratch_index = 0;
+                    // Final day after all actual links for moved selected
+                    // successor link line lookups.
+                    let successor_day_path =
+                        pomodoro::day_file_for(&request.bob_dir);
+                    let successor_final_day = planner
+                        .peek_text(&successor_day_path)
+                        .unwrap_or_default();
                     frozen_offers
                         .iter()
                         .map(|offer| {
+                            // Moved selected offers link via the existing-task
+                            // gesture (saved in moved_selected_successor);
+                            // new selected use actual placements, unselected
+                            // (new + moved) use recomputed scratch previews.
+                            if offer.moved_from.is_some() && offer.selected {
+                                let block_link =
+                                    offer.final_block_id.as_ref().map(
+                                        |block_id| {
+                                            format!(
+                                                "[[{stem}#^{block_id}]]"
+                                            )
+                                        },
+                                    );
+                                let link = offer
+                                    .final_block_id
+                                    .as_ref()
+                                    .and_then(|block_id| {
+                                        moved_selected_successor
+                                            .get(block_id)
+                                    })
+                                    .zip(block_link.as_ref())
+                                    .map(
+                                        |(
+                                            (entry_name,
+                                            entry_line,
+                                            entry_created,
+                                            next_up),
+                                            block_link,
+                                        )| {
+                                            TaskCompleteSuccessorLinkJson {
+                                                day_file: day_relative
+                                                    .clone()
+                                                    .unwrap_or_default(),
+                                                entry_name: entry_name
+                                                    .clone(),
+                                                entry_line: *entry_line,
+                                                entry_created: *entry_created,
+                                                next_up: *next_up,
+                                                line: block_link_line(
+                                                    &successor_final_day,
+                                                    block_link,
+                                                ),
+                                                block_link: block_link
+                                                    .clone(),
+                                                block_id_created: false,
+                                            }
+                                        },
+                                    );
+                                let (entry_role, fallback) = link
+                                    .as_ref()
+                                    .map(|_| ("slot", false))
+                                    .unwrap_or(("implicit", true));
+                                let destination_name = link
+                                    .as_ref()
+                                    .map(|link| link.entry_name.clone())
+                                    .unwrap_or_default();
+                                let _ = (entry_role, fallback);
+                                return TaskCompleteUnblockedJson {
+                                    note_path: basename.clone(),
+                                    block_id: offer
+                                        .final_block_id
+                                        .clone()
+                                        .unwrap_or_default(),
+                                    line: offer.final_line,
+                                    text: offer.text.clone(),
+                                    previous_status_symbol: offer.pre_status,
+                                    previous_status_name: status_name_for(
+                                        &request.bob_dir,
+                                        offer.pre_status,
+                                    ),
+                                    status_symbol: offer.final_status,
+                                    status_name: status_name_for(
+                                        &request.bob_dir,
+                                        offer.final_status,
+                                    ),
+                                    inbox: false,
+                                    unblocked_by: vec![
+                                        TaskCompleteUnblockedCauseJson {
+                                            note_path: basename.clone(),
+                                            block_id: "prj".to_string(),
+                                            text: prj_text.clone(),
+                                        },
+                                    ],
+                                    link,
+                                    not_linked: None,
+                                    trigger: crate::native::task_complete::PROJECT_CREATED_TRIGGER,
+                                    hide_removed: false,
+                                    offer: Some(TaskCompleteOfferJson {
+                                        key: offer.key.clone(),
+                                        n: offer.n,
+                                        group: "project",
+                                        selected: offer.selected,
+                                        block_id_needed: offer.block_id_needed,
+                                        project: Some(basename.clone()),
+                                        after: None,
+                                        moved_from: offer.moved_from.clone(),
+                                        destination:
+                                            TaskCompleteOfferDestinationJson {
+                                                day_file: day_relative
+                                                    .clone()
+                                                    .unwrap_or_default(),
+                                                entry_name: destination_name,
+                                                entry_role,
+                                                fallback,
+                                            },
+                                        order_key: offer.order_key.clone(),
+                                        settled_ordinal: offer.settled_ordinal,
+                                    }),
+                                    relation: None,
+                                };
+                            }
                             let placement = if offer.selected {
                                 actual_placements.iter().find(|placed| {
                                     Some(placed.task.block_id.as_str())
@@ -875,6 +1748,7 @@ pub(super) fn plan_project_note_item(
                                     block_id_needed: offer.block_id_needed,
                                     project: Some(basename.clone()),
                                     after: None,
+                                    moved_from: offer.moved_from.clone(),
                                     destination:
                                         TaskCompleteOfferDestinationJson {
                                             day_file: day_relative
@@ -907,8 +1781,8 @@ pub(super) fn plan_project_note_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: project_link_guard,
-            dropped_dependencies: Vec::new(),
-            blocks_line_updates: Vec::new(),
+            dropped_dependencies: extra_dropped,
+            blocks_line_updates: extra_blocks_updates,
             minted_dependent_block_id: None,
             dependency_updates: Vec::new(),
             minted_blocker_block_id: None,
@@ -926,17 +1800,21 @@ pub(super) fn plan_project_note_item(
             relation_groups: Vec::new(),
         },
         clip_plan: None,
-        pomodoro_refs: project_merges
-            .iter()
-            .map(|merge| {
-                super::PomodoroBlockRef::at(
-                    super::PomodoroBlockRole::Changed,
-                    merge.dest_index,
-                    merge.dest_index,
-                )
-            })
-            .collect(),
-        task_block_refs: Vec::new(),
+        pomodoro_refs: {
+            let mut refs: Vec<super::PomodoroBlockRef> = project_merges
+                .iter()
+                .map(|merge| {
+                    super::PomodoroBlockRef::at(
+                        super::PomodoroBlockRole::Changed,
+                        merge.dest_index,
+                        merge.dest_index,
+                    )
+                })
+                .collect();
+            refs.extend(extra_pomodoro_refs);
+            refs
+        },
+        task_block_refs: extra_task_block_refs,
     })
 }
 
@@ -1405,6 +2283,7 @@ struct FrozenOffer {
     block_id_needed: bool,
     final_status: char,
     final_line: usize,
+    moved_from: Option<String>,
     /// Position among the equal-description tasks that stay ID-less after
     /// the picks mint theirs; see `TaskCompleteOfferJson::settled_ordinal`.
     settled_ordinal: Option<usize>,
@@ -1671,6 +2550,7 @@ mod tests {
         planner: CaptureBatchPlanner,
         task_theme_context: CaptureTaskThemeContext,
         warnings: Vec<CaptureWarning>,
+        dependency_ctx: DependencyContext,
         day_file: PathBuf,
     }
 
@@ -1738,6 +2618,7 @@ mod tests {
             selection: SuccessorSelection::None,
         };
         let today = test_now().date();
+        let dependency_ctx = DependencyContext::new(&request.bob_dir, today);
         OfferHarness {
             planner: CaptureBatchPlanner::default(),
             task_theme_context: CaptureTaskThemeContext::new(
@@ -1746,6 +2627,7 @@ mod tests {
                 None,
             ),
             warnings: Vec::new(),
+            dependency_ctx,
             request,
             day_file,
             _temp: temp,
@@ -1767,6 +2649,7 @@ mod tests {
             &mut harness.planner,
             &mut harness.task_theme_context,
             &mut harness.warnings,
+            &mut harness.dependency_ctx,
         )
     }
 

@@ -1117,6 +1117,9 @@ pub(super) struct TaskCompleteOfferJson {
     /// Group target for a relation offer (`note.md#^id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) after: Option<String>,
+    /// Source parent for a moved project offer (`cash.md`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) moved_from: Option<String>,
     pub(super) destination: TaskCompleteOfferDestinationJson,
     /// Crate-private draft order; never a JSON field.
     #[serde(skip)]
@@ -6569,6 +6572,7 @@ mod tests {
                     fallback: false,
                 },
                 after: None,
+                moved_from: None,
                 order_key: (0, (0, 0), 0, std::path::PathBuf::from("b.md"), 0),
                 settled_ordinal: None,
             }),

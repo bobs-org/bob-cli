@@ -1957,32 +1957,429 @@ fn capture_project_note_repairs_dependencies_for_stayed_and_moved_tasks() {
 }
 
 #[test]
-fn colon_and_offer_moves_keep_the_interim_refusal_until_link_phase() {
-    for (name, input) in [
-        ("colon", "Project @cash^x@\n- :a\n"),
-        ("offer", "Project @cash:x@\n- ^a\n"),
-    ] {
-        let temp = TempDir::new(&format!("bob-cli-interim-{name}-move"));
+fn capture_project_note_offer_moves_are_offered_with_moved_from() {
+    // MV5 (offers part): `@cash:x@` + `- ^a` + `- New` offers both rows;
+    // the moved row carries `moved_from`.
+    let temp = TempDir::new("bob-cli-move-offer-mv5");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Moved ^a\n",
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash:x@\n- ^a\n- New task\n",
+        true,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("offer JSON");
+    let successors = json["project_note"]["successors"]
+        .as_array()
+        .expect("successors");
+    assert_eq!(successors.len(), 2, "{json}");
+    // Draft order: moved `^a` (source 0) then new task (source 1).
+    assert_eq!(successors[0]["block_id"], "a", "{json}");
+    assert_eq!(successors[0]["offer"]["moved_from"], "cash.md", "{json}");
+    assert!(
+        successors[1]["offer"].get("moved_from").is_none()
+            || successors[1]["offer"]["moved_from"].is_null(),
+        "{json}"
+    );
+    // Keys: moved uses `<new>#^<id>`, new ID-less uses digest.
+    assert_eq!(successors[0]["offer"]["key"], "cash_x.md#^a", "{json}");
+}
+
+#[test]
+fn capture_project_note_colon_move_links_next_under_named_pomodoro() {
+    // MV4: `@cash^x@#admin` + `- :a` (Ready) moves, becomes Next, links
+    // under ADMIN.
+    let temp = TempDir::new("bob-cli-move-colon-mv4");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Ready task ^a\n",
+    );
+    write_file(&day, "## Pomodoros\n- [ ] () — ADMIN\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@#admin\n- :a\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["block_id"], "a", "{json}");
+    assert_eq!(moved["sigil"], ":", "{json}");
+    assert_eq!(moved["status_symbol"], "*", "{json}");
+    assert_eq!(moved["status_name"], "Next", "{json}");
+    assert!(moved.get("link").is_some(), "{json}");
+    assert_eq!(moved["link"]["block_link"], "[[cash_x#^a]]", "{json}");
+    assert!(moved["not_linked"].is_null(), "{json}");
+    assert_eq!(
+        moved["detail"], "becomes Next · links under ADMIN",
+        "{json}"
+    );
+    assert_eq!(
+        json["project_note"]["task_links"][0]["block_id"], "a",
+        "{json}"
+    );
+    assert_eq!(json["pomodoro_name"], "ADMIN", "{json}");
+    let note = fs::read_to_string(vault.join("cash_x.md")).expect("new note");
+    assert!(note.contains("- [*] #task Ready task"), "{note}");
+    assert!(!fs::read_to_string(vault.join("cash.md"))
+        .unwrap()
+        .contains("^a"));
+    let day_after = fs::read_to_string(&day).expect("day");
+    assert!(day_after.contains("[[cash_x#^a]]"), "{day_after}");
+}
+
+#[test]
+fn capture_project_note_colon_move_drops_local_prerequisite_and_links() {
+    // MV16: `- :a` blocked only by its own open prerequisite drops it,
+    // becomes Next, and links.
+    let temp = TempDir::new("bob-cli-move-colon-mv16");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\ntype: \"[[area]]\"\n---\n",
+            "- [?] #task Blocked [dependsOn:: cash__b] [id:: cash__a] ^a\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
+            "- [ ] #task Prereq [id:: cash__b] ^b\n",
+        ),
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@\n- :a\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["block_id"], "a", "{json}");
+    assert_eq!(moved["status_symbol"], "*", "{json}");
+    assert!(moved.get("link").is_some(), "{json}");
+    assert!(moved["not_linked"].is_null(), "{json}");
+    assert_eq!(
+        json["dropped_dependencies"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    let note = fs::read_to_string(vault.join("cash_x.md")).expect("new note");
+    assert!(note.contains("- [*] #task Blocked"), "{note}");
+    assert!(!note.contains("DEPENDS ON"), "{note}");
+}
+
+#[test]
+fn capture_project_note_colon_move_future_schedule_stays_unlinked() {
+    // Colon MV9: `s:3` + `- :b` ([?]) moves and stays unlinked with
+    // `project_schedule`.
+    let temp = TempDir::new("bob-cli-move-colon-mv9");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [?] #task Blocked ^b\n",
+    );
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^later@ s:3\n- :b\n",
+        false,
+        None,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["block_id"], "b", "{json}");
+    assert_eq!(moved["sigil"], ":", "{json}");
+    assert!(moved["link"].is_null(), "{json}");
+    assert_eq!(moved["not_linked"], "project_schedule", "{json}");
+    assert_eq!(
+        moved["detail"], "stays unlinked until the project starts",
+        "{json}"
+    );
+    let note =
+        fs::read_to_string(vault.join("cash_later.md")).expect("new note");
+    assert!(note.contains("- [?] #task Blocked"), "{note}");
+}
+
+#[test]
+fn capture_project_note_mixed_new_and_colon_move_preserves_draft_order() {
+    // Mixed ordering: new `:` task and colon move link in draft order.
+    let temp = TempDir::new("bob-cli-move-colon-mixed");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Moved ^a\n",
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@\n- New task :new\n- :a\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let links = json["project_note"]["task_links"]
+        .as_array()
+        .expect("links");
+    assert_eq!(links.len(), 2, "{json}");
+    assert_eq!(links[0]["block_id"], "new", "{json}");
+    assert_eq!(links[1]["block_id"], "a", "{json}");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["block_id"], "a", "{json}");
+    assert!(moved.get("link").is_some(), "{json}");
+    let note = fs::read_to_string(vault.join("cash_x.md")).expect("new note");
+    let new_pos = note.find("#task New task").expect("new");
+    let moved_pos = note.find("#task Moved").expect("moved");
+    assert!(new_pos < moved_pos, "{note}");
+}
+
+#[test]
+fn capture_project_note_offer_all_picks_equal_explicit_colon_moves() {
+    // MV5 (selection part): Offer `-p all` on `- ^a` + `- New` writes
+    // byte-identical files to explicit `- :a` + `- New :new`.
+    let make_vault = |name: &str| {
+        let temp = TempDir::new(name);
         let vault = temp.path().join("vault");
+        let day = vault.join("day.md");
         write_file(
             &vault.join("cash.md"),
-            "---\ntype: \"[[area]]\"\n---\n- [ ] #task A ^a\n",
+            "---\ntype: \"[[area]]\"\n---\n- [ ] #task Moved ^a\n",
         );
-        let output = project_note_move_capture(&vault, input, true, None);
-        assert!(
-            !output.status.success(),
-            "{name}: {}",
-            format_output(&output)
-        );
-        assert!(
-            stdout(&output).contains(
-                "moving tasks into a new project note is not available in this build yet"
-            ),
-            "{name}: {}",
-            format_output(&output)
-        );
-        assert!(!vault.join("cash_x.md").exists(), "{name}");
+        write_file(&day, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+        (temp, vault, day)
+    };
+    let (_temp_a, vault_a, day_a) = make_vault("bob-cli-move-offer-all-a");
+    let (_temp_b, vault_b, day_b) = make_vault("bob-cli-move-offer-all-b");
+    let offer_output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault_a)
+            .arg("-f")
+            .arg("json")
+            .arg("-p")
+            .arg("all")
+            .env("BOB_DAY_FILE", &day_a)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Project @cash:x@\n- ^a\n- New\n",
+    );
+    assert_success(&offer_output);
+    let offer_json: serde_json::Value =
+        serde_json::from_str(stdout(&offer_output).trim()).expect("offer JSON");
+    let successors = offer_json["project_note"]["successors"]
+        .as_array()
+        .expect("successors");
+    assert_eq!(successors.len(), 2, "{offer_json}");
+    for row in successors {
+        assert_eq!(row["offer"]["selected"], true, "{row}");
+        assert_eq!(row["status_symbol"], "*", "{row}");
+        assert!(row.get("link").is_some(), "{row}");
     }
+    assert_eq!(successors[0]["block_id"], "a", "{offer_json}");
+    assert_eq!(
+        successors[0]["offer"]["moved_from"], "cash.md",
+        "{offer_json}"
+    );
+    // "New" mints the fallback `task` ID (no usable word for a suggestion).
+    assert_eq!(successors[1]["block_id"], "task", "{offer_json}");
+    let explicit_output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault_b)
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_b)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Project @cash^x@\n- :a\n- New :task\n",
+    );
+    assert_success(&explicit_output);
+    assert_eq!(
+        fs::read_to_string(vault_a.join("cash_x.md")).expect("offer note"),
+        fs::read_to_string(vault_b.join("cash_x.md")).expect("explicit note"),
+        "picked moved+new rows render exactly like authored `:` bullets"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_a).expect("offer day"),
+        fs::read_to_string(&day_b).expect("explicit day"),
+        "picked moved+new links land exactly like authored `:` links"
+    );
+    assert_eq!(
+        fs::read_to_string(vault_a.join("cash.md")).expect("offer parent"),
+        fs::read_to_string(vault_b.join("cash.md")).expect("explicit parent"),
+        "moved parent blocks match"
+    );
+}
+
+#[test]
+fn capture_project_note_offer_none_leaves_moves_unlinked() {
+    // `-p none`: moves happen, new tasks are created, but nothing links.
+    let temp = TempDir::new("bob-cli-move-offer-none");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Moved ^a\n",
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("-p")
+            .arg("none")
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Project @cash:x@\n- ^a\n- New\n",
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("offer JSON");
+    let successors = json["project_note"]["successors"]
+        .as_array()
+        .expect("successors");
+    assert_eq!(successors.len(), 2, "{json}");
+    for row in successors {
+        assert_eq!(row["offer"]["selected"], false, "{row}");
+        assert!(row.get("link").is_none() || row["link"].is_null(), "{row}");
+    }
+    assert!(
+        json["project_note"]["task_links"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{json}"
+    );
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["block_id"], "a", "{json}");
+    assert!(moved["link"].is_null(), "{json}");
+    let note = fs::read_to_string(vault.join("cash_x.md")).expect("new note");
+    assert!(note.contains("#task Moved"), "{note}");
+    assert!(note.contains("#task New"), "{note}");
+}
+
+#[test]
+fn capture_project_note_offer_subset_picks_only_first_offer() {
+    // `-p 1` selects only the moved offer (draft order a then New).
+    let temp = TempDir::new("bob-cli-move-offer-subset");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Moved ^a\n",
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+    let output = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("-p")
+            .arg("1")
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0"),
+        "Project @cash:x@\n- ^a\n- New\n",
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("offer JSON");
+    let successors = json["project_note"]["successors"]
+        .as_array()
+        .expect("successors");
+    assert_eq!(successors.len(), 2, "{json}");
+    assert_eq!(successors[0]["offer"]["selected"], true, "{json}");
+    assert_eq!(successors[1]["offer"]["selected"], false, "{json}");
+    assert!(
+        successors[0].get("link").is_some() && !successors[0]["link"].is_null(),
+        "{json}"
+    );
+    assert!(
+        successors[1].get("link").is_none() || successors[1]["link"].is_null(),
+        "{json}"
+    );
+    let links = json["project_note"]["task_links"]
+        .as_array()
+        .expect("links");
+    assert_eq!(links.len(), 1, "{json}");
+    assert_eq!(links[0]["block_id"], "a", "{json}");
+}
+
+#[test]
+fn capture_project_note_colon_move_next_stays_next_and_links() {
+    // Next `[*]` colon move stays Next and links (no `becomes` prefix).
+    let temp = TempDir::new("bob-cli-move-colon-next");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [*] #task Next task ^a\n",
+    );
+    write_file(&day, "## Pomodoros\n- [ ] () — ADMIN\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@#admin\n- :a\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["status_symbol"], "*", "{json}");
+    assert!(moved.get("link").is_some(), "{json}");
+    assert_eq!(moved["detail"], "links under ADMIN", "{json}");
+}
+
+#[test]
+fn capture_project_note_colon_move_future_ready_is_refused() {
+    // Colon MV9 (Ready): `s:3` + `- :a` (Ready) refuses with
+    // `move_task_blocked_birth`; vault byte-identical.
+    let temp = TempDir::new("bob-cli-move-colon-future-ready");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Ready ^a\n",
+    );
+    let before = fs::read_to_string(vault.join("cash.md")).unwrap();
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^later@ s:3\n- :a\n",
+        false,
+        None,
+    );
+    assert!(!output.status.success(), "{}", format_output(&output));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("refusal JSON")["code"],
+        "move_task_blocked_birth"
+    );
+    assert_eq!(fs::read_to_string(vault.join("cash.md")).unwrap(), before);
+    assert!(!vault.join("cash_later.md").exists());
 }
 
 fn project_note_move_capture(

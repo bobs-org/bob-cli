@@ -435,6 +435,7 @@ pub(super) fn offer_json(
             fallback: offer.destination.fallback,
         },
         order_key: offer.order_key.clone(),
+        moved_from: None,
         settled_ordinal: None,
     }
 }
