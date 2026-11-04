@@ -36,6 +36,7 @@ pub(crate) enum LinkTaskGroup {
     InProgress,
     Next,
     Note,
+    Completed,
 }
 
 /// One linkable task: an open task with a linkable status in a routable
@@ -174,6 +175,7 @@ pub(crate) fn discover_at(
                 LinkTaskGroup::InProgress => (1, 0, 0),
                 LinkTaskGroup::Next => (2, 0, 0),
                 LinkTaskGroup::Note => (3, target_index, task.line_index),
+                LinkTaskGroup::Completed => (4, target_index, task.line_index),
             };
             // One field pass per task line feeds both the displayed
             // date and the pull-forward flag.

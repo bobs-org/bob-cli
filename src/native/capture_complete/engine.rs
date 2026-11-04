@@ -41,18 +41,23 @@ pub(super) fn build_result(
     raw_text: &str,
     cursor: usize,
     all_tasks: bool,
+    closed_tasks: bool,
 ) -> Result<CaptureCompleteResult, CompleteError> {
     let directive_owns_cursor =
         capture_language::completion_field_at(raw_text, cursor)
             .is_some_and(|field| field.context == CompletionContext::Directive);
     let mut result = if directive_owns_cursor {
-        build_result_inner(bob_dir, raw_text, cursor, all_tasks)?
-    } else if let Some(result) =
-        template_completion_gate(bob_dir, raw_text, cursor, all_tasks)?
-    {
+        build_result_inner(bob_dir, raw_text, cursor, all_tasks, closed_tasks)?
+    } else if let Some(result) = template_completion_gate(
+        bob_dir,
+        raw_text,
+        cursor,
+        all_tasks,
+        closed_tasks,
+    )? {
         result
     } else {
-        build_result_inner(bob_dir, raw_text, cursor, all_tasks)?
+        build_result_inner(bob_dir, raw_text, cursor, all_tasks, closed_tasks)?
     };
     result.initial_selection = initial_selection(raw_text, &result);
     Ok(result)
@@ -63,6 +68,7 @@ fn build_result_inner(
     raw_text: &str,
     cursor: usize,
     all_tasks: bool,
+    closed_tasks: bool,
 ) -> Result<CaptureCompleteResult, CompleteError> {
     let current_route = capture_language::editor_item_at(raw_text, cursor)
         .and_then(|item| item.route);
@@ -478,7 +484,7 @@ fn build_result_inner(
             task_link_candidates(bob_dir, &field.query)
         }
         CompletionContext::TaskGoto => {
-            task_goto_candidates(bob_dir, &field.query)
+            task_goto_candidates(bob_dir, &field.query, closed_tasks)
         }
         CompletionContext::TaskParent => {
             task_parent_candidates(bob_dir, &field.query)
@@ -898,6 +904,7 @@ fn template_completion_gate(
     raw_text: &str,
     cursor: usize,
     all_tasks: bool,
+    closed_tasks: bool,
 ) -> Result<Option<CaptureCompleteResult>, CompleteError> {
     let analysis = crate::native::capture_language::template::analyze(raw_text);
     if analysis.directive.is_none() {
@@ -918,7 +925,8 @@ fn template_completion_gate(
     }
 
     let masked = crate::native::capture_language::template::masked(raw_text);
-    let result = build_result_inner(bob_dir, &masked, cursor, all_tasks)?;
+    let result =
+        build_result_inner(bob_dir, &masked, cursor, all_tasks, closed_tasks)?;
     if matches!(
         result.context,
         Some(

@@ -37,7 +37,7 @@ fn isolate_missing_config() -> TestEnvGuard {
 
 fn result(bob_dir: &Path, raw: &str, cursor: usize) -> CaptureCompleteResult {
     let _guard = isolate_missing_config();
-    build_result(bob_dir, raw, cursor, false).expect("build result")
+    build_result(bob_dir, raw, cursor, false, false).expect("build result")
 }
 
 fn result_all(
@@ -46,7 +46,7 @@ fn result_all(
     cursor: usize,
 ) -> CaptureCompleteResult {
     let _guard = isolate_missing_config();
-    build_result(bob_dir, raw, cursor, true).expect("build result")
+    build_result(bob_dir, raw, cursor, true, false).expect("build result")
 }
 
 fn write_settings(root: &Path) {

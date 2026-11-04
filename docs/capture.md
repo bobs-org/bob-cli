@@ -1807,22 +1807,38 @@ sigil included, and no diagnostics. `bob capture-complete` serves context
 `task_goto`: the same rows and order as `task_link` for the same query,
 including ID-less rows (every row opens directly) and the inbox. Each
 candidate carries `replacement` (always `""`; clients never insert it),
-`ref` (`<line>:<digest>`), `route`, `note_kind`, `note_path` (the exact
-vault-relative path with extension), `target` (the absolute path,
-`bob_dir.join(note_path)`), nullable `block_id`, `status_symbol`,
-`status_name`, `status_type`, `text`, nullable `section`, `depth`, 1-based
-`line`, `group`, nullable `scheduled` (context only), nullable `pomodoro`,
-and `task_kind` (omitted when absent). There is no `requires_block_id`,
-`block_id_suggestions`, or `pulls_forward`. The query is the token text
-between the sigil and the cursor (empty at or just after the sigil); the
-replacement covers the whole token, sigil included, so refetching at
-`replacement.start` returns the unfiltered list. The response carries no
-`query` field and no `picker` descriptor, exactly like `task_link`. Human
-rows read `[status] text  · note_path:line`, with `· scheduled YYYY-MM-DD`
-whenever the task carries a scheduled date; the shell format yields no rows,
-because nothing is insertable. The navigation itself runs through
-bob-navigation-hotkeys' `obsidian://bob-goto-task` URI, whose contract is in
-the [Go to task URI reference](reference/plugins/goto-task-uri.md).
+`ref` (`<line>:<digest>`), `route`, optional `note_kind` (present on open
+rows, omitted on closed rows), `note_path` (the exact vault-relative path
+with extension), `target` (the absolute path, `bob_dir.join(note_path)`),
+nullable `block_id`, `status_symbol`, `status_name`, `status_type`, `text`,
+nullable `section`, `depth`, 1-based `line`, `group`, nullable `scheduled`
+(context only), nullable `pomodoro`, optional `closed` (`YYYY-MM-DD`,
+omitted when absent), and `task_kind` (omitted when absent). There is no
+`requires_block_id`, `block_id_suggestions`, or `pulls_forward`. The query
+is the token text between the sigil and the cursor (empty at or just after
+the sigil); the replacement covers the whole token, sigil included, so
+refetching at `replacement.start` returns the unfiltered list. The response
+carries no `query` field and no `picker` descriptor, exactly like
+`task_link`. Human rows read `[status] text  · note_path:line`, with
+`· scheduled YYYY-MM-DD` whenever the task carries a scheduled date and
+`· closed YYYY-MM-DD` for closed rows; the shell format yields no rows,
+because nothing is insertable.
+
+Pass `-C`/`--closed-tasks` to append done and canceled tasks from the whole
+vault after the open rows. Closed rows come from the vault-wide task catalog
+(the same catalog the `&` and `((` pickers use, including `done/` archives,
+ref notes, and daily notes), filtered by the query with the same matcher;
+open matches always come first. For an empty query closed rows order newest
+close date first (the first strict `[completion:: YYYY-MM-DD]` for DONE
+rows, the first strict `[cancelled:: YYYY-MM-DD]` otherwise; undated rows
+last; ties by `note_path`, then `line`); for a non-empty query score comes
+first, then this order. Each closed row carries `group: "completed"`,
+`route` as the catalog locator, no `note_kind`, `scheduled: null`,
+`pomodoro: null`, and `closed` when the line carries a date. Warnings from
+the vault catalog are appended to the response. Without the flag the output
+is unchanged. The navigation itself runs through bob-navigation-hotkeys'
+`obsidian://bob-goto-task` URI, whose contract is in the [Go to task URI
+reference](reference/plugins/goto-task-uri.md).
 
 ### Choosing a parent task with `+`
 

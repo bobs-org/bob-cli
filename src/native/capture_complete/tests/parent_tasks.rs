@@ -20,8 +20,10 @@ fn parent_result(
 ) -> super::super::model::CaptureCompleteResult {
     crate::native::env::with_var("BOB_DAY_FILE", day_file, || {
         crate::native::env::with_var("BOB_NOW", "2026-09-30 09:02:00", || {
-            super::super::engine::build_result(root, raw, cursor, all_tasks)
-                .expect("build parent-task completion")
+            super::super::engine::build_result(
+                root, raw, cursor, all_tasks, false,
+            )
+            .expect("build parent-task completion")
         })
     })
 }

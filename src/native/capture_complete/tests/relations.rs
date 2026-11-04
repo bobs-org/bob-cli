@@ -551,7 +551,8 @@ fn cancel_result(
         ("BOB_CONFIG_FILE", Some(config.as_os_str())),
     ]);
     let cursor = raw.len();
-    build_result(bob_dir, raw, cursor, false).expect("build cancel result")
+    build_result(bob_dir, raw, cursor, false, false)
+        .expect("build cancel result")
 }
 
 fn cancel_json(value: &CaptureCompleteResult) -> serde_json::Value {
@@ -575,7 +576,8 @@ fn complete_result(
         ("XDG_CACHE_HOME", Some(cache.as_os_str())),
         ("BOB_CONFIG_FILE", Some(config.as_os_str())),
     ]);
-    build_result(bob_dir, raw, raw.len(), false).expect("build complete result")
+    build_result(bob_dir, raw, raw.len(), false, false)
+        .expect("build complete result")
 }
 
 fn complete_json(value: &CaptureCompleteResult) -> serde_json::Value {

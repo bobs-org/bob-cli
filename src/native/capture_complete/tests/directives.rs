@@ -196,6 +196,7 @@ fn listen_row_activates_when_configured() {
         raw,
         raw.len(),
         false,
+        false,
     )
     .unwrap();
     let Candidates::Directive(rows) = value.candidates else {

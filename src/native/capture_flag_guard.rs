@@ -98,6 +98,7 @@ pub(crate) fn capture_complete_spec() -> GuardSpec {
     static LONGS: &[LongFlag] = &[
         long("all-tasks", false),
         BOB_DIR,
+        long("closed-tasks", false),
         long("cursor", true),
         FORMAT,
         HELP,
@@ -105,7 +106,7 @@ pub(crate) fn capture_complete_spec() -> GuardSpec {
     GuardSpec {
         longs: LONGS,
         short_values: "bcf",
-        short_flags: "ah",
+        short_flags: "aCh",
         equals_only_shorts: "",
     }
 }

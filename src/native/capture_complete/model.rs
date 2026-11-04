@@ -422,21 +422,25 @@ pub(super) struct TaskLinkCandidate {
 }
 
 /// One `task_goto` (Go To picker) candidate: any linkable open task in
-/// the same routable catalog `task_link` uses, in the same rows and order.
-/// The JSON keys match the picker contract: `replacement` is always `""`
-/// (clients never insert it; it is kept so the shared decoder still
-/// works), `note_path` is the exact vault-relative path with extension,
-/// and `target` is the absolute path (`bob_dir.join(note_path)`). There
-/// is no `requires_block_id`, `block_id_suggestions`, or `pulls_forward`:
-/// every row opens directly, including ID-less ones. `scheduled` is shown
-/// as context only.
+/// the same routable catalog `task_link` uses, in the same rows and order,
+/// plus optional trailing closed rows from the vault-wide catalog behind
+/// `--closed-tasks`. The JSON keys match the picker contract:
+/// `replacement` is always `""` (clients never insert it; it is kept so
+/// the shared decoder still works), `note_path` is the exact
+/// vault-relative path with extension, and `target` is the absolute path
+/// (`bob_dir.join(note_path)`). There is no `requires_block_id`,
+/// `block_id_suggestions`, or `pulls_forward`: every row opens directly,
+/// including ID-less ones. `scheduled` is shown as context only. Open
+/// rows carry `note_kind`; closed rows omit it and instead carry
+/// `group: "completed"` with an optional `closed` date.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct TaskGotoCandidate {
     pub(super) replacement: String,
     #[serde(rename = "ref")]
     pub(super) task_ref: String,
     pub(super) route: String,
-    pub(super) note_kind: CaptureTargetKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note_kind: Option<CaptureTargetKind>,
     pub(super) note_path: String,
     pub(super) target: String,
     pub(super) block_id: Option<String>,
@@ -450,6 +454,8 @@ pub(super) struct TaskGotoCandidate {
     pub(super) group: capture_link_tasks::LinkTaskGroup,
     pub(super) scheduled: Option<String>,
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) closed: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) task_kind: Option<&'static str>,
 }

@@ -127,6 +127,51 @@ fn complete_json(
     })
 }
 
+fn complete_json_with_closed(
+    vault: &Path,
+    day_file: &Path,
+    cursor: usize,
+    text: &str,
+    closed_flag: Option<&str>,
+) -> serde_json::Value {
+    let mut command = bob_command();
+    command.arg("capture-complete").arg("-b").arg(vault);
+    if let Some(flag) = closed_flag {
+        command.arg(flag);
+    }
+    let output = command
+        .arg("-c")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(text)
+        .env("BOB_DAY_FILE", day_file)
+        .env("BOB_NOW", BOB_NOW)
+        .output()
+        .expect("run goto completion");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
+        panic!(
+            "completion stdout should be JSON: {error}\n{}",
+            format_output(&output)
+        )
+    })
+}
+
+fn write_closed_example(vault: &Path) -> PathBuf {
+    let day_file = write_worked_example(vault);
+    write_file(
+        &vault.join("done/archived.md"),
+        "- [x] #task Shipped feature [completion:: 2026-10-03] ^shipped\n- [-] #task Canceled idea [cancelled:: 2026-09-20] ^canceled\n",
+    );
+    write_file(
+        &vault.join("ref/beta.md"),
+        "- [x] #task Ref done [completion:: 2026-09-25] ^ref-done\n",
+    );
+    day_file
+}
+
 #[test]
 fn capture_goto_query_fails_with_the_t3_teaching_error() {
     let temp = TempDir::new("bob-cli-capture-task-goto");
@@ -551,6 +596,194 @@ fn complete_goto_human_lines_show_note_path_and_line() {
     assert!(out.contains("[ ] Call the bank  · mac_inbox.md:4"), "{out}");
     assert!(!out.contains("needs ID"), "{out}");
     assert!(out.contains("8 candidates"), "{out}");
+}
+
+#[test]
+fn complete_goto_without_flag_omits_closed_rows() {
+    let temp = TempDir::new("bob-cli-complete-task-goto-no-closed");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_closed_example(&vault);
+
+    let json = complete_json_with_closed(&vault, &day_file, 1, "/", None);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["context"], "task_goto");
+    let candidates = json["candidates"].as_array().expect("candidates array");
+    assert_eq!(candidates.len(), 8, "{json}");
+    for candidate in candidates {
+        assert_ne!(candidate["group"], "completed", "{candidate}");
+        assert!(candidate.get("closed").is_none(), "{candidate}");
+        assert!(candidate.get("note_kind").is_some(), "{candidate}");
+    }
+}
+
+#[test]
+fn complete_goto_closed_tasks_appends_newest_first() {
+    let temp = TempDir::new("bob-cli-complete-task-goto-closed");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_closed_example(&vault);
+
+    for flag in ["-C", "--closed-tasks"] {
+        let open = complete_json_with_closed(&vault, &day_file, 1, "/", None);
+        let json =
+            complete_json_with_closed(&vault, &day_file, 1, "/", Some(flag));
+        assert_eq!(json["ok"], true, "{flag}");
+        assert_eq!(json["context"], "task_goto", "{flag}");
+        let open_candidates =
+            open["candidates"].as_array().expect("open candidates");
+        let candidates =
+            json["candidates"].as_array().expect("candidates array");
+        assert_eq!(
+            candidates.len(),
+            open_candidates.len() + 5,
+            "{flag}: {json}"
+        );
+        assert_eq!(
+            candidates[..open_candidates.len()].to_vec(),
+            *open_candidates,
+            "{flag}: open rows must stay unchanged and first"
+        );
+        let closed = &candidates[open_candidates.len()..];
+        let texts: Vec<&str> = closed
+            .iter()
+            .map(|candidate| candidate["text"].as_str().expect("text"))
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "Shipped feature",
+                "Ref done",
+                "Canceled idea",
+                "Old fix",
+                "Dropped idea",
+            ],
+            "{flag}: {json}"
+        );
+        for candidate in closed {
+            assert_eq!(candidate["group"], "completed", "{candidate}");
+            assert_eq!(
+                candidate["scheduled"],
+                serde_json::Value::Null,
+                "{candidate}"
+            );
+            assert_eq!(
+                candidate["pomodoro"],
+                serde_json::Value::Null,
+                "{candidate}"
+            );
+            assert!(candidate.get("note_kind").is_none(), "{candidate}");
+            assert_eq!(candidate["replacement"], "", "{candidate}");
+            let note_path = candidate["note_path"].as_str().expect("note_path");
+            assert_eq!(
+                candidate["target"],
+                vault.join(note_path).display().to_string(),
+                "{candidate}"
+            );
+            assert!(
+                candidate["route"]
+                    .as_str()
+                    .is_some_and(|route| !route.is_empty()),
+                "{candidate}"
+            );
+        }
+        let by_text = |text: &str| {
+            closed
+                .iter()
+                .find(|candidate| candidate["text"] == text)
+                .unwrap_or_else(|| {
+                    panic!("missing closed row {text:?}: {json}")
+                })
+                .clone()
+        };
+        assert_eq!(by_text("Shipped feature")["closed"], "2026-10-03");
+        assert_eq!(by_text("Ref done")["closed"], "2026-09-25");
+        assert_eq!(by_text("Canceled idea")["closed"], "2026-09-20");
+        assert_eq!(by_text("Old fix")["closed"], serde_json::Value::Null);
+        assert!(by_text("Old fix").get("closed").is_none());
+        assert_eq!(by_text("Shipped feature")["status_type"], "DONE");
+        assert_eq!(by_text("Canceled idea")["status_type"], "CANCELLED");
+        assert_eq!(by_text("Shipped feature")["route"], "archived");
+        assert_eq!(by_text("Shipped feature")["note_path"], "done/archived.md");
+    }
+}
+
+#[test]
+fn complete_goto_closed_query_filters_with_open_first() {
+    let temp = TempDir::new("bob-cli-complete-task-goto-closed-query");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_closed_example(&vault);
+
+    let json =
+        complete_json_with_closed(&vault, &day_file, 4, "/fix", Some("-C"));
+    let candidates = json["candidates"].as_array().expect("candidates");
+    let texts: Vec<&str> = candidates
+        .iter()
+        .map(|candidate| candidate["text"].as_str().expect("text"))
+        .collect();
+    assert!(texts.contains(&"Fix deep bug"), "{texts:?}");
+    assert!(texts.contains(&"Old fix"), "{texts:?}");
+    let first_closed = candidates
+        .iter()
+        .position(|candidate| candidate["group"] == "completed")
+        .expect("closed rows");
+    assert!(
+        candidates[..first_closed]
+            .iter()
+            .all(|candidate| candidate["group"] != "completed"),
+        "open matches must come before closed matches: {texts:?}"
+    );
+    assert!(
+        candidates[first_closed..]
+            .iter()
+            .all(|candidate| candidate["group"] == "completed"),
+        "closed rows must trail: {texts:?}"
+    );
+}
+
+#[test]
+fn complete_task_link_ignores_closed_flag() {
+    let temp = TempDir::new("bob-cli-complete-task-link-closed-flag");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_closed_example(&vault);
+
+    let plain = complete_json_with_closed(&vault, &day_file, 1, ":", None);
+    let flagged =
+        complete_json_with_closed(&vault, &day_file, 1, ":", Some("-C"));
+    assert_eq!(plain["candidates"], flagged["candidates"]);
+    assert!(flagged["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .all(|candidate| candidate["group"] != "completed"));
+}
+
+#[test]
+fn complete_goto_closed_human_lines_show_closed_date() {
+    let temp = TempDir::new("bob-cli-complete-task-goto-closed-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_closed_example(&vault);
+
+    let human = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-C")
+        .arg("-c")
+        .arg("1")
+        .arg("--")
+        .arg("/")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", BOB_NOW)
+        .output()
+        .expect("run human goto completion");
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("· closed 2026-10-03"), "{out}");
+    assert!(out.contains("13 candidates"), "{out}");
 }
 
 #[test]

@@ -145,6 +145,9 @@ pub(super) fn task_link_line(item: &TaskLinkCandidate) -> (String, String) {
             capture_link_tasks::LinkTaskGroup::Note => {
                 format!("{}.md", item.route)
             }
+            capture_link_tasks::LinkTaskGroup::Completed => {
+                "Completed".to_string()
+            }
         },
     };
     let mut detail =
@@ -170,14 +173,18 @@ pub(super) fn task_link_line(item: &TaskLinkCandidate) -> (String, String) {
 
 /// Human row for one `task_goto` candidate: the `note_path:line`
 /// opening location plus `[status] text  · note_path:line`, with
-/// `· scheduled DATE` whenever the task carries a scheduled date. Every
-/// row opens directly, so there is never a needs-ID tail.
+/// `· scheduled DATE` whenever the task carries a scheduled date and
+/// `· closed DATE` for closed rows. Every row opens directly, so there
+/// is never a needs-ID tail.
 pub(super) fn task_goto_line(item: &TaskGotoCandidate) -> (String, String) {
     let location = format!("{}:{}", item.note_path, item.line);
     let mut detail =
         format!("[{}] {}  · {location}", item.status_symbol, item.text);
     if let Some(scheduled) = &item.scheduled {
         detail.push_str(&format!("  · scheduled {scheduled}"));
+    }
+    if let Some(closed) = &item.closed {
+        detail.push_str(&format!("  · closed {closed}"));
     }
     (location, detail)
 }
@@ -198,6 +205,9 @@ pub(super) fn task_parent_line(item: &TaskParentCandidate) -> (String, String) {
             capture_link_tasks::LinkTaskGroup::Next => "Next".to_string(),
             capture_link_tasks::LinkTaskGroup::Note => {
                 format!("{}.md", item.route)
+            }
+            capture_link_tasks::LinkTaskGroup::Completed => {
+                "Completed".to_string()
             }
         },
     };

@@ -26,7 +26,7 @@ use std::{
 use super::{
     capture_block_ids, capture_tasks, is_always_excluded_note_directory_name,
     note_tasks::{self, TaskStatusType},
-    task_dependencies,
+    task_dependencies, task_fields,
     vault_links::NoteIndex,
 };
 
@@ -62,6 +62,10 @@ pub(crate) struct DependencyTask {
     /// repaired.
     pub(crate) duplicate_id: bool,
     pub(crate) task_kind: Option<&'static str>,
+    /// First strict close date on the raw task line (`YYYY-MM-DD`):
+    /// `completion` for DONE rows, `cancelled` otherwise. `None` when
+    /// the line carries no strict date.
+    pub(crate) closed_on: Option<String>,
 }
 
 /// Discovery output: canonically ordered candidates plus bounded
@@ -163,6 +167,7 @@ pub(crate) fn discover(bob_dir: &Path) -> DependencyTaskResult {
                 open,
                 duplicate_id,
                 task_kind: task.task_kind,
+                closed_on: closed_on_for(task.status_type, raw_line),
             });
         }
     }
@@ -255,6 +260,26 @@ fn bounded_warning(message: String) -> String {
 /// near-matches such as `#hidden` or `#hideaway` do not count.
 pub(crate) fn has_hide_tag(raw_line: &str) -> bool {
     raw_line.split_whitespace().any(|token| token == "#hide")
+}
+
+/// First strict close date on a raw task line: the first strict
+/// `completion` value for DONE rows, the first strict `cancelled`
+/// value otherwise. `None` when the line carries no strict date.
+pub(crate) fn closed_on_for(
+    status_type: TaskStatusType,
+    raw_line: &str,
+) -> Option<String> {
+    let key = if status_type == TaskStatusType::Done {
+        "completion"
+    } else {
+        "cancelled"
+    };
+    task_fields::inline_fields(raw_line, key)
+        .iter()
+        .find_map(|field| {
+            task_fields::parse_strict_calendar_date(&field.value)
+                .map(|_| field.value.clone())
+        })
 }
 
 /// Whether a raw task line carries the machine-owned project-block tag as
@@ -1030,5 +1055,42 @@ mod tests {
         assert_eq!(group("Beta ref"), "open");
         assert_eq!(group("Done deed"), "completed");
         assert_eq!(group("Old kept"), "completed");
+    }
+
+    #[test]
+    fn closed_on_prefers_completion_for_done_and_cancelled_otherwise() {
+        use super::note_tasks::TaskStatusType;
+        assert_eq!(
+            closed_on_for(
+                TaskStatusType::Done,
+                "- [x] #task Done [completion:: 2026-10-03] [cancelled:: 2026-09-01] ^a",
+            ),
+            Some("2026-10-03".to_string())
+        );
+        assert_eq!(
+            closed_on_for(
+                TaskStatusType::Cancelled,
+                "- [-] #task Dropped [completion:: 2026-10-03] [cancelled:: 2026-09-20] ^b",
+            ),
+            Some("2026-09-20".to_string())
+        );
+        assert_eq!(
+            closed_on_for(TaskStatusType::Done, "- [x] #task Undated ^c",),
+            None
+        );
+        assert_eq!(
+            closed_on_for(
+                TaskStatusType::Done,
+                "- [x] #task Bad date [completion:: 2026-13-40] ^d",
+            ),
+            None
+        );
+        assert_eq!(
+            closed_on_for(
+                TaskStatusType::Done,
+                "- [x] #task First wins [completion:: 2026-10-02] [completion:: 2026-10-05] ^e",
+            ),
+            Some("2026-10-02".to_string())
+        );
     }
 }

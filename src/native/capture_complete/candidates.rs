@@ -713,42 +713,126 @@ pub(super) fn task_link_candidates(
 /// The `replacement` is always empty (clients never insert it) and carries
 /// no Add block ID metadata; `note_path` is the exact vault-relative path
 /// and `target` the absolute path for opening the task.
+///
+/// Behind `closed_tasks`, closed rows from the vault-wide catalog trail
+/// the open rows: filtered by the query with the same `match_score`
+/// matcher, open matches always first, closed rows ordered newest close
+/// date first (undated last, ties by `note_path` then `line`; for a
+/// non-empty query score comes first). Closed rows carry
+/// `group: "completed"`, a `locator` route, no `note_kind`, no
+/// `scheduled`/`pomodoro`, and an optional `closed` date.
 pub(super) fn task_goto_candidates(
     bob_dir: &Path,
     query: &str,
+    closed_tasks: bool,
 ) -> (Candidates, Vec<String>) {
     let discovered = capture_link_tasks::discover(bob_dir);
-    let candidates = capture_link_tasks::rank(&discovered.tasks, query)
-        .into_iter()
-        .map(|task| TaskGotoCandidate {
-            replacement: String::new(),
-            task_ref: task.task_ref.clone(),
-            route: task.route.clone(),
-            note_kind: task.note_kind,
-            note_path: task.note_path.clone(),
-            target: bob_dir.join(&task.note_path).display().to_string(),
-            block_id: task.block_id.clone(),
-            status_symbol: task.status_symbol,
-            status_name: task.status_name.clone(),
-            status_type: task.status_type,
-            text: task.text.clone(),
-            section: task.section.clone(),
-            depth: task.depth,
-            line: task.line,
-            group: task.group,
-            scheduled: task.scheduled.clone(),
-            pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
-                ActiveTaskPomodoroCandidate {
-                    line: pomodoro.line,
-                    name: pomodoro.name.clone(),
-                    time_range: pomodoro.time_range.clone(),
-                    is_current: pomodoro.is_current,
-                }
-            }),
-            task_kind: task.task_kind,
+    let mut candidates: Vec<TaskGotoCandidate> =
+        capture_link_tasks::rank(&discovered.tasks, query)
+            .into_iter()
+            .map(|task| TaskGotoCandidate {
+                replacement: String::new(),
+                task_ref: task.task_ref.clone(),
+                route: task.route.clone(),
+                note_kind: Some(task.note_kind),
+                note_path: task.note_path.clone(),
+                target: bob_dir.join(&task.note_path).display().to_string(),
+                block_id: task.block_id.clone(),
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: task.status_type,
+                text: task.text.clone(),
+                section: task.section.clone(),
+                depth: task.depth,
+                line: task.line,
+                group: task.group,
+                scheduled: task.scheduled.clone(),
+                pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
+                    ActiveTaskPomodoroCandidate {
+                        line: pomodoro.line,
+                        name: pomodoro.name.clone(),
+                        time_range: pomodoro.time_range.clone(),
+                        is_current: pomodoro.is_current,
+                    }
+                }),
+                closed: None,
+                task_kind: task.task_kind,
+            })
+            .collect();
+    let mut warnings = discovered.warnings;
+    if !closed_tasks {
+        return (Candidates::TaskGoto(candidates), warnings);
+    }
+    let vault = capture_dependency_tasks::discover(bob_dir);
+    for warning in vault.warnings {
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+    let mut scored: Vec<(&capture_dependency_tasks::DependencyTask, u32)> =
+        vault
+            .tasks
+            .iter()
+            .filter(|task| !task.open)
+            .filter_map(|task| {
+                capture_link_tasks::match_score(
+                    &capture_dependency_tasks::dependency_search_fields(task),
+                    query,
+                )
+                .map(|score| (task, score))
+            })
+            .collect();
+    scored.sort_by(|left, right| {
+        let (left_task, left_score) = left;
+        let (right_task, right_score) = right;
+        right_score.cmp(left_score).then_with(|| {
+            closed_goto_order_key(left_task)
+                .cmp(&closed_goto_order_key(right_task))
         })
-        .collect();
-    (Candidates::TaskGoto(candidates), discovered.warnings)
+    });
+    candidates.extend(scored.into_iter().map(|(task, _)| TaskGotoCandidate {
+        replacement: String::new(),
+        task_ref: task.task_ref.clone(),
+        route: task.locator.clone(),
+        note_kind: None,
+        note_path: task.note_path.clone(),
+        target: bob_dir.join(&task.note_path).display().to_string(),
+        block_id: task.block_id.clone(),
+        status_symbol: task.status_symbol,
+        status_name: task.status_name.clone(),
+        status_type: capture_tasks::status_type_label(task.status_type),
+        text: task.text.clone(),
+        section: task.section.clone(),
+        depth: task.depth,
+        line: task.line,
+        group: capture_link_tasks::LinkTaskGroup::Completed,
+        scheduled: None,
+        pomodoro: None,
+        closed: task.closed_on.clone(),
+        task_kind: task.task_kind,
+    }));
+    (Candidates::TaskGoto(candidates), warnings)
+}
+
+/// Close-date order for a closed Go To row: dated rows first, newest
+/// first, undated last; ties break by `note_path`, then `line`.
+fn closed_goto_order_key(
+    task: &capture_dependency_tasks::DependencyTask,
+) -> (u8, std::cmp::Reverse<String>, String, usize) {
+    match &task.closed_on {
+        Some(date) => (
+            0,
+            std::cmp::Reverse(date.clone()),
+            task.note_path.clone(),
+            task.line,
+        ),
+        None => (
+            1,
+            std::cmp::Reverse(String::new()),
+            task.note_path.clone(),
+            task.line,
+        ),
+    }
 }
 
 /// `task_parent` candidates for a bare-plus selector. Reuses the colon
@@ -2512,5 +2596,66 @@ pub(super) fn read_target(
             "read target {}: {error}",
             target.display()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod closed_goto_tests {
+    use super::*;
+    use crate::native::note_tasks::TaskStatusType;
+
+    fn closed_task(
+        note_path: &str,
+        line: usize,
+        closed_on: Option<&str>,
+    ) -> capture_dependency_tasks::DependencyTask {
+        capture_dependency_tasks::DependencyTask {
+            note_path: note_path.to_string(),
+            locator: note_path
+                .strip_suffix(".md")
+                .unwrap_or(note_path)
+                .to_string(),
+            block_id: None,
+            block_id_suggestions: Vec::new(),
+            status_symbol: 'x',
+            status_name: "Done".to_string(),
+            status_type: TaskStatusType::Done,
+            text: "closed".to_string(),
+            section: None,
+            depth: 0,
+            line,
+            task_ref: format!("{line}:deadbeef"),
+            hidden: false,
+            open: false,
+            duplicate_id: false,
+            task_kind: None,
+            closed_on: closed_on.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn dated_rows_come_before_undated_newest_first() {
+        let newest = closed_task("b.md", 1, Some("2026-10-03"));
+        let older = closed_task("a.md", 1, Some("2026-09-20"));
+        let undated = closed_task("a.md", 2, None);
+        assert!(
+            closed_goto_order_key(&newest) < closed_goto_order_key(&older),
+            "newest date should sort first"
+        );
+        assert!(
+            closed_goto_order_key(&older) < closed_goto_order_key(&undated),
+            "dated rows should sort before undated rows"
+        );
+    }
+
+    #[test]
+    fn ties_break_by_note_path_then_line() {
+        let first = closed_task("a.md", 1, Some("2026-09-20"));
+        let second = closed_task("b.md", 1, Some("2026-09-20"));
+        let later_line = closed_task("a.md", 2, Some("2026-09-20"));
+        assert!(closed_goto_order_key(&first) < closed_goto_order_key(&second));
+        assert!(
+            closed_goto_order_key(&first) < closed_goto_order_key(&later_line)
+        );
     }
 }

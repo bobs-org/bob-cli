@@ -46,6 +46,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
     let output_format = OutputFormat::from_matches(&matches);
     let all_tasks = matches.get_flag("all-tasks");
+    let closed_tasks = matches.get_flag("closed-tasks");
     let bob_dir = bob_dir_from_matches(&matches);
     let cursor = *matches.get_one::<usize>("cursor").expect("required");
 
@@ -64,7 +65,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         );
     }
 
-    match build_result(&bob_dir, &raw_text, cursor, all_tasks) {
+    match build_result(&bob_dir, &raw_text, cursor, all_tasks, closed_tasks) {
         Ok(result) => {
             print_success(&result, output_format);
             0
@@ -247,7 +248,7 @@ Progress) in the routable inbox, area, and non-terminal project notes, in \
 canonical picker order and ranked by the query with ID-less tasks always \
 included; the replacement covers the whole `:` token, sigil included, \
 because accepting rewrites the query into the canonical `@route:block-id` \
-link. A whole-draft `/` token completes `task_goto`: the same rows and order as `task_link`, with `note_path` and absolute `target` for opening the task; the replacement covers the whole token and is never inserted. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
+link. A whole-draft `/` token completes `task_goto`: the same rows and order as `task_link`, with `note_path` and absolute `target` for opening the task; the replacement covers the whole token and is never inserted. Pass -C/--closed-tasks to append done and canceled tasks from the whole vault as a trailing `completed` group, newest close date first. The right-hand side of '@route^block-id' completes as `task_block_id` once the route resolves, with empty \
 candidates and an additive `block_id` object carrying intent, used IDs, and suggestions. A project-note `@` seal \
 directly after the `^` or `:` block-ID part is never part of the replacement and reports intent `project_note`; a `+` after a `:` block ID is the retired project-note form and offers nothing. A trailing ` :id` or ` ^id` on a \
 first-level bullet of a project-note item completes as `project_task_block_id`, with empty candidates and an additive `block_id` object carrying intent `new`, the project-note stem, the sigil range, the owning task body, used IDs (`prj` plus other task IDs), and suggestions. This prompt also opens on task-list bullets and nested lines, and on nested lines under project-note task bullets. Its object reports `owner_line` and an additive `splice`; list IDs use the header route, destination-note IDs followed by sibling-list IDs, and owner-first suggestions when that ID is free. The splice moves an accepted ID onto its owner line while preserving nested text and returning the caret to the typed line. An empty block-ID component \
@@ -300,11 +301,12 @@ nothing for this field. The replacement covers the `((query` token \
 up to the cursor.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n  bob capture-complete -c 7 -- '@inbox+ > @db'\n  bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, project_task_move, pomodoro_name, pomodoro_start_name, task, drawer, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
+            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n  bob capture-complete -c 1 -f json -- '/'\n  bob capture-complete -C -c 1 -f json -- '/'\n  bob capture-complete -c 13 -f json -- 'Follow up ((s'\n  bob capture-complete -c 7 -- '@inbox+ > @db'\n  bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, project_task_move, pomodoro_name, pomodoro_start_name, task, drawer, active_task, task_type, directive, task_link, task_goto, task_parent, task_dependency, blocked_task, relation_to, relation_from, relation_label, task_complete, wikilink_note, wikilink_heading, wikilink_block, wikilink_task",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())
         .arg(bob_dir_arg())
+        .arg(closed_tasks_arg())
         .arg(cursor_arg())
         .arg(format_arg())
         .arg(help_arg())
@@ -318,6 +320,16 @@ pub(super) fn all_tasks_arg() -> Arg {
         .action(ArgAction::SetTrue)
         .help(
             "Include open tasks that still need a block ID (task context only)",
+        )
+}
+
+pub(super) fn closed_tasks_arg() -> Arg {
+    Arg::new("closed-tasks")
+        .long("closed-tasks")
+        .short('C')
+        .action(ArgAction::SetTrue)
+        .help(
+            "Include done and canceled tasks from the whole vault (task_goto context only)",
         )
 }
 
