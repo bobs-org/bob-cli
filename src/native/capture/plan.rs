@@ -12,6 +12,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) plan_budget: Option<CapturePlanBudget>,
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
     pub(super) task_blocks: Vec<TaskBlockJson>,
+    pub(super) section_blocks: Vec<SectionBlockJson>,
     pub(super) inbox_route: InboxRouteReport,
     pub(super) move_choice: super::move_choice::MoveChoiceReport,
     /// Routed tasks' source→destination landings, in move order. The
@@ -139,6 +140,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     let mut block_tracker = PomodoroBlockTracker::new(day_relative);
     let task_settings = note_tasks::read_settings(&request.bob_dir);
     let mut task_tracker = TaskBlockTracker::new(task_settings.clone());
+    let mut section_tracker = SectionBlockTracker::new();
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
     let mut task_theme_context =
         CaptureTaskThemeContext::new(&request.bob_dir, today, config_path);
@@ -459,11 +461,16 @@ pub(super) fn plan_capture_batch_with_config_path(
                 all_project_moves.extend(move_landings.iter().cloned());
                 task_tracker.remap_project_moves(&planner, &move_landings);
                 task_tracker.remap_transfer_moves(
-                    &planner,
+                    &request.bob_dir,
+                    &planned.result.transfer_move_output.moves,
+                    &task_refs,
+                );
+                task_tracker.track_item(&planner, &pre_tasks, task_refs);
+                task_tracker.mark_transfer_move_origins(
                     &request.bob_dir,
                     &planned.result.transfer_move_output.moves,
                 );
-                task_tracker.track_item(&planner, &pre_tasks, task_refs);
+                section_tracker.track_item(&planned.result, &request.bob_dir);
                 keep_moving_trace.record(
                     items.len(),
                     &planned,
@@ -573,11 +580,16 @@ pub(super) fn plan_capture_batch_with_config_path(
             all_project_moves.extend(move_landings.iter().cloned());
             task_tracker.remap_project_moves(&planner, &move_landings);
             task_tracker.remap_transfer_moves(
-                &planner,
+                &request.bob_dir,
+                &planned.result.transfer_move_output.moves,
+                &task_refs,
+            );
+            task_tracker.track_item(&planner, &pre_tasks, task_refs);
+            task_tracker.mark_transfer_move_origins(
                 &request.bob_dir,
                 &planned.result.transfer_move_output.moves,
             );
-            task_tracker.track_item(&planner, &pre_tasks, task_refs);
+            section_tracker.track_item(&planned.result, &request.bob_dir);
             keep_moving_trace.record(
                 items.len(),
                 &planned,
@@ -640,6 +652,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         &successor_reasons,
     );
     let task_blocks = task_tracker.finish(&planner);
+    let section_blocks = section_tracker.finish(&planner);
     // The BLOCKS kill-switch warning surfaces once per batch, and only
     // when a dependency write consulted the switch (§14.10). Plain
     // captures never touch the config and never warn.
@@ -683,6 +696,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         plan_budget: None,
         pomodoro_blocks,
         task_blocks,
+        section_blocks,
         move_choice,
         inbox_route: applied.report,
         routed_landings: applied.moves,

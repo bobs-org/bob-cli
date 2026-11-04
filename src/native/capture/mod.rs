@@ -378,6 +378,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.plan_budget,
         batch.pomodoro_blocks,
         batch.task_blocks,
+        batch.section_blocks,
         open_notes,
         pull_in,
         batch.inbox_route,

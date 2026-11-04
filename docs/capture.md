@@ -7133,16 +7133,21 @@ Field rules:
 - `created` is true only when the parent task did not exist before the
   batch. This happens when an earlier item in the same draft created it,
   as in `Task @sase^new` followed by `note @sase+new`. A created block's
-  lines are all `added`.
-  - `roles` is informational and deduplicated: `"sub_bullet"` for captured
+  lines are all `added`. A transferred task keeps `created: false`; its
+  source before-image is used even when the destination note never held it.
+- `moved_from` appears on moved tasks as `{relative_target, line}`, naming
+  the source note and 1-based source line before the move.
+- `roles` is informational and deduplicated: `"sub_bullet"` for captured
   children, `"dependency"` / `"dependency_target"` for prerequisite writes,
   `"dependency_dropped"` when a capture link drops the task's own prerequisites,
-  and `"completed"` (the completed root and each closed subtask) /
-  `"unblocked"` (each recovered dependent) for whole-item `!` completions.
-  Clients must not depend on it. A `dependency_target` block's `lines` include
-  the staged BLOCKS child when that mirror changes; the item also carries
-  additive `blocks_line_updates` and `minted_dependent_block_id` when a
-  mint happens ([task-dependencies.md §14.11](task-dependencies.md#1411-outputs-and-warning-kinds)).
+  `"merge_target"` for a merge destination, `"merge_source"` for each merged
+  tombstone, and `"moved"` for each task moved by `>`. It also includes
+  `"completed"` (the completed root and each closed subtask) / `"unblocked"`
+  (each recovered dependent) for whole-item `!` completions. Clients must not
+  depend on it. A `dependency_target` block's `lines` include the staged BLOCKS
+  child when that mirror changes; the item also carries additive
+  `blocks_line_updates` and `minted_dependent_block_id` when a mint happens
+  ([task-dependencies.md §14.11](task-dependencies.md#1411-outputs-and-warning-kinds)).
 - `lines` uses exactly the `pomodoro_blocks` line schema: `text`
   (verbatim, no terminator), `depth` (relative to the task line, computed
   by the same helper), `change` (`unchanged` / `added` / `removed` /
@@ -7154,6 +7159,37 @@ Field rules:
   text.
 - Dry-run JSON equals real-run JSON except for `dry_run`. Human output
   does not change. Per-item `parent_*` fields stay as they are.
+
+#### Transfer section blocks
+
+A successful section transfer merge adds one batch-level `section_blocks`
+entry for its destination section. The key is omitted when there was no
+section merge. The payload uses the task-block line schema and follows
+first-touch order:
+
+```json
+"section_blocks": [
+  {
+    "relative_target": "db.md",
+    "route": "db",
+    "line": 40,
+    "heading": "Future Work",
+    "created": false,
+    "roles": ["merge_target"],
+    "lines": [
+      {"text": "## Future Work", "depth": 0, "change": "unchanged"},
+      {"text": "- Existing idea", "depth": 0, "change": "unchanged"},
+      {"text": "- Benchmark logical replication", "depth": 0, "change": "added"}
+    ]
+  }
+]
+```
+
+`line` is the 1-based heading line in the final staged note. The section
+diff starts at its heading and ends before the next heading at the same or
+higher level. A newly created H2 has `created: true`, and every line is
+`added`. A re-run whose transfer outcomes are all `unchanged` emits neither
+transfer task blocks nor section blocks.
 
 #### Open notes
 

@@ -480,6 +480,9 @@ pub(super) struct CaptureResult {
     /// when the batch wrote a sub-bullet. Never per item.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) task_blocks: Vec<TaskBlockJson>,
+    /// Batch-level sections receiving a transfer merge, omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) section_blocks: Vec<SectionBlockJson>,
     /// Notes Control-Return should open. Always present (empty when
     /// nothing opens). Never per item.
     pub(super) open_notes: Vec<OpenNoteJson>,
@@ -506,6 +509,7 @@ impl CaptureResult {
         plan_budget: Option<CapturePlanBudget>,
         pomodoro_blocks: Vec<PomodoroBlockJson>,
         task_blocks: Vec<TaskBlockJson>,
+        section_blocks: Vec<SectionBlockJson>,
         open_notes: Vec<OpenNoteJson>,
         pull_in: PullInJson,
         inbox_route: InboxRouteReport,
@@ -530,6 +534,7 @@ impl CaptureResult {
             plan_budget,
             pomodoro_blocks,
             task_blocks,
+            section_blocks,
             open_notes,
             pull_in,
             inbox_route,

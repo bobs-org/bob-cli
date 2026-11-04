@@ -391,6 +391,7 @@ fn json_success_shape_is_stable() {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        Vec::new(),
         PullInJson::empty(),
         InboxRouteReport::empty(),
         crate::native::capture::move_choice::MoveChoiceReport::empty(),
@@ -423,6 +424,7 @@ fn json_success_shape_is_stable() {
     assert!(value.get("sub_bullets").is_none(), "{value}");
     assert!(value.get("captures").is_none(), "{value}");
     assert!(value.get("global_destination").is_none(), "{value}");
+    assert!(value.get("section_blocks").is_none(), "{value}");
     assert_eq!(value["open_notes"], serde_json::json!([]));
     assert_eq!(value["pull_in"]["supported"], true);
     assert_eq!(value["pull_in"]["offer_count"], 0);

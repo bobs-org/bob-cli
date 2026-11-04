@@ -462,6 +462,20 @@ fn transfer_moves_multiple_sources_in_typed_order() {
     assert_eq!(moves[1]["old_block_id"], "pgdump", "{json}");
     assert_eq!(moves[0]["source_path"], "inbox.md", "{json}");
     assert_eq!(moves[1]["source_path"], "work.md", "{json}");
+    let blocks = json["task_blocks"].as_array().expect("task blocks");
+    assert_eq!(blocks.len(), 2, "{json}");
+    for (block, source, line) in
+        [(&blocks[0], "inbox.md", 5), (&blocks[1], "work.md", 5)]
+    {
+        assert_eq!(block["roles"], serde_json::json!(["moved"]), "{block}");
+        assert_eq!(block["created"], false, "{block}");
+        assert_eq!(
+            block["moved_from"],
+            serde_json::json!({"relative_target": source, "line": line}),
+            "{block}"
+        );
+        assert_eq!(block["lines"][0]["change"], "changed", "{block}");
+    }
     let db_after = fs::read_to_string(vault.join("db.md")).expect("read db");
     let bench = db_after.find("^bench").expect("bench landed");
     let pgdump = db_after.find("^pgdump").expect("pgdump landed");
@@ -816,6 +830,15 @@ fn transfer_merge_task_cuts_retires_repairs_and_preserves_target() {
     assert_eq!(json["kind"], "task_merge");
     assert_eq!(json["merges"][0]["source"]["block_id"], "pgdump");
     assert_eq!(json["merges"][1]["source"]["block_id"], "bench");
+    let blocks = json["task_blocks"].as_array().expect("task blocks");
+    assert_eq!(blocks.len(), 3, "{json}");
+    assert_eq!(blocks[0]["roles"], serde_json::json!(["merge_target"]));
+    assert_eq!(blocks[0]["block_id"], "upgrade");
+    assert_eq!(blocks[1]["roles"], serde_json::json!(["merge_source"]));
+    assert_eq!(blocks[1]["block_id"], "pgdump");
+    assert_eq!(blocks[2]["roles"], serde_json::json!(["merge_source"]));
+    assert_eq!(blocks[2]["block_id"], "bench");
+    assert!(json.get("section_blocks").is_none(), "{json}");
     assert!(json.get("moves").is_none());
     assert!(!json["repaired_files"].as_array().unwrap().is_empty());
     let target = fs::read_to_string(vault.join("db.md")).unwrap();
@@ -841,8 +864,39 @@ fn transfer_merge_task_cuts_retires_repairs_and_preserves_target() {
     let merged = markdown_snapshot(&vault);
     let again = capture_json(&vault, &day, draft, false);
     assert_success(&again);
-    assert_eq!(json_body(&again)["merges"][0]["outcome"], "unchanged");
+    let again_json = json_body(&again);
+    assert_eq!(again_json["merges"][0]["outcome"], "unchanged");
+    assert!(again_json.get("task_blocks").is_none(), "{again_json}");
+    assert!(again_json.get("section_blocks").is_none(), "{again_json}");
     assert_eq!(markdown_snapshot(&vault), merged);
+}
+
+#[test]
+fn transfer_merge_reports_target_and_tombstone_in_same_note() {
+    let (_temp, vault, day) = setup_merge_vault("transfer-merge-same-note");
+    write_file(
+        &vault.join("db.md"),
+        &area_with_tasks(concat!(
+            "- [ ] #task Upgrade Postgres ^upgrade\n",
+            "- [ ] #task Add capture timing ^capture-time\n",
+            "  - Keep the timestamp with the capture\n",
+        )),
+    );
+    let output =
+        capture_json(&vault, &day, "@db+capture-time > @db+upgrade", true);
+    assert_success(&output);
+    let json = json_body(&output);
+    let blocks = json["task_blocks"].as_array().expect("task blocks");
+    assert_eq!(blocks.len(), 2, "{json}");
+    assert_eq!(blocks[0]["block_id"], "upgrade", "{json}");
+    assert_eq!(blocks[0]["roles"], serde_json::json!(["merge_target"]));
+    assert_eq!(blocks[1]["block_id"], "capture-time", "{json}");
+    assert_eq!(blocks[1]["roles"], serde_json::json!(["merge_source"]));
+    assert_eq!(blocks[1]["lines"][0]["change"], "changed", "{json}");
+    assert_eq!(
+        blocks[1]["lines"][0]["before"],
+        "- [ ] #task Add capture timing ^capture-time"
+    );
 }
 
 #[test]
@@ -867,6 +921,7 @@ fn transfer_merge_drawers_and_sections_preserve_selector_intent() {
             false,
         );
         assert_success(&output);
+        let json = json_body(&output);
         let text = fs::read_to_string(vault.join("db.md")).unwrap();
         assert!(text.contains(heading), "{destination}: {text}");
         let heading_at = text.find(heading).unwrap();
@@ -879,8 +934,47 @@ fn transfer_merge_drawers_and_sections_preserve_selector_intent() {
         assert!(!source.contains("Try pgbench"), "{source}");
         if destination.starts_with("@db#") {
             assert!(source.contains("CANCEL LOG"), "{source}");
+            let sections = json["section_blocks"]
+                .as_array()
+                .expect("section merge block");
+            assert_eq!(sections.len(), 1, "{json}");
+            assert_eq!(
+                sections[0]["roles"],
+                serde_json::json!(["merge_target"]),
+                "{json}"
+            );
+            assert_eq!(
+                sections[0]["heading"],
+                heading.trim_start_matches("## "),
+                "{json}"
+            );
+            assert!(sections[0]["line"].as_u64().unwrap_or(0) > 0, "{json}");
+            assert!(sections[0]["lines"].as_array().unwrap().len() >= 2);
+            assert_eq!(
+                sections[0]["created"],
+                destination == "@db#future-work"
+                    || destination == "@db#\"Exact Heading\""
+                    || destination == "@db#new-ideas",
+                "{json}"
+            );
         } else {
             assert!(source.contains("merged into [[db#^"), "{source}");
+            let blocks = json["task_blocks"].as_array().expect("task blocks");
+            assert_eq!(blocks.len(), 2, "{json}");
+            assert_eq!(blocks[0]["roles"], serde_json::json!(["merge_target"]));
+            if destination == "@db+upgrade#new-ideas" {
+                assert!(
+                    blocks[0]["lines"].as_array().unwrap().iter().any(|line| {
+                        line["text"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .contains("NEW IDEAS")
+                            && line["change"] == "added"
+                    }),
+                    "{json}"
+                );
+            }
+            assert!(json.get("section_blocks").is_none(), "{json}");
         }
     }
 }
@@ -1042,6 +1136,28 @@ fn transfer_merge_later_items_use_staged_bytes_and_failure_rolls_back() {
         false,
     );
     assert_success(&output);
+    let json = json_body(&output);
+    let target = json["task_blocks"]
+        .as_array()
+        .expect("task blocks")
+        .iter()
+        .find(|block| block["block_id"] == "upgrade")
+        .expect("merge target block");
+    assert_eq!(
+        target["roles"],
+        serde_json::json!(["merge_target", "sub_bullet"]),
+        "{json}"
+    );
+    assert!(
+        target["lines"].as_array().unwrap().iter().any(|line| {
+            line["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Follow up")
+                && line["change"] == "added"
+        }),
+        "{json}"
+    );
     let target = fs::read_to_string(vault.join("db.md")).unwrap();
     assert!(target.contains("Try pgbench"), "{target}");
     assert!(target.contains("Follow up"), "{target}");

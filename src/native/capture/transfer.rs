@@ -222,6 +222,14 @@ pub(super) fn plan_transfer_item(
             "Project blocking changed; run bob task reconcile.".to_string(),
         ));
     }
+    let task_block_refs = transfer_task_block_refs(
+        planner,
+        &request.bob_dir,
+        &settings,
+        is_move,
+        &moves,
+        &relation_merge_output,
+    );
     let created = super::plan::date_string(today);
     let kind_label = super::plan::capture_kind_label(&parsed_item.parsed.kind);
     let route_label = dest_display.clone();
@@ -331,9 +339,123 @@ pub(super) fn plan_transfer_item(
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
-        task_block_refs: Vec::new(),
+        task_block_refs,
         project_move_landings: Vec::new(),
     })
+}
+
+/// Build final-state tracker refs for the blocks a transfer moved or merged.
+/// Each staged note is scanned at most once for this item, no matter how many
+/// sources or destinations it contributes.
+fn transfer_task_block_refs(
+    planner: &CaptureBatchPlanner,
+    bob_dir: &Path,
+    settings: &note_tasks::NoteTaskSettings,
+    is_move: bool,
+    moves: &[TransferMoveJson],
+    merge_output: &RelationMergeOutput,
+) -> Vec<TaskBlockRef> {
+    use crate::native::task_merge::MergeOutcome;
+
+    let mut scans: HashMap<PathBuf, note_tasks::NoteTaskScan> = HashMap::new();
+    let mut refs = Vec::new();
+    if is_move {
+        for movement in moves {
+            let Some(block_id) = movement.new_block_id.as_deref() else {
+                continue;
+            };
+            let path = PathBuf::from(&movement.destination_path);
+            let target = bob_dir.join(&path);
+            let Some(text) = planner.peek_text(&target) else {
+                continue;
+            };
+            let scan = scans
+                .entry(target.clone())
+                .or_insert_with(|| note_tasks::scan(&text, settings));
+            let BlockIdLookup::Found(task) = scan.by_block_id(block_id) else {
+                debug_assert!(
+                    false,
+                    "moved task is missing from staged destination"
+                );
+                continue;
+            };
+            refs.push(TaskBlockRef {
+                target,
+                relative_target: movement.destination_path.clone(),
+                route: transfer_route(&path),
+                line: task.line_index,
+                block_id: Some(block_id.to_string()),
+                role: TaskBlockRole::Moved,
+            });
+        }
+        return refs;
+    }
+
+    let merged = merge_output
+        .merges
+        .iter()
+        .filter(|record| record.outcome == MergeOutcome::Merged)
+        .collect::<Vec<_>>();
+    let Some(first) = merged.first() else {
+        return refs;
+    };
+    if first.target.kind != "section"
+        && let Some(block_id) = first.target.block_id.as_deref()
+    {
+        let path = first.target.path.clone();
+        let target = bob_dir.join(&path);
+        if let Some(text) = planner.peek_text(&target) {
+            let scan = scans
+                .entry(target.clone())
+                .or_insert_with(|| note_tasks::scan(&text, settings));
+            if let BlockIdLookup::Found(task) = scan.by_block_id(block_id) {
+                refs.push(TaskBlockRef {
+                    target,
+                    relative_target: super::dependencies::display_relative(
+                        &path,
+                    ),
+                    route: transfer_route(&path),
+                    line: task.line_index,
+                    block_id: Some(block_id.to_string()),
+                    role: TaskBlockRole::MergeTarget,
+                });
+            } else {
+                debug_assert!(
+                    false,
+                    "merge target is missing from staged text"
+                );
+            }
+        }
+    }
+    for record in merged {
+        let path = record.source.path.clone();
+        let target = bob_dir.join(&path);
+        let Some(text) = planner.peek_text(&target) else {
+            continue;
+        };
+        let scan = scans
+            .entry(target.clone())
+            .or_insert_with(|| note_tasks::scan(&text, settings));
+        let BlockIdLookup::Found(task) =
+            scan.by_block_id(&record.source.block_id)
+        else {
+            debug_assert!(false, "merge tombstone is missing from staged text");
+            continue;
+        };
+        refs.push(TaskBlockRef {
+            target,
+            relative_target: super::dependencies::display_relative(&path),
+            route: transfer_route(&path),
+            line: task.line_index,
+            block_id: Some(record.source.block_id.clone()),
+            role: TaskBlockRole::MergeSource,
+        });
+    }
+    refs
+}
+
+fn transfer_route(path: &Path) -> String {
+    path.with_extension("").to_string_lossy().replace('\\', "/")
 }
 
 /// Resolve one transfer route against the staged snapshot's vault
