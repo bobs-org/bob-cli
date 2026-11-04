@@ -5897,6 +5897,11 @@ fn render_temp_pdf_from(
 ) -> Result<RenderReports> {
     let source_path = Path::new(&plan.source);
     let resource_path = source_path.parent().unwrap_or_else(|| Path::new("."));
+    let filter_dir = filters.code_break.parent().ok_or_else(|| {
+        CommandError::new("generic Markdown filter has no parent directory")
+    })?;
+    let (glyph_filter, glyph_table, fallback_font_dir) =
+        prepare_generic_glyph_fallback(filter_dir)?;
     let mut cmd = Command::new(pandoc);
     cmd.arg(source_override.unwrap_or(source_path))
         .arg("-o")
@@ -5927,6 +5932,8 @@ fn render_temp_pdf_from(
         .arg(&filters.return_links)
         .arg("--lua-filter")
         .arg(&filters.code_catalog_report_filter)
+        .arg("--lua-filter")
+        .arg(&glyph_filter)
         .arg("-V")
         .arg("colorlinks=true")
         .arg("-V")
@@ -5957,11 +5964,12 @@ fn render_temp_pdf_from(
         .arg("monofontoptions=Ligatures=NoCommon")
         .arg("-V")
         .arg(format!(
-            "header-includes={PANDOC_HEADER_INCLUDES}\n{}\n{}\n{}\n{}",
+            "header-includes={PANDOC_HEADER_INCLUDES}\n{}\n{}\n{}\n{}\n{}",
             super::return_links::HEADER_INCLUDES,
             super::diagrams::HEADER_INCLUDES,
             super::code_catalog::HEADER_INCLUDES,
-            super::table_layout::HEADER_INCLUDES
+            super::table_layout::HEADER_INCLUDES,
+            generic_glyph_header(&fallback_font_dir),
         ))
         .arg("--metadata")
         .arg(format!("title={}", plan.title))
@@ -6001,6 +6009,8 @@ fn render_temp_pdf_from(
             super::table_layout::REPORT_METADATA_KEY,
             filters.table_layout_report.display()
         ))
+        .arg("--metadata")
+        .arg(format!("bob-glyph-table={}", glyph_table.display()))
         .args(audio_uri.into_iter().flat_map(|uri| {
             ["--metadata".to_string(), format!("bob-listen-uri={uri}")]
         }))
@@ -6047,6 +6057,75 @@ fn render_temp_pdf_from(
             &filters.table_layout_report,
         ),
     })
+}
+
+fn prepare_generic_glyph_fallback(
+    scratch: &Path,
+) -> Result<(PathBuf, PathBuf, PathBuf)> {
+    let glyph_filter = scratch.join("generic-emoji.lua");
+    fs::write(&glyph_filter, include_str!("generic_emoji.lua")).map_err(
+        |error| {
+            CommandError::new(format!(
+                "write generic glyph filter {}: {error}",
+                glyph_filter.display()
+            ))
+        },
+    )?;
+
+    let font_dir = scratch.join("generic-fonts");
+    note_snapshot::fonts::GlyphCoverage::write_fallback_font(&font_dir)
+        .map_err(|error| {
+            CommandError::new(format!(
+                "write generic fallback font in {}: {error}",
+                font_dir.display()
+            ))
+        })?;
+
+    let glyph_table = scratch.join("generic-glyphs.lua");
+    note_snapshot::fonts::GlyphCoverage::new()
+        .and_then(|coverage| coverage.write_glyph_table(&glyph_table))
+        .map_err(|error| {
+            CommandError::new(format!(
+                "write generic glyph table {}: {error}",
+                glyph_table.display()
+            ))
+        })?;
+
+    let glyph_filter = fs::canonicalize(&glyph_filter).map_err(|error| {
+        CommandError::new(format!(
+            "resolve generic glyph filter {}: {error}",
+            glyph_filter.display()
+        ))
+    })?;
+    let glyph_table = fs::canonicalize(&glyph_table).map_err(|error| {
+        CommandError::new(format!(
+            "resolve generic glyph table {}: {error}",
+            glyph_table.display()
+        ))
+    })?;
+    let font_dir = fs::canonicalize(&font_dir).map_err(|error| {
+        CommandError::new(format!(
+            "resolve generic fallback font directory {}: {error}",
+            font_dir.display()
+        ))
+    })?;
+
+    Ok((glyph_filter, glyph_table, font_dir))
+}
+
+fn generic_glyph_header(font_dir: &Path) -> String {
+    let font_path = format!("{}/", font_dir.display());
+    format!(
+        r"\newfontfamily\BobFallbackFont{{NotoEmoji-Regular.ttf}}[Path={{{font_path}}},Ligatures=NoCommon,Scale=1.0]
+\newcommand{{\BobFallbackBegin}}{{\bgroup\BobFallbackFont}}
+\newcommand{{\BobFallbackEnd}}{{\egroup}}
+\newcommand{{\BobMonoGlyphBegin}}{{\bgroup\ttfamily}}
+\newcommand{{\BobMonoGlyphEnd}}{{\egroup}}
+\newcommand{{\BobSansGlyphBegin}}{{\bgroup\sffamily}}
+\newcommand{{\BobSansGlyphEnd}}{{\egroup}}
+\newcommand{{\BobSerifGlyphBegin}}{{\bgroup\rmfamily}}
+\newcommand{{\BobSerifGlyphEnd}}{{\egroup}}"
+    )
 }
 
 /// The dry-run parent line: the resolved `parent    route  (kind · label

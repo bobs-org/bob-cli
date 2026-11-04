@@ -3907,6 +3907,68 @@ fn highlights_create_markdown_text_layer_avoids_hyphen_splits_and_ligatures() {
 }
 
 #[test]
+fn ref_create_markdown_extracts_noto_fallback_glyphs() {
+    let pandoc_available = Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let xelatex_available = Command::new("xelatex")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let pdftotext_available =
+        Command::new("pdftotext").arg("-v").output().is_ok();
+    if !pandoc_available || !xelatex_available || !pdftotext_available {
+        eprintln!(
+            "skipping generic ref glyph extraction test: pandoc, xelatex, and pdftotext are required"
+        );
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-ref-create-glyph-extraction");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    let pdf = temp.path().join("out").join("report.pdf");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &source,
+        "# Glyph report\n\nNoto fallback: 🍅 and cross-face symbol ▸ in prose; `🎲` in inline code.\n",
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-o")
+        .arg(&pdf)
+        .output()
+        .expect("render generic ref PDF with glyphs");
+    assert_success(&output);
+    assert!(pdf.is_file(), "missing rendered PDF: {}", pdf.display());
+
+    let extracted = Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&pdf)
+        .arg("-")
+        .output()
+        .expect("extract generic ref PDF text");
+    assert!(extracted.status.success(), "{extracted:?}");
+    let text = String::from_utf8_lossy(&extracted.stdout);
+    assert!(
+        text.contains("🍅") && text.contains("🎲") && text.contains("▸"),
+        "fallback glyphs must survive PDF text extraction: {text:?}"
+    );
+    assert!(
+        !text.contains('\0') && !text.contains('\u{fffd}'),
+        "fallback glyphs must not become missing-glyph markers: {text:?}"
+    );
+}
+
+#[test]
 fn highlights_create_pdf_url_binds_explicit_audio() {
     let temp = TempDir::new("bob-cli-highlights-create-pdf-audio");
     let vault = temp.path().join("vault");

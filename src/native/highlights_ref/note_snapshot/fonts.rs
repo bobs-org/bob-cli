@@ -170,6 +170,16 @@ impl GlyphCoverage {
         Ok(())
     }
 
+    /// Writes only the Noto fallback face for renderers that retain their own
+    /// body fonts but share the note snapshot's glyph fallback table.
+    pub(crate) fn write_fallback_font(dir: &Path) -> io::Result<()> {
+        fs::create_dir_all(dir)?;
+        fs::write(
+            dir.join("NotoEmoji-Regular.ttf"),
+            print_fonts::NOTO_EMOJI_REGULAR,
+        )
+    }
+
     /// Writes a Lua integer-keyed set of glyphs that require the fallback face,
     /// plus per-role body-font overrides.
     ///
