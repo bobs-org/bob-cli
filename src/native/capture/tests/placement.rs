@@ -392,6 +392,7 @@ fn json_success_shape_is_stable() {
         Vec::new(),
         PullInJson::empty(),
         InboxRouteReport::empty(),
+        crate::native::capture::move_choice::MoveChoiceReport::empty(),
     );
 
     let legacy_json = serde_json::to_string(&result)

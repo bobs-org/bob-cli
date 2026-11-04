@@ -431,6 +431,8 @@ pub(super) struct CaptureResult {
     pub(super) pull_in: PullInJson,
     /// Inbox tasks whose checkbox status changed during this batch.
     pub(super) inbox_route: InboxRouteReport,
+    /// Move-choice report. Present on every success.
+    pub(super) move_choice: super::move_choice::MoveChoiceReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -451,6 +453,7 @@ impl CaptureResult {
         open_notes: Vec<OpenNoteJson>,
         pull_in: PullInJson,
         inbox_route: InboxRouteReport,
+        move_choice: super::move_choice::MoveChoiceReport,
     ) -> Self {
         let item = items
             .first()
@@ -474,6 +477,7 @@ impl CaptureResult {
             open_notes,
             pull_in,
             inbox_route,
+            move_choice,
         }
     }
 }
@@ -1957,6 +1961,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         );
         print_pull_in_hint(result);
         print_inbox_route_hint(result);
+        print_move_choice_report(result);
         return;
     }
 
@@ -1982,6 +1987,94 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     );
     print_pull_in_hint(result);
     print_inbox_route_hint(result);
+    print_move_choice_report(result);
+}
+
+fn print_move_choice_report(result: &CaptureResult) {
+    let Some(slots) = result.move_choice.slots.as_ref() else {
+        return;
+    };
+    let styler = Styler::detect();
+    for slot in slots {
+        if slot.answered {
+            continue;
+        }
+        println!(
+            "- ^^ on line {} asks which of {}'s {} open tasks move in:",
+            slot.item_line, slot.parent, slot.open_count
+        );
+        for row in &slot.rows {
+            let id_part = if let Some(id) = row.block_id.as_deref() {
+                format!(" ^{id}")
+            } else if let Some(mint) = row.mint.as_deref() {
+                format!(" adds ^{mint}")
+            } else {
+                String::new()
+            };
+            let tail = if let Some(lock) = row.locked.as_ref() {
+                format!("moving on line {}", lock.item_line)
+            } else if let Some(reason) = row.disabled_reason.as_deref() {
+                reason.to_string()
+            } else {
+                // `^` consequence suffix after the head, without
+                // duplicating the `adds ^mint` already shown as the ID.
+                let head = format!("Moves into {}", slot.destination);
+                row.choices
+                    .iter()
+                    .find(|c| c.sigil == "^")
+                    .map(|choice| {
+                        let suffix = choice
+                            .consequence
+                            .strip_prefix(&head)
+                            .unwrap_or(choice.consequence.as_str())
+                            .strip_prefix(" · ")
+                            .unwrap_or(
+                                choice
+                                    .consequence
+                                    .strip_prefix(&head)
+                                    .unwrap_or("")
+                                    .trim(),
+                            )
+                            .to_string();
+                        if let Some(mint) = row.mint.as_deref() {
+                            let adds = format!("adds ^{mint}");
+                            if suffix == adds {
+                                return String::new();
+                            }
+                            // Strip a trailing ` · adds ^mint` when other
+                            // suffixes precede it; the ID line already shows it.
+                            if let Some(stripped) =
+                                suffix.strip_suffix(&format!(" · {adds}"))
+                            {
+                                return stripped.to_string();
+                            }
+                            if let Some(stripped) =
+                                suffix.strip_prefix(&format!("{adds} · "))
+                            {
+                                return stripped.to_string();
+                            }
+                        }
+                        suffix
+                    })
+                    .filter(|suffix| !suffix.is_empty())
+                    .map(|suffix| format!("· {suffix}"))
+                    .unwrap_or_default()
+            };
+            let tail = if tail.is_empty() {
+                String::new()
+            } else {
+                format!(" {tail}")
+            };
+            println!(
+                "  {}",
+                styler.dim(&format!(
+                    "{} [{}] {}{}",
+                    row.n, row.status_symbol, row.text, id_part
+                )) + &styler.dim(&tail)
+            );
+        }
+        println!("  {}", styler.dim(super::move_choice::choose_hint()));
+    }
 }
 
 /// Print the complete target run once, immediately before its first
@@ -3595,7 +3688,7 @@ fn print_human_project_note_moves(
         println!(
             "  {}",
             styler.dim(&format!(
-                "hint: '- ^' moves one of {}'s {} open {} into this project",
+                "hint: '- ^' moves one of {}'s {} open {} into this project; '- ^^' lets you choose several",
                 hint.parent, hint.open_count, task_word
             ))
         );
@@ -6487,6 +6580,7 @@ impl CaptureError {
 
     pub(super) fn inbox_route_choice_required(
         report: &InboxRouteReport,
+        move_choice: &super::move_choice::MoveChoiceReport,
     ) -> Self {
         let count = report.candidate_count;
         let task_word = if count == 1 { "task" } else { "tasks" };
@@ -6494,6 +6588,10 @@ impl CaptureError {
         extra.insert(
             "inbox_route".to_string(),
             serde_json::to_value(report).expect("serialize inbox_route"),
+        );
+        extra.insert(
+            "move_choice".to_string(),
+            serde_json::to_value(move_choice).expect("serialize move_choice"),
         );
         Self {
             kind: CaptureErrorKind::Io,

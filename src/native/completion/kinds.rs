@@ -717,6 +717,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "move-in",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "query",
         kind: Kind::FreeText,
     },

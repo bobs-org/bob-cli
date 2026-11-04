@@ -3021,38 +3021,343 @@ fn capture_move_landing_repairs_moved_reports_after_child_edits() {
 }
 
 #[test]
-fn capture_project_note_choice_is_unavailable_until_cli_report() {
-    // Interim cli-grammar refusal: any `- ^^` is write-free refused with
-    // `move_choice_unavailable` until `cli-report` builds the report.
-    // `cli-report` deletes this test.
-    let temp = TempDir::new("bob-cli-choice-unavailable");
+fn capture_project_note_choice_report_lists_rows_and_refuses_real() {
+    // cli-report (MQ5/MQ6): unanswered dry run succeeds with numbered rows;
+    // unanswered real run refuses `move_choice_required` write-free.
+    let temp = TempDir::new("bob-cli-choice-report");
     let vault = temp.path().join("vault");
     let source = vault.join("cash.md");
-    let source_before = "---\ntype: \"[[area]]\"\n---\n- [ ] #task A ^a\n";
+    let source_before = "---\ntype: \"[[area]]\"\n---\n- [ ] #task Alpha ^a\n- [ ] #task Beta ^b\n- [ ] #task Gamma\n";
     write_file(&source, source_before);
-    for dry_run in [true, false] {
-        let output = project_note_move_capture(
-            &vault,
-            "Finish @cash^x@\n- ^^\n",
-            dry_run,
-            None,
-        );
-        assert!(!output.status.success(), "{dry_run:?}");
-        let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim()).expect("choice JSON");
-        assert_eq!(json["ok"], false);
-        assert_eq!(json["code"], "move_choice_unavailable");
-        assert!(
-            json["error"]
-                .as_str()
-                .unwrap()
-                .contains("choosing parent tasks with - ^^ is not available"),
-            "{json}"
-        );
-    }
+
+    let dry = project_note_move_capture(
+        &vault,
+        "Finish @cash^x@\n- ^^\n",
+        true,
+        None,
+    );
+    assert_success(&dry);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("choice JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["move_choice"]["supported"], true);
+    let slot = &json["move_choice"]["slots"][0];
+    assert_eq!(slot["answered"], false);
+    assert_eq!(slot["open_count"], 3);
+    assert_eq!(slot["rows"].as_array().unwrap().len(), 3);
+    assert_eq!(slot["rows"][0]["n"], 1);
+    assert_eq!(slot["rows"][0]["key"], "cash.md#^a");
+    assert_eq!(slot["rows"][2]["mint"], "gamma");
+    assert!(slot["rows"][2]["choices"][0]["consequence"]
+        .as_str()
+        .unwrap()
+        .contains("adds ^gamma"));
+
+    let human = project_note_move_human_capture(
+        &vault,
+        "Finish @cash^x@\n- ^^\n",
+        true,
+    );
+    assert_success(&human);
+    let out = String::from_utf8_lossy(&human.stdout).to_string();
+    assert!(
+        out.contains(
+            "- ^^ on line 2 asks which of cash.md's 3 open tasks move in:"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains(
+            "choose with -m 1,3 (move), -m :2 (move & link), or -m none"
+        ),
+        "{out}"
+    );
+
+    let real = project_note_move_capture(
+        &vault,
+        "Finish @cash^x@\n- ^^\n",
+        false,
+        None,
+    );
+    assert!(!real.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&real).trim()).expect("required JSON");
+    assert_eq!(json["code"], "move_choice_required");
+    assert!(json["move_choice"]["slots"].is_array());
     assert_eq!(
         fs::read_to_string(&source).expect("source unchanged"),
         source_before
     );
     assert!(!vault.join("cash_x.md").exists());
+}
+
+#[test]
+fn capture_project_note_choice_answered_still_unavailable() {
+    // cli-report interim: answered `- ^^` refuses `move_choice_unavailable`
+    // until cli-execute.
+    let temp = TempDir::new("bob-cli-choice-answered");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Alpha ^a\n- [ ] #task Beta ^b\n",
+    );
+    for flag in ["-m", "--move-in"] {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg(flag)
+            .arg("1")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        let output = run_with_stdin(&mut command, "Finish @cash^x@\n- ^^\n");
+        assert!(!output.status.success(), "{flag}");
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("unavailable JSON");
+        assert_eq!(json["code"], "move_choice_unavailable");
+        assert_eq!(json["move_choice"]["slots"][0]["answered"], true);
+    }
+    assert!(!vault.join("cash_x.md").exists());
+}
+
+#[test]
+fn capture_project_note_choice_refusals_are_write_free() {
+    // MQ10/MQ14: unasked, conflict, stale, refused, usage.
+    let temp = TempDir::new("bob-cli-choice-refusals");
+    let vault = temp.path().join("vault");
+    let source = vault.join("cash.md");
+    let before = "---\ntype: \"[[area]]\"\n---\n- [ ] #task Alpha ^a\n- [ ] #task Beta ^b\n";
+    write_file(&source, before);
+
+    // -m without - ^^.
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("-m")
+        .arg("1")
+        .env("BOB_NOW", "2026-09-20 14:31:07")
+        .env("TZ", "UTC0");
+    let output = run_with_stdin(&mut command, "Hello @cash\n");
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("unasked JSON");
+    assert_eq!(json["code"], "move_choice_unasked");
+
+    // Conflict: none + pick, and duplicate row both sigils.
+    for picks in [["none", "1"], ["1", ":1"]] {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run");
+        for pick in picks {
+            command.arg("-m").arg(pick);
+        }
+        command
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        let output = run_with_stdin(&mut command, "Finish @cash^x@\n- ^^\n");
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("conflict JSON");
+        assert_eq!(json["code"], "move_choice_conflict", "{picks:?} {json}");
+    }
+
+    // Usage: -m foo.
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("-m")
+        .arg("foo")
+        .env("BOB_NOW", "2026-09-20 14:31:07")
+        .env("TZ", "UTC0");
+    let output = run_with_stdin(&mut command, "Finish @cash^x@\n- ^^\n");
+    assert!(!output.status.success());
+    // Usage error has no code, but writes nothing.
+    let raw = stdout(&output).trim().to_string();
+    assert!(raw.contains("--move-in pick"), "{raw}");
+
+    // Stale: out-of-range number.
+    let output = {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg("-m")
+            .arg("99")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        run_with_stdin(&mut command, "Finish @cash^x@\n- ^^\n")
+    };
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("stale JSON");
+    assert_eq!(json["code"], "move_choice_stale");
+
+    // Refused: locked row via explicit move in same draft.
+    let output = {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg("-m")
+            .arg("1")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        run_with_stdin(&mut command, "Finish @cash^x@\n- ^a\n- ^^\n")
+    };
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("refused JSON");
+    assert_eq!(json["code"], "move_choice_refused");
+
+    assert_eq!(fs::read_to_string(&source).expect("unchanged"), before);
+    assert!(!vault.join("cash_x.md").exists());
+}
+
+#[test]
+fn capture_project_note_choice_empty_and_locked() {
+    // MQ11/MQ15: empty parent dry ok with warning, real refuses empty.
+    let temp = TempDir::new("bob-cli-choice-empty");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("empty.md"),
+        "---\ntype: \"[[area]]\"\n---\nNo tasks.\n",
+    );
+    let dry = project_note_move_capture(
+        &vault,
+        "Finish @empty^x@\n- ^^\n",
+        true,
+        None,
+    );
+    assert_success(&dry);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("empty dry JSON");
+    assert_eq!(json["ok"], true);
+    assert!(json["warnings"].as_array().unwrap().iter().any(|w| w
+        .as_str()
+        .unwrap_or_default()
+        .contains("no selectable tasks")));
+
+    let real = project_note_move_capture(
+        &vault,
+        "Finish @empty^x@\n- ^^\n",
+        false,
+        None,
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&real).trim()).expect("empty real JSON");
+    assert_eq!(json["code"], "move_choice_empty");
+
+    // All locked: explicit move claims the only row.
+    let temp = TempDir::new("bob-cli-choice-locked");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Alpha ^a\n",
+    );
+    let dry = {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        run_with_stdin(&mut command, "Finish @cash^x@\n- ^a\n- ^^\n")
+    };
+    assert_success(&dry);
+}
+
+#[test]
+fn capture_project_note_choice_name_needs_link() {
+    // MQ16: #name needs a : pick with adds_link.
+    let temp = TempDir::new("bob-cli-choice-name");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Alpha ^a\n- [ ] #task Beta ^b\n",
+    );
+    let day = vault.join("day.md");
+    write_file(&day, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+
+    let dry = project_note_move_capture(
+        &vault,
+        "Finish @cash^x@#admin\n- ^^\n",
+        true,
+        Some(&day),
+    );
+    assert_success(&dry);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("name JSON");
+    assert_eq!(json["move_choice"]["slots"][0]["name_needs_link"], true);
+
+    let refused = {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg("-m")
+            .arg("1")
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        run_with_stdin(&mut command, "Finish @cash^x@#admin\n- ^^\n")
+    };
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&refused).trim()).expect("unused JSON");
+    assert_eq!(json["code"], "unused_project_note_pomodoro");
+}
+
+#[test]
+fn capture_project_note_choice_unanswered_lists_all_rows() {
+    // MQ19: unanswered preview prints every row, even above 20.
+    let temp = TempDir::new("bob-cli-choice-many");
+    let vault = temp.path().join("vault");
+    let mut parent = String::from("---\ntype: \"[[area]]\"\n---\n");
+    for i in 1..=25 {
+        parent.push_str(&format!("- [ ] #task Task {i:02} ^t{i:02}\n"));
+    }
+    write_file(&vault.join("cash.md"), &parent);
+    let human = project_note_move_human_capture(
+        &vault,
+        "Finish @cash^x@\n- ^^\n",
+        true,
+    );
+    assert_success(&human);
+    let out = String::from_utf8_lossy(&human.stdout).to_string();
+    assert!(out.contains("25 open tasks"), "{out}");
+    for n in 1..=25 {
+        assert!(out.contains(&format!("{n} [ ]")), "{out} missing row {n}");
+    }
+    assert!(out.contains("choose with -m"), "{out}");
 }

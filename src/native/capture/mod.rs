@@ -69,6 +69,7 @@ mod inbox_route;
 mod keep_moving_net;
 mod link_guard;
 mod meet_event_run;
+pub(crate) mod move_choice;
 pub(crate) mod move_consequence;
 mod note_pull;
 mod open_notes;
@@ -333,6 +334,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     {
         return Err(CaptureError::inbox_route_choice_required(
             &batch.inbox_route,
+            &batch.move_choice,
         ));
     }
     append_plan_budget(&request, &mut batch)?;
@@ -371,6 +373,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         open_notes,
         pull_in,
         batch.inbox_route,
+        batch.move_choice,
     );
     result.warnings.extend(hide_failures);
     result.warnings.extend(origin_failures);

@@ -89,20 +89,10 @@ pub(super) fn plan_project_note_item(
         ));
     };
     let mut parsed = parsed;
-    // Interim `cli-grammar` refusal: any `- ^^` is write-free refused until
-    // `cli-report` builds the report. `cli-report` deletes this check and
-    // its test.
-    if parsed
-        .sub_bullets
-        .iter()
-        .any(|sub_bullet| sub_bullet.move_choice.is_some())
-    {
-        return Err(CaptureError::usage_code(
-            "choosing parent tasks with - ^^ is not available in this build \
-yet",
-            "move_choice_unavailable",
-        ));
-    }
+    // `cli-report` builds the batch `move_choice` report after all items
+    // plan (see `plan_batch_move_choice`). The item itself treats `- ^^`
+    // as contributing nothing; answered drafts are refused there with
+    // `move_choice_unavailable` until `cli-execute` splices picks.
     // The grammar rejects a Create `#pomodoro` name with no ` :` task
     // before planning; this guards planners that bypass it. Offer defers
     // the check until after the pre-pick render, so a name is valid when
@@ -3076,6 +3066,7 @@ mod tests {
             forced_sub_bullet_target: None,
             forced_drawer: None,
             inbox_routes: Vec::new(),
+            move_in: None,
             no_clip: false,
             no_ref: false,
             pull_in: None,

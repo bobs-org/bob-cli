@@ -401,7 +401,7 @@ pub(crate) enum MoveIdOutcome {
 pub(crate) struct ProjectTaskPass {
     seen: Vec<(String, usize)>,
     seen_moves: Vec<(String, usize)>,
-    choice_line: Option<usize>,
+    pub(crate) choice_line: Option<usize>,
     pub(crate) has_link: bool,
 }
 

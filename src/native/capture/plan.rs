@@ -13,6 +13,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
     pub(super) task_blocks: Vec<TaskBlockJson>,
     pub(super) inbox_route: InboxRouteReport,
+    pub(super) move_choice: super::move_choice::MoveChoiceReport,
     /// Routed tasks' source→destination landings, in move order. The
     /// block trackers and `open_notes` forward entries through these.
     pub(super) routed_landings: Vec<RoutedTaskMove>,
@@ -304,6 +305,16 @@ pub(super) fn plan_capture_batch_with_config_path(
         &keep_moving_trace,
         &all_project_moves,
     );
+    // Move-choice report (`cli-report`): built from the staged parent,
+    // before pull-in and inbox-route choice refusals. Write-free.
+    let move_choice = super::move_choice::plan_batch_move_choice(
+        request,
+        &parsed_items,
+        &mut planner,
+        today,
+        &mut dependency_ctx,
+        &mut warnings,
+    )?;
     let inbox_route = detect_inbox_routes(
         &planner,
         &request.bob_dir,
@@ -379,6 +390,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         plan_budget: None,
         pomodoro_blocks,
         task_blocks,
+        move_choice,
         inbox_route: applied.report,
         routed_landings: applied.moves,
         template,

@@ -370,6 +370,10 @@ pub(crate) fn render_project_note(
             });
             continue;
         }
+        if group.owner.move_choice.is_some() {
+            // `- ^^` contributes nothing until `cli-execute` splices picks.
+            continue;
+        }
         let owner_body = group.owner.body.trim();
         let (checkbox, bare) = split_leading_checkbox(owner_body);
         let named = group.owner.task_id.as_ref();

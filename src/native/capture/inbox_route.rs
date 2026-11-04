@@ -1240,6 +1240,7 @@ mod tests {
                 selector: "1".to_string(),
                 destination: Some("health".to_string()),
             }],
+            move_in: None,
             no_clip: true,
             no_ref: false,
             pull_in: None,

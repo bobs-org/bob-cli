@@ -548,6 +548,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(format_arg())
         .arg(help_arg())
         .arg(inbox_route_arg())
+        .arg(move_in_arg())
         .arg(no_clip_arg())
         .arg(no_ref_arg())
         .arg(pull_in_arg())
@@ -622,6 +623,17 @@ pub(super) fn inbox_route_arg() -> Arg {
         .action(ArgAction::Append)
         .help(
             "Route an inbox task this capture changes: <N|KEY>=<NOTE> moves it, <N|KEY>= keeps it in its inbox, keep keeps every otherwise unanswered candidate; repeatable",
+        )
+}
+
+pub(super) fn move_in_arg() -> Arg {
+    Arg::new("move-in")
+        .long("move-in")
+        .short('m')
+        .value_name("PICKS")
+        .action(ArgAction::Append)
+        .help(
+            "Answer a - ^^ move choice: none, all, or a comma list of row numbers and keys; a leading : also links; repeatable",
         )
 }
 
@@ -794,6 +806,7 @@ pub(super) struct CaptureRequest {
     pub(super) forced_sub_bullet_target: Option<SubBulletTarget>,
     pub(super) forced_drawer: Option<String>,
     pub(super) inbox_routes: Vec<InboxRoutePick>,
+    pub(super) move_in: Option<super::move_choice::MoveInPicks>,
     pub(super) no_clip: bool,
     pub(super) no_ref: bool,
     pub(super) pull_in: Option<PullInPicks>,
@@ -858,6 +871,19 @@ impl CaptureRequest {
                 })
                 .transpose()?
                 .unwrap_or_default(),
+            move_in: {
+                let values: Vec<super::move_choice::MoveInPicks> = matches
+                    .get_many::<String>("move-in")
+                    .map(|vals| {
+                        vals.map(|raw| {
+                            super::move_choice::parse_move_in_picks(raw)
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                super::move_choice::merge_move_in_picks(values)
+            },
             no_clip: matches.get_flag("no-clip"),
             no_ref: matches.get_flag("no-ref"),
             pull_in: matches

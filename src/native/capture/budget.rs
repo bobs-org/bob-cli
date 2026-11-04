@@ -451,6 +451,7 @@ mod tests {
             forced_sub_bullet_target: None,
             forced_drawer: None,
             inbox_routes: Vec::new(),
+            move_in: None,
             no_clip: true,
             no_ref: true,
             pull_in: None,

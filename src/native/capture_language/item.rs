@@ -2978,7 +2978,7 @@ fn parse_capture_item_masked<'a>(
                 }
             }
         }
-        has_link_task = pass.has_link;
+        has_link_task = pass.has_link || pass.choice_line.is_some();
     }
     if let CaptureKind::ProjectNote {
         pomodoro_name: Some(name),

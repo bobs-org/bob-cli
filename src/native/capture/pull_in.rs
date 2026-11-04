@@ -20,7 +20,11 @@ pub(super) fn plan_with_pull_in(
                 && request.require_pull_in_choice
                 && pull_in.offer_count > 0
             {
-                return Err(choice_required_error(&batch.items, &pull_in));
+                return Err(choice_required_error(
+                    &batch.items,
+                    &pull_in,
+                    &batch.move_choice,
+                ));
             }
             Ok((batch, pull_in))
         }
@@ -319,6 +323,7 @@ fn unknown_pick_error(
 fn choice_required_error(
     items: &[PlannedCaptureItem],
     pull_in: &PullInJson,
+    move_choice: &super::move_choice::MoveChoiceReport,
 ) -> CaptureError {
     let offers: Vec<TaskCompleteUnblockedJson> = items
         .iter()
@@ -358,6 +363,10 @@ fn choice_required_error(
     extra.insert(
         "offers".to_string(),
         serde_json::to_value(&offers).expect("serialize offers"),
+    );
+    extra.insert(
+        "move_choice".to_string(),
+        serde_json::to_value(move_choice).expect("serialize move_choice"),
     );
     // The refusal's human output renders keep-moving groups with their
     // folded counts, so carry the engine's folds for the offered projects.

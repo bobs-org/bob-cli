@@ -99,6 +99,7 @@ pub(crate) fn link_existing_task(
             plan_budget: None,
             pomodoro_blocks: Vec::new(),
             task_blocks: Vec::new(),
+            move_choice: super::move_choice::MoveChoiceReport::empty(),
             inbox_route: InboxRouteReport::empty(),
             routed_landings: Vec::new(),
             template: None,
