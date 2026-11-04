@@ -595,7 +595,9 @@ pub(crate) struct EditorItemParse {
     /// owns, in source order, across every one of its lines. `rewrite_draft`
     /// uses the length of this list to tell "no local marker" from "one" from
     /// "more than one" (Rule A6), and the sole entry's span to build the
-    /// absorb-local-marker edit (Rule A1).
+    /// absorb-local-marker edit (Rule A1). A target run keeps one entry per
+    /// member sharing a single route slot, so Rule A6 reports the run's
+    /// non-absorbable-marker notice instead of staying silent.
     pub(crate) local_destination_markers: Vec<LocalDestinationMarker>,
     /// Where this item's first-level bullets land, when a bullet-start `#`
     /// would name a drawer there. Drives bullet drawer completion.

@@ -1206,3 +1206,39 @@ fn a_cursor_on_a_type_marker_requests_task_type_completion() {
     assert_eq!(leading.query, "");
     assert_eq!(leading.replacement, (0, 4));
 }
+
+#[test]
+fn target_run_members_and_inner_edge_fragments_complete() {
+    // Every run member completes through its own route and block ID, and an
+    // `@`-fragment at the run's inner edge extends the run once completed.
+    let routes = field("@work+a @de", "@work+a @de".len()).expect("routes");
+    assert_eq!(routes.context, CompletionContext::Route);
+    assert_eq!(routes.query, "de");
+
+    let task = field("@work+a @dev+", "@work+a @dev+".len()).expect("task");
+    assert_eq!(task.context, CompletionContext::Task);
+    assert_eq!(task.route.as_deref(), Some("dev"));
+
+    let drawer =
+        field("@work+a @dev+b#re", "@work+a @dev+b#re".len()).expect("drawer");
+    assert_eq!(drawer.context, CompletionContext::Drawer);
+    assert_eq!(drawer.route.as_deref(), Some("dev"));
+
+    let colon = field("@work+a @dev:", "@work+a @dev:".len()).expect("colon");
+    assert_eq!(colon.context, CompletionContext::PomodoroBlockId);
+    assert_eq!(colon.route.as_deref(), Some("dev"));
+
+    let trailing_route =
+        field("Called Morgan @wo @dev+b", "Called Morgan @wo".len())
+            .expect("trailing routes");
+    assert_eq!(trailing_route.context, CompletionContext::Route);
+    assert_eq!(trailing_route.query, "wo");
+
+    let trailing_drawer =
+        field("note @work+a @dev+b#re", "note @work+a @dev+b#re".len())
+            .expect("trailing drawer");
+    assert_eq!(trailing_drawer.context, CompletionContext::Drawer);
+
+    // Mid-line prose stays literal, even beside a run shape.
+    assert_eq!(field("Discuss @de later", "Discuss @de".len()), None);
+}

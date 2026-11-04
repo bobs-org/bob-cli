@@ -670,3 +670,24 @@ fn bullet_menu_human_output_shows_the_title_line_only() {
     assert!(text.contains("REQUIREMENTS  2 notes  · task"), "{text}");
     assert!(!text.contains("\n  - "), "{text}");
 }
+
+#[test]
+fn run_members_complete_and_bullet_menu_keeps_first_members_drawers() {
+    let temp = TempDir::new("bob-cli-run-complete-wire");
+    let vault = drawer_vault(&temp);
+
+    // Any run member completes through its own route and block ID: the
+    // second member's drawer fragment offers that member's drawers.
+    let draft = "@foo+bar @foo+plain#";
+    let json = complete(&temp, &vault, draft);
+    assert_eq!(json["context"], "drawer");
+
+    // The bullet drawer menu below a note-less run keeps offering the first
+    // member's drawers, matching the singleton `@foo+bar` menu (titles and
+    // target match; `cursor_after` shifts with the longer run draft).
+    let single = complete(&temp, &vault, "@foo+bar\n- #");
+    let run = complete(&temp, &vault, "@foo+bar @foo+plain\n- #");
+    assert_eq!(run["context"], "drawer");
+    assert_eq!(run["target"], single["target"]);
+    assert_eq!(shape(&run), shape(&single));
+}

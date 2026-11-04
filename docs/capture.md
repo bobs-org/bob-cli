@@ -7742,7 +7742,10 @@ In Bob Mac Capture, Undo immediately after a successful `@route:id+` or
 leading markers, a trailing marker before later body text, a trailing marker
 on an authored child line, and one item in a blank-line batch are eligible
 wherever the shared grammar already recognizes that token as the item's
-destination. Route and ID spelling, surrounding whitespace, CRLF,
+destination. A token that, once switched, becomes a member of a `@route+id`
+target run is also eligible: `@work+a @dev:b+` becomes `@work+a @dev+b`,
+`note @work:a+ @dev+b` becomes `note @work+a @dev+b`, and `@work:a+ @dev+b`
+becomes `@work+a @dev+b`. Route and ID spelling, surrounding whitespace, CRLF,
 schedule/priority/dependency markers, and other items stay byte-for-byte.
 Suffixes already inside the marker (`#name`, `=...`), `@@`, `@!`, standalone
 `^route:id`, `&note:id`, `!note:id`, incomplete or malformed markers,
@@ -7832,10 +7835,9 @@ and for a Pomodoro link it is
 `@@ cannot take a Pomodoro link: leave ^sase:deep-fix on this item, or delete it`.
 `^` items are never rewritten. An item with more than one local marker is also left untouched, with no
 notice, because `bob capture-parse` already reports that duplicate as a
-`duplicate_capture_marker` diagnostic.
-An item with more than one local marker is also left untouched, with no
-notice, because `bob capture-parse` already reports that duplicate as a
-`duplicate_capture_marker` diagnostic.
+`duplicate_capture_marker` diagnostic. The one exception is a `@route+id`
+target run: its members share one route slot, so the run gets the existing
+non-absorbable-marker notice instead of staying silent.
 
 Absorption is an editor typing assist, not a grammar rule: `bob capture`
 still executes exactly the text it is given, so a bare `@@` there is still
@@ -7905,8 +7907,15 @@ completion.
 
 The service itself decides whether completion applies. An unrecognized
 marker, a cursor sitting in plain body text, or a cursor on an `@token` that
-is not the leading or trailing marker on its line all return a successful
-empty result rather than an error. A lone leading `@route` fragment with no
+is neither a member of the line's `@route+id` target run nor the `@`-fragment
+extending that run at its inner edge (right after a leading run, or right
+before a trailing run) all return a successful
+empty result rather than an error. Every run member completes through its own
+route and block ID: `@work+a @de|` completes routes, `@work+a @dev+|`
+completes block IDs in `dev`, `@work+a @dev+b#re|` completes drawers of
+`dev ^b`, `@work+a @dev:|` completes block IDs through the existing `:` path
+(so `+` can rewrite it), `Called Morgan @wo| @dev+b` completes routes, and
+`Discuss @de| later` stays empty. A lone leading `@route` fragment with no
 body text yet is still completed on the parent line, even though
 `bob capture` would leave that exact input literal.
 
@@ -7946,7 +7955,8 @@ names the section (`Adds to ## Requirements`).
 Bullet drawer completion covers the `#` that starts a first-level bullet
 (`- #`, `- #fut`, `- #"FUTURE W`) wherever its bullets land directly under a
 task: a new task, a new project note, or a note-less `@route+id` (the
-[multi-note form](#several-notes-at-once)). The field's
+[multi-note form](#several-notes-at-once)), or a note-less `@route+id @route+id`
+target run (which offers the first member's drawers). The field's
 `replacement` covers the whole shortcut, `#` through its end, and every row's
 `replacement` is the bare ALL-CAPS title (`FUTURE WORK`), never `#slug`. A row
 is valid only when committing that literal title (an exact resolution, like any

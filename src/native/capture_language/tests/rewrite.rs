@@ -758,3 +758,59 @@ fn rewrite_draft_separator_toggle_leaves_type_markers_intact() {
     let rewrite = rewrite_draft(raw, Some(raw.len()));
     assert_eq!(rewrite.text, raw);
 }
+
+#[test]
+fn rewrite_draft_switches_a_token_that_becomes_a_run_member() {
+    // Each token, once switched, joins a target run: the switch is allowed
+    // even though the stripped form is not the line's single marker. The
+    // cursor sits right after the trigger being switched, which is at the
+    // end of the line for trailing tokens and mid-line for leading ones.
+    let trailing = "@work+a @dev:b+";
+    let rewrite = switch_at(trailing);
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "@work+a @dev+b");
+    assert_eq!(rewrite.cursor, Some("@work+a @dev+b".len()));
+    assert_eq!(parse_for_editor(&rewrite.text).targets.len(), 2);
+
+    for (raw, cursor, expected, expected_cursor) in [
+        (
+            "note @work:a+ @dev+b",
+            "note @work:a+".len(),
+            "note @work+a @dev+b",
+            "note @work+a".len(),
+        ),
+        (
+            "@work:a+ @dev+b",
+            "@work:a+".len(),
+            "@work+a @dev+b",
+            "@work+a".len(),
+        ),
+    ] {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::SwitchBlockIdSeparator),
+            "{raw}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw}");
+        assert_eq!(rewrite.cursor, Some(expected_cursor), "{raw}");
+        let parsed = parse_for_editor(&rewrite.text);
+        assert_eq!(parsed.targets.len(), 2, "{raw}: {parsed:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_reports_a_run_for_bare_at_at() {
+    // A target run shares one route slot, so `@@` gets the existing
+    // non-absorbable notice instead of Rule A6's silent no-op.
+    let raw = "@work+a @dev+b @@";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+    assert_eq!(rewrite.notices.len(), 1, "{:?}", rewrite.notices);
+    assert!(
+        rewrite.notices[0].contains("cannot take an existing task destination"),
+        "{}",
+        rewrite.notices[0]
+    );
+}

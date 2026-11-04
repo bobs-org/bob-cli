@@ -655,3 +655,60 @@ fn capture_complete_and_rewrite_ignore_starts() {
         assert_eq!(json["text"], text, "{text}: {json}");
     }
 }
+
+#[test]
+fn capture_rewrite_switches_a_token_that_becomes_a_run_member() {
+    for (draft, cursor, expected) in [
+        ("@work+a @dev:b+", "@work+a @dev:b+".len(), "@work+a @dev+b"),
+        (
+            "note @work:a+ @dev+b",
+            "note @work:a+".len(),
+            "note @work+a @dev+b",
+        ),
+        ("@work:a+ @dev+b", "@work:a+".len(), "@work+a @dev+b"),
+    ] {
+        let output = bob_command()
+            .arg("capture-rewrite")
+            .arg("-c")
+            .arg(cursor.to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .output()
+            .expect("run capture-rewrite");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("rewrite JSON");
+        assert_eq!(json["changed"], true, "{draft}: {json}");
+        assert_eq!(json["text"], expected, "{draft}: {json}");
+        assert_eq!(json["rule"], "switch_block_id_separator", "{draft}");
+    }
+}
+
+#[test]
+fn capture_rewrite_reports_a_run_for_bare_at_at() {
+    let draft = "@work+a @dev+b @@";
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run capture-rewrite");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("rewrite JSON");
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], draft, "{json}");
+    let notices = json["notices"].as_array().expect("notices");
+    assert_eq!(notices.len(), 1, "{json}");
+    assert!(
+        notices[0]
+            .as_str()
+            .expect("notice")
+            .contains("existing task"),
+        "{json}"
+    );
+}

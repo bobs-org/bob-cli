@@ -1553,7 +1553,7 @@ pub(crate) fn completion_field_at(
     tokens = stripped;
     extract_terminal_markers(&mut tokens);
 
-    let index = completion_marker_index(&tokens, leading)?;
+    let index = completion_marker_index(&tokens, leading, cursor)?;
     let token = tokens[index];
     if cursor < token.start || cursor > token.end {
         return None;
@@ -2244,10 +2244,63 @@ pub(super) fn has_previous_first_level_authored_item(
 /// `@route` fragment with no body text yet is still the token a user is
 /// actively completing, even though `bob capture` would leave it literal.
 /// `leading` is only ever set for the parent (first) physical line.
+///
+/// Target runs generalize the singleton choice: any member of the run phase
+/// `grammar` selects completes, plus the `@`-token that extends a run at its
+/// inner edge (the token right after a leading run, or right before a
+/// trailing run). Per-token field parsing already uses the token's own route
+/// and block ID, so the run only decides *which* token the cursor owns.
 pub(super) fn completion_marker_index(
     tokens: &[Token<'_>],
     leading: bool,
+    cursor: usize,
 ) -> Option<usize> {
+    if let Some(run) =
+        super::target_runs::select_target_run(tokens, leading, true)
+    {
+        for member in &run.members {
+            if cursor >= member.start && cursor <= member.end {
+                return Some(member.token_index);
+            }
+        }
+        // An `@`-shaped neighbor at the run's inner edge extends the run
+        // once completed: after a leading run, or before a trailing run.
+        // Whole-line runs cover every token, so neither edge applies there
+        // unless the run is a single member with room on one side (handled
+        // by the position checks below).
+        if matches!(
+            run.position,
+            super::target_runs::TargetRunPosition::Leading
+        ) && let Some(last) = run.members.last()
+        {
+            let next = last.token_index + 1;
+            if next < tokens.len()
+                && let Some(token) = tokens.get(next)
+                && token.text.starts_with('@')
+                && cursor >= token.start
+                && cursor <= token.end
+            {
+                return Some(next);
+            }
+        }
+        if matches!(
+            run.position,
+            super::target_runs::TargetRunPosition::Trailing
+        ) && let Some(first) = run.members.first()
+            && first.token_index > 0
+        {
+            let prev = first.token_index - 1;
+            if let Some(token) = tokens.get(prev)
+                && token.text.starts_with('@')
+                && cursor >= token.start
+                && cursor <= token.end
+            {
+                return Some(prev);
+            }
+        }
+        // A run owns this line: body text and middle tokens stay literal.
+        return None;
+    }
     if leading
         && let Some(first) = tokens.first()
         && classify_editor_token(first).is_some()

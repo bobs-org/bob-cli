@@ -104,8 +104,8 @@ two-space nested authored line only completes its own trailing marker. A \
 cursor on a blank separator row returns an empty success. The \
 service decides whether completion applies at all: an unrecognized marker, \
 a cursor in plain body text, a cursor on an authored line's indentation or \
-bullet marker itself, an orphaned nested line, or a cursor on a token in the middle of a line all return a \
-successful empty result rather than an error.\n\n\
+bullet marker itself, an orphaned nested line, or a cursor on a middle token that is neither a member of the line's `@route+id` target run nor the `@`-fragment extending that run at its inner edge all return a \
+successful empty result rather than an error. Every member of a target run completes through its own route and block ID, and the `@`-fragment right after a leading run or right before a trailing run extends that run once completed.\n\n\
 Route completion covers a bare '@', a still-typing '@fragment', and the \
 missing route portion of '@^...', '@+...', '@:...', and '@#...', plus the route \
 component of a '@@' or '@@fragment' declaration anywhere in the draft. Replacement \

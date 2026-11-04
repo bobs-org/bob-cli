@@ -180,8 +180,23 @@ fn absorb_bare_declaration(
                 };
             }
             // Rule A6: two or more local markers already put the draft in a
-            // duplicate-marker error state that `capture-parse` reports.
-            _ => return unchanged_rewrite(raw_text, cursor, Vec::new()),
+            // duplicate-marker error state that `capture-parse` reports. A
+            // target run is the one exception: its members share one route
+            // slot, so the run gets the existing non-absorbable-marker
+            // notice instead of the silent no-op.
+            _ => {
+                let item = &item_outcomes[item_index].item;
+                if !item.targets.is_empty()
+                    && let Some(marker) = item.local_destination_markers.first()
+                {
+                    return unchanged_rewrite(
+                        raw_text,
+                        cursor,
+                        vec![non_absorbable_marker_notice(marker, item)],
+                    );
+                }
+                return unchanged_rewrite(raw_text, cursor, Vec::new());
+            }
         }
     }
 
@@ -374,6 +389,9 @@ fn switch_block_id_separator(
         stripped,
         separator,
         sealed,
+        trigger_char,
+        route,
+        id,
     ) {
         return None;
     }
@@ -506,6 +524,9 @@ fn candidate_selects_plain_marker(
     stripped: &str,
     separator: char,
     sealed: bool,
+    trigger: char,
+    route_part: &str,
+    id_part: &str,
 ) -> bool {
     let Some((_, route, block_id, _)) = plain_block_id_parts(stripped) else {
         return false;
@@ -574,6 +595,41 @@ fn candidate_selects_plain_marker(
                         && span.start == start
                 });
                 return project_task && link == (separator == ':');
+            }
+            // A token that, once switched, becomes a member of a target run
+            // is eligible, even though the stripped form is not the line's
+            // single selected marker. Build the switched draft (same byte
+            // length: one separator char replaces another) and ask the
+            // editor's run probe whether the switched token joins a run.
+            {
+                let switched_marker = if sealed {
+                    format!("@{route_part}{trigger}{id_part}@")
+                } else {
+                    format!("@{route_part}{trigger}{id_part}")
+                };
+                let mut switched = String::with_capacity(candidate.len());
+                switched.push_str(candidate.get(..start).unwrap_or(""));
+                switched.push_str(&switched_marker);
+                switched.push_str(candidate.get(end..).unwrap_or(""));
+                let switched_end = start + switched_marker.len();
+                let switched_draft = split_capture_draft(&switched);
+                for switched_item in &switched_draft.items {
+                    let contains = switched_item.lines.iter().any(|line| {
+                        line.raw.start <= start && switched_end <= line.raw.end
+                    });
+                    if !contains {
+                        continue;
+                    }
+                    let (run, _) =
+                        super::item::find_editor_target_run(switched_item);
+                    if let Some(run) = run
+                        && run.selection.members.iter().any(|member| {
+                            member.start == start && member.end == switched_end
+                        })
+                    {
+                        return true;
+                    }
+                }
             }
             // Type markers are transparent to the toggle: mask them so a
             // neighboring `#<type>` never blocks an otherwise plain marker.
