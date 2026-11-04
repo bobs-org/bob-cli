@@ -132,12 +132,29 @@ pub(crate) fn project_note_basename(route: &str, block_id: &str) -> String {
 /// keeps controlling the field.
 pub(crate) fn format_created_timestamp(now: NaiveDateTime) -> String {
     const FORMAT: &str = "%Y-%m-%dT%H:%M:%S%z";
+    format_timestamp_with_format(now, FORMAT)
+}
+
+/// Format the minute-precision `captured` stamp (`YYYY-MM-DDTHH:mm±ZZZZ`)
+/// from the same naive local datetime, with the same offset resolution as
+/// `format_created_timestamp` so `created` and `captured` always agree on
+/// offsets (including ambiguous times and DST gaps).
+pub(crate) fn format_captured_timestamp(now: NaiveDateTime) -> String {
+    const FORMAT: &str = "%Y-%m-%dT%H:%M%z";
+    format_timestamp_with_format(now, FORMAT)
+}
+
+/// Shared offset resolution for a caller-supplied `strftime` format.
+pub(crate) fn format_timestamp_with_format(
+    now: NaiveDateTime,
+    format: &str,
+) -> String {
     match Local.from_local_datetime(&now) {
-        LocalResult::Single(datetime) => datetime.format(FORMAT).to_string(),
+        LocalResult::Single(datetime) => datetime.format(format).to_string(),
         LocalResult::Ambiguous(earliest, _) => {
-            earliest.format(FORMAT).to_string()
+            earliest.format(format).to_string()
         }
-        LocalResult::None => gap_offset_timestamp(now, FORMAT),
+        LocalResult::None => gap_offset_timestamp(now, format),
     }
 }
 
@@ -157,7 +174,12 @@ fn gap_offset_timestamp(now: NaiveDateTime, format: &str) -> String {
         .and_then(|offset| offset.from_local_datetime(&now).single())
         .map(|resolved| resolved.format(format).to_string())
         .unwrap_or_else(|| {
-            format!("{}{FALLBACK_SUFFIX}", now.format("%Y-%m-%dT%H:%M:%S"))
+            let base_format = if format.contains("%S") {
+                "%Y-%m-%dT%H:%M:%S"
+            } else {
+                "%Y-%m-%dT%H:%M"
+            };
+            format!("{}{FALLBACK_SUFFIX}", now.format(base_format))
         })
 }
 
@@ -705,6 +727,35 @@ mod tests {
         );
         assert_eq!(first, "2026-09-20T14:31:07+0000");
         assert_eq!(later, "2026-09-21T09:00:00+0000");
+    }
+
+    #[test]
+    fn captured_timestamp_is_minute_precision_with_matching_offset() {
+        pin_utc();
+        let now = test_now();
+        let captured = format_captured_timestamp(now);
+        let created = format_created_timestamp(now);
+        assert_eq!(captured, "2026-09-20T14:31+0000");
+        // Same `Local` resolution, so `created` and `captured` agree on
+        // offsets; the minute stamp is the created prefix without seconds.
+        assert!(created.starts_with("2026-09-20T14:31:"));
+        assert_eq!(&created[16..19], ":07");
+        assert_eq!(&captured[16..], "+0000");
+        assert_eq!(&created[19..], "+0000");
+    }
+
+    #[test]
+    fn captured_timestamp_uses_shared_format_helper() {
+        pin_utc();
+        let now = test_now();
+        assert_eq!(
+            format_timestamp_with_format(now, "%Y-%m-%dT%H:%M%z"),
+            format_captured_timestamp(now)
+        );
+        assert_eq!(
+            format_timestamp_with_format(now, "%Y-%m-%dT%H:%M:%S%z"),
+            format_created_timestamp(now)
+        );
     }
 
     #[test]

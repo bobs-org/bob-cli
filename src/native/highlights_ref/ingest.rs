@@ -26,7 +26,7 @@ use super::io::vault_relative_path_value;
 use super::listen::{ListenCommand, ListenError, ListenOutput, ListenValues};
 use super::model::MarkerValue;
 use super::model::{CommandError, Config};
-use super::note::current_local_date;
+use super::note::capture_clock;
 use super::stamp::{
     compose_marker, plan_default_target, stamp_and_install,
     DefaultTargetIdentity, PdfInfo, TargetPlan,
@@ -912,9 +912,17 @@ fn ingest_pdf_url_route(
     progress: Option<&dyn Fn(&str)>,
     listen: Option<&ListenCommand>,
 ) -> Result<IngestOutcome, IngestError> {
-    let captured = current_local_date();
+    let clock = capture_clock();
     let pdf_plan = super::pdf_target::plan_pdf_url(
-        url, downloaded, None, None, None, None, &captured, progress,
+        url,
+        downloaded,
+        None,
+        None,
+        None,
+        None,
+        &clock.stamp,
+        &clock.date,
+        progress,
     )
     .map_err(command_error)?;
     let identity = DefaultTargetIdentity::Url {
@@ -1007,7 +1015,7 @@ fn ingest_arxiv_route(
     progress: Option<&dyn Fn(&str)>,
     listen: Option<&ListenCommand>,
 ) -> Result<IngestOutcome, IngestError> {
-    let captured = current_local_date();
+    let clock = capture_clock();
     let scratch =
         super::workdir::ScratchDir::create("ingest").map_err(command_error)?;
     let dest = scratch.path().join("arxiv.pdf");
@@ -1046,7 +1054,7 @@ fn ingest_arxiv_route(
         None,
         metadata.as_ref(),
         &dest,
-        &captured,
+        &clock.stamp,
         progress,
     )
     .map_err(command_error)?;
@@ -1202,7 +1210,7 @@ fn ingest_article_route(
     let workdir =
         super::workdir::ScratchDir::create("ingest").map_err(command_error)?;
     let out_pdf = workdir.path().join("render.pdf");
-    let captured = current_local_date();
+    let clock = capture_clock();
     let (table_layout, table_prose_words) =
         super::create::table_layout_settings().map_err(command_error)?;
     let client = ClipAdapterClient::resolve().map_err(|failure| {
@@ -1217,7 +1225,7 @@ fn ingest_article_route(
         workdir.path().to_string_lossy().into_owned(),
         out_pdf.to_string_lossy().into_owned(),
         false,
-        captured.clone(),
+        clock.date.clone(),
         MetadataOverrides::default(),
         super::clip_adapter::TablesSettings {
             layout: table_layout,
@@ -1241,7 +1249,7 @@ fn ingest_article_route(
             format!(
                 "{}_{}",
                 url.host.replace('.', "_"),
-                captured.replace('-', "")
+                clock.date.replace('-', "")
             )
         });
     let title = extracted_title
@@ -1283,7 +1291,7 @@ fn ingest_article_route(
                 "published",
                 MarkerValue::String(published.clone().unwrap_or_default()),
             ),
-            ("captured", MarkerValue::String(captured.clone())),
+            ("captured", MarkerValue::String(clock.stamp.clone())),
         ],
     )
     .map_err(command_error)?;

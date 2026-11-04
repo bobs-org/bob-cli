@@ -324,14 +324,15 @@ queued, finished, dropped, unknown), modern before legacy, `next` before
 `ready` within queued, row date newest first with undated last, then
 title. `--limit` applies after filtering and ordering.
 
-The `added` date uses this precedence: frontmatter `captured`, the date
-part of frontmatter `created`, a zorg `source_block` date, then (with
-`-g`) the Git birth date. `added_source` is `captured`, `created`,
-`zorg_block`, or `git`. `added_at` is the most precise instant known on
-that `added` day: a full offset-bearing `created` value supplies it when
-its own-offset date matches `added`, including when `captured` wins the
-date precedence. Date-only `created` values, mismatched dates, and zorg
-dates have no `added_at`.
+The `added` date uses this precedence: the date part of frontmatter
+`captured`, the date part of frontmatter `created`, a zorg `source_block`
+date, then (with `-g`) the Git birth date. `added_source` is `captured`,
+`created`, `zorg_block`, or `git`. `added_at` is the most precise instant
+known on that `added` day: a full offset-bearing `created` value supplies
+it when its own-offset date matches `added`, including when `captured`
+wins the date precedence; otherwise a minute-precision `captured` stamp
+(`YYYY-MM-DDTHH:mm±ZZZZ`) supplies `added_at`. Date-only `created`
+values, mismatched dates, and zorg dates have no `added_at`.
 
 `-g/--git-dates` uses a rename-following file-birth pass to fill missing
 `added` and `added_at` for every modern row, including v2 rows. A separate

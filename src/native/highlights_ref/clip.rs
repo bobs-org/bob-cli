@@ -12,9 +12,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::note::capture_clock;
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use super::{
-    compose_marker, current_local_date, plan_default_target, plan_exact_output,
+    compose_marker, plan_default_target, plan_exact_output,
     stamp_and_install_with, stamp_and_install_with_listen, CommandError,
     Config, DefaultTargetIdentity, MarkerValue, PdfInfo, ScratchDir,
     TargetPlan, TargetWorkflow,
@@ -350,7 +351,10 @@ pub(super) fn capture_article(
         Some(path) => Some(path.clone()),
     };
     let out_pdf = workdir.path().join("render.pdf");
-    let captured = current_local_date();
+    // One clock read per capture: the adapter request and fallback stem
+    // stay date-only, while the marker and printed `captured:` use the
+    // minute-precision stamp from the same read.
+    let clock = capture_clock();
     let overrides = MetadataOverrides {
         title: options.title.clone(),
         author: options.author.clone(),
@@ -362,7 +366,7 @@ pub(super) fn capture_article(
         workdir.path().to_string_lossy().into_owned(),
         out_pdf.to_string_lossy().into_owned(),
         options.dry_run,
-        captured.clone(),
+        clock.date.clone(),
         overrides,
         options.tables.clone(),
     );
@@ -402,7 +406,7 @@ pub(super) fn capture_article(
                 format!(
                     "{}_{}",
                     web_url.host.replace('.', "_"),
-                    captured.replace('-', "")
+                    clock.date.replace('-', "")
                 )
             }),
     };
@@ -465,7 +469,7 @@ pub(super) fn capture_article(
                 "published",
                 MarkerValue::String(published.clone().unwrap_or_default()),
             ),
-            ("captured", MarkerValue::String(captured.clone())),
+            ("captured", MarkerValue::String(clock.stamp.clone())),
         ],
     )?;
     // The fetched identity is guarded again: a reread re-resolves its
@@ -588,7 +592,7 @@ pub(super) fn capture_article(
             &title,
             &author,
             &published,
-            &captured,
+            &clock.stamp,
             &response,
             audio.as_ref().or(listen_display_audio.as_ref()),
             &legacy,
@@ -785,7 +789,7 @@ pub(super) fn capture_article(
     if let Some(published) = &published {
         println!("published: {published}");
     }
-    println!("captured: {captured}");
+    println!("captured: {}", clock.stamp);
     println!("source_url: {}", web_url.cleaned);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
@@ -877,7 +881,7 @@ pub(super) fn capture_article_overwrite(
         Some(path) => Some(path.clone()),
     };
     let out_pdf = workdir.path().join("render.pdf");
-    let captured = current_local_date();
+    let clock = capture_clock();
     let overrides = MetadataOverrides {
         title: options.title.clone(),
         author: options.author.clone(),
@@ -889,7 +893,7 @@ pub(super) fn capture_article_overwrite(
         workdir.path().to_string_lossy().into_owned(),
         out_pdf.to_string_lossy().into_owned(),
         options.dry_run,
-        captured.clone(),
+        clock.date.clone(),
         overrides,
         options.tables.clone(),
     );
@@ -949,7 +953,7 @@ pub(super) fn capture_article_overwrite(
             "published",
             MarkerValue::String(published.clone().unwrap_or_default()),
         ),
-        ("captured", MarkerValue::String(captured.clone())),
+        ("captured", MarkerValue::String(clock.stamp.clone())),
     ];
     marker_extras.append(&mut carried);
     let marker = compose_marker(

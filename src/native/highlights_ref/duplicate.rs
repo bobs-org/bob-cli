@@ -224,7 +224,7 @@ impl CapturedCopy {
             parts.push(label);
         }
         if let Some(captured) = &self.captured {
-            parts.push(format!("captured {captured}"));
+            parts.push(format!("captured {}", captured_date_part(captured)));
         }
         parts.join(&format!(" {sep} "))
     }
@@ -259,10 +259,24 @@ fn sort_copies(copies: &mut [CapturedCopy]) {
 
 fn compare_captured(a: &CapturedCopy, b: &CapturedCopy) -> std::cmp::Ordering {
     match (&a.captured, &b.captured) {
-        (Some(left), Some(right)) => right.cmp(left),
+        (Some(left), Some(right)) => captured_date_part(left)
+            .cmp(captured_date_part(right))
+            .reverse()
+            .then_with(|| right.cmp(left)),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn captured_date_part(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.len() >= 10
+        && chrono::NaiveDate::parse_from_str(&trimmed[..10], "%Y-%m-%d").is_ok()
+    {
+        &trimmed[..10]
+    } else {
+        trimmed
     }
 }
 
@@ -803,5 +817,55 @@ mod tests {
             "{formatted}"
         );
         assert_eq!(formatted.matches("hint:").count(), 2, "{formatted}");
+    }
+
+    #[test]
+    fn captured_refusal_renders_date_part_only() {
+        let refusal = AlreadyCaptured::new(
+            "Title",
+            vec![copy(
+                "ref/papers/a.md",
+                Some("read"),
+                3,
+                Some("2026-10-16T12:00-0400"),
+                false,
+            )],
+            vec![],
+        );
+        let plain = refusal.render(&Styler::plain());
+        assert!(
+            plain.contains("captured 2026-10-16"),
+            "refusal shows the date part: {plain}"
+        );
+        assert!(
+            !plain.contains("12:00"),
+            "refusal never shows the minute stamp: {plain}"
+        );
+    }
+
+    #[test]
+    fn captured_compare_orders_by_date_then_full_value() {
+        let old = copy("ref/papers/a.md", None, 0, Some("2026-10-16"), false);
+        let stamped = copy(
+            "ref/papers/b.md",
+            None,
+            0,
+            Some("2026-10-16T12:00-0400"),
+            false,
+        );
+        let newer = copy(
+            "ref/papers/c.md",
+            None,
+            0,
+            Some("2026-10-16T13:00-0400"),
+            false,
+        );
+        // Same day: fuller values order newest first, and any same-day
+        // stamp still beats the bare date-only value.
+        assert_eq!(
+            compare_captured(&newer, &stamped),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(compare_captured(&stamped, &old), std::cmp::Ordering::Less);
     }
 }

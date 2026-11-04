@@ -556,10 +556,12 @@ to a private scratch `stamped.pdf`, verifies the marker round-trips and
 the page count is unchanged, and only then atomically installs the target.
 A local source file is never modified.
 
-URL routes stamp `source_url` (cleaned URL, or `https://arxiv.org/abs/<id>`
-with version), `author`, `published` (arXiv first-version date), `captured`
-(local `YYYY-MM-DD`), and always `id` (the stem). Local PDFs stamp `id`
-only with `-i` (with `-N`, `-i` embeds the name).
+Every route stamps `captured` as the local capture time
+(`YYYY-MM-DDTHH:mm±ZZZZ`, minute precision). URL routes also stamp
+`source_url` (cleaned URL, or `https://arxiv.org/abs/<id>` with version),
+`author`, `published` (arXiv first-version date), and always `id` (the
+stem). Local PDFs stamp `captured` and `id` (`-i` embeds the name; with
+`-N`, `-i` embeds the name).
 
 A local PDF inside `lib/` or `xlib/` with a marker is already captured:
 `already captured; bob ref sync <PDF> re-syncs it` plus the
@@ -884,7 +886,7 @@ audio: /home/bryan/bob/xlib/papers/attention_is_all_you_need.mp3 (from --listen)
 title: Attention Is All You Need
 author: Ashish Vaswani et al.
 published: 2017-06-12
-captured: 2026-10-06
+captured: 2026-10-06T12:00-0400
 status: ready
 parent: sase
 id: attention_is_all_you_need

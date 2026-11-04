@@ -1018,13 +1018,16 @@ fn capture_and_install(
     classify_parts(&urls, &scratch)?;
 
     let client = ClipAdapterClient::resolve()?;
-    let captured = super::current_local_date();
+    // One clock read per capture: adapter requests and the compose payload
+    // stay date-only, while the marker and printed `captured:` use the
+    // minute-precision stamp from the same read.
+    let clock = super::note::capture_clock();
     let parts = capture_parts(
         &client,
         &urls,
         scratch.path(),
         options.dry_run,
-        &captured,
+        &clock.date,
     )?;
     // A reread keeps its family's title: the title fallback uses the
     // family root, not the allocated `__vN` stem, so every reading of
@@ -1078,6 +1081,7 @@ fn capture_and_install(
             &overlap,
             audio.as_ref(),
             listen_flow.as_ref(),
+            &clock.stamp,
         )?;
         return Ok(());
     }
@@ -1106,7 +1110,7 @@ fn capture_and_install(
             title: derived.title.clone(),
             author: derived.author.clone(),
             published: derived.published.clone(),
-            captured: captured.clone(),
+            captured: clock.date.clone(),
         },
         compose_dir.to_string_lossy().into_owned(),
         composed_pdf.to_string_lossy().into_owned(),
@@ -1146,7 +1150,7 @@ fn capture_and_install(
     .map_err(with_nothing_written)?;
 
     let marker =
-        collection_marker(&options, &plan, &urls, &derived, &captured)?;
+        collection_marker(&options, &plan, &urls, &derived, &clock.stamp)?;
     let info = PdfInfo {
         title: Some(derived.title.clone()),
         author: derived.author.clone(),
@@ -1280,7 +1284,7 @@ fn capture_and_install(
         &compose,
         &composed_pdf,
         audio.as_ref(),
-        &captured,
+        &clock.stamp,
         page_count,
         listen_flow.as_ref(),
     )?;
@@ -1316,9 +1320,9 @@ fn capture_and_install_overwrite(
     let mut scratch = ScratchDir::create("collection-overwrite")?;
     classify_parts(&urls, &scratch)?;
     let client = ClipAdapterClient::resolve()?;
-    let captured = super::current_local_date();
+    let clock = super::note::capture_clock();
     let parts =
-        capture_parts(&client, &urls, scratch.path(), false, &captured)?;
+        capture_parts(&client, &urls, scratch.path(), false, &clock.date)?;
     let selection = options
         .overwrite()
         .expect("overwrite options retain their selected family");
@@ -1360,7 +1364,7 @@ fn capture_and_install_overwrite(
             title: derived.title.clone(),
             author: derived.author.clone(),
             published: derived.published.clone(),
-            captured: captured.clone(),
+            captured: clock.date.clone(),
         },
         compose_dir.to_string_lossy().into_owned(),
         composed_pdf.to_string_lossy().into_owned(),
@@ -1970,8 +1974,9 @@ fn print_dry_run(
     overlap: &OverlapCheck,
     audio: Option<&super::companion::AudioCopyPlan>,
     listen_flow: Option<&super::listen::ListenFlow>,
+    captured_stamp: &str,
 ) -> Result<(), CommandError> {
-    let captured = super::current_local_date();
+    let captured = captured_stamp;
     println!(
         "{} would create Highlights-ready PDF from {} web articles",
         styler.success_prefix(true),
@@ -2015,7 +2020,7 @@ fn print_dry_run(
             );
         }
     }
-    let marker = collection_marker(options, plan, urls, derived, &captured)?;
+    let marker = collection_marker(options, plan, urls, derived, captured)?;
     println!("marker:");
     print!("{marker}");
     super::create::print_create_intake_preview(

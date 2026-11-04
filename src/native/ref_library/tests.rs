@@ -529,6 +529,52 @@ fn added_at_uses_a_matching_created_instant() {
 }
 
 #[test]
+fn added_uses_captured_date_part_with_stamp_fallback() {
+    let fields = |lines: &[&str]| {
+        let raw = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        super::added_date(&ParsedFrontmatter::parse(&raw))
+    };
+
+    // Minute stamp supplies `added` as its date part and `added_at` from
+    // the stamp when `created` does not match.
+    assert_eq!(
+        fields(&["captured: '2026-10-16T12:00-0400'"]),
+        (
+            Some("2026-10-16".to_string()),
+            Some("captured".to_string()),
+            Some("2026-10-16T12:00:00-04:00".to_string()),
+        )
+    );
+    // A matching `created` instant still wins over the stamp fallback.
+    assert_eq!(
+        fields(&[
+            "captured: '2026-10-16T12:00-0400'",
+            "created: '2026-10-16T09:12:44-0400'",
+        ]),
+        (
+            Some("2026-10-16".to_string()),
+            Some("captured".to_string()),
+            Some("2026-10-16T09:12:44-04:00".to_string()),
+        )
+    );
+    // Date-only rows keep their current values: no stamp fallback.
+    assert_eq!(
+        fields(&[
+            "captured: '2026-10-16'",
+            "created: '2026-10-17T09:12:44-0400'",
+        ]),
+        (
+            Some("2026-10-16".to_string()),
+            Some("captured".to_string()),
+            None,
+        )
+    );
+}
+
+#[test]
 fn top_level_note_has_no_status_type_or_tracker() {
     let index = fixture_index();
     let row = row(&index, "ref/toplevel_note.md");

@@ -1193,6 +1193,7 @@ fn preflight_before_parent(
                 matches.get_one::<String>("author").map(String::as_str),
                 matches.get_one::<String>("published").map(String::as_str),
                 None,
+                None,
             ) {
                 Ok(plan) => plan,
                 Err(_) => return Ok(CaptureOutcome::Fresh),
@@ -1490,6 +1491,7 @@ fn check_pdf_stamp_before_parent(
         matches.get_one::<String>("title").map(String::as_str),
         matches.get_one::<String>("author").map(String::as_str),
         matches.get_one::<String>("published").map(String::as_str),
+        None,
         None,
     )
     .ok()?;
@@ -1902,7 +1904,8 @@ pub(super) fn prepare_local_overwrite_with_source(
     source: OverwriteSourcePolicy<'_>,
 ) -> Result<(OverwritePreflight, OverwriteRequest, bool)> {
     let member = selection.family.selected_member();
-    let date = super::current_local_date();
+    let clock = super::note::capture_clock();
+    let date = clock.date;
     let replacing = replacing_audio(options);
     let mut request = overwrite_request(options, None);
     match &source {
@@ -1995,7 +1998,7 @@ pub(super) fn stamp_overwrite_source(
         options.explicit_status.as_deref(),
         existing.as_ref().map(|marker| marker.status.as_str()),
     );
-    let captured = super::current_local_date();
+    let captured = super::note::capture_clock().stamp;
     let mut extras = extra_fields;
     // `keep_user_fields = keep`: carry the old aliases, topics, and
     // research into the replacement marker whenever the new capture does
@@ -2265,7 +2268,7 @@ fn overwrite_markdown(
         source_url: None,
         source_note: None,
         source_markdown: Some(markdown.clone()),
-        captured: Some(super::current_local_date()),
+        captured: Some(super::note::capture_clock().stamp),
         id: Some(plan.member.stem.clone()),
         marker: String::new(),
         audio: None,
@@ -2427,7 +2430,7 @@ fn overwrite_vault_note(
             source_url: None,
             source_note: Some(source_note.clone()),
             source_markdown: Some(snapshot.source_markdown.clone()),
-            captured: Some(super::current_local_date()),
+            captured: Some(super::note::capture_clock().stamp),
             id: Some(plan.member.stem.clone()),
             marker: String::new(),
             audio: None,
@@ -2748,7 +2751,12 @@ fn create_vault_note_route(
     listen: Option<&super::listen::ListenCommand>,
     source_display: &str,
 ) -> Result<()> {
-    let snapshot_date = bob_env::current_datetime().date();
+    // One clock read per capture: the snapshot date and the marker stamp
+    // come from the same `BOB_NOW`-pinned read.
+    let now = bob_env::current_datetime();
+    let snapshot_date = now.date();
+    let clock_stamp =
+        super::super::capture_project_note::format_captured_timestamp(now);
     let settings =
         crate::native::task_status_hooks::read_tasks_settings(&config.bob_dir);
     let parent = options
@@ -2863,6 +2871,7 @@ fn create_vault_note_route(
         author.as_deref(),
         published.as_deref(),
         Some(&source_note),
+        Some(&clock_stamp),
         false,
     )?;
     let audio = plan_audio_copy(
@@ -2887,7 +2896,7 @@ fn create_vault_note_route(
         source_url: None,
         source_note: Some(source_note),
         source_markdown: Some(snapshot.source_markdown.clone()),
-        captured: None,
+        captured: Some(clock_stamp),
         id,
         marker,
         audio,
@@ -3070,6 +3079,9 @@ fn create_snapshot_plan(
         println!("audio: none");
     }
     println!("title: {}", plan.title);
+    if let Some(captured) = &plan.captured {
+        println!("captured: {captured}");
+    }
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
     if let Some(id) = &plan.id {
@@ -3225,6 +3237,9 @@ fn print_snapshot_plan(
         println!("audio: none");
     }
     println!("title: {}", plan.title);
+    if let Some(captured) = &plan.captured {
+        println!("captured: {captured}");
+    }
     println!("status: {}", options.status);
     let parent_line = snapshot
         .parent
@@ -4128,6 +4143,9 @@ fn create_markdown_plan(
         println!("audio_link: {uri}");
     }
     println!("title: {}", plan.title);
+    if let Some(captured) = &plan.captured {
+        println!("captured: {captured}");
+    }
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
     if let Some(id) = &plan.id {
@@ -4195,14 +4213,21 @@ fn create_local_pdf_route(
         );
     }
     pdf_target_mod::check_local_pdf_identity(config, source)?;
-    let pdf_plan = pdf_target_mod::plan_local_pdf(
+    let clock = super::note::capture_clock();
+    let mut pdf_plan = pdf_target_mod::plan_local_pdf(
         &canonical,
         options.name.as_deref(),
         options.title.as_deref(),
         options.author.as_deref(),
         options.published.as_deref(),
         Some(&pdf_progress),
+        Some(&clock.stamp),
     )?;
+    // `plan_local_pdf` stamps `captured` from the caller's clock read so
+    // the marker and the printed `captured:` line share one value.
+    if pdf_plan.captured.is_none() {
+        pdf_plan.captured = Some(clock.stamp.clone());
+    }
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
     if let Some(selection) = options.overwrite() {
@@ -4368,6 +4393,9 @@ fn create_local_pdf_route(
     if let Some(published) = &pdf_plan.published {
         println!("published: {published}");
     }
+    if let Some(captured) = &pdf_plan.captured {
+        println!("captured: {captured}");
+    }
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
     if let Some(id) = &id {
@@ -4409,7 +4437,7 @@ fn overwrite_pdf_url(
     )?;
     let library_pdf = config.bob_dir.join(&plan.pdf_path);
     pdf_target_mod::refuse_marked_pdf(&downloaded, Some(&library_pdf))?;
-    let captured = super::current_local_date();
+    let clock = super::note::capture_clock();
     let pdf_plan = pdf_target_mod::plan_pdf_url(
         &url,
         &downloaded,
@@ -4417,7 +4445,8 @@ fn overwrite_pdf_url(
         options.title.as_deref(),
         options.author.as_deref(),
         options.published.as_deref(),
-        &captured,
+        &clock.stamp,
+        &clock.date,
         Some(&pdf_progress),
     )?;
     let title = pdf_plan.title.clone();
@@ -4486,7 +4515,8 @@ fn create_pdf_url_route(
             &selection,
         );
     }
-    let captured = super::current_local_date();
+    let clock = super::note::capture_clock();
+    let captured = clock.stamp.clone();
     let pdf_plan = pdf_target_mod::plan_pdf_url(
         &url,
         &downloaded,
@@ -4494,7 +4524,8 @@ fn create_pdf_url_route(
         options.title.as_deref(),
         options.author.as_deref(),
         options.published.as_deref(),
-        &captured,
+        &clock.stamp,
+        &clock.date,
         Some(&pdf_progress),
     )?;
     let ref_type =
@@ -4750,7 +4781,7 @@ fn overwrite_arxiv(
         );
         return Ok(());
     }
-    let captured = super::current_local_date();
+    let clock = super::note::capture_clock();
     let (metadata, warning) = super::arxiv::fetch_metadata(
         &paper,
         scratch.path(),
@@ -4800,7 +4831,7 @@ fn overwrite_arxiv(
         options.published.as_deref(),
         metadata.as_ref(),
         &dest,
-        &captured,
+        &clock.stamp,
         Some(&pdf_progress),
     )?;
     let title = pdf_plan.title.clone();
@@ -4860,7 +4891,8 @@ fn create_arxiv_route(
             config, paper, url, scratch, options, listen, &selection,
         );
     }
-    let captured = super::current_local_date();
+    let clock = super::note::capture_clock();
+    let captured = clock.stamp.clone();
     let (metadata, warning) = super::arxiv::fetch_metadata(
         &paper,
         scratch.path(),
@@ -4902,7 +4934,7 @@ fn create_arxiv_route(
         options.published.as_deref(),
         metadata.as_ref(),
         &dest,
-        &captured,
+        &clock.stamp,
         Some(&pdf_progress),
     )?;
     let ref_type =
@@ -5400,6 +5432,9 @@ fn plan_markdown(
     } else {
         None
     };
+    // One clock read per capture: the marker stamp and the plan's
+    // `captured` come from the same read.
+    let clock = super::note::capture_clock();
     let marker = compose_markdown_marker(
         &options.status,
         &options.parent,
@@ -5408,6 +5443,7 @@ fn plan_markdown(
         author.as_deref(),
         published.as_deref(),
         None,
+        Some(&clock.stamp),
         false,
     )?;
 
@@ -5429,7 +5465,7 @@ fn plan_markdown(
         source_url: None,
         source_note: None,
         source_markdown: Some(markdown),
-        captured: None,
+        captured: Some(clock.stamp),
         id,
         marker,
         audio,
@@ -5438,8 +5474,9 @@ fn plan_markdown(
 }
 
 /// Compose the Markdown-route page-1 marker. `plan_markdown` previews it
-/// without the key for dry runs; `create_markdown_route` recomposes with
-/// `return_links: true` after a render whose report says links were paired.
+/// with the capture stamp for dry runs; `create_markdown_route` recomposes
+/// with `return_links: true` after a render whose report says links were
+/// paired, reusing the plan's stamp so the two differ only by return links.
 fn compose_markdown_marker(
     status: &str,
     parent: &str,
@@ -5448,6 +5485,7 @@ fn compose_markdown_marker(
     author: Option<&str>,
     published: Option<&str>,
     source_note: Option<&str>,
+    captured: Option<&str>,
     return_links: bool,
 ) -> Result<String> {
     let mut extras: Vec<(&str, MarkerValue)> = Vec::new();
@@ -5462,6 +5500,10 @@ fn compose_markdown_marker(
             FIELD_SOURCE_NOTE,
             MarkerValue::String(source_note.to_string()),
         ));
+    }
+    if let Some(captured) = captured.filter(|value| !value.is_empty()) {
+        extras
+            .push((FIELD_CAPTURED, MarkerValue::String(captured.to_string())));
     }
     if return_links {
         extras.push(("return_links", MarkerValue::Bool(true)));
@@ -5482,6 +5524,8 @@ fn compose_markdown_marker(
 /// `return_links: true` only when the filter report says the render actually
 /// paired at least one link (`Missing` test-double renders, `Invalid`
 /// reports, opt-outs, and link-free documents keep the planned marker).
+/// The recompose reuses the plan's stamp, so planned and stamped markers
+/// differ only by `return_links`.
 fn stamp_marker_for_outcome(
     plan: &CreatePlan,
     options: &CreateOptions,
@@ -5503,6 +5547,7 @@ fn stamp_marker_for_outcome(
         plan.author.as_deref(),
         plan.published.as_deref(),
         plan.source_note.as_deref(),
+        plan.captured.as_deref(),
         true,
     )
 }
@@ -6051,6 +6096,9 @@ fn print_plan(
     if let Some(published) = &plan.published {
         println!("published: {published} (override)");
     }
+    if let Some(captured) = &plan.captured {
+        println!("captured: {captured}");
+    }
     println!("status: {}", options.status);
     print_parent_line(options);
     if let Some(id) = &plan.id {
@@ -6297,6 +6345,124 @@ mod tests {
                 "{unchanged:?} must keep the planned marker"
             );
         }
+    }
+
+    #[test]
+    fn markdown_marker_carries_minute_captured_in_extra_order() {
+        let marker = compose_markdown_marker(
+            "ready",
+            "sase",
+            "Report",
+            Some("report"),
+            Some("Jane Doe"),
+            Some("2026-01-02"),
+            None,
+            Some("2026-10-16T12:00-0400"),
+            false,
+        )
+        .expect("compose marker");
+        let captured_pos = marker
+            .find("- captured: 2026-10-16T12:00-0400")
+            .expect("captured line");
+        let published_pos = marker
+            .find("- published: 2026-01-02")
+            .expect("published line");
+        assert!(
+            published_pos < captured_pos,
+            "captured follows published per MARKER_EXTRA_ORDER: {marker}"
+        );
+        if marker.contains("return_links") {
+            let links_pos =
+                marker.find("return_links").expect("return links position");
+            assert!(
+                captured_pos < links_pos,
+                "captured precedes return_links: {marker}"
+            );
+        }
+        let parsed =
+            parse_marker_with_normalization(&marker).expect("parse marker");
+        assert_eq!(
+            parsed.projection.get("captured"),
+            Some(&MarkerValue::String("2026-10-16T12:00-0400".to_string()))
+        );
+    }
+
+    #[test]
+    fn markdown_recompose_keeps_the_plan_stamp() {
+        let temp = TempDir::new("stamp-marker-keeps-captured");
+        let source = temp.path.join("report.md");
+        fs::write(&source, "# Report\n").expect("write source");
+        let plan = plan_create(&config(&temp.path), &source, &options())
+            .expect("plan");
+        let planned_captured = plan.captured.clone().expect("plan captured");
+        assert!(
+            plan.marker
+                .contains(&format!("- captured: {planned_captured}")),
+            "planned marker carries the plan stamp: {}",
+            plan.marker
+        );
+        let outcome = super::super::return_links::ReportOutcome::Report(
+            super::super::return_links::Report {
+                version: 1,
+                enabled: true,
+                prefix: "bob:ret:".to_string(),
+                paired: 2,
+                targets: 1,
+                untagged: 0,
+                github: 0,
+                dead: Vec::new(),
+                duplicates: Vec::new(),
+            },
+        );
+        let stamped = stamp_marker_for_outcome(&plan, &options(), &outcome)
+            .expect("stamp marker");
+        assert!(
+            stamped.contains(&format!("- captured: {planned_captured}")),
+            "recompose reuses the plan stamp: {stamped}"
+        );
+        assert!(stamped.contains("- return_links: true\n"), "{stamped}");
+        let planned_without_links = plan
+            .marker
+            .replace(&format!("- captured: {planned_captured}\n"), "");
+        let stamped_without_links = stamped
+            .replace(&format!("- captured: {planned_captured}\n"), "")
+            .replace("- return_links: true\n", "");
+        assert_eq!(
+            stamped_without_links, planned_without_links,
+            "planned and stamped markers differ only by return_links"
+        );
+    }
+
+    #[test]
+    fn pdf_marker_carries_minute_captured_in_extra_order() {
+        let pdf_plan = super::super::pdf_target::PdfPlan {
+            stem: "report".to_string(),
+            title: "Report".to_string(),
+            author: Some("Jane Doe".to_string()),
+            published: Some("2026-01-02".to_string()),
+            source_url: Some("https://example.com/paper.pdf".to_string()),
+            captured: Some("2026-10-16T12:00-0400".to_string()),
+            title_source: "pdf info",
+            author_source: Some("pdf info"),
+            published_source: None,
+        };
+        let marker = super::super::pdf_target::compose_pdf_marker(
+            "ready",
+            "sase",
+            &pdf_plan,
+            Some("report"),
+        )
+        .expect("compose pdf marker");
+        let captured_pos = marker
+            .find("- captured: 2026-10-16T12:00-0400")
+            .expect("captured line");
+        let published_pos = marker
+            .find("- published: 2026-01-02")
+            .expect("published line");
+        assert!(
+            published_pos < captured_pos,
+            "captured follows published per MARKER_EXTRA_ORDER: {marker}"
+        );
     }
 
     #[test]

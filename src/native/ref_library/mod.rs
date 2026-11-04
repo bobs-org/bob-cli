@@ -688,10 +688,12 @@ fn annotation_counts(region: Option<&str>) -> (usize, usize, Vec<Diagnostic>) {
     (annotations, comments, diagnostics)
 }
 
-/// The `added` date: `captured`, else the date part of `created`, else the
-/// zorg `source_block` date (`^z-YYMMDD-…` → `20YY-MM-DD`). `added_at`
-/// carries a parsed `created` instant only when its own-offset date matches
-/// the selected `added` day.
+/// The `added` date: the date part of `captured`, else the date part of
+/// `created`, else the zorg `source_block` date (`^z-YYMMDD-…` →
+/// `20YY-MM-DD`). `added_at` carries a parsed `created` instant only when
+/// its own-offset date matches the selected `added` day; when `captured`
+/// supplies `added` and `created` does not match, a minute-precision
+/// `captured` stamp (`%Y-%m-%dT%H:%M%z`) supplies `added_at`.
 fn added_date(
     front: &ParsedFrontmatter,
 ) -> (Option<String>, Option<String>, Option<String>) {
@@ -701,8 +703,13 @@ fn added_date(
         let added_day = date_part(&captured);
         let added_at = created_instant
             .filter(|instant| instant.date_naive().to_string() == added_day)
-            .map(|instant| instant.to_rfc3339_opts(SecondsFormat::Secs, false));
-        return (Some(captured), Some("captured".to_string()), added_at);
+            .map(|instant| instant.to_rfc3339_opts(SecondsFormat::Secs, false))
+            .or_else(|| {
+                parse_captured_instant(&captured).map(|instant| {
+                    instant.to_rfc3339_opts(SecondsFormat::Secs, false)
+                })
+            });
+        return (Some(added_day), Some("captured".to_string()), added_at);
     }
     if let Some(created) = created {
         let added = date_part(&created);
@@ -724,6 +731,13 @@ fn parse_created_instant(value: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(value)
         .or_else(|_| DateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%z"))
         .ok()
+}
+
+/// Parse a minute-precision `captured` stamp (`%Y-%m-%dT%H:%M%z`) for the
+/// `added_at` fallback. Date-only values return `None` so legacy rows keep
+/// their current `added_at`.
+fn parse_captured_instant(value: &str) -> Option<DateTime<FixedOffset>> {
+    DateTime::parse_from_str(value.trim(), "%Y-%m-%dT%H:%M%z").ok()
 }
 
 fn date_part(value: &str) -> String {

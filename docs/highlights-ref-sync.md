@@ -611,9 +611,10 @@ route for note snapshots. `id` is ordinary
 user frontmatter for the basename-derived source identifier and does not
 require `highlights_marker_fields`. Existing `research` values remain legacy
 standard fields for repository-relative Markdown source paths; they round-trip
-without being renamed automatically to `id`. `captured` is the snapshot date
-(`YYYY-MM-DD`) of a web capture; like the other provenance fields it is
-omitted rather than written wrong. `return_links` is stamped `true` by
+without being renamed automatically to `id`. `captured` is the local capture
+time (`YYYY-MM-DDTHH:mm±ZZZZ`, minute precision) stamped on every route;
+readers accept legacy date-only values. Like the other provenance fields it
+is omitted rather than written wrong. `return_links` is stamped `true` by
 `bob ref create` when a Markdown render actually pairs return links, so
 `bob ref sync` knows to keep their tag glyphs and return pills out of synced
 highlight text; it never needs `highlights_marker_fields`.
@@ -631,8 +632,9 @@ notes and notes created after `xlib/` intake — and later syncs preserve the
 authored value verbatim. It never joins the synced projection, marker hash,
 base snapshot, or `highlights_marker_fields` (even a stale opt-in list naming
 it is ignored), and setting it never requires `--write-pdf` / `--write-pdfs`
-or modifies PDF bytes. It differs from `captured` (the `YYYY-MM-DD`
-web-capture snapshot date synced from the marker) and from
+or modifies PDF bytes. It differs from `captured` (the minute-precision
+capture time synced from the marker; the note keeps its own `created`) and
+from
 `highlights_synced_at` (refreshed whenever sidecar highlights rerender).
 Notes created before this field existed gain none on sync; their historical
 creation times are not backfilled. A PDF marker containing `created` is

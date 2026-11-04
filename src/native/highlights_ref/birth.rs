@@ -299,10 +299,21 @@ fn candidate_title(candidate: &RefRow) -> Option<String> {
 }
 
 /// `vM · <captured date>` for a live family member, or bare `vM` when no
-/// captured date is recorded. Labels are display-only; the lineage reader
+/// captured date is recorded. Minute-precision stamps render as their date
+/// part (`v2 · 2026-11-04`); labels are display-only and the lineage reader
 /// never parses them for identity.
 fn member_label(reading: u32, captured: Option<&str>) -> String {
-    match captured.map(str::trim).filter(|date| !date.is_empty()) {
+    match captured
+        .map(str::trim)
+        .filter(|date| !date.is_empty())
+        .map(|date| {
+            date.get(..10)
+                .filter(|prefix| {
+                    chrono::NaiveDate::parse_from_str(prefix, "%Y-%m-%d")
+                        .is_ok()
+                })
+                .unwrap_or(date)
+        }) {
         Some(date) => format!("v{reading} · {date}"),
         None => format!("v{reading}"),
     }
@@ -687,5 +698,15 @@ mod tests {
         assert_eq!(reading.root_stem, "gap");
         let plain = vec!["title: Solo".to_string()];
         assert_eq!(reading_from_note_frontmatter(&plain), None);
+    }
+
+    #[test]
+    fn member_label_renders_stamp_date_part_only() {
+        assert_eq!(
+            member_label(2, Some("2026-10-16T12:00-0400")),
+            "v2 · 2026-10-16"
+        );
+        assert_eq!(member_label(1, Some("2026-10-16")), "v1 · 2026-10-16");
+        assert_eq!(member_label(1, None), "v1");
     }
 }

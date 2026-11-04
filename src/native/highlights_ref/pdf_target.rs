@@ -44,7 +44,9 @@ pub(super) struct PdfPlan {
     pub(super) published_source: Option<&'static str>,
 }
 
-/// Plan a local PDF target.
+/// Plan a local PDF target. `captured_stamp` is the minute-precision
+/// marker stamp (`%Y-%m-%dT%H:%M%z`); `None` leaves `captured` unset for
+/// preflight-only plans that never compose a marker.
 pub(super) fn plan_local_pdf(
     source: &Path,
     name_override: Option<&str>,
@@ -52,6 +54,7 @@ pub(super) fn plan_local_pdf(
     author_override: Option<&str>,
     published_override: Option<&str>,
     progress: Option<&dyn Fn(&str)>,
+    captured_stamp: Option<&str>,
 ) -> Result<PdfPlan> {
     validate_pdf_file(source, progress)?;
     let file_stem = source
@@ -117,7 +120,7 @@ pub(super) fn plan_local_pdf(
         author,
         published,
         source_url: None,
-        captured: None,
+        captured: captured_stamp.map(str::to_string),
         title_source,
         author_source,
         published_source,
@@ -125,6 +128,8 @@ pub(super) fn plan_local_pdf(
 }
 
 /// Plan a PDF-URL target (`downloaded` is the fetched body in scratch).
+/// `captured_stamp` is the minute-precision marker value; `fallback_date`
+/// (`YYYY-MM-DD`) feeds the `<host>_<YYYYMMDD>` fallback stem.
 pub(super) fn plan_pdf_url(
     url: &WebUrl,
     downloaded: &Path,
@@ -132,7 +137,8 @@ pub(super) fn plan_pdf_url(
     title_override: Option<&str>,
     author_override: Option<&str>,
     published_override: Option<&str>,
-    captured: &str,
+    captured_stamp: &str,
+    fallback_date: &str,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<PdfPlan> {
     validate_pdf_file(downloaded, progress)?;
@@ -157,7 +163,7 @@ pub(super) fn plan_pdf_url(
                     format!(
                         "{}_{}",
                         url.host.replace(['.', '-'], "_"),
-                        captured.replace('-', "")
+                        fallback_date.replace('-', "")
                     )
                 }
             }
@@ -202,14 +208,15 @@ pub(super) fn plan_pdf_url(
         author,
         published,
         source_url: Some(url.cleaned.clone()),
-        captured: Some(captured.to_string()),
+        captured: Some(captured_stamp.to_string()),
         title_source,
         author_source,
         published_source,
     })
 }
 
-/// Plan an arXiv target.
+/// Plan an arXiv target. `captured_stamp` feeds the marker; the
+/// `arxiv_<id>` fallback never uses a date.
 pub(super) fn plan_arxiv(
     paper: &ArxivPaper,
     name_override: Option<&str>,
@@ -218,7 +225,7 @@ pub(super) fn plan_arxiv(
     published_override: Option<&str>,
     metadata: Option<&ArxivMetadata>,
     downloaded: &Path,
-    captured: &str,
+    captured_stamp: &str,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<PdfPlan> {
     validate_pdf_file(downloaded, progress)?;
@@ -304,7 +311,7 @@ pub(super) fn plan_arxiv(
         author,
         published,
         source_url: Some(paper.abs_url()),
-        captured: Some(captured.to_string()),
+        captured: Some(captured_stamp.to_string()),
         title_source,
         author_source,
         published_source,

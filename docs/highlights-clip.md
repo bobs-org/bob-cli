@@ -160,11 +160,11 @@ is skipped.
 ## Marker fields and dedupe
 
 Every marker carries `status` (default `ready`), `parent` (required:
-the resolved `-P` route), `title`, `id` (always the file stem), and
-`source_url`.
-It also carries `author`, `published` (`YYYY-MM-DD`), and `captured`
-(`YYYY-MM-DD`, local date) when known; a field is omitted rather than
-written wrong.
+the resolved `-P` route), `title`, `id` (always the file stem),
+`source_url`, and `captured` (the local capture time,
+`YYYY-MM-DDTHH:mm±ZZZZ`, minute precision, always present).
+It also carries `author` and `published` (`YYYY-MM-DD`) when known; a
+field is omitted rather than written wrong.
 
 The dedupe key lowercases the scheme and host, drops a leading `www.` and
 the default port, strips the trailing slash, and sorts the remaining

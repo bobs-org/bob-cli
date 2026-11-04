@@ -678,6 +678,26 @@ pub(super) fn current_local_date() -> String {
     bob_env::current_datetime().format("%Y-%m-%d").to_string()
 }
 
+/// One clock read per capture: the minute-precision `captured` stamp
+/// (`%Y-%m-%dT%H:%M%z`) plus the `YYYY-MM-DD` date from the same read, so
+/// the two never disagree around midnight. `BOB_NOW` still pins the value,
+/// and offsets resolve exactly like `created` (ambiguous times and DST
+/// gaps included).
+pub(super) struct CaptureClock {
+    pub(super) stamp: String,
+    pub(super) date: String,
+}
+
+pub(super) fn capture_clock() -> CaptureClock {
+    let now = bob_env::current_datetime();
+    CaptureClock {
+        stamp: super::super::capture_project_note::format_captured_timestamp(
+            now,
+        ),
+        date: now.format("%Y-%m-%d").to_string(),
+    }
+}
+
 pub(crate) fn configured_path(
     matches: &ArgMatches,
     arg_name: &str,
