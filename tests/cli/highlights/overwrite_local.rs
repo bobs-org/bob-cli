@@ -197,6 +197,7 @@ pub(crate) fn reread_command(
         .arg(&fixture.vault)
         .env("BOB_DIR", &fixture.vault)
         .env("BOB_NOW", FIXED_NOW)
+        .env("TZ", "UTC")
         .env("NO_COLOR", "1")
         .env("HOME", fixture.temp.path().join("home"))
         .env("XDG_STATE_HOME", fixture.temp.path().join("state"))
@@ -238,6 +239,7 @@ fn overwrite_command_with_parent(
         .arg(&fixture.vault)
         .env("BOB_DIR", &fixture.vault)
         .env("BOB_NOW", FIXED_NOW)
+        .env("TZ", "UTC")
         .env("NO_COLOR", "1")
         .env("HOME", fixture.temp.path().join("home"))
         .env("XDG_STATE_HOME", fixture.temp.path().join("state"))
@@ -654,7 +656,7 @@ fn local_pdf_overwrite_replaces_in_place_without_archive() {
     let marker = stdout(&marker);
     assert!(
         marker.contains(&format!("- id: {STEM}\n"))
-            && marker.contains("- captured: 2026-10-16T12:00-0400\n")
+            && marker.contains("- captured: 2026-10-16T12:00+0000\n")
             && marker.contains("- status: ready\n"),
         "replacement keeps the stem id and refreshes captured:\n{marker}"
     );
@@ -1657,7 +1659,7 @@ fn overwrite_same_stem_source_selects_named_member() {
     let v2_marker = stdout(&v2_marker);
     assert!(
         v2_marker.contains("- id: report__v2\n")
-            && v2_marker.contains("- captured: 2026-10-16T12:00-0400\n"),
+            && v2_marker.contains("- captured: 2026-10-16T12:00+0000\n"),
         "v2 keeps its stamp after the named overwrite:\n{v2_marker}"
     );
 

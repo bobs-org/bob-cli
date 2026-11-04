@@ -992,8 +992,9 @@ without force still attaches to the newest reading and `-f -L` narrates
 the new reading. `-f overwrite` on a filed Markdown file, original local
 PDF, same-day vault-note snapshot, or single-URL web capture (article,
 saved HTML, PDF URL, arXiv) replaces that reading in place: the note
-path, stem, id, and reading task stay, companion audio is preserved
-unless `-a` or `-L` (which narrates the replacement) replaces it, and
+path, stem, id, and reading task stay, and `captured` refreshes to the
+overwrite time. Companion audio is preserved unless `-a` or `-L` (which
+narrates the replacement) replaces it, and
 `--no-audio` leaves an existing episode in place. Markdown-rendered and
 web-article overwrites stage, install, and repoint the write-once source
 store inside the same transaction; a PDF URL, arXiv, or local PDF
