@@ -1373,11 +1373,10 @@ pub(crate) fn completion_field_at(
     {
         return Some(field);
     }
-    // Type markers are transparent to field detection: run every claim
-    // below on the offset-preserving masked view, so a neighboring marker
-    // never changes a route completion's replacement range. Masking keeps
-    // byte lengths, so cursor checks and returned ranges still index the
-    // original draft.
+    // Type markers and directives are transparent to route-run detection.
+    // Their specialized completion claims have already run, so mask both
+    // on a same-length view before selecting a run. Returned ranges still
+    // index the original draft.
     let masked_source;
     let masked_item;
     let (item, line) = {
@@ -1391,12 +1390,20 @@ pub(crate) fn completion_field_at(
                 bare_name: false,
             });
         }
-        let occurrences = super::type_marker::collect_item(item);
-        if occurrences.is_empty() {
+        let type_occurrences = super::type_marker::collect_item(item);
+        let directive_occurrences = super::directive::collect_item(item);
+        if type_occurrences.is_empty() && directive_occurrences.is_empty() {
             (item, line)
         } else {
-            masked_source =
-                super::type_marker::masked_source(item, &occurrences);
+            let mut bytes = if type_occurrences.is_empty() {
+                item.source.as_bytes().to_vec()
+            } else {
+                super::type_marker::masked_source(item, &type_occurrences)
+                    .into_bytes()
+            };
+            super::directive::mask_bytes(&mut bytes, &directive_occurrences);
+            masked_source = String::from_utf8(bytes)
+                .expect("completion masking preserves UTF-8");
             masked_item = super::type_marker::masked_item(item, &masked_source);
             let masked_line = masked_item.lines[line_index].raw;
             (&masked_item, masked_line)
@@ -1551,6 +1558,22 @@ pub(crate) fn completion_field_at(
         leading,
     );
     tokens = stripped;
+
+    // Multi-target selection uses the same run-aware terminal extraction
+    // as execution and the editor. Keep the historical singleton stream
+    // below unless this selection actually covers a run or the cursor is
+    // on the token extending its inner edge.
+    let mut run_tokens = tokens.clone();
+    super::target_runs::extract_terminal_markers_crossing_runs(&mut run_tokens);
+    if let Some(index) =
+        completion_target_run_marker_index(&run_tokens, leading, cursor)
+    {
+        let token = run_tokens[index];
+        if cursor >= token.start && cursor <= token.end {
+            return marker_field_at_cursor(&token, cursor);
+        }
+    }
+
     extract_terminal_markers(&mut tokens);
 
     let index = completion_marker_index(&tokens, leading, cursor)?;
@@ -1560,6 +1583,28 @@ pub(crate) fn completion_field_at(
     }
 
     marker_field_at_cursor(&token, cursor)
+}
+
+/// Selects only a multi-member target run or its one inner-edge extension.
+/// A selected singleton continues through the legacy completion scanner so
+/// adding run-aware terminal extraction cannot change its behavior.
+fn completion_target_run_marker_index(
+    tokens: &[Token<'_>],
+    leading: bool,
+    cursor: usize,
+) -> Option<usize> {
+    let run = super::target_runs::select_target_run(tokens, leading, true)?;
+    let marker_index = completion_marker_index(tokens, leading, cursor)?;
+    if run.members.len() >= 2
+        || run
+            .members
+            .first()
+            .is_some_and(|member| member.token_index != marker_index)
+    {
+        Some(marker_index)
+    } else {
+        None
+    }
 }
 
 /// Build the vault-wide parent-task field for the shared terminal-plus

@@ -291,6 +291,77 @@ fn np28_dry_run_parity_and_refusal_paths_are_write_free() {
 }
 
 #[test]
+fn target_runs_and_one_note_pull_keep_capture_order_and_offer_ownership() {
+    for (name, draft, run_first) in [
+        (
+            "run-before-pull",
+            "@cash+a @cash+b Shared note\n\n@sase",
+            true,
+        ),
+        (
+            "run-after-pull",
+            "@sase\n\n@cash+a @cash+b Shared note",
+            false,
+        ),
+    ] {
+        let (_temp, vault, day, _) = fixture("np1");
+        let target_note = vault.join("cash.md");
+        let before_target = "- [ ] #task Alpha ^a\n- [ ] #task Beta ^b\n";
+        fs::write(&target_note, before_target).expect("write target tasks");
+        let before = snapshot(&vault, &day, &["sase.md", "cash.md", "<day>"]);
+
+        let output = run_json(&vault, &day, &["-p", "2"], draft, true);
+        assert_success(&output);
+        let json: Value =
+            serde_json::from_slice(&output.stdout).expect("mixed capture JSON");
+        let captures = json["captures"].as_array().expect("ordered captures");
+        assert_eq!(captures.len(), 3, "{name}: {json}");
+
+        let target_results = if run_first {
+            &captures[0..2]
+        } else {
+            &captures[1..3]
+        };
+        assert_eq!(target_results[0]["kind"], "sub_bullet", "{name}");
+        assert_eq!(target_results[1]["kind"], "sub_bullet", "{name}");
+        assert_eq!(target_results[0]["fanout"]["position"], 1, "{name}");
+        assert_eq!(target_results[1]["fanout"]["position"], 2, "{name}");
+
+        let pull = captures
+            .iter()
+            .find(|capture| capture["kind"] == "note_pull")
+            .expect("one note-pull result");
+        let offers = pull["note_pull"]["successors"]
+            .as_array()
+            .expect("advertised note-pull tasks");
+        assert_eq!(offers.len(), 3, "{name}: {json}");
+        assert_eq!(json["pull_in"]["offer_count"], 3, "{name}: {json}");
+        assert_eq!(json["pull_in"]["picked_count"], 1, "{name}: {json}");
+        assert_eq!(
+            offers
+                .iter()
+                .map(|row| row["offer"]["n"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "{name}: {json}"
+        );
+        let selected = offers
+            .iter()
+            .filter(|row| row["offer"]["selected"] == true)
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1, "{name}: {json}");
+        assert_eq!(selected[0]["block_id"], "next", "{name}: {json}");
+        assert_eq!(selected[0]["offer"]["n"], 2, "{name}: {json}");
+        let keys = offers
+            .iter()
+            .map(|row| row["offer"]["key"].as_str().unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(keys.len(), offers.len(), "{name}: {json}");
+        assert_snapshot_unchanged(&before);
+    }
+}
+
+#[test]
 fn note_pull_human_subset_two_notes_and_mixed_groups() {
     // Subset pick links only the picked row and reports partial selection
     // without the no-pick hint.

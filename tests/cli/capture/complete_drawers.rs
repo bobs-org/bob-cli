@@ -691,3 +691,51 @@ fn run_members_complete_and_bullet_menu_keeps_first_members_drawers() {
     assert_eq!(run["target"], single["target"]);
     assert_eq!(shape(&run), shape(&single));
 }
+
+#[test]
+fn target_run_completion_crosses_schedule_and_clipboard_tokens() {
+    let temp = TempDir::new("bob-cli-run-completion-transparent-markers");
+    let vault = drawer_vault(&temp);
+
+    let task_draft = "@foo+bar s:3 @foo+pl note";
+    let task_cursor = task_draft.find("@foo+pl").unwrap() + "@foo+pl".len();
+    let task = complete_at(&temp, &vault, task_draft, task_cursor);
+    assert_eq!(task["context"], "task", "{task}");
+    assert_eq!(
+        task["replacement"],
+        serde_json::json!({
+            "start": task_draft.find("@foo+pl").unwrap() + "@foo+".len(),
+            "end": task_cursor,
+        }),
+        "{task}"
+    );
+    assert!(
+        task["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["block_id"] == "plain"),
+        "the second member owns its task candidates: {task}"
+    );
+
+    let drawer_draft = "@foo+plain %c @foo+bar#FUT note";
+    let drawer_cursor = drawer_draft.find("#FUT").unwrap() + "#FUT".len();
+    let drawer = complete_at(&temp, &vault, drawer_draft, drawer_cursor);
+    assert_eq!(drawer["context"], "drawer", "{drawer}");
+    assert_eq!(
+        drawer["replacement"],
+        serde_json::json!({
+            "start": drawer_draft.find("#FUT").unwrap(),
+            "end": drawer_cursor,
+        }),
+        "{drawer}"
+    );
+    assert!(
+        drawer["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["title"] == "FUTURE WORK"),
+        "the selected member owns its drawer candidates: {drawer}"
+    );
+}

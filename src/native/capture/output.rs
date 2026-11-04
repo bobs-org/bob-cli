@@ -1976,7 +1976,7 @@ fn print_fanout_summary(items: &[CaptureItemResult], item: &CaptureItemResult) {
         .map(|target| target.marker.as_str())
         .collect::<Vec<_>>()
         .join(" · ");
-    println!("targets  {markers}");
+    println!("{}", Styler::detect().dim(&format!("targets  {markers}")));
 }
 
 fn note_pull_rows(result: &CaptureResult) -> Vec<&TaskCompleteUnblockedJson> {

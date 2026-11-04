@@ -506,11 +506,8 @@ fn validate_fanout_target_group(
                 })?;
         let path_key = std::fs::canonicalize(&absolute)
             .unwrap_or_else(|_| absolute.clone());
-        let resolved_id = task
-            .block_id
-            .as_deref()
-            .unwrap_or(block_id)
-            .to_ascii_lowercase();
+        let resolved_id =
+            task.block_id.as_deref().unwrap_or(block_id).to_string();
         let key = (path_key, resolved_id);
         if let Some(first_marker) = seen.get(&key) {
             let marker = item

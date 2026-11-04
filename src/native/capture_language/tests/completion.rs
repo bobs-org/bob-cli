@@ -471,6 +471,162 @@ fn terminal_markers_do_not_interfere_with_route_completion() {
 }
 
 #[test]
+fn target_run_completion_crosses_transparent_markers_with_source_offsets() {
+    struct Case {
+        draft: &'static str,
+        context: CompletionContext,
+        route: Option<&'static str>,
+        block_id: Option<&'static str>,
+        query: &'static str,
+        component: &'static str,
+    }
+
+    let cases = [
+        Case {
+            draft: "@work+a s:3 @dev+| note",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "s:3 @work+a @dev+b#re| note",
+            context: CompletionContext::Drawer,
+            route: Some("dev"),
+            block_id: Some("b"),
+            query: "re",
+            component: "#re",
+        },
+        Case {
+            draft: "@work+a $1 @dev+| note",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "@work+a %c @dev+| note",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "@work+a #fix @dev+| note",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "@work+a &foo:bar @dev+| note",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "@work+a *foo:bar @dev+| note",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "@work+a ~foo:bar @dev+| note",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "@work+a %c @de| note",
+            context: CompletionContext::Route,
+            route: None,
+            block_id: None,
+            query: "de",
+            component: "de",
+        },
+        Case {
+            draft: "note s:3 @work+| @dev+b",
+            context: CompletionContext::Task,
+            route: Some("work"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "note @work+| %c @dev+b",
+            context: CompletionContext::Task,
+            route: Some("work"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+        Case {
+            draft: "@work+a %c @dev+b @notes+c#req| note",
+            context: CompletionContext::Drawer,
+            route: Some("notes"),
+            block_id: Some("c"),
+            query: "req",
+            component: "#req",
+        },
+        Case {
+            draft: "Parent\n- First child\n- Child note @work+a s:3 @dev+|",
+            context: CompletionContext::Task,
+            route: Some("dev"),
+            block_id: None,
+            query: "",
+            component: "",
+        },
+    ];
+
+    for case in cases {
+        let cursor = case.draft.find('|').expect("cursor marker");
+        let raw = case.draft.replace('|', "");
+        let completion =
+            field(&raw, cursor).unwrap_or_else(|| panic!("{raw:?}"));
+        let expected_start = if case.component.is_empty() {
+            cursor
+        } else {
+            raw.find(case.component).expect("component start")
+        };
+        assert_eq!(completion.context, case.context, "{raw:?}");
+        assert_eq!(completion.route.as_deref(), case.route, "{raw:?}");
+        assert_eq!(completion.block_id.as_deref(), case.block_id, "{raw:?}");
+        assert_eq!(completion.query, case.query, "{raw:?}");
+        assert_eq!(
+            completion.replacement,
+            (expected_start, expected_start + case.component.len()),
+            "{raw:?}"
+        );
+        assert_eq!(
+            &raw[completion.replacement.0..completion.replacement.1],
+            case.component,
+            "{raw:?}"
+        );
+    }
+
+    let raw = "🌱 earlier\n\n@work+a %c @de note";
+    let marker = raw.find("@de").expect("later item marker");
+    let completion = field(raw, marker + 3).expect("later item route");
+    assert_eq!(completion.context, CompletionContext::Route);
+    assert_eq!(completion.query, "de");
+    assert_eq!(completion.replacement, (marker + 1, marker + 3));
+    assert_eq!(
+        &raw[completion.replacement.0..completion.replacement.1],
+        "de"
+    );
+}
+
+#[test]
 fn completion_field_stays_on_unicode_scalar_boundaries() {
     let raw = "caf\u{e9} \u{1f680} @Cash+goog-exit";
     for cursor in (0..=raw.len()).filter(|&index| raw.is_char_boundary(index)) {

@@ -666,6 +666,16 @@ fn capture_rewrite_switches_a_token_that_becomes_a_run_member() {
             "note @work+a @dev+b",
         ),
         ("@work:a+ @dev+b", "@work:a+".len(), "@work+a @dev+b"),
+        (
+            "@work+a %c @dev:b+",
+            "@work+a %c @dev:b+".len(),
+            "@work+a %c @dev+b",
+        ),
+        (
+            "note @work:a+ %c @dev+b",
+            "note @work:a+".len(),
+            "note @work+a %c @dev+b",
+        ),
     ] {
         let output = bob_command()
             .arg("capture-rewrite")

@@ -1985,6 +1985,163 @@ fn capture_project_note_reads_a_chained_destination_as_the_next_parent() {
 }
 
 #[test]
+fn project_moves_and_target_runs_share_staged_task_snapshots() {
+    let source_before = concat!(
+        "---\ntype: \"[[area]]\"\n---\n",
+        "- [ ] #task Alpha ^a\n",
+        "- [ ] #task Beta ^b\n",
+    );
+    let day_before = "## Pomodoros\n- [ ] Work (0900-0930)\n";
+
+    // A move creates cash_x.md only in the planner's staged snapshot. The
+    // following run must resolve both moved tasks there, and dry run must
+    // leave every source byte and destination path untouched.
+    let after = TempDir::new("bob-cli-project-move-then-target-run");
+    let after_vault = after.path().join("vault");
+    let after_source = after_vault.join("cash.md");
+    let after_day = after_vault.join("day.md");
+    write_file(&after_source, source_before);
+    write_file(&after_day, day_before);
+    let after_input = concat!(
+        "Project @cash^x@\n",
+        "- ^a\n",
+        "- ^b\n",
+        "\n",
+        "@cash_x+a @cash_x+b Shared note\n",
+    );
+    let preview = project_note_move_capture(
+        &after_vault,
+        after_input,
+        true,
+        Some(&after_day),
+    );
+    assert_success(&preview);
+    assert_eq!(fs::read(&after_source).unwrap(), source_before.as_bytes());
+    assert_eq!(fs::read(&after_day).unwrap(), day_before.as_bytes());
+    assert!(!after_vault.join("cash_x.md").exists());
+
+    let committed = project_note_move_capture(
+        &after_vault,
+        after_input,
+        false,
+        Some(&after_day),
+    );
+    assert_success(&committed);
+    let after_json: serde_json::Value =
+        serde_json::from_slice(&committed.stdout)
+            .expect("staged target-run JSON");
+    assert_eq!(after_json["captures"].as_array().unwrap().len(), 3);
+    assert_eq!(after_json["captures"][1]["fanout"]["position"], 1);
+    assert_eq!(after_json["captures"][2]["fanout"]["position"], 2);
+    let moved_note = fs::read_to_string(after_vault.join("cash_x.md"))
+        .expect("read moved project note");
+    assert!(moved_note.contains("#task Alpha"), "{moved_note}");
+    assert!(moved_note.contains("#task Beta"), "{moved_note}");
+    assert_eq!(
+        moved_note.matches("- Shared note").count(),
+        2,
+        "{moved_note}"
+    );
+    for id in ["a", "b"] {
+        assert!(
+            after_json["task_blocks"].as_array().unwrap().iter().any(|block| {
+                block["relative_target"] == "cash_x.md"
+                    && block["block_id"] == id
+                    && block["lines"].as_array().unwrap().iter().any(|line| {
+                        line["text"].as_str().unwrap_or_default().contains("Shared note")
+                    })
+            }),
+            "task block ^{id} must resolve through the staged project move: {after_json}"
+        );
+    }
+
+    // A run before the move edits the source snapshot first. The final task
+    // block report must follow those same task identities to cash_x.md, and
+    // the note text must travel with each moved task.
+    let before = TempDir::new("bob-cli-target-run-then-project-move");
+    let before_vault = before.path().join("vault");
+    let before_source = before_vault.join("cash.md");
+    let before_day = before_vault.join("day.md");
+    write_file(&before_source, source_before);
+    write_file(&before_day, day_before);
+    let before_input = concat!(
+        "@cash+a @cash+b Shared note\n",
+        "\n",
+        "Project @cash^x@\n",
+        "- ^a\n",
+        "- ^b\n",
+    );
+    let preview = project_note_move_capture(
+        &before_vault,
+        before_input,
+        true,
+        Some(&before_day),
+    );
+    assert_success(&preview);
+    assert_eq!(fs::read(&before_source).unwrap(), source_before.as_bytes());
+    assert_eq!(fs::read(&before_day).unwrap(), day_before.as_bytes());
+    assert!(!before_vault.join("cash_x.md").exists());
+
+    let committed = project_note_move_capture(
+        &before_vault,
+        before_input,
+        false,
+        Some(&before_day),
+    );
+    assert_success(&committed);
+    let before_json: serde_json::Value =
+        serde_json::from_slice(&committed.stdout)
+            .expect("move after target-run JSON");
+    assert_eq!(before_json["captures"][0]["fanout"]["position"], 1);
+    assert_eq!(before_json["captures"][1]["fanout"]["position"], 2);
+    let moved_note = fs::read_to_string(before_vault.join("cash_x.md"))
+        .expect("read project note after target-run");
+    assert_eq!(
+        moved_note.matches("- Shared note").count(),
+        2,
+        "{moved_note}"
+    );
+    for id in ["a", "b"] {
+        assert!(
+            before_json["task_blocks"].as_array().unwrap().iter().any(|block| {
+                block["relative_target"] == "cash_x.md"
+                    && block["block_id"] == id
+                    && block["lines"].as_array().unwrap().iter().any(|line| {
+                        line["text"].as_str().unwrap_or_default().contains("Shared note")
+                    })
+            }),
+            "task block ^{id} must be remapped to the moved note: {before_json}"
+        );
+    }
+
+    // A later invalid run member rolls back the earlier move and the valid
+    // first member's staged note write as one batch.
+    let failed = TempDir::new("bob-cli-project-move-target-run-rollback");
+    let failed_vault = failed.path().join("vault");
+    let failed_source = failed_vault.join("cash.md");
+    let failed_day = failed_vault.join("day.md");
+    write_file(&failed_source, source_before);
+    write_file(&failed_day, day_before);
+    let failing_input = concat!(
+        "Project @cash^x@\n",
+        "- ^a\n",
+        "- ^b\n",
+        "\n",
+        "@cash_x+a @cash_x+missing Shared note\n",
+    );
+    let rejected = project_note_move_capture(
+        &failed_vault,
+        failing_input,
+        false,
+        Some(&failed_day),
+    );
+    assert!(!rejected.status.success(), "{}", format_output(&rejected));
+    assert_eq!(fs::read(&failed_source).unwrap(), source_before.as_bytes());
+    assert_eq!(fs::read(&failed_day).unwrap(), day_before.as_bytes());
+    assert!(!failed_vault.join("cash_x.md").exists());
+}
+
+#[test]
 fn capture_project_note_child_line_seal_keeps_move_ranges_in_original_text() {
     let temp = TempDir::new("bob-cli-move-child-line-seal-range");
     let vault = temp.path().join("vault");

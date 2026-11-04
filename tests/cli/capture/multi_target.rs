@@ -159,6 +159,113 @@ fn target_run_captures_each_task_in_one_note_and_reports_the_group() {
         "missing target-run header:\n{}",
         format_output(&output)
     );
+    assert!(
+        !stdout(&output).contains('\u{1b}'),
+        "NO_COLOR preserves plain output:\n{}",
+        format_output(&output)
+    );
+
+    let (_temp, vault, day) = setup("bob-cli-capture-multi-target-dim-header");
+    write_file(
+        &vault.join("cash.md"),
+        "- [ ] #task Parent ^parent\n- [ ] #task Child ^child\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@cash+parent @cash+child Shared note")
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_NOW", NOW)
+        .env("CLICOLOR_FORCE", "1")
+        .env_remove("NO_COLOR")
+        .output()
+        .expect("run colored capture");
+    assert_success(&output);
+    assert!(
+        stdout(&output)
+            .contains("\u{1b}[2mtargets  @cash+parent · @cash+child\u{1b}[0m"),
+        "target-run header must use dim styling:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn case_distinct_block_ids_are_distinct_fanout_targets() {
+    let (_temp, vault, day) = setup("bob-cli-capture-multi-target-case-id");
+    let note = vault.join("cash.md");
+    write_file(&note, "- [ ] #task Upper ^A\n- [ ] #task Lower ^a\n");
+
+    let json = capture_json(&vault, &day, "@cash+A @cash+a Shared note");
+    assert_eq!(json["captures"].as_array().unwrap().len(), 2, "{json}");
+    assert_eq!(json["captures"][0]["fanout"]["marker"], "@cash+A");
+    assert_eq!(json["captures"][1]["fanout"]["marker"], "@cash+a");
+    assert_eq!(json["captures"][0]["block_id"], "A", "{json}");
+    assert_eq!(json["captures"][1]["block_id"], "a", "{json}");
+    assert_eq!(
+        fs::read_to_string(&note).expect("read fanout note"),
+        concat!(
+            "- [ ] #task Upper ^A\n",
+            "\t- Shared note\n",
+            "- [ ] #task Lower ^a\n",
+            "\t- Shared note\n",
+        )
+    );
+}
+
+#[test]
+fn duplicate_target_suffixes_still_refuse_without_changing_vault_files() {
+    let (_temp, vault, day) =
+        setup("bob-cli-capture-multi-target-suffix-duplicates");
+    let note = vault.join("cash.md");
+    let before = "- [ ] #task Parent ^parent\n  - REQUIREMENTS\n";
+    write_file(&note, before);
+    let alias = vault.join("alias.md");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(&note, &alias).expect("create task-note alias");
+    }
+    let mut before_files = vec![
+        (note.clone(), fs::read(&note).expect("read task note")),
+        (day.clone(), fs::read(&day).expect("read day note")),
+        (
+            vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+            fs::read(
+                vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+            )
+            .expect("read task settings"),
+        ),
+    ];
+    #[cfg(unix)]
+    before_files.push((alias.clone(), fs::read(&alias).expect("read alias")));
+
+    for draft in [
+        "@cash+parent @cash+parent#requirements Shared note",
+        "@alias+parent#requirements @cash+parent Shared note",
+        "@alias+parent @cash+parent#requirements Shared note",
+    ] {
+        if draft.contains("@alias") {
+            #[cfg(not(unix))]
+            continue;
+        }
+        let output = capture_output(&vault, &day, draft, true, &[]);
+        assert!(!output.status.success(), "duplicate should refuse: {draft}");
+        assert!(
+            format_output(&output).contains("duplicate_capture_target"),
+            "wrong duplicate refusal for {draft}:\n{}",
+            format_output(&output)
+        );
+        for (path, contents) in &before_files {
+            assert_eq!(
+                fs::read(path).expect("read unchanged vault file"),
+                *contents,
+                "duplicate changed {} for {draft}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[test]
