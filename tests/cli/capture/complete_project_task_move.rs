@@ -234,11 +234,45 @@ fn query_ranking_add_block_id_ref_and_colon_consequence() {
     assert_eq!(colon["picker"]["continuation"], "\n- :");
     assert_eq!(
         row(&colon, "Call Morgan Stanley about the 401k")["consequence"],
-        "Moves in · becomes Next · links under ADMIN"
+        "Moves in · keeps its WORK link"
     );
     assert_eq!(
         row(&colon, "Review benefits")["consequence"],
+        "Moves in · keeps its ADMIN link"
+    );
+}
+
+#[test]
+fn move_picker_uses_sticky_lane_and_blocked_status_copy() {
+    let temp = TempDir::new("bob-cli-complete-project-task-move-lanes");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_move_fixture(&vault);
+    let parent = vault.join("cash.md");
+    let mut contents = fs::read_to_string(&parent).expect("parent note");
+    contents.push_str(
+        "- [/] #task Active task ^active\n- [?] #task Blocked task ^blocked\n",
+    );
+    write_file(&parent, &contents);
+
+    let colon_draft = "Create @cash^exit@#admin\n- :";
+    let colon =
+        complete_json(&vault, &day_file, colon_draft, colon_draft.len());
+    assert_eq!(
+        row(&colon, "Active task")["consequence"],
         "Moves in · links under ADMIN"
+    );
+    assert_eq!(
+        row(&colon, "Blocked task")["consequence"],
+        "Moves in · links only if Bob can unblock it"
+    );
+
+    let caret_draft = "Create @cash^exit@\n- ^";
+    let caret =
+        complete_json(&vault, &day_file, caret_draft, caret_draft.len());
+    assert_eq!(
+        row(&caret, "Blocked task")["consequence"],
+        "Moves into cash_exit.md · stays Blocked"
     );
 }
 

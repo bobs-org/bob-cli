@@ -69,6 +69,7 @@ mod inbox_route;
 mod keep_moving_net;
 mod link_guard;
 mod meet_event_run;
+pub(crate) mod move_consequence;
 mod note_pull;
 mod open_notes;
 mod output;

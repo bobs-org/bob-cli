@@ -415,38 +415,37 @@ fn project_move_consequence(
     suggestion: Option<&String>,
     pomodoro: Option<&ActiveTaskPomodoroCandidate>,
 ) -> String {
-    let consequence = if detail.sigil == '^' {
-        let destination =
-            detail.destination.as_deref().unwrap_or("the new note");
-        let mut text = format!("Moves into {destination}");
-        if let Some(name) = pomodoro.and_then(|item| item.name.as_deref()) {
-            text.push_str(&format!(
-                " · its {} link follows",
-                name.to_uppercase()
-            ));
-        }
-        text
-    } else {
-        let mut text = "Moves in".to_string();
-        if status != '*' {
-            text.push_str(" · becomes Next");
-        }
-        if let Some(name) = detail.pomodoro_name.as_deref() {
-            text.push_str(&format!(" · links under {}", name.to_uppercase()));
-        } else {
-            text.push_str(" · links into today's plan");
-        }
-        text
+    use crate::native::capture::move_consequence::{
+        self, LinkGuard, PredictionInput,
     };
+
+    let prediction = move_consequence::predict(&PredictionInput {
+        sigil: detail.sigil,
+        status,
+        destination: detail
+            .destination
+            .clone()
+            .unwrap_or_else(|| "the new note".to_string()),
+        pomodoro_name: detail.pomodoro_name.clone(),
+        today_link: pomodoro.and_then(|item| item.name.clone()),
+        own_scheduled: None,
+        project_starts: detail.project_start.clone(),
+        guard: if status == '?' {
+            LinkGuard::StatusOnly
+        } else {
+            LinkGuard::Link
+        },
+        id_to_add: None,
+    });
     if !requires_block_id {
-        return consequence;
+        return prediction.consequence;
     }
     let mut text = match suggestion {
         Some(suggestion) => format!("Needs an ID first · ⊕ ^{suggestion}"),
         None => "Needs an ID first".to_string(),
     };
     text.push_str(" · ");
-    text.push_str(&consequence);
+    text.push_str(&prediction.consequence);
     text
 }
 

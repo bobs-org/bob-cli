@@ -2320,6 +2320,11 @@ fn capture_project_note_colon_move_drops_local_prerequisite_and_links() {
         1,
         "{json}"
     );
+    assert_eq!(
+        moved["detail"],
+        "drops 1 prerequisite · becomes Next · links into today's plan",
+        "{json}"
+    );
     let note = fs::read_to_string(vault.join("cash_x.md")).expect("new note");
     assert!(note.contains("- [*] #task Blocked"), "{note}");
     assert!(!note.contains("DEPENDS ON"), "{note}");
@@ -2350,7 +2355,7 @@ fn capture_project_note_colon_move_future_schedule_stays_unlinked() {
     assert!(moved["link"].is_null(), "{json}");
     assert_eq!(moved["not_linked"], "project_schedule", "{json}");
     assert_eq!(
-        moved["detail"], "stays unlinked until the project starts",
+        moved["detail"], "stays unlinked until the project starts Sep 23",
         "{json}"
     );
     let note =
@@ -2597,6 +2602,56 @@ fn capture_project_note_colon_move_next_stays_next_and_links() {
     assert_eq!(moved["status_symbol"], "*", "{json}");
     assert!(moved.get("link").is_some(), "{json}");
     assert_eq!(moved["detail"], "links under ADMIN", "{json}");
+}
+
+#[test]
+fn capture_project_note_colon_move_keeps_in_progress_lane() {
+    let temp = TempDir::new("bob-cli-move-colon-in-progress");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        "---\ntype: \"[[area]]\"\n---\n- [/] #task Active task ^a\n",
+    );
+    write_file(&day, "## Pomodoros\n- [ ] () — ADMIN\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@#admin\n- :a\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["status_symbol"], "/", "{json}");
+    assert_eq!(moved["status_name"], "In Progress", "{json}");
+    assert_eq!(moved["detail"], "links under ADMIN", "{json}");
+}
+
+#[test]
+fn capture_project_note_caret_move_reports_blocked_schedule() {
+    let temp = TempDir::new("bob-cli-move-caret-blocked-schedule");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\ntype: \"[[area]]\"\n---\n",
+            "- [?] #task Waiting [scheduled:: 2026-09-23] ^a\n",
+        ),
+    );
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@\n- ^a\n",
+        false,
+        None,
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["status_symbol"], "?", "{json}");
+    assert_eq!(moved["detail"], "stays Blocked until Sep 23", "{json}");
 }
 
 #[test]

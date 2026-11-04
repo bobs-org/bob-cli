@@ -6,6 +6,7 @@ use super::output::{
 };
 use super::*;
 use crate::native::capture_active_tasks;
+use crate::native::task_fields;
 use crate::native::task_move::{
     movable_roots, resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot,
     MovePlacement, MoveRequest, MoveSelector, PlanError,
@@ -962,8 +963,19 @@ yet",
             task.sigil == ':' && task.planned.is_none() && task.link.is_none()
         }) {
             task.not_linked = Some("project_schedule".to_string());
-            task.detail =
-                Some("stays unlinked until the project starts".to_string());
+            task.detail = super::move_consequence::describe(
+                &super::move_consequence::Outcome {
+                    sigil: task.sigil,
+                    previous_status: task.previous_status_symbol,
+                    status: task.status_symbol,
+                    existing_today_link: None,
+                    added_today_link: None,
+                    own_scheduled: None,
+                    project_starts: scheduled.as_deref().map(display_move_date),
+                    guard: super::move_consequence::LinkGuard::Link,
+                    id_added: None,
+                },
+            );
         }
     }
 
@@ -1218,7 +1230,28 @@ yet",
                         .unwrap_or_else(|| "blocked".to_string());
                     let entry = &mut execution.moved_tasks[moved_idx];
                     entry.not_linked = Some(reason);
-                    entry.detail = guard.detail.clone();
+                    entry.detail = super::move_consequence::describe(
+                        &super::move_consequence::Outcome {
+                            sigil: entry.sigil,
+                            previous_status: entry.status_symbol,
+                            status: entry.status_symbol,
+                            existing_today_link: None,
+                            added_today_link: None,
+                            own_scheduled: None,
+                            project_starts: None,
+                            guard:
+                                super::move_consequence::LinkGuard::Consume {
+                                    reason: guard
+                                        .detail
+                                        .as_deref()
+                                        .map(move_guard_reason)
+                                        .unwrap_or_else(|| {
+                                            "blocked".to_string()
+                                        }),
+                                },
+                            id_added: None,
+                        },
+                    );
                     // Sync day for subsequent ops; consumption may have
                     // staged day changes even without a link.
                     if let Ok(current) = planner.read_existing(&day_path) {
@@ -1294,31 +1327,47 @@ yet",
                     &request.bob_dir,
                     final_status,
                 );
-                let status_changed = execution.moved_tasks[moved_idx]
-                    .status_symbol
-                    != final_status;
+                let previous_status =
+                    execution.moved_tasks[moved_idx].status_symbol;
                 // Detail suffix copy (without the `Moves in` prefix).
                 let entry_name = nested_result
                     .pomodoro_link_destination
                     .as_ref()
                     .and_then(|dest| dest.name.clone())
                     .unwrap_or_default();
-                let detail = if status_changed && final_status == '*' {
-                    if pomodoro_name.is_some() {
-                        Some(format!("becomes Next · links under {entry_name}"))
-                    } else {
-                        Some(
-                            "becomes Next · links into today's plan"
-                                .to_string(),
-                        )
-                    }
-                } else if pomodoro_name.is_some() {
-                    Some(format!("links under {entry_name}"))
-                } else if entry_name.is_empty() {
-                    Some("links into today's plan".to_string())
-                } else {
-                    Some(format!("links under {entry_name}"))
-                };
+                let dropped_prerequisites =
+                    nested_result.dropped_dependencies.len();
+                let pulled_forward = nested_result
+                    .previous_task_line
+                    .as_deref()
+                    .and_then(scheduled_field)
+                    .filter(|date| {
+                        scheduled_field(&final_task_line).as_ref() != Some(date)
+                    });
+                let detail = super::move_consequence::describe(
+                    &super::move_consequence::Outcome {
+                        sigil: execution.moved_tasks[moved_idx].sigil,
+                        previous_status,
+                        status: final_status,
+                        existing_today_link: None,
+                        added_today_link: Some(entry_name.clone()),
+                        own_scheduled: None,
+                        project_starts: None,
+                        guard: if dropped_prerequisites > 0 {
+                            super::move_consequence::LinkGuard::DropPrerequisites {
+                                count: dropped_prerequisites,
+                                pulled_forward,
+                            }
+                        } else if let Some(date) = pulled_forward {
+                            super::move_consequence::LinkGuard::PullForward {
+                                date,
+                            }
+                        } else {
+                            super::move_consequence::LinkGuard::Link
+                        },
+                        id_added: None,
+                    },
+                );
                 {
                     let entry = &mut execution.moved_tasks[moved_idx];
                     entry.status_symbol = final_status;
@@ -1558,13 +1607,22 @@ yet",
                         &dest_route_refresh,
                         &task.block_id,
                     );
-                    task.detail = task.planned.as_ref().map(|link| {
-                        if link.entry_name.is_empty() {
-                            "Task Link follows".to_string()
-                        } else {
-                            format!("{} link follows", link.entry_name)
-                        }
-                    });
+                    task.detail = super::move_consequence::describe(
+                        &super::move_consequence::Outcome {
+                            sigil: task.sigil,
+                            previous_status: task.previous_status_symbol,
+                            status: task.status_symbol,
+                            existing_today_link: task
+                                .planned
+                                .as_ref()
+                                .map(|link| link.entry_name.clone()),
+                            added_today_link: None,
+                            own_scheduled: None,
+                            project_starts: None,
+                            guard: super::move_consequence::LinkGuard::Link,
+                            id_added: None,
+                        },
+                    );
                 }
             }
         }
@@ -1986,6 +2044,7 @@ struct ResolvedProjectMove {
     block_id: String,
     draft_range: (usize, usize),
     root: MovableRoot,
+    own_scheduled: Option<String>,
 }
 
 fn project_note_move_hint(
@@ -2094,6 +2153,10 @@ fn resolve_project_note_moves(
                 bob_dir,
             )
         })?;
+        let own_scheduled = contents
+            .lines()
+            .nth(root.line.saturating_sub(1))
+            .and_then(scheduled_field);
         if future_project_date.is_some() && root.status != '?' {
             let date = scheduled.unwrap_or_default();
             let status_name =
@@ -2114,6 +2177,7 @@ fn resolve_project_note_moves(
             block_id: block_id.to_string(),
             draft_range: movement.range,
             root,
+            own_scheduled,
         });
     }
     Ok(resolved)
@@ -2288,13 +2352,21 @@ fn execute_project_note_moves(
         let planned = day_contents.as_deref().and_then(|day| {
             followed_live_link(day, destination_route, &authored.block_id)
         });
-        let detail = planned.as_ref().map(|link| {
-            if link.entry_name.is_empty() {
-                "Task Link follows".to_string()
-            } else {
-                format!("{} link follows", link.entry_name)
-            }
-        });
+        let detail = super::move_consequence::describe(
+            &super::move_consequence::Outcome {
+                sigil: authored.sigil,
+                previous_status: authored.root.status,
+                status: landed.status_symbol,
+                existing_today_link: planned
+                    .as_ref()
+                    .map(|link| link.entry_name.clone()),
+                added_today_link: None,
+                own_scheduled: authored.own_scheduled.clone(),
+                project_starts: None,
+                guard: super::move_consequence::LinkGuard::Link,
+                id_added: None,
+            },
+        );
         let source = display_project_path(&movement.source_path);
         moved_tasks.push(ProjectNoteMovedTask {
             sigil: authored.sigil,
@@ -2358,6 +2430,55 @@ fn execute_project_note_moves(
         },
         repaired_files,
     })
+}
+
+fn scheduled_field(line: &str) -> Option<String> {
+    task_fields::inline_fields(line, "scheduled")
+        .into_iter()
+        .find_map(|field| {
+            task_fields::parse_strict_calendar_date(&field.value)
+                .map(|date| date.format("%b %-d").to_string())
+        })
+}
+
+fn display_move_date(value: &str) -> String {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(|date| date.format("%b %-d").to_string())
+        .unwrap_or_else(|_| value.to_string())
+}
+
+/// Link-guard detail is written for reports (`not linked (...) · promoted…`).
+/// Move copy keeps the blocking reason while removing the report wrapper and
+/// reducing task wikilinks to their short block IDs.
+fn move_guard_reason(detail: &str) -> String {
+    let mut reason = detail.trim();
+    if let Some(rest) = reason.strip_prefix("not linked (") {
+        reason = rest
+            .split_once(") ·")
+            .map(|(reason, _)| reason)
+            .or_else(|| rest.strip_suffix(')'))
+            .unwrap_or(rest);
+    }
+    let mut output = String::with_capacity(reason.len());
+    let mut rest = reason;
+    while let Some(start) = rest.find("[[") {
+        output.push_str(&rest[..start]);
+        let after_open = &rest[start + 2..];
+        let Some(end) = after_open.find("]]") else {
+            output.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let target = &after_open[..end];
+        let short = target
+            .rsplit_once("#^")
+            .map(|(_, id)| format!("^{id}"))
+            .unwrap_or_else(|| target.to_string());
+        output.push_str(&short);
+        rest = &after_open[end + 2..];
+    }
+    output.push_str(rest);
+    output.trim().to_string()
 }
 
 fn project_move_engine_error(
