@@ -112,7 +112,12 @@ the key must sit against the ID (or seal) with no space, and it must end the tok
 Suffixes already inside the token ('#name', '=...'), '@@', '@!', standalone \
 '^route:id', '&note:id', '!note:id', incomplete \
 markers, same-separator repeats after a seal, '+' after a seal, and tokens the \
-contextual parser does not select are left unchanged. Without --cursor this \
+contextual parser does not select are left unchanged. On a `>` transfer \
+line, '+' after '@route:id' or '@route^id' in a source or destination slot \
+switches to '@route+id' ('@inbox:bench+ > @db' becomes '@inbox+bench > \
+@db', '@a+x > @c:tid+' becomes '@a+x > @c+tid'); ':' or '^' after a \
+transfer '+id' stays literal, since it would break the transfer. Without \
+--cursor this \
 rule is skipped rather than searching the draft.\n\n\
 Relation-label pipe attach (requires --cursor): typing '|' after \
 whitespace that follows a relation token deletes that whitespace, so \
@@ -140,7 +145,9 @@ marker is left untouched with no notice, since 'bob capture-parse' already \
 reports that duplicate. Feeding a rewrite's own output back in is a no-op, \
 because the claiming token is no longer bare and no longer ends in a toggle \
 trigger. A whole-item `x[<N>][!<M>]` close item is never rewritten or \
-absorbed, and a `@@` declaration never applies to it.\n\n\
+absorbed, and a `@@` declaration never applies to it. A `>` transfer line \
+never absorbs either: a bare `@@` on the line is left untouched with an \
+`@@ cannot take a capture transfer` notice naming the destination.\n\n\
 These assists are editor-only: 'bob capture' and 'bob capture-parse' keep \
 the literal TEXT, so '@file:id^' is not silently rewritten there. Only a \
 missing TEXT or a bad flag is an error; every other input succeeds with \
@@ -148,7 +155,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())

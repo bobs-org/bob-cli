@@ -22,6 +22,7 @@ mod complete_task_complete;
 mod complete_task_link;
 mod complete_task_types;
 mod complete_themes;
+mod complete_transfer;
 mod complete_wikilink_task;
 mod drawer_bullets;
 mod ensure_next;

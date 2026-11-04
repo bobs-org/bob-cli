@@ -420,6 +420,13 @@ fn is_complete_source(text: &str) -> bool {
     parse_complete_source_text(text).is_some()
 }
 
+/// Split a complete `@route+id` source marker into its lowercased route
+/// and block ID. Completion reuses this on claimed-but-invalid lines, where
+/// the scan carries no parsed sources.
+pub(crate) fn split_complete_source(text: &str) -> Option<(String, String)> {
+    parse_complete_source_text(text)
+}
+
 fn parse_complete_source_text(text: &str) -> Option<(String, String)> {
     let rest = text.strip_prefix('@')?;
     if rest.starts_with('@') || rest.starts_with('!') {

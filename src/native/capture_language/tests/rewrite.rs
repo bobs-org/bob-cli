@@ -814,3 +814,73 @@ fn rewrite_draft_reports_a_run_for_bare_at_at() {
         rewrite.notices[0]
     );
 }
+
+#[test]
+fn rewrite_draft_switches_transfer_source_colon_to_plus() {
+    // Typing `+` after a colon source on a transfer line switches to the
+    // transfer spelling.
+    let raw = "@inbox:bench+ > @db";
+    let rewrite = rewrite_draft(raw, Some(13));
+    assert_eq!(
+        rewrite.rule,
+        Some(RewriteRule::SwitchBlockIdSeparator),
+        "{raw}"
+    );
+    assert_eq!(rewrite.text, "@inbox+bench > @db");
+    assert_eq!(rewrite.cursor, Some(12));
+    assert_eq!(
+        rewrite.summary.as_deref(),
+        Some("Changed @inbox:bench to @inbox+bench")
+    );
+    assert_eq!(
+        rewrite.edits,
+        vec![TextEdit {
+            start: 0,
+            end: 13,
+            replacement: "@inbox+bench".to_string(),
+        }]
+    );
+    let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+    assert_eq!(again.rule, None, "idempotent");
+}
+
+#[test]
+fn rewrite_draft_switches_transfer_destination_caret_to_plus() {
+    // Typing `+` after a caret destination switches to a merge target.
+    let raw = "@a+x > @c:tid+";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(
+        rewrite.rule,
+        Some(RewriteRule::SwitchBlockIdSeparator),
+        "{raw}"
+    );
+    assert_eq!(rewrite.text, "@a+x > @c+tid");
+    assert_eq!(rewrite.summary.as_deref(), Some("Changed @c:tid to @c+tid"));
+}
+
+#[test]
+fn rewrite_draft_leaves_transfer_plus_triggers_for_other_marks_literal() {
+    // `:` after a transfer `+id` would break the transfer, so it stays
+    // literal; prose `+` triggers never switch either.
+    let raw = "@a+x > @c+tid:";
+    assert_eq!(rewrite_draft(raw, Some(raw.len())).rule, None);
+    let source = "@inbox+bench > @c+tid:";
+    assert_eq!(rewrite_draft(source, Some(source.len())).rule, None);
+}
+
+#[test]
+fn rewrite_draft_reports_transfer_for_bare_at_at() {
+    // A bare `@@` on a transfer line is refused: the destination is not
+    // a declaration payload.
+    for raw in ["@a+x > @c @@", "@a+x > @c+tid @@"] {
+        let rewrite = rewrite_draft(raw, None);
+        assert_eq!(rewrite.rule, None, "{raw}");
+        assert_eq!(rewrite.text, raw, "{raw}");
+        assert_eq!(rewrite.notices.len(), 1, "{raw}: {:?}", rewrite.notices);
+        assert!(
+            rewrite.notices[0].contains("@@ cannot take a capture transfer"),
+            "{raw}: {}",
+            rewrite.notices[0]
+        );
+    }
+}

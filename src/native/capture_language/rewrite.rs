@@ -126,6 +126,20 @@ fn absorb_bare_declaration(
     }
     occurrences.sort_by_key(|occurrence| occurrence.token.start);
 
+    // A `>` transfer never absorbs `@@` — its destination is not a
+    // declaration payload — so a bare `@@` on the transfer's own line is
+    // refused here. Transfer items surface no declarations, so the normal
+    // selection below cannot see these tokens.
+    if let Some(rewrite) = transfer_bare_at_at_notice(
+        &draft,
+        &item_outcomes,
+        &occurrences,
+        raw_text,
+        cursor,
+    ) {
+        return rewrite;
+    }
+
     let Some(selected_index) = select_bare_declaration(&occurrences, cursor)
     else {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
@@ -379,6 +393,25 @@ fn switch_block_id_separator(
         return None;
     }
 
+    // Transfer slots (`>` sources and destinations) only take `+id`:
+    // typing `+` after `@route:id` or `@route^id` there switches to the
+    // transfer spelling. `:`/`^` triggers stay literal (they would break
+    // the transfer), and the ordinary marker check below declines them.
+    if !sealed
+        && trigger_char == '+'
+        && matches!(separator, ':' | '^')
+        && let Some(rewrite) = switch_transfer_block_id_separator(
+            raw_text,
+            token_start,
+            token_end,
+            stripped,
+            route,
+            id,
+        )
+    {
+        return Some(rewrite);
+    }
+
     let mut candidate = String::with_capacity(raw_text.len() - 1);
     candidate.push_str(&raw_text[..stripped_end]);
     candidate.push_str(&raw_text[token_end..]);
@@ -416,6 +449,75 @@ fn switch_block_id_separator(
         summary: Some(summary),
         notices: Vec::new(),
     })
+}
+
+/// Typing `+` after `@route:id` or `@route^id` in a transfer source or
+/// destination slot switches to `@route+id`. Eligibility is decided on the
+/// switched draft (same length: one separator swaps for another): the token
+/// must land exactly on a transfer source or destination there. Anything
+/// else — prose, ordinary markers, partial destinations that stay partial
+/// — falls through to the ordinary marker check.
+fn switch_transfer_block_id_separator(
+    raw_text: &str,
+    token_start: usize,
+    token_end: usize,
+    stripped: &str,
+    route: &str,
+    id: &str,
+) -> Option<DraftRewrite> {
+    let switched_marker = format!("@{route}+{id}");
+    let mut switched = String::with_capacity(raw_text.len());
+    switched.push_str(raw_text.get(..token_start)?);
+    switched.push_str(&switched_marker);
+    switched.push_str(raw_text.get(token_end..)?);
+    let switched_end = token_start + switched_marker.len();
+    let draft = split_capture_draft(&switched);
+    for item in &draft.items {
+        for line in &item.lines {
+            if !(line.raw.start <= token_start && switched_end <= line.raw.end)
+            {
+                continue;
+            }
+            let scan = super::transfer::scan_transfer_line(
+                &line.raw,
+                &switched,
+                item.lines.len() > 1,
+            );
+            let covers = match scan {
+                super::transfer::TransferScan::Valid {
+                    sources,
+                    destination,
+                    ..
+                } => {
+                    sources.iter().any(|source| {
+                        source.start == token_start
+                            && source.end == switched_end
+                    }) || (destination.start == token_start
+                        && destination.end == switched_end)
+                }
+                _ => false,
+            };
+            if covers {
+                let summary =
+                    format!("Changed {stripped} to {switched_marker}");
+                let edits = vec![TextEdit {
+                    start: token_start,
+                    end: token_end,
+                    replacement: switched_marker.clone(),
+                }];
+                let text = apply_text_edits(raw_text, &edits);
+                return Some(DraftRewrite {
+                    rule: Some(RewriteRule::SwitchBlockIdSeparator),
+                    edits,
+                    text,
+                    cursor: Some(token_start + switched_marker.len()),
+                    summary: Some(summary),
+                    notices: Vec::new(),
+                });
+            }
+        }
+    }
+    None
 }
 
 /// Typing `|` (or `||`) after whitespace that follows a relation token
@@ -731,6 +833,103 @@ pub(super) fn select_bare_declaration(
         }),
         None => bare_indices.into_iter().next_back(),
     }
+}
+
+/// The destination-shaped token after a standalone `>` on one parent
+/// line, for notices on lines the transfer scan refuses (a trailing `@@`
+/// is `transfer_extra_text`, so the scan carries no destination span).
+/// Returns `None` when the arrow is glued, escaped, or missing.
+fn transfer_destination_token_text<'a>(
+    parent: &'a RawLine<'a>,
+) -> Option<&'a str> {
+    let mut tokens = tokenize_with_spans(parent.text).into_iter();
+    loop {
+        let token = tokens.next()?;
+        if token.text == ">" {
+            let next = tokens.next()?;
+            return next.text.starts_with('@').then_some(next.text);
+        }
+    }
+}
+
+/// Refuse a bare `@@` typed on a `>` transfer's own line: the transfer
+/// destination cannot become a declaration payload. Transfer items surface
+/// no declarations, so the normal selection cannot claim these tokens;
+/// this mirrors its claiming rule instead — the `@@` containing the
+/// cursor, else the last bare `@@` in the draft — and reports the same
+/// copy as every other non-absorbable marker.
+fn transfer_bare_at_at_notice(
+    draft: &CaptureDraft<'_>,
+    item_outcomes: &[EditorItemOutcome<'_>],
+    occurrences: &[DeclarationOccurrence<'_>],
+    raw_text: &str,
+    cursor: Option<usize>,
+) -> Option<DraftRewrite> {
+    use super::transfer::{scan_transfer_line, TransferScan};
+    let mut bare: Vec<(usize, usize, usize)> = Vec::new();
+    for (item_index, item) in draft.items.iter().enumerate() {
+        let Some(parent) = item.lines.first() else {
+            continue;
+        };
+        // Any claimed scan owns the line: a complete transfer, a partial
+        // right-hand side, or a teaching error (a trailing `@@` is
+        // `transfer_extra_text`). Escaped and unclaimed lines keep the
+        // ordinary declaration paths.
+        if !matches!(
+            scan_transfer_line(&parent.raw, item.source, item.lines.len() > 1),
+            TransferScan::Valid { .. }
+                | TransferScan::Incomplete { .. }
+                | TransferScan::Invalid { .. }
+        ) {
+            continue;
+        }
+        for token in tokenize_with_spans(parent.raw.text) {
+            if token.text == "@@" {
+                bare.push((
+                    item_index,
+                    parent.raw.start + token.start,
+                    parent.raw.start + token.end,
+                ));
+            }
+        }
+    }
+    let (item_index, _, _) = match cursor {
+        Some(position) => bare
+            .iter()
+            .find(|(_, start, end)| *start <= position && position <= *end)
+            .copied()?,
+        None => {
+            let last = bare.last().copied()?;
+            let last_occurrence = occurrences
+                .iter()
+                .filter(|occurrence| occurrence.token.text == "@@")
+                .map(|occurrence| occurrence.token.start)
+                .next_back();
+            if last_occurrence.is_some_and(|start| start > last.1) {
+                return None;
+            }
+            last
+        }
+    };
+    let marker = item_outcomes[item_index]
+        .item
+        .spans
+        .iter()
+        .find(|span| span.kind == SpanKind::TransferDestination)
+        .and_then(|span| raw_text.get(span.start..span.end))
+        .or_else(|| {
+            transfer_destination_token_text(
+                &draft.items[item_index].lines.first()?.raw,
+            )
+        })
+        .unwrap_or("the transfer destination");
+    Some(unchanged_rewrite(
+        raw_text,
+        cursor,
+        vec![format!(
+            "@@ cannot take a capture transfer: leave {marker} on this item, or delete it"
+        )],
+    ))
 }
 
 pub(super) enum LocalMarkerAbsorbability {

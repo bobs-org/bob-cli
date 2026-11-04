@@ -1398,3 +1398,86 @@ fn target_run_members_and_inner_edge_fragments_complete() {
     // Mid-line prose stays literal, even beside a run shape.
     assert_eq!(field("Discuss @de later", "Discuss @de".len()), None);
 }
+
+#[test]
+fn transfer_sources_complete_routes_and_tasks() {
+    // A cursor in a transfer source completes that note's routes and tasks,
+    // even though the `>` destination follows on the same line.
+    let route = field("@inbox+bench > @db", 4).expect("source route");
+    assert_eq!(route.context, CompletionContext::Route);
+    assert_eq!(route.query, "inb");
+    assert_eq!(route.replacement, (1, 6));
+
+    let task = field("@inbox+bench > @db", 9).expect("source task");
+    assert_eq!(task.context, CompletionContext::Task);
+    assert_eq!(task.route.as_deref(), Some("inbox"));
+    assert_eq!(task.query, "be");
+    assert_eq!(task.replacement, (7, 12));
+
+    let second = field(
+        "@inbox+bench @work+pgdump > @db",
+        "@inbox+bench @work+p".len(),
+    )
+    .expect("second source task");
+    assert_eq!(second.context, CompletionContext::Task);
+    assert_eq!(second.route.as_deref(), Some("work"));
+    assert_eq!(second.query, "p");
+}
+
+#[test]
+fn transfer_destination_routes_complete_after_the_arrow() {
+    // `> @` completes routes; a typed `> @db` fragment completes the
+    // matching routes (the move-destination list).
+    let bare = field("@inbox+bench > @", "@inbox+bench > @".len())
+        .expect("destination routes");
+    assert_eq!(bare.context, CompletionContext::Route);
+    assert_eq!(bare.query, "");
+    assert_eq!(bare.replacement, (16, 16));
+
+    let typed = field("@inbox+bench > @db", "@inbox+bench > @db".len())
+        .expect("typed destination routes");
+    assert_eq!(typed.context, CompletionContext::Route);
+    assert_eq!(typed.query, "db");
+    assert_eq!(typed.replacement, (16, 18));
+}
+
+#[test]
+fn transfer_merge_targets_drawers_and_sections_complete() {
+    // `@c+` completes the destination note's open tasks (merge targets),
+    // `@c+id#` completes that task's drawers, and `@c#` completes the
+    // note's sections.
+    let target = field("@a+x > @c+", "@a+x > @c+".len()).expect("merge target");
+    assert_eq!(target.context, CompletionContext::Task);
+    assert_eq!(target.route.as_deref(), Some("c"));
+    assert_eq!(target.query, "");
+
+    let typed = field("@a+x > @c+ti", "@a+x > @c+ti".len()).expect("typed id");
+    assert_eq!(typed.context, CompletionContext::Task);
+    assert_eq!(typed.route.as_deref(), Some("c"));
+    assert_eq!(typed.query, "ti");
+
+    let drawer =
+        field("@a+x > @c+tid#fu", "@a+x > @c+tid#fu".len()).expect("drawer");
+    assert_eq!(drawer.context, CompletionContext::Drawer);
+    assert_eq!(drawer.route.as_deref(), Some("c"));
+    assert_eq!(drawer.block_id.as_deref(), Some("tid"));
+    assert_eq!(drawer.query, "fu");
+
+    let section = field("@a+x > @c#fu", "@a+x > @c#fu".len()).expect("section");
+    assert_eq!(section.context, CompletionContext::Section);
+    assert_eq!(section.route.as_deref(), Some("c"));
+    assert_eq!(section.query, "fu");
+}
+
+#[test]
+fn transfer_arrow_and_gaps_offer_no_completion() {
+    // The `>` arrow and the whitespace around it own no completion field,
+    // and neither does trailing whitespace past a complete destination.
+    // (A cursor at the end of a source still completes that source.)
+    assert_eq!(field("@inbox+bench > @db", 13), None);
+    assert_eq!(field("@inbox+bench > @db", 14), None);
+    assert_eq!(field("@inbox+bench > @db ", 19), None);
+    let at_end = field("@inbox+bench > @db", 12).expect("source end");
+    assert_eq!(at_end.context, CompletionContext::Task);
+    assert_eq!(at_end.query, "bench");
+}

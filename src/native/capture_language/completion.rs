@@ -1274,6 +1274,434 @@ pub(crate) fn pomodoro_start_override_at(
     Some(suffix.is_empty() && timing.is_none())
 }
 
+/// Which transfer component the cursor sits in, for the engine to scope
+/// candidates. Sources complete movable-or-mergeable tasks; a complete bare
+/// destination also carries the `+ merge into a task` hint; merge targets
+/// exclude the typed sources and carry a merge consequence; sections add a
+/// creation row and a near-duplicate refusal on top of the note's headings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransferCompletionRole {
+    Source {
+        route: String,
+    },
+    DestinationRoute,
+    DestinationNote {
+        route: String,
+    },
+    MergeTarget {
+        route: String,
+        exclude: Vec<(String, String)>,
+    },
+    Drawer {
+        route: String,
+        block_id: String,
+    },
+    Section {
+        route: String,
+    },
+}
+
+/// The transfer role at `cursor`, when the cursor sits on a
+/// transfer-claimed parent line in a completable component. Returns `None`
+/// when the line is not a transfer or the cursor owns no component, so the
+/// engine keeps its existing candidates. The cursor mapping mirrors
+/// [`transfer_completion_field_at`]: both scan the same parent line, so a
+/// role exists exactly when that function returns a field.
+pub(crate) fn transfer_completion_role(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<TransferCompletionRole> {
+    let draft = split_capture_draft(raw_text);
+    let item = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
+    })?;
+    if item.lines.first()?.raw.start
+        != item
+            .lines
+            .iter()
+            .find(|line| cursor >= line.raw.start && cursor <= line.raw.end)?
+            .raw
+            .start
+    {
+        return None;
+    }
+    let parent = item.lines.first()?.raw;
+    if cursor < parent.start || cursor > parent.end {
+        return None;
+    }
+    let scan = super::transfer::scan_transfer_line(
+        &parent,
+        item.source,
+        item.lines.len() > 1,
+    );
+    match scan {
+        super::transfer::TransferScan::Valid {
+            sources,
+            arrow,
+            destination,
+        } => transfer_role_for_valid(cursor, &sources, &arrow, &destination),
+        super::transfer::TransferScan::Incomplete {
+            sources,
+            arrow,
+            need,
+            ..
+        } => {
+            transfer_role_for_incomplete(parent, cursor, &sources, &arrow, need)
+        }
+        super::transfer::TransferScan::Invalid { .. } => {
+            transfer_role_for_invalid(parent, cursor)
+        }
+        _ => None,
+    }
+}
+
+/// Role for a cursor on a transfer-shaped line the lexer refused. Partial
+/// sources (`@route+` still being typed) still narrow to that note's
+/// tasks, and a destination fragment still scopes like its incomplete
+/// twin; the parsed sources are unavailable, so complete `@route+id`
+/// tokens before the arrow stand in for the exclusion list.
+fn transfer_role_for_invalid(
+    parent: RawLine<'_>,
+    cursor: usize,
+) -> Option<TransferCompletionRole> {
+    let tokens = tokenize_line_with_spans(&parent);
+    let arrow = tokens
+        .iter()
+        .find(|token| token.text == ">")
+        .map(|token| token.start);
+    let token = tokens.iter().find(|token| {
+        cursor >= token.start
+            && cursor <= token.end
+            && token.text.starts_with('@')
+    })?;
+    let rest = token.text.get(1..)?;
+    let end = rest.find(['+', '#', ':', '^']).unwrap_or(rest.len());
+    let route = rest.get(..end)?;
+    if !is_route_token(route) {
+        return None;
+    }
+    let route = route.to_ascii_lowercase();
+    let before_arrow = arrow.is_none_or(|arrow| token.start < arrow);
+    if before_arrow {
+        if !rest.contains('+') {
+            return None;
+        }
+        return Some(TransferCompletionRole::Source { route });
+    }
+    if rest.contains('+') {
+        let exclude = tokens
+            .iter()
+            .filter(|other| {
+                arrow.is_none_or(|arrow| other.end <= arrow)
+                    && other.text.starts_with('@')
+            })
+            .filter_map(|other| {
+                super::transfer::split_complete_source(other.text)
+            })
+            .collect();
+        return Some(TransferCompletionRole::MergeTarget { route, exclude });
+    }
+    if rest.contains('#') {
+        return Some(TransferCompletionRole::Section { route });
+    }
+    Some(TransferCompletionRole::DestinationRoute)
+}
+
+/// Role for a cursor on a complete transfer line.
+fn transfer_role_for_valid(
+    cursor: usize,
+    sources: &[super::transfer::TransferSource],
+    arrow: &super::transfer::TransferArrow,
+    destination: &super::transfer::TransferDestination,
+) -> Option<TransferCompletionRole> {
+    use super::transfer::TransferDestinationKind;
+    if let Some(source) = sources
+        .iter()
+        .find(|source| cursor >= source.start && cursor <= source.end)
+    {
+        // The engine only scopes `Task` fields; a cursor in the route
+        // part keeps the plain route list.
+        return Some(TransferCompletionRole::Source {
+            route: source.route.clone(),
+        });
+    }
+    if cursor >= arrow.start && cursor <= arrow.end {
+        return None;
+    }
+    if cursor >= destination.start && cursor <= destination.end {
+        let exclude = sources
+            .iter()
+            .map(|source| (source.route.clone(), source.block_id.clone()))
+            .collect();
+        return match destination.kind {
+            TransferDestinationKind::Note => {
+                if cursor == destination.end {
+                    Some(TransferCompletionRole::DestinationNote {
+                        route: destination.route.clone(),
+                    })
+                } else {
+                    Some(TransferCompletionRole::DestinationRoute)
+                }
+            }
+            TransferDestinationKind::Task => {
+                Some(TransferCompletionRole::MergeTarget {
+                    route: destination.route.clone(),
+                    exclude,
+                })
+            }
+            TransferDestinationKind::Drawer => {
+                Some(TransferCompletionRole::Drawer {
+                    route: destination.route.clone(),
+                    block_id: destination.block_id.clone().unwrap_or_default(),
+                })
+            }
+            TransferDestinationKind::Section => {
+                Some(TransferCompletionRole::Section {
+                    route: destination.route.clone(),
+                })
+            }
+        };
+    }
+    None
+}
+
+/// Role for a cursor on a partial transfer line.
+fn transfer_role_for_incomplete(
+    parent: RawLine<'_>,
+    cursor: usize,
+    sources: &[super::transfer::TransferSource],
+    arrow: &super::transfer::TransferArrow,
+    need: super::transfer::TransferNeed,
+) -> Option<TransferCompletionRole> {
+    if sources
+        .iter()
+        .any(|source| cursor >= source.start && cursor <= source.end)
+    {
+        let route = sources
+            .iter()
+            .find(|source| cursor >= source.start && cursor <= source.end)
+            .map(|source| source.route.clone())?;
+        return Some(TransferCompletionRole::Source { route });
+    }
+    let fragment = transfer_destination_fragment(parent, arrow.end)?;
+    if cursor < fragment.0 || cursor > fragment.1 {
+        return None;
+    }
+    let _ = need;
+    // A partial destination completes through the same components as a
+    // whole marker: routes, task IDs, drawers, and sections.
+    let text = parent.text.get(
+        fragment.0.checked_sub(parent.start)?
+            ..fragment.1.checked_sub(parent.start)?,
+    )?;
+    if !text.starts_with('@') {
+        return None;
+    }
+    if let Some(plus) = text.find('+') {
+        let route = text[1..plus].to_ascii_lowercase();
+        if text[plus + 1..].contains('#') {
+            return Some(TransferCompletionRole::Drawer {
+                route,
+                block_id: String::new(),
+            });
+        }
+        return Some(TransferCompletionRole::MergeTarget {
+            route,
+            exclude: sources
+                .iter()
+                .map(|source| (source.route.clone(), source.block_id.clone()))
+                .collect(),
+        });
+    }
+    if text.contains('#') {
+        return Some(TransferCompletionRole::Section {
+            route: text[1..text.find('#').unwrap_or(text.len())]
+                .to_ascii_lowercase(),
+        });
+    }
+    Some(TransferCompletionRole::DestinationRoute)
+}
+
+/// Byte range of the destination fragment on an incomplete transfer line:
+/// the first whitespace-delimited token after the arrow, or `None` when
+/// nothing is typed there yet.
+fn transfer_destination_fragment(
+    parent: RawLine<'_>,
+    arrow_end: usize,
+) -> Option<(usize, usize)> {
+    let mut start = arrow_end;
+    while start < parent.end
+        && parent
+            .text
+            .get(start.checked_sub(parent.start)?..)
+            .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('\t'))
+    {
+        start += 1;
+    }
+    if start >= parent.end {
+        return None;
+    }
+    let mut end = start;
+    while end < parent.end
+        && parent
+            .text
+            .get(end.checked_sub(parent.start)?..)
+            .is_some_and(|rest| {
+                !(rest.starts_with(' ') || rest.starts_with('\t'))
+            })
+    {
+        end += 1;
+    }
+    Some((start, end))
+}
+
+/// Transfer-aware completion for one parent line.
+///
+/// A claimed `>` line owns the whole line, so the normal target-run
+/// selection cannot serve it: this maps the cursor to the component it
+/// sits in and reuses [`marker_field_at_cursor`] for that component, so
+/// sources complete routes and tasks, `> @` completes routes, `@c+`
+/// completes tasks, `@c+id#` completes drawers, and `@c#` completes
+/// sections.
+///
+/// Returns `None` when the line is no transfer (the caller continues with
+/// ordinary completion). Returns `Some(None)` when the line is claimed but
+/// the cursor sits on the arrow, in a gap, or past the destination, so the
+/// line completes nothing instead of falling through to target runs.
+fn transfer_completion_field_at(
+    source: &str,
+    line: RawLine<'_>,
+    has_children: bool,
+    cursor: usize,
+) -> Option<Option<CompletionField>> {
+    use super::transfer::{scan_transfer_line, TransferScan};
+    if cursor < line.start || cursor > line.end {
+        return None;
+    }
+    match scan_transfer_line(&line, source, has_children) {
+        TransferScan::Unclaimed | TransferScan::Escaped { .. } => None,
+        TransferScan::Invalid { .. } => {
+            Some(transfer_invalid_field_at(line, cursor))
+        }
+        TransferScan::Incomplete { sources, arrow, .. } => {
+            Some(transfer_partial_field_at(line, cursor, &sources, arrow.end))
+        }
+        TransferScan::Valid {
+            sources,
+            arrow,
+            destination,
+        } => Some(transfer_valid_field_at(
+            line,
+            cursor,
+            &sources,
+            &arrow,
+            &destination,
+        )),
+    }
+}
+
+/// Completion on a transfer-shaped line the lexer refused: still complete
+/// a source the cursor sits in, so a teaching error never hides the task
+/// list. Anything else on the claimed line completes nothing.
+fn transfer_invalid_field_at(
+    line: RawLine<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let token = tokenize_line_with_spans(&line)
+        .into_iter()
+        .find(|token| cursor >= token.start && cursor <= token.end)?;
+    if !token.text.starts_with('@') {
+        return None;
+    }
+    marker_field_at_cursor(&token, cursor)
+}
+
+/// Completion on a partial transfer: a source completes through its own
+/// marker, and the destination fragment after the arrow completes like a
+/// whole marker. Gaps and the arrow itself complete nothing.
+fn transfer_partial_field_at(
+    line: RawLine<'_>,
+    cursor: usize,
+    sources: &[super::transfer::TransferSource],
+    arrow_end: usize,
+) -> Option<CompletionField> {
+    if let Some(source) = sources
+        .iter()
+        .find(|source| cursor >= source.start && cursor <= source.end)
+    {
+        return marker_field_at_cursor(
+            &Token {
+                text: line.text.get(
+                    source.start.checked_sub(line.start)?
+                        ..source.end.checked_sub(line.start)?,
+                )?,
+                start: source.start,
+                end: source.end,
+            },
+            cursor,
+        );
+    }
+    let (start, end) = transfer_destination_fragment(line, arrow_end)?;
+    if cursor < start || cursor > end {
+        return None;
+    }
+    marker_field_at_cursor(
+        &Token {
+            text: line.text.get(
+                start.checked_sub(line.start)?..end.checked_sub(line.start)?,
+            )?,
+            start,
+            end,
+        },
+        cursor,
+    )
+}
+
+/// Completion on a complete transfer: sources and the destination complete
+/// through their own markers. The arrow, the gaps around it, and trailing
+/// text past the destination complete nothing.
+fn transfer_valid_field_at(
+    line: RawLine<'_>,
+    cursor: usize,
+    sources: &[super::transfer::TransferSource],
+    arrow: &super::transfer::TransferArrow,
+    destination: &super::transfer::TransferDestination,
+) -> Option<CompletionField> {
+    if let Some(source) = sources
+        .iter()
+        .find(|source| cursor >= source.start && cursor <= source.end)
+    {
+        return marker_field_at_cursor(
+            &Token {
+                text: line.text.get(
+                    source.start.checked_sub(line.start)?
+                        ..source.end.checked_sub(line.start)?,
+                )?,
+                start: source.start,
+                end: source.end,
+            },
+            cursor,
+        );
+    }
+    if cursor >= destination.start && cursor <= destination.end {
+        return marker_field_at_cursor(
+            &Token {
+                text: line.text.get(
+                    destination.start.checked_sub(line.start)?
+                        ..destination.end.checked_sub(line.start)?,
+                )?,
+                start: destination.start,
+                end: destination.end,
+            },
+            cursor,
+        );
+    }
+    let _ = arrow;
+    None
+}
+
 /// Identify the completable marker component at `cursor`, reusing the same
 /// tokenizer, terminal-marker extraction, and `@token` candidate detection
 /// as [`parse_for_editor`]. Returns `None` when the cursor is not inside an
@@ -1453,6 +1881,22 @@ pub(crate) fn completion_field_at(
         return Some(field);
     }
     let leading = line_index == 0;
+
+    // A claimed `>` transfer line owns its whole parent line: the normal
+    // target-run selection would treat the sources as a leading run and
+    // leave every destination with no completion. Map the cursor to the
+    // transfer component it sits in instead; a claimed line with the
+    // cursor on the arrow or in a gap completes nothing.
+    if leading
+        && let Some(field) = transfer_completion_field_at(
+            item.source,
+            line,
+            item.lines.len() > 1,
+            cursor,
+        )
+    {
+        return field;
+    }
 
     // A whole-draft `/` token completes Go To searches instead of
     // offering `@` route completion. This runs before the `!`, `:`, and

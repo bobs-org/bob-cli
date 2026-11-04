@@ -86,6 +86,11 @@ pub(super) struct TaskCandidate {
     pub(super) text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) disabled_reason: Option<String>,
+    /// Bob-authored transfer consequence: on a `>` merge-target row this
+    /// names the merge (`⤵ merge into …`). Omitted everywhere else, so
+    /// existing rows serialize byte-identically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) consequence: Option<String>,
     pub(super) section: Option<String>,
     pub(super) depth: usize,
     pub(super) child_count: usize,

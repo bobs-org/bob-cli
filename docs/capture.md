@@ -8014,7 +8014,12 @@ template marker.
 plain `@route:id` or `@route+id`, `:` after `@route^id` or `@route+id`, or `+`
 after `@route:id` or `@route^id` consumes that character and switches the
 separator. A plain `@route+block-id` can switch back to `@route:id` with `:`
-or to `@route^block-id` with `^`. A sealed project-note marker toggles
+or to `@route^block-id` with `^`. On a `>` transfer line, `+` after
+`@route:id` or `@route^id` in a source or destination slot switches to
+`@route+id` (`@inbox:bench+ > @db` becomes `@inbox+bench > @db`, and
+`@a+x > @c:tid+` becomes `@a+x > @c+tid`); `:` or `^` after a transfer
+`+id` stays literal, since it would break the transfer. A sealed
+project-note marker toggles
 between its two forms instead: `:` typed right after `@route^block-id@` gives
 `@route:block-id@` (create becomes offer), and `^` after `@route:block-id@`
 gives `@route^block-id@`. The same separator, or `+`, after a seal stays
@@ -8134,7 +8139,10 @@ for a project note it is
 `@@ cannot take a project note: leave @cash^goog-exit@ on this item, or delete it`,
 and for a Pomodoro link it is
 `@@ cannot take a Pomodoro link: leave ^sase:deep-fix on this item, or delete it`.
-`^` items are never rewritten. An item with more than one local marker is also left untouched, with no
+`^` items are never rewritten. A `>` transfer line never absorbs either:
+a bare `@@` on the line is left untouched with an
+`@@ cannot take a capture transfer: leave @db on this item, or delete it`
+notice naming the destination. An item with more than one local marker is also left untouched, with no
 notice, because `bob capture-parse` already reports that duplicate as a
 `duplicate_capture_marker` diagnostic. The one exception is a `@route+id`
 target run: its members share one route slot, so the run gets the existing
@@ -8593,6 +8601,23 @@ task text, section, and status name or symbol the same way, but identified
 tasks always stay ahead of unidentified tasks and prefix matches precede
 substring matches inside each of those two groups. A non-matching candidate
 is dropped, and an empty query keeps every eligible candidate.
+
+On a `>` transfer line the same contexts serve each component: a source
+marker completes routes and that note's open tasks, narrowed to
+movable-or-mergeable rows (ID-less rows never list, since a source needs
+`+id`); `> @` completes routes; a complete bare destination keeps the route
+list and adds a `type + to merge` hint warning; `@c+` completes the
+destination note's open tasks minus the typed sources, each row carrying a
+Bob-authored `⤵ merge into` consequence; `@c+id#` completes that task's
+drawers through the usual drawer menu; and `@c#` completes the note's
+eligible `##` sections in document order, then a creation row for an
+unmatched name, while a strict-prefix or edit-distance-1 near-duplicate
+warns `did you mean \`## …\`?` instead of creating. The arrow, the gaps
+around it, and trailing text past the destination complete nothing. For
+example, `bob capture-complete -c 7 -- '@inbox+ > @db'` lists inbox's
+movable-or-mergeable tasks, and
+`bob capture-complete -c 21 -f json -- '@inbox+bench > @db+up'` lists db's
+tasks minus `bench`, each with its merge consequence.
 
 When the cursor is inside a valid Obsidian wikilink component, link completion
 takes precedence over marker completion so `@` and `%` inside link text remain

@@ -59,9 +59,11 @@ pub(crate) use self::completion::pomodoro_start_override_at;
 pub(crate) use self::completion::project_task_block_id_detail;
 pub(crate) use self::completion::project_task_move_detail;
 pub(crate) use self::completion::relation_label_token_at;
+pub(crate) use self::completion::transfer_completion_role;
 pub(crate) use self::completion::CompletionContext;
 pub(crate) use self::completion::CompletionField;
 pub(crate) use self::completion::ProjectTaskMoveDetail;
+pub(crate) use self::completion::TransferCompletionRole;
 pub(crate) use self::dependencies::close_blocked_task_error;
 pub(crate) use self::directive::clip_not_read_error;
 #[cfg(test)]

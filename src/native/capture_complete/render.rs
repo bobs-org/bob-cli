@@ -485,6 +485,12 @@ pub(super) fn candidate_lines(
                     ),
                     None => item.text.clone(),
                 };
+                let detail = match item.consequence.as_deref() {
+                    Some(consequence) => {
+                        format!("{detail}  · {consequence}")
+                    }
+                    None => detail,
+                };
                 (label, detail)
             })
             .collect(),

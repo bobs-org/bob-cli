@@ -18,6 +18,7 @@ mod task_types;
 #[cfg(test)]
 mod tests;
 mod theme_menu;
+mod transfer_assist;
 
 pub(super) const COMMAND_NAME: &str = "bob capture-complete";
 

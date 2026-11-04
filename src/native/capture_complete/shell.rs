@@ -221,10 +221,16 @@ pub(crate) fn shell_completion(
                 if full.is_empty() {
                     continue;
                 }
+                let description = match item.consequence.as_deref() {
+                    Some(consequence) => {
+                        format!("{}  · {consequence}", item.text)
+                    }
+                    None => item.text.clone(),
+                };
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),
                     full,
-                    description: item.text.clone(),
+                    description,
                     group: group.clone(),
                 });
             }

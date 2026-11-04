@@ -399,7 +399,7 @@ fn build_result_inner(
         )
         .is_some_and(|(_, _, hidden)| hidden);
     let mut theme_suggestion = None;
-    let (mut candidates, warnings) = match field.context {
+    let (mut candidates, mut warnings) = match field.context {
         CompletionContext::Route => {
             (route_candidates(bob_dir, &field.query)?, Vec::new())
         }
@@ -740,6 +740,22 @@ fn build_result_inner(
             unreachable!("marker field context")
         }
     };
+
+    // Transfer-assist scoping: a `>` line reuses the ordinary contexts,
+    // so narrow them here — movable-or-mergeable sources, minus-source
+    // merge targets with a merge consequence, the `+` hint on complete
+    // bare destinations, and section creation plus the §3.4 refusal.
+    if let Some(role) =
+        capture_language::transfer_completion_role(raw_text, cursor)
+    {
+        super::transfer_assist::apply(
+            bob_dir,
+            &field,
+            role,
+            &mut candidates,
+            &mut warnings,
+        )?;
+    }
 
     // Bob owns the search query for task pickers and relation completion.
     // Relation target queries are decoded here so clients never parse a
