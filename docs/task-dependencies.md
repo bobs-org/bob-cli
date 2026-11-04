@@ -3328,7 +3328,10 @@ Offer numbering continues across the whole draft. Each group has one row per
 key: the earliest note-pull item that offers that key owns it, and a later
 note pull omits the duplicate. A later item that completes, blocks, links, or
 explicitly drops an offered task removes that row in the final net pass.
-Rows a later item moves follow the move and keep their offer key.
+Rows a later item moves follow the move and keep their offer key and source:
+`note_path`, `block_id`, and the link name the task's final home, while
+`offer.note` still names the requested `@route` note, so the row stays in that
+note's group with that note's fold counts.
 
 Keys are computed from the source note staged **before any pick**. A task with
 a block ID uses `<note_path>#^<block-id>`; otherwise it uses the stable
@@ -3429,7 +3432,8 @@ uses `kind: "note_pull"` and carries:
     "route": "sase",
     "successors": [{
       "trigger": "note_pull", "unblocked_by": [], "inbox": false,
-      "offer": {"group": "note_pull", "project": null, "key": "sase.md#^task"}
+      "offer": {"group": "note_pull", "project": null, "key": "sase.md#^task",
+                "note": "sase.md"}
     }],
     "folded": {"already_planned": 2, "blocked": 3, "scheduled": 1,
                 "hidden": 1, "sub_projects": 0,
@@ -3452,8 +3456,13 @@ uses `kind: "note_pull"` and carries:
 ```
 
 Rows use the exact `unblocked[]` row shape with `trigger: "note_pull"`,
-`unblocked_by: []`, and `inbox`; the offer has `group: "note_pull"` and
-`project: null`. `pull_in.groups[]` adds `note` only for this group. The group
+`unblocked_by: []`, and `inbox`; the offer has `group: "note_pull"`,
+`project: null`, and `note`. `pull_in.groups[]` adds `note` only for this
+group. `offer.note` and `pull_in.groups[].note` identify the requested source
+note; a row's `note_path` identifies its final resident location, which differs
+only when a later item in the same draft moved the task. Group membership,
+headers, and fold counts follow `offer.note`; a payload without it falls back
+to `note_path`. Other offer groups omit `offer.note`. The group
 fold includes `already_planned`, `blocked`, `scheduled`, `hidden`,
 `sub_projects`, `already_started`, and `waits_for`; zero fields may be
 omitted as in other groups. Pomodoro block diffs mark picked lines with
@@ -3473,7 +3482,7 @@ JSON match for the same flags apart from `dry_run` and preview wording.
 | CLI no-pick hint | `nothing pulled in · choose with -p 1,3 or -p all`; with one offer, `-p 1` |
 | Mac footer verb | `Pull In` |
 | Mac preview hint | `↩ choose what to pull in · ⇧↩ start a list` |
-| Mac prompt status / VoiceOver | `Choose tasks to pull in from ‹N›` |
+| Mac prompt status / VoiceOver | `Choose tasks to pull in from ‹N›`; with several distinct source groups, `Choose tasks to pull in from 2 notes` |
 | Mac empty state | `Nothing ready in ‹N›` above the fold line |
 | Mac notification title | `📥 Pulled in k from ‹N›`; mixed drafts use the existing summary and count note-pull picks as pulled in |
 | Mac notification body | Picked task texts and destinations, e.g. `Ship the badge renderer → FIX · Write badge docs → DOCS` |

@@ -1824,6 +1824,7 @@ yet",
                                         after: None,
                                         moved_from: offer.moved_from.clone(),
                                         merged_from: None,
+                                        note: None,
                                         destination:
                                             TaskCompleteOfferDestinationJson {
                                                 day_file: day_relative
@@ -1943,6 +1944,7 @@ yet",
                                     after: None,
                                     moved_from: offer.moved_from.clone(),
                                     merged_from: None,
+                                    note: None,
                                     destination:
                                         TaskCompleteOfferDestinationJson {
                                             day_file: day_relative

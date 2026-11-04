@@ -457,6 +457,7 @@ pub(super) fn offer_json(
         order_key: offer.order_key.clone(),
         moved_from: None,
         merged_from: offer.merged_from.clone(),
+        note: None,
         settled_ordinal: None,
     }
 }

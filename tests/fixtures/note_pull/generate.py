@@ -14,6 +14,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 NOW = "2026-10-05 09:30:00"
 MISSING_CONFIG = "/definitely/missing/bob-cli-note-pull-config.yml"
+MOVE_DRAFT = (
+    "@work\n\n@dev\n\n@work+gamma > @bob\n\n@dev+delta > @bob\n\n"
+    "Docs push @work^docs-push@\n- ^beta"
+)
 
 
 def run_case(bob: Path, case: str, flags: list[str], draft: str, *, json_output: bool,
@@ -91,6 +95,19 @@ def main() -> None:
              json_output=True, dry_run=False, expected_code=1, output_name="choice.json")
     run_case(bob, "np16", ["-p", "2", "-i", "1=health"], "@mac_inbox",
              json_output=True, dry_run=False, expected_code=0, output_name="routed.json")
+    # Later moves relocate pulled rows: groups and folds stay keyed by the
+    # requested source (`offer.note`) while `note_path` reports the final home.
+    run_case(bob, "np-move", [], MOVE_DRAFT, json_output=True, dry_run=True,
+             expected_code=0, output_name="preview.json")
+    run_case(bob, "np-move", ["-p", "all"], MOVE_DRAFT, json_output=True,
+             dry_run=True, expected_code=0, output_name="picked.json")
+    run_case(bob, "np-move", ["-p", "all"], MOVE_DRAFT, json_output=False,
+             dry_run=True, expected_code=0, output_name="human.txt")
+    run_case(bob, "np-move", ["--require-pull-in-choice"], MOVE_DRAFT,
+             json_output=True, dry_run=False, expected_code=1,
+             output_name="choice.json")
+    run_case(bob, "np-move", [], "@work\n\n@dev", json_output=True,
+             dry_run=True, expected_code=0, output_name="two-notes.json")
 
 
 if __name__ == "__main__":

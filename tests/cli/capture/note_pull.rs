@@ -256,6 +256,133 @@ fn np16_inbox_choice_and_routed_pick_match_cli_fixtures() {
     assert_eq!(report["inbox_route"]["routed_count"], 1);
 }
 
+const NP_MOVE_DRAFT: &str = concat!(
+    "@work\n\n@dev\n\n@work+gamma > @bob\n\n@dev+delta > @bob\n\n",
+    "Docs push @work^docs-push@\n- ^beta",
+);
+
+#[test]
+fn np_move_groups_follow_requested_sources_in_cli_fixtures() {
+    // `@work` splits across two destinations (gamma → bob, beta → a new
+    // project note); `@dev`'s only offer moves into the same bob.md and its
+    // hidden resident's fold must stay on the dev group.
+    let notes = ["work.md", "dev.md", "bob.md", "work_docs_push.md", "<day>"];
+    let (_temp, vault, day, root) = fixture("np-move");
+    let before = snapshot(&vault, &day, &notes);
+    let expected_groups = |picked: [usize; 2]| {
+        vec![
+            (
+                "work.md".to_string(),
+                "Pull from ‹work›".to_string(),
+                None,
+                3,
+                picked[0],
+            ),
+            (
+                "dev.md".to_string(),
+                "Pull from ‹dev›".to_string(),
+                Some("1 hidden".to_string()),
+                1,
+                picked[1],
+            ),
+        ]
+    };
+
+    let preview = run_json(&vault, &day, &[], NP_MOVE_DRAFT, true);
+    let json =
+        assert_json_fixture(&root, &vault, &day, &preview, "preview.json", 0);
+    let rows = all_note_pull_rows(&json);
+    assert_eq!(
+        note_pull_group_summary(&json, &rows),
+        expected_groups([0, 0])
+    );
+    assert_eq!(json["pull_in"]["copy"]["title"], "Pull from 2 notes");
+    let homes: Vec<(u64, &str, &str, &str)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row["offer"]["n"].as_u64().expect("n"),
+                row["offer"]["key"].as_str().expect("key"),
+                row["offer"]["note"].as_str().expect("source"),
+                row["note_path"].as_str().expect("home"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        homes,
+        vec![
+            (1, "work.md#^alpha", "work.md", "work.md"),
+            (2, "work.md#^beta", "work.md", "work_docs_push.md"),
+            (3, "work.md#^gamma", "work.md", "bob.md"),
+            (4, "dev.md#^delta", "dev.md", "bob.md"),
+        ]
+    );
+
+    let picked = run_json(&vault, &day, &["-p", "all"], NP_MOVE_DRAFT, true);
+    let json =
+        assert_json_fixture(&root, &vault, &day, &picked, "picked.json", 0);
+    let rows = all_note_pull_rows(&json);
+    assert_eq!(
+        note_pull_group_summary(&json, &rows),
+        expected_groups([3, 1])
+    );
+    let links: Vec<&str> = rows
+        .iter()
+        .map(|row| row["link"]["block_link"].as_str().expect("link"))
+        .collect();
+    assert_eq!(
+        links,
+        vec![
+            "[[work#^alpha]]",
+            "[[work_docs_push#^beta]]",
+            "[[bob#^gamma]]",
+            "[[bob#^delta]]",
+        ]
+    );
+    let human = run_human(&vault, &day, &["-p", "all"], NP_MOVE_DRAFT, true);
+    assert_human_fixture(&root, &vault, &day, &human, "human.txt");
+
+    for (flags, picked) in [
+        (vec!["-p", "4"], [0, 1]),
+        (vec!["-p", "work.md#^beta"], [1, 0]),
+        (vec!["-p", "none"], [0, 0]),
+    ] {
+        let output = run_json(&vault, &day, &flags, NP_MOVE_DRAFT, true);
+        assert_success(&output);
+        let json: Value =
+            serde_json::from_slice(&output.stdout).expect("pick JSON");
+        let rows = all_note_pull_rows(&json);
+        assert_eq!(
+            note_pull_group_summary(&json, &rows),
+            expected_groups(picked),
+            "{flags:?}: {json}"
+        );
+    }
+
+    // The flat `pull_in_choice_required` offers carry the same sources.
+    let choice = run_json(
+        &vault,
+        &day,
+        &["--require-pull-in-choice"],
+        NP_MOVE_DRAFT,
+        false,
+    );
+    let json =
+        assert_json_fixture(&root, &vault, &day, &choice, "choice.json", 1);
+    assert_eq!(json["code"], "pull_in_choice_required");
+    // Pull-only two-note draft (the Mac `Pull In` / `from 2 notes` fixture).
+    let two = run_json(&vault, &day, &[], "@work\n\n@dev", true);
+    let two_json =
+        assert_json_fixture(&root, &vault, &day, &two, "two-notes.json", 0);
+    assert_eq!(two_json["pull_in"]["copy"]["title"], "Pull from 2 notes");
+    let offers = json["offers"].as_array().expect("offers").clone();
+    assert_eq!(
+        note_pull_group_summary(&json, &offers),
+        expected_groups([0, 0])
+    );
+    assert_snapshot_unchanged(&before);
+}
+
 #[test]
 fn np28_dry_run_parity_and_refusal_paths_are_write_free() {
     let (_temp, vault, day, _) = fixture("np1");
@@ -462,6 +589,57 @@ fn pull_successors(json: &Value) -> Vec<Value> {
         .clone()
 }
 
+/// `(note, title, fold, offered, picked)` for each `note_pull` group, in
+/// group order, with offered/picked counted from rows whose frozen
+/// `offer.note` names that group's requested source.
+fn note_pull_group_summary(
+    json: &Value,
+    rows: &[Value],
+) -> Vec<(String, String, Option<String>, usize, usize)> {
+    json["pull_in"]["groups"]
+        .as_array()
+        .expect("pull_in groups")
+        .iter()
+        .filter(|group| group["group"] == "note_pull")
+        .map(|group| {
+            let note = group["note"].as_str().expect("group note").to_string();
+            let members: Vec<&Value> = rows
+                .iter()
+                .filter(|row| row["offer"]["note"] == note.as_str())
+                .collect();
+            let picked = members
+                .iter()
+                .filter(|row| row["offer"]["selected"] == true)
+                .count();
+            (
+                note,
+                group["copy"]["title"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                group["copy"]["fold"].as_str().map(str::to_string),
+                members.len(),
+                picked,
+            )
+        })
+        .collect()
+}
+
+fn all_note_pull_rows(json: &Value) -> Vec<Value> {
+    json["captures"]
+        .as_array()
+        .expect("captures")
+        .iter()
+        .filter(|capture| capture["kind"] == "note_pull")
+        .flat_map(|capture| {
+            capture["note_pull"]["successors"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
 #[test]
 fn note_pull_move_project_and_transfer_follow_picked_row() {
     for (name, draft, dest, link) in [
@@ -480,6 +658,16 @@ fn note_pull_move_project_and_transfer_follow_picked_row() {
     ] {
         let (_temp, vault, day) =
             move_vault(&format!("bob-cli-np-move-{name}"));
+        // A hidden resident makes the source fold observable.
+        let mut work =
+            fs::read_to_string(vault.join("work.md")).expect("work note");
+        work.push_str("- [ ] #task Quiet #hide ^quiet\n");
+        fs::write(vault.join("work.md"), work).expect("hidden resident");
+        let before = snapshot(
+            &vault,
+            &day,
+            &["work.md", "bob.md", "work_docs_push.md", "<day>"],
+        );
         // `-p all` links all three; the moved row follows to the
         // destination with a stable key and a remapped day link.
         let output = run_json(&vault, &day, &["-p", "all"], draft, true);
@@ -490,6 +678,28 @@ fn note_pull_move_project_and_transfer_follow_picked_row() {
         assert_eq!(json["pull_in"]["picked_count"], 3, "{name}: {json}");
         let successors = pull_successors(&json);
         assert_eq!(successors.len(), 3, "{name}: {json}");
+        // One `@work` pull stays one source group, whatever moved.
+        assert_eq!(
+            note_pull_group_summary(&json, &successors),
+            vec![(
+                "work.md".to_string(),
+                "Pull from ‹work›".to_string(),
+                Some("1 hidden".to_string()),
+                3,
+                3,
+            )],
+            "{name}: {json}"
+        );
+        assert_eq!(
+            json["pull_in"]["copy"]["title"], "Pull from ‹work›",
+            "{name}: {json}"
+        );
+        assert!(
+            successors
+                .iter()
+                .all(|row| row["offer"]["note"] == "work.md"),
+            "{name}: every row names its requested source: {json}"
+        );
         let gamma = successors
             .iter()
             .find(|row| row["block_id"] == "gamma")
@@ -528,6 +738,17 @@ fn note_pull_move_project_and_transfer_follow_picked_row() {
         assert_eq!(probe_gamma["not_linked"], "not_selected", "{name}");
         let n = probe_gamma["offer"]["n"].as_u64().expect("n");
         assert_eq!(n, 3, "{name}");
+        assert_eq!(
+            note_pull_group_summary(&probe_json, &probe_rows),
+            vec![(
+                "work.md".to_string(),
+                "Pull from ‹work›".to_string(),
+                Some("1 hidden".to_string()),
+                3,
+                0,
+            )],
+            "{name}: {probe_json}"
+        );
         for flags in [
             vec!["-p".to_string(), n.to_string()],
             vec!["-p".to_string(), "work.md#^gamma".to_string()],
@@ -537,14 +758,65 @@ fn note_pull_move_project_and_transfer_follow_picked_row() {
             assert_success(&picked);
             let picked_json: Value =
                 serde_json::from_slice(&picked.stdout).expect("picked JSON");
-            let picked_rows = pull_successors(&picked_json)
+            let all_rows = pull_successors(&picked_json);
+            assert_eq!(
+                note_pull_group_summary(&picked_json, &all_rows),
+                vec![(
+                    "work.md".to_string(),
+                    "Pull from ‹work›".to_string(),
+                    Some("1 hidden".to_string()),
+                    3,
+                    1,
+                )],
+                "{name}: {flags:?}: {picked_json}"
+            );
+            let picked_rows = all_rows
                 .into_iter()
                 .filter(|row| row["offer"]["selected"] == true)
                 .collect::<Vec<_>>();
             assert_eq!(picked_rows.len(), 1, "{name}: {flags:?}");
             assert_eq!(picked_rows[0]["block_id"], "gamma");
             assert_eq!(picked_rows[0]["note_path"], dest);
+            assert_eq!(picked_rows[0]["offer"]["key"], "work.md#^gamma");
+
+            // Human output: one source header, the moved row's true home.
+            let human = run_human(&vault, &day, &refs, draft, true);
+            assert_success(&human);
+            let text = stdout(&human);
+            assert_eq!(
+                text.matches("Pull from ").count(),
+                1,
+                "{name}: {flags:?}: {text}"
+            );
+            assert!(
+                text.contains("Pull from work · 1 of 3 pulled in"),
+                "{name}: {flags:?}: {text}"
+            );
+            assert!(
+                text.contains(&format!("{dest} ^gamma")),
+                "{name}: {flags:?}: {text}"
+            );
+            assert!(
+                text.contains("not offered  1 hidden"),
+                "{name}: {flags:?}: {text}"
+            );
         }
+        for (flags, header) in [
+            (vec![], "Pull from work · 3 ready tasks"),
+            (vec!["-p", "all"], "Pull from work · 3 of 3 pulled in"),
+            (vec!["-p", "none"], "Pull from work · 3 ready tasks"),
+        ] {
+            let human = run_human(&vault, &day, &flags, draft, true);
+            assert_success(&human);
+            let text = stdout(&human);
+            assert_eq!(
+                text.matches("Pull from ").count(),
+                1,
+                "{name}: {flags:?}: {text}"
+            );
+            assert!(text.contains(header), "{name}: {flags:?}: {text}");
+        }
+        assert_snapshot_unchanged(&before);
 
         // Dry-run and real-run agree on the moved identity.
         let real = run_json(&vault, &day, &["-p", "all"], draft, false);

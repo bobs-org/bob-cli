@@ -1151,6 +1151,12 @@ pub(super) struct TaskCompleteOfferJson {
     /// Merge source for a hand-off offer (`old-note.md#^source`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) merged_from: Option<String>,
+    /// Requested source note of a note-pull offer (`work.md`). Frozen at
+    /// offer time like `key`: a later move updates the row's `note_path`
+    /// to the task's final home, while this keeps naming the `@note` the
+    /// row was pulled from, so `pull_in.groups[].note` membership survives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note: Option<String>,
     pub(super) destination: TaskCompleteOfferDestinationJson,
     /// Crate-private draft order; never a JSON field.
     #[serde(skip)]
@@ -2005,6 +2011,16 @@ fn print_fanout_summary(items: &[CaptureItemResult], item: &CaptureItemResult) {
     println!("{}", Styler::detect().dim(&format!("targets  {markers}")));
 }
 
+/// Requested source note of a note-pull row: the frozen `offer.note`,
+/// falling back to `note_path` for payloads that predate the field. A later
+/// move changes `note_path` to the task's final home but never the source.
+pub(super) fn note_pull_source(row: &TaskCompleteUnblockedJson) -> &str {
+    row.offer
+        .as_ref()
+        .and_then(|offer| offer.note.as_deref())
+        .unwrap_or(&row.note_path)
+}
+
 fn note_pull_rows(result: &CaptureResult) -> Vec<&TaskCompleteUnblockedJson> {
     let rows = if result.captures.is_empty() {
         all_note_pull(&result.item).collect::<Vec<_>>()
@@ -2038,7 +2054,7 @@ fn print_human_note_pull_groups(
         let group_rows: Vec<_> = rows
             .iter()
             .copied()
-            .filter(|row| row.note_path == note)
+            .filter(|row| note_pull_source(row) == note)
             .collect();
         if group_rows.is_empty() {
             continue;
@@ -2320,7 +2336,7 @@ fn print_pull_in_hint(result: &CaptureResult) {
             .flat_map(|group| {
                 note_rows.iter().filter_map(|row| {
                     let offer = row.offer.as_ref()?;
-                    (group.note.as_deref() == Some(row.note_path.as_str()))
+                    (group.note.as_deref() == Some(note_pull_source(row)))
                         .then_some(offer.n)
                 })
             })
@@ -6847,6 +6863,7 @@ mod tests {
                 after: None,
                 moved_from: None,
                 merged_from: None,
+                note: None,
                 order_key: (0, (0, 0), 0, std::path::PathBuf::from("b.md"), 0),
                 settled_ordinal: None,
             }),

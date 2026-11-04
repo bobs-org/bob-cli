@@ -1,0 +1,25 @@
+
+
+↪ Would move 1 task into bob.md › Tasks
+  ^gamma work.md:7 → bob.md  Gamma
+  ↻ would repair 1 link in 1 note
+
+↪ Would move 1 task into bob.md › Tasks
+  ^delta dev.md:5 → bob.md  Delta
+  ↻ would repair 1 link in 1 note
+
+[dry-run] ok would capture  5/5  work_docs_push.md
+  parent  [[work]]
+  - [ ] #task #prj Docs push #hide ^prj
+  1 task · 1 moved from work.md · sections —
+  would move  [*] Beta  work.md:6 → ^beta · FIX link follows
+  would repair  1 link in 1 note
+  hint: 'bob projects sync' adds the parent's Sub-projects line; 'bob task reconcile' reconciles Blocked state
+Pull from work · 3 of 3 pulled in
+  offer 1  would link Pending Alpha  work.md ^alpha → FIX
+  offer 2  would link Next Beta  work_docs_push.md ^beta → FIX
+  offer 3  would link Ready → Next Gamma  bob.md ^gamma → FIX
+Pull from dev · 1 of 1 pulled in
+  offer 4  would link Ready → Next Delta  bob.md ^delta → FIX
+  not offered  1 hidden
+plan 4/10 links

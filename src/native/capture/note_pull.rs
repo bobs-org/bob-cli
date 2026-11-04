@@ -1086,6 +1086,7 @@ pub(super) fn plan_note_pull_item(
                 after: None,
                 moved_from: None,
                 merged_from: None,
+                note: Some(note.clone()),
                 destination,
                 order_key,
                 settled_ordinal: offer.settled_ordinal,
@@ -2968,11 +2969,23 @@ mod tests {
             .expect("gamma survives the transfer");
         assert_eq!(gamma.note_path, "bob.md");
         assert_eq!(gamma.offer.as_ref().expect("offer").key, "work.md#^gamma");
+        // The requested source stays frozen while `note_path` follows.
+        assert_eq!(
+            gamma.offer.as_ref().expect("offer").note.as_deref(),
+            Some("work.md")
+        );
         assert_eq!(gamma.status_symbol, '*');
         assert_eq!(
             gamma.link.as_ref().expect("link").block_link,
             "[[bob#^gamma]]"
         );
+        // One requested source is one group with that source's title.
+        let groups: Vec<_> = pull_in
+            .groups
+            .iter()
+            .map(|group| (group.note.as_deref(), group.copy.title.as_str()))
+            .collect();
+        assert_eq!(groups, vec![(Some("work.md"), "Pull from ‹work›")]);
     }
 
     // Move integration: pull, move, then pull the destination offers once;

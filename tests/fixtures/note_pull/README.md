@@ -50,6 +50,18 @@ roles, counts, and omitted fields remain pinned.
 | `np13/stdout.json` | `capture -b <vault> -f json --require-pull-in-choice -- @sase` | 1 | `np13/vault/` |
 | `np16/choice.json` | `capture -b <vault> -f json -p 2 --require-inbox-route-choice -- @mac_inbox` | 1 | `np16/vault/` |
 | `np16/routed.json` | `capture -b <vault> -f json -p 2 -i 1=health -- @mac_inbox` | 0 | `np16/vault/` |
+| `np-move/preview.json` | `capture -b <vault> -f json --dry-run -- <MOVE_DRAFT>` | 0 | `np-move/vault/` |
+| `np-move/picked.json` | `capture -b <vault> -f json --dry-run -p all -- <MOVE_DRAFT>` | 0 | `np-move/vault/` |
+| `np-move/human.txt` | `capture -b <vault> --dry-run -p all -- <MOVE_DRAFT>` | 0 | `np-move/vault/` |
+| `np-move/choice.json` | `capture -b <vault> -f json --require-pull-in-choice -- <MOVE_DRAFT>` | 1 | `np-move/vault/` |
+| `np-move/two-notes.json` | `capture -b <vault> -f json --dry-run -- $'@work\n\n@dev'` | 0 | `np-move/vault/` |
+
+`<MOVE_DRAFT>` is `generate.py`'s `MOVE_DRAFT`: `@work`, `@dev`, transfers
+`@work+gamma > @bob` and `@dev+delta > @bob`, then a `Docs push` project note
+that moves `^beta`. One `@work` pull splits across two destinations, two sources
+share `bob.md`, and `@dev`'s only offer moves while its hidden resident keeps
+the dev group's fold. Groups follow each row's `offer.note` source; `note_path`
+reports the final home.
 
 ## Coverage checklist
 
@@ -60,7 +72,7 @@ roles, counts, and omitted fields remain pinned.
 | NP10–NP12 | `np10_empty_refusals_carry_fold_and_write_nothing`, `np11_blocked_project_names_prj_reason`, `blocked_project_counts_only_open_prerequisites`, `np11_scheduled_project_names_date_reason`, `np12_missing_source_refuses_pull_note_missing` | `np10_empty_and_folded_np12_missing_source_match_write_free_fixtures` |
 | NP13–NP16 | `np13_require_choice_without_picks_refuses`, `np14_numeric_key_and_out_of_range_picks`, `np15_none_selection_writes_nothing_and_mints_nothing`, `np16_inbox_ready_pick_routes_next_pick_does_not` | `np13_required_choice_matches_refusal_fixture_without_writes`, `np16_inbox_choice_and_routed_pick_match_cli_fixtures` |
 | NP17–NP20 | `np17_same_draft_creation_offered_without_fresh_stamp`, `np18_later_link_drops_earlier_pull_row`, `np19_hand_off_owns_row_later_pull_omits`, `batch_selected_handoff_owns_row_later_pull_omits`, `batch_repeated_source_selected_ownership_prunes`, `np20_two_pulls_keep_item_order_and_continue_numbers`, `batch_duplicate_idless_second_row_selects_alone`, `batch_repeated_source_second_pull_pruned_not_refused`, `batch_later_missing_note_rolls_back_earlier_creation` | `np28_dry_run_parity_and_refusal_paths_are_write_free` covers rollback after a staged first pull, `target_runs_and_one_note_pull_keep_capture_order_and_offer_ownership`, `note_pull_human_subset_two_notes_and_mixed_groups` |
-| Move integration | `batch_pull_then_project_move_follows_picked_row`, `batch_pull_then_project_move_no_pick_keeps_offer`, `batch_pull_then_transfer_move_follows_picked_row`, `batch_pull_move_pull_destination_dedups_and_source_omits` | `note_pull_move_project_and_transfer_follow_picked_row`, `note_pull_move_destination_dedup_and_rollback` |
+| Move integration | `batch_pull_then_project_move_follows_picked_row`, `batch_pull_then_project_move_no_pick_keeps_offer`, `batch_pull_then_transfer_move_follows_picked_row`, `batch_pull_move_pull_destination_dedups_and_source_omits` | `note_pull_move_project_and_transfer_follow_picked_row`, `np_move_groups_follow_requested_sources_in_cli_fixtures`, `note_pull_move_destination_dedup_and_rollback` |
 | NP21–NP23 | `np21_subset_pick_links_only_picked_row`, `np22_unavailable_proof_folds_candidate_blocked`, `staged_closed_prerequisite_is_visible_to_note_pull_snapshot`, `np23_missing_day_uses_existing_error`, `np23_day_without_pomodoros_uses_existing_error` | Planner behavior is additionally exercised through NP1/NP2 fixtures |
 | NP24–NP27 | `execution_lone_route_is_note_pull`, `execution_consecutive_headers_split_note_pull_and_list`, `execution_lone_header_markers_keep_previous_meaning`, `editor_lone_route_reports_note_pull`, `editor_empty_list_needs_list_item`, `lone_route_reports_note_pull_mode` | `capture_list_empty_header_needs_list_item` |
 | NP28 | `np1_no_pick_reports_lane_order_and_writes_nothing`, `np2_pick_all_links_statuses_mints_and_stamps` | `np28_dry_run_parity_and_refusal_paths_are_write_free`; saved NP1/NP2 JSON outputs are real CLI responses |

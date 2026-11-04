@@ -8,8 +8,8 @@
 use super::keep_moving_net::row_project;
 use super::output::{
     all_keep_moving_folds, all_offer_rows, all_project_folds,
-    all_relation_groups, all_relation_held, PullInAfterJson, PullInFoldedJson,
-    PullInGroupCopyJson, PullInGroupJson, PullInTopCopyJson,
+    all_relation_groups, all_relation_held, note_pull_source, PullInAfterJson,
+    PullInFoldedJson, PullInGroupCopyJson, PullInGroupJson, PullInTopCopyJson,
     TaskCompleteUnblockedJson,
 };
 use super::plan::PlannedCaptureItem;
@@ -162,8 +162,9 @@ fn group_key(row: &TaskCompleteUnblockedJson) -> Option<GroupKey> {
         "keep_moving" => GroupKey::KeepMoving {
             project: row_project(row),
         },
+        // The requested source, not the row's possibly moved home.
         "note_pull" => GroupKey::NotePull {
-            note: row.note_path.clone(),
+            note: note_pull_source(row).to_string(),
         },
         _ => return None,
     })

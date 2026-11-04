@@ -408,6 +408,7 @@ fn merge_offer_row(
             after: None,
             moved_from: None,
             merged_from: Some(offer.merged_from.clone().unwrap_or(source_path)),
+            note: None,
             destination: TaskCompleteOfferDestinationJson {
                 day_file: display_relative(daily_path),
                 entry_name: offer.entry_name.clone(),

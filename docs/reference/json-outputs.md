@@ -143,6 +143,7 @@ flow. The additive fields are:
 | Location | Fields |
 | --- | --- |
 | `task_complete`, `pomodoro_close`, nested `relation_completes[].task_complete`, or a Pending-unlink capture item | `relation_successors[]` and `relation_held[]` are omitted when empty; `relation_check` (`checked` or `unavailable`) is present only when the lookup ran |
+| A note-pull offered row | `offer.note` is the requested source, matching `pull_in.groups[].note`; `note_path` is the final home after a later move |
 | An offered row with a relation reason | `relation: {label, key, event, after}`; `event` is `parked` or `done`, and `after[]` identifies the triggering tasks with `note_path`, `block_id`, and `text`. A relation-group row also has `offer.after`, a `note.md#^id` string |
 | A held relation row | Task identity, the relation, and `reason`: `already_planned`, `already_started`, `blocked`, `hidden`, or `waits_for` |
 | Batch `pull_in` | `supported`, `offer_count`, `choice` (`null`, `all`, `none`, or `subset`), `picked_count`; optional `groups[]` and `copy: {title, capsule, glyph}` |
