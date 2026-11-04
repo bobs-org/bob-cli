@@ -430,6 +430,7 @@ pub(super) fn plan_note_pull_item(
                     clip_plan: None,
                     pomodoro_refs: Vec::new(),
                     task_block_refs: Vec::new(),
+                    project_move_landings: Vec::new(),
                 });
             }
         }
@@ -685,6 +686,7 @@ pub(super) fn plan_note_pull_item(
             clip_plan: None,
             pomodoro_refs: Vec::new(),
             task_block_refs: Vec::new(),
+            project_move_landings: Vec::new(),
         });
     }
     // Lane pull order (Pending → Next → Ready), then source line.
@@ -1158,6 +1160,7 @@ pub(super) fn plan_note_pull_item(
         clip_plan: None,
         pomodoro_refs: Vec::new(),
         task_block_refs,
+        project_move_landings: Vec::new(),
     })
 }
 

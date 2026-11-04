@@ -45,6 +45,9 @@ pub(super) struct PlannedCaptureItem {
     /// Parent-task touches this item reported. The batch loop feeds them
     /// to the task tracker; this field is never serialized.
     pub(super) task_block_refs: Vec<TaskBlockRef>,
+    /// Project-note move landings for tracker forwarding. The batch loop
+    /// remaps tracked roots before ordinary forwarding; never serialized.
+    pub(super) project_move_landings: Vec<ProjectMoveLanding>,
 }
 
 pub(super) fn plan_capture_batch(
@@ -206,6 +209,11 @@ pub(super) fn plan_capture_batch_with_config_path(
             }
         }
         let task_refs = std::mem::take(&mut planned.task_block_refs);
+        // Project moves remove tracked roots from their source: remap
+        // before ordinary forwarding so moved and carried blocks follow
+        // to the destination instead of tripping the lost-headline guard.
+        let move_landings = std::mem::take(&mut planned.project_move_landings);
+        task_tracker.remap_project_moves(&planner, &move_landings);
         task_tracker.track_item(&planner, &pre_tasks, task_refs);
         keep_moving_trace.record(items.len(), &planned, &planner, &day_file);
         items.push(planned);
@@ -616,6 +624,7 @@ fn plan_ref_item(
         clip_plan: None,
         pomodoro_refs: Vec::new(),
         task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
     };
     Ok((planned, staged))
 }
@@ -1165,6 +1174,7 @@ pub(super) fn plan_capture_item(
                 .into_iter()
                 .chain(toggle.relation.task_block_refs.iter().cloned())
                 .collect(),
+            project_move_landings: Vec::new(),
         };
         if let Some((original, applied)) = marker_retype {
             let marker = parsed.type_marker.as_ref().ok_or_else(|| {
@@ -2104,6 +2114,7 @@ pub(super) fn plan_capture_item(
                 clip_plan,
                 pomodoro_refs: Vec::new(),
                 task_block_refs: vec![task_ref],
+                project_move_landings: Vec::new(),
             });
         }
         // Clipboard notes are direct children with no wrapper bullet: the
@@ -2983,6 +2994,7 @@ pub(super) fn plan_capture_item(
             refs.extend(close_task_block_refs);
             refs
         },
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -4172,5 +4184,6 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             refs.extend(close_task_block_refs);
             refs
         },
+        project_move_landings: Vec::new(),
     })
 }

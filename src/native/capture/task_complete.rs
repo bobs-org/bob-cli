@@ -148,6 +148,7 @@ pub(super) fn plan_task_complete_item(
         clip_plan: None,
         pomodoro_refs: outcome.pomodoro_refs.clone(),
         task_block_refs: outcome.task_block_refs.clone(),
+        project_move_landings: Vec::new(),
     })
 }
 

@@ -3621,6 +3621,7 @@ pub(super) fn plan_dependency_only_item(
         clip_plan: None,
         pomodoro_refs,
         task_block_refs,
+        project_move_landings: Vec::new(),
     })
 }
 

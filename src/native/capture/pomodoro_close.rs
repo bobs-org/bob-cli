@@ -1478,6 +1478,7 @@ fn plan_reset_link_item(
         clip_plan: None,
         pomodoro_refs,
         task_block_refs: task_block_ref.into_iter().collect(),
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -1654,6 +1655,7 @@ fn plan_reset_task_item(
             }
             None => Vec::new(),
         },
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -1766,6 +1768,7 @@ fn plan_reset_whole_item(
         clip_plan: None,
         pomodoro_refs,
         task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -2017,6 +2020,7 @@ pub(super) fn plan_pomodoro_close_item(
         clip_plan: None,
         pomodoro_refs,
         task_block_refs,
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -2809,6 +2813,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         clip_plan: None,
         pomodoro_refs,
         task_block_refs,
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -3173,5 +3178,6 @@ pub(super) fn plan_pomodoro_close_task_item(
             }
             None => task_block_refs,
         },
+        project_move_landings: Vec::new(),
     })
 }

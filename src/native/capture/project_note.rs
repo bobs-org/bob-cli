@@ -5,6 +5,7 @@ use super::output::{
     ProjectNotePlannedLink, ProjectNoteRepairedFile,
 };
 use super::*;
+use crate::native::capture_active_tasks;
 use crate::native::task_move::{
     movable_roots, resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot,
     MovePlacement, MoveRequest, MoveSelector, PlanError,
@@ -216,6 +217,23 @@ pub(super) fn plan_project_note_item(
         .as_deref()
         .is_some_and(|date| date > date_string(today).as_str());
 
+    // Inherited blocking at the new project boundary: when the staged
+    // parent project is itself blocked (future schedule or an existing
+    // #prj_is_blocked proxy from reconcile), the new note inherits that
+    // state before links/offers. Keep the parent's reasons on its own
+    // ^prj; do not copy dates/prerequisites or run vault-wide reconcile.
+    // The child ^prj and open residents carry the Blocked/tag proxy so
+    // the existing guard sees an unblocked destination as blocked.
+    let inherited_blocked =
+        parent_project_blocks_child(planner, &source_path, today, &settings);
+    if inherited_blocked {
+        apply_inherited_block_to_rendered(&mut rendered, &settings);
+    }
+    // Offers and bulk new-task links see the effective blocked state;
+    // moved colon tasks still run the nested gesture so guard/consumption
+    // and dependency-drop details stay truthful.
+    let offer_blocked = project_blocked || inherited_blocked;
+
     let mut frozen_offers: Vec<FrozenOffer> = Vec::new();
     let mut project_folds: Vec<crate::native::task_complete::ProjectFold> =
         Vec::new();
@@ -228,7 +246,7 @@ pub(super) fn plan_project_note_item(
             .filter(|row| !row.placeholder && row.hidden && !row.link)
             .count();
         let offer_rows: Vec<&capture_project_note::RenderedTask> =
-            if project_blocked {
+            if offer_blocked {
                 Vec::new()
             } else {
                 rendered
@@ -260,31 +278,40 @@ pub(super) fn plan_project_note_item(
                     .filter_map(|task| task.block_id.clone())
                     .collect();
                 let day_path = pomodoro::day_file_for(&request.bob_dir);
-                let day_contents = planner.peek_text(&day_path);
+                // Staged-aware ledger: load the day only when offers need
+                // it, so a never-loaded disk day agrees with the same day
+                // already staged by an earlier item. No daily-note
+                // requirement when there are no offer destinations.
+                let day_contents =
+                    planner.current_contents(&day_path).ok().flatten();
+                let day_ledger = day_contents
+                    .as_deref()
+                    .map(capture_active_tasks::ledger_from_contents);
                 let parent_lines: Vec<&str> = parent_contents.lines().collect();
                 for (pos, resolved) in resolved_moves.iter().enumerate() {
                     if resolved.sigil == ':' {
                         moved_already_extra += 1;
                         continue;
                     }
-                    if project_blocked {
+                    if offer_blocked {
                         continue;
                     }
                     // Already-live-linked caret moves fold into planned.
-                    let parent_link = format!(
-                        "[[{route}#^{block_id}]]",
-                        block_id = resolved.block_id
-                    );
-                    if day_contents
-                        .as_deref()
-                        .is_some_and(|day| day.contains(&parent_link))
-                    {
+                    // Exact dedicated-link identity: prose mentions,
+                    // historical/closed entries, fenced/struck/deeper-nested
+                    // rows, and prefix IDs (ab vs a) never count.
+                    let live_key =
+                        (route.to_string(), resolved.block_id.clone());
+                    if day_ledger.as_ref().is_some_and(|ledger| {
+                        ledger.owners.contains_key(&live_key)
+                    }) {
                         moved_already_extra += 1;
                         continue;
                     }
                     // Hidden rows fold into hidden (muted, still movable).
+                    // MovableRoot lines are 1-based; parent_lines is 0-based.
                     let hidden = parent_lines
-                        .get(resolved.root.line)
+                        .get(resolved.root.line.saturating_sub(1))
                         .is_some_and(|line| {
                             crate::native::capture_dependency_tasks::has_hide_tag(
                                 line,
@@ -619,7 +646,7 @@ pub(super) fn plan_project_note_item(
     let linked_all: Vec<capture_project_note::RenderedNamedTask> = rendered
         .named_tasks
         .iter()
-        .filter(|task| task.link && !project_blocked)
+        .filter(|task| task.link && !offer_blocked)
         .cloned()
         .collect();
     // For Create with colon moves, and for Offer with any moves, the bulk
@@ -863,6 +890,7 @@ pub(super) fn plan_project_note_item(
     let mut task_theme = None;
     let mut project_merges: Vec<super::task_theme::AppliedMerge> = Vec::new();
     if project_link_guard.is_none()
+        && !inherited_blocked
         && let Some(initial_destination) = canonical_pomodoro_name.clone()
         && let Some(selector) = pomodoro_name.as_deref()
     {
@@ -995,11 +1023,16 @@ pub(super) fn plan_project_note_item(
         }
 
         for (source_index, bullet) in parsed.sub_bullets.iter().enumerate() {
-            // New `:` task in draft order.
+            // New `:` task in draft order. Inherited-blocked projects stay
+            // unlinked like future-dated ones; the staged [?] + tag rows
+            // already carry the proxy.
             if let Some(task_id) = bullet.task_id.as_ref()
                 && task_id.link
                 && let Some(named) = new_by_id.get(task_id.block_id.as_str())
             {
+                if inherited_blocked {
+                    continue;
+                }
                 let named = (*named).clone();
                 // Per-task type placement when no `#name` (D3); named keeps
                 // its deliberate destination (the caller applies D6 below).
@@ -1462,6 +1495,79 @@ pub(super) fn plan_project_note_item(
         let _ = current_destination;
     }
 
+    // Re-resolve every moved root by stable block-ID identity after the
+    // item's links: dependency-child removals, schedule-log edits, and
+    // later same-note writes shift destination rows, so carrying the
+    // pre-link landing line reports stale lines (e.g. c on 15 vs 14).
+    // Preserve sigil, source coordinates, UTF-8 ranges, previous status
+    // and move history; never derive identity from title text.
+    if let Some(execution) = move_execution.as_mut() {
+        if let Ok(final_contents) = planner.read_existing(&new_target) {
+            let final_scan = note_tasks::scan(&final_contents, &settings);
+            for task in execution.moved_tasks.iter_mut() {
+                if let BlockIdLookup::Found(live) =
+                    final_scan.by_block_id(&task.block_id)
+                {
+                    task.line = live.line_index + 1;
+                    task.status_symbol = live.status_symbol;
+                    task.status_name = task_complete::status_name_for(
+                        &request.bob_dir,
+                        live.status_symbol,
+                    );
+                    // Text follows the live row; identity stays block ID.
+                    if let Some(line_text) =
+                        final_contents.lines().nth(live.line_index)
+                    {
+                        // Keep the original title for reporting stability
+                        // unless the row genuinely changed (e.g. status or
+                        // type edits during linking).
+                        let _ = line_text;
+                    }
+                }
+            }
+        }
+        // Refresh followed live-link entries after day insertions and
+        // destination-name merges so entry lines/names agree with the
+        // final staged day. Selected offers, task links and block tracker
+        // rows stay consistent via the same staged state.
+        let day_path = pomodoro::day_file_for(&request.bob_dir);
+        if let Ok(Some(final_day)) = planner.current_contents(&day_path) {
+            let dest_route_refresh = basename
+                .strip_suffix(".md")
+                .unwrap_or(&basename)
+                .to_string();
+            for task in execution.moved_tasks.iter_mut() {
+                if task.planned.is_some() {
+                    task.planned = followed_live_link(
+                        &final_day,
+                        &dest_route_refresh,
+                        &task.block_id,
+                    );
+                    task.detail = task.planned.as_ref().map(|link| {
+                        if link.entry_name.is_empty() {
+                            "Task Link follows".to_string()
+                        } else {
+                            format!("{} link follows", link.entry_name)
+                        }
+                    });
+                }
+            }
+        }
+        // Keep moved-offer rows consistent with the final staged rows.
+        for offer in frozen_offers.iter_mut().filter(|o| o.moved_from.is_some())
+        {
+            if let Some(block_id) = offer.final_block_id.clone()
+                && let Some(moved) = execution
+                    .moved_tasks
+                    .iter()
+                    .find(|t| t.block_id == block_id)
+            {
+                offer.final_status = moved.status_symbol;
+                offer.final_line = moved.line;
+            }
+        }
+    }
+
     let prj_text = parsed.body.trim().to_string();
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -1827,6 +1933,30 @@ pub(super) fn plan_project_note_item(
             refs
         },
         task_block_refs: extra_task_block_refs,
+        project_move_landings: move_execution.as_ref().map_or_else(
+            Vec::new,
+            |execution| {
+                let dest_relative = basename.clone();
+                let dest_route = basename
+                    .strip_suffix(".md")
+                    .unwrap_or(&basename)
+                    .to_string();
+                execution
+                    .moved_tasks
+                    .iter()
+                    .map(|task| super::ProjectMoveLanding {
+                        source: source_path.clone(),
+                        dest: new_target.clone(),
+                        dest_relative: dest_relative.clone(),
+                        dest_route: dest_route.clone(),
+                        old_block_id: Some(task.block_id.clone()),
+                        new_block_id: Some(task.block_id.clone()),
+                        old_line: task.source_line,
+                        new_line: task.line,
+                    })
+                    .collect()
+            },
+        ),
     })
 }
 
@@ -2099,7 +2229,9 @@ fn execute_project_note_moves(
         })?;
     let destination_scan = note_tasks::scan(&destination_contents, settings);
     let day_file = pomodoro::day_file_for(&request.bob_dir);
-    let day_contents = planner.peek_text(&day_file);
+    // Staged-aware: a never-loaded disk day must agree with the same day
+    // already staged by an earlier item.
+    let day_contents = planner.current_contents(&day_file).ok().flatten();
     let mut moved_tasks = Vec::with_capacity(moves.len());
     for authored in moves {
         let movement = move_plan
@@ -2269,33 +2401,180 @@ fn followed_live_link(
     destination_route: &str,
     block_id: &str,
 ) -> Option<ProjectNotePlannedLink> {
-    let link_target = format!("{destination_route}#^{block_id}");
-    let lines: Vec<&str> = day_contents.lines().collect();
-    let scan = capture_pomodoros::scan(day_contents);
-    for entry in scan
-        .entries
-        .iter()
-        .filter(|entry| entry.state == capture_pomodoros::PomodoroState::Open)
-    {
-        let start = entry.line.saturating_sub(1);
-        let end = (start + 1..lines.len())
-            .find(|index| {
-                !lines[*index].trim().is_empty()
-                    && !lines[*index].starts_with(' ')
-                    && !lines[*index].starts_with('\t')
-            })
-            .unwrap_or(lines.len());
-        if lines[start..end]
-            .iter()
-            .any(|line| line.contains(&link_target))
+    // Exact staged-aware dedicated-link identity via the shared ledger:
+    // sole-content [[route#^id]] bullets under open Pomodoros only. Prose
+    // mentions, historical/closed entries, fenced/struck/deeper-nested rows,
+    // and prefix IDs never count.
+    let ledger = capture_active_tasks::ledger_from_contents(day_contents);
+    ledger
+        .owners
+        .get(&(destination_route.to_string(), block_id.to_string()))
+        .map(|pomodoro| ProjectNotePlannedLink {
+            entry_name: pomodoro.name.clone().unwrap_or_default(),
+            entry_line: pomodoro.line,
+        })
+}
+
+/// Whether the staged parent project blocks a new child project via
+/// inheritance: a future schedule on the parent ^prj or an existing
+/// #prj_is_blocked proxy (own or inherited) means the child inherits.
+/// Uses only the already-loaded staged parent text, so no-move drafts gain
+/// no new vault-wide scans. Deeper ancestors surface through the parent's
+/// own tagged ^prj; staged parents work because current_contents returns
+/// the staged overlay.
+fn parent_project_blocks_child(
+    planner: &mut CaptureBatchPlanner,
+    source_path: &Path,
+    today: NaiveDate,
+    settings: &note_tasks::NoteTaskSettings,
+) -> bool {
+    let Ok(Some(contents)) = planner.current_contents(source_path) else {
+        return false;
+    };
+    let scan = note_tasks::scan(&contents, settings);
+    // Parent must be a recognised project with an open ^prj to inherit.
+    let tasks =
+        crate::native::task_status_hooks::parse_tasks(&contents, settings);
+    let relative = source_path
+        .file_name()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("parent.md"));
+    // Rebuild a minimal FileScan for ProjectContext: relative path is only
+    // used for identity, contents/tasks drive recognition.
+    let file_scan = crate::native::task_status_hooks::FileScan {
+        path: source_path.to_path_buf(),
+        relative_path: relative,
+        contents: contents.clone(),
+        tasks: tasks.clone(),
+    };
+    let context = crate::native::project_dependencies::ProjectContext::for_note(
+        &file_scan,
+    );
+    if !context.recognised {
+        return false;
+    }
+    // Future schedule on the parent ^prj blocks children.
+    if context.scheduled.is_some_and(|date| date > today) {
+        return true;
+    }
+    // An existing proxy tag means the parent is itself blocked (own or
+    // inherited) and reconcile has recorded it; the child inherits.
+    let lines: Vec<&str> = contents.lines().collect();
+    for task in scan.tasks() {
+        let Some(line) = lines.get(task.line_index) else {
+            continue;
+        };
+        if crate::native::capture_dependency_tasks::has_prj_is_blocked_tag(line)
         {
-            return Some(ProjectNotePlannedLink {
-                entry_name: entry.name.clone().unwrap_or_default(),
-                entry_line: entry.line,
-            });
+            return true;
         }
     }
-    None
+    false
+}
+
+/// Tag the freshly rendered child note with the inherited Blocked proxy:
+/// open ^prj becomes [?] plus tag, open residents become [?] plus tag.
+/// The parent keeps its own reasons; no dates/prerequisites are copied.
+fn apply_inherited_block_to_rendered(
+    rendered: &mut capture_project_note::RenderedProjectNote,
+    settings: &note_tasks::NoteTaskSettings,
+) {
+    // Patch the ^prj lifecycle line.
+    let patched_prj = patch_task_line_to_blocked(&rendered.task_line, settings);
+    rendered.task_line = patched_prj.clone();
+    // Patch the full contents: first occurrence of the ^prj line plus every
+    // open resident task line. Closed/placeholder rows stay untouched.
+    let mut lines: Vec<String> =
+        rendered.contents.lines().map(str::to_string).collect();
+    let mut prj_patched = false;
+    for line in lines.iter_mut() {
+        // Only first-level task lines can be project residents; nested,
+        // fenced and section lines never carry the proxy from rendering.
+        let trimmed = line.trim_start();
+        if !(trimmed.starts_with("- ") || trimmed.starts_with("* ")) {
+            continue;
+        }
+        // Parse status symbol: "- [X]" shape.
+        let bytes = trimmed.as_bytes();
+        if bytes.len() < 6 || bytes[0] != b'-' && bytes[0] != b'*' {
+            continue;
+        }
+        // Find "[X]" after the marker.
+        let Some(open) = trimmed.find('[') else {
+            continue;
+        };
+        let Some(close) = trimmed.find(']') else {
+            continue;
+        };
+        if close != open + 2 {
+            continue;
+        }
+        let symbol = trimmed.as_bytes()[open + 1] as char;
+        // Skip closed, placeholder and already-blocked rows; keep the
+        // first ^prj patch aligned with rendered.task_line.
+        if symbol == 'x' || symbol == 'X' || symbol == '-' {
+            continue;
+        }
+        if line.contains(capture_project_note::PLACEHOLDER_TASK_BODY) {
+            continue;
+        }
+        let Some(status_type) = settings.status_types.get(&symbol) else {
+            continue;
+        };
+        if !status_type.is_open() {
+            continue;
+        }
+        let patched = patch_task_line_to_blocked(line, settings);
+        // Only patch lines that actually change (open tasks); this keeps
+        // headings, logs and drawers byte-identical.
+        if patched != *line {
+            // For the ^prj line, reuse the already-patched task_line once.
+            if !prj_patched && line.contains("^prj") {
+                *line = patched_prj.clone();
+                prj_patched = true;
+            } else {
+                *line = patched;
+            }
+        } else if !prj_patched && line.contains("^prj") {
+            *line = patched_prj.clone();
+            prj_patched = true;
+        }
+    }
+    // Ensure the ^prj line in contents matches rendered.task_line even
+    // when the scan above missed it (e.g. unusual spacing).
+    if !prj_patched {
+        for line in lines.iter_mut() {
+            if line.contains("^prj") {
+                *line = patched_prj.clone();
+                break;
+            }
+        }
+    }
+    rendered.contents = lines.join("\n");
+    if !rendered.contents.ends_with('\n') {
+        rendered.contents.push('\n');
+    }
+}
+
+fn patch_task_line_to_blocked(
+    line: &str,
+    settings: &note_tasks::NoteTaskSettings,
+) -> String {
+    use crate::native::projects::edits::normalize_prj_is_blocked_tag;
+    // Change "[X]" to "[?]" for open statuses; leave closed/unknown alone.
+    let mut patched = line.to_string();
+    if let Some(open) = line.find('[')
+        && let Some(close) = line.find(']')
+        && close == open + 2
+    {
+        let symbol = line.as_bytes()[open + 1] as char;
+        if let Some(status_type) = settings.status_types.get(&symbol)
+            && status_type.is_open()
+        {
+            patched.replace_range(open + 1..open + 2, "?");
+        }
+    }
+    normalize_prj_is_blocked_tag(&patched, true)
 }
 
 fn draft_line_number(text: &str, offset: usize) -> usize {

@@ -2509,3 +2509,301 @@ fn project_note_move_human_capture(
         .env("TZ", "UTC0");
     run_with_stdin(&mut command, input)
 }
+
+#[test]
+fn capture_move_landing_repairs_tracker_forwards_moved_roots() {
+    // Defect 1: a shared-note touch plus a project move must not panic;
+    // the tracked root follows to the destination with roles preserved.
+    // Dry-run JSON agrees with real JSON after normalizing dry_run.
+    let temp = TempDir::new("bob-cli-move-landing-tracker");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\ntype: \"[[area]]\"\n---\n",
+            "- [ ] #task Alpha ^a\n",
+            "- [ ] #task Beta ^b\n",
+        ),
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Work (0900-0930)\n");
+    // Two valid sub-bullet touches (one per task) then a project move of
+    // ^a. The tracker must forward ^a to the destination instead of
+    // tripping the lost-headline guard.
+    let input = concat!(
+        "Touch one @cash+a\n",
+        "\n",
+        "Touch two @cash+b\n",
+        "\n",
+        "Project @cash^x@\n",
+        "- ^a\n",
+    );
+    let run = |dry_run: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_NOW", "2026-09-20 14:31:07")
+            .env("TZ", "UTC0");
+        let output = run_with_stdin(&mut command, input);
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture JSON")
+    };
+    let day_before = fs::read_to_string(&day).expect("read day");
+    let dry = run(true);
+    assert!(!vault.join("cash_x.md").exists(), "{dry}");
+    assert_eq!(
+        fs::read_to_string(&day).expect("dry writes nothing"),
+        day_before
+    );
+    let json = run(false);
+    fn mask_dry_run(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, val) in map.iter_mut() {
+                    if key == "dry_run" {
+                        *val = serde_json::json!(false);
+                    } else {
+                        mask_dry_run(val);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    mask_dry_run(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut masked = dry.clone();
+    mask_dry_run(&mut masked);
+    let mut expected = json.clone();
+    mask_dry_run(&mut expected);
+    assert_eq!(masked, expected, "dry-run must equal real-run JSON");
+    // Multi-item batch output nests the project-note capture in captures[].
+    let project_json = if json.get("project_note").is_some() {
+        json.clone()
+    } else {
+        json["captures"]
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("project_note").is_some())
+                    .cloned()
+            })
+            .expect("project-note capture in batch")
+    };
+    let moved = &project_json["project_note"]["moved_tasks"];
+    assert_eq!(moved.as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(moved[0]["block_id"], "a", "{json}");
+    assert_eq!(moved[0]["source"], "cash.md", "{json}");
+    let dest = fs::read_to_string(vault.join("cash_x.md")).expect("dest");
+    assert!(dest.contains("#task Alpha"), "{dest}");
+    let source = fs::read_to_string(vault.join("cash.md")).expect("source");
+    assert!(!source.contains("^a"), "{source}");
+    assert!(source.contains("^b"), "{source}");
+}
+
+#[test]
+fn capture_move_landing_repairs_exact_live_link_identities() {
+    // Defect 2: prose mentions and prefix IDs never count as live links.
+    // A prose mention must still create a dedicated ADMIN link.
+    let temp = TempDir::new("bob-cli-move-landing-live");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\ntype: \"[[area]]\"\n---\n",
+            "- [ ] #task Admin work ^admin\n",
+        ),
+    );
+    write_file(
+        &day,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] Work (0900-0930)\n",
+            "  - Discuss [[cash#^admin]]\n",
+        ),
+    );
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@#admin\n- :admin\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["block_id"], "admin", "{json}");
+    assert!(moved.get("link").is_some(), "{json} prose is inert");
+    assert!(moved["not_linked"].is_null(), "{json}");
+    let day_after = fs::read_to_string(&day).expect("day");
+    assert!(day_after.contains("[[cash_x#^admin]]"), "{day_after}");
+}
+
+#[test]
+fn capture_move_landing_repairs_hidden_eligibility_coordinates() {
+    // Defect 3: hidden final rows are offered (not visible-before-hidden).
+    // MovableRoot lines are 1-based; parent_lines is 0-based.
+    let temp = TempDir::new("bob-cli-move-landing-hidden");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\ntype: \"[[area]]\"\n---\n",
+            "- [ ] #task Visible ^a\n",
+            "- [ ] #task Secret #hide ^b\n",
+        ),
+    );
+    // Offer form via :x seal with caret moves: eligible rows are offered,
+    // hidden rows fold instead of offering. MovableRoot lines are 1-based.
+    let day = vault.join("day.md");
+    write_file(&day, "## Pomodoros\n- [ ] Work (0900-0930)\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash:x@\n- ^a\n",
+        true,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let successors = json["project_note"]["successors"]
+        .as_array()
+        .expect("successors");
+    // Visible ^a immediately before hidden ^b must be offered (not
+    // wrongly excluded by the off-by-one).
+    assert_eq!(successors.len(), 1, "{json} visible before hidden");
+    // Explicit hidden move still moves when named (Create form).
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^y@\n- ^b\n",
+        false,
+        None,
+    );
+    assert_success(&output);
+    let note = fs::read_to_string(vault.join("cash_y.md")).expect("dest");
+    assert!(note.contains("^b"), "{note}");
+    // Hidden final row is never offered: same Offer draft against a vault
+    // where ^a itself is hidden must fold, not offer.
+    let temp = TempDir::new("bob-cli-move-landing-hidden-final");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\ntype: \"[[area]]\"\n---\n",
+            "- [ ] #task Secret #hide ^a\n",
+        ),
+    );
+    let day = vault.join("day.md");
+    write_file(&day, "## Pomodoros\n- [ ] Work (0900-0930)\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash:x@\n- ^a\n",
+        true,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let successors = json["project_note"]["successors"]
+        .as_array()
+        .expect("successors");
+    assert_eq!(successors.len(), 0, "{json} hidden final folds");
+}
+
+#[test]
+fn capture_move_landing_repairs_inherited_blocking_at_new_boundary() {
+    // Defect 4: a future-scheduled parent blocks the new project; a colon
+    // move through the new boundary stays unlinked, never Next+linked.
+    let temp = TempDir::new("bob-cli-move-landing-inherited");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    crate::support::write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [?] #task Parent #prj #hide [scheduled:: 2026-09-25] ^prj\n",
+            "- [?] #task Alpha #prj_is_blocked ^a\n",
+        ),
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Work (0900-0930)\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@\n- :a\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = &json["project_note"]["moved_tasks"][0];
+    assert_eq!(moved["block_id"], "a", "{json}");
+    assert!(moved["link"].is_null(), "{json} inherited stays unlinked");
+    assert!(moved["not_linked"].is_string(), "{json}");
+    assert_ne!(moved["status_symbol"], "*", "{json} never Next");
+    let dest = fs::read_to_string(vault.join("cash_x.md")).expect("dest");
+    assert!(dest.contains("#prj_is_blocked"), "{dest}");
+}
+
+#[test]
+fn capture_move_landing_repairs_moved_reports_after_child_edits() {
+    // Defect 5: dependency-child removal shifting later moved rows must
+    // re-resolve every moved root by block ID (c on 14, not stale 15).
+    let temp = TempDir::new("bob-cli-move-landing-reresolve");
+    let vault = temp.path().join("vault");
+    let day = vault.join("day.md");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\ntype: \"[[area]]\"\n---\n",
+            "- [?] #task Blocked [dependsOn:: cash__b] [id:: cash__a] ^a\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
+            "- [ ] #task Prereq [id:: cash__b] ^b\n",
+            "- [ ] #task Ready ^c\n",
+        ),
+    );
+    write_file(&day, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+    let output = project_note_move_capture(
+        &vault,
+        "Project @cash^x@\n- :a\n- ^c\n",
+        false,
+        Some(&day),
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("move JSON");
+    let moved = json["project_note"]["moved_tasks"]
+        .as_array()
+        .expect("moved");
+    assert_eq!(moved.len(), 2, "{json}");
+    let dest = fs::read_to_string(vault.join("cash_x.md")).expect("dest");
+    for task in moved {
+        let id = task["block_id"].as_str().unwrap();
+        let reported = task["line"].as_u64().unwrap() as usize;
+        let actual = dest
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains(&format!("^{id}")))
+            .map(|(index, _)| index + 1)
+            .expect("block in dest");
+        assert_eq!(reported, actual, "{json} {dest} stale line for ^{id}");
+    }
+}

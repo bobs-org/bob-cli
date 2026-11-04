@@ -962,5 +962,6 @@ pub(super) fn plan_pomodoro_merge_item(
         clip_plan: None,
         pomodoro_refs: refs,
         task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
     })
 }

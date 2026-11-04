@@ -1156,6 +1156,7 @@ pub(super) fn plan_pomodoro_start_item(
             moved_index,
         )],
         task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -1406,6 +1407,7 @@ fn plan_override_restart_item(
             moved_index,
         )],
         task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -2012,6 +2014,7 @@ fn plan_override_swap_item(
             ),
         ],
         task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
     })
 }
 
@@ -2798,6 +2801,7 @@ fn plan_named_pomodoro_start_item(
             after: Some(moved_index),
         }],
         task_block_refs: Vec::new(),
+        project_move_landings: Vec::new(),
     })
 }
 

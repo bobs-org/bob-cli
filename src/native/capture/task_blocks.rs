@@ -41,6 +41,21 @@ pub(super) struct TaskBlockRef {
     pub(super) role: TaskBlockRole,
 }
 
+/// One project-note move landing: typed identity carried from project
+/// planning into the batch loop so tracked roots remap before ordinary
+/// same-note forwarding can declare them lost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProjectMoveLanding {
+    pub(super) source: PathBuf,
+    pub(super) dest: PathBuf,
+    pub(super) dest_relative: String,
+    pub(super) dest_route: String,
+    pub(super) old_block_id: Option<String>,
+    pub(super) new_block_id: Option<String>,
+    pub(super) old_line: usize,
+    pub(super) new_line: usize,
+}
+
 /// One parent tracked across the batch: its current 0-based line in the
 /// latest post-state text, plus the identity needed to re-find it after
 /// rewrites and to render the final block.
@@ -115,7 +130,14 @@ impl TaskBlockTracker {
                 .push(index);
         }
         for (target, indices) in by_target {
-            let pre_text = pre.get(&target).and_then(|text| text.clone());
+            // Remapped project-move destinations have no pre snapshot
+            // (the dest was untracked before this item); the remap already
+            // set their landing lines, so keep positions without Myers.
+            let pre_entry = pre.get(&target);
+            if pre_entry.is_none() {
+                continue;
+            }
+            let pre_text = pre_entry.and_then(|text| text.clone());
             let post_text = planner.peek_text(&target);
             let (Some(pre_text), Some(post_text)) = (pre_text, post_text)
             else {
@@ -173,6 +195,78 @@ impl TaskBlockTracker {
             }
         }
         self.merge_or_start(refs);
+    }
+
+    /// One project-note move landing for tracker forwarding: a moved
+    /// root's absolute source/destination, its 1-based old/new lines, and
+    /// its preserved block ID. Runs per item before ordinary forwarding
+    /// so remapped entries have valid pre/post handling.
+    pub(super) fn remap_project_moves(
+        &mut self,
+        planner: &CaptureBatchPlanner,
+        moves: &[ProjectMoveLanding],
+    ) {
+        if moves.is_empty() {
+            return;
+        }
+        // Cache destination scans so carried descendants (children inside
+        // a moved block) follow their block ID without extra vault scans.
+        let mut dest_scans: HashMap<PathBuf, note_tasks::NoteTaskScan> =
+            HashMap::new();
+        for tracked in &mut self.tracked {
+            // Exact root match first: same source note and same block ID
+            // (or same ID-less line).
+            if let Some(movement) = moves.iter().find(|movement| {
+                tracked.target == movement.source
+                    && match movement.old_block_id.as_deref() {
+                        Some(id) => tracked.block_id.as_deref() == Some(id),
+                        None => {
+                            tracked.block_id.is_none()
+                                && tracked.current
+                                    == movement.old_line.saturating_sub(1)
+                        }
+                    }
+            }) {
+                tracked.target = movement.dest.clone();
+                tracked.relative_target = movement.dest_relative.clone();
+                tracked.route = movement.dest_route.clone();
+                tracked.current = movement.new_line.saturating_sub(1);
+                tracked.block_id = movement.new_block_id.clone();
+                continue;
+            }
+            // Carried descendants: a tracked block ID that left its source
+            // now lives in a project-move destination. Follow it there so
+            // previously touched children inside the moved block keep
+            // first-touch roles and cumulative reporting.
+            let Some(tracked_id) = tracked.block_id.clone() else {
+                continue;
+            };
+            for movement in moves {
+                if tracked.target != movement.source {
+                    continue;
+                }
+                let Some(dest_text) = planner.peek_text(&movement.dest) else {
+                    continue;
+                };
+                let scan = dest_scans
+                    .entry(movement.dest.clone())
+                    .or_insert_with(|| {
+                        let settings = self.settings.clone();
+                        note_tasks::scan(&dest_text, &settings)
+                    });
+                let found = match scan.by_block_id(&tracked_id) {
+                    BlockIdLookup::Found(task) => Some(task.line_index),
+                    _ => None,
+                };
+                if let Some(line) = found {
+                    tracked.target = movement.dest.clone();
+                    tracked.relative_target = movement.dest_relative.clone();
+                    tracked.route = movement.dest_route.clone();
+                    tracked.current = line;
+                    break;
+                }
+            }
+        }
     }
 
     /// Forward tracked parents through answered inbox-route moves: an
