@@ -1199,6 +1199,82 @@ pub(super) fn staged_completed_note_texts(
     Ok(texts)
 }
 
+/// Build the batch-level move map note-pull rows follow when a later
+/// item relocates a pulled task. Drawn only from each item's
+/// `project_move_landings` and `transfer_move_output.moves`; project-note
+/// and transfer execution are never changed here. Chains are followed at
+/// lookup time, so one task moving twice still resolves to its final home.
+pub(super) fn build_note_pull_move_map(
+    items: &[PlannedCaptureItem],
+    project_moves: &[ProjectMoveLanding],
+    bob_dir: &Path,
+) -> BTreeMap<(PathBuf, String), (PathBuf, String)> {
+    let mut map: BTreeMap<(PathBuf, String), (PathBuf, String)> =
+        BTreeMap::new();
+    for landing in project_moves {
+        let (Some(old_id), Some(new_id)) =
+            (landing.old_block_id.clone(), landing.new_block_id.clone())
+        else {
+            continue;
+        };
+        let source_rel = landing
+            .source
+            .strip_prefix(bob_dir)
+            .unwrap_or(&landing.source)
+            .to_path_buf();
+        let dest_rel = landing
+            .dest
+            .strip_prefix(bob_dir)
+            .unwrap_or(&landing.dest)
+            .to_path_buf();
+        map.insert((source_rel, old_id), (dest_rel, new_id));
+    }
+    for item in items {
+        for movement in &item.result.transfer_move_output.moves {
+            let (Some(old_id), Some(new_id)) =
+                (movement.old_block_id.clone(), movement.new_block_id.clone())
+            else {
+                continue;
+            };
+            let source_rel = PathBuf::from(&movement.source_path);
+            let dest_rel = PathBuf::from(&movement.destination_path);
+            map.insert((source_rel, old_id), (dest_rel, new_id));
+        }
+    }
+    map
+}
+
+/// Follow move chains to the final identity. ID-less rows (empty block
+/// id) can never be move targets, so they resolve to themselves and keep
+/// today's drop behavior.
+pub(super) fn resolve_move_final(
+    map: &BTreeMap<(PathBuf, String), (PathBuf, String)>,
+    note_path: &str,
+    block_id: &str,
+) -> Option<(PathBuf, String)> {
+    if block_id.is_empty() {
+        return None;
+    }
+    let mut current = (PathBuf::from(note_path), block_id.to_string());
+    let mut resolved = false;
+    for _ in 0..(map.len().saturating_add(1)) {
+        let Some(next) = map.get(&current) else {
+            break;
+        };
+        current = next.clone();
+        resolved = true;
+    }
+    resolved.then_some(current)
+}
+
+/// Remapped `[[stem#^id]]` link for a moved note-pull row, matching the
+/// vault-wide link repair the move execution stages in the day text.
+fn remapped_block_link(final_path: &Path, final_id: &str) -> String {
+    let stem_path = final_path.with_extension("");
+    let stem = display_relative(&stem_path);
+    format!("[[{stem}#^{final_id}]]")
+}
+
 /// Net batch post-pass for successor rows (`docs/task-dependencies.md`
 /// §12.5 SL20): after every item is planned, drop each linked row whose
 /// bullet no longer survives live in the final staged day text, or whose
@@ -1214,6 +1290,7 @@ pub(super) fn apply_successor_net_post_pass(
     dependency_ctx: &DependencyContext,
     bob_dir: &Path,
     keep_moving_trace: &super::keep_moving_net::KeepMovingTrace,
+    project_moves: &[ProjectMoveLanding],
 ) {
     // Traverse whole-item `task_complete`, nested `relation_completes`,
     // and `pomodoro_close` rows together so nested completions share the
@@ -1276,15 +1353,38 @@ pub(super) fn apply_successor_net_post_pass(
     };
     let tasks_settings =
         crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    // Batch-level move map for note-pull net identity: a later project-note
+    // or transfer move relocates a pulled task, so rows follow to their
+    // final home instead of dropping on the old note.
+    let move_map = build_note_pull_move_map(items, project_moves, bob_dir);
     // Cross-group earliest-wins ownership for explicit offer keys: one row
     // per key per draft across hand-off, relation, and note-pull groups.
     // The earliest item that offers a key owns it; later duplicates are
     // omitted even when unselected. Later explicit links still win via the
     // live-link net checks below (they carry no offer key), so NP18-style
-    // drops are preserved.
+    // drops are preserved. Note-pull rows additionally dedup on final
+    // move-aware identity so a later pull of the destination omits a row an
+    // earlier pull still owns under a different key.
     {
         use std::collections::BTreeSet;
         let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut seen_finals: BTreeSet<(PathBuf, String)> = BTreeSet::new();
+        let track_final =
+            |row: &TaskCompleteUnblockedJson,
+             seen_finals: &mut BTreeSet<(PathBuf, String)>| {
+                if row.block_id.is_empty() {
+                    return;
+                }
+                let final_identity = resolve_move_final(
+                    &move_map,
+                    &row.note_path,
+                    &row.block_id,
+                )
+                .unwrap_or_else(|| {
+                    (PathBuf::from(&row.note_path), row.block_id.clone())
+                });
+                seen_finals.insert(final_identity);
+            };
         for item in items.iter_mut() {
             for vec in super::output::unblocked_vecs_mut(&mut item.result) {
                 vec.retain(|row| {
@@ -1297,6 +1397,7 @@ pub(super) fn apply_successor_net_post_pass(
                     if let Some(offer) = row.offer.as_ref() {
                         seen.insert(offer.key.clone());
                     }
+                    track_final(row, &mut seen_finals);
                 }
             }
             for vec in
@@ -1312,6 +1413,7 @@ pub(super) fn apply_successor_net_post_pass(
                     if let Some(offer) = row.offer.as_ref() {
                         seen.insert(offer.key.clone());
                     }
+                    track_final(row, &mut seen_finals);
                 }
             }
             for vec in super::output::note_pull_vecs_mut(&mut item.result) {
@@ -1319,12 +1421,32 @@ pub(super) fn apply_successor_net_post_pass(
                     let Some(offer) = row.offer.as_ref() else {
                         return true;
                     };
-                    !seen.contains(&offer.key)
+                    if seen.contains(&offer.key) {
+                        return false;
+                    }
+                    if !move_map.is_empty() && !row.block_id.is_empty() {
+                        let final_identity = resolve_move_final(
+                            &move_map,
+                            &row.note_path,
+                            &row.block_id,
+                        )
+                        .unwrap_or_else(|| {
+                            (
+                                PathBuf::from(&row.note_path),
+                                row.block_id.clone(),
+                            )
+                        });
+                        if seen_finals.contains(&final_identity) {
+                            return false;
+                        }
+                    }
+                    true
                 });
                 for row in vec.iter() {
                     if let Some(offer) = row.offer.as_ref() {
                         seen.insert(offer.key.clone());
                     }
+                    track_final(row, &mut seen_finals);
                 }
             }
             let rows = &mut item.result.relation_merge_output.offer_rows;
@@ -1393,8 +1515,28 @@ pub(super) fn apply_successor_net_post_pass(
         // links, completes, re-blocks, or drops an offered task removes
         // that row. Own picks survive via the linked-row survive check.
         // No keep-moving whole-group invalidation applies here because a
-        // note pull is a request, not a trigger.
+        // note pull is a request, not a trigger. Rows a later move
+        // relocated follow to their final home before the checks, keeping
+        // the stable offer key; ID-less rows keep today's drop behavior.
         for vec in super::output::note_pull_vecs_mut(&mut item.result) {
+            for row in vec.iter_mut() {
+                let Some((final_path, final_id)) = resolve_move_final(
+                    &move_map,
+                    &row.note_path,
+                    &row.block_id,
+                ) else {
+                    continue;
+                };
+                let final_path_str = display_relative(&final_path);
+                if row.note_path != final_path_str || row.block_id != final_id {
+                    row.note_path = final_path_str;
+                    row.block_id = final_id.clone();
+                    if let Some(link) = row.link.as_mut() {
+                        link.block_link =
+                            remapped_block_link(&final_path, &final_id);
+                    }
+                }
+            }
             vec.retain(|row| {
                 keep_unblocked_row(
                     row,

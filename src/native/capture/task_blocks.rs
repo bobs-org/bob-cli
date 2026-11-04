@@ -269,6 +269,62 @@ impl TaskBlockTracker {
         }
     }
 
+    /// Forward tracked parents through transfer `>` moves: an entry
+    /// pointing at a transferred task follows it to the destination note.
+    /// Runs per item before ordinary forwarding so moved blocks keep
+    /// their roles instead of tripping the lost-headline guard.
+    pub(super) fn remap_transfer_moves(
+        &mut self,
+        planner: &CaptureBatchPlanner,
+        bob_dir: &Path,
+        moves: &[super::transfer::TransferMoveJson],
+    ) {
+        if moves.is_empty() {
+            return;
+        }
+        let mut dest_scans: HashMap<PathBuf, note_tasks::NoteTaskScan> =
+            HashMap::new();
+        for tracked in &mut self.tracked {
+            let Some(movement) = moves.iter().find(|movement| {
+                let source_abs = bob_dir.join(&movement.source_path);
+                let Some(old_id) = movement.old_block_id.as_deref() else {
+                    return false;
+                };
+                tracked.target == source_abs
+                    && tracked.block_id.as_deref() == Some(old_id)
+            }) else {
+                continue;
+            };
+            let dest_abs = bob_dir.join(&movement.destination_path);
+            let Some(new_id) = movement.new_block_id.clone() else {
+                continue;
+            };
+            let dest_text = planner.peek_text(&dest_abs);
+            let line = dest_text.as_deref().and_then(|text| {
+                let scan =
+                    dest_scans.entry(dest_abs.clone()).or_insert_with(|| {
+                        let settings = self.settings.clone();
+                        note_tasks::scan(text, &settings)
+                    });
+                match scan.by_block_id(&new_id) {
+                    BlockIdLookup::Found(task) => Some(task.line_index),
+                    _ => None,
+                }
+            });
+            tracked.target = dest_abs.clone();
+            tracked.relative_target = movement.destination_path.clone();
+            tracked.route = movement
+                .destination_path
+                .strip_suffix(".md")
+                .unwrap_or(&movement.destination_path)
+                .to_string();
+            if let Some(line) = line {
+                tracked.current = line;
+            }
+            tracked.block_id = Some(new_id);
+        }
+    }
+
     /// Forward tracked parents through answered inbox-route moves: an
     /// entry pointing at a routed task follows it to the destination
     /// note, landing on its final line with its new block ID. Entries

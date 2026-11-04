@@ -196,7 +196,7 @@ fn collect_note_paths(
         Ok(entries) => {
             let mut entries =
                 entries.filter_map(Result::ok).collect::<Vec<_>>();
-            entries.sort_by_key(|entry| entry.path());
+            entries.sort_by_cached_key(|entry| entry.file_name());
             entries
         }
         Err(error) => {
@@ -986,6 +986,29 @@ mod tests {
         // History stays findable through search.
         let ordered = order_for_picker(&discovered.tasks, "kept", None);
         assert_eq!(texts(&ordered), vec!["Old kept"]);
+    }
+
+    #[test]
+    fn interleaved_names_walk_in_sorted_order() {
+        let temp = vault_fixture();
+        write_file(&temp.path().join("a/inner.md"), "- [ ] #task Inner\n");
+        write_file(&temp.path().join("a.md"), "- [ ] #task A\n");
+        write_file(&temp.path().join("a-b.md"), "- [ ] #task AB\n");
+        write_file(&temp.path().join("A.md"), "- [ ] #task Upper\n");
+        let root = temp.path();
+        let mut paths = Vec::new();
+        let mut warnings = Vec::new();
+        collect_note_paths(root, root, &mut paths, &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let mut sorted = paths.clone();
+        sorted.sort();
+        // Siblings share a parent, so file-name order equals path order:
+        // the depth-first walk already emits component-wise sorted paths.
+        assert_eq!(paths, sorted, "{paths:?}");
+        assert!(paths.contains(&PathBuf::from("a/inner.md")));
+        assert!(paths.contains(&PathBuf::from("a.md")));
+        assert!(paths.contains(&PathBuf::from("a-b.md")));
+        assert!(paths.contains(&PathBuf::from("A.md")));
     }
 
     #[test]

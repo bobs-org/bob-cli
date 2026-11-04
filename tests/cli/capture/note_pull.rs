@@ -423,3 +423,218 @@ fn note_pull_human_subset_two_notes_and_mixed_groups() {
         "mixed groups keep their own copy: {mixed_text}"
     );
 }
+
+fn move_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    crate::support::write_capture_task_settings(&vault);
+    let area = |tasks: &str| {
+        format!("---\ntype: \"[[area]]\"\n---\n## Tasks\n{tasks}")
+    };
+    fs::write(
+        vault.join("work.md"),
+        area(concat!(
+            "- [/] #task Alpha ^alpha\n",
+            "- [*] #task Beta ^beta\n",
+            "- [ ] #task Gamma ^gamma\n",
+        )),
+    )
+    .expect("work note");
+    fs::write(vault.join("bob.md"), area("")).expect("transfer dest");
+    let day = vault.join("20261005.md");
+    fs::write(
+        &day,
+        "## Pomodoros\n- [ ] (**0800-0825** [t:: 25m]) — FIX\n",
+    )
+    .expect("day note");
+    (temp, vault, day)
+}
+
+fn pull_successors(json: &Value) -> Vec<Value> {
+    json["captures"]
+        .as_array()
+        .expect("captures")
+        .iter()
+        .find(|capture| capture["kind"] == "note_pull")
+        .expect("note-pull capture")["note_pull"]["successors"]
+        .as_array()
+        .expect("successors")
+        .clone()
+}
+
+#[test]
+fn note_pull_move_project_and_transfer_follow_picked_row() {
+    for (name, draft, dest, link) in [
+        (
+            "project",
+            "@work\n\nDocs push @work^docs-push@\n- ^gamma",
+            "work_docs_push.md",
+            "[[work_docs_push#^gamma]]",
+        ),
+        (
+            "transfer",
+            "@work\n\n@work+gamma > @bob",
+            "bob.md",
+            "[[bob#^gamma]]",
+        ),
+    ] {
+        let (_temp, vault, day) =
+            move_vault(&format!("bob-cli-np-move-{name}"));
+        // `-p all` links all three; the moved row follows to the
+        // destination with a stable key and a remapped day link.
+        let output = run_json(&vault, &day, &["-p", "all"], draft, true);
+        assert_success(&output);
+        let json: Value =
+            serde_json::from_slice(&output.stdout).expect("move capture JSON");
+        assert_eq!(json["pull_in"]["offer_count"], 3, "{name}: {json}");
+        assert_eq!(json["pull_in"]["picked_count"], 3, "{name}: {json}");
+        let successors = pull_successors(&json);
+        assert_eq!(successors.len(), 3, "{name}: {json}");
+        let gamma = successors
+            .iter()
+            .find(|row| row["block_id"] == "gamma")
+            .expect("gamma survives");
+        assert_eq!(gamma["note_path"], dest, "{name}: {json}");
+        assert_eq!(gamma["offer"]["key"], "work.md#^gamma", "{name}: {json}");
+        assert_eq!(gamma["status_symbol"], "*", "{name}: {json}");
+        assert_eq!(gamma["link"]["block_link"], link, "{name}: {json}");
+        // One remapped link keeps the note-pull reason in the day block.
+        let reasons: Vec<_> = json["pomodoro_blocks"]
+            .as_array()
+            .expect("blocks")
+            .iter()
+            .flat_map(|block| {
+                block["lines"].as_array().cloned().unwrap_or_default()
+            })
+            .filter(|line| {
+                line["text"].as_str().unwrap_or_default().contains(link)
+            })
+            .collect();
+        assert_eq!(reasons.len(), 1, "{name}: {json}");
+        assert_eq!(reasons[0]["reason"], "note_pull", "{name}: {json}");
+
+        // No picks keeps the moved row offered with a stable number; both
+        // `-p <n>` and `-p <key>` select it.
+        let probe = run_json(&vault, &day, &[], draft, true);
+        assert_success(&probe);
+        let probe_json: Value =
+            serde_json::from_slice(&probe.stdout).expect("probe JSON");
+        let probe_rows = pull_successors(&probe_json);
+        let probe_gamma = probe_rows
+            .iter()
+            .find(|row| row["block_id"] == "gamma")
+            .expect("probe gamma");
+        assert_eq!(probe_gamma["note_path"], dest, "{name}");
+        assert_eq!(probe_gamma["not_linked"], "not_selected", "{name}");
+        let n = probe_gamma["offer"]["n"].as_u64().expect("n");
+        assert_eq!(n, 3, "{name}");
+        for flags in [
+            vec!["-p".to_string(), n.to_string()],
+            vec!["-p".to_string(), "work.md#^gamma".to_string()],
+        ] {
+            let refs: Vec<&str> = flags.iter().map(String::as_str).collect();
+            let picked = run_json(&vault, &day, &refs, draft, true);
+            assert_success(&picked);
+            let picked_json: Value =
+                serde_json::from_slice(&picked.stdout).expect("picked JSON");
+            let picked_rows = pull_successors(&picked_json)
+                .into_iter()
+                .filter(|row| row["offer"]["selected"] == true)
+                .collect::<Vec<_>>();
+            assert_eq!(picked_rows.len(), 1, "{name}: {flags:?}");
+            assert_eq!(picked_rows[0]["block_id"], "gamma");
+            assert_eq!(picked_rows[0]["note_path"], dest);
+        }
+
+        // Dry-run and real-run agree on the moved identity.
+        let real = run_json(&vault, &day, &["-p", "all"], draft, false);
+        assert_success(&real);
+        let real_json: Value =
+            serde_json::from_slice(&real.stdout).expect("real JSON");
+        assert_eq!(
+            pull_successors(&real_json).len(),
+            3,
+            "{name}: dry/real parity"
+        );
+    }
+}
+
+#[test]
+fn note_pull_move_destination_dedup_and_rollback() {
+    let (_temp, vault, day) = move_vault("bob-cli-np-move-dedup");
+    // Pull, move, then pull the destination: the destination pull omits
+    // the row the first pull owns; one owner and three links total.
+    let draft =
+        "@work\n\nDocs push @work^docs-push@\n- ^gamma\n\n@work_docs_push";
+    let output = run_json(&vault, &day, &["-p", "all"], draft, true);
+    assert_success(&output);
+    let json: Value =
+        serde_json::from_slice(&output.stdout).expect("dedup JSON");
+    let gamma_rows: Vec<_> = json["captures"]
+        .as_array()
+        .expect("captures")
+        .iter()
+        .filter(|capture| capture["kind"] == "note_pull")
+        .flat_map(|capture| {
+            capture["note_pull"]["successors"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter(|row| row["block_id"] == "gamma")
+        .collect();
+    assert_eq!(gamma_rows.len(), 1, "one offer owner: {json}");
+    assert_eq!(gamma_rows[0]["note_path"], "work_docs_push.md");
+
+    // Move first, then pull the source: the moved task is not offered.
+    let moved_first = run_json(
+        &vault,
+        &day,
+        &[],
+        "Docs push @work^docs-push@\n- ^gamma\n\n@work",
+        true,
+    );
+    assert_success(&moved_first);
+    let moved_json: Value =
+        serde_json::from_slice(&moved_first.stdout).expect("source JSON");
+    let source_gamma: Vec<_> = moved_json["captures"]
+        .as_array()
+        .expect("captures")
+        .iter()
+        .filter(|capture| capture["kind"] == "note_pull")
+        .flat_map(|capture| {
+            capture["note_pull"]["successors"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter(|row| row["block_id"] == "gamma")
+        .collect();
+    assert!(
+        source_gamma.is_empty(),
+        "moved task not offered: {moved_json}"
+    );
+
+    // A later item failure rolls back the moved pick; bytes stay unchanged.
+    let before_work =
+        fs::read_to_string(vault.join("work.md")).expect("work before");
+    let before_day = fs::read_to_string(&day).expect("day before");
+    let failing = run_json(
+        &vault,
+        &day,
+        &["-p", "all"],
+        "@work\n\n@work+gamma > @bob\n\n@nosuch",
+        false,
+    );
+    assert!(!failing.status.success(), "later failure must refuse");
+    assert_eq!(
+        fs::read_to_string(vault.join("work.md")).expect("work after"),
+        before_work,
+        "failed batch writes nothing"
+    );
+    assert_eq!(
+        fs::read_to_string(&day).expect("day after"),
+        before_day,
+        "failed batch leaves the day alone"
+    );
+}

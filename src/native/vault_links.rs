@@ -25,23 +25,23 @@ impl NoteIndex {
     where
         I: IntoIterator<Item = PathBuf>,
     {
-        let mut relative_paths = BTreeSet::new();
+        let paths: Vec<PathBuf> = paths.into_iter().collect();
         let mut basename_paths = BTreeMap::new();
-        for path in paths {
-            if let Some(name) = markdown_basename(&path) {
+        for path in &paths {
+            if let Some(name) = markdown_basename(path) {
                 match basename_paths.entry(name.to_lowercase()) {
                     std::collections::btree_map::Entry::Vacant(entry) => {
                         entry.insert(Some(path.clone()));
                     }
                     std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        if entry.get().as_ref() != Some(&path) {
+                        if entry.get().as_ref() != Some(path) {
                             entry.insert(None);
                         }
                     }
                 }
             }
-            relative_paths.insert(path);
         }
+        let relative_paths = paths.into_iter().collect::<BTreeSet<_>>();
         Self {
             relative_paths,
             basename_paths,

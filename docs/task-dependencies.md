@@ -3328,6 +3328,7 @@ Offer numbering continues across the whole draft. Each group has one row per
 key: the earliest note-pull item that offers that key owns it, and a later
 note pull omits the duplicate. A later item that completes, blocks, links, or
 explicitly drops an offered task removes that row in the final net pass.
+Rows a later item moves follow the move and keep their offer key.
 
 Keys are computed from the source note staged **before any pick**. A task with
 a block ID uses `<note_path>#^<block-id>`; otherwise it uses the stable

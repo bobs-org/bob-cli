@@ -54,6 +54,7 @@ pub(super) fn plan_note_pull_item(
     item_index: usize,
     earlier_keys: &BTreeSet<String>,
     earlier_block_ids: &BTreeSet<(PathBuf, String)>,
+    move_map: &BTreeMap<(PathBuf, String), (PathBuf, String)>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let route = match &parsed.kind {
         crate::native::capture_language::CaptureKind::NotePull { route } => {
@@ -258,6 +259,29 @@ pub(super) fn plan_note_pull_item(
         });
     }
 
+    // Move-aware earlier finals: earlier rows relocated by a later
+    // project-note or transfer move still own their final identity, so a
+    // later pull of the destination prunes instead of refusing.
+    let earlier_finals: BTreeSet<(PathBuf, String)> = earlier_block_ids
+        .iter()
+        .map(|(path, id)| {
+            super::task_complete::resolve_move_final(
+                move_map,
+                &path.to_string_lossy().replace('\\', "/"),
+                id,
+            )
+            .unwrap_or_else(|| (path.clone(), id.clone()))
+        })
+        .collect();
+    let current_final = |note_path: &PathBuf, block_id: &str| {
+        super::task_complete::resolve_move_final(
+            move_map,
+            &note_path.to_string_lossy().replace('\\', "/"),
+            block_id,
+        )
+        .unwrap_or_else(|| (note_path.clone(), block_id.to_string()))
+    };
+
     if offers.is_empty() {
         // Selected repeated-pull ownership: a genuinely empty source
         // refuses, but a later pull whose every otherwise-offerable row
@@ -324,6 +348,8 @@ pub(super) fn plan_note_pull_item(
                 if earlier_keys.contains(&key)
                     || earlier_block_ids
                         .contains(&(relative.clone(), block_id.to_string()))
+                    || earlier_finals
+                        .contains(&current_final(&relative, block_id))
                 {
                     owned += 1;
                 }
@@ -533,12 +559,15 @@ pub(super) fn plan_note_pull_item(
         // Earliest-item ownership across every successor class: a later
         // pull omits a row already owned by an earlier item even when it
         // was unselected. Selected predecessors still own their row after
-        // minting via the final block-ID identity.
+        // minting via the final block-ID identity. Moves relocate the
+        // final identity, so a later pull of the destination omits a row
+        // an earlier pull still owns under a different key.
         if earlier_keys.contains(&key) {
             continue;
         }
         if let Some(id) = offer.block_id.as_deref()
-            && earlier_block_ids.contains(&(relative.clone(), id.to_string()))
+            && (earlier_block_ids.contains(&(relative.clone(), id.to_string()))
+                || earlier_finals.contains(&current_final(&relative, id)))
         {
             continue;
         }
@@ -1595,6 +1624,7 @@ mod tests {
         let parsed = parsed_pull();
         let empty_keys = std::collections::BTreeSet::new();
         let empty_ids = std::collections::BTreeSet::new();
+        let empty_moves = std::collections::BTreeMap::new();
         plan_note_pull_item(
             &harness.request,
             parsed,
@@ -1606,6 +1636,7 @@ mod tests {
             0,
             &empty_keys,
             &empty_ids,
+            &empty_moves,
         )
     }
 
@@ -2783,6 +2814,218 @@ mod tests {
             offers.iter().filter(|row| row.block_id == "dep").collect();
         assert_eq!(dep_rows.len(), 1, "{offers:?}");
         assert_ne!(dep_rows[0].trigger, "note_pull");
+    }
+
+    // Move integration: a later project-note move relocates a picked
+    // pull row; the net pass follows it instead of dropping the report.
+    #[test]
+    fn batch_pull_then_project_move_follows_picked_row() {
+        let work = concat!(
+            "---\ntype: \"[[area]]\"\n---\n## Tasks\n",
+            "- [/] #task Alpha ^alpha\n",
+            "- [*] #task Beta ^beta\n",
+            "- [ ] #task Gamma ^gamma\n",
+        );
+        let mut vault = batch_vault(
+            &[("work.md", work)],
+            Some(FIX_DAY),
+            "@work\n\nDocs push @work^docs-push@\n- ^gamma",
+        );
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::All);
+        let (batch, pull_in) =
+            crate::native::capture::pull_in::plan_with_pull_in(
+                &mut vault.request,
+                None,
+            )
+            .expect("pull then project move plans");
+        assert_eq!(pull_in.offer_count, 3, "{pull_in:?}");
+        assert_eq!(pull_in.picked_count, 3, "{pull_in:?}");
+        let rows = batch_offers(&batch);
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        let gamma = rows
+            .iter()
+            .find(|row| row.block_id == "gamma")
+            .expect("gamma survives the move");
+        assert_eq!(gamma.note_path, "work_docs_push.md");
+        assert_eq!(
+            gamma.offer.as_ref().expect("offer").key,
+            "work.md#^gamma",
+            "offer key stays stable"
+        );
+        assert_eq!(gamma.status_symbol, '*', "Ready becomes Next");
+        let link = gamma.link.as_ref().expect("picked link");
+        assert_eq!(link.block_link, "[[work_docs_push#^gamma]]");
+        // One link with the note-pull reason survives in the day block.
+        let mut reasoned = 0;
+        for block in &batch.pomodoro_blocks {
+            for line in &block.lines {
+                if line.text.contains("work_docs_push#^gamma") {
+                    assert_eq!(line.reason, Some("note_pull"));
+                    reasoned += 1;
+                }
+            }
+        }
+        assert_eq!(reasoned, 1, "one remapped day link keeps note_pull");
+    }
+
+    // Move integration: the same draft with no picks keeps the moved
+    // candidate offered under a stable number and key.
+    #[test]
+    fn batch_pull_then_project_move_no_pick_keeps_offer() {
+        let work = concat!(
+            "---\ntype: \"[[area]]\"\n---\n## Tasks\n",
+            "- [/] #task Alpha ^alpha\n",
+            "- [*] #task Beta ^beta\n",
+            "- [ ] #task Gamma ^gamma\n",
+        );
+        let raw = "@work\n\nDocs push @work^docs-push@\n- ^gamma";
+        let mut vault = batch_vault(&[("work.md", work)], Some(FIX_DAY), raw);
+        let (batch, pull_in) =
+            crate::native::capture::pull_in::plan_with_pull_in(
+                &mut vault.request,
+                None,
+            )
+            .expect("no-pick pull then move plans");
+        assert_eq!(pull_in.offer_count, 3);
+        assert_eq!(pull_in.picked_count, 0);
+        let rows = batch_offers(&batch);
+        let gamma = rows
+            .iter()
+            .find(|row| row.block_id == "gamma")
+            .expect("gamma stays offered");
+        assert_eq!(gamma.note_path, "work_docs_push.md");
+        let n = gamma.offer.as_ref().expect("offer").n;
+        let key = gamma.offer.as_ref().expect("offer").key.clone();
+        assert_eq!(n, 3);
+        assert_eq!(key, "work.md#^gamma");
+        // `-p <n>` and `-p <key>` both select the moved row.
+        for picks in [
+            crate::native::capture::cli::PullInPicks::Tokens {
+                numbers: vec![n],
+                keys: Vec::new(),
+            },
+            crate::native::capture::cli::PullInPicks::Tokens {
+                numbers: Vec::new(),
+                keys: vec![key.clone()],
+            },
+        ] {
+            let mut vault =
+                batch_vault(&[("work.md", work)], Some(FIX_DAY), raw);
+            vault.request.pull_in = Some(picks);
+            let (batch, pull_in) =
+                crate::native::capture::pull_in::plan_with_pull_in(
+                    &mut vault.request,
+                    None,
+                )
+                .expect("numeric/key pick plans");
+            assert_eq!(pull_in.picked_count, 1);
+            let picked: Vec<_> = batch_offers(&batch)
+                .into_iter()
+                .filter(|row| {
+                    row.offer.as_ref().is_some_and(|offer| offer.selected)
+                })
+                .collect();
+            assert_eq!(picked.len(), 1);
+            assert_eq!(picked[0].block_id, "gamma");
+            assert_eq!(picked[0].note_path, "work_docs_push.md");
+        }
+    }
+
+    // Move integration: a transfer `>` move relocates a picked pull row
+    // the same way a project-note move does.
+    #[test]
+    fn batch_pull_then_transfer_move_follows_picked_row() {
+        let area = |tasks: &str| {
+            format!("---\ntype: \"[[area]]\"\n---\n## Tasks\n{tasks}")
+        };
+        let mut vault = batch_vault(
+            &[
+                (
+                    "work.md",
+                    &area(
+                        "- [/] #task Alpha ^alpha\n- [*] #task Beta ^beta\n- [ ] #task Gamma ^gamma\n",
+                    ),
+                ),
+                ("bob.md", &area("")),
+            ],
+            Some(FIX_DAY),
+            "@work\n\n@work+gamma > @bob",
+        );
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::All);
+        let (batch, pull_in) =
+            crate::native::capture::pull_in::plan_with_pull_in(
+                &mut vault.request,
+                None,
+            )
+            .expect("pull then transfer plans");
+        assert_eq!(pull_in.offer_count, 3, "{pull_in:?}");
+        assert_eq!(pull_in.picked_count, 3, "{pull_in:?}");
+        let gamma = batch_offers(&batch)
+            .into_iter()
+            .find(|row| row.block_id == "gamma")
+            .expect("gamma survives the transfer");
+        assert_eq!(gamma.note_path, "bob.md");
+        assert_eq!(gamma.offer.as_ref().expect("offer").key, "work.md#^gamma");
+        assert_eq!(gamma.status_symbol, '*');
+        assert_eq!(
+            gamma.link.as_ref().expect("link").block_link,
+            "[[bob#^gamma]]"
+        );
+    }
+
+    // Move integration: pull, move, then pull the destination offers once;
+    // moving first then pulling the source omits the moved task.
+    #[test]
+    fn batch_pull_move_pull_destination_dedups_and_source_omits() {
+        let work = concat!(
+            "---\ntype: \"[[area]]\"\n---\n## Tasks\n",
+            "- [/] #task Alpha ^alpha\n",
+            "- [*] #task Beta ^beta\n",
+            "- [ ] #task Gamma ^gamma\n",
+        );
+        // Pull source, move Gamma away, then pull the destination: the
+        // destination pull omits the row the first pull still owns.
+        let mut vault = batch_vault(
+            &[("work.md", work)],
+            Some(FIX_DAY),
+            "@work\n\nDocs push @work^docs-push@\n- ^gamma\n\n@work_docs_push",
+        );
+        vault.request.pull_in =
+            Some(crate::native::capture::cli::PullInPicks::All);
+        let (batch, pull_in) =
+            crate::native::capture::pull_in::plan_with_pull_in(
+                &mut vault.request,
+                None,
+            )
+            .expect("pull move pull plans");
+        let gamma_rows: Vec<_> = batch_offers(&batch)
+            .into_iter()
+            .filter(|row| row.block_id == "gamma")
+            .collect();
+        assert_eq!(gamma_rows.len(), 1, "one offer owner for gamma");
+        assert_eq!(gamma_rows[0].note_path, "work_docs_push.md");
+        let _ = pull_in;
+        // Move first, then pull the source: the moved task is not offered.
+        let mut vault = batch_vault(
+            &[("work.md", work)],
+            Some(FIX_DAY),
+            "Docs push @work^docs-push@\n- ^gamma\n\n@work",
+        );
+        let (batch, _) = crate::native::capture::pull_in::plan_with_pull_in(
+            &mut vault.request,
+            None,
+        )
+        .expect("move then pull plans");
+        let gamma_rows: Vec<_> = batch_offers(&batch)
+            .into_iter()
+            .filter(|row| row.block_id == "gamma")
+            .collect();
+        assert!(
+            gamma_rows.is_empty(),
+            "moved task is not offered from the source: {gamma_rows:?}"
+        );
     }
 
     // Rollback: a later pull failure aborts the whole draft; no earlier

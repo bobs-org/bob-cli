@@ -51,6 +51,25 @@ pub(super) struct CapturePlanBudget {
     pub(super) warnings: Vec<PlanBudgetWarning>,
 }
 
+#[cfg(test)]
+pub(super) static THEME_CATALOG_LOADS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn reset_theme_catalog_loads() {
+    THEME_CATALOG_LOADS.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(super) fn theme_catalog_loads() -> usize {
+    THEME_CATALOG_LOADS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(test)]
+fn record_theme_catalog_load() {
+    THEME_CATALOG_LOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Attach catalog-backed refs to capture destinations and the changed plan
 /// budget. Kept best-effort so a damaged theme journal cannot block a capture.
 pub(super) fn append_theme_refs(
@@ -77,9 +96,16 @@ pub(super) fn append_theme_refs(
     if names.is_empty() {
         return BTreeMap::new();
     }
+    // Cheap no-vocabulary fast path: with no configured types there are no
+    // refs to attach, so skip the full vault catalog load.
+    if config::load_theme_sources().themes.is_none() {
+        return BTreeMap::new();
+    }
 
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let today = super::super::capture_pomodoros_agenda::agenda_date(&day_file);
+    #[cfg(test)]
+    record_theme_catalog_load();
     let Ok(catalog) = super::super::pomodoro_themes::Catalog::load(
         &request.bob_dir,
         today,
@@ -111,8 +137,57 @@ pub(super) fn append_unconfigured_theme_warnings(
     request: &CaptureRequest,
     batch: &mut PlannedCaptureBatch,
 ) {
+    // Cheap pre-checks avoid the full vault catalog load on the common
+    // no-growth path. Only the config warning and the type vocabulary are
+    // needed before the daily-note loop.
+    let sources = config::load_theme_sources();
+    let push_config_warning = |batch: &mut PlannedCaptureBatch,
+                               warning: &str| {
+        let already = batch
+            .warnings
+            .iter()
+            .any(|existing| existing.message() == warning);
+        if !already {
+            batch.warnings.push(warning.to_string().into());
+        }
+    };
+    if sources.themes.is_none() {
+        if let Some(warning) = sources.warning.as_deref() {
+            push_config_warning(batch, warning);
+        }
+        return;
+    }
     let day_file = pomodoro::day_file_for(&request.bob_dir);
+    let close_created = close_created_component_counts(batch);
+    let mut any_grew = false;
+    for file in &batch.text_files {
+        if !is_daily_note(&request.bob_dir, &file.target, &day_file) {
+            continue;
+        }
+        let before = component_entry_counts(&file.original_target);
+        let after = component_entry_counts(&file.updated_target);
+        for (key, _) in authored_components_in_order(&file.updated_target) {
+            let grew = after.get(&key).copied().unwrap_or(0)
+                > before.get(&key).copied().unwrap_or(0)
+                    + close_created.get(&key).copied().unwrap_or(0);
+            if grew {
+                any_grew = true;
+                break;
+            }
+        }
+        if any_grew {
+            break;
+        }
+    }
+    if !any_grew {
+        if let Some(warning) = sources.warning.as_deref() {
+            push_config_warning(batch, warning);
+        }
+        return;
+    }
     let today = super::super::capture_pomodoros_agenda::agenda_date(&day_file);
+    #[cfg(test)]
+    record_theme_catalog_load();
     let Ok(catalog) = super::super::pomodoro_themes::Catalog::load(
         &request.bob_dir,
         today,
@@ -121,13 +196,7 @@ pub(super) fn append_unconfigured_theme_warnings(
         return;
     };
     if let Some(warning) = catalog.config_warning() {
-        let already = batch
-            .warnings
-            .iter()
-            .any(|existing| existing.message() == warning);
-        if !already {
-            batch.warnings.push(warning.to_string().into());
-        }
+        push_config_warning(batch, warning);
     }
     if !catalog.has_configured() {
         return;
@@ -343,6 +412,65 @@ fn link_warning(count: usize, cap: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::env::TestEnvGuard;
+
+    #[test]
+    fn no_grown_daily_component_skips_theme_catalog() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(&vault).expect("vault dir");
+        let settings = vault.join(".obsidian/plugins/obsidian-tasks-plugin");
+        std::fs::create_dir_all(&settings).expect("tasks settings dir");
+        std::fs::write(
+            settings.join("data.json"),
+            r##"{"globalFilter":"#task","statusSettings":{"coreStatuses":[{"symbol":" ","name":"Todo","type":"TODO"},{"symbol":"x","name":"Done","type":"DONE"}],"customStatuses":[]}}"##,
+        )
+        .expect("tasks settings");
+        let day_file = vault.join("20261024.md");
+        std::fs::write(&day_file, "## Pomodoros\n").expect("day file");
+        std::fs::write(vault.join("sase.md"), "- [ ] #task Work ^foo\n")
+            .expect("note");
+        let config = temp.path().join("config.yml");
+        std::fs::write(
+            &config,
+            "plan:\nthemes:\n  BUILD: yellow\n  PLAN: blue\n",
+        )
+        .expect("config");
+        let _guard = TestEnvGuard::set(&[
+            ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+            ("BOB_DAY_FILE", Some(day_file.as_os_str())),
+            ("BOB_NOW", Some(std::ffi::OsStr::new("2026-10-24 08:00:00"))),
+        ]);
+        let request = CaptureRequest {
+            bob_dir: vault.clone(),
+            dry_run: true,
+            forced_clip: None,
+            forced_destination_flags: Vec::new(),
+            forced_route: None,
+            forced_section: None,
+            forced_sub_bullet_target: None,
+            forced_drawer: None,
+            inbox_routes: Vec::new(),
+            no_clip: true,
+            no_ref: true,
+            pull_in: None,
+            refuse_override: false,
+            require_inbox_route_choice: false,
+            require_pull_in_choice: false,
+            template_origin: None,
+            raw_text: "hello @sase".to_string(),
+            selection: crate::native::task_complete::SuccessorSelection::None,
+        };
+        let mut batch =
+            plan_capture_batch(&request, None).expect("plan simple capture");
+        reset_theme_catalog_loads();
+        append_unconfigured_theme_warnings(&request, &mut batch);
+        assert_eq!(
+            theme_catalog_loads(),
+            0,
+            "no grown daily-note component must not load the theme catalog"
+        );
+    }
 
     #[test]
     fn destination_roles_follow_the_contract() {

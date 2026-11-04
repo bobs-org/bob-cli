@@ -141,6 +141,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
     let mut task_theme_context =
         CaptureTaskThemeContext::new(&request.bob_dir, today, config_path);
+    let mut all_project_moves: Vec<ProjectMoveLanding> = Vec::new();
     let mut ref_assignments = assign_ref_verdicts(request, &parsed_items);
     let mut staged_jobs = Vec::new();
     // Per-item day text for keep-moving group invalidation (KM21); empty
@@ -230,6 +231,7 @@ pub(super) fn plan_capture_batch_with_config_path(
                 config_path,
                 &mut task_theme_context,
                 &items,
+                &all_project_moves,
             )
             .map_err(|mut error| {
                 error.message = format!("{error_context}: {}", error.message);
@@ -264,9 +266,16 @@ pub(super) fn plan_capture_batch_with_config_path(
             // Project moves remove tracked roots from their source: remap
             // before ordinary forwarding so moved and carried blocks follow
             // to the destination instead of tripping the lost-headline guard.
+            // Transfer moves relocate tracked note-pull picks the same way.
             let move_landings =
                 std::mem::take(&mut planned.project_move_landings);
+            all_project_moves.extend(move_landings.iter().cloned());
             task_tracker.remap_project_moves(&planner, &move_landings);
+            task_tracker.remap_transfer_moves(
+                &planner,
+                &request.bob_dir,
+                &planned.result.transfer_move_output.moves,
+            );
             task_tracker.track_item(&planner, &pre_tasks, task_refs);
             keep_moving_trace.record(
                 items.len(),
@@ -293,6 +302,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         &dependency_ctx,
         &request.bob_dir,
         &keep_moving_trace,
+        &all_project_moves,
     );
     let inbox_route = detect_inbox_routes(
         &planner,
@@ -950,6 +960,7 @@ pub(super) fn plan_capture_item(
     config_path: Option<&Path>,
     task_theme_context: &mut CaptureTaskThemeContext,
     earlier_items: &[PlannedCaptureItem],
+    project_moves: &[ProjectMoveLanding],
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let item_index = parsed_item.index;
     let fanout_item = parsed_item.fanout.is_some();
@@ -1570,6 +1581,11 @@ pub(super) fn plan_capture_item(
     if matches!(parsed.kind, CaptureKind::NotePull { .. }) {
         let (earlier_keys, earlier_block_ids) =
             note_pull_earlier_ownership(earlier_items);
+        let move_map = super::task_complete::build_note_pull_move_map(
+            earlier_items,
+            project_moves,
+            &request.bob_dir,
+        );
         return plan_note_pull_item(
             request,
             parsed,
@@ -1581,6 +1597,7 @@ pub(super) fn plan_capture_item(
             parsed_item.index,
             &earlier_keys,
             &earlier_block_ids,
+            &move_map,
         );
     }
     let created = date_string(today);
