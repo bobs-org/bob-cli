@@ -265,7 +265,8 @@ pub(crate) fn shell_completion(
             }
         }
         CompletionContext::PomodoroName
-        | CompletionContext::PomodoroStartName => {
+        | CompletionContext::PomodoroStartName
+        | CompletionContext::PomodoroPastName => {
             let (mut candidates, _) = if field.context
                 == CompletionContext::PomodoroName
             {
@@ -282,6 +283,13 @@ pub(crate) fn shell_completion(
                     )
                     .map_err(|error| error.message.clone())?;
                 (candidates, warnings)
+            } else if field.context == CompletionContext::PomodoroPastName {
+                super::pomodoros::pomodoro_past_candidates(
+                    bob_dir,
+                    &field.query,
+                    raw_text[field.replacement.0..].starts_with(['"', '“']),
+                )
+                .map_err(|error| error.message.clone())?
             } else {
                 pomodoro_candidates(
                     bob_dir,

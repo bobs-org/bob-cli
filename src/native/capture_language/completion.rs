@@ -30,6 +30,7 @@ pub(crate) enum CompletionContext {
     ProjectTaskMove,
     PomodoroName,
     PomodoroStartName,
+    PomodoroPastName,
     Task,
     /// A `#<type>` task-type marker at either item edge.
     TaskType,
@@ -103,9 +104,8 @@ pub(crate) struct CompletionField {
     /// completion replaces in full regardless of where the cursor sits
     /// inside it.
     pub(crate) replacement: (usize, usize),
-    /// True when this `pomodoro_start_name` field is a bare `=name`
-    /// spelling, so candidates whose slug cannot be bare get a `#slug`
-    /// replacement.
+    /// True for a bare `=name` or `x=name` field, so candidates whose
+    /// slug cannot be bare get a `#slug` replacement.
     pub(crate) bare_name: bool,
 }
 
@@ -941,6 +941,58 @@ fn pomodoro_start_name_field(
         query,
         replacement: (name_start, name_end),
         bare_name,
+    })
+}
+
+/// The name in `x=<E>` owns only its own bytes, including a quoted
+/// literal but excluding counts, repair, timing, and close selections.
+fn pomodoro_past_name_field(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let parent = item.lines.first()?;
+    let text = parent.raw.text.trim_start();
+    let token_len = super::item::past_token_len(text)?;
+    let token = &text[..token_len];
+    let token_start = parent.raw.start + parent.raw.text.len() - text.len();
+    let after_eq = &token[2..];
+    let digits = after_eq.bytes().take_while(u8::is_ascii_digit).count();
+    let hash = after_eq[digits..].starts_with('#');
+    if digits > 0 && !hash {
+        return None;
+    }
+    let name_offset = 2 + digits + usize::from(hash);
+    let name = &token[name_offset..];
+    let literal = hash && super::pomodoro_literal::opens_exact_name(name);
+    let name_len = if literal {
+        super::pomodoro_literal::lex_exact_name_after_hash(name, name.len())?
+            .literal_len
+    } else {
+        super::item::past_name_extent(name)
+    };
+    if !hash
+        && !name.is_empty()
+        && super::bare_name::bare_start_name_len(&name[..name_len]).is_none()
+    {
+        return None;
+    }
+    let start = token_start + name_offset;
+    let end = start + name_len;
+    if cursor < start || cursor > end {
+        return None;
+    }
+    let query = if literal {
+        exact_name_query(&name[..name_len], cursor - start, true)
+    } else {
+        name.get(..cursor - start)?.to_string()
+    };
+    Some(CompletionField {
+        context: CompletionContext::PomodoroPastName,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (start, end),
+        bare_name: !hash,
     })
 }
 
@@ -1786,6 +1838,11 @@ pub(crate) fn completion_field_at(
     };
     if let Some(field) = directive_completion_field_at(item, cursor) {
         return Some(field);
+    }
+    // Claim the whole past token before generic `#`/`@` completion can
+    // mistake a name or duration for a task marker. Child logs stay literal.
+    if line_index == 0 && line.text.trim_start().starts_with("x=") {
+        return pomodoro_past_name_field(item, cursor);
     }
     // A `=/` split base or `#type` completes before generic task-type
     // masking can consume the split `#`, and before the session-action

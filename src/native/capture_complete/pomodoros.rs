@@ -33,7 +33,17 @@ pub(super) fn pomodoro_candidates(
     literal: bool,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
     let (candidates, warnings, _) =
-        pomodoro_candidates_inner(bob_dir, query, start, literal, None)?;
+        pomodoro_candidates_inner(bob_dir, query, start, literal, None, false)?;
+    Ok((candidates, warnings))
+}
+
+pub(super) fn pomodoro_past_candidates(
+    bob_dir: &Path,
+    query: &str,
+    literal: bool,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let (candidates, warnings, _) =
+        pomodoro_candidates_inner(bob_dir, query, true, literal, None, true)?;
     Ok((candidates, warnings))
 }
 
@@ -51,6 +61,7 @@ pub(super) fn pomodoro_name_candidates_for_task(
         false,
         literal,
         Some((route, if new_task { None } else { block_id })),
+        false,
     )
 }
 
@@ -60,6 +71,7 @@ fn pomodoro_candidates_inner(
     start: bool,
     literal: bool,
     task_target: Option<(&str, Option<&str>)>,
+    past: bool,
 ) -> Result<(Candidates, Vec<String>, Option<MenuSuggestion>), CompleteError> {
     // Resolve Bob's date once: DATE may be a subprocess and timezone
     // configuration is read on each call.
@@ -117,6 +129,10 @@ fn pomodoro_candidates_inner(
     };
     let next_up_line = start
         .then(|| {
+            if past {
+                return capture_pomodoros::next_future_pomodoro(&scan)
+                    .map(|entry| entry.line);
+            }
             unnamed_start_next_up_line(
                 &scan,
                 &contents,
@@ -124,7 +140,8 @@ fn pomodoro_candidates_inner(
             )
         })
         .flatten();
-    let (candidates, menu_suggestion) = if let Some(suggestion) = suggestion {
+    let (mut candidates, menu_suggestion) = if let Some(suggestion) = suggestion
+    {
         let choice = menu_choice(&suggestion, &scan, hint.as_ref());
         let candidates = theme_menu::compose_task_aware(
             &scan,
@@ -161,6 +178,26 @@ fn pomodoro_candidates_inner(
             None,
         )
     };
+    if past {
+        candidates.retain(|row| {
+            if row.state == PomodoroState::Open && row.time_range.is_some() {
+                return false;
+            }
+            // A duplicate placeholder or a newly typed prefix can still
+            // resolve to a running row. Filter the accepted selector too.
+            let quoted = row.replacement.starts_with('"');
+            let selector = if quoted {
+                row.name.as_deref().unwrap_or_default()
+            } else {
+                &row.replacement
+            };
+            !matches!(
+                capture_pomodoros::select_capture_name(&scan, selector, quoted),
+                capture_pomodoros::NamedSelection::Found(entry)
+                    if entry.time_range.is_some()
+            )
+        });
+    }
     Ok((
         Candidates::PomodoroName(candidates),
         warnings,

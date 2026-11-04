@@ -581,7 +581,13 @@ pub(super) fn candidate_lines(
         Candidates::PomodoroName(items) => items
             .iter()
             .map(|item| {
-                if context == Some(CompletionContext::PomodoroStartName) {
+                if matches!(
+                    context,
+                    Some(
+                        CompletionContext::PomodoroStartName
+                            | CompletionContext::PomodoroPastName
+                    )
+                ) {
                     return pomodoro_start_name_line(item);
                 }
                 let name =
@@ -733,6 +739,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::ProjectTaskMove => "project_task_move",
         CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::PomodoroStartName => "pomodoro_start_name",
+        CompletionContext::PomodoroPastName => "pomodoro_past_name",
         CompletionContext::Task => "task",
         CompletionContext::Drawer => "drawer",
         CompletionContext::ActiveTask => "active_task",

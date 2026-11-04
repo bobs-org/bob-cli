@@ -109,6 +109,7 @@ fn build_result_inner(
             | CompletionContext::ProjectTaskMove
             | CompletionContext::PomodoroName
             | CompletionContext::PomodoroStartName
+            | CompletionContext::PomodoroPastName
             | CompletionContext::Task
             | CompletionContext::Drawer
             | CompletionContext::ActiveTask
@@ -477,6 +478,13 @@ fn build_result_inner(
             true,
             raw_text[field.replacement.0..].starts_with(['"', '“']),
         )?,
+        CompletionContext::PomodoroPastName => {
+            super::pomodoros::pomodoro_past_candidates(
+                bob_dir,
+                &field.query,
+                raw_text[field.replacement.0..].starts_with(['"', '“']),
+            )?
+        }
         CompletionContext::ActiveTask => {
             active_task_candidates(bob_dir, &field.query)
         }

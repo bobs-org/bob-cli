@@ -37,6 +37,146 @@ fn named_start_ledger() -> capture_pomodoros::PomodoroScan {
 }
 
 #[test]
+fn pomodoro_past_name_fields_preserve_suffixes_and_chain_siblings() {
+    for (marked, query, replaced, bare) in [
+        ("x=|", "", "", true),
+        ("x=#|", "", "", false),
+        ("x=3#|", "", "", false),
+        ("x=fi|x!", "fi", "fix", true),
+        ("x=#fi|x=*3", "fi", "fix", false),
+        ("x=3#fi|x!=1!2", "fi", "fix", false),
+        ("x=fi|x@2!=*3", "fi", "fix", true),
+        ("x=fi|x~2", "fi", "fix", true),
+        ("x=#\"DEEP |WORK\"@3!", "DEEP ", "\"DEEP WORK\"", false),
+        ("x=#\"DEEP|", "DEEP", "\"DEEP", false),
+        ("x=#\"FIX!=@|\"=1", "FIX!=@", "\"FIX!=@\"", false),
+        ("x=#“CAFÉ”|@3", "CAFÉ", "“CAFÉ”", false),
+        ("=3 x=fi|x@2 x=build", "fi", "fix", true),
+        ("x=build\n\nx=3#fi|x!", "fi", "fix", false),
+        ("  x=fi|x entry", "fi", "fix", true),
+    ] {
+        let cursor = marked.find('|').unwrap();
+        let raw = marked.replace('|', "");
+        let field = capture_language::completion_field_at(&raw, cursor)
+            .unwrap_or_else(|| panic!("missing field: {marked}"));
+        assert_eq!(
+            field.context,
+            CompletionContext::PomodoroPastName,
+            "{marked}"
+        );
+        assert_eq!(field.query, query, "{marked}");
+        assert_eq!(field.bare_name, bare, "{marked}");
+        let start = if replaced.is_empty() {
+            cursor
+        } else {
+            raw.find(replaced).unwrap()
+        };
+        assert_eq!(
+            field.replacement,
+            (start, start + replaced.len()),
+            "{marked}"
+        );
+    }
+    for marked in [
+        "x|=fix",
+        "x=|3#fix",
+        "x=3|#fix",
+        "x=3|",
+        "x=fix!|",
+        "x=fix@|3",
+        "x=fix@3|",
+        "x=fix=|",
+        "x=fix=*3|",
+        "x==~|",
+        "x=3!=1!2|",
+        "X=fi|x",
+        "Plan x=fi|x",
+        "x=fix log @|",
+        "x=fix\n  - @|",
+    ] {
+        let cursor = marked.find('|').unwrap();
+        let raw = marked.replace('|', "");
+        assert!(
+            capture_language::completion_field_at(&raw, cursor).is_none(),
+            "unexpected field: {marked}"
+        );
+    }
+}
+
+#[test]
+fn pomodoro_past_name_menu_excludes_running_targets_without_override() {
+    let temp = TempDir::new("bob-cli-capture-complete-past-name");
+    let day = temp.path().join("2026/20261104.md");
+    write_file(
+        &day,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0800-0825** [t:: 25m]) — READ\n",
+            "- [ ] (**0900-0925** [t:: 25m]) — BUILD\n",
+            "- [ ] () — FIX\n",
+            "- [ ] () — BUILD\n",
+            "- [ ] () — DEEP WORK\n",
+            "- [ ] () — 2FA\n",
+        ),
+    );
+    crate::native::env::with_var("BOB_DAY_FILE", &day, || {
+        let menu = result(temp.path(), "x=", 2);
+        assert_eq!(menu.context, Some(CompletionContext::PomodoroPastName));
+        assert!(menu.r#override.is_none());
+        let json = serde_json::to_value(&menu).expect("completion JSON");
+        assert_eq!(json["context"], "pomodoro_past_name");
+        assert!(json.get("override").is_none());
+        let Candidates::PomodoroName(rows) = &menu.candidates else {
+            panic!("expected name candidates");
+        };
+        for name in ["FIX", "READ", "DEEP WORK", "2FA"] {
+            assert!(
+                rows.iter().any(|row| row.name.as_deref() == Some(name)),
+                "{name}: {rows:?}"
+            );
+        }
+        assert!(rows.iter().all(|row| row.name.as_deref() != Some("BUILD")));
+        assert!(rows.iter().any(|row| row.replacement == "#2fa"));
+        assert!(rows.iter().any(|row| row.replacement == "deep-work"));
+        assert!(rows
+            .iter()
+            .any(|row| row.name.as_deref() == Some("READ")
+                && row.creates_pomodoro));
+        for raw in ["x=#build", "x=#\"BUILD\""] {
+            let menu = result(temp.path(), raw, raw.len());
+            let Candidates::PomodoroName(rows) = menu.candidates else {
+                panic!("expected name candidates");
+            };
+            assert!(
+                rows.is_empty(),
+                "running target offered for {raw}: {rows:?}"
+            );
+            assert!(menu.r#override.is_none());
+        }
+        // A typed prefix may create a distinct name when its accepted
+        // replacement is quoted, so it cannot select the running BUILD.
+        let menu = result(temp.path(), "x=bui", 5);
+        let Candidates::PomodoroName(rows) = menu.candidates else {
+            panic!("expected name candidates");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].replacement, "#\"BUI\"");
+        assert!(rows[0].creates_pomodoro);
+        let raw = "x=#\"DEEP W";
+        let menu = result(temp.path(), raw, raw.len());
+        let Candidates::PomodoroName(rows) = menu.candidates else {
+            panic!("expected name candidates");
+        };
+        assert_eq!(rows[0].replacement, "\"DEEP WORK\"");
+        let shell = super::super::shell::shell_completion(temp.path(), "x=", 2)
+            .expect("shell completion")
+            .expect("past name field");
+        assert!(shell.rows.iter().any(|row| row.full == "x=fix"));
+        assert!(shell.rows.iter().all(|row| row.full != "x=build"));
+    });
+}
+
+#[test]
 fn pomodoro_name_completion_lists_named_then_nameable_rows() {
     let scan = capture_pomodoros::scan(concat!(
         "## Pomodoros\n",
