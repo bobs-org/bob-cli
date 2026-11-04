@@ -51,7 +51,9 @@ Configured linked and sidecar repositories associated with this project:
 - `bob-mac-capture`: Native macOS menu-bar frontend for Bob capture. It delegates
   capture grammar, completion, live preview, and vault mutation to bob-cli's versioned
   `bob` subprocess/JSON interfaces, so coordinate capture-contract changes across both
-  repositories.
+  repositories. GitHub Actions is the only gate for the macOS-only targets, so agents
+  watch the exact-SHA macOS run to green with `/sase_monitor` after every push, or gate
+  first with `scripts/dev/macos-ci-check`.
 - `bob-cli--research`: Durable SASE research reports and generated media.
 
 When you need to read or modify files in any repository other than your own workspace
