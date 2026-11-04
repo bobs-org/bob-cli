@@ -6,6 +6,7 @@ use std::collections::HashSet;
 pub(super) struct PlannedCaptureBatch {
     pub(super) items: Vec<PlannedCaptureItem>,
     pub(super) text_files: Vec<StagedTextFile>,
+    pub(super) read_guards: super::batch::BatchReadGuards,
     pub(super) global_destination: Option<GlobalDestinationSummary>,
     pub(super) warnings: Vec<CaptureWarning>,
     pub(super) plan_budget: Option<CapturePlanBudget>,
@@ -92,21 +93,6 @@ pub(super) fn plan_capture_batch_with_config_path(
         request.forced_section.as_deref(),
         &options,
     )?;
-    if parsed_draft.items.iter().any(|item| {
-        matches!(
-            &item.parsed.kind,
-            CaptureKind::Transfer { destination, .. }
-            if !matches!(
-                destination.kind,
-                capture_language::transfer::TransferDestinationKind::Note
-            )
-        )
-    }) {
-        return Err(CaptureError::usage_code(
-            super::transfer::TRANSFER_EXECUTION_UNAVAILABLE_MESSAGE,
-            super::transfer::TRANSFER_EXECUTION_UNAVAILABLE_CODE,
-        ));
-    }
     if parsed_draft.template.is_some() && request.forced_clip.is_some() {
         return Err(CaptureError::usage_code(
             "a template can't capture the clipboard: `%c` would repeat once per row",
@@ -376,6 +362,7 @@ pub(super) fn plan_capture_batch_with_config_path(
     }
     Ok(PlannedCaptureBatch {
         items,
+        read_guards: std::mem::take(&mut planner.read_guards),
         text_files: planner.into_staged_files()?,
         global_destination,
         warnings,
@@ -967,8 +954,7 @@ pub(super) fn plan_capture_item(
     let item_index = parsed_item.index;
     let fanout_item = parsed_item.fanout.is_some();
     // Staged `>` transfers run before every other planner: a bare-note
-    // destination moves through `batch_move`, while task/drawer/section
-    // destinations keep the temporary refusal until the merges phase.
+    // destination moves through `batch_move`; other destinations merge.
     if matches!(parsed_item.parsed.kind, CaptureKind::Transfer { .. }) {
         return super::transfer::plan_transfer_item(
             request,
@@ -976,6 +962,7 @@ pub(super) fn plan_capture_item(
             today,
             planner,
             warnings,
+            dependency_ctx,
         );
     }
     let mut parsed = parsed_item.parsed;

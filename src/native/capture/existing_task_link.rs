@@ -86,12 +86,14 @@ pub(crate) fn link_existing_task(
     let kind = planned.result.kind.to_string();
     let capture =
         serde_json::to_value(&planned.result).expect("capture item serializes");
+    let read_guards = std::mem::take(&mut planner.read_guards);
     let text_files = planner.into_staged_files()?;
     let changed = !text_files.is_empty();
     if !dry_run && changed {
         let mut batch = PlannedCaptureBatch {
             items: vec![planned],
             text_files,
+            read_guards,
             global_destination: None,
             warnings,
             plan_budget: None,

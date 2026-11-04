@@ -38,8 +38,9 @@ pub(crate) struct PrunedLinkSlot {
     /// Stable ledger-header identity used to rebase after other staged writes.
     pub(crate) entry_context: String,
     pub(crate) entry_ordinal: usize,
-    /// Number of retained linked bullets before this slot in the pruned entry.
-    pub(crate) retained_bullets_before: usize,
+    /// Retained lines before this slot, relative to its pruned entry header.
+    /// Includes plain notes, which are absent from the linked-bullet scan.
+    pub(crate) retained_lines_before: usize,
     pub(crate) indentation: String,
 }
 
@@ -230,21 +231,16 @@ pub(crate) fn prune_daily(
                 .map(|(index, _)| index)?;
             let insertion_line =
                 original_to_output.get(matched.bullet_line).copied()?;
-            let retained_bullets_before = output_model
-                .bullets
-                .iter()
-                .filter(|bullet| {
-                    bullet.entry_index == output_entry_index
-                        && bullet.line_index < insertion_line
-                })
-                .count();
+            let retained_lines_before = insertion_line.saturating_sub(
+                output_model.entries[output_entry_index].line_index + 1,
+            );
             Some(PrunedLinkSlot {
                 task: matched.task.clone(),
                 entry_index: matched.entry_index,
                 original_line: matched.bullet_line,
                 entry_context: entry.context.clone(),
                 entry_ordinal,
-                retained_bullets_before,
+                retained_lines_before,
                 indentation: matched.indentation.clone(),
             })
         })

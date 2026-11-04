@@ -1327,6 +1327,15 @@ pub(super) fn apply_successor_net_post_pass(
                     }
                 }
             }
+            let rows = &mut item.result.relation_merge_output.offer_rows;
+            rows.retain(|row| {
+                row.offer
+                    .as_ref()
+                    .is_none_or(|offer| !seen.contains(&offer.key))
+            });
+            seen.extend(rows.iter().filter_map(|row| {
+                row.offer.as_ref().map(|offer| offer.key.clone())
+            }));
         }
     }
     for item in items.iter_mut() {
@@ -1403,6 +1412,28 @@ pub(super) fn apply_successor_net_post_pass(
                     &tasks_settings,
                 );
             }
+        }
+    }
+    for item in items.iter_mut() {
+        let output = &mut item.result.relation_merge_output;
+        output.offer_rows.retain(|row| {
+            keep_unblocked_row(row, &live, planner, bob_dir, &tasks_settings)
+        });
+        for row in &mut output.offer_rows {
+            refresh_relation_row_final_position(
+                row,
+                planner,
+                bob_dir,
+                &tasks_settings,
+            );
+        }
+        let surviving = output
+            .offer_rows
+            .iter()
+            .filter_map(|row| row.offer.as_ref().map(|offer| offer.key.clone()))
+            .collect::<BTreeSet<_>>();
+        for record in &mut output.merges {
+            record.offers.retain(|offer| surviving.contains(&offer.key));
         }
     }
     // A group with no surviving selectable row is silent, folds included.
@@ -1547,7 +1578,10 @@ fn keep_unblocked_row(
         }
         let in_live = live
             .contains(&(PathBuf::from(&row.note_path), row.block_id.clone()));
-        if row.link.is_some() {
+        if row.link.is_some()
+            || (row.trigger == "merge"
+                && row.offer.as_ref().is_some_and(|offer| offer.selected))
+        {
             if !successor_row_survives(
                 row,
                 live,

@@ -2117,6 +2117,38 @@ fn mg12_picked_slot_rebases_after_same_daily_note_edits_and_source_permutations(
 }
 
 #[test]
+fn mg12_picked_slot_preserves_plain_notes_between_removed_links() {
+    let snapshot = snapshot(&[
+        ("first.md", "- [ ] #task First ^first\n"),
+        ("second.md", "- [ ] #task Second ^second\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "daily/2026-11-03.md",
+            concat!(
+                "## Pomodoros\n- [ ] () — BUILD\n",
+                "  - Before\n  - [[first#^first]]\n",
+                "  - Between\n    - Child of between\n",
+                "  - [[second#^second]]\n  - After\n",
+            ),
+        ),
+    ]);
+    let mut request = request(
+        &["second:second", "first:first"],
+        MergeContainer::Task(locator("dest:dst")),
+    );
+    request.selection = SuccessorSelection::All;
+    let result = plan(&snapshot, &request).expect("selected merge");
+    assert_eq!(
+        result.postimages[Path::new("daily/2026-11-03.md")],
+        concat!(
+            "## Pomodoros\n- [ ] () — BUILD\n",
+            "  - Before\n  - [[dest#^dst]]\n",
+            "  - Between\n    - Child of between\n  - After\n",
+        )
+    );
+}
+
+#[test]
 fn mg16_public_planner_rerun_has_no_writes_and_serializes_source_order() {
     let before = snapshot(&[
         ("src.md", "- [ ] #task Source ^src\n"),

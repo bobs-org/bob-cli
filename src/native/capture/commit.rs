@@ -42,6 +42,7 @@ pub(super) fn commit_capture_batch(
     batch: &mut PlannedCaptureBatch,
     bob_dir: &Path,
 ) -> Result<(), CaptureError> {
+    batch.read_guards.validate(bob_dir)?;
     let created_clip_files = save_clip_plans(&batch.items)?;
     let created_jobs = match save_ref_job_plans(&batch.staged_jobs) {
         Ok(created) => created,
@@ -54,7 +55,11 @@ pub(super) fn commit_capture_batch(
             return Err(CaptureError::io(message));
         }
     };
-    if let Err(mut error) = write_staged_files(&batch.text_files) {
+    if let Err(mut error) =
+        write_staged_files_guarded(&batch.text_files, || {
+            batch.read_guards.validate(bob_dir)
+        })
+    {
         if !created_clip_files.is_empty() {
             let cleanup = capture_clip::cleanup_created(&created_clip_files);
             capture_clip::append_cleanup_message(&mut error.message, &cleanup);
@@ -215,6 +220,14 @@ pub(super) fn validate_disk_preimages(
 pub(crate) fn write_staged_files(
     files: &[StagedTextFile],
 ) -> Result<(), CaptureError> {
+    write_staged_files_guarded(files, || Ok(()))
+}
+
+fn write_staged_files_guarded(
+    files: &[StagedTextFile],
+    validate_reads: impl Fn() -> Result<(), CaptureError>,
+) -> Result<(), CaptureError> {
+    validate_reads()?;
     // Refuse a stale batch before creating any temporary files.
     validate_disk_preimages(files)?;
     let mut pending = Vec::new();
@@ -256,7 +269,9 @@ pub(crate) fn write_staged_files(
 
     // Revalidate after staging so an edit that landed while temporary
     // files were written still refuses before any target is replaced.
-    if let Err(error) = validate_disk_preimages(files) {
+    if let Err(error) =
+        validate_reads().and_then(|()| validate_disk_preimages(files))
+    {
         cleanup_pending_text_files(&pending);
         return Err(error);
     }

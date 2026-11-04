@@ -184,15 +184,8 @@ pub(super) fn plan_relation_merges(
         for warning in &plan.warnings {
             warnings.push(CaptureWarning::Text(warning.clone()));
         }
-        for (relative, postimage) in &plan.postimages {
-            let absolute = request.bob_dir.join(relative);
-            planner.stage_snapshot_postimage(
-                &absolute,
-                before.notes.get(relative).cloned(),
-                postimage.clone(),
-            )?;
-            snapshot.notes.insert(relative.clone(), postimage.clone());
-        }
+        stage_merge_plan(planner, &request.bob_dir, &before, &plan)?;
+        snapshot.notes.extend(plan.postimages.clone());
         for record in &plan.records {
             let effect = match record.outcome {
                 MergeOutcome::Merged => RelationMergeEffect::Merged,
@@ -263,13 +256,14 @@ fn source_is_recurring(
         .is_some_and(is_recurring_task_line)
 }
 
-fn load_staged_snapshot(
+pub(super) fn load_staged_snapshot(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
 ) -> Result<VaultSnapshot, CaptureError> {
     let files = link_repair_markdown_files(bob_dir).map_err(|error| {
         CaptureError::io(format!("scan vault for merge planning: {error}"))
     })?;
+    planner.guard_merge_scan(files.clone())?;
     let overlays = planner.staged_snapshot();
     let mut notes = BTreeMap::new();
     for path in files {
@@ -286,19 +280,19 @@ fn load_staged_snapshot(
                 CaptureError::io(format!("read {}: {error}", path.display()))
             })?,
         };
+        planner.guard_merge_read(&path, Some(contents.clone()));
         notes.insert(relative.to_path_buf(), contents);
     }
     for (path, contents) in overlays {
         let Some(contents) = contents else { continue };
-        if !notes.contains_key(&path) {
-            let relative = path.strip_prefix(bob_dir).map_err(|error| {
-                CaptureError::io(format!(
-                    "{} is outside the vault: {error}",
-                    path.display()
-                ))
-            })?;
-            notes.insert(relative.to_path_buf(), contents);
-        }
+        let relative = path.strip_prefix(bob_dir).map_err(|error| {
+            CaptureError::io(format!(
+                "{} is outside the vault: {error}",
+                path.display()
+            ))
+        })?;
+        planner.guard_merge_read(&path, Some(contents.clone()));
+        notes.insert(relative.to_path_buf(), contents);
     }
     Ok(VaultSnapshot { notes })
 }
@@ -331,7 +325,7 @@ fn merge_conflict_markers(
     markers
 }
 
-fn offer_rows_for_record(
+pub(super) fn offer_rows_for_record(
     record: &MergeRecord,
     before: &VaultSnapshot,
     after: &VaultSnapshot,
@@ -380,6 +374,7 @@ fn merge_offer_row(
     let source_path = display_relative(&record.source.path);
     let source_id = record.source.block_id.clone();
     let destination_role = match offer.entry_role.as_str() {
+        "slot" => "slot",
         "created" => "created",
         "next_up" => "next_up",
         _ => "current",
@@ -430,4 +425,30 @@ fn merge_offer_row(
         }),
         relation: None,
     }
+}
+
+/// Preserve engine read dependencies and target/dependents/repairs/day/source order.
+pub(super) fn stage_merge_plan(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    before: &VaultSnapshot,
+    plan: &crate::native::task_merge::MergePlan,
+) -> Result<(), CaptureError> {
+    for path in &plan.read_paths {
+        planner.guard_merge_read(
+            &bob_dir.join(path),
+            before.notes.get(path).cloned(),
+        );
+    }
+    for path in &plan.write_order {
+        planner.stage_snapshot_postimage(
+            &bob_dir.join(path),
+            before.notes.get(path).cloned(),
+            plan.postimages[path].clone(),
+        )?;
+    }
+    for pair in plan.write_order.windows(2) {
+        planner.record_move(&bob_dir.join(&pair[1]), &bob_dir.join(&pair[0]));
+    }
+    Ok(())
 }

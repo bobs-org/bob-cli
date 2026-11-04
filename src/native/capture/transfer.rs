@@ -1,9 +1,4 @@
-//! Staged `>` transfer moves to bare notes (`docs/task-move.md`).
-//!
-//! Bare-note destinations move each source through the shared move engine
-//! (`capture/batch_move.rs`), one `plan_task_move` per source in typed
-//! order on staged snapshots. Task, drawer, and section destinations keep
-//! the temporary execution refusal until the merges phase lands.
+//! Staged `>` transfers through the shared move and explicit merge engines.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -23,11 +18,6 @@ use crate::native::vault_links::{target_to_markdown_path, NoteIndex};
 
 pub(super) const TRANSFER_OVERLAPPING_SOURCES_CODE: &str =
     "transfer_overlapping_sources";
-pub(super) const TRANSFER_EXECUTION_UNAVAILABLE_CODE: &str =
-    "transfer_execution_unavailable";
-pub(super) const TRANSFER_EXECUTION_UNAVAILABLE_MESSAGE: &str =
-    "capture transfer execution is not available yet; no changes were made";
-
 /// One moved task in a transfer item result. This mirrors the
 /// `bob task move` `MoveRecord` JSON shape exactly (same keys, same
 /// nulls for absent optionals) so Mac clients share one decoder.
@@ -62,15 +52,14 @@ pub(super) struct TransferMoveOutput {
     pub(super) repaired_files: Vec<TransferRepairedFileJson>,
 }
 
-/// Plan one bare-note transfer item. Merge destinations keep the
-/// temporary refusal; the batch-level pre-check refuses mixed drafts
-/// before any item stages so the whole draft rolls back together.
+/// Plan one atomic transfer item against the current staged vault.
 pub(super) fn plan_transfer_item(
     request: &CaptureRequest,
     parsed_item: ParsedCaptureItem,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<CaptureWarning>,
+    ctx: &DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let ParsedCaptureText { kind, route, .. } = &parsed_item.parsed;
     let (sources, destination) = match kind {
@@ -85,20 +74,14 @@ pub(super) fn plan_transfer_item(
             ));
         }
     };
-    if !matches!(
-        destination.kind,
-        crate::native::capture_language::transfer::TransferDestinationKind::Note
-    ) {
-        return Err(CaptureError::usage_code(
-            TRANSFER_EXECUTION_UNAVAILABLE_MESSAGE,
-            TRANSFER_EXECUTION_UNAVAILABLE_CODE,
-        ));
-    }
-    // Resolve every identity against the staged snapshot before any
-    // source stages, so aliases, duplicates, and overlaps refuse with
-    // no partial move.
-    let snapshot =
-        super::batch_move::destination_snapshot(&request.bob_dir, planner)?;
+    let is_move = destination.kind == lexer::TransferDestinationKind::Note;
+    // Resolve every source before mutation; aliases and overlapping blocks refuse
+    // as a whole. Merge snapshots also guard the scanned membership and bytes.
+    let snapshot = if is_move {
+        super::batch_move::destination_snapshot(&request.bob_dir, planner)?
+    } else {
+        super::relations_merge::load_staged_snapshot(planner, &request.bob_dir)?
+    };
     let dest_path = resolve_transfer_note(&snapshot, &destination.route)
         .map_err(|error| {
             CaptureError::usage_code(error.to_string(), error.code())
@@ -138,69 +121,90 @@ pub(super) fn plan_transfer_item(
     let dest_display = super::dependencies::display_relative(&dest_path);
     let dest_absolute = request.bob_dir.join(&dest_path);
     let item_number = parsed_item.index + 1;
+    let mut relation_merge_output = RelationMergeOutput::default();
     let mut moves = Vec::new();
     let mut repaired: BTreeMap<PathBuf, (usize, usize)> = BTreeMap::new();
     let mut needs_reconcile = false;
-    for (source, path) in &resolved_sources {
-        let source_display = super::dependencies::display_relative(path);
-        let move_request = MoveRequest {
-            source: source_display,
-            dest: dest_display.clone(),
-            selectors: vec![MoveSelector::Block(source.block_id.clone())],
-            allow_closed: false,
-            placement: MovePlacement::Append,
-            id_collision: IdCollisionPolicy::Refuse,
-        };
-        let plan = match apply_batch_move(
+    if is_move {
+        for (source, path) in &resolved_sources {
+            let source_display = super::dependencies::display_relative(path);
+            let move_request = MoveRequest {
+                source: source_display,
+                dest: dest_display.clone(),
+                selectors: vec![MoveSelector::Block(source.block_id.clone())],
+                allow_closed: false,
+                placement: MovePlacement::Append,
+                id_collision: IdCollisionPolicy::Refuse,
+            };
+            let plan = match apply_batch_move(
+                planner,
+                &request.bob_dir,
+                &settings,
+                today,
+                &move_request,
+            ) {
+                Ok(plan) => plan,
+                Err(BatchMoveError::Plan(error)) => {
+                    return Err(CaptureError::usage_code(
+                        error.to_string(),
+                        error.code(),
+                    ));
+                }
+                Err(BatchMoveError::Capture(error)) => return Err(error),
+            };
+            for movement in &plan.moves {
+                moves.push(TransferMoveJson {
+                    source_path: super::dependencies::display_relative(
+                        &movement.source_path,
+                    ),
+                    destination_path: super::dependencies::display_relative(
+                        &movement.dest_path,
+                    ),
+                    source_line: movement.source_line,
+                    title: movement.title.clone(),
+                    old_block_id: movement.old_block_id.clone(),
+                    new_block_id: movement.new_block_id.clone(),
+                    old_dependency_id: movement.old_dependency_id.clone(),
+                    new_dependency_id: movement.new_dependency_id.clone(),
+                });
+            }
+            for file in &plan.repaired_files {
+                let entry = repaired.entry(file.path.clone()).or_insert((0, 0));
+                entry.0 += file.link_count;
+                entry.1 += file.dependency_token_count;
+            }
+            needs_reconcile |= plan.needs_reconcile;
+            // Later items see the new identity through the staged overlay;
+            // a repeat of the old identity gets the already-moved error
+            // above instead of the engine's missing-selector refusal.
+            for movement in &plan.moves {
+                if let Some(old) = movement.old_block_id.as_deref() {
+                    planner.record_moved_origin(
+                        &request.bob_dir.join(&movement.source_path),
+                        old,
+                        &request.bob_dir.join(&movement.dest_path),
+                        item_number,
+                    );
+                }
+            }
+        }
+    } else {
+        let (output, repairs) = plan_transfer_merge(
+            request,
             planner,
-            &request.bob_dir,
-            &settings,
-            today,
-            &move_request,
-        ) {
-            Ok(plan) => plan,
-            Err(BatchMoveError::Plan(error)) => {
-                return Err(CaptureError::usage_code(
-                    error.to_string(),
-                    error.code(),
-                ));
-            }
-            Err(BatchMoveError::Capture(error)) => return Err(error),
-        };
-        for movement in &plan.moves {
-            moves.push(TransferMoveJson {
-                source_path: super::dependencies::display_relative(
-                    &movement.source_path,
-                ),
-                destination_path: super::dependencies::display_relative(
-                    &movement.dest_path,
-                ),
-                source_line: movement.source_line,
-                title: movement.title.clone(),
-                old_block_id: movement.old_block_id.clone(),
-                new_block_id: movement.new_block_id.clone(),
-                old_dependency_id: movement.old_dependency_id.clone(),
-                new_dependency_id: movement.new_dependency_id.clone(),
-            });
-        }
-        for file in &plan.repaired_files {
-            let entry = repaired.entry(file.path.clone()).or_insert((0, 0));
-            entry.0 += file.link_count;
-            entry.1 += file.dependency_token_count;
-        }
-        needs_reconcile |= plan.needs_reconcile;
-        // Later items see the new identity through the staged overlay;
-        // a repeat of the old identity gets the already-moved error
-        // above instead of the engine's missing-selector refusal.
-        for movement in &plan.moves {
-            if let Some(old) = movement.old_block_id.as_deref() {
-                planner.record_moved_origin(
-                    &request.bob_dir.join(&movement.source_path),
-                    old,
-                    &request.bob_dir.join(&movement.dest_path),
-                    item_number,
-                );
-            }
+            ctx,
+            &snapshot,
+            &resolved_sources,
+            &destination,
+            &dest_path,
+            warnings,
+        )?;
+        relation_merge_output = output;
+        for file in repairs {
+            repaired.insert(
+                file.path,
+                (file.link_count, file.dependency_token_count),
+            );
         }
     }
     let repaired_files = repaired
@@ -309,7 +313,7 @@ pub(super) fn plan_transfer_item(
             relation_updates: Vec::new(),
             relation_cancels: Vec::new(),
             relation_completes: Vec::new(),
-            relation_merge_output: Default::default(),
+            relation_merge_output,
             transfer_move_output: TransferMoveOutput {
                 moves,
                 repaired_files,
@@ -488,4 +492,152 @@ fn refuse_overlapping_sources(
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_transfer_merge(
+    request: &CaptureRequest,
+    planner: &mut CaptureBatchPlanner,
+    ctx: &DependencyContext,
+    snapshot: &VaultSnapshot,
+    sources: &[(lexer::TransferSource, PathBuf)],
+    destination: &lexer::TransferDestination,
+    dest_path: &Path,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<
+    (
+        RelationMergeOutput,
+        Vec<crate::native::task_move::transplant::RepairedFile>,
+    ),
+    CaptureError,
+> {
+    use crate::native::{
+        task_locator::TaskLocator,
+        task_merge::{
+            plan_task_merge, DailyNoteReadState, MergeContainer, MergeContext,
+            MergeGesture, MergeRelationPolicy, MergeRequest,
+        },
+    };
+    let locator = |path: &Path, id: &str| TaskLocator {
+        note: path.with_extension("").to_string_lossy().replace('\\', "/"),
+        block_id: id.to_string(),
+    };
+    let target = match destination.kind {
+        lexer::TransferDestinationKind::Task
+        | lexer::TransferDestinationKind::Drawer => {
+            let id = destination
+                .block_id
+                .as_deref()
+                .expect("complete task destination");
+            if sources.iter().any(|(source, path)| {
+                path == dest_path && source.block_id == id
+            }) {
+                return Err(CaptureError::usage_code(
+                    "a transfer destination cannot also be a source",
+                    "transfer_destination_is_source",
+                ));
+            }
+            let task = locator(dest_path, id);
+            if let Some(drawer) = &destination.drawer {
+                MergeContainer::Drawer(
+                    task,
+                    capture_language::DrawerSelector {
+                        text: drawer.clone(),
+                        exact: destination.drawer_exact,
+                    },
+                )
+            } else {
+                MergeContainer::Task(task)
+            }
+        }
+        lexer::TransferDestinationKind::Section => MergeContainer::Section {
+            note: dest_path
+                .with_extension("")
+                .to_string_lossy()
+                .replace('\\', "/"),
+            selector: capture_language::DrawerSelector {
+                text: destination
+                    .section
+                    .clone()
+                    .expect("complete section destination"),
+                exact: destination.section_exact,
+            },
+        },
+        lexer::TransferDestinationKind::Note => {
+            unreachable!("moves dispatch separately")
+        }
+    };
+    let daily_abs = pomodoro::day_file_for(&request.bob_dir);
+    let daily_path = daily_abs
+        .strip_prefix(&request.bob_dir)
+        .map_err(|error| CaptureError::io(error.to_string()))?
+        .to_path_buf();
+    let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+    let drawers = capture_drawers::load_drawer_catalog(&request.bob_dir)
+        .unwrap_or_default();
+    let context = MergeContext {
+        today: ctx.today,
+        daily_read: snapshot
+            .notes
+            .get(&daily_path)
+            .cloned()
+            .map(DailyNoteReadState::Read)
+            .unwrap_or(DailyNoteReadState::Missing),
+        daily_path: daily_path.clone(),
+        task_settings: ctx.settings(),
+        note_index: &note_index,
+        drawer_catalog: &drawers,
+        relation_policy: MergeRelationPolicy {
+            linked_from_lines: ctx.linked_from_lines_enabled(),
+            linked_from_mentions: ctx.linked_from_mentions_enabled(),
+        },
+        successor_labels: ctx.successor_labels(),
+    };
+    let merge_request = MergeRequest {
+        sources: sources
+            .iter()
+            .map(|(source, path)| locator(path, &source.block_id))
+            .collect(),
+        target,
+        label: ctx
+            .merge_labels()
+            .first()
+            .map(|label| label.name.clone())
+            .unwrap_or_else(|| "merged into".to_string()),
+        gesture: MergeGesture::Explicit,
+        // Capture maps draft-global numbers to stable keys before this pass.
+        // The engine alone applies the selected target once at its lost-link slot.
+        selection: request.selection.clone(),
+    };
+    let plan = plan_task_merge(snapshot, &merge_request, &context)
+        .map_err(|error| CaptureError::usage_code(error.message, error.code))?;
+    super::relations_merge::stage_merge_plan(
+        planner,
+        &request.bob_dir,
+        snapshot,
+        &plan,
+    )?;
+    let mut after = snapshot.clone();
+    after.notes.extend(plan.postimages.clone());
+    let offer_rows = plan
+        .records
+        .iter()
+        .flat_map(|record| {
+            super::relations_merge::offer_rows_for_record(
+                record,
+                snapshot,
+                &after,
+                ctx.settings(),
+                &daily_path,
+            )
+        })
+        .collect();
+    warnings.extend(plan.warnings.into_iter().map(CaptureWarning::Text));
+    Ok((
+        RelationMergeOutput {
+            merges: plan.records,
+            offer_rows,
+        },
+        plan.repaired_files,
+    ))
 }

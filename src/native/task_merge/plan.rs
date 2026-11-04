@@ -362,13 +362,8 @@ fn rebase_pruned_slot(
     if !entry.open {
         return None;
     }
-    let line_index = model
-        .bullets
-        .iter()
-        .filter(|bullet| bullet.entry_index == entry_index)
-        .nth(slot.retained_bullets_before)
-        .map(|bullet| bullet.line_index)
-        .unwrap_or(entry.end_line);
+    let line_index =
+        (entry.line_index + 1 + slot.retained_lines_before).min(entry.end_line);
     Some((entry_index, line_index))
 }
 

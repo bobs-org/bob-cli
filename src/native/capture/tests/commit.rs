@@ -442,3 +442,151 @@ fn keep_moving_pick_batch_stale_preimage_refuses_whole_batch() {
     );
     no_capture_litter(dir.path());
 }
+
+fn merge_fixture() -> (
+    tempfile::TempDir,
+    CaptureRequest,
+    crate::native::env::TestEnvGuard,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("a.md"), "---\ntype: [[area]]\n---\n## Tasks\n- [ ] #task Source ^s\n  - Payload\n").unwrap();
+    fs::write(
+        dir.path().join("z.md"),
+        "---\ntype: [[area]]\n---\n## Tasks\n- [ ] #task Target ^t\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("readonly.md"), "Original unrelated note\n")
+        .unwrap();
+    let day = dir.path().join("day.md");
+    let guard = crate::native::env::TestEnvGuard::set(&[
+        ("BOB_DAY_FILE", Some(day.as_os_str())),
+        ("BOB_NOW", Some(std::ffi::OsStr::new("2026-11-03 09:30:00"))),
+    ]);
+    let request = CaptureRequest {
+        bob_dir: dir.path().to_path_buf(),
+        dry_run: false,
+        forced_clip: None,
+        forced_destination_flags: Vec::new(),
+        forced_route: None,
+        forced_section: None,
+        forced_sub_bullet_target: None,
+        forced_drawer: None,
+        inbox_routes: Vec::new(),
+        no_clip: true,
+        no_ref: true,
+        pull_in: None,
+        refuse_override: false,
+        require_inbox_route_choice: false,
+        require_pull_in_choice: false,
+        template_origin: None,
+        raw_text: "@a+s > @z+t".to_string(),
+        selection: crate::native::task_complete::SuccessorSelection::None,
+    };
+    (dir, request, guard)
+}
+
+#[test]
+fn transfer_merge_guards_unchanged_reads_membership_and_missing_day() {
+    for change in ["edit", "create", "delete", "day"] {
+        let (dir, request, _env) = merge_fixture();
+        let mut batch =
+            plan_capture_batch(&request, None).expect("merge plans");
+        let source_before = fs::read(dir.path().join("a.md")).unwrap();
+        let target_before = fs::read(dir.path().join("z.md")).unwrap();
+        match change {
+            "edit" => {
+                fs::write(dir.path().join("readonly.md"), "external edit")
+                    .unwrap()
+            }
+            "create" => {
+                fs::write(dir.path().join("new.md"), "new dependent").unwrap()
+            }
+            "delete" => {
+                fs::remove_file(dir.path().join("readonly.md")).unwrap()
+            }
+            "day" => fs::write(dir.path().join("day.md"), "new daily ledger")
+                .unwrap(),
+            _ => unreachable!(),
+        }
+        let error = commit_capture_batch(&mut batch, dir.path())
+            .expect_err("stale merge refuses");
+        assert!(error.message.contains("changed"), "{error:?}");
+        assert_eq!(fs::read(dir.path().join("a.md")).unwrap(), source_before);
+        assert_eq!(fs::read(dir.path().join("z.md")).unwrap(), target_before);
+        no_capture_litter(dir.path());
+    }
+}
+
+#[test]
+fn transfer_merge_preserves_engine_order_and_rolls_back_failed_source() {
+    let (dir, request, _env) = merge_fixture();
+    let mut batch = plan_capture_batch(&request, None).expect("merge plans");
+    assert_eq!(
+        batch.text_files.first().unwrap().target,
+        dir.path().join("z.md")
+    );
+    assert_eq!(
+        batch.text_files.last().unwrap().target,
+        dir.path().join("a.md")
+    );
+    let source = fs::read(dir.path().join("a.md")).unwrap();
+    let target = fs::read(dir.path().join("z.md")).unwrap();
+    RENAME_FAIL_TARGET
+        .with(|fail| *fail.borrow_mut() = Some(dir.path().join("a.md")));
+    let result = commit_capture_batch(&mut batch, dir.path());
+    RENAME_FAIL_TARGET.with(|fail| *fail.borrow_mut() = None);
+    let error = result.expect_err("source write fails");
+    assert!(error.message.contains("rolled back"));
+    assert_eq!(fs::read(dir.path().join("a.md")).unwrap(), source);
+    assert_eq!(fs::read(dir.path().join("z.md")).unwrap(), target);
+    no_capture_litter(dir.path());
+}
+
+#[test]
+fn transfer_merge_rerun_has_no_staged_writes() {
+    let (dir, request, _env) = merge_fixture();
+    let mut batch = plan_capture_batch(&request, None).expect("merge plans");
+    commit_capture_batch(&mut batch, dir.path()).expect("commit merge");
+    let notes = super::super::batch_move::destination_snapshot(
+        dir.path(),
+        &CaptureBatchPlanner::default(),
+    )
+    .unwrap()
+    .notes;
+    let settings =
+        crate::native::task_status_hooks::read_tasks_settings(dir.path());
+    assert_eq!(
+        crate::native::task_status_hooks::reconcile_merge_snapshot_for_tests(
+            &notes, &settings
+        ),
+        notes
+    );
+    let again = plan_capture_batch(&request, None).expect("rerun plans");
+    assert!(again.text_files.is_empty());
+    assert_eq!(
+        again.items[0].result.relation_merge_output.merges[0].outcome,
+        crate::native::task_merge::MergeOutcome::Unchanged
+    );
+}
+
+#[test]
+fn transfer_merge_same_note_stages_one_file() {
+    let (dir, mut request, _env) = merge_fixture();
+    let source_path = dir.path().join("a.md");
+    let mut source = fs::read_to_string(&source_path).unwrap();
+    source.push_str("- [ ] #task Local target ^local\n");
+    fs::write(&source_path, source).unwrap();
+    request.raw_text = "@a+s > @a+local".to_string();
+    let mut batch =
+        plan_capture_batch(&request, None).expect("same-note merge");
+    assert_eq!(batch.text_files.len(), 1);
+    assert_eq!(batch.text_files[0].target, source_path);
+    commit_capture_batch(&mut batch, dir.path())
+        .expect("commit same-note merge");
+    let result = fs::read_to_string(source_path).unwrap();
+    assert!(result.contains("- [-] #task Source"), "{result}");
+    assert!(
+        result.find("^local\n").unwrap() < result.find("Payload").unwrap(),
+        "{result}"
+    );
+}

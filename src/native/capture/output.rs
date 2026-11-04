@@ -3310,6 +3310,10 @@ pub(super) fn print_human_item_success(
     if result.note_pull.is_some() {
         return;
     }
+    if result.kind == "task_merge" {
+        print_human_transfer_merges(result);
+        return;
+    }
     if result.kind == "task_move"
         && !result.transfer_move_output.moves.is_empty()
     {
@@ -3585,6 +3589,65 @@ fn print_human_project_note_moves(
 /// Human rows for a bare-note `>` transfer: the shared move header plus
 /// one row per source in typed order and the canonical repair row.
 /// Dry runs use the `Would move` / `would repair` wording.
+fn print_human_transfer_merges(result: &CaptureItemResult) {
+    let records = &result.relation_merge_output.merges;
+    let Some(first) = records.first() else { return };
+    let target = first
+        .target
+        .title
+        .as_deref()
+        .or(first.target.section.as_deref())
+        .unwrap_or("destination");
+    let suffix = first
+        .target
+        .drawer
+        .as_deref()
+        .or(first.target.section.as_deref())
+        .map(|title| format!(" › {title}"))
+        .unwrap_or_default();
+    let action = if result.dry_run {
+        "would merge"
+    } else {
+        "merged"
+    };
+    println!(
+        "⤵ {action} {} {} into “{target}” · {}{suffix}",
+        records.len(),
+        if records.len() == 1 { "task" } else { "tasks" },
+        display_relative(&first.target.path)
+    );
+    for record in records {
+        println!("  {}", record.message);
+        for dependent in &record.dependents_repointed {
+            println!("  ⛓ {dependent}   now waits on “{target}”");
+        }
+        if !record.prerequisites_left.is_empty() {
+            println!(
+                "  ⚠ “{}” waited on {}; “{target}” does not · add &note:id",
+                record.source.title,
+                record.prerequisites_left.join(", ")
+            );
+        }
+        if !record.successors_orphaned.is_empty() {
+            println!("  ⚠ {} task(s) start after “{}”; they won't be offered when “{target}” finishes · relink with ~",
+                record.successors_orphaned.len(), record.source.title);
+        }
+        for offer in &record.offers {
+            println!(
+                "  ◌ {} link removed · offer {}: link “{target}” under {}{}",
+                offer.entry_name,
+                offer.n,
+                offer.entry_name,
+                if offer.selected {
+                    String::from(" · selected")
+                } else {
+                    format!(" (-p {})", offer.n)
+                }
+            );
+        }
+    }
+}
+
 fn print_human_transfer_moves(result: &CaptureItemResult, styler: &Styler) {
     let output = &result.transfer_move_output;
     let count = output.moves.len();

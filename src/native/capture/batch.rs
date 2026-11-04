@@ -9,6 +9,47 @@ pub(crate) struct CaptureBatchPlanner {
     moved_origins: HashMap<(PathBuf, String), MovedOrigin>,
     item_pre_day: Option<Option<String>>,
     item_consumed_links: Vec<ConsumedLinkJson>,
+    pub(super) read_guards: BatchReadGuards,
+}
+
+/// Inputs consulted by a merge even when they are not written by the batch.
+#[derive(Default)]
+pub(super) struct BatchReadGuards {
+    files: BTreeMap<PathBuf, Option<String>>,
+    scan_paths: Option<Vec<PathBuf>>,
+}
+
+impl BatchReadGuards {
+    pub(super) fn validate(&self, bob_dir: &Path) -> Result<(), CaptureError> {
+        if let Some(expected) = &self.scan_paths {
+            let mut current = collect_done::link_repair_markdown_files(bob_dir)
+                .map_err(|error| CaptureError::io(error.to_string()))?;
+            current.sort();
+            if &current != expected {
+                return Err(CaptureError::io(
+                    "vault Markdown membership changed after merge planning",
+                )
+                .with_typed(CaptureFailureKind::NoteChanged));
+            }
+        }
+        for (path, expected) in &self.files {
+            let current = match fs::read(path) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(CaptureError::io(error.to_string())),
+            };
+            if current.as_deref()
+                != expected.as_ref().map(|text| text.as_bytes())
+            {
+                return Err(CaptureError::io(format!(
+                    "merge input {} changed on disk after planning",
+                    path.display()
+                ))
+                .with_typed(CaptureFailureKind::NoteChanged));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -34,6 +75,45 @@ pub(crate) struct StagedTextFile {
 }
 
 impl CaptureBatchPlanner {
+    pub(super) fn guard_merge_scan(
+        &mut self,
+        mut paths: Vec<PathBuf>,
+    ) -> Result<(), CaptureError> {
+        paths.sort();
+        if self
+            .read_guards
+            .scan_paths
+            .as_ref()
+            .is_some_and(|previous| previous != &paths)
+        {
+            return Err(CaptureError::io(
+                "vault Markdown membership changed during merge planning",
+            )
+            .with_typed(CaptureFailureKind::NoteChanged));
+        }
+        self.read_guards.scan_paths = Some(paths);
+        Ok(())
+    }
+
+    pub(super) fn guard_merge_read(
+        &mut self,
+        path: &Path,
+        snapshot: Option<String>,
+    ) {
+        let original = self
+            .by_path
+            .get(path)
+            .map(|index| {
+                let file = &self.files[*index];
+                file.existed.then(|| file.original.clone())
+            })
+            .unwrap_or(snapshot);
+        self.read_guards
+            .files
+            .entry(path.to_path_buf())
+            .or_insert(original);
+    }
+
     pub(super) fn begin_item(&mut self, pre_day: Option<String>) {
         self.item_pre_day = Some(pre_day);
         self.item_consumed_links.clear();

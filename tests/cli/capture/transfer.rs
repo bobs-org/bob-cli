@@ -1,8 +1,4 @@
-//! Staged `>` transfer moves to bare notes plus the shell guard.
-//!
-//! Bare-note destinations move through `batch_move` in typed order;
-//! task, drawer, and section destinations keep the temporary
-//! `transfer_execution_unavailable` refusal until the merges phase.
+//! Atomic capture transfers to notes, tasks, drawers, and sections.
 
 use crate::support::*;
 use std::fs;
@@ -164,38 +160,6 @@ fn shell_guard_lets_normal_files_and_pipes_through() {
         .output()
         .expect("run capture with piped stdout");
     assert_success(&piped);
-}
-
-#[test]
-fn merge_destination_transfer_refuses_before_capture_mutation() {
-    // Task, drawer, and section destinations keep the temporary refusal
-    // until the merges phase; bare-note moves execute (covered below).
-    let temp = TempDir::new("bob-cli-transfer-unavailable");
-    let vault = temp.path().join("vault");
-    let day_file = vault.join("day.md");
-    write_file(&day_file, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
-    let before = fs::read(&day_file).expect("read day before");
-    let output = bob_command()
-        .arg("capture")
-        .arg("-b")
-        .arg(&vault)
-        .arg("-f")
-        .arg("json")
-        .arg("--")
-        .arg("@inbox+bench > @db+upgrade")
-        .env("BOB_DAY_FILE", &day_file)
-        .env("BOB_NOW", NOW)
-        .output()
-        .expect("run capture with a merge transfer draft");
-    assert!(!output.status.success());
-    let error: serde_json::Value = serde_json::from_str(stdout(&output).trim())
-        .expect("capture JSON error");
-    assert_eq!(error["code"], "transfer_execution_unavailable");
-    assert_eq!(
-        fs::read(&day_file).expect("read day after"),
-        before,
-        "transfer refusal writes nothing"
-    );
 }
 
 #[test]
@@ -580,4 +544,351 @@ fn transfer_mixes_with_ordinary_items_without_ensure_next() {
     assert!(fs::read_to_string(vault.join("cash_x.md"))
         .expect("read project")
         .contains("^b"));
+}
+
+fn setup_merge_vault(
+    name: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let fixture = setup_move_vault(name);
+    write_file(
+        &fixture.1.join("db.md"),
+        &area_with_tasks(concat!(
+            "- [ ] #task Upgrade Postgres [priority:: 2] ^upgrade\n",
+            "  - FUTURE WORK\n    - Existing idea\n",
+        )),
+    );
+    fixture
+}
+
+fn markdown_snapshot(
+    vault: &Path,
+) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fs::read_dir(vault)
+        .expect("vault")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .map(|path| {
+            (
+                path.file_name().unwrap().to_string_lossy().into_owned(),
+                fs::read(path).unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn transfer_merge_task_cuts_retires_repairs_and_preserves_target() {
+    let (_temp, vault, day) = setup_merge_vault("transfer-merge-task");
+    write_file(&vault.join("inbox.md"), &area_with_tasks(concat!(
+        "- [*] #task Benchmark logical replication [created:: 2026-10-28] ^bench\n",
+        "  - Try pgbench ^detail\n",
+        "  - 🗓️ **SCHEDULE LOG**\n    - old schedule\n",
+        "- [?] #task Cut over prod ^cutover\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^bench]]\n",
+    )));
+    write_file(
+        &vault.join("referrer.md"),
+        "See [[inbox#^detail]] and [[inbox#^bench]].\n",
+    );
+    let draft = "@work+pgdump @inbox+bench > @db+upgrade";
+    let before = markdown_snapshot(&vault);
+    let dry = capture_json(&vault, &day, draft, true);
+    assert_success(&dry);
+    assert_eq!(markdown_snapshot(&vault), before);
+    let real = capture_json(&vault, &day, draft, false);
+    assert_success(&real);
+    let mut preview = json_body(&dry);
+    preview["dry_run"] = false.into();
+    assert_eq!(preview, json_body(&real));
+    let json = json_body(&real);
+    assert_eq!(json["kind"], "task_merge");
+    assert_eq!(json["merges"][0]["source"]["block_id"], "pgdump");
+    assert_eq!(json["merges"][1]["source"]["block_id"], "bench");
+    assert!(json.get("moves").is_none());
+    assert!(!json["repaired_files"].as_array().unwrap().is_empty());
+    let target = fs::read_to_string(vault.join("db.md")).unwrap();
+    assert!(
+        target.contains("- [ ] #task Upgrade Postgres [priority:: 2]"),
+        "{target}"
+    );
+    assert!(target.contains("Try pgbench ^detail"), "{target}");
+    assert!(
+        target.find("Dump production").unwrap()
+            < target.find("Benchmark logical replication\n").unwrap()
+    );
+    assert!(!target.contains("old schedule"));
+    let source = fs::read_to_string(vault.join("inbox.md")).unwrap();
+    assert!(source.contains("- [-] #task Benchmark"), "{source}");
+    assert!(source.contains("[cancelled:: 2026-11-03]"));
+    assert!(source.contains("old schedule"));
+    assert!(!source.contains("Try pgbench"));
+    assert!(source.contains("DEPENDS ON:** [[db#^upgrade]]"), "{source}");
+    assert!(fs::read_to_string(vault.join("referrer.md"))
+        .unwrap()
+        .contains("[[db#^detail]]"));
+    let merged = markdown_snapshot(&vault);
+    let again = capture_json(&vault, &day, draft, false);
+    assert_success(&again);
+    assert_eq!(json_body(&again)["merges"][0]["outcome"], "unchanged");
+    assert_eq!(markdown_snapshot(&vault), merged);
+}
+
+#[test]
+fn transfer_merge_drawers_and_sections_preserve_selector_intent() {
+    for (destination, heading, project) in [
+        ("@db+upgrade#future-work", "FUTURE WORK", false),
+        ("@db+upgrade#new-ideas", "NEW IDEAS", false),
+        ("@db+upgrade#\"Future Works\"", "FUTURE WORKS", false),
+        ("@db#future-work", "## Future Work", false),
+        ("@db#\"Exact Heading\"", "## Exact Heading", false),
+        ("@db+prj#future-work", "## Future Work", true),
+        ("@db#new-ideas", "## New Ideas", true),
+    ] {
+        let (_temp, vault, day) = setup_merge_vault("transfer-merge-container");
+        if project {
+            write_file(&vault.join("db.md"), "---\ntype: [[project]]\n---\n- [ ] #task Upgrade ^prj\n\n## Future Work\n- Existing idea\n");
+        }
+        let output = capture_json(
+            &vault,
+            &day,
+            &format!("@inbox+bench > {destination}"),
+            false,
+        );
+        assert_success(&output);
+        let text = fs::read_to_string(vault.join("db.md")).unwrap();
+        assert!(text.contains(heading), "{destination}: {text}");
+        let heading_at = text.find(heading).unwrap();
+        assert!(
+            text[heading_at..].contains("Benchmark logical replication"),
+            "{text}"
+        );
+        assert!(text[heading_at..].contains("Try pgbench"), "{text}");
+        let source = fs::read_to_string(vault.join("inbox.md")).unwrap();
+        assert!(!source.contains("Try pgbench"), "{source}");
+        if destination.starts_with("@db#") {
+            assert!(source.contains("CANCEL LOG"), "{source}");
+        } else {
+            assert!(source.contains("merged into [[db#^"), "{source}");
+        }
+    }
+}
+
+#[test]
+fn transfer_merge_refusals_are_atomic_and_coded() {
+    for (source, destination, code) in [
+        (
+            "@inbox+bench",
+            "@inbox+bench",
+            "transfer_destination_is_source",
+        ),
+        ("@inbox+closed", "@db+upgrade", "merge_source_closed"),
+        ("@inbox+parent", "@db+upgrade", "merge_source_open_subtasks"),
+        ("@inbox+bench", "@db+closed", "merge_target_closed"),
+        (
+            "@inbox+bench",
+            "@db+upgrade#future-wor",
+            "drawer_near_duplicate",
+        ),
+        ("@inbox+bench", "@db#tasks", "merge_section_reserved"),
+        (
+            "@inbox+needed",
+            "@db#future-work",
+            "merge_section_has_dependents",
+        ),
+    ] {
+        let (_temp, vault, day) = setup_merge_vault("transfer-merge-refusal");
+        let mut text = fs::read_to_string(vault.join("inbox.md")).unwrap();
+        text.push_str("- [-] #task Closed ^closed\n- [ ] #task Parent ^parent\n  - [ ] #task Child ^child\n- [ ] #task Needed ^needed\n- [?] #task Waiting ^waiting\n  - ⛓️ **DEPENDS ON:** [[#^needed]]\n");
+        write_file(&vault.join("inbox.md"), &text);
+        let mut text = fs::read_to_string(vault.join("db.md")).unwrap();
+        text.push_str("- [-] #task Closed target ^closed\n");
+        write_file(&vault.join("db.md"), &text);
+        let before = markdown_snapshot(&vault);
+        let output = capture_json(
+            &vault,
+            &day,
+            &format!("{source} > {destination}"),
+            false,
+        );
+        assert!(!output.status.success(), "{source} > {destination}");
+        assert_eq!(json_body(&output)["code"], code, "{}", stdout(&output));
+        assert_eq!(markdown_snapshot(&vault), before);
+    }
+}
+
+fn capture_picked(
+    vault: &Path,
+    day: &Path,
+    draft: &str,
+    pick: &str,
+) -> std::process::Output {
+    bob_command()
+        .args(["capture", "-b"])
+        .arg(vault)
+        .args(["-f", "json", "-p", pick, "--"])
+        .arg(draft)
+        .env("BOB_DAY_FILE", day)
+        .env("BOB_NOW", NOW)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn transfer_merge_offers_once_and_only_links_selected_targets() {
+    for picks in ["none", "1", "all"] {
+        let (_temp, vault, day) = setup_merge_vault("transfer-merge-offer");
+        write_file(&day, "## Pomodoros\n\n- [ ] () — BUILD\n  - [[inbox#^bench]]\n  - keep this slot\n  - [[work#^pgdump]]\n");
+        let output = capture_picked(
+            &vault,
+            &day,
+            "@work+pgdump @inbox+bench > @db+upgrade",
+            picks,
+        );
+        assert_success(&output);
+        let json = json_body(&output);
+        assert_eq!(json["pull_in"]["offer_count"], 1, "{json}");
+        assert_eq!(
+            json["pull_in"]["picked_count"],
+            if picks == "none" { 0 } else { 1 },
+            "{json}"
+        );
+        let after = fs::read_to_string(&day).unwrap();
+        assert!(!after.contains("[[inbox#^bench]]"), "{after}");
+        assert!(!after.contains("[[work#^pgdump]]"), "{after}");
+        let target = fs::read_to_string(vault.join("db.md")).unwrap();
+        if picks == "none" {
+            assert!(!after.contains("[[db#^upgrade]]"));
+            assert!(!target.contains("[fresh::"));
+        } else {
+            assert_eq!(after.matches("[[db#^upgrade]]").count(), 1);
+            assert!(
+                after.find("[[db#^upgrade]]").unwrap()
+                    < after.find("keep this slot").unwrap()
+            );
+            assert!(target.contains("- [*] #task Upgrade"), "{target}");
+            assert!(target.contains("[fresh:: 2026-11-03]"));
+        }
+    }
+}
+
+#[test]
+fn transfer_merge_draft_global_picks_and_duplicate_offers() {
+    for same_target in [false, true] {
+        let (_temp, vault, day) =
+            setup_merge_vault("transfer-merge-draft-picks");
+        write_file(
+            &vault.join("z.md"),
+            &area_with_tasks("- [ ] #task Another target ^t\n"),
+        );
+        write_file(&day, "## Pomodoros\n- [ ] () — BUILD\n  - [[inbox#^bench]]\n  - [[work#^pgdump]]\n");
+        let second = if same_target { "db+upgrade" } else { "z+t" };
+        let draft =
+            format!("@inbox+bench > @db+upgrade\n\n@work+pgdump > @{second}");
+        let preview = capture_json(&vault, &day, &draft, true);
+        assert_success(&preview);
+        let json = json_body(&preview);
+        assert_eq!(
+            json["pull_in"]["offer_count"],
+            if same_target { 1 } else { 2 }
+        );
+        let output = capture_picked(
+            &vault,
+            &day,
+            &draft,
+            if same_target { "1" } else { "2" },
+        );
+        assert_success(&output);
+        assert_eq!(json_body(&output)["pull_in"]["picked_count"], 1);
+        let after = fs::read_to_string(&day).unwrap();
+        assert_eq!(
+            after.matches("[[db#^upgrade]]").count(),
+            usize::from(same_target)
+        );
+        assert_eq!(
+            after.matches("[[z#^t]]").count(),
+            usize::from(!same_target)
+        );
+    }
+}
+
+#[test]
+fn transfer_merge_later_items_use_staged_bytes_and_failure_rolls_back() {
+    let (_temp, vault, day) = setup_merge_vault("transfer-merge-staging");
+    let before = markdown_snapshot(&vault);
+    let failed = capture_json(
+        &vault,
+        &day,
+        "@inbox+bench > @db+upgrade\n\n@missing+none > @db+upgrade",
+        false,
+    );
+    assert!(!failed.status.success());
+    assert_eq!(markdown_snapshot(&vault), before);
+    let output = capture_json(
+        &vault,
+        &day,
+        "@inbox+bench > @db+upgrade\n\n@db+upgrade Follow up",
+        false,
+    );
+    assert_success(&output);
+    let target = fs::read_to_string(vault.join("db.md")).unwrap();
+    assert!(target.contains("Try pgbench"), "{target}");
+    assert!(target.contains("Follow up"), "{target}");
+}
+
+#[test]
+fn transfer_merge_uses_configured_label_and_human_output() {
+    for label in ["folded into", "merged into"] {
+        let (temp, vault, day) = setup_merge_vault("transfer-merge-label");
+        let config = temp.path().join("config.yml");
+        write_file(
+            &config,
+            if label == "merged into" {
+                "relations:\n  merge_labels: []\n"
+            } else {
+                "relations:\n  merge_labels: [folded into]\n"
+            },
+        );
+        let output = bob_command()
+            .args(["capture", "-b"])
+            .arg(&vault)
+            .args(["--", "@inbox+bench > @db+upgrade"])
+            .env("BOB_CONFIG_FILE", config)
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_NOW", NOW)
+            .output()
+            .unwrap();
+        assert_success(&output);
+        assert!(
+            stdout(&output).contains("⤵ merged 1 task"),
+            "{}",
+            stdout(&output)
+        );
+        let source = fs::read_to_string(vault.join("inbox.md")).unwrap();
+        assert!(
+            source.contains(&format!("{label} [[db#^upgrade]]")),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn transfer_merge_offers_follow_later_draft_actions() {
+    for later in ["!db:upgrade", "@db:upgrade"] {
+        for picked in ["none", "all"] {
+            let (_temp, vault, day) = setup_merge_vault("transfer-merge-net");
+            write_file(
+                &day,
+                "## Pomodoros\n- [ ] () — BUILD\n  - [[inbox#^bench]]\n",
+            );
+            let draft = format!("@inbox+bench > @db+upgrade\n\n{later}");
+            let output = capture_picked(&vault, &day, &draft, picked);
+            assert_success(&output);
+            let json = json_body(&output);
+            // An explicit later link consumes an unpicked offer. A prior
+            // selected link survives a redundant link, but never a close.
+            let expected =
+                usize::from(later == "@db:upgrade" && picked == "all");
+            assert_eq!(json["pull_in"]["offer_count"], expected, "{json}");
+        }
+    }
 }
