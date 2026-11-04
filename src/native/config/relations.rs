@@ -223,58 +223,42 @@ pub(crate) fn parse_relations_config(
         "offering successors",
         &mut warnings,
     );
-    let cancel_keys = cancel_labels
-        .iter()
-        .map(|label| label.key.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let complete_keys = complete_labels
-        .iter()
-        .map(|label| label.key.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let successor_keys = successor_labels
-        .iter()
-        .map(|label| label.key.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    // Preserve the legacy cancel-label iteration order when successor
-    // labels are absent; otherwise visit each normalized key once in
-    // config-list order.
-    let mut overlaps = Vec::new();
-    for label in cancel_labels
-        .iter()
-        .chain(complete_labels.iter())
-        .chain(successor_labels.iter())
-    {
-        let in_cancel = cancel_keys.contains(label.key.as_str());
-        let in_complete = complete_keys.contains(label.key.as_str());
-        let in_successor = successor_keys.contains(label.key.as_str());
-        let count = usize::from(in_cancel)
-            + usize::from(in_complete)
-            + usize::from(in_successor);
-        if count > 1 && !overlaps.iter().any(|(key, _, _)| key == &label.key) {
-            let legacy_overlap = in_cancel && in_complete && !in_successor;
-            if legacy_overlap {
-                warnings.push(format!(
-                    "relations: “{}” is in both cancel_labels and complete_labels in {path_display}; it closes nothing",
-                    label.name
-            ));
-            } else {
-                warnings.push(format!(
-                    "relations: “{}” is in more than one of cancel_labels, complete_labels, successor_labels in {path_display}; it has no effect",
-                    label.name
-                ));
-            }
-            overlaps.push((
-                label.key.clone(),
-                label.name.clone(),
-                legacy_overlap,
-            ));
-        }
-    }
-    if !overlaps.is_empty() {
-        let overlap_keys = overlaps
-            .into_iter()
-            .map(|(key, _, _)| key)
-            .collect::<std::collections::BTreeSet<_>>();
+    // Shared overlap rule (MG19): one effect per label. The pure
+    // helper below owns the key/warning computation so the later
+    // merge-label phase can pass its fourth parsed list through the
+    // same rule; this parser keeps its three lists and byte-identical
+    // warnings.
+    let (overlap_keys, mut overlap_warnings) =
+        crate::native::task_merge::overlapping_effect_keys(
+            &path_display.to_string(),
+            &[
+                (
+                    "cancel_labels",
+                    cancel_labels
+                        .iter()
+                        .map(|label| (label.key.clone(), label.name.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+                (
+                    "complete_labels",
+                    complete_labels
+                        .iter()
+                        .map(|label| (label.key.clone(), label.name.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+                (
+                    "successor_labels",
+                    successor_labels
+                        .iter()
+                        .map(|label| (label.key.clone(), label.name.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+            ],
+        );
+    // The helper visits keys in first-use order across the three
+    // lists, which matches the legacy iteration sequence.
+    warnings.append(&mut overlap_warnings);
+    if !overlap_keys.is_empty() {
         cancel_labels.retain(|label| !overlap_keys.contains(&label.key));
         complete_labels.retain(|label| !overlap_keys.contains(&label.key));
         successor_labels.retain(|label| !overlap_keys.contains(&label.key));

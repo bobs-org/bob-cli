@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -624,4 +624,462 @@ fn source_identity_and_task_structure_refusals_are_specific() {
     .expect("retain source disposition for retirement");
     assert_eq!(plan.sources[0].disposition, SourceDisposition::Closed);
     assert_eq!(plan.sources[1].disposition, SourceDisposition::Open);
+}
+
+// ---- retirement (phase 4.1.2) ----
+
+fn retire(
+    snapshot: &VaultSnapshot,
+    request: &MergeRequest,
+) -> Result<(BTreeMap<PathBuf, String>, Vec<RetirementReports>), MergeError> {
+    let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
+    let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+    let catalog = BTreeMap::new();
+    let context = MergeContext {
+        today: NaiveDate::from_ymd_opt(2026, 11, 3).expect("valid date"),
+        daily_path: PathBuf::from("daily/2026-11-03.md"),
+        daily_read: DailyNoteReadState::NotRead,
+        task_settings: &settings,
+        note_index: &note_index,
+        drawer_catalog: &catalog,
+        relation_policy: MergeRelationPolicy::default(),
+    };
+    let prepared = prepare_task_merge(snapshot, request, &context)?;
+    let target = match &request.target {
+        MergeContainer::Task(locator) | MergeContainer::Drawer(locator, _) => {
+            let located = crate::native::task_locator::resolve_task(
+                &snapshot.notes,
+                &format!("{}:{}", locator.note, locator.block_id),
+                &settings,
+            )
+            .map_err(|error| MergeError::new(error.code, error.message))?;
+            Some((located.path, located.task.block_id.unwrap_or_default()))
+        }
+        MergeContainer::Section { .. } => None,
+    };
+    apply_retirement(snapshot, &prepared, request, target, &context)
+}
+
+fn staged_text(staged: &BTreeMap<PathBuf, String>, path: &str) -> String {
+    staged
+        .get(Path::new(path))
+        .cloned()
+        .unwrap_or_else(|| panic!("missing staged note {path}"))
+}
+
+fn classify(
+    snapshot: &VaultSnapshot,
+    source: &str,
+    target: MergeContainer,
+    label: &str,
+    gesture: MergeGesture,
+) -> (SourceOutcome, SourceDisposition) {
+    let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
+    let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+    let catalog = BTreeMap::new();
+    let context = MergeContext {
+        today: NaiveDate::from_ymd_opt(2026, 11, 3).expect("valid date"),
+        daily_path: PathBuf::from("daily/2026-11-03.md"),
+        daily_read: DailyNoteReadState::NotRead,
+        task_settings: &settings,
+        note_index: &note_index,
+        drawer_catalog: &catalog,
+        relation_policy: MergeRelationPolicy::default(),
+    };
+    let request = MergeRequest {
+        sources: vec![locator(source)],
+        target,
+        label: label.to_string(),
+        gesture,
+        selection: SuccessorSelection::None,
+    };
+    classify_source(
+        snapshot,
+        &request.sources[0],
+        &request.target,
+        label,
+        &context,
+    )
+    .expect("classification")
+}
+
+#[test]
+fn mg5_open_dependents_repoint_with_mirrors_and_provenance() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "dep.md",
+            "- [ ] #task Dependent ^dep\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+        ),
+    ]);
+    let (staged, reports) = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("retire");
+    let dependent = staged_text(&staged, "dep.md");
+    assert!(
+        dependent.contains("⛓️ **DEPENDS ON:** [[dest#^dst]]"),
+        "{dependent}"
+    );
+    assert!(!dependent.contains("src#^src"), "{dependent}");
+    assert!(!dependent.contains("[unblocked::]"), "{dependent}");
+    let destination = staged_text(&staged, "dest.md");
+    assert!(
+        destination.contains("🧱 **BLOCKS:** [[dep#^dep]]"),
+        "{destination}"
+    );
+    assert!(
+        destination.contains("LINKED FROM")
+            && destination.contains("(merged into)"),
+        "{destination}"
+    );
+    let source = staged_text(&staged, "src.md");
+    assert!(source.starts_with("- [-]"), "{source}");
+    assert!(source.contains("merged into [[dest#^dst]]"), "{source}");
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0].dependents_repointed,
+        vec!["dep.md#^dep".to_string()]
+    );
+}
+
+#[test]
+fn mg5_shared_dependent_dedups_to_one_target_link() {
+    let snapshot = snapshot(&[
+        ("first.md", "- [ ] #task First ^first\n"),
+        ("second.md", "- [ ] #task Second ^second\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "dep.md",
+            "- [ ] #task Dependent ^dep\n\t- ⛓️ **DEPENDS ON:** [[first#^first]] • [[second#^second]]\n",
+        ),
+    ]);
+    let (staged, reports) = retire(
+        &snapshot,
+        &request(
+            &["first:first", "second:second"],
+            MergeContainer::Task(locator("dest:dst")),
+        ),
+    )
+    .expect("retire shared dependent");
+    let dependent = staged_text(&staged, "dep.md");
+    let depends_on = dependent
+        .lines()
+        .find(|line| line.contains("DEPENDS ON"))
+        .expect("repointed line")
+        .to_string();
+    assert_eq!(depends_on.matches("dest#^dst").count(), 1, "{dependent}");
+    assert!(!dependent.contains("first#^first"), "{dependent}");
+    assert!(!dependent.contains("second#^second"), "{dependent}");
+    assert_eq!(
+        reports[0].dependents_repointed,
+        vec!["dep.md#^dep".to_string()]
+    );
+    assert_eq!(
+        reports[1].dependents_repointed,
+        vec!["dep.md#^dep".to_string()]
+    );
+}
+
+#[test]
+fn mg6_target_prerequisite_on_source_is_never_repointed() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "dest.md",
+            "- [ ] #task Target ^dst\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+        ),
+    ]);
+    let (staged, reports) = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("target waiting on source still merges");
+    // T is never repointed to itself; the edge stays for cancel recovery.
+    let destination = staged_text(&staged, "dest.md");
+    assert!(!destination.contains("dest#^dst"), "{destination}");
+    assert!(reports[0].dependents_repointed.is_empty());
+    let source = staged_text(&staged, "src.md");
+    assert!(source.starts_with("- [-]"), "{source}");
+}
+
+#[test]
+fn mg7_repoint_cycle_refuses_the_whole_batch() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "dest.md",
+            "- [ ] #task Target ^dst\n\t- ⛓️ **DEPENDS ON:** [[dep#^dep]]\n",
+        ),
+        (
+            "dep.md",
+            "- [ ] #task Dependent ^dep\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+        ),
+    ]);
+    let error = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect_err("cycle must refuse");
+    assert_eq!(error.code, "merge_dependency_cycle");
+}
+
+#[test]
+fn mg8_starts_after_successors_are_reported_untouched() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "other.md",
+            "- [ ] #task Other ^other\n\t- 🪢 **LINKS:** starts after [[src#^src]]\n",
+        ),
+    ]);
+    let (staged, reports) = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("retire with successor");
+    assert_eq!(
+        reports[0].successors_orphaned,
+        vec!["other.md#^other".to_string()]
+    );
+    let other = staged_text(&staged, "other.md");
+    assert!(other.contains("starts after [[src#^src]]"), "{other}");
+}
+
+#[test]
+fn mg9_repoint_lands_before_cancel_without_transient_recovery() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "dep.md",
+            "- [ ] #task Dependent ^dep\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+        ),
+    ]);
+    let (staged, _) = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("retire");
+    // The repointed dependent already waits on T and never received a
+    // transient recovery stamp or offer.
+    let dependent = staged_text(&staged, "dep.md");
+    assert!(dependent.contains("[[dest#^dst]]"), "{dependent}");
+    assert!(!dependent.contains("[unblocked::]"), "{dependent}");
+    assert!(dependent.starts_with("- [ ]"), "{dependent}");
+}
+
+#[test]
+fn mg9_source_prerequisites_are_retained_and_reported() {
+    let snapshot = snapshot(&[
+        (
+            "src.md",
+            "- [ ] #task Source ^src\n\t- ⛓️ **DEPENDS ON:** [[pre#^pre]]\n",
+        ),
+        ("pre.md", "- [ ] #task Prerequisite ^pre\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+    ]);
+    let (staged, reports) = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("retire with prerequisites");
+    assert_eq!(
+        reports[0].prerequisites_left,
+        vec!["pre.md#^pre".to_string()]
+    );
+    // Prerequisites are retained on S, never transferred to T.
+    let source = staged_text(&staged, "src.md");
+    assert!(source.contains("pre#^pre"), "{source}");
+    let destination = staged_text(&staged, "dest.md");
+    assert!(!destination.contains("DEPENDS ON"), "{destination}");
+}
+
+#[test]
+fn mg13_section_merge_with_open_dependents_refuses() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "areas/work.md",
+            "---\ntype: [[area]]\n---\n## Future Work\n- Existing\n",
+        ),
+        (
+            "dep.md",
+            "- [ ] #task Dependent ^dep\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+        ),
+    ]);
+    let error = retire(
+        &snapshot,
+        &request(
+            &["src:src"],
+            MergeContainer::Section {
+                note: "areas/work".to_string(),
+                selector: DrawerSelector {
+                    text: "future-work".to_string(),
+                    exact: false,
+                },
+            },
+        ),
+    )
+    .expect_err("section with dependents must refuse");
+    assert_eq!(error.code, "merge_section_has_dependents");
+}
+
+#[test]
+fn mg13_section_provenance_writes_one_cancel_log_entry() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "areas/work.md",
+            "---\ntype: [[area]]\n---\n## Future Work\n- Existing\n",
+        ),
+    ]);
+    let (staged, _) = retire(
+        &snapshot,
+        &request(
+            &["src:src"],
+            MergeContainer::Section {
+                note: "areas/work".to_string(),
+                selector: DrawerSelector {
+                    text: "future-work".to_string(),
+                    exact: false,
+                },
+            },
+        ),
+    )
+    .expect("section merge without dependents");
+    let source = staged_text(&staged, "src.md");
+    assert!(source.starts_with("- [-]"), "{source}");
+    assert!(
+        source.contains("📥 merged into [[areas/work#Future Work]]"),
+        "{source}"
+    );
+    // Exactly one provenance entry: no task relation, no duplicate log.
+    assert!(!source.contains("🪢 **LINKS:**"), "{source}");
+    assert_eq!(
+        source
+            .matches("📥 merged into [[areas/work#Future Work]]")
+            .count(),
+        1,
+        "{source}"
+    );
+}
+
+#[test]
+fn mg16_rerun_against_same_target_is_unchanged() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+    ]);
+    let (staged, _) = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("first merge");
+    let retired = VaultSnapshot::from_notes(staged);
+    let (outcome, disposition) = classify(
+        &retired,
+        "src:src",
+        MergeContainer::Task(locator("dest:dst")),
+        "merged into",
+        MergeGesture::Explicit,
+    );
+    assert_eq!(outcome, SourceOutcome::Unchanged);
+    assert_eq!(disposition, SourceDisposition::Closed);
+}
+
+#[test]
+fn closed_sources_classify_for_label_gestures_and_refuse_explicit() {
+    let snapshot = snapshot(&[
+        ("closed.md", "- [x] #task Closed ^closed\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+    ]);
+    let (outcome, _) = classify(
+        &snapshot,
+        "closed:closed",
+        MergeContainer::Task(locator("dest:dst")),
+        "merged into",
+        MergeGesture::Label,
+    );
+    assert_eq!(outcome, SourceOutcome::AlreadyClosed);
+    let error = retire(
+        &snapshot,
+        &request(
+            &["closed:closed"],
+            MergeContainer::Task(locator("dest:dst")),
+        ),
+    )
+    .expect_err("explicit closed source must refuse");
+    assert_eq!(error.code, "merge_source_closed");
+}
+
+#[test]
+fn mg19_shared_key_with_merge_labels_drops_everywhere_once() {
+    let (dropped, warnings) = overlapping_effect_keys(
+        "relations.yaml",
+        &[
+            (
+                "cancel_labels",
+                vec![("merged-into".to_string(), "merged into".to_string())],
+            ),
+            ("complete_labels", vec![]),
+            ("successor_labels", vec![]),
+            (
+                "merge_labels",
+                vec![("merged-into".to_string(), "merged into".to_string())],
+            ),
+        ],
+    );
+    assert_eq!(dropped, BTreeSet::from(["merged-into".to_string()]));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("merge_labels"), "{}", warnings[0]);
+}
+
+#[test]
+fn mg19_three_list_warnings_stay_byte_identical() {
+    let (_, warnings) = overlapping_effect_keys(
+        "cfg.yaml",
+        &[
+            (
+                "cancel_labels",
+                vec![("done".to_string(), "done".to_string())],
+            ),
+            (
+                "complete_labels",
+                vec![("done".to_string(), "done".to_string())],
+            ),
+            ("successor_labels", vec![]),
+        ],
+    );
+    assert_eq!(
+        warnings,
+        vec![
+            "relations: “done” is in both cancel_labels and complete_labels in cfg.yaml; it closes nothing"
+                .to_string()
+        ]
+    );
+    let (_, warnings) = overlapping_effect_keys(
+        "cfg.yaml",
+        &[
+            (
+                "cancel_labels",
+                vec![("later".to_string(), "later".to_string())],
+            ),
+            ("complete_labels", vec![]),
+            (
+                "successor_labels",
+                vec![("later".to_string(), "later".to_string())],
+            ),
+        ],
+    );
+    assert_eq!(
+        warnings,
+        vec![
+            "relations: “later” is in more than one of cancel_labels, complete_labels, successor_labels in cfg.yaml; it has no effect"
+                .to_string()
+        ]
+    );
 }
