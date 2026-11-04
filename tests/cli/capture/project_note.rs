@@ -350,6 +350,7 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
     assert_eq!(json["project_note"]["parent_route"], "cash");
     assert_eq!(json["project_note"]["parent_link"], "[[cash]]");
     assert_eq!(json["project_note"]["tasks"], 1);
+    assert!(json["project_note"].get("move_hint").is_none(), "{json}");
     assert!(json["project_note"]["sections"]
         .as_array()
         .unwrap()
@@ -1673,6 +1674,92 @@ fn capture_project_note_move_only_draft_suppresses_placeholder() {
 }
 
 #[test]
+fn capture_project_note_move_human_output_reports_moves_and_repairs() {
+    let temp = TempDir::new("bob-cli-project-note-move-human-output");
+    let vault = temp.path().join("vault");
+    let source = vault.join("cash.md");
+    let source_before =
+        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Move this task ^a\n";
+    write_file(&source, source_before);
+    write_file(&vault.join("other.md"), "See [[cash#^a]].\n");
+    let input = "Project @cash^x@\n- ^a\n";
+
+    let dry = project_note_move_human_capture(&vault, input, true);
+    assert_success(&dry);
+    let dry_text = stdout(&dry);
+    assert!(
+        dry_text.contains("1 task · 1 moved from cash.md · sections —"),
+        "{dry_text}"
+    );
+    assert!(
+        dry_text.contains("would move  [ ] Move this task  cash.md:4 → ^a"),
+        "{dry_text}"
+    );
+    assert!(
+        dry_text.contains("would repair  1 link in 1 note"),
+        "{dry_text}"
+    );
+    assert!(dry_text.contains("bob projects sync"), "{dry_text}");
+    assert!(!vault.join("cash_x.md").exists());
+    assert_eq!(fs::read_to_string(&source).unwrap(), source_before);
+
+    let committed = project_note_move_human_capture(&vault, input, false);
+    assert_success(&committed);
+    let committed_text = stdout(&committed);
+    assert!(
+        committed_text.contains("moved  [ ] Move this task  cash.md:4 → ^a"),
+        "{committed_text}"
+    );
+    assert!(
+        committed_text.contains("repaired  1 link in 1 note"),
+        "{committed_text}"
+    );
+}
+
+#[test]
+fn capture_project_note_move_hint_counts_only_eligible_open_roots() {
+    let temp = TempDir::new("bob-cli-project-note-move-hint");
+    let vault = temp.path().join("vault");
+    let mut parent = String::from("---\ntype: \"[[area]]\"\n---\n\n## Tasks\n");
+    parent
+        .push_str("- [ ] #task Parent ^parent\n  - [ ] #task Nested ^nested\n");
+    for index in 0..11 {
+        parent.push_str(&format!("- [ ] #task Open {index} ^open-{index}\n"));
+    }
+    parent.push_str(concat!(
+        "- [ ] #task Hidden #hide ^hidden\n",
+        "- [ ] #task ID-less\n",
+        "- [x] #task Closed ^closed\n",
+        "- [ ] #task Project #prj ^prj\n",
+        "- [~] #task Unsupported ^unsupported\n",
+        "- [ ] #task (REPLACE WITH TASK DESCRIPTION) [created::2026-09-20]\n",
+    ));
+    write_file(&vault.join("cash.md"), &parent);
+
+    let output =
+        project_note_move_capture(&vault, "Project @cash^x@\n", true, None);
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(
+        json["project_note"]["move_hint"],
+        serde_json::json!({"parent": "cash.md", "open_count": 14}),
+        "{json}"
+    );
+
+    let human =
+        project_note_move_human_capture(&vault, "Project @cash^y@\n", true);
+    assert_success(&human);
+    assert!(
+        stdout(&human).contains(
+            "hint: '- ^' moves one of cash.md's 14 open tasks into this project"
+        ),
+        "{}",
+        stdout(&human)
+    );
+}
+
+#[test]
 fn capture_project_note_move_repairs_and_reports_a_followed_work_link() {
     let temp = TempDir::new("bob-cli-project-note-move-followed-link");
     let vault = temp.path().join("vault");
@@ -2400,6 +2487,22 @@ fn project_note_move_capture(
     }
     if let Some(day_file) = day_file {
         command.env("BOB_DAY_FILE", day_file);
+    }
+    command
+        .env("BOB_NOW", "2026-09-20 14:31:07")
+        .env("TZ", "UTC0");
+    run_with_stdin(&mut command, input)
+}
+
+fn project_note_move_human_capture(
+    vault: &Path,
+    input: &str,
+    dry_run: bool,
+) -> std::process::Output {
+    let mut command = bob_command();
+    command.arg("capture").arg("-b").arg(vault);
+    if dry_run {
+        command.arg("--dry-run");
     }
     command
         .env("BOB_NOW", "2026-09-20 14:31:07")

@@ -538,6 +538,12 @@ pub(super) struct ProjectNoteRepairedFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectNoteMoveHint {
+    pub(super) parent: String,
+    pub(super) open_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ProjectNoteSummary {
     pub(super) basename: String,
     pub(super) parent_route: String,
@@ -551,6 +557,8 @@ pub(super) struct ProjectNoteSummary {
     pub(super) move_summary: Option<ProjectNoteMoveSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) repaired_files: Option<Vec<ProjectNoteRepairedFile>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) move_hint: Option<ProjectNoteMoveHint>,
     /// `"offer"` for `@route:id@`; omitted on Create.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) form: Option<&'static str>,
@@ -3324,13 +3332,25 @@ pub(super) fn print_human_item_success(
             note.sections.join(", ")
         };
         let task_word = if note.tasks == 1 { "task" } else { "tasks" };
+        let moved = note
+            .moved_tasks
+            .first()
+            .map(|first| {
+                format!(
+                    " · {} moved from {}",
+                    note.moved_tasks.len(),
+                    first.source
+                )
+            })
+            .unwrap_or_default();
         println!(
             "  {}",
             styler.dim(&format!(
-                "{} {task_word} · sections {sections}",
-                note.tasks
+                "{} {task_word}{moved} · sections {sections}",
+                note.tasks,
             ))
         );
+        print_human_project_note_moves(note, result.dry_run, &styler);
     }
     for line in &result.sub_bullets {
         println!("  {}", styler.dim(line));
@@ -3434,6 +3454,63 @@ pub(super) fn print_human_item_success(
         );
     }
     print_consumed_links(result, &styler);
+}
+
+fn print_human_project_note_moves(
+    note: &ProjectNoteSummary,
+    dry_run: bool,
+    styler: &Styler,
+) {
+    let move_verb = if dry_run { "would move" } else { "moved" };
+    for moved in &note.moved_tasks {
+        let status =
+            style_task_status_marker(styler, moved.previous_status_symbol);
+        let text = styler.dim(&moved.text);
+        let location = styler.cyan(&format!(
+            "{}:{} → ^{}",
+            moved.source, moved.source_line, moved.block_id
+        ));
+        let consequence = moved
+            .detail
+            .as_ref()
+            .map(|detail| format!(" · {detail}"))
+            .unwrap_or_default();
+        println!("  {move_verb}  {status} {text}  {location}{consequence}");
+    }
+
+    if let Some(files) = note.repaired_files.as_ref() {
+        let repaired_links: usize =
+            files.iter().map(|file| file.link_count).sum();
+        let repaired_link_notes =
+            files.iter().filter(|file| file.link_count > 0).count();
+        if repaired_links > 0 {
+            let repair_verb = if dry_run { "would repair" } else { "repaired" };
+            let link_word = if repaired_links == 1 { "link" } else { "links" };
+            let note_word = if repaired_link_notes == 1 {
+                "note"
+            } else {
+                "notes"
+            };
+            println!(
+                "  {repair_verb}  {repaired_links} {link_word} in {repaired_link_notes} {note_word}"
+            );
+        }
+    }
+
+    if let Some(hint) = note.move_hint.as_ref() {
+        let task_word = if hint.open_count == 1 {
+            "task"
+        } else {
+            "tasks"
+        };
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "hint: '- ^' moves one of {}'s {} open {} into this project",
+                hint.parent, hint.open_count, task_word
+            ))
+        );
+    }
 }
 
 /// Render one close task row's typed Work Log entries, each followed by
@@ -6782,6 +6859,7 @@ mod tests {
             moved_tasks: Vec::new(),
             move_summary: None,
             repaired_files: None,
+            move_hint: None,
             form: Some("offer"),
             successors: Some(vec![unblocked_row(
                 "Draft the memo",
@@ -6821,6 +6899,7 @@ mod tests {
             moved_tasks: Vec::new(),
             move_summary: None,
             repaired_files: None,
+            move_hint: None,
             form: None,
             successors: None,
             project_folds: Vec::new(),

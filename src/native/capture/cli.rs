@@ -408,10 +408,15 @@ instead of a task. The note carries a 'parent: \"[[<route>]]\"' link, a \
 command. The '^prj' task is never linked and never starts as '[*]'. The route \
 is lower-cased and the block ID keeps its authored case. \
 The parent '<route>.md' must already exist as an area or non-terminal project \
-note; the new note must not exist yet; the parent note itself is never \
-modified ('bob projects sync' owns its Sub-projects line). Authored child \
-bullets become '## Tasks' entries or '## Title Case' sections from ALL-CAPS \
-titles in the new note. 's:<N>' writes inline '[scheduled:: YYYY-MM-DD]' on \
+note; the new note must not exist yet. Moving a task removes its complete block \
+from the parent and repairs links; the parent is replaced last, while 'bob \
+projects sync' owns its Sub-projects line. Authored child bullets become \
+'## Tasks' entries or '## Title Case' sections from ALL-CAPS titles in the new \
+note. In that item's first-level bullets, '- ^<id>' moves an open top-level \
+task from the parent into that slot; '- :<id>' also makes it Next and links \
+it into the chosen Pomodoro. Moved blocks keep their children and identity. \
+When there are no move bullets but the parent has movable tasks, the preview \
+shows a '- ^' move hint. 's:<N>' writes inline '[scheduled:: YYYY-MM-DD]' on \
 the '^prj' line and '$<N>' writes an inline priority there, while '%...' and \
 --clip are rejected. \
 The '#<pomodoro>' name picks the Pomodoro that ' :<id>' Task Links go under; \

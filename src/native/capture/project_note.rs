@@ -1,13 +1,13 @@
 //! Project-note planning for plus-sigil captures.
 use super::batch_move::{apply_batch_move, BatchMoveError};
 use super::output::{
-    ProjectNoteMoveSummary, ProjectNoteMovedTask, ProjectNotePlannedLink,
-    ProjectNoteRepairedFile,
+    ProjectNoteMoveHint, ProjectNoteMoveSummary, ProjectNoteMovedTask,
+    ProjectNotePlannedLink, ProjectNoteRepairedFile,
 };
 use super::*;
 use crate::native::task_move::{
-    resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot, MovePlacement,
-    MoveRequest, MoveSelector, PlanError,
+    movable_roots, resolve_movable, IdCollisionPolicy, Ineligible, MovableRoot,
+    MovePlacement, MoveRequest, MoveSelector, PlanError,
 };
 
 pub(super) fn reject_project_note_conflicts(
@@ -167,6 +167,17 @@ pub(super) fn plan_project_note_item(
         today,
         &request.bob_dir,
     )?;
+    let move_hint = if resolved_moves.is_empty() {
+        project_note_move_hint(
+            planner,
+            &source_path,
+            scheduled.as_deref(),
+            today,
+            &request.bob_dir,
+        )
+    } else {
+        None
+    };
     let new_target = request.bob_dir.join(&basename);
     if planner.currently_exists(&new_target)? {
         return Err(CaptureError::io(format!(
@@ -1522,6 +1533,7 @@ pub(super) fn plan_project_note_item(
                 repaired_files: move_execution
                     .as_ref()
                     .map(|execution| execution.repaired_files.clone()),
+                move_hint,
                 form: (form == ProjectNoteForm::Offer).then_some("offer"),
                 successors: (form == ProjectNoteForm::Offer).then(|| {
                     let mut scratch_index = 0;
@@ -1824,6 +1836,39 @@ struct ResolvedProjectMove {
     block_id: String,
     draft_range: (usize, usize),
     root: MovableRoot,
+}
+
+fn project_note_move_hint(
+    planner: &CaptureBatchPlanner,
+    source_path: &Path,
+    scheduled: Option<&str>,
+    today: NaiveDate,
+    bob_dir: &Path,
+) -> Option<ProjectNoteMoveHint> {
+    let contents = planner.peek_text(source_path)?;
+    let future_project_date = scheduled.and_then(|value| {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .ok()
+            .filter(|date| *date > today)
+    });
+    let lines: Vec<&str> = contents.lines().collect();
+    let relative_source =
+        source_path.strip_prefix(bob_dir).unwrap_or(source_path);
+    let roots = movable_roots(relative_source, &contents);
+    let open_count = roots
+        .into_iter()
+        .filter(|root| root.disabled_reason.is_none())
+        .filter(|root| {
+            !lines.get(root.line.saturating_sub(1)).is_some_and(|line| {
+                line.contains(capture_project_note::PLACEHOLDER_TASK_BODY)
+            })
+        })
+        .filter(|root| future_project_date.is_none() || root.status == '?')
+        .count();
+    (open_count > 0).then(|| ProjectNoteMoveHint {
+        parent: display_project_path(relative_source),
+        open_count,
+    })
 }
 
 struct ProjectMoveExecution {
