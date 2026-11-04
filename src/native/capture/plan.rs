@@ -1,6 +1,7 @@
 //! Batch/item planning and capture formatting helpers.
 use super::keep_moving_net::KeepMovingTrace;
 use super::*;
+use std::collections::HashSet;
 
 pub(super) struct PlannedCaptureBatch {
     pub(super) items: Vec<PlannedCaptureItem>,
@@ -48,6 +49,12 @@ pub(super) struct PlannedCaptureItem {
     /// Project-note move landings for tracker forwarding. The batch loop
     /// remaps tracked roots before ordinary forwarding; never serialized.
     pub(super) project_move_landings: Vec<ProjectMoveLanding>,
+}
+
+#[derive(Clone)]
+pub(super) enum FanoutClipboardRead {
+    Current(String),
+    History(Vec<String>),
 }
 
 pub(super) fn plan_capture_batch(
@@ -119,6 +126,10 @@ pub(super) fn plan_capture_batch_with_config_path(
     let roll_seed = config::roll_seed();
     let mut planner = CaptureBatchPlanner::default();
     let mut clip_reservations = capture_clip::ClipReservations::default();
+    let mut fanout_clip_reads: HashMap<usize, FanoutClipboardRead> =
+        HashMap::new();
+    let mut fanout_warning_messages: HashMap<usize, HashSet<String>> =
+        HashMap::new();
     let mut items = Vec::new();
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let day_relative =
@@ -135,88 +146,142 @@ pub(super) fn plan_capture_batch_with_config_path(
     // until some item reports a keep-moving offer.
     let mut keep_moving_trace = KeepMovingTrace::default();
 
-    for parsed_item in parsed_items {
-        let item_number = parsed_item.index + 1;
-        let error_context = capture_error_context(item_number, &parsed_item);
-        let pre_day = planner.peek_text(&day_file);
-        planner.begin_item(pre_day.clone());
-        let pre_tasks = task_tracker.snapshot_pre(&planner);
-        let item_list = parsed_item.list.clone();
-        if matches!(parsed_item.parsed.kind, CaptureKind::Ref(_)) {
-            let assignment = ref_assignments
-                .remove(&parsed_item.index)
-                .ok_or_else(|| {
-                    CaptureError::io(
+    let mut item_start = 0;
+    while item_start < parsed_items.len() {
+        let first = &parsed_items[item_start];
+        let group_key = first.fanout.as_ref().map(|_| first.index);
+        let mut group_end = item_start + 1;
+        if let Some(first_fanout) = first.fanout.as_ref() {
+            while group_end < parsed_items.len() {
+                let candidate = &parsed_items[group_end];
+                let same_group = candidate.index == first.index
+                    && candidate.fanout.as_ref().is_some_and(|fanout| {
+                        fanout.line == first_fanout.line
+                            && fanout.count == first_fanout.count
+                    });
+                if !same_group {
+                    break;
+                }
+                group_end += 1;
+            }
+        }
+        if group_end - item_start > 1 {
+            validate_fanout_target_group(
+                request,
+                &mut planner,
+                &parsed_items[item_start..group_end],
+            )?;
+        }
+        for parsed_item in parsed_items[item_start..group_end].iter().cloned() {
+            let fanout_context = parsed_item.fanout.clone();
+            let warning_start = warnings.len();
+            let item_number = parsed_item.index + 1;
+            let error_context =
+                capture_error_context(item_number, &parsed_item);
+            let pre_day = planner.peek_text(&day_file);
+            planner.begin_item(pre_day.clone());
+            let pre_tasks = task_tracker.snapshot_pre(&planner);
+            let item_list = parsed_item.list.clone();
+            if matches!(parsed_item.parsed.kind, CaptureKind::Ref(_)) {
+                let assignment = ref_assignments
+                    .remove(&parsed_item.index)
+                    .ok_or_else(|| {
+                        CaptureError::io(
                         "reference capture invariant failed: missing verdict",
                     )
-                })?;
-            let (mut planned, staged) =
-                plan_ref_item(request, parsed_item, assignment, today)
-                    .map_err(|mut error| {
-                        error.message =
-                            format!("{error_context}: {}", error.message);
-                        error
                     })?;
-            planned.result.list = item_list;
-            planned.result.consumed_links = planner.take_consumed_links();
-            if let Some(job) = staged {
-                staged_jobs.push(StagedRefJob {
-                    item: items.len(),
-                    job,
-                });
-            }
-            items.push(planned);
-            continue;
-        }
-        let mut planned = plan_capture_item(
-            request,
-            parsed_item,
-            now,
-            today,
-            roll_seed,
-            &mut planner,
-            &mut clip_reservations,
-            &mut warnings,
-            &mut dependency_ctx,
-            config_path,
-            &mut task_theme_context,
-            &items,
-        )
-        .map_err(|mut error| {
-            error.message = format!("{error_context}: {}", error.message);
-            error
-        })?;
-        planned.result.list = item_list;
-        planned.result.consumed_links = planner.take_consumed_links();
-        planned.result.normalize_dependency_updates();
-        if let Some(warning) = warning_from_item(&planned.result) {
-            warnings.push(warning);
-        }
-        if let Some(warning) = in_progress_warning_from_item(&planned.result) {
-            warnings.push(warning);
-        }
-        let refs = std::mem::take(&mut planned.pomodoro_refs);
-        match planner.loaded_texts(&day_file) {
-            Some((original, current)) => {
-                let pre = pre_day.unwrap_or(original);
-                block_tracker.track_item(Some(&pre), Some(&current), refs);
-            }
-            None => {
-                debug_assert!(
-                    refs.is_empty(),
-                    "pomodoro block refs without a loaded day file"
+                let (mut planned, staged) =
+                    plan_ref_item(request, parsed_item, assignment, today)
+                        .map_err(|mut error| {
+                            error.message =
+                                format!("{error_context}: {}", error.message);
+                            error
+                        })?;
+                planned.result.list = item_list;
+                planned.result.fanout = fanout_context;
+                planned.result.consumed_links = planner.take_consumed_links();
+                if let Some(job) = staged {
+                    staged_jobs.push(StagedRefJob {
+                        item: items.len(),
+                        job,
+                    });
+                }
+                items.push(planned);
+                dedupe_fanout_group_warnings(
+                    &mut warnings,
+                    warning_start,
+                    group_key,
+                    &mut fanout_warning_messages,
                 );
+                continue;
             }
+            let mut planned = plan_capture_item(
+                request,
+                parsed_item,
+                now,
+                today,
+                roll_seed,
+                &mut planner,
+                &mut clip_reservations,
+                &mut fanout_clip_reads,
+                &mut warnings,
+                &mut dependency_ctx,
+                config_path,
+                &mut task_theme_context,
+                &items,
+            )
+            .map_err(|mut error| {
+                error.message = format!("{error_context}: {}", error.message);
+                error
+            })?;
+            planned.result.list = item_list;
+            planned.result.fanout = fanout_context;
+            planned.result.consumed_links = planner.take_consumed_links();
+            planned.result.normalize_dependency_updates();
+            if let Some(warning) = warning_from_item(&planned.result) {
+                warnings.push(warning);
+            }
+            if let Some(warning) =
+                in_progress_warning_from_item(&planned.result)
+            {
+                warnings.push(warning);
+            }
+            let refs = std::mem::take(&mut planned.pomodoro_refs);
+            match planner.loaded_texts(&day_file) {
+                Some((original, current)) => {
+                    let pre = pre_day.unwrap_or(original);
+                    block_tracker.track_item(Some(&pre), Some(&current), refs);
+                }
+                None => {
+                    debug_assert!(
+                        refs.is_empty(),
+                        "pomodoro block refs without a loaded day file"
+                    );
+                }
+            }
+            let task_refs = std::mem::take(&mut planned.task_block_refs);
+            // Project moves remove tracked roots from their source: remap
+            // before ordinary forwarding so moved and carried blocks follow
+            // to the destination instead of tripping the lost-headline guard.
+            let move_landings =
+                std::mem::take(&mut planned.project_move_landings);
+            task_tracker.remap_project_moves(&planner, &move_landings);
+            task_tracker.track_item(&planner, &pre_tasks, task_refs);
+            keep_moving_trace.record(
+                items.len(),
+                &planned,
+                &planner,
+                &day_file,
+            );
+            items.push(planned);
+            dedupe_fanout_group_warnings(
+                &mut warnings,
+                warning_start,
+                group_key,
+                &mut fanout_warning_messages,
+            );
         }
-        let task_refs = std::mem::take(&mut planned.task_block_refs);
-        // Project moves remove tracked roots from their source: remap
-        // before ordinary forwarding so moved and carried blocks follow
-        // to the destination instead of tripping the lost-headline guard.
-        let move_landings = std::mem::take(&mut planned.project_move_landings);
-        task_tracker.remap_project_moves(&planner, &move_landings);
-        task_tracker.track_item(&planner, &pre_tasks, task_refs);
-        keep_moving_trace.record(items.len(), &planned, &planner, &day_file);
-        items.push(planned);
+        item_start = group_end;
     }
 
     // Net successor reporting (SL20): drop linked rows whose bullet or
@@ -390,13 +455,144 @@ fn capture_error_context(
     item_number: usize,
     parsed_item: &ParsedCaptureItem,
 ) -> String {
-    match &parsed_item.template_row {
+    let context = match &parsed_item.template_row {
         Some(row) => format!("template row {} (line {})", row.row, row.line),
         None => format!(
             "capture item {item_number} starting on line {}",
             parsed_item.line_start
         ),
+    };
+    parsed_item
+        .fanout
+        .as_ref()
+        .map_or(context.clone(), |fanout| {
+            format!("{context} (target {})", fanout.marker)
+        })
+}
+
+/// Resolve every task in a target run against the same staged snapshots
+/// before any member of the group can edit them. Canonical paths collapse
+/// symlink aliases, and the scanned task ID is the resolved identity.
+fn validate_fanout_target_group(
+    request: &CaptureRequest,
+    planner: &mut CaptureBatchPlanner,
+    items: &[ParsedCaptureItem],
+) -> Result<(), CaptureError> {
+    let settings = note_tasks::read_settings(&request.bob_dir);
+    let mut seen: HashMap<(PathBuf, String), String> = HashMap::new();
+    for item in items {
+        let Some((route, block_id)) = fanout_task_target(&item.parsed) else {
+            continue;
+        };
+        let relative = relative_target(Some(route));
+        let absolute = request.bob_dir.join(&relative);
+        let contents =
+            planner.read_existing(&absolute).map_err(|mut error| {
+                error.message = format!(
+                    "{}: {}",
+                    capture_error_context(item.index + 1, item),
+                    error.message
+                );
+                error
+            })?;
+        let scan = note_tasks::scan(&contents, &settings);
+        let task =
+            scan.lookup_capture_task(route, block_id)
+                .map_err(|message| {
+                    CaptureError::io(format!(
+                        "{}: {message}",
+                        capture_error_context(item.index + 1, item)
+                    ))
+                })?;
+        let path_key = std::fs::canonicalize(&absolute)
+            .unwrap_or_else(|_| absolute.clone());
+        let resolved_id = task
+            .block_id
+            .as_deref()
+            .unwrap_or(block_id)
+            .to_ascii_lowercase();
+        let key = (path_key, resolved_id);
+        if let Some(first_marker) = seen.get(&key) {
+            let marker = item
+                .fanout
+                .as_ref()
+                .map(|fanout| fanout.marker.as_str())
+                .unwrap_or("target");
+            return Err(CaptureError::usage_code(
+                format!(
+                    "{}: `{marker}` resolves to the same task as `{first_marker}`; name each task once",
+                    capture_error_context(item.index + 1, item)
+                ),
+                "duplicate_capture_target",
+            ));
+        }
+        let marker = item
+            .fanout
+            .as_ref()
+            .map(|fanout| fanout.marker.clone())
+            .unwrap_or_else(|| format!("@{route}+{block_id}"));
+        seen.insert(key, marker);
     }
+    Ok(())
+}
+
+fn fanout_task_target(parsed: &ParsedCaptureText) -> Option<(&str, &str)> {
+    let route = parsed.route.as_deref()?;
+    match &parsed.kind {
+        CaptureKind::SubBullet {
+            target: SubBulletTarget::BlockId(block_id),
+            ..
+        }
+        | CaptureKind::TaskToggle { block_id, .. } => {
+            Some((route, block_id.as_str()))
+        }
+        _ => None,
+    }
+}
+
+fn dedupe_fanout_group_warnings(
+    warnings: &mut Vec<CaptureWarning>,
+    warning_start: usize,
+    group_key: Option<usize>,
+    seen_by_group: &mut HashMap<usize, HashSet<String>>,
+) {
+    let Some(group_key) = group_key else {
+        return;
+    };
+    let seen = seen_by_group.entry(group_key).or_default();
+    let mut index = warning_start;
+    while index < warnings.len() {
+        let message = warnings[index].message().into_owned();
+        if seen.insert(message) {
+            index += 1;
+        } else {
+            warnings.remove(index);
+        }
+    }
+}
+
+fn read_capture_clipboard(
+    item_index: usize,
+    fanout_item: bool,
+    request: &ClipRequest,
+    memo: &mut HashMap<usize, FanoutClipboardRead>,
+) -> Result<FanoutClipboardRead, CaptureError> {
+    if fanout_item && let Some(read) = memo.get(&item_index) {
+        return Ok(read.clone());
+    }
+    let read = match request {
+        ClipRequest::Current => FanoutClipboardRead::Current(
+            capture_clip::read_clipboard().map_err(CaptureError::io)?,
+        ),
+        ClipRequest::History { count } => FanoutClipboardRead::History(
+            capture_clip::read_clipboard_history(count.get())
+                .map_err(CaptureError::io)?,
+        ),
+    };
+    if fanout_item {
+        memo.insert(item_index, read.clone());
+    }
+    Ok(read)
 }
 
 /// Plan one reference item: resolve the canonical parent with
@@ -531,6 +727,7 @@ fn plan_ref_item(
             text: intent.original.clone(),
             task_line: String::new(),
             kind: capture_kind_label(&parsed_item.parsed.kind),
+            fanout: None,
             created,
             scheduled: None,
             priority: None,
@@ -746,12 +943,15 @@ pub(super) fn plan_capture_item(
     roll_seed: u64,
     planner: &mut CaptureBatchPlanner,
     clip_reservations: &mut capture_clip::ClipReservations,
+    fanout_clip_reads: &mut HashMap<usize, FanoutClipboardRead>,
     warnings: &mut Vec<CaptureWarning>,
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
     task_theme_context: &mut CaptureTaskThemeContext,
     earlier_items: &[PlannedCaptureItem],
 ) -> Result<PlannedCaptureItem, CaptureError> {
+    let item_index = parsed_item.index;
+    let fanout_item = parsed_item.fanout.is_some();
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.
@@ -1091,6 +1291,7 @@ pub(super) fn plan_capture_item(
                 task_theme,
                 type_relocation: None,
                 kind: capture_kind_label(&parsed.kind),
+                fanout: None,
                 created,
                 scheduled: None,
                 priority: None,
@@ -1614,9 +1815,18 @@ pub(super) fn plan_capture_item(
                 ));
             }
         }
-        Some(ClipRequest::Current) => {
-            let clipboard =
-                capture_clip::read_clipboard().map_err(CaptureError::io)?;
+        Some(clip @ ClipRequest::Current) => {
+            let read = read_capture_clipboard(
+                item_index,
+                fanout_item,
+                clip,
+                fanout_clip_reads,
+            )?;
+            let FanoutClipboardRead::Current(clipboard) = read else {
+                return Err(CaptureError::io(
+                    "clipboard capture invariant failed: current clipboard read expected",
+                ));
+            };
             Some(
                 capture_clip::plan_with_reservations(
                     &request.bob_dir,
@@ -1628,9 +1838,18 @@ pub(super) fn plan_capture_item(
                 .map_err(CaptureError::io)?,
             )
         }
-        Some(ClipRequest::History { count }) => {
-            let clipboards = capture_clip::read_clipboard_history(count.get())
-                .map_err(CaptureError::io)?;
+        Some(clip @ ClipRequest::History { .. }) => {
+            let read = read_capture_clipboard(
+                item_index,
+                fanout_item,
+                clip,
+                fanout_clip_reads,
+            )?;
+            let FanoutClipboardRead::History(clipboards) = read else {
+                return Err(CaptureError::io(
+                    "clipboard capture invariant failed: history clipboard read expected",
+                ));
+            };
             Some(
                 capture_clip::plan_history_with_reservations(
                     &request.bob_dir,
@@ -2041,6 +2260,7 @@ pub(super) fn plan_capture_item(
                     task_theme: None,
                     type_relocation: None,
                     kind: kind_label,
+                    fanout: None,
                     created,
                     scheduled: None,
                     priority: None,
@@ -2888,6 +3108,7 @@ pub(super) fn plan_capture_item(
             task_theme,
             type_relocation: sub_bullet_type_relocation,
             kind: kind_label,
+            fanout: None,
             created,
             scheduled,
             priority: priority.as_ref().map(|resolved| resolved.value.clone()),
@@ -4108,6 +4329,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             task_theme: sub_bullet_task_theme,
             type_relocation: sub_bullet_type_relocation,
             kind: kind_label,
+            fanout: None,
             created,
             scheduled: None,
             priority: None,

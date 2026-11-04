@@ -586,6 +586,10 @@ pub(super) struct CaptureItemResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) type_relocation: Option<TypeRelocationJson>,
     pub(super) kind: &'static str,
+    /// Source target-run context. Ordinary captures omit this additive
+    /// field so their JSON stays byte-compatible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fanout: Option<capture_language::FanoutContext>,
     pub(super) created: String,
     pub(super) scheduled: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1929,6 +1933,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         if index > 0 {
             println!();
         }
+        print_fanout_summary(&result.captures, item);
         print_list_summary(item);
         print_human_item_success(
             item,
@@ -1945,6 +1950,33 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     );
     print_pull_in_hint(result);
     print_inbox_route_hint(result);
+}
+
+/// Print the complete target run once, immediately before its first
+/// per-target result.
+fn print_fanout_summary(items: &[CaptureItemResult], item: &CaptureItemResult) {
+    let Some(fanout) = item.fanout.as_ref() else {
+        return;
+    };
+    if fanout.position != 1 {
+        return;
+    }
+    let targets = items
+        .iter()
+        .filter_map(|candidate| candidate.fanout.as_ref())
+        .filter(|candidate| {
+            candidate.line == fanout.line && candidate.count == fanout.count
+        })
+        .collect::<Vec<_>>();
+    if targets.len() != fanout.count {
+        return;
+    }
+    let markers = targets
+        .into_iter()
+        .map(|target| target.marker.as_str())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    println!("targets  {markers}");
 }
 
 fn note_pull_rows(result: &CaptureResult) -> Vec<&TaskCompleteUnblockedJson> {
@@ -6676,6 +6708,7 @@ mod tests {
             text: String::new(),
             task_line: "- [x] done".to_string(),
             kind: "task_complete",
+            fanout: None,
             created: "2026-10-28".to_string(),
             scheduled: None,
             priority: None,

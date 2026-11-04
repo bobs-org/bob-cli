@@ -784,6 +784,7 @@ pub(super) fn plan_pomodoro_split_item(
             text: parsed.body.clone(),
             task_line: source_line_text,
             kind: capture_kind_label(&parsed.kind),
+            fanout: None,
             created: date_string(today),
             scheduled: None,
             priority: None,

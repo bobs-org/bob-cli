@@ -3548,6 +3548,7 @@ pub(super) fn plan_dependency_only_item(
             text: final_task.description.clone(),
             task_line: final_line,
             kind: "task_dependency",
+            fanout: None,
             created: date_string(ctx.today),
             scheduled: None,
             priority: None,

@@ -89,6 +89,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `:id` | Project-note child: name, Next, and link | [`:id` child](#project-colon-child) |
 | `^id` | Project-note child: name only | [`^id` child](#project-caret-child) |
 | `@route+block-id` | Child bullet under an existing task | [`@route+block-id`](#plus-child) |
+| `@route+id @route+id` | Target run | [Target run](#plus-child-target-run) |
 | `@route+block-id#drawer` | Child inside a task drawer | [`@route+block-id#drawer`](#plus-child-section) |
 | `- #drawer` with nested notes | First-level drawer bullet | [Drawer bullets](#drawer-bullets) |
 | `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
@@ -1237,6 +1238,18 @@ A note-less `@route+id` with only `%c` files the clipboard as notes directly
 under that task: `bob capture '@work+prep %c'`.
 
 Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
+
+### Target run {#plus-child-target-run}
+
+Targets repeat one capture.
+
+```bash
+bob capture '@work+one @work+two Ship it'
+```
+
+```text { .no-copy title="Output" }
+targets  @work+one · @work+two
+```
 
 ### `@route+block-id#drawer` {#plus-child-section}
 

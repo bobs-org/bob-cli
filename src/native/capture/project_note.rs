@@ -1584,6 +1584,7 @@ pub(super) fn plan_project_note_item(
             text: parsed.body,
             task_line: rendered.task_line.clone(),
             kind: "project_note",
+            fanout: None,
             created,
             scheduled,
             priority: priority.as_ref().map(|resolved| resolved.value.clone()),

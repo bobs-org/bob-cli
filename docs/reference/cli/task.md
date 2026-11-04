@@ -82,7 +82,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -97,7 +97,7 @@ Options:
 
   -r, --retry-timeout <SECONDS>
           Lock wait and re-plan budget after concurrent edits; 0 fails fast
-          
+
           [default: 60]
 
 Examples:
@@ -138,7 +138,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -147,7 +147,7 @@ Options:
 
   -r, --retry-timeout <SECONDS>
           Retry recoverable failures (lock contention, a changed vault, an unstable read) for up to this many seconds with jittered backoff; 0 attempts once and fails fast
-          
+
           [default: 120]
 
 Examples:
@@ -185,7 +185,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -200,7 +200,7 @@ Options:
 
   -r, --retry-timeout <SECONDS>
           Budget for waiting on the maintenance lock and for re-planning after concurrent-edit races; 0 fails fast
-          
+
           [default: 60]
 
   -s, --seed <SEED>
@@ -253,7 +253,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -271,7 +271,7 @@ Options:
 
   -r, --retry-timeout <SECONDS>
           Lock wait and re-plan budget
-          
+
           [default: 60]
 
   -s, --section <TITLE>

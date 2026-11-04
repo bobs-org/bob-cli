@@ -77,6 +77,7 @@ pub(super) fn plan_task_complete_item(
             text: String::new(),
             task_line: outcome.task_line.clone(),
             kind: "task_complete",
+            fanout: None,
             created: date_string(today),
             scheduled: None,
             priority: None,

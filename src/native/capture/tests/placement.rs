@@ -311,6 +311,7 @@ fn json_success_shape_is_stable() {
             text: "buy milk".to_string(),
             task_line: "- [ ] #task buy milk [created::2026-06-15]".to_string(),
             kind: "task",
+            fanout: None,
             created: "2026-06-15".to_string(),
             scheduled: None,
             priority: None,

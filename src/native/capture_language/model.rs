@@ -872,7 +872,7 @@ pub(crate) struct ParsedCaptureItem {
 /// Identifies one parsed member of a capture target run. Positions are
 /// one-based in source order, and `line` is the source line that contained
 /// the run (or the originating row for template expansion).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct FanoutContext {
     pub(crate) line: usize,
     pub(crate) position: usize,

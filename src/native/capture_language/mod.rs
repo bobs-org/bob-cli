@@ -130,6 +130,7 @@ pub(crate) use self::model::CloseLogEntry;
 pub(crate) use self::model::CloseLogOrigin;
 pub(crate) use self::model::DrawerSelector;
 pub(crate) use self::model::EditorParseOptions;
+pub(crate) use self::model::FanoutContext;
 pub(crate) use self::model::ListContext;
 pub(crate) use self::model::ListKind;
 pub(crate) use self::model::MoveBullet;

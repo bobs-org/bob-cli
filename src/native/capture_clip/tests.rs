@@ -694,7 +694,7 @@ fn snippet_names_use_deterministic_collision_counters() {
 }
 
 #[test]
-fn aggregate_planner_flattens_entries_and_reserves_all_paths() {
+fn aggregate_planner_flattens_entries_and_reuses_duplicate_snippets() {
     let root = test_root("aggregate");
     let vault = root.join("vault");
     let first_dir = root.join("first");
@@ -747,10 +747,10 @@ fn aggregate_planner_flattens_entries_and_reserves_all_paths() {
     );
     assert_eq!(
         plan.output.entries[6].snippet.as_deref(),
-        Some("file/clip-20260715-131415-heading-2.md")
+        Some("file/clip-20260715-131415-heading.md")
     );
-    assert_eq!(plan.files.len(), 4, "unique files only");
-    assert_eq!(plan.output.file_confirmations().len(), 4);
+    assert_eq!(plan.files.len(), 3, "unique files only");
+    assert_eq!(plan.output.file_confirmations().len(), 3);
     let aggregate_json =
         serde_json::to_value(&plan.output).expect("aggregate JSON");
     assert_eq!(aggregate_json["mode"], "history");
@@ -758,7 +758,7 @@ fn aggregate_planner_flattens_entries_and_reserves_all_paths() {
     assert_eq!(aggregate_json["attachments"].as_array().unwrap().len(), 3);
     assert!(aggregate_json.get("snippet").is_none(), "{aggregate_json}");
     let created = plan.save().expect("save aggregate");
-    assert_eq!(created.len(), 4);
+    assert_eq!(created.len(), 3);
     fs::remove_dir_all(root).expect("cleanup");
 }
 

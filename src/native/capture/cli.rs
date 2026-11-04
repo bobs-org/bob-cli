@@ -60,6 +60,12 @@ validation, staging, or replace failure leaves notes, ledgers, and newly \
 created clipboard files at their original state. Single-item JSON keeps its \
 legacy shape; multi-item JSON keeps the first result at the top level and adds \
 an ordered 'captures' array.\n\n\
+A maximal adjacent run of two or more @route+id targets at one end of a parent \
+line applies that line to every named task in marker order, in the same atomic \
+capture. Duplicate task identities are refused before staging. A target run \
+shares each clipboard read and each rolled priority date; errors name the \
+failing target. Human output shows a 'targets  @route+id · @route+id' header, \
+and JSON adds per-member fanout context.\n\n\
 A draft whose first item carries the `%t` directive expands one capture per \
 later row. Write one capture item with `{0}`, `{1}`, and so on, put `%t` at \
 either edge of any of its lines, then a blank line and one row \

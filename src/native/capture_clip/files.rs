@@ -327,6 +327,30 @@ pub(super) fn plan_snippet(
     indent: &str,
     reservations: &mut FileReservations,
 ) -> Result<ClipOutput, String> {
+    let mut contents = clipboard.as_bytes().to_vec();
+    if !contents.ends_with(b"\n") {
+        contents.push(b'\n');
+    }
+    if let Some(reserved) = reservations.files.iter().find(|file| {
+        file.kind == PlannedFileKind::Snippet && file.contents == contents
+    }) {
+        let saved = reserved
+            .destination
+            .strip_prefix(bob_dir)
+            .unwrap_or(&reserved.destination)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let reference = saved.strip_suffix(".md").unwrap_or(&saved);
+        return Ok(ClipOutput {
+            status: ClipStatus::Read,
+            count: None,
+            mode: ClipMode::Snippet,
+            lines: rendered_lines(&[format!("[[{reference}]]")], indent),
+            attachments: Vec::new(),
+            snippet: Some(saved),
+            entries: Vec::new(),
+        });
+    }
     let slug = snippet_slug(clipboard);
     let timestamp = format!(
         "{:04}{:02}{:02}-{:02}{:02}{:02}",
@@ -358,10 +382,6 @@ pub(super) fn plan_snippet(
     };
     let saved = format!("file/{name}");
     let reference = saved.strip_suffix(".md").unwrap_or(&saved);
-    let mut contents = clipboard.as_bytes().to_vec();
-    if !contents.ends_with(b"\n") {
-        contents.push(b'\n');
-    }
     reservations.reserve(
         destination,
         contents,

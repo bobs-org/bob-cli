@@ -210,6 +210,16 @@ for ^y. Note-less child bullets, clipboard notes, `#type`, `s:<N>`/`$<N>`,
 `&`/`*`/`~`, drawers, Ensure Next, and `!` toggle keep their existing
 semantics for every member.
 
+Bob validates the whole run before staging it, including duplicate task
+identities reached through normalized paths or symlink aliases. Members then
+plan in marker order against the same transaction snapshots; any refusal rolls
+back the entire capture. A clipboard value is read once per target run, and
+each `$<N>` priority date is rolled once and reused for all members. Identical
+warnings from the members are shown once. Errors include the marker that
+failed. Human output prints a `targets  @a+x · @b+y` line, and JSON adds
+`fanout: {line, position, count, marker}` to the item result and each member
+capture.
+
 | Line shape | Each named task gets |
 | --- | --- |
 | `@a+x @b+y <note>` (or a trailing run) | The same child note, with authored bullets nested beneath it. |
@@ -687,7 +697,9 @@ target, so order, insertion points, duplicate block-ID checks, sub-bullet
 lookups, and Pomodoro links match a successful sequential capture. If any
 item fails to parse, read the clipboard, validate, stage, or replace, Bob
 leaves notes, ledgers, and newly-created clipboard files at their original
-state. `--dry-run` uses the same planner with the commit step disabled.
+state. Members of one target run also plan in marker order within that item;
+the run shares its clipboard read and any rolled schedule date. `--dry-run`
+uses the same planner with the commit step disabled.
 
 Before replacing a note, Bob checks that its on-disk contents still match the
 planning snapshot. The check runs before any temporary files are created,
@@ -1224,6 +1236,10 @@ index labels, container bullets, or separators.
 
 Clipboard children use the target note's dominant tab-or-two-space indentation
 and fall back to a tab, matching the sub-bullet capture rule.
+
+When one item targets several tasks, Bob reads each clipboard value once and
+fans the planned content out to every member. Byte-identical snippet content
+uses one reserved file path for all of those task notes.
 
 One item is written as a direct child and multiple items are written as
 direct sibling children:
@@ -5874,6 +5890,10 @@ that task (or drawer), with no wrapper bullet. The parent's status, Task
 Links, schedule, and freshness stamp never change, and the daily note is
 untouched.
 
+With adjacent targets, Bob reads the requested clipboard values once and
+places the same notes beneath each task. A long identical value reuses one
+snippet file across the run.
+
 Clipboard lines land at the plain-child anchor in clipboard order, using the
 task's child indentation. A counted `%c<N>` flattens every entry in order.
 With `@route+id#drawer`, every line files inside that drawer: an existing
@@ -5905,6 +5925,10 @@ bullet. `bob capture '@cash+goog-exit'` is the default Ensure Next operation:
 it makes the task Next and relocates its existing Task Link. The route note and
 daily note are planned together before either file is written, so a failure
 leaves the whole batch unchanged.
+
+An adjacent target run applies this marker-only operation to each member in
+marker order, using the shared staged daily ledger. The human target header and
+JSON `fanout` context identify the whole run and each member.
 
 A separate `#type` token on `@route+block-id` retypes the existing task
 in the same transaction; a marker-only item also ensures Next, and the task's

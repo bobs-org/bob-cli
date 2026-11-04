@@ -817,6 +817,7 @@ fn planned_item_from_pomodoro_link_plan(
             } else {
                 "pomodoro_link"
             },
+            fanout: None,
             created: date_string(today),
             scheduled: None,
             priority: None,

@@ -28,6 +28,8 @@
   location: /reference/capture-syntax/#hash-picker
 - query: "template directive %t"
   location: /reference/capture-syntax/#template
+- query: "@route+id @route+id applies to several tasks"
+  location: /reference/capture-syntax/#plus-child-target-run
 - query: "@route"
   location: /reference/capture-syntax/#at-route
 - query: "@route#Section"
