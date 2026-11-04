@@ -511,9 +511,86 @@ fn clean_task_text(description: &str) -> String {
         .join(" ")
 }
 
-/// A ready-to-paste note link: `[[stem|label]]`.
+/// Alias text for a freshness-scan row: inline fields stripped the way
+/// `clean_task_text` does, `^block` ids dropped (so truncation never cuts
+/// one mid-id), and wiki-links flattened like every other alias.
+fn clean_scan_alias(text: &str) -> String {
+    let cleaned = clean_task_text(text);
+    let no_blocks: Vec<&str> = cleaned
+        .split_whitespace()
+        .filter(|word| !word.starts_with('^'))
+        .collect();
+    flatten_wikilinks(&no_blocks.join(" "))
+}
+
+/// A ready-to-paste note link: `[[stem|label]]`. The label never
+/// nests a wiki-link: spans flatten to their display text first.
 fn note_link(path: &str, label: &str) -> String {
-    format!("[[{}|{label}]]", stem_of(path))
+    format!("[[{}|{}]]", stem_of(path), flatten_wikilinks(label))
+}
+
+/// Strip exactly one bullet or checkbox marker. Any other leading
+/// character — notably a leading `x` in real prose — survives.
+fn strip_bullet_marker(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    for marker in [
+        "- [ ] ", "- [x] ", "- [X] ", "* [ ] ", "* [x] ", "* [X] ", "- [ ]",
+        "- [x]", "- [X]", "* [ ]", "* [x]", "* [X]", "- ", "* ",
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(marker) {
+            return rest.trim();
+        }
+    }
+    trimmed
+}
+
+/// Whether a child bullet carries nothing but one wiki-link: it is a
+/// Task Link, not a verbatim Bryan quote.
+fn is_bare_wikilink(text: &str) -> bool {
+    let text = text.trim();
+    if !(text.starts_with("[[") && text.ends_with("]]")) {
+        return false;
+    }
+    let inner = &text[2..text.len().saturating_sub(2)];
+    !inner.contains("[[") && !inner.contains("]]")
+}
+
+/// Display text for one `[[...]]` span: the alias, else the last path
+/// segment without any `#section` or `#^block` suffix.
+fn wikilink_display(span: &str) -> String {
+    let inner = span
+        .strip_prefix("[[")
+        .unwrap_or(span)
+        .strip_suffix("]]")
+        .unwrap_or(span);
+    if let Some((_, alias)) = inner.split_once('|') {
+        return alias.trim().to_string();
+    }
+    let target = inner.split('#').next().unwrap_or(inner);
+    target
+        .rsplit('/')
+        .next()
+        .unwrap_or(target)
+        .trim()
+        .to_string()
+}
+
+/// Replace every `[[...]]` span with its display text and drop stray
+/// brackets, so a quote carrying links never nests inside an alias.
+fn flatten_wikilinks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        let Some(relative_end) = rest[start + 2..].find("]]") else {
+            break;
+        };
+        let end = start + 2 + relative_end + 2;
+        out.push_str(&rest[..start]);
+        out.push_str(&wikilink_display(&rest[start..end]));
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out.replace(['[', ']'], "")
 }
 
 fn build_json(ctx: &mut Ctx) -> Result<Value, BriefError> {
@@ -542,9 +619,13 @@ fn build_json(ctx: &mut Ctx) -> Result<Value, BriefError> {
         "facts": facts,
         "time": time,
         "parts": parts,
-        "finished": finished,
+        "finished": finished.rows,
+        "finished_total": finished.total,
+        "finished_more": finished.total.saturating_sub(finished.shown),
         "started": started,
-        "dropped": dropped,
+        "dropped": dropped.rows,
+        "dropped_total": dropped.total,
+        "dropped_more": dropped.total.saturating_sub(dropped.shown),
         "still_open": still_open,
         "practice": practice,
         "bryans_words": bryans_words,
@@ -959,10 +1040,19 @@ fn task_row(task: &IndexedTask, ctx: &Ctx) -> Value {
     })
 }
 
+/// Rows shown behind the Finished/Dropped cap, plus the pre-cap total
+/// so callers can report the `+N more` the weekly callout requires.
+struct CappedRows {
+    rows: Value,
+    total: usize,
+    shown: usize,
+}
+
 /// `^prj` completions first, then done tasks ranked by linked minutes.
 /// Year briefs group the projects by area.
-fn finished_section(ctx: &mut Ctx) -> Value {
+fn finished_section(ctx: &mut Ctx) -> CappedRows {
     let done = done_in_span(&ctx.index.tasks, ctx);
+    let total = done.len();
     let mut prj: Vec<&IndexedTask> =
         done.iter().filter(|task| is_prj(task)).copied().collect();
     let mut rest: Vec<&IndexedTask> =
@@ -971,6 +1061,7 @@ fn finished_section(ctx: &mut Ctx) -> Value {
     rest.truncate(ctx.finish_cap.saturating_sub(prj.len().min(ctx.finish_cap)));
     let ordered: Vec<&IndexedTask> =
         prj.into_iter().take(ctx.finish_cap).chain(rest).collect();
+    let shown = ordered.len();
     let group_by_area = matches!(ctx.id, PeriodId::Year(_));
     let engine = HomesEngine::new(&ctx.index);
     let rows: Vec<Value> = ordered
@@ -993,7 +1084,11 @@ fn finished_section(ctx: &mut Ctx) -> Value {
             row
         })
         .collect();
-    Value::Array(rows)
+    CappedRows {
+        rows: Value::Array(rows),
+        total,
+        shown,
+    }
 }
 
 /// `^prj` tasks created in the period.
@@ -1014,7 +1109,7 @@ fn started_section(ctx: &Ctx) -> Value {
 }
 
 /// Tasks cancelled in the period, capped like finished rows.
-fn dropped_section(ctx: &Ctx) -> Value {
+fn dropped_section(ctx: &Ctx) -> CappedRows {
     let mut dropped: Vec<&IndexedTask> = ctx
         .index
         .tasks
@@ -1022,13 +1117,19 @@ fn dropped_section(ctx: &Ctx) -> Value {
         .filter(|task| span_contains(task.cancelled.date, ctx))
         .collect();
     dropped.sort_by(|left, right| left.description.cmp(&right.description));
+    let total = dropped.len();
     dropped.truncate(ctx.finish_cap);
-    Value::Array(
-        dropped
-            .into_iter()
-            .map(|task| task_row(task, ctx))
-            .collect(),
-    )
+    let shown = dropped.len();
+    CappedRows {
+        rows: Value::Array(
+            dropped
+                .into_iter()
+                .map(|task| task_row(task, ctx))
+                .collect(),
+        ),
+        total,
+        shown,
+    }
 }
 
 fn still_open_section(ctx: &Ctx) -> Value {
@@ -1057,14 +1158,12 @@ fn still_open_section(ctx: &Ctx) -> Value {
             seen.insert(key.clone(), true);
             let minutes = linked_for_path(&task.path, block, ctx);
             if minutes == 0 {
+                let alias =
+                    short_description(&clean_scan_alias(&task.text), 120);
                 let link = if block.trim().is_empty() {
-                    note_link(&task.path, &short_description(&task.text, 120))
+                    note_link(&task.path, &alias)
                 } else {
-                    format!(
-                        "[[{}#^{block}|{}]]",
-                        stem_of(&task.path),
-                        short_description(&task.text, 120)
-                    )
+                    format!("[[{}#^{block}|{alias}]]", stem_of(&task.path))
                 };
                 zero_minute.push(json!({ "link": link }));
             }
@@ -1372,16 +1471,68 @@ fn practice_section(ctx: &Ctx) -> Value {
     })
 }
 
+/// At most this many quotes per day, and this many overall: a heavy
+/// early day must never bury the later days of the period.
+const WORDS_PER_DAY: usize = 10;
+const WORDS_TOTAL: usize = 40;
+
 fn bryans_words_section(ctx: &Ctx) -> Value {
     let mut words = work_log_entries(ctx);
     words.extend(pomodoro_notes(ctx));
-    words.sort_by(|left, right| {
-        str_field(left, "date")
-            .cmp(&str_field(right, "date"))
-            .then(str_field(left, "link").cmp(&str_field(right, "link")))
+    // Dedup mirrored lines: a task's WORK LOG mirror and its daily-note
+    // Pomodoro child emit the same (date, text). Pomodoro rows arrive
+    // last, so the daily-note link wins the duplicate.
+    let mut at: HashMap<(String, String), usize> = HashMap::new();
+    let mut deduped: Vec<Value> = Vec::new();
+    for word in words {
+        let key = (str_field(&word, "date"), str_field(&word, "text"));
+        if let Some(&index) = at.get(&key) {
+            deduped[index] = word;
+        } else {
+            at.insert(key, deduped.len());
+            deduped.push(word);
+        }
+    }
+    // Chronological only: a stable sort keeps each day's rows in the
+    // order they were written instead of alphabetizing link text.
+    deduped.sort_by(|left, right| {
+        str_field(left, "date").cmp(&str_field(right, "date"))
     });
-    words.truncate(40);
-    Value::Array(words)
+    // Fair across days: round-robin by date, so every day with quotes
+    // keeps its earliest rows even when an early day overflows.
+    let mut by_date: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for word in deduped {
+        by_date
+            .entry(str_field(&word, "date"))
+            .or_default()
+            .push(word);
+    }
+    let mut capped: Vec<Value> = Vec::new();
+    let mut round = 0;
+    while capped.len() < WORDS_TOTAL {
+        let mut took = false;
+        for words in by_date.values() {
+            let Some(word) = words.get(round) else {
+                continue;
+            };
+            if round >= WORDS_PER_DAY {
+                continue;
+            }
+            capped.push(word.clone());
+            took = true;
+            if capped.len() >= WORDS_TOTAL {
+                break;
+            }
+        }
+        if !took {
+            break;
+        }
+        round += 1;
+    }
+    capped.sort_by(|left, right| {
+        str_field(left, "date").cmp(&str_field(right, "date"))
+    });
+    Value::Array(capped)
 }
 
 /// Work Log entries dated in the period, across every vault buffer.
@@ -1416,10 +1567,11 @@ fn work_log_entries(ctx: &Ctx) -> Vec<Value> {
                 && date >= ctx.span_start
                 && date <= end
             {
+                let quote = flatten_wikilinks(&text);
                 entries.push(json!({
                     "date": date.format("%Y-%m-%d").to_string(),
-                    "link": note_link(path, &short_description(&text, 80)),
-                    "text": short_description(&text, 280),
+                    "link": note_link(path, &short_description(&quote, 80)),
+                    "text": short_description(&quote, 280),
                 }));
             }
         }
@@ -1487,15 +1639,15 @@ fn pomodoro_notes(ctx: &Ctx) -> Vec<Value> {
                 if !is_item || link_lines.contains_key(&number) {
                     continue;
                 }
-                let text = trimmed
-                    .trim_start_matches(['-', '*'])
-                    .trim()
-                    .trim_start_matches(|ch: char| {
-                        ch == '[' || ch == ']' || ch == 'x' || ch == ' '
-                    })
-                    .trim()
-                    .to_string();
-                if text.is_empty() || text.contains("#^") {
+                let stripped = strip_bullet_marker(trimmed);
+                if stripped.is_empty() || stripped.contains("#^") {
+                    continue;
+                }
+                if is_bare_wikilink(stripped) {
+                    continue;
+                }
+                let text = flatten_wikilinks(stripped);
+                if text.trim().is_empty() {
                     continue;
                 }
                 notes.push(json!({
@@ -1941,7 +2093,13 @@ fn render_markdown(_ctx: &Ctx, json: &Value) -> String {
     }
     // Finished / started / dropped.
     out.push_str("\n## Finished\n");
-    render_finished(&mut out, json.get("finished").and_then(Value::as_array));
+    render_finished(
+        &mut out,
+        json.get("finished").and_then(Value::as_array),
+        json.get("finished_more")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    );
     out.push_str("\n## Started and dropped\n");
     out.push_str("Started:\n");
     render_task_rows(
@@ -1954,6 +2112,12 @@ fn render_markdown(_ctx: &Ctx, json: &Value) -> String {
         &mut out,
         json.get("dropped").and_then(Value::as_array),
         "Nothing dropped.",
+    );
+    render_more(
+        &mut out,
+        json.get("dropped_more")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     );
     // Still open.
     out.push_str("\n## Still open, as of today\n");
@@ -2142,12 +2306,14 @@ fn render_markdown(_ctx: &Ctx, json: &Value) -> String {
 
 fn render_part(out: &mut String, part: &Value) {
     let state = str_field(part, "state");
+    let dates = str_field(part, "dates");
     if state == "future" {
-        out.push_str(&format!(
-            "- {} · {} (not started)\n",
-            str_field(part, "label"),
-            str_field(part, "dates"),
-        ));
+        let mut line = format!("- {}", str_field(part, "label"));
+        if !dates.is_empty() {
+            line.push_str(&format!(" · {dates}"));
+        }
+        line.push_str(" (not started)\n");
+        out.push_str(&line);
         return;
     }
     let review_state = str_field(part, "review_state");
@@ -2161,12 +2327,13 @@ fn render_part(out: &mut String, part: &Value) {
             format!("{review_state} · {headline}")
         }
     };
-    let mut line = format!(
-        "- {} · {} · {} · {review_bits}",
-        str_field(part, "label"),
-        str_field(part, "dates"),
-        str_field(part, "worked_display"),
-    );
+    let mut segments = vec![str_field(part, "label")];
+    if !dates.is_empty() {
+        segments.push(dates);
+    }
+    segments.push(str_field(part, "worked_display"));
+    segments.push(review_bits);
+    let mut line = format!("- {}", segments.join(" · "));
     let lead = str_field(part, "reflection_lead");
     if !lead.is_empty() {
         line.push_str(&format!(" · {lead}"));
@@ -2188,8 +2355,15 @@ fn render_part(out: &mut String, part: &Value) {
     out.push_str(&line);
 }
 
+/// The `+N more` tail behind a capped row list.
+fn render_more(out: &mut String, more: u64) {
+    if more > 0 {
+        out.push_str(&format!("- +{more} more\n"));
+    }
+}
+
 /// Finished rows, grouped by area when the rows carry one (year).
-fn render_finished(out: &mut String, rows: Option<&Vec<Value>>) {
+fn render_finished(out: &mut String, rows: Option<&Vec<Value>>, more: u64) {
     let Some(rows) = rows else {
         out.push_str("Nothing finished.\n");
         return;
@@ -2200,6 +2374,7 @@ fn render_finished(out: &mut String, rows: Option<&Vec<Value>>) {
     }
     if rows.iter().all(|row| row.get("area").is_none()) {
         render_task_rows(out, Some(rows), "Nothing finished.");
+        render_more(out, more);
         return;
     }
     let mut areas: Vec<String> = rows
@@ -2221,6 +2396,7 @@ fn render_finished(out: &mut String, rows: Option<&Vec<Value>>) {
             .collect();
         render_task_rows(out, Some(&grouped), "Nothing finished.");
     }
+    render_more(out, more);
 }
 
 fn render_task_rows(out: &mut String, rows: Option<&Vec<Value>>, empty: &str) {

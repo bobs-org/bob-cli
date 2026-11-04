@@ -948,6 +948,220 @@ fn brief_attributes_archived_and_splits_multi_link() {
 }
 
 #[test]
+fn brief_finished_and_dropped_report_totals_behind_the_cap() {
+    // bob-cli-gv: the weekly Finished/Dropped caps (7) hide rows without
+    // reporting the cut. The brief must carry totals and +N more.
+    let vault = vault_dir("brief-totals");
+    write_dataview_tasks_settings(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-26", "-q"]);
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-11-02", "-q"]);
+    fs::create_dir_all(vault.path().join("2026")).unwrap();
+    let mut tasks = String::from(
+        "- [x] #task Big launch [created:: 2026-10-18] [completion:: 2026-10-27] ^prj\n",
+    );
+    for n in 1..=8 {
+        tasks.push_str(&format!(
+            "- [x] #task Done task {n:02} [created:: 2026-10-18] [completion:: 2026-10-27] ^done{n:02}\n"
+        ));
+    }
+    for n in 1..=8 {
+        tasks.push_str(&format!(
+            "- [-] #task Dropped task {n:02} [created:: 2026-10-18] [cancelled:: 2026-10-27] ^drop{n:02}\n"
+        ));
+    }
+    fs::write(vault.path().join("tasks.md"), tasks).unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    let finished = body["finished"].as_array().expect("finished rows");
+    assert_eq!(
+        body["finished_total"], 9,
+        "nine completions: {}",
+        body["finished_total"]
+    );
+    assert_eq!(finished.len(), 7, "weekly cap still applies: {finished:?}");
+    assert_eq!(
+        body["finished_more"], 2,
+        "two rows cut: {}",
+        body["finished_more"]
+    );
+    assert!(
+        finished[0]["link"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("#^prj"),
+        "project completions first: {finished:?}"
+    );
+    let dropped = body["dropped"].as_array().expect("dropped rows");
+    assert_eq!(
+        body["dropped_total"], 8,
+        "eight cancellations: {}",
+        body["dropped_total"]
+    );
+    assert_eq!(dropped.len(), 7, "weekly cap still applies: {dropped:?}");
+    assert_eq!(
+        body["dropped_more"], 1,
+        "one row cut: {}",
+        body["dropped_more"]
+    );
+
+    let output = periods_command(vault.path(), "brief", &["2026-W44"]);
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("+2 more"), "finished tail: ...{text}");
+    assert!(text.contains("+1 more"), "dropped tail: ...{text}");
+}
+
+#[test]
+fn brief_bryans_words_dedups_orders_and_sanitizes_links() {
+    // bob-cli-gw: mirrored WORK LOG lines duplicate Pomodoro children,
+    // same-day rows sort by link text, checkbox trims eat leading `x`,
+    // link-only children render as mangled aliases, and nested links nest.
+    let vault = vault_dir("brief-words");
+    write_dataview_tasks_settings(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-26", "-q"]);
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-11-02", "-q"]);
+    fs::create_dir_all(vault.path().join("2026")).unwrap();
+    fs::write(
+        vault.path().join("proj.md"),
+        "---\nparent: \"[[org]]\"\n---\n\n\
+         - [ ] #task Stuck project [created:: 2026-10-20] ^stuck\n\
+         \t- 🛠️ **WORK LOG**\n\
+         \t\t- *2026-10-27 14:03* — shipped the widget slice\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.path().join("2026/20261027.md"),
+        "---\nparent: '[[2026/2026-W44]]'\n---\n\n\
+         [[2026/20261026|prev]] · [[2026/2026-W44|W44]] · [[2026/20261028|next]]\n\n\
+         ## Pomodoros\n\n\
+         - [x] (**09:00 - 09:40** [t:: 40m]) — PLAN\n\
+         \t- zebra thought\n\
+         \t- apple thought\n\
+         \t- shipped the widget slice\n\
+         \t- xprompt follow-up\n\
+         \t- [[sase_better_tasks]]\n\
+         \t- review [[sase]] notes\n",
+    )
+    .unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    let words = body["bryans_words"].as_array().expect("words");
+    let shipped: Vec<&serde_json::Value> = words
+        .iter()
+        .filter(|word| {
+            word["text"].as_str().unwrap_or_default()
+                == "shipped the widget slice"
+        })
+        .collect();
+    assert_eq!(
+        shipped.len(),
+        1,
+        "work log mirror deduped to one entry: {words:?}"
+    );
+    assert!(
+        shipped[0]["link"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("20261027"),
+        "daily-note link wins the duplicate: {}",
+        shipped[0]["link"]
+    );
+    let day: Vec<String> = words
+        .iter()
+        .filter(|word| word["date"] == "2026-10-27")
+        .map(|word| word["text"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let zebra = day
+        .iter()
+        .position(|text| text == "zebra thought")
+        .expect("zebra");
+    let apple = day
+        .iter()
+        .position(|text| text == "apple thought")
+        .expect("apple");
+    assert!(
+        zebra < apple,
+        "date-only stable order keeps insertion before alphabetic link: {day:?}"
+    );
+    assert!(
+        words.iter().any(|word| {
+            word["text"].as_str().unwrap_or_default() == "xprompt follow-up"
+        }),
+        "leading x survives the checkbox trim: {words:?}"
+    );
+    assert!(
+        !words.iter().any(|word| {
+            word["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sase_better_tasks")
+        }),
+        "link-only child is skipped: {words:?}"
+    );
+    for word in words {
+        let link = word["link"].as_str().unwrap_or_default();
+        assert_eq!(
+            link.matches("[[").count(),
+            1,
+            "no nested link in alias: {link}"
+        );
+        assert_eq!(
+            link.matches("]]").count(),
+            1,
+            "no nested link in alias: {link}"
+        );
+    }
+}
+
+#[test]
+fn brief_parts_skip_empty_dates_and_still_open_cleans_aliases() {
+    // bob-cli-gx: week Part lines print an empty `·  ·` dates segment,
+    // and Still open aliases leak raw block ids and inline fields.
+    let vault = vault_dir("brief-alias");
+    write_dataview_tasks_settings(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-26", "-q"]);
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-11-02", "-q"]);
+    fs::create_dir_all(vault.path().join("2026")).unwrap();
+    fs::write(
+        vault.path().join("proj.md"),
+        "---\nparent: \"[[org]]\"\n---\n\n\
+         - [*] #task Better Obsidian image support! [created:: 2026-10-26] ^better-obsidian-image\n",
+    )
+    .unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    let zero = body["still_open"]["zero_minute"]
+        .as_array()
+        .expect("zero_minute");
+    let row = zero
+        .iter()
+        .find(|row| {
+            row["link"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Better Obsidian")
+        })
+        .expect("unlinked task listed");
+    let link = row["link"].as_str().unwrap_or_default();
+    let alias = link.split('|').nth(1).unwrap_or(link);
+    assert!(!alias.contains("^better"), "no raw block id: {link}");
+    assert!(!alias.contains("created::"), "no inline field: {link}");
+    assert!(!alias.contains("…"), "no mid-id truncation: {link}");
+
+    let output = periods_command(vault.path(), "brief", &["2026-W44"]);
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(!text.contains("·  ·"), "no empty dates segment:\n{text}");
+    for line in text.lines().filter(|line| line.contains("Better Obsidian")) {
+        let alias = line.split('|').nth(1).unwrap_or(line);
+        assert!(!alias.contains("^better"), "md alias clean: {line}");
+    }
+}
+
+#[test]
 fn brief_output_is_deterministic() {
     let vault = vault_dir("brief-deterministic");
     write_reviews_fixture(vault.path());

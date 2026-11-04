@@ -375,24 +375,36 @@ token; Bryan's words, then caveats, are trimmed first). Sections:
    render their `done/` link. This changes values, not JSON shape.
 4. **Parts**: one line per child with Worked, review state, Headline,
    and Reflection lead; days get `mostly` and closeout instead. A
-   child without a review reads "not reviewed".
+   child without a review reads "not reviewed". The dates segment is
+   omitted when the child carries none, so day rows never print an
+   empty `·  ·`.
 5. **Finished**: `^prj` completions first, then done tasks ranked by
    linked minutes in the period (cap 7 for a week, 15 for a quarter,
-   25 for a year). Year briefs group projects by area.
+   25 for a year). Year briefs group projects by area. JSON adds
+   `finished_total` and `finished_more` (`total - shown`); Markdown
+   prints a `- +N more` tail when rows were cut.
 6. **Started and dropped**: `^prj` tasks created in the period, and
-   tasks cancelled in it (capped).
+   tasks cancelled in it (capped). Dropped carries `dropped_total`
+   and `dropped_more` in JSON and the same `+N more` tail in
+   Markdown.
 7. **Still open, as of today**: Next and WIP tasks with zero linked
    minutes in the period; `^prj` lines that are Blocked now, with
    their reason (Depends-On links, else the scheduled date); tasks
    with `[keeps:: N]` N ≥ 3, with their latest Rotten Log reason.
-   Quarter and year briefs add stalled projects: open `^prj` tasks
-   with no linked minutes.
+   No-linked-minutes aliases strip inline fields and `^block` ids
+   the way finished rows do. Quarter and year briefs add stalled
+   projects: open `^prj` tasks with no linked minutes.
 8. **Practice** (year only): recurring `#gtd` rows created, cancelled,
    or finished in the year, and the review-closed rate per quarter
    (`N of M days`).
 9. **Bryan's words**: Work Log entries dated in the period and
    free-text Pomodoro child bullets (not Task Links), linked,
-   chronological, capped at 40.
+   chronological by date only, deduplicated by (date, text) with the
+   daily-note link winning, at most 10 per day and 40 overall so a
+   heavy early day never buries later days. Only the checkbox marker
+   is trimmed (a leading `x` in real prose survives), link-only
+   children are skipped, and `[[...]]` spans flatten to display text
+   in aliases.
 10. **This note and its neighbours**: this note's human sections
     verbatim; the previous same-kind note's Reflection (≤300 words);
     the parent's Outcomes and Theme; year only: `h3_goal.md` and
