@@ -1067,6 +1067,145 @@ fn rewrite_draft_leaves_transfer_plus_triggers_for_other_marks_literal() {
 }
 
 #[test]
+fn rewrite_draft_expands_backslash_hash_alias() {
+    for (raw, expected) in [
+        ("Buy milk \\", "Buy milk #"),
+        ("foo #a \\", "foo #a #"),
+        ("@cash\\", "@cash#"),
+        ("Buy milk @cash\\", "Buy milk @cash#"),
+        ("a > @cash\\", "a > @cash#"),
+        ("Buy milk @cash:goog-exit\\", "Buy milk @cash:goog-exit#"),
+        ("Buy milk @cash^newid@\\", "Buy milk @cash^newid@#"),
+        ("^cash:goog-exit\\", "^cash:goog-exit#"),
+        ("Buy milk @cash+goog-exit\\", "Buy milk @cash+goog-exit#"),
+        ("@cash^goog-exit@\n- \\", "@cash^goog-exit@\n- #"),
+        ("@cash:goog-exit@\n- \\", "@cash:goog-exit@\n- #"),
+        ("Buy milk\n- \\", "Buy milk\n- #"),
+        ("@cash^goog-exit@\n  - \\", "@cash^goog-exit@\n  - #"),
+        ("=\\", "=#"),
+        ("=25\\", "=25#"),
+        ("x=25\\", "x=25#"),
+        ("=/\\", "=/#"),
+        ("=*fix\\", "=*fix#"),
+        ("[[cash\\", "[[cash#"),
+        ("[[\\", "[[#"),
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Typed # for \\"),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.notices, Vec::<String>::new(), "{raw:?}");
+        assert_eq!(
+            rewrite.edits,
+            vec![TextEdit {
+                start: cursor - 1,
+                end: cursor,
+                replacement: "#".to_string(),
+            }],
+            "{raw:?}"
+        );
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+
+    let raw = "@cash+goog-exit\\ Buy milk";
+    let cursor = "@cash+goog-exit\\".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(rewrite.text, "@cash+goog-exit# Buy milk");
+    assert_eq!(rewrite.cursor, Some(cursor));
+    assert_eq!(rewrite.summary.as_deref(), Some("Typed # for \\"));
+    assert_eq!(
+        rewrite.edits,
+        vec![TextEdit {
+            start: cursor - 1,
+            end: cursor,
+            replacement: "#".to_string(),
+        }]
+    );
+    let again = rewrite_draft(&rewrite.text, Some(cursor));
+    assert_eq!(again.rule, None);
+    assert_eq!(again.text, "@cash+goog-exit# Buy milk");
+
+    let raw = "caf\u{e9} \\";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(rewrite.text, "caf\u{e9} #");
+    assert!(raw.is_char_boundary(rewrite.edits[0].start));
+    assert_eq!(rewrite.edits[0].start, raw.len() - 1);
+    let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+    assert_eq!(again.rule, None);
+}
+
+#[test]
+fn rewrite_draft_leaves_backslash_hash_alias_literal() {
+    for raw in [
+        "\\",
+        "  \\",
+        "Buy milk\n\\",
+        "Buy milk\n\n\\",
+        "dir\\",
+        "C:\\",
+        "C:\\Users\\",
+        "foo \\\\",
+        "@cash\\\\",
+        "- \\\\",
+        "Buy milk\n- \\\\",
+        "x foo \\",
+        "x\n- 1 \\",
+        "@@cash\\",
+        "foo |\\",
+        "foo ~cash:goog-exit\\",
+        ":\\",
+        "Buy milk @cash:goog-exit#a\\",
+    ] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+
+    let raw = "\\ foo";
+    let rewrite = rewrite_draft(raw, Some(1));
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+
+    let raw = "foo \\alpha";
+    let cursor = "foo \\".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, None, "{raw:?}@{cursor}");
+    assert_eq!(rewrite.text, raw);
+
+    let raw = "foo \\ bar";
+    let cursor = "foo \\".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, None, "{raw:?}@{cursor}");
+    assert_eq!(rewrite.text, raw);
+
+    let raw = "Buy milk \\";
+    let no_cursor = rewrite_draft(raw, None);
+    assert_eq!(no_cursor.rule, None);
+    assert_eq!(no_cursor.text, raw);
+
+    let template = "Do work @file:{0}^ %t\n\nrow\\";
+    let template_rewrite = rewrite_draft(template, Some(template.len()));
+    assert_eq!(template_rewrite.rule, None);
+    assert_eq!(template_rewrite.text, template);
+}
+
+#[test]
 fn rewrite_draft_reports_transfer_for_bare_at_at() {
     // A bare `@@` on a transfer line is refused: the destination is not
     // a declaration payload.

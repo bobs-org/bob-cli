@@ -8281,10 +8281,15 @@ becomes `^`, and typing `;` there becomes `:` when the candidate opens the
 same Block ID picker as the real sigil. A whole-item `;` becomes `:` when
 the candidate opens the Task Link picker. A `- .` or `- ;` first-level bullet
 in a sealed project-note item becomes `- ^` or `- :` where the Move picker
-would open, and `- ^.` becomes `- ^^`. For example, `@errands.` becomes
-`@errands^`, `@errands;` becomes `@errands:`, `;` becomes `:`, and
-`@cash^goog-exit@` plus `- .` becomes `- ^`. Bob's
-completion grammar decides eligibility, so prose and other picker contexts
+would open, and `- ^.` becomes `- ^^`. Typing `\` becomes `#` wherever bob's
+completion grammar would open a `#` menu: task type, section, drawer and
+drawer bullet, Pomodoro name, named-start and past-session name, split type,
+merge destination, and wikilink heading. A `\` at a line start, glued to a
+word, or right after another `\` stays literal. For example, `Buy milk \`
+becomes `Buy milk #` and `Buy milk @cash+goog-exit\` becomes
+`Buy milk @cash+goog-exit#`. A `\` after `\` never aliases, so `\#` escapes
+stay typeable directly (Mac Capture's double-tap below gives the same text).
+Bob's completion grammar decides eligibility, so prose and other picker contexts
 stay unchanged. The caret stays just past the sigil. This is an editor assist:
 `bob capture` and `bob capture-parse` keep the literal text. Feeding the
 result back through the command is a no-op.

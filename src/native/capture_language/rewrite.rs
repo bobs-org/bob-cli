@@ -107,14 +107,18 @@ pub(crate) fn rewrite_draft(
     absorb_bare_declaration(raw_text, cursor)
 }
 
-/// Typing `.` or `;` in a position where its real sigil would open a picker
-/// swaps that byte to `^` or `:`. The candidate is checked by the ordinary
-/// completion grammar, keeping the assist lexical and aligned with picker
-/// eligibility. Route-scope contexts plus lone move-bullet sigils are
-/// accepted; a `.` that completes a `- ^^` choice marker is also accepted.
+/// Typing `.`, `;`, or `\` in a position where its real sigil would open a
+/// picker swaps that byte to `^`, `:`, or `#`. The candidate is checked by
+/// the ordinary completion grammar, keeping the assist lexical and aligned
+/// with picker eligibility. Route-scope contexts plus lone move-bullet
+/// sigils are accepted; a `.` that completes a `- ^^` choice marker is also
+/// accepted.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
+    if alias == "\\" {
+        return expand_hash_alias(raw_text, start, cursor);
+    }
     let (sigil, allowed_context) = match alias {
         "." => ('^', super::completion::CompletionContext::TaskBlockId),
         ";" => (':', super::completion::CompletionContext::PomodoroBlockId),
@@ -197,6 +201,69 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }
     Some(finish_sigil_alias(
         raw_text, &candidate, start, cursor, sigil, alias,
+    ))
+}
+
+/// Typing `\` where a real `#` would open a completion menu swaps that byte
+/// to `#`. A `\` with only whitespace before it on its physical line never
+/// aliases, so a blank draft keeps opening Go To and a later line's leading
+/// `\` stays literal. The candidate is checked by the ordinary completion
+/// grammar: wikilink headings first (matching the engine's precedence), then
+/// the marker grammar's `#` menus.
+fn expand_hash_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
+    if raw_text
+        .get(line_start..start)
+        .is_some_and(|prefix| prefix.chars().all(|c| c == ' ' || c == '\t'))
+    {
+        return None;
+    }
+    if tokenize_with_spans(raw_text)
+        .into_iter()
+        .all(|token| token.end != cursor)
+    {
+        return None;
+    }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, "#");
+    if let Some(field) = crate::native::capture_links::completion_field_at(
+        &candidate,
+        cursor,
+        String::new(),
+    ) {
+        use super::completion::CompletionContext;
+        if field.context == CompletionContext::WikilinkHeading
+            && field.replacement.0 == cursor
+        {
+            return Some(finish_sigil_alias(
+                raw_text, &candidate, start, cursor, '#', "\\",
+            ));
+        }
+        return None;
+    }
+    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    use super::completion::CompletionContext;
+    let allowed = match field.context {
+        CompletionContext::TaskType | CompletionContext::Drawer => {
+            field.replacement == (start, cursor)
+        }
+        CompletionContext::Section
+        | CompletionContext::PomodoroName
+        | CompletionContext::PomodoroStartName
+        | CompletionContext::PomodoroPastName
+        | CompletionContext::PomodoroSplitType
+        | CompletionContext::PomodoroMergeDest => field.replacement.0 == cursor,
+        _ => false,
+    };
+    if !allowed {
+        return None;
+    }
+    Some(finish_sigil_alias(
+        raw_text, &candidate, start, cursor, '#', "\\",
     ))
 }
 
