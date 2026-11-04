@@ -100,6 +100,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route` alone on its line, with no bullets or other markers | Pull the note's unlinked, unblocked Pending, Next, and Ready tasks into today's Pomodoros through the explicit Pull-In choice; see [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) |
 | `- ^<id>` in a sealed project-note item | Move that open top-level task from the parent note into this slot in the new project's `## Tasks` section; see [Moving parent tasks in](#moving-parent-tasks-in) |
 | `- :<id>` in a sealed project-note item | Move the parent task into this slot, make it Next, and link it into today's plan (or the selected `#name`); see [Moving parent tasks in](#moving-parent-tasks-in) |
+| `- ^^` in a sealed project-note item | Ask which open parent tasks to move at Return; answer with `-m, --move-in` before any write; see [Choosing parent tasks in](#choosing-parent-tasks-in) |
 | `- ^` / `- :` in a sealed project-note item | Incomplete move picker (`capture-parse` needs `project_task_move`); `bob capture` refuses until an ID is selected |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
@@ -1166,7 +1167,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 10`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 11`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -5471,6 +5472,157 @@ An item's `#pomodoro` name treats `- :<id>` and an unfinished `- :` as a
 link for the unused-name rule; a complete `- :<id>` reports
 `pomodoro_project_note` mode.
 
+#### Choosing parent tasks in {#choosing-parent-tasks-in}
+
+Use `- ^` when you know a task's ID. Use `- ^^` when you want to see the
+parent's open tasks and sort several of them into the new project. `- ^^` is
+one exact first-level bullet body in a sealed project-note item; the project
+marker may be on the parent line or a sealing child line. It works with the
+`@<route>^<id>@` and `@<route>:<id>@` seals. It is not a task ID or an
+unfinished `- ^` picker query, and it adds no task by itself.
+
+In Bob Mac Capture, Return opens a Move card before capture writes anything.
+Nothing is selected initially; Escape returns to the draft without writing.
+Each selected row is expanded server-side as if the matching `- ^<id>` or
+`- :<id>` bullet had been authored at the `- ^^` line. `^` moves the task;
+`:` moves it and links it into today's plan. The card's highlighted row is not
+selected by focus. Picks are inserted at the `^^` slot in the order the tasks
+appear in the parent note, regardless of the order they were selected. The
+submitted draft is not rewritten.
+
+The marker claims no block ID and contributes no task ID to the item's
+namespace. On the create form, an unused `#name` counts as a possible link
+(like an unfinished `- :`); capture checks the chosen answers and refuses if
+the name still has no link. The capture remains one guarded batch: cancellation or any
+refusal leaves notes and the daily ledger unchanged.
+
+The grammar and teaching errors are:
+
+| First-level bullet body | Meaning or diagnostic |
+| --- | --- |
+| `^^` | Move choice; complete parse, answered after Return |
+| `^^ text`, `^^^`, `^^x` | `move_choice_text` |
+| `[ ] ^^` (any checkbox) | `move_bullet_checkbox` |
+| `^^` with nested bullets | `move_choice_nested` |
+| A second `^^` in the draft | `move_choice_duplicate`, naming the first line |
+| `::` | `move_choice_colon`; teaches `- ^^` and choosing `^` or `:` |
+| `\^^`, `` `^^` ``, nested `  - ^^`, non-project items, `@file` lists, or `@route+id` items | Unchanged from today |
+
+The four new diagnostics keep these messages (the sealed route supplies
+`<route>`):
+
+| Code | Message |
+| --- | --- |
+| `move_choice_text` | `` `- ^^` takes no other text; leave it alone on its line to choose tasks from cash.md `` |
+| `move_choice_nested` | ``notes under `- ^^` are not supported; add them after capture`` |
+| `move_choice_duplicate` | ``only one `- ^^` per capture; the first is on line 4`` |
+| `move_choice_colon` | `` `- ::` is not a picker; write `- ^^` and choose `^` or `:` for each task `` |
+
+`capture-parse` keeps this draft complete in `project_note` mode (or
+`pomodoro_project_note` when an explicit `:` link exists), with no `needs`.
+It adds a `project_task_move_choice_marker` span over both carets and an
+additive `sub_bullet_move_choices` array beside `sub_bullet_moves`, at the top
+level and per item. The array is omitted unless at least one choice exists;
+within it, entries are `null` or `{range}` (the range covers both carets).
+The `^^` line keeps an empty `sub_bullets` body, a null
+`sub_bullet_task_ids` entry, and a null `sub_bullet_moves` entry, so older
+clients do not mistake it for an unfinished `- ^`. Human parse output says
+`move choice ^^`. The capture grammar revision advances from 10 to 11.
+
+At a lone `- ^` with an empty query, `capture-complete` adds
+`action_continuation_keys: ["^"]`; the key is not offered for `- :`, a
+non-empty query, or text outside a sealed project-note item. At `- ^^`,
+including with the cursor on either caret, no `project_task_move` context is
+returned and the picker stays closed.
+
+The capture preview leaves the project unchanged and adds a moves-band line:
+`↪ Asks about cash.md's 25 open tasks on ↩`. Its ghost hint is
+`choose from cash.md's 25 open tasks on ↩`. The structured rows and their copy
+are described in the [move-choice JSON contract](reference/json-outputs.md#move-choice-results).
+With 12 available parent tasks and no authored move bullets, `move_hint` is
+`{parent, open_count: 12}` and the human hint reads: `hint: '- ^' moves one of cash.md's 12 open tasks into this project; '- ^^' lets you choose several`.
+
+##### Choosing from a terminal
+
+`-m, --move-in PICKS` answers `- ^^`; it is repeatable and unions its values.
+Numbers resolve against the rows rebuilt at execution time. Keys are the
+stale-safe row keys Bob returns (and are what editor clients send).
+The option help reads: `Answer a - ^^ move choice: none, all, or a comma list of row numbers and keys; a leading : also links; repeatable`.
+
+| Pick | Meaning |
+| --- | --- |
+| `3` or `cash.md#^call-ms` | Move that row |
+| `:3` or `:cash.md@1a2b3c4d` | Move that row and link it |
+| `^3` | Synonym for `3`; a leading `^` on a key also means move |
+| `all` | Move every enabled, unlocked row without linking |
+| `none` | Move nothing; the `^^` slot contributes no move |
+
+With no picks, the `^^` line contributes nothing; the existing generated task
+placeholder appears only if the new project has no other task bullets.
+
+There is no `:all`. Quote `^3` in zsh when `EXTENDED_GLOB` is enabled.
+Tokens outside these forms are usage errors. `none` or `all` mixed with any
+other pick refuses with `move_choice_conflict`. A key or number that no longer
+resolves refuses with `move_choice_stale` and fresh rows; a locked or disabled
+row refuses with `move_choice_refused`. `-m` without a `- ^^` refuses with
+`move_choice_unasked`.
+
+`-p, --pull-in` answers successor offers and never answers the move slot.
+
+A dry run without `-m` is valid: it treats the choice as `none` and lists the
+available rows. A real capture with `- ^^` always needs an answer, including
+`-m none`; without an answer it refuses with `move_choice_required`. There is
+no opt-in guard flag. If there are no selectable rows, a
+dry run stays `ok: true` and reports a warning, while a real capture refuses
+with `move_choice_empty`. These checks follow Pomodoro override and lexical
+or move-bullet refusals, then run before `pull_in_choice_required` and
+`inbox_route_choice_required`. Every refusal is write-free and carries the
+move-choice payload so a client can reopen the card.
+
+The remaining refusal is `unused_project_note_pomodoro`: when a `#name` needs
+a link and no other `:` link exists, the answers must add a Task Link under
+that name. A `:` choice with `adds_link: false` does not satisfy it. Capture's
+exact refusal ordering and row fields are in the
+[move-choice JSON contract](reference/json-outputs.md#move-choice-results).
+
+An unanswered terminal preview starts with:
+`- ^^ on line N asks which of P's K open tasks move in:`
+
+It then prints one numbered row for every listed task (there is no 20-row
+limit). Rows show status, title, ID
+or `adds ^<mint>`, and the `^` consequence suffix or lock/disabled reason. Its
+answer hint reads `choose with -m 1,3 (move), -m :2 (move & link), or -m none`.
+An answered preview and a real capture use the existing `would move` and
+`moved` lines in draft order. The suffix following the consequence head matches
+`project_note.moved_tasks[].detail`; it is null when there is no suffix.
+
+The consequences reported for a choice use the planner's actual move and link
+guard results. A `:` choice on a Ready or Blocked-by-own-prerequisites task
+can become Next; Next and In Progress lanes stay as they are. Blocked rows
+that the link guard cannot consume stay unlinked. A future-scheduled project
+accepts only Blocked rows, and its `:` choice remains unlinked until the
+project starts. Today's existing Task Link follows the move; it does not gain
+a duplicate. An ID-less task receives the reported collision-free ID only if
+it is picked. The table pins the card and planner copy:
+
+| Row state | `^` consequence | `:` consequence |
+| --- | --- | --- |
+| Ready, unlinked | `Moves into cash_goog_exit.md` | `Moves in · becomes Next · links under ADMIN` |
+| Next, unlinked | `Moves into cash_goog_exit.md` | `Moves in · links under ADMIN` |
+| In Progress, unlinked | `Moves into cash_goog_exit.md` | `Moves in · links under ADMIN` |
+| Linked today under WORK | `Moves into cash_goog_exit.md · its WORK link follows` | `Moves in · keeps its WORK link` (`adds_link: false`) |
+| Blocked only by its own open prerequisites | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · drops 1 prerequisite · becomes Next · links under ADMIN` |
+| Blocked only by its own future date | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · pulls Nov 9 forward · becomes Next · links under ADMIN` |
+| Blocked for another reason | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · stays unlinked: waits on ^lawyer-call` (`adds_link: false`) |
+| `[?]` into a project with a future `s:N` | `Moves into cash_goog_exit.md · stays Blocked` | `Moves in · stays unlinked until the project starts Nov 6` (`adds_link: false`) |
+| ID-less row (either choice) | Append `· adds ^renew-the-passport` | Append `· adds ^renew-the-passport` |
+
+Without `#name`, `links under ADMIN` reads `links into today's plan`. The
+capture-complete picker uses the same consequence builder in status-only mode;
+for `[?]`, its `:` copy says `Moves in · links only if Bob can unblock it`.
+The picker keeps its existing `Needs an ID first · ⊕ ^…` prefix for an
+ID-less row.
+
 Moves require a movable root in the parent: a column-zero `#task` outside
 frontmatter and fences, with open status `[ ]`, `[*]`, `[/]`, or `[?]`, and
 not `^prj`. A task without a block ID can be selected in the editor after
@@ -5513,7 +5665,7 @@ names come from the item's seal):
 
 The parser and completion commands expose the same draft shape:
 
-- `capture-parse` uses grammar revision 10. A complete `- ^id` has a
+- `capture-parse` uses grammar revision 11. A complete `- ^id` has a
   `project_task_move_marker` span over `^`; `- :id` uses
   `project_task_move_link_marker` over `:`. `project_task_move_block_id`
   covers the ID, including a partial ID. A lone sigil is `incomplete`, needs
@@ -5588,6 +5740,25 @@ as their contract:
 | MC3 | Nested `  - ^`, `- ^` in non-project item, or `@file` list | Existing behavior is unchanged |
 | MC4 | `- :` with `#admin` | Picker has `scope_token: ":"`, `continuation: "\n- :"`, and `Moves in · becomes Next · links under ADMIN` |
 | MC5 | `@^x@` + `- ^`, or `@nope^x@` + `- ^` | No rows and the matching warning |
+| MQ1 | Sealed project item with one first-level `- ^^` | Complete `project_note` (or `pomodoro_project_note` with a `:` link); no `needs`; `project_task_move_choice_marker` spans both carets |
+| MQ2 | `- ^^ text`, `- ^^^`, or `- ^^x` | `move_choice_text`; checkbox and nested forms use `move_bullet_checkbox` and `move_choice_nested` |
+| MQ3 | Two `- ^^` lines or a `- ::` line | `move_choice_duplicate` names the first line; `move_choice_colon` teaches `- ^^` |
+| MQ4 | Escaped/inline-code `^^`, nested `  - ^^`, non-project item, `@file` list, or `@route+id` item | Existing meaning; no move-choice slot |
+| MQ5 | Parse JSON for a draft with `- ^^` | `sub_bullet_move_choices` parallels `sub_bullet_moves`; the choice row stays null in both `sub_bullet_moves` and `sub_bullet_task_ids`; grammar is 11 |
+| MQ6 | Dry run with no `-m` and one choice slot | `ok: true`, `answered: false`, no moves selected, and rows numbered in parent document order |
+| MQ7 | Real run with a choice slot but no `-m` | `move_choice_required`; no note, ledger, or attachment writes |
+| MQ8 | `-m 1,:2` and `-m none` | Row 1 moves; row 2 moves and links; `none` contributes no move. Repeated flags union their picks |
+| MQ9 | `-m ^3`, `-m all`, or `-m :all` | `^3` means move; `all` moves every enabled, unlocked row; `:all` is a usage error |
+| MQ10 | `-m` without `- ^^`, conflicting duplicate modes, stale row, or locked/disabled row | `move_choice_unasked`, `move_choice_conflict`, `move_choice_stale`, or `move_choice_refused`, respectively; every refusal is write-free |
+| MQ11 | Empty parent or all rows locked/disabled | Dry run reports a warning and stays `ok: true`; real run returns `move_choice_empty` |
+| MQ12 | ID-less row selected by number or key | The row reports `mint`; selection adds that ID in the same guarded batch; an unselected row gets no ID |
+| MQ13 | Select rows in reverse order in the card and choose `:` for one | Picks land at the `^^` slot in parent order; `^`/`:` choices match authored move bullets, and focus alone selects nothing |
+| MQ14 | `:` choice is Ready; Next; In Progress; own-dependency Blocked; other Blocked; or blocked by future project date | Planner and card copy match the consequence table; `adds_link` is true only when a new Task Link is actually added |
+| MQ15 | `#name` needs a link; choice answers contain no `:` | `unused_project_note_pomodoro`; adding a `:` choice satisfies the name only when its link guard allows the link |
+| MQ16 | A picked move would otherwise be offered as a successor | Choice rows are excluded from successor offers; authored move bullets and new tasks retain existing offer behavior |
+| MQ17 | Multiple items, a later refusal, or a stale answer | The whole guarded batch writes nothing |
+| MQ18 | Answered dry run and real run | JSON is identical apart from `dry_run`; successful choice moves report `via: "choice"` and the `^^` draft range |
+| MQ19 | Unanswered terminal preview with over 20 rows | Prints every numbered row, status, title, ID or suggested ID, consequence or lock/disabled reason, and the `-m` answer hint |
 
 #### Offer a new project's tasks {#offer-a-new-projects-tasks}
 
@@ -5993,7 +6164,7 @@ plus `route`, `block_id`, `drawer`, or `section`), `transfer_source`,
 `route`/`block_id` fields describing the destination. `bob capture -f json`
 adds `moves[]` (the `bob task move` record shape) or `merges[]` (the merge
 record shape) plus `repaired_files[]`; ordinary items omit the empty fields.
-`capture-parse` and `capture-complete` report grammar revision 10 while
+`capture-parse` and `capture-complete` report grammar revision 11 while
 `schema_version` stays 1 (see [Capture-language
 revision](reference/compatibility.md#capture-language-revision)).
 
@@ -6316,6 +6487,9 @@ Useful options:
   `<N|KEY>=<NOTE>` moves it, `<N|KEY>=` keeps it in its inbox, `keep` keeps
   every otherwise unanswered candidate; repeatable. See
   [Routing inbox tasks out](#routing-inbox-tasks-out)
+- `-m, --move-in PICKS`: answer a `- ^^` move choice with `none`, `all`, or a
+  comma list of row numbers and keys; a leading `:` also links the row;
+  repeatable. See [Choosing parent tasks in](#choosing-parent-tasks-in)
 - `-n, --no-clip`: never read the clipboard, even when `%c` is written; a dry run reports `clip.status: not_read`, and a real capture refuses
 - `-R, --no-ref`: keep bare links as inbox tasks instead of queueing a
   background reference job
@@ -6364,8 +6538,9 @@ joined with single spaces, never newlines. Editor clients such as Bob Mac Captur
 call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`,
-`placement`, `open_notes`, `pull_in`, and `inbox_route` (`supported: true`
-on every success; see [Routing inbox tasks out](#routing-inbox-tasks-out)).
+`placement`, `open_notes`, `pull_in`, `inbox_route`, and `move_choice`
+(`supported: true` on every success; see [Routing inbox tasks out](#routing-inbox-tasks-out)
+and [Choosing parent tasks in](#choosing-parent-tasks-in)).
 `open_notes` is a batch-level array on every success (dry-run and real run
 alike); see [Open notes](#open-notes). The
 template path additionally returns `template: {line, field_count, row_count}`
@@ -6389,8 +6564,8 @@ post-image line. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on
 `pull_in_choice_required`,
-`inbox_route_choice_required`, `inbox_route_stale`, and `inbox_route_refused`
-refusals.
+`inbox_route_choice_required`, `inbox_route_stale`, `inbox_route_refused`, and
+move-choice refusal codes.
 
 A reference item (`kind: "ref"`) uses `placement: "queued"` or
 `"unchanged"`, leaves `task_line` empty, and carries the additive `ref`
@@ -7163,7 +7338,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 10` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 11` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -8338,7 +8513,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 10`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 11`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

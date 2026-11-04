@@ -79,9 +79,9 @@ previews, pickers, and discovery calls for the Mac app and editors.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob capture` | `-f json` | Item results plus batch `captures`, `warnings`, `plan_budget`, `pomodoro_blocks`, `task_blocks`, `open_notes`, `pull_in`, and `inbox_route`; adjacent `@route+id` target runs add `fanout: {line, position, count, marker}` to the item and every member capture, while human output prints one `targets  <marker> · <marker>` line; project-note move bullets add `project_note.moved_tasks[]`, `move_summary`, `repaired_files[]`, and optional `move_hint`, while offer rows add `moved_from`; list bullets add per-item `list` (`kind`, `route`, `section`, `header_line`, `position`, `count`), and human output prints one `list  <target> · N tasks|notes` line before each list's first item; a lone `@route` item adds `kind: "note_pull"` and `note_pull: {note, route, successors, folded}`, while `@route` with bullets retains its list result; one-off labels add per-item `relation_label_hides`; cancel-label commits add per-item `relation_cancels[]` (one row per cancelled source), `relation_updates[].cancel_effect`, and warning `relation_cancelled_source`; starts add `pomodoro_start.off_clock` and deprecated `pomodoro_start.tracked: false` fields, additive `pomodoro_start.clock_note` / `pomodoro_close.clock_note` when every counted off-clock link inherited from the same note, `pomodoro_start.event_run` (its span is the buffered span; `events[]` gain `buffer` when the Event Task has a `[buffer::]`), and `pomodoro_blocks[].off_clock` plus deprecated `pomodoro_blocks[].tracked: false` fields, plus warning `pomodoro_event_run_later`; non-MEET starts, `+N` adjusts, and `++N`/`--N` shifts that newly conflict with an open Event Task's occupied span add `event_conflict` on `pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift` (`event.off_clock`, deprecated `event.untracked`, `event.buffer`, and `buffer_part` appear as applicable) plus warning `pomodoro_runs_past_event`; non-MEET starts whose written start is strictly inside an open Event Task's meeting add `pomodoro_start.event_in_progress` plus warning `pomodoro_starts_during_event`; complete-label commits add per-item `relation_completes[]` (one row per completed source, embedding `task_complete`), `relation_updates[].complete_effect`, and warning `relation_completed_source`; sub-bullet items carry per-item `drawer: {title, key, created}` (`null` for a plain child), drawer refusals carry a JSON `code`, and drawer creation near a catalog name emits warning `drawer_near_catalog`; note-less `@route+id` multi-note items omit `sub_bullets` and add `notes[]` (each with `text`, `task_line`, optional `sub_bullets`, and `drawer`) plus `drawers[]` in first-touch order, with `drawer` set only when one drawer received every note; clipboard-notes items report empty `text`/`task_line` with notes in `clip.lines` at the task's child level; transfer items use kind `task_move` (bare-note destination) or `task_merge` (task, drawer, or section destination) with `moves[]` or `merges[]` plus `repaired_files[]` (ordinary items omit the empty fields), and human output prints `↪ Moved N tasks into <note> › Tasks` or `⤵ merged N tasks into “<target>”` lines; a MEET close that carries later meetings with an open Pomodoro below adds `pomodoro_close.next_pomodoro.placed_last: true` (omitted otherwise) | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
-| `bob capture-parse` | `-f json` | Per-item `mode`, spans, diagnostics, and `needs` for incomplete input; top-level `grammar: 10` identifies the capture-language revision. Multi-target runs add `targets: [{start, end, marker, mode, route, block_id, section}, ...]` only for two or more members; legacy fields describe the first member, `needs` is the ordered union, and member spans retain absolute ranges. `duplicate_capture_target` and `split_capture_targets` are coded diagnostics. A complete `>` transfer reports mode `task_move` or `task_merge` with a `transfer` object (`sources[]`, `arrow`, `destination` with `kind: note|task|drawer|section`), `transfer_source`/`transfer_arrow`/`transfer_destination` spans, and the legacy `route`/`block_id` describing the destination; partial transfers need `transfer_destination`, `block_id`, `drawer`, or `section`, and malformed transfers carry `transfer_*` diagnostics. Move bullets add `sub_bullet_moves[]` and the `project_task_move_marker`, `project_task_move_link_marker`, and `project_task_move_block_id` spans; unfinished bullets need `project_task_move`, and lexical diagnostics use `move_bullet_*` codes. A lone `@route` reports mode `note_pull`, `needs: []`, no diagnostics, route spans, and the ordinary `list` summary (`kind: "tasks"`, `count: 0`, `header_line`, `header_range`); `@route` with bullets remains a list. Other list drafts report one `items[]` entry per bullet with per-item `list` and `header_range`; a section header with no bullets is `incomplete` needing `list_item`. List diagnostics carry `code` (`empty_list`, `list_header_marker`, `list_bullet_marker`, `list_bullet_checkbox`, `template_list`, `misplaced_project_task_id`, `invalid_project_task_id`, `duplicate_project_task_id`). An unterminated `@route#"…` section is `incomplete` needing `section` with no diagnostic; `bob capture` refuses it as `incomplete_section`. Relation-label spans carry `cancels_source` or `completes_source` when configured. Drawer spans carry `title` and `key` when the name is valid; a first-level `#` shortcut is a `drawer` span, and an ALL-CAPS drawer bullet with nested notes is a `drawer_bullet` span; incomplete shortcuts need `drawer` or `drawer_notes`. Drawer diagnostics carry `code` (`invalid_drawer`, `drawer_text`, `drawer_bullet_text`, `drawer_bullet_position`, `empty_drawer_bullet`, `multi_note_marker`, `ambiguous_drawer`, `reserved_drawer`, `drawer_near_duplicate`, `drawer_toggle`) | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
-| `bob capture-complete` | `-f json` | Completion context plus candidates and replacement ranges; top-level `grammar: 10` identifies the capture-language revision. The `project_task_move` context adds parent/destination metadata, a note-scoped picker descriptor with continuation, and movable parent-task rows including ID-less suggestions, today's Pomodoro chips, consequences, schedules, hidden state, and disabled reasons. Bare `#` and `%` menus, an empty drawer query after `@route+id#`, and an empty `=*` merge source add `initial_selection: "none"`. A merge source row resolves `current` to the selected running or next planned Pomodoro when unambiguous; destination rows put the next mergeable planned Pomodoro below the source first and label it `next planned`. Drawer menus add `target: {route, block_id, text}`, the decoded `query`, and rows grouped `task`, `recent`, and `new`; each row carries Bob-authored `detail` and `consequence`, `creates`, an optional commit-derived `refused` reason, and a `replacement` that covers the `#` and the name, with `cursor_after`. At a first-level bullet start the same menu uses the bare ALL-CAPS title as `replacement` (`TITLE\n  - ` when it also opens the nested bullet, so `cursor_after` lands on it), and `target.block_id` is `null` for a new task (`"prj"` for a new project note). `section` rows keep `title` as the display heading and set `replacement` to a selector that resolves back to that heading (raw title, hyphen slug, or quoted `"Title"`). `project_task_block_id` accepts task-list bullets and nested lines as well as project-note task bullets and nested lines; `block_id.owner_line` and `block_id.splice` locate the owning line and preserve surrounding draft text. List prompts merge destination-note IDs and sibling-list IDs in `block_id.used`. `relation_label` rows carry `cancels_source`, `completes_source`, and `configured`; the response may include `relation_cancel` and/or `relation_complete` when configured | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
+| `bob capture` | `-f json` | Item results plus batch `captures`, `warnings`, `plan_budget`, `pomodoro_blocks`, `task_blocks`, `open_notes`, `pull_in`, `inbox_route`, and batch-level `move_choice`; adjacent `@route+id` target runs add `fanout: {line, position, count, marker}` to the item and every member capture, while human output prints one `targets  <marker> · <marker>` line; project-note move bullets add `project_note.moved_tasks[]`, `move_summary`, `repaired_files[]`, and optional `move_hint`, while offer rows add `moved_from`; list bullets add per-item `list` (`kind`, `route`, `section`, `header_line`, `position`, `count`), and human output prints one `list  <target> · N tasks|notes` line before each list's first item; a lone `@route` item adds `kind: "note_pull"` and `note_pull: {note, route, successors, folded}`, while `@route` with bullets retains its list result; one-off labels add per-item `relation_label_hides`; cancel-label commits add per-item `relation_cancels[]` (one row per cancelled source), `relation_updates[].cancel_effect`, and warning `relation_cancelled_source`; starts add `pomodoro_start.off_clock` and deprecated `pomodoro_start.tracked: false` fields, additive `pomodoro_start.clock_note` / `pomodoro_close.clock_note` when every counted off-clock link inherited from the same note, `pomodoro_start.event_run` (its span is the buffered span; `events[]` gain `buffer` when the Event Task has a `[buffer::]`), and `pomodoro_blocks[].off_clock` plus deprecated `pomodoro_blocks[].tracked: false` fields, plus warning `pomodoro_event_run_later`; non-MEET starts, `+N` adjusts, and `++N`/`--N` shifts that newly conflict with an open Event Task's occupied span add `event_conflict` on `pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift` (`event.off_clock`, deprecated `event.untracked`, `event.buffer`, and `buffer_part` appear as applicable) plus warning `pomodoro_runs_past_event`; non-MEET starts whose written start is strictly inside an open Event Task's meeting add `pomodoro_start.event_in_progress` plus warning `pomodoro_starts_during_event`; complete-label commits add per-item `relation_completes[]` (one row per completed source, embedding `task_complete`), `relation_updates[].complete_effect`, and warning `relation_completed_source`; sub-bullet items carry per-item `drawer: {title, key, created}` (`null` for a plain child), drawer refusals carry a JSON `code`, and drawer creation near a catalog name emits warning `drawer_near_catalog`; note-less `@route+id` multi-note items omit `sub_bullets` and add `notes[]` (each with `text`, `task_line`, optional `sub_bullets`, and `drawer`) plus `drawers[]` in first-touch order, with `drawer` set only when one drawer received every note; clipboard-notes items report empty `text`/`task_line` with notes in `clip.lines` at the task's child level; transfer items use kind `task_move` (bare-note destination) or `task_merge` (task, drawer, or section destination) with `moves[]` or `merges[]` plus `repaired_files[]` (ordinary items omit the empty fields), and human output prints `↪ Moved N tasks into <note> › Tasks` or `⤵ merged N tasks into “<target>”` lines; a MEET close that carries later meetings with an open Pomodoro below adds `pomodoro_close.next_pomodoro.placed_last: true` (omitted otherwise) | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
+| `bob capture-parse` | `-f json` | Per-item `mode`, spans, diagnostics, and `needs` for incomplete input; top-level `grammar: 11` identifies the capture-language revision. Multi-target runs add `targets: [{start, end, marker, mode, route, block_id, section}, ...]` only for two or more members; legacy fields describe the first member, `needs` is the ordered union, and member spans retain absolute ranges. `duplicate_capture_target` and `split_capture_targets` are coded diagnostics. A complete `>` transfer reports mode `task_move` or `task_merge` with a `transfer` object (`sources[]`, `arrow`, `destination` with `kind: note|task|drawer|section`), `transfer_source`/`transfer_arrow`/`transfer_destination` spans, and the legacy `route`/`block_id` describing the destination; partial transfers need `transfer_destination`, `block_id`, `drawer`, or `section`, and malformed transfers carry `transfer_*` diagnostics. Move bullets add `sub_bullet_moves[]` and the `project_task_move_marker`, `project_task_move_link_marker`, and `project_task_move_block_id` spans; unfinished bullets need `project_task_move`, and lexical diagnostics use `move_bullet_*` codes. A `^^` choice adds `project_task_move_choice_marker` and `sub_bullet_move_choices[]` (null or `{range}` entries beside `sub_bullet_moves[]`), leaves the parse complete, and advances the grammar to 11. A lone `@route` reports mode `note_pull`, `needs: []`, no diagnostics, route spans, and the ordinary `list` summary (`kind: "tasks"`, `count: 0`, `header_line`, `header_range`); `@route` with bullets remains a list. Other list drafts report one `items[]` entry per bullet with per-item `list` and `header_range`; a section header with no bullets is `incomplete` needing `list_item`. List diagnostics carry `code` (`empty_list`, `list_header_marker`, `list_bullet_marker`, `list_bullet_checkbox`, `template_list`, `misplaced_project_task_id`, `invalid_project_task_id`, `duplicate_project_task_id`). An unterminated `@route#"…` section is `incomplete` needing `section` with no diagnostic; `bob capture` refuses it as `incomplete_section`. Relation-label spans carry `cancels_source` or `completes_source` when configured. Drawer spans carry `title` and `key` when the name is valid; a first-level `#` shortcut is a `drawer` span, and an ALL-CAPS drawer bullet with nested notes is a `drawer_bullet` span; incomplete shortcuts need `drawer` or `drawer_notes`. Drawer diagnostics carry `code` (`invalid_drawer`, `drawer_text`, `drawer_bullet_text`, `drawer_bullet_position`, `empty_drawer_bullet`, `multi_note_marker`, `ambiguous_drawer`, `reserved_drawer`, `drawer_near_duplicate`, `drawer_toggle`) | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
+| `bob capture-complete` | `-f json` | Completion context plus candidates and replacement ranges; top-level `grammar: 11` identifies the capture-language revision. The `project_task_move` context adds parent/destination metadata, a note-scoped picker descriptor with continuation, and movable parent-task rows including ID-less suggestions, today's Pomodoro chips, consequences, schedules, hidden state, and disabled reasons. At a lone `- ^` with an empty query, its descriptor adds `action_continuation_keys: ["^"]`. Bare `#` and `%` menus, an empty drawer query after `@route+id#`, and an empty `=*` merge source add `initial_selection: "none"`. A merge source row resolves `current` to the selected running or next planned Pomodoro when unambiguous; destination rows put the next mergeable planned Pomodoro below the source first and label it `next planned`. Drawer menus add `target: {route, block_id, text}`, the decoded `query`, and rows grouped `task`, `recent`, and `new`; each row carries Bob-authored `detail` and `consequence`, `creates`, an optional commit-derived `refused` reason, and a `replacement` that covers the `#` and the name, with `cursor_after`. At a first-level bullet start the same menu uses the bare ALL-CAPS title as `replacement` (`TITLE\n  - ` when it also opens the nested bullet, so `cursor_after` lands on it), and `target.block_id` is `null` for a new task (`"prj"` for a new project note). `section` rows keep `title` as the display heading and set `replacement` to a selector that resolves back to that heading (raw title, hyphen slug, or quoted `"Title"`). `project_task_block_id` accepts task-list bullets and nested lines as well as project-note task bullets and nested lines; `block_id.owner_line` and `block_id.splice` locate the owning line and preserve surrounding draft text. List prompts merge destination-note IDs and sibling-list IDs in `block_id.used`. `relation_label` rows carry `cancels_source`, `completes_source`, and `configured`; the response may include `relation_cancel` and/or `relation_complete` when configured | `schema_version: 1` | [Capture](../capture.md), [cancel labels](../task-relations.md#17-cancel-labels), [complete labels](../task-relations.md#18-complete-labels) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-pomodoros` | `-f json` | Ledger entries plus `warnings`; `--tasks` adds task agendas, optional `events` calendar rows/hints, event chips, `off_clock` and deprecated `untracked` fields plus `clock_source` (`on_tag`\|`off_tag`\|`note`\|`invalid_note`\|`default`) and `clock_note` (deciding note path or null), completed off-clock totals, and buffer objects with occupied spans on buffered Event Tasks | `schema_version: 1` | [Capture](../capture.md), [Pomodoro homes](../pomodoro-homes.md) |
 | `bob capture-related` | `-f json` | Candidate matches, UTF-8 draft anchors, verified actions, and already-linked tasks; `--query` adds scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
@@ -163,6 +163,133 @@ with `relation_successor` in `roles[]`; its added Pomodoro line has
 `reason: "relation"`. See the
 [successor JSON contract](../task-dependencies.md#125-reporting-model)
 and [relation events](../task-dependencies.md#1218-relation-successors-starts-after).
+
+### Move-choice results
+
+Every `bob capture -f json` success and refusal returns a top-level `move_choice`
+object. It always has `supported: true`, which clients use for capability
+detection; when the draft has a `- ^^` slot, it also has `slots[]`. This is
+additive and leaves capture's unversioned JSON shape unchanged. A dry run
+without `-m` reports the same rows with
+`answered: false`, no choices applied, and `ok: true`.
+
+A v1 draft has at most one choice slot; `slots[]` keeps the batch-level shape
+additive for later versions. A slot is built from the staged parent, so earlier
+capture items are visible, and reads today's daily note and the link-guard
+inputs needed for its consequences. It includes `item`, the 1-based `item_line`,
+the `draft_range` as a half-open UTF-8 byte pair for `^^`, `parent`,
+`destination`, optional `pomodoro_name`,
+`name_needs_link`, `open_count`, `answered`, `moved_count`, `linked_count`,
+`copy`, and `rows[]`. The copy object has Bob-authored `title`, `subtitle`,
+`slot`, `leave`, `ghost`, `band`, and optional `then` strings:
+
+```json
+{
+  "move_choice": {
+    "supported": true,
+    "slots": [{
+      "item": 1,
+      "item_line": 4,
+      "draft_range": [112, 114],
+      "parent": "cash.md",
+      "destination": "cash_goog_exit.md",
+      "pomodoro_name": "ADMIN",
+      "name_needs_link": false,
+      "open_count": 25,
+      "answered": false,
+      "moved_count": 0,
+      "linked_count": 0,
+      "copy": {
+        "title": "Move into cash_goog_exit.md",
+        "subtitle": "from cash.md · 25 open",
+        "slot": "Lands between “Pay the credit card” and “Book the lawyer”, in cash.md order",
+        "leave": "Stays in cash.md",
+        "ghost": "choose from cash.md's 25 open tasks on ↩",
+        "band": "Asks about cash.md's 25 open tasks on ↩",
+        "then": null
+      },
+      "rows": [{
+        "key": "cash.md#^call-ms",
+        "n": 2,
+        "line": 12,
+        "section": "Tasks",
+        "block_id": "call-ms",
+        "mint": null,
+        "text": "Call Morgan Stanley about the 401k",
+        "status_symbol": " ",
+        "status_name": "Ready",
+        "hidden": false,
+        "scheduled": null,
+        "pomodoro": null,
+        "choices": [
+          {"sigil": "^", "consequence": "Moves into cash_goog_exit.md", "adds_link": false},
+          {"sigil": ":", "consequence": "Moves in · becomes Next · links under ADMIN", "adds_link": true}
+        ],
+        "locked": null,
+        "disabled_reason": null,
+        "answer": null
+      }]
+    }]
+  }
+}
+```
+
+Rows come from the shared movable-root eligibility in parent document order.
+They include ID-less and `#hide` roots; `^prj`, closed and nested tasks, and
+the project template placeholder are excluded. `open_count` is the number of
+listed movable roots. `n` is the 1-based position among all rows, including
+rows that are locked or disabled, so answer numbers never shift around them.
+An identified row's key is `path#^id`; an ID-less
+row uses `path@<sha8>[~k]`. `mint` is Bob's collision-free suggested block ID
+for an ID-less row and is null otherwise. It avoids the parent's IDs, IDs
+authored in the new note, `prj`, and every other row's suggestion. At execution,
+Bob uses that suggestion if still free or chooses the next free suffix, also
+avoiding descendants of moved blocks; a collision with an imported descendant
+refuses with `move_task_id_collision`. The key is stable for the row and is the
+preferred answer form for editor clients.
+
+Each enabled, unlocked row has `^` and `:` choices with a Bob-authored
+`consequence` and `adds_link`. Disabled and locked rows have no choices.
+`locked` is null or `{sigil, item_line}` when an explicit move in this draft
+already moves that row from the same parent. `disabled_reason` is Bob-authored.
+A row also carries its task text, status, section, source line, hidden and
+scheduled state, and today's Pomodoro chip (or null). After an answer, the slot
+has `answered: true`, the moved and
+linked counts, and every row's `answer` as `^`, `:`, or null. Dry-run JSON
+matches the real-run JSON apart from `dry_run`.
+
+`name_needs_link` is true on the create form when the item has a `#name`, no
+other `:` link exists, and that name needs a link; the offer form defers this
+check. Under a `:` seal, `then` says `Then: choose today's links for N new
+tasks` when offers remain; otherwise it is null. `copy.slot` names the
+neighboring roots, or says `first` or `last` at an edge.
+
+Repeatable `-m, --move-in` values union their selections. Bare numbers and
+keys mean move (`^`); a leading `:` means move and link. `all` selects every
+enabled, unlocked row as a move, and `none` selects no rows. There is no
+`:all`. Numbers resolve against the rows rebuilt from the staged parent at
+execution. Successful choice moves add `via: "choice"` to
+`project_note.moved_tasks[]`, with `draft_range` set to the `^^` range; authored
+moves retain `via: "bullet"`. Choice rows are never added to successor offers.
+
+These write-free refusal codes run after existing Pomodoro-override, lexical,
+and move-bullet refusals, in this order, before `pull_in_choice_required` and
+`inbox_route_choice_required`:
+
+| Code | Trigger |
+| --- | --- |
+| `move_choice_unasked` | `-m` is supplied but the draft has no `- ^^` |
+| `move_choice_empty` | No selectable rows; a dry run instead reports a warning and stays `ok: true` |
+| `move_choice_required` | A real run has `- ^^` but no `-m` answer |
+| `move_choice_conflict` | Duplicate row answers conflict, or `none`/`all` is combined with other picks |
+| `move_choice_stale` | A number or key no longer resolves; the refusal carries fresh rows |
+| `move_choice_refused` | The answer selects a locked or disabled row |
+| `unused_project_note_pomodoro` | A required `#name` has no link after applying the answers |
+
+Exit codes follow the corresponding pull-in and inbox-route refusals. The
+human unanswered preview prints every row, even above 20 rows, with its number,
+status, title, ID or suggested ID, and consequence or lock/disabled reason,
+then a `choose with -m ...` hint.
 
 ### Inbox-routing results
 
