@@ -15,18 +15,19 @@ use crate::native::{
     collect_done::link_repair_markdown_files,
     config::{self},
     env as bob_env,
-    ob::{self, ChildEnv},
+    ob::ChildEnv,
     pomodoro,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
     pomodoro_themes::{self, Catalog},
     style::Styler,
+    task_command_shell::{self, TaskCommandShell},
     task_status_hooks_write::{
         apply_plan, capture_required, planned_write, ApplyOutcome,
         ApplySession, CaptureError, InputKind, InputSnapshot, ReasonCode,
         WritePlan,
     },
     task_theme::parse_task_theme,
-    vault_sync::{self, CycleReport},
+    vault_sync::CycleReport,
 };
 
 use super::{
@@ -342,44 +343,31 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
     }
 
     let retry_timeout = Duration::from_secs(report.retry_secs);
-    let json_mode = report.format == OutputFormat::Json;
-    let _lock = match ob::acquire_lock_waiting(retry_timeout, || {
-        if json_mode {
-            eprintln!("waiting for another vault maintenance run…");
-        } else {
-            eprintln!("  waiting for another vault maintenance run…");
-        }
-    }) {
-        Ok(lock) => lock,
+    let shell = match TaskCommandShell::start(
+        &report.vault,
+        retry_timeout,
+        report.offline,
+        report.format == OutputFormat::Json,
+    ) {
+        Ok(shell) => shell,
         Err(error) => {
-            report.fail("lock", format!("acquire vault maintenance lock: {error}"), Some("wait for the current maintenance run to finish, then retry"));
+            report.fail("lock", format!("{error}"), Some("wait for the current maintenance run to finish, then retry"));
             return 1;
         }
     };
-
-    let child_env = ob::child_env();
-    let worktree = match ob::detect_git_worktree(&report.vault, &child_env) {
-        Ok(worktree) => worktree,
-        Err(error) => {
-            report.warn(format!(
-                "git is unavailable ({error}); skipping commit and sync"
-            ));
-            report.mode = GitMode::NotAWorktree;
-            false
-        }
-    };
-    if !worktree && report.mode != GitMode::NotAWorktree {
+    let child_env = shell.child_env.clone();
+    let worktree = shell.worktree;
+    if let Some(warning) = shell.warning.as_deref() {
         report.mode = GitMode::NotAWorktree;
-        report.warn(format!(
-            "vault is not a git worktree ({}); skipping commit and sync",
-            report.vault.display()
-        ));
+        report.warn(warning);
+    } else if report.offline {
+        report.mode = GitMode::Offline;
+    } else {
+        report.mode = GitMode::Sync;
     }
 
-    if worktree && !report.offline {
-        let cycle =
-            vault_sync::run_cycle_with_existing_lock_report(&child_env, true);
-        let section = SyncSection::from_report(&cycle, true);
+    if let Some(cycle) = &shell.pre_sync {
+        let section = SyncSection::from_report(cycle, true);
         report.progress(&pre_sync_detail(&section));
         report.pre_sync = Some(section);
         if !cycle.ok {
@@ -387,7 +375,7 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
                 "pre_sync",
                 format!(
                     "pre-sync failed: {}",
-                    cycle.error.unwrap_or_else(|| {
+                    cycle.error.clone().unwrap_or_else(|| {
                         "vault sync reported failure".to_string()
                     })
                 ),
@@ -842,25 +830,25 @@ fn commit_applied(
         first.dest_path.display(),
         if count == 1 { "task" } else { "tasks" }
     );
-    let relative: Vec<PathBuf> = applied
-        .iter()
-        .map(|path| {
-            path.strip_prefix(&report.vault)
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|_| path.clone())
-        })
-        .collect();
-    let sha = ob::commit_paths(&report.vault, child_env, &subject, &relative)?;
-    Ok(Some(CommitSection {
-        sha,
-        subject,
-        paths: relative.iter().map(|path| display_relative(path)).collect(),
+    let committed = task_command_shell::commit_paths(
+        &report.vault,
+        child_env,
+        applied,
+        &subject,
+    )?;
+    Ok(committed.map(|committed| CommitSection {
+        sha: committed.sha,
+        subject: committed.subject,
+        paths: committed
+            .paths
+            .iter()
+            .map(|path| display_relative(path))
+            .collect(),
     }))
 }
 
 fn post_sync(report: &mut Report, child_env: &ChildEnv) -> i32 {
-    let cycle =
-        vault_sync::run_cycle_with_existing_lock_report(child_env, true);
+    let cycle = task_command_shell::run_post_sync(child_env);
     report.post_sync = Some(SyncSection::from_report(&cycle, false));
     if !cycle.conflicts.is_empty() {
         let mut conflicts = cycle.conflicts.clone();

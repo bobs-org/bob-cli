@@ -6,11 +6,7 @@ of [merging tasks](task-merge.md): merge folds tasks into a container, split
 turns notes back into tasks. Moving tasks between notes keeps their identity
 (see [Move open tasks between notes](task-move.md)).
 
-> [!NOTE] Contract only: the `split-cli` and `nav-split` phases land the Rust
-> planner plus `bob task split` and the Obsidian Ctrl+Shift+T twin. Until then
-> this page pins the contract they must pass.
-
-This file is the contract every implementation cites. The Rust side will be
+This file is the contract every implementation cites. The Rust side is
 `src/native/task_split/plan.rs` (pure planner), surfaced as
 `bob task split` and the Obsidian Ctrl+Shift+T gesture. The JavaScript twin
 ports the planner against the copied vectors. If an implementation disagrees
@@ -103,6 +99,7 @@ bob task split [OPTIONS] <TASK|NOTE> [-m TEXT | -n N]...
   -o, --offline                Skip both sync cycles; commit locally
   -r, --retry-timeout SECONDS  Lock wait and re-plan budget
   -s, --section TITLE          split that section's bullets
+      --bullet-ref LINE:DIGEST hidden stale-safe picker selector
 ```
 
 A task locator is `note:block-id`, split on the last `:`; `[[note#^id]]`

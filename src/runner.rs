@@ -202,6 +202,14 @@ const TASK_MEMBERS: &[Member] = &[
             script_command: None,
         },
     },
+    Member {
+        name: "split",
+        about: "Split task notes into linked tasks",
+        leaf: Leaf {
+            native_command: NativeCommand::TaskSplit,
+            script_command: None,
+        },
+    },
 ];
 
 const POMODORO_MEMBERS: &[Member] = &[
@@ -235,6 +243,7 @@ const TASK_AFTER_HELP: &str = "\
 Examples:
   bob task archive               Archive done and canceled tasks
   bob task move --dry-run        Preview moving tasks and repairing links
+  bob task split --dry-run       Preview splitting task notes into tasks
   bob task reconcile --dry-run   Preview task status reconciliation
   bob task reroll --dry-run      Preview re-rolling due prioritized tasks
 
@@ -727,7 +736,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "task",
-        about: "Vault-wide task maintenance: archive, move, reconcile, reroll",
+        about: "Vault-wide task maintenance: archive, move, reconcile, reroll, split",
         section: Section::TasksAndProjects,
         target: Target::Group(Group {
             members: TASK_MEMBERS,
@@ -2234,6 +2243,7 @@ mod tests {
             NativeCommand::Highlights,
             NativeCommand::MoveDoneTasks,
             NativeCommand::TaskMove,
+            NativeCommand::TaskSplit,
             NativeCommand::Nightly,
             NativeCommand::NoteReady,
             NativeCommand::Notify,

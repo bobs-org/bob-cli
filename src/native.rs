@@ -93,6 +93,7 @@ mod subprocess_runner;
 #[cfg_attr(not(test), allow(dead_code))]
 mod task_cancel;
 mod task_children;
+mod task_command_shell;
 mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
@@ -103,6 +104,7 @@ mod task_merge;
 mod task_move;
 pub(crate) mod task_relations;
 mod task_root;
+mod task_split;
 mod task_status_groups;
 mod task_status_hooks;
 mod task_status_hooks_write;
@@ -147,6 +149,7 @@ pub(crate) enum NativeCommand {
     Highlights,
     MoveDoneTasks,
     TaskMove,
+    TaskSplit,
     Nightly,
     NoteReady,
     Notify,
@@ -232,6 +235,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Highlights => highlights_ref::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),
         NativeCommand::TaskMove => task_move::run(args),
+        NativeCommand::TaskSplit => task_split::run(args),
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::NoteReady => note_ready::cli::run(args),
         NativeCommand::Notify => notify::run(args),

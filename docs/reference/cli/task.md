@@ -20,6 +20,7 @@ Commands:
   move       Move open tasks between notes and repair vault links
   reconcile  Reconcile task statuses from the Pomodoro ledger and dependencies
   reroll     Re-roll due prioritized tasks within their priority windows
+  split      Split task notes into linked tasks
 
 Options:
   -h, --help  Print help
@@ -27,6 +28,7 @@ Options:
 Examples:
   bob task archive               Archive done and canceled tasks
   bob task move --dry-run        Preview moving tasks and repairing links
+  bob task split --dry-run       Preview splitting task notes into tasks
   bob task reconcile --dry-run   Preview task status reconciliation
   bob task reroll --dry-run      Preview re-rolling due prioritized tasks
 
@@ -80,7 +82,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -95,7 +97,7 @@ Options:
 
   -r, --retry-timeout <SECONDS>
           Lock wait and re-plan budget after concurrent edits; 0 fails fast
-          
+
           [default: 60]
 
 Examples:
@@ -136,7 +138,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -145,7 +147,7 @@ Options:
 
   -r, --retry-timeout <SECONDS>
           Retry recoverable failures (lock contention, a changed vault, an unstable read) for up to this many seconds with jittered backoff; 0 attempts once and fails fast
-          
+
           [default: 120]
 
 Examples:
@@ -183,7 +185,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -198,7 +200,7 @@ Options:
 
   -r, --retry-timeout <SECONDS>
           Budget for waiting on the maintenance lock and for re-planning after concurrent-edit races; 0 fails fast
-          
+
           [default: 60]
 
   -s, --seed <SEED>
@@ -230,6 +232,62 @@ Environment:
   NO_COLOR      disable colored output
   XDG_CONFIG_HOME  config root when BOB_CONFIG_FILE is unset
   XDG_STATE_HOME  recovery-record root
+```
+
+## bob task split
+
+Split task notes into linked tasks
+
+```text title="bob task split --help"
+Split selected authored bullets from a task into new tasks. The parent keeps an in-place task link to each new task, and the selected bullets' children move with them. A live run uses the task maintenance lock, guarded writes, a scoped commit, and vault sync; --dry-run prints the same plan without changing the vault.
+
+Usage: bob task split [OPTIONS] <TASK|NOTE>
+
+Arguments:
+  <TASK|NOTE>
+          Task locator, or note path when --section is given
+
+Options:
+  -d, --dry-run
+          Plan and print only; do not lock, sync, or write
+
+  -f, --format <FORMAT>
+          Output format: human or json
+
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -m, --match <TEXT>
+          Select a unique splittable bullet containing this text; repeatable
+
+  -n, --nth <N>
+          Select the Nth candidate; repeatable and 1-based
+
+  -o, --offline
+          Skip both sync cycles; commit locally
+
+  -r, --retry-timeout <SECONDS>
+          Lock wait and re-plan budget
+
+          [default: 60]
+
+  -s, --section <TITLE>
+          Select section bullets in this note; created Tasks intake receives the new tasks
+
+Examples:
+  bob task split --dry-run db:upgrade -n 1
+                                 Preview the first splittable note
+  bob task split db:upgrade -m 'rollback runbook'
+                                 Split the unique matching note
+  bob task split dev -s 'Future Work'
+                                 Promote every bullet in a note section
+  bob task split -f json db:upgrade
+                                 List numbered candidates as JSON
+
+A task locator is note:block-id or [[note#^block-id]].
 ```
 
 ## Related

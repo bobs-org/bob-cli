@@ -49,6 +49,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob task move`](task.md#bob-task-move) | Move open tasks between notes and repair vault links |
 | [`bob task reconcile`](task.md#bob-task-reconcile) | Reconcile task statuses from the Pomodoro ledger and dependencies |
 | [`bob task reroll`](task.md#bob-task-reroll) | Re-roll due prioritized tasks within their priority windows |
+| [`bob task split`](task.md#bob-task-split) | Split task notes into linked tasks |
 
 ## Vault
 

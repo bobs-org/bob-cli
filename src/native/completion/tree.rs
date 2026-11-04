@@ -148,6 +148,7 @@ impl NativeCommand {
                 crate::native::stats::cli::show_command()
             }
             NativeCommand::TaskMove => crate::native::task_move::build_cli(),
+            NativeCommand::TaskSplit => crate::native::task_split::build_cli(),
             NativeCommand::ThemesColor => {
                 crate::native::pomodoro_themes::write::build_cli_color()
             }
