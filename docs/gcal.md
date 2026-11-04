@@ -395,7 +395,7 @@ upgraded in place) is linked by phase, on any day:
 
 | Phase at sync time | Pomodoro | Link line | Row checkbox |
 | --- | --- | --- | --- |
-| Past: the buffered span ended (buffered end ≤ now) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry for worked events or `(**SSSS-EEEE** [off:: Nm])` for an off-clock cluster | `🍅 [[#^id]]` | `[/]` |
+| Past: the buffered span ended (buffered end ≤ now) | A closed `- [x] (**SSSS-EEEE** [t:: Nm]) — MEET` entry for worked events or `(**SSSS-EEEE** [off:: Nm])` for an off-clock cluster | `🍅 ~~[[#^id]]~~` | `[x]` with `[completion:: YYYY-MM-DD]` for the note's day |
 | Current: buffered start ≤ now < buffered end, today's note only | The running MEET entry | `[[#^id]]` | `[*]` |
 | Future: the buffered span has not started | The open MEET placeholder `- [ ] () — MEET` | `[[#^id]]` | `[*]` |
 
@@ -427,7 +427,8 @@ entries, adds links, and reorders Event Task links within an entry. Existing
 unlinked rows still earn an open-MEET link only on today's note, and only
 when the event has not ended.
 
-A past day (`-D yesterday`) gains closed MEET entries and `[/]` rows. A
+A past day (`-D yesterday`) gains closed MEET entries and `[x]` rows completed
+on that note's day. A
 future day (`-D tomorrow`) gains a MEET placeholder and `[*]` rows; task
 status hooks rule R9 may clear those `[*]` rows to `[ ]` until that day
 becomes today, when the MEET link raises them again.
@@ -479,7 +480,7 @@ immediately after the heading gap:
 ## Events
 
 *↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*
-- [x] #task **0800-0830** Product interview [📅](…) [📹](…) [root:: job] ^product-interview
+- [x] #task **0800-0830** Product interview [📅](…) [📹](…) [root:: job]  [completion:: 2026-10-30] ^product-interview
 ```
 
 The source is `*↻ synced <when> · [<account>](<day-url>)*`. `<when>` is `HH:MM`
@@ -529,12 +530,12 @@ Badges are plain title-free links (`[📅](url)`), so link-hint plugins such as 
 
 "Untouched" means not done, not In Progress, never linked under a closed
 Pomodoro, and with no 🍅 history. A worked task is never cancelled; it is
-left alone and reported once. A Past row is worked from birth (`[/]` and a
-closed-entry link), so a later Google decline, delete, or move leaves it
-alone and reports it once. `[/]` rows count in the Pending lane and show in
-`list`'s `past_open` footer until they are completed or cancelled. MEET
-placeholders and running MEET entries are created only in the same write
-that adds their first link, so sync never leaves a second open MEET.
+left alone and reported once. A Past row is born done (`[x]`, a completion
+date, and a struck 🍅 link under its closed MEET), so a later Google decline,
+delete, or move leaves it alone and reports it once. Sync cannot learn
+attendance, so uncheck or cancel a skipped meeting by hand. MEET placeholders
+and running MEET entries are created only in the same write that adds their
+first link, so sync never leaves a second open MEET.
 
 <a id="off-clock-events"></a><a id="untracked-events"></a>
 
@@ -950,6 +951,8 @@ immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
   re-adds them. Sibling notes and managed lines above or below do not.
 - Google-side changes apply only to spans you have not edited; your edits
   are kept and reported once.
+- A meeting first synced after it ended is born done and counted (Done, plus
+  its closed MEET's minutes); sync cannot tell whether you attended.
 - Google forbids Calendar scopes on the device-code flow; over SSH, login
   switches to the paste flow automatically.
 - Consent screens left in Testing expire in 7 days; publish them.

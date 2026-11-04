@@ -9,6 +9,7 @@ metadata:
     - decisions:untracked-sessions-omit-t-field
     - decisions:event-buffers-widen-the-span
     - decisions:sync-sorts-event-task-links
+    - decisions:ended-synced-meetings-are-born-done
 title: Synced Meetings Are Linked By Phase At Birth
 aliases:
   - synced-meetings-link-by-phase
@@ -82,6 +83,10 @@ time. The meeting span in the bold label is unchanged. See
 Superseded in part: sync no longer only appends links; every run reorders
 each entry's Event Task links by meeting time. See
 [[decisions:sync-sorts-event-task-links]].
+
+Superseded in part: Past rows are now born `[x]` with a completion date and a
+struck 🍅 link, and the `[x]` rejection is retired. See
+[[decisions:ended-synced-meetings-are-born-done]].
 
 [[decisions:calendar-events-are-daily-note-event-tasks]]
 

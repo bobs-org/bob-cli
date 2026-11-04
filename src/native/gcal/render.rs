@@ -28,7 +28,7 @@ pub(crate) struct TaskRowInput<'a> {
     pub needs_type: bool,
     pub buffer: EventBuffer,
     pub clock_tag: ClockTag,
-    /// Task checkbox: `*` (Next), `/` (In Progress), or ` ` (Ready).
+    /// Task checkbox: `x` (Past), `*` (Next), `/` (In Progress), or ` ` (Ready).
     pub status: char,
 }
 
@@ -620,5 +620,17 @@ mod tests {
                 .badges
         };
         assert_eq!(badges_of(&rerouted), badges_of(&before));
+    }
+
+    #[test]
+    fn row_metadata_inserts_root_before_completion_suffix() {
+        let completed = "- [x] #task **0815-0830** Swings! [📅](https://cal.example/swings) #off  [completion:: 2026-11-04] ^swings";
+        let rerouted = set_row_metadata(completed, Some("love"), true);
+        assert!(
+            rerouted.contains(
+                "#off [root:: love] [type:: MEET]  [completion:: 2026-11-04] ^swings"
+            ),
+            "{rerouted}"
+        );
     }
 }

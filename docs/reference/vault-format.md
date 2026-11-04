@@ -400,7 +400,7 @@ qualify too; Google Calendar is not required.
 ## Events
 
 *↻ synced 14:05 · [you@example.com](https://calendar.google.com/calendar/r/day/2026/10/30?authuser=you%40example.com)*
-- [/] #task **0800-0830** Product interview [root:: job] [type:: MEET] ^product-interview
+- [x] #task **0800-0830** Product interview [root:: job] [type:: MEET]  [completion:: 2026-10-30] ^product-interview
 - [*] #task **1830-1900** Dentist [root:: body] [type:: MEET] ^dentist
 	- Bring insurance card
 - **all day** School holiday
@@ -409,7 +409,7 @@ qualify too; Google Calendar is not required.
 ## Pomodoros
 
 - [x] (**0800-0830** [t:: 30m]) — MEET
-  - 🍅 [[#^product-interview]]
+  - 🍅 ~~[[#^product-interview]]~~
 - [ ] () — MEET
   - [[#^dentist]]
 ```
@@ -451,7 +451,8 @@ the span (`**all day**` or `**HHMM-HHMM**`) plus optional `· *day N of M*`,
 `· *maybe*`, or `· *free*` tags and the `📅` badge, and never carries
 an off-clock tag or `[buffer::]`. Event Tasks linked under
 an open MEET show `[*]`; a row first synced after its event ended shows
-`[/]` under a closed MEET. Titles are data: `#task`, trailing `^id`, `%%`, `::`, `🔁`, Tasks
+`[x]` with `[completion:: YYYY-MM-DD]` for the note's day under a closed MEET.
+Titles are data: `#task`, trailing `^id`, `%%`, `::`, `🔁`, Tasks
 emoji, and leading markers are escaped or neutralized, and a resolved
 `@route` token is stripped from the title. Off-clock aliases are stripped
 before the route is read.

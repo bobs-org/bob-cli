@@ -106,12 +106,16 @@ fn first_sync_creates_events_meet_and_links() {
         "{note}"
     );
 
-    // Interview ended before sync: In Progress under a closed MEET.
+    // Interview ended before sync: born done under a closed MEET.
     let interview = rows
         .iter()
         .find(|row| row.contains("Product interview"))
         .expect("interview row");
-    assert!(interview.starts_with("- [/] #task"), "{interview}");
+    assert!(interview.starts_with("- [x] #task"), "{interview}");
+    assert!(
+        interview.contains("  [completion:: 2026-10-30] ^product-interview"),
+        "{interview}"
+    );
     assert!(interview.contains("[root:: job]"), "{interview}");
     assert!(interview.contains("[type:: MEET]"), "{interview}");
     assert!(interview.contains("[📹]("), "{interview}");
@@ -144,7 +148,7 @@ fn first_sync_creates_events_meet_and_links() {
         "{pomodoros}"
     );
     assert!(
-        pomodoros.contains("\t- 🍅 [[#^product-interview]]"),
+        pomodoros.contains("\t- 🍅 ~~[[#^product-interview]]~~"),
         "{pomodoros}"
     );
     assert!(pomodoros.contains("- [ ] () — MEET"), "{pomodoros}");
@@ -477,16 +481,119 @@ fn past_day_gets_closed_meet_entries() {
         "past days gain closed MEET entries:\n{note}"
     );
     assert!(
-        note.lines().any(|line| line.starts_with("- [/] #task")),
+        note.lines().any(|line| {
+            line.starts_with("- [x] #task")
+                && line.contains("[completion:: 2026-10-29]")
+        }),
         "{note}"
     );
-    assert!(note.contains("\t- 🍅 [[#^yesterday-standup]]"), "{note}");
+    assert!(
+        note.contains("\t- 🍅 ~~[[#^yesterday-standup]]~~"),
+        "{note}"
+    );
     // Today's note is untouched.
     assert!(
         !today_note(&env).contains("## Events"),
         "{}",
         today_note(&env)
     );
+}
+
+#[test]
+fn past_completed_row_stays_syncable_and_reconcile_stable() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-past-rootless");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    let event = |summary: &str| {
+        clock_event(
+            "rootless-past",
+            summary,
+            "2026-10-30T08:15:00-04:00",
+            "2026-10-30T08:30:00-04:00",
+        )
+    };
+    fake.events_json(&clock_envelope(vec![event("Rootless past")]));
+
+    let first = sync_at(&env, &fake, &[], "2026-10-30 11:06:00");
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let first_note = today_note(&env);
+    let first_row = row_for(&first_note, "^rootless-past");
+    assert!(first_row.starts_with("- [x] #task"), "{first_row}");
+    assert!(
+        first_row.contains("  [completion:: 2026-10-30] ^rootless-past"),
+        "{first_row}"
+    );
+    assert!(first_row.contains("[root:: meet]"), "{first_row}");
+    let closed_link = "\t- 🍅 ~~[[#^rootless-past]]~~";
+    assert!(first_note.contains(closed_link), "{first_note}");
+
+    let rerun = sync_at(&env, &fake, &[], "2026-10-30 11:07:00");
+    assert_eq!(rerun.status.code(), Some(0), "{}", stderr(&rerun));
+    let rerun_notices = format!("{}{}", stdout(&rerun), stderr(&rerun));
+    assert!(!rerun_notices.contains("kept_edit"), "{rerun_notices}");
+    assert!(
+        !rerun_notices.contains("kept your edit to badges"),
+        "{rerun_notices}"
+    );
+    let rerun_note = today_note(&env);
+    assert_eq!(row_for(&rerun_note, "^rootless-past"), first_row);
+
+    fake.events_json(&clock_envelope(vec![event("Rootless past revised")]));
+    let title_update = sync_at(&env, &fake, &[], "2026-10-30 11:08:00");
+    assert_eq!(
+        title_update.status.code(),
+        Some(0),
+        "{}",
+        stderr(&title_update)
+    );
+    let before_reconcile = today_note(&env);
+    let updated_row = row_for(&before_reconcile, "^rootless-past");
+    assert!(
+        updated_row.contains("Rootless past revised"),
+        "{updated_row}"
+    );
+    assert!(
+        updated_row.contains("  [completion:: 2026-10-30] ^rootless-past"),
+        "{updated_row}"
+    );
+    assert!(
+        updated_row.starts_with(
+            "- [x] #task **0815-0830** Rootless past revised [📅]("
+        ),
+        "{updated_row}"
+    );
+    assert!(before_reconcile.contains(closed_link), "{before_reconcile}");
+
+    let before_event_rows: Vec<&str> = before_reconcile
+        .split("## Pomodoros")
+        .next()
+        .expect("Events section")
+        .lines()
+        .filter(|line| line.starts_with("- "))
+        .collect();
+    let before_closed_link = before_reconcile
+        .lines()
+        .find(|line| line.contains("~~[[#^rootless-past]]~~"))
+        .expect("closed MEET link")
+        .to_string();
+    let reconcile =
+        run_bob(&env, &["task", "reconcile"], "2026-10-30 11:09:00");
+    assert_eq!(reconcile.status.code(), Some(0), "{}", stderr(&reconcile));
+    let after_reconcile = today_note(&env);
+    let after_event_rows: Vec<&str> = after_reconcile
+        .split("## Pomodoros")
+        .next()
+        .expect("Events section")
+        .lines()
+        .filter(|line| line.starts_with("- "))
+        .collect();
+    let after_closed_link = after_reconcile
+        .lines()
+        .find(|line| line.contains("~~[[#^rootless-past]]~~"))
+        .expect("closed MEET link")
+        .to_string();
+    assert_eq!(after_event_rows, before_event_rows);
+    assert_eq!(after_closed_link, before_closed_link);
 }
 
 #[test]
@@ -802,7 +909,7 @@ fn reconcile_keeps_linked_rows() {
     let before = today_note(&env);
     let tomato = before
         .lines()
-        .find(|line| line.contains("🍅 [[#^product-interview]]"))
+        .find(|line| line.contains("🍅 ~~[[#^product-interview]]~~"))
         .expect("tomato link")
         .to_string();
     let output = run_bob(&env, &["task", "reconcile"], "2026-10-30 12:00:00");
@@ -813,7 +920,7 @@ fn reconcile_keeps_linked_rows() {
         .find(|line| line.contains("^product-interview"))
         .expect("interview row");
     assert!(
-        interview.starts_with("- [/]"),
+        interview.starts_with("- [x]"),
         "reconcile cleared the past row: {interview}"
     );
     assert!(
@@ -1857,9 +1964,10 @@ fn buffered_spans_drive_meet_phases_and_clusters() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let note = today_note(&env);
 
-    // Past rows work from birth; the rows keep their meeting spans.
+    // Past rows are done from birth; the rows keep their meeting spans.
     let gym = event_row(&note, "**0800-0830**");
-    assert!(gym.starts_with("- [/] #task"), "{gym}");
+    assert!(gym.starts_with("- [x] #task"), "{gym}");
+    assert!(gym.contains("[completion:: 2026-10-30]"), "{gym}");
     assert!(gym.contains(" [buffer:: +15m]"), "{gym}");
     let lunch = event_row(&note, "**1200-1300**");
     assert!(lunch.starts_with("- [*] #task"), "{lunch}");
@@ -1874,8 +1982,14 @@ fn buffered_spans_drive_meet_phases_and_clusters() {
         pomodoros.contains("- [x] (**1000-1115** [t:: 75m]) — MEET"),
         "bridged past cluster:\n{pomodoros}"
     );
-    assert!(pomodoros.contains("\t- 🍅 [[#^standup]]"), "{pomodoros}");
-    assert!(pomodoros.contains("\t- 🍅 [[#^planning]]"), "{pomodoros}");
+    assert!(
+        pomodoros.contains("\t- 🍅 ~~[[#^standup]]~~"),
+        "{pomodoros}"
+    );
+    assert!(
+        pomodoros.contains("\t- 🍅 ~~[[#^planning]]~~"),
+        "{pomodoros}"
+    );
     // Mixed trackedness splits the morning pair despite the overlap.
     assert!(
         pomodoros.contains("- [x] (**0800-0845** [t:: 45m]) — MEET"),
@@ -1975,12 +2089,14 @@ fn descriptions_become_bullets_in_every_phase() {
     let note = today_note(&env);
 
     // The motivating case: the directive line still drives canonical `#off`
-    // and `[root:: love]`, and the human line becomes the bullet.
+    // and `[root:: love]`, the ended row is complete, and the human line
+    // becomes its bullet.
     let swings = note
         .lines()
         .find(|line| line.contains("^swings"))
         .expect("swings row");
-    assert!(swings.starts_with("- [/] #task"), "{swings}");
+    assert!(swings.starts_with("- [x] #task"), "{swings}");
+    assert!(swings.contains("[completion:: 2026-10-30]"), "{swings}");
     assert!(swings.contains(" #off [root:: love]"), "{swings}");
     // The past row works from birth under a closed MEET.
     assert!(note.contains("\t- And retainers!"), "{note}");

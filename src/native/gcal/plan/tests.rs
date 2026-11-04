@@ -889,7 +889,10 @@ fn past_and_future_share_closed_then_placeholder() {
         pomodoros.contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
         "{pomodoros}"
     );
-    assert!(pomodoros.contains("\t- 🍅 [[#^standup]]"), "{pomodoros}");
+    assert!(
+        pomodoros.contains("\t- 🍅 ~~[[#^standup]]~~"),
+        "{pomodoros}"
+    );
     assert!(pomodoros.contains("- [ ] () — MEET"), "{pomodoros}");
     assert!(pomodoros.contains("\t- [[#^dentist]]"), "{pomodoros}");
     let closed_at = pomodoros.find("(**0800-0830**").expect("closed");
@@ -900,7 +903,11 @@ fn past_and_future_share_closed_then_placeholder() {
         .lines()
         .find(|line| line.contains("^standup"))
         .expect("standup");
-    assert!(standup.starts_with("- [/] #task"), "{standup}");
+    assert!(standup.starts_with("- [x] #task"), "{standup}");
+    assert!(
+        standup.contains("  [completion:: 2026-10-30] ^standup"),
+        "{standup}"
+    );
     let dentist = plan
         .contents
         .lines()
@@ -947,9 +954,9 @@ fn past_clusters_touching_meetings_and_splits_on_a_gap() {
     let first = pomodoros.find("(**0800-0900**").expect("first");
     let second = pomodoros.find("(**1000-1030**").expect("second");
     assert!(first < second, "{pomodoros}");
-    assert!(pomodoros.contains("\t- 🍅 [[#^one]]"), "{pomodoros}");
-    assert!(pomodoros.contains("\t- 🍅 [[#^two]]"), "{pomodoros}");
-    assert!(pomodoros.contains("\t- 🍅 [[#^three]]"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- 🍅 ~~[[#^one]]~~"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- 🍅 ~~[[#^two]]~~"), "{pomodoros}");
+    assert!(pomodoros.contains("\t- 🍅 ~~[[#^three]]~~"), "{pomodoros}");
     assert_eq!(plan.pomodoro_entries.len(), 2);
 }
 
@@ -1102,6 +1109,11 @@ fn one_open_never_leaves_two_open_meets() {
             .contents
             .contains("- [ ] (**1400-1500** [t:: 60m]) — MEET"),
         "{}",
+        current_and_future.contents
+    );
+    assert!(
+        !current_and_future.contents.contains("[completion::"),
+        "Current and Future rows stay incomplete:\n{}",
         current_and_future.contents
     );
     assert!(
@@ -1282,7 +1294,11 @@ fn upgraded_ended_maybe_gets_closed_meet() {
         .lines()
         .find(|line| line.contains("^standup"))
         .expect("standup");
-    assert!(standup.starts_with("- [/] #task"), "{standup}");
+    assert!(standup.starts_with("- [x] #task"), "{standup}");
+    assert!(
+        standup.contains("  [completion:: 2026-10-30] ^standup"),
+        "{standup}"
+    );
     assert!(
         plan.contents
             .contains("- [x] (**0800-0830** [t:: 30m]) — MEET"),
@@ -1290,7 +1306,7 @@ fn upgraded_ended_maybe_gets_closed_meet() {
         plan.contents
     );
     assert!(
-        plan.contents.contains("\t- 🍅 [[#^standup]]"),
+        plan.contents.contains("\t- 🍅 ~~[[#^standup]]~~"),
         "{}",
         plan.contents
     );

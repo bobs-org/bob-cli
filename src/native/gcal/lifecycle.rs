@@ -154,19 +154,30 @@ pub(crate) fn split_row_spans(line: &str) -> Option<RowSpans> {
     })
 }
 
-/// Split the trailing `[root::]` / `[type::]` / `^block` shell off a
-/// task row. Context rows keep no suffix.
+/// Split the trailing `[root::]` / `[type::]` / `[completion::]` / `^block`
+/// shell off a task row. Context rows keep no suffix.
 fn split_suffix(middle: &str, task: bool) -> (&str, String) {
     if !task {
         return (middle, String::new());
     }
-    for marker in [" [root::", " [type::"] {
-        if let Some(at) = middle.find(marker) {
-            return (
-                middle.get(..at).unwrap_or(middle),
-                middle.get(at..).unwrap_or("").to_string(),
-            );
+    let marker_at = ["[root::", "[type::", "[completion::"]
+        .into_iter()
+        .filter_map(|marker| {
+            middle.match_indices(marker).find_map(|(at, _)| {
+                (at > 0 && middle.as_bytes()[at - 1].is_ascii_whitespace())
+                    .then_some(at)
+            })
+        })
+        .min();
+    if let Some(at) = marker_at {
+        let mut start = at;
+        while start > 0 && middle.as_bytes()[start - 1].is_ascii_whitespace() {
+            start -= 1;
         }
+        return (
+            middle.get(..start).unwrap_or(middle),
+            middle.get(start..).unwrap_or("").to_string(),
+        );
     }
     if let Some(caret) = middle.rfind('^') {
         let id = middle.get(caret + 1..).unwrap_or("");
@@ -477,6 +488,26 @@ mod tests {
         assert_eq!(context.title, "School holiday");
         assert_eq!(context.qualifier.as_deref(), Some("day 2 of 2"));
         assert_eq!(context.suffix, "");
+    }
+
+    #[test]
+    fn completion_fields_stay_in_the_vault_owned_suffix() {
+        let cases = [
+            (
+                "- [x] #task **0815-0830** Swings! [📅](https://cal.example/swings) #off  [completion:: 2026-11-04] ^swings",
+                "- [x] #task **0815-0830** Swings! [📅](https://cal.example/swings) #off ^swings",
+            ),
+            (
+                "- [x] #task **0800-0830** Product interview [📅](https://cal.example/interview) [root:: job] [type:: MEET]  [completion:: 2026-10-30] ^product-interview",
+                "- [x] #task **0800-0830** Product interview [📅](https://cal.example/interview) [root:: job] [type:: MEET] ^product-interview",
+            ),
+        ];
+        for (completed, without_completion) in cases {
+            let parsed = spans(completed);
+            let baseline = spans(without_completion);
+            assert_eq!(parsed.hashes(), baseline.hashes(), "{completed}");
+            assert_eq!(parsed.rebuild(), completed);
+        }
     }
 
     #[test]

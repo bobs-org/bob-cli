@@ -363,7 +363,7 @@ fn deleted_past_row_is_left_alone_and_reported_once() {
         .find(|line| line.contains("^product-interview"))
         .expect("interview")
         .to_string();
-    assert!(interview.starts_with("- [/]"), "{interview}");
+    assert!(interview.starts_with("- [x]"), "{interview}");
 
     let mut events = base_events();
     events.retain(|event| event["id"] != "interview");
@@ -1050,7 +1050,7 @@ fn off_clock_tag_flip_on_worked_row_is_kept_once() {
     let env = GcalEnv::new("bob-cli-gcal-lifecycle-untracked-worked");
     prepare(&env);
     let fake = FakeGog::new(&env, "fake-gog");
-    // Past dentist is worked from birth ([/] + closed MEET link).
+    // Past dentist is done from birth ([x] + closed MEET link).
     let mut past = dentist_event(&serde_json::Map::new());
     past["start"] =
         serde_json::json!({"dateTime": "2026-10-30T08:00:00-04:00"});
@@ -1058,7 +1058,7 @@ fn off_clock_tag_flip_on_worked_row_is_kept_once() {
     fake.events_json(&events_envelope(vec![past]));
     assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
     let before = dentist_row(&today_note(&env));
-    assert!(before.starts_with("- [/]"), "{before}");
+    assert!(before.starts_with("- [x]"), "{before}");
     assert!(!before.contains("#untracked"), "{before}");
 
     // Google adds the token after the session closed: report once, leave
@@ -1077,7 +1077,8 @@ fn off_clock_tag_flip_on_worked_row_is_kept_once() {
     let output = sync_output(&env, &fake, &[]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let row = dentist_row(&today_note(&env));
-    assert!(!row.contains("#untracked"), "worked row kept:\n{row}");
+    assert!(row.starts_with("- [x]"), "done row kept:\n{row}");
+    assert!(!row.contains("#untracked"), "done row kept:\n{row}");
     let combined = format!("{}{}", stdout(&output), stderr(&output));
     assert!(
         combined.contains("add #off by hand to follow Google"),
@@ -1123,7 +1124,7 @@ fn off_to_on_tag_flip_on_worked_row_is_kept_once() {
     let output = sync_output(&env, &fake, &[]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let row = dentist_row(&today_note(&env));
-    assert!(row.starts_with("- [/]"), "worked row stays: {row}");
+    assert!(row.starts_with("- [x]"), "done row stays: {row}");
     assert!(
         row.contains(" #off [root:: body]"),
         "Google flip is kept: {row}"

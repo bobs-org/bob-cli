@@ -100,6 +100,8 @@ pub(crate) struct PlannedOccurrence {
 }
 
 /// How a created Event Task is filed under a MEET Pomodoro.
+/// Past rows are born done on the note's day with a struck 🍅 link;
+/// Current and Future rows start Next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LinkPhase {
     Past,
@@ -341,7 +343,7 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
         // Context rows without a 📅 URL match by their full rendered
         // text, so URL-less events stay idempotent.
         let text_match = if !occurrence.task && occurrence.url().is_none() {
-            Some(render_occurrence(occurrence, ""))
+            Some(render_occurrence(occurrence, "", note_day(input)))
         } else {
             None
         };
@@ -479,7 +481,8 @@ pub(crate) fn plan_with_clock<C: ClockLookup + ?Sized>(
                 } else {
                     String::new()
                 };
-                let text = render_occurrence(occurrence, &block_id);
+                let text =
+                    render_occurrence(occurrence, &block_id, note_day(input));
                 working.ensure_events_section();
                 let slot = insert_slot(
                     &working,
@@ -1143,7 +1146,8 @@ fn upgrade_context_row(
         &used.iter().map(String::as_str).collect(),
     );
     used.insert(block_id.clone());
-    working.lines[line_index] = render_occurrence(occurrence, &block_id);
+    working.lines[line_index] =
+        render_occurrence(occurrence, &block_id, note_day(input));
     // The bullets land directly under the upgraded row, above any notes
     // Bryan already has there.
     if let Some(description) = occurrence.description.as_ref() {
@@ -1476,9 +1480,13 @@ fn row_kind(task: bool) -> String {
     }
 }
 
-fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
+fn render_occurrence(
+    occurrence: &PlannedOccurrence,
+    block_id: &str,
+    completion_day: NaiveDate,
+) -> String {
     if occurrence.task {
-        render_task_row(
+        let row = render_task_row(
             &super::render::TaskRowInput {
                 time_label: &occurrence.time_label,
                 title: &occurrence.title,
@@ -1492,7 +1500,15 @@ fn render_occurrence(occurrence: &PlannedOccurrence, block_id: &str) -> String {
                 status: status_for_phase(occurrence.link_phase),
             },
             block_id,
-        )
+        );
+        if occurrence.link_phase == Some(LinkPhase::Past) {
+            crate::native::task_complete::tree::add_or_replace_completion_field(
+                &row,
+                &completion_day.format("%Y-%m-%d").to_string(),
+            )
+        } else {
+            row
+        }
     } else {
         render_context_row(&ContextRowInput {
             time_label: &occurrence.time_label,
@@ -2481,7 +2497,7 @@ fn format_meet_span(
 
 fn status_for_phase(phase: Option<LinkPhase>) -> char {
     match phase {
-        Some(LinkPhase::Past) => '/',
+        Some(LinkPhase::Past) => 'x',
         Some(LinkPhase::Current | LinkPhase::Future) => '*',
         None => ' ',
     }
@@ -2592,7 +2608,7 @@ fn append_links(
     let mut added = 0;
     for link in links {
         let body = if tomato {
-            format!("🍅 [[#^{}]]", link.block_id)
+            format!("🍅 ~~[[#^{}]]~~", link.block_id)
         } else {
             format!("[[#^{}]]", link.block_id)
         };
