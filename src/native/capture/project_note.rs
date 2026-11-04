@@ -295,8 +295,39 @@ pub(super) fn plan_project_note_item(
                     .map(capture_active_tasks::ledger_from_contents);
                 let parent_lines: Vec<&str> = parent_contents.lines().collect();
                 for (pos, resolved) in resolved_moves.iter().enumerate() {
+                    let is_choice = matches!(
+                        resolved.via,
+                        crate::native::capture_language::MoveVia::Choice
+                    );
                     if resolved.sigil == ':' {
                         moved_already_extra += 1;
+                        continue;
+                    }
+                    if is_choice {
+                        // Move-choice rows are never offered as successors,
+                        // whatever their sigil. Fold live-linked and hidden
+                        // rows for accurate counts, then skip offering.
+                        if offer_blocked {
+                            continue;
+                        }
+                        let live_key =
+                            (route.to_string(), resolved.block_id.clone());
+                        if day_ledger.as_ref().is_some_and(|ledger| {
+                            ledger.owners.contains_key(&live_key)
+                        }) {
+                            moved_already_extra += 1;
+                            continue;
+                        }
+                        let hidden = parent_lines
+                            .get(resolved.root.line.saturating_sub(1))
+                            .is_some_and(|line| {
+                                crate::native::capture_dependency_tasks::has_hide_tag(
+                                    line,
+                                )
+                            });
+                        if hidden {
+                            moved_hidden_extra += 1;
+                        }
                         continue;
                     }
                     if offer_blocked {
@@ -953,6 +984,10 @@ pub(super) fn plan_project_note_item(
             task.sigil == ':' && task.planned.is_none() && task.link.is_none()
         }) {
             task.not_linked = Some("project_schedule".to_string());
+            let id_added = resolved_moves
+                .iter()
+                .find(|resolved| resolved.block_id == task.block_id)
+                .and_then(|resolved| resolved.id_added.clone());
             task.detail = super::move_consequence::describe(
                 &super::move_consequence::Outcome {
                     sigil: task.sigil,
@@ -963,7 +998,7 @@ pub(super) fn plan_project_note_item(
                     own_scheduled: None,
                     project_starts: scheduled.as_deref().map(display_move_date),
                     guard: super::move_consequence::LinkGuard::Link,
-                    id_added: None,
+                    id_added,
                 },
             );
         }
@@ -1218,6 +1253,7 @@ pub(super) fn plan_project_note_item(
                         .first()
                         .cloned()
                         .unwrap_or_else(|| "blocked".to_string());
+                    let id_added = resolved.id_added.clone();
                     let entry = &mut execution.moved_tasks[moved_idx];
                     entry.not_linked = Some(reason);
                     entry.detail = super::move_consequence::describe(
@@ -1239,7 +1275,7 @@ pub(super) fn plan_project_note_item(
                                             "blocked".to_string()
                                         }),
                                 },
-                            id_added: None,
+                            id_added,
                         },
                     );
                     // Sync day for subsequent ops; consumption may have
@@ -1334,6 +1370,7 @@ pub(super) fn plan_project_note_item(
                     .filter(|date| {
                         scheduled_field(&final_task_line).as_ref() != Some(date)
                     });
+                let id_added = resolved.id_added.clone();
                 let detail = super::move_consequence::describe(
                     &super::move_consequence::Outcome {
                         sigil: execution.moved_tasks[moved_idx].sigil,
@@ -1355,7 +1392,7 @@ pub(super) fn plan_project_note_item(
                         } else {
                             super::move_consequence::LinkGuard::Link
                         },
-                        id_added: None,
+                        id_added,
                     },
                 );
                 {
@@ -1597,6 +1634,10 @@ pub(super) fn plan_project_note_item(
                         &dest_route_refresh,
                         &task.block_id,
                     );
+                    let id_added = resolved_moves
+                        .iter()
+                        .find(|resolved| resolved.block_id == task.block_id)
+                        .and_then(|resolved| resolved.id_added.clone());
                     task.detail = super::move_consequence::describe(
                         &super::move_consequence::Outcome {
                             sigil: task.sigil,
@@ -1610,7 +1651,7 @@ pub(super) fn plan_project_note_item(
                             own_scheduled: None,
                             project_starts: None,
                             guard: super::move_consequence::LinkGuard::Link,
-                            id_added: None,
+                            id_added,
                         },
                     );
                 }
@@ -2037,6 +2078,8 @@ struct ResolvedProjectMove {
     draft_range: (usize, usize),
     root: MovableRoot,
     own_scheduled: Option<String>,
+    via: crate::native::capture_language::MoveVia,
+    id_added: Option<String>,
 }
 
 fn project_note_move_hint(
@@ -2163,6 +2206,12 @@ fn resolve_project_note_moves(
                 "move_task_blocked_birth",
             ));
         }
+        let via = movement.via;
+        let id_added = if movement.minted {
+            Some(block_id.to_string())
+        } else {
+            None
+        };
         resolved.push(ResolvedProjectMove {
             source_index,
             sigil: movement.sigil,
@@ -2170,6 +2219,8 @@ fn resolve_project_note_moves(
             draft_range: movement.range,
             root,
             own_scheduled,
+            via,
+            id_added,
         });
     }
     Ok(resolved)
@@ -2356,10 +2407,18 @@ fn execute_project_note_moves(
                 own_scheduled: authored.own_scheduled.clone(),
                 project_starts: None,
                 guard: super::move_consequence::LinkGuard::Link,
-                id_added: None,
+                id_added: authored.id_added.clone(),
             },
         );
         let source = display_project_path(&movement.source_path);
+        let via = match authored.via {
+            crate::native::capture_language::MoveVia::Choice => {
+                "choice".to_string()
+            }
+            crate::native::capture_language::MoveVia::Bullet => {
+                "bullet".to_string()
+            }
+        };
         moved_tasks.push(ProjectNoteMovedTask {
             sigil: authored.sigil,
             draft_range: authored.draft_range,
@@ -2387,6 +2446,7 @@ fn execute_project_note_moves(
             link: None,
             not_linked: None,
             detail,
+            via,
         });
         planner.record_moved_origin(
             source_path,

@@ -703,6 +703,10 @@ pub(crate) struct MoveBullet {
     /// splices synthetic `Choice` moves.
     #[serde(skip)]
     pub(crate) via: MoveVia,
+    /// True when this `Choice` move minted its block ID into the staged
+    /// parent during `cli-execute`. Authored bullets never mint.
+    #[serde(skip)]
+    pub(crate) minted: bool,
 }
 
 /// How a move bullet was authored.

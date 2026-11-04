@@ -113,7 +113,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         .iter()
         .map(|item| item.template_row.clone())
         .collect();
-    let parsed_items = parsed_draft.items;
+    let mut parsed_items = parsed_draft.items;
     let mut warnings: Vec<CaptureWarning> = parsed_draft
         .warnings
         .into_iter()
@@ -148,6 +148,20 @@ pub(super) fn plan_capture_batch_with_config_path(
     // Per-item day text for keep-moving group invalidation (KM21); empty
     // until some item reports a keep-moving offer.
     let mut keep_moving_trace = KeepMovingTrace::default();
+
+    // Move-choice `cli-execute` pre-pass: build slots from the pre-item
+    // staged parent, enforce refusals, mint ID-less picks into the staged
+    // parent, and splice synthetic `via: Choice` moves at the `^^` slot.
+    // The final report is precomputed here; item planning executes the
+    // spliced moves, so no post-loop rebuild is needed.
+    let move_choice_report = super::move_choice::prepare_move_choice(
+        request,
+        &mut parsed_items,
+        &mut planner,
+        today,
+        &mut dependency_ctx,
+        &mut warnings,
+    )?;
 
     let mut item_start = 0;
     while item_start < parsed_items.len() {
@@ -305,16 +319,9 @@ pub(super) fn plan_capture_batch_with_config_path(
         &keep_moving_trace,
         &all_project_moves,
     );
-    // Move-choice report (`cli-report`): built from the staged parent,
-    // before pull-in and inbox-route choice refusals. Write-free.
-    let move_choice = super::move_choice::plan_batch_move_choice(
-        request,
-        &parsed_items,
-        &mut planner,
-        today,
-        &mut dependency_ctx,
-        &mut warnings,
-    )?;
+    // Move-choice report was precomputed before item planning (with mint
+    // and splice); reuse it before pull-in and inbox-route refusals.
+    let move_choice = move_choice_report;
     let inbox_route = detect_inbox_routes(
         &planner,
         &request.bob_dir,

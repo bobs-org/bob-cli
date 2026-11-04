@@ -1128,8 +1128,11 @@ pub(crate) fn choose_hint() -> &'static str {
 ///
 /// Returns the `move_choice` report for successes. Refusals return a
 /// `CaptureError` whose `extra` carries the same report so clients can
-/// reopen the card. Answered runs return `move_choice_unavailable` until
-/// `cli-execute` replaces it.
+/// reopen the card.
+///
+/// Kept for direct report callers; the batch pre-pass is
+/// `prepare_move_choice`, which also mints and splices.
+#[allow(dead_code)]
 pub(super) fn plan_batch_move_choice(
     request: &super::cli::CaptureRequest,
     parsed_items: &[crate::native::capture_language::ParsedCaptureItem],
@@ -1296,34 +1299,15 @@ pub(super) fn plan_batch_move_choice(
             }
         }
 
-        // Answered runs still refuse until cli-execute.
-        if request.move_in.is_some() {
-            apply_answers(&mut slot, &answers);
-            slot.answered = true;
-            let report = MoveChoiceReport::with_slots(vec![slot.clone()]);
-            let mut extra = serde_json::Map::new();
-            extra.insert(
-                "move_choice".to_string(),
-                serde_json::to_value(&report).expect("serialize move_choice"),
-            );
-            return Err(CaptureError {
-                kind: CaptureErrorKind::Usage,
-                message: "choosing parent tasks with - ^^ is not available in this build yet".to_string(),
-                code: Some("move_choice_unavailable".to_string()),
-                extra: Some(extra),
-                human_unblocked: Vec::new(),
-                human_keep_moving_folds: Vec::new(),
-                human_relation_groups: Vec::new(),
-                human_relation_held: Vec::new(),
-                human_relation_check: None,
-                human_note_pull_rows: Vec::new(),
-                human_note_pull_groups: Vec::new(),
-                typed: None,
-            });
-        }
-
-        // Unanswered dry run: planned as none.
+        // Answered runs: mark answered (explicit `none` has no picks but
+        // is still answered) and report with moved/linked counts.
+        // Execution (mint, splice, offers, `via`) happens in `cli-execute`
+        // via `prepare_move_choice` before item planning; this report path
+        // is for callers that plan without that pre-pass.
         apply_answers(&mut slot, &answers);
+        if request.move_in.is_some() {
+            slot.answered = true;
+        }
         finished_slots.push(slot);
     }
 
@@ -1349,14 +1333,354 @@ fn apply_answers(slot: &mut MoveChoiceSlot, answers: &[Option<char>]) {
     }
     slot.answered = answers.iter().any(|a| a.is_some());
     // Unanswered dry run stays answered=false with zero counts.
-    // Answered-none also has zero counts but answered is set by resolve?
-    // `resolve_picks` for None returns all None; keep answered=false.
-    // For explicit `-m none`, resolve returns all None too; mark answered.
-    // The caller distinguishes via request.move_in, but for the report
-    // mark answered when the flag was present. This helper is only called
-    // for success (unanswered dry) and for error payloads where the caller
-    // already cloned; keep the simple rule here and let the unavailable
-    // branch set answered=true explicitly.
+    // Explicit `-m none` also resolves to all None; the caller marks
+    // answered=true when the flag was present.
     slot.moved_count = moved;
     slot.linked_count = linked;
+}
+
+/// `cli-execute` pre-pass: build slots from the pre-item staged parent,
+/// enforce the §3.7 refusal order, mint IDs for picked ID-less rows into the
+/// staged parent, and splice picks into the item's sub-bullets at the `^^`
+/// slot in parent document order.
+///
+/// Returns the final `move_choice` report (answered slots carry answers and
+/// moved/linked counts). Mutates `parsed_items` (synthetic `via: Choice`
+/// moves replace the `^^` marker) and stages parent mint edits into
+/// `planner`. Refusals return before any item planning, write-free.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepare_move_choice(
+    request: &super::cli::CaptureRequest,
+    parsed_items: &mut Vec<crate::native::capture_language::ParsedCaptureItem>,
+    planner: &mut super::batch::CaptureBatchPlanner,
+    today: NaiveDate,
+    dependency_ctx: &mut super::dependencies::DependencyContext,
+    warnings: &mut Vec<super::output::CaptureWarning>,
+) -> Result<MoveChoiceReport, super::output::CaptureError> {
+    use super::output::{CaptureError, CaptureErrorKind};
+    let locks = collect_move_locks(&request.raw_text, parsed_items);
+
+    // Build one slot per `- ^^` item from the pre-item staged parent.
+    let mut built: Vec<(usize, MoveChoiceSlot)> = Vec::new();
+    for parsed_item in parsed_items.iter() {
+        let has_choice = parsed_item
+            .parsed
+            .sub_bullets
+            .iter()
+            .any(|b| b.move_choice.is_some());
+        if !has_choice {
+            continue;
+        }
+        let is_project_note = matches!(
+            parsed_item.parsed.kind,
+            crate::native::capture_language::CaptureKind::ProjectNote { .. }
+        );
+        if !is_project_note {
+            continue;
+        }
+        if let Some(slot) = build_slot(
+            &request.bob_dir,
+            &request.raw_text,
+            &parsed_item.parsed,
+            parsed_item.index,
+            planner,
+            today,
+            &locks,
+            dependency_ctx,
+        )? {
+            built.push((parsed_item.index, slot));
+        }
+    }
+
+    if built.is_empty() {
+        if request.move_in.is_some() {
+            let report = MoveChoiceReport::empty();
+            let mut extra = serde_json::Map::new();
+            extra.insert(
+                "move_choice".to_string(),
+                serde_json::to_value(&report).expect("serialize move_choice"),
+            );
+            return Err(CaptureError {
+                kind: CaptureErrorKind::Usage,
+                message: "--move-in answers no - ^^ move choice in this draft"
+                    .to_string(),
+                code: Some("move_choice_unasked".to_string()),
+                extra: Some(extra),
+                human_unblocked: Vec::new(),
+                human_keep_moving_folds: Vec::new(),
+                human_relation_groups: Vec::new(),
+                human_relation_held: Vec::new(),
+                human_relation_check: None,
+                human_note_pull_rows: Vec::new(),
+                human_note_pull_groups: Vec::new(),
+                typed: None,
+            });
+        }
+        return Ok(MoveChoiceReport::empty());
+    }
+
+    let mut finished_slots: Vec<MoveChoiceSlot> = Vec::new();
+    // Process in item order; the first refusal wins. Mint and splice each
+    // answered slot before the next so shared parents see earlier mints.
+    built.sort_by_key(|(index, _)| *index);
+    for (_, mut slot) in built {
+        let selectable = slot.rows.iter().any(|row| {
+            row.locked.is_none()
+                && row.disabled_reason.is_none()
+                && !row.choices.is_empty()
+        });
+        let no_selectable = slot.rows.is_empty() || !selectable;
+        if no_selectable {
+            if request.dry_run {
+                warnings.push(
+                    format!(
+                        "no selectable tasks in {} for - ^^ on line {}",
+                        slot.parent, slot.item_line
+                    )
+                    .into(),
+                );
+                slot.answered = false;
+                slot.moved_count = 0;
+                slot.linked_count = 0;
+                finished_slots.push(slot);
+                continue;
+            }
+            let report = MoveChoiceReport::with_slots(vec![slot.clone()]);
+            let mut extra = serde_json::Map::new();
+            extra.insert(
+                "move_choice".to_string(),
+                serde_json::to_value(&report).expect("serialize move_choice"),
+            );
+            return Err(CaptureError {
+                kind: CaptureErrorKind::Io,
+                message: format!(
+                    "no selectable tasks in {} for - ^^ on line {}",
+                    slot.parent, slot.item_line
+                ),
+                code: Some("move_choice_empty".to_string()),
+                extra: Some(extra),
+                human_unblocked: Vec::new(),
+                human_keep_moving_folds: Vec::new(),
+                human_relation_groups: Vec::new(),
+                human_relation_held: Vec::new(),
+                human_relation_check: None,
+                human_note_pull_rows: Vec::new(),
+                human_note_pull_groups: Vec::new(),
+                typed: None,
+            });
+        }
+
+        let answers =
+            resolve_picks(&slot, request.move_in.as_ref(), request.dry_run)?;
+        if slot.name_needs_link && request.move_in.is_some() {
+            let has_linking_pick =
+                answers.iter().enumerate().any(|(idx, ans)| {
+                    ans == &Some(':')
+                        && slot.rows[idx]
+                            .choices
+                            .iter()
+                            .any(|c| c.sigil == ":" && c.adds_link)
+                });
+            if !has_linking_pick {
+                let pomodoro =
+                    slot.pomodoro_name.as_deref().unwrap_or_default();
+                let report = MoveChoiceReport::with_slots(vec![{
+                    let mut s = slot.clone();
+                    apply_answers(&mut s, &answers);
+                    s
+                }]);
+                let mut extra = serde_json::Map::new();
+                extra.insert(
+                    "move_choice".to_string(),
+                    serde_json::to_value(&report)
+                        .expect("serialize move_choice"),
+                );
+                return Err(CaptureError {
+                    kind: CaptureErrorKind::Usage,
+                    message: crate::native::capture_language::unused_project_note_pomodoro_error(pomodoro),
+                    code: Some("unused_project_note_pomodoro".to_string()),
+                    extra: Some(extra),
+                    human_unblocked: Vec::new(),
+                    human_keep_moving_folds: Vec::new(),
+                    human_relation_groups: Vec::new(),
+                    human_relation_held: Vec::new(),
+                    human_relation_check: None,
+                    human_note_pull_rows: Vec::new(),
+                    human_note_pull_groups: Vec::new(),
+                    typed: None,
+                });
+            }
+        }
+
+        if request.move_in.is_none() {
+            // Unanswered dry run: planned as none, no mint or splice.
+            apply_answers(&mut slot, &answers);
+            finished_slots.push(slot);
+            continue;
+        }
+
+        // Answered: mint ID-less picks into the staged parent, then splice
+        // synthetic `via: Choice` moves at the `^^` slot in parent order.
+        mint_and_splice(request, &slot, &answers, parsed_items, planner)?;
+        apply_answers(&mut slot, &answers);
+        slot.answered = true;
+        finished_slots.push(slot);
+    }
+
+    Ok(MoveChoiceReport::with_slots(finished_slots))
+}
+
+/// Mint IDs for picked ID-less rows into the staged parent and splice
+/// synthetic `via: Choice` moves at the `^^` position in parent order.
+fn mint_and_splice(
+    request: &super::cli::CaptureRequest,
+    slot: &MoveChoiceSlot,
+    answers: &[Option<char>],
+    parsed_items: &mut Vec<crate::native::capture_language::ParsedCaptureItem>,
+    planner: &mut super::batch::CaptureBatchPlanner,
+) -> Result<(), super::output::CaptureError> {
+    use super::output::CaptureError;
+    // Collect picks in parent document order (slot.rows order).
+    let mut picks: Vec<(usize, char)> = Vec::new();
+    for (idx, ans) in answers.iter().enumerate() {
+        if let Some(sigil) = ans {
+            picks.push((idx, *sigil));
+        }
+    }
+    if picks.is_empty() {
+        return Ok(());
+    }
+
+    let parsed_index = slot.item - 1;
+    let parsed_item = parsed_items
+        .iter()
+        .find(|p| p.index == parsed_index)
+        .ok_or_else(|| {
+            CaptureError::io(
+                "move choice invariant failed: choice item is missing",
+            )
+        })?;
+    // Used IDs: parent IDs + new note authored IDs + prj + other mints.
+    let source_path = request.bob_dir.join(&slot.parent);
+    let parent_contents = planner.current_contents(&source_path)?.ok_or_else(|| {
+        CaptureError::io(format!(
+            "cannot create a project note under {}: note does not exist (run 'bob capture-targets' to list routable notes)",
+            slot.parent
+        ))
+    })?;
+    let settings = note_tasks::read_settings(&request.bob_dir);
+    let scan = note_tasks::scan(&parent_contents, &settings);
+    let mut used: HashSet<String> = HashSet::new();
+    for task in scan.tasks() {
+        if let Some(id) = task.block_id.as_deref() {
+            used.insert(id.to_string());
+        }
+    }
+    for sub in &parsed_item.parsed.sub_bullets {
+        if let Some(task) = sub.task_id.as_ref() {
+            used.insert(task.block_id.clone());
+        }
+        if let Some(movement) = sub.move_task.as_ref()
+            && let Some(id) = movement.block_id.as_deref()
+        {
+            used.insert(id.to_string());
+        }
+    }
+    used.insert("prj".to_string());
+
+    // Resolve final IDs in parent order, reusing the report mint when free.
+    let mut finals: HashMap<usize, (String, bool)> = HashMap::new();
+    for (row_idx, _) in &picks {
+        let row = &slot.rows[*row_idx];
+        if let Some(id) = row.block_id.as_deref() {
+            finals.insert(*row_idx, (id.to_string(), false));
+        } else {
+            let suggested = row.mint.clone();
+            let chosen = if let Some(candidate) = suggested
+                && !used.contains(&candidate)
+            {
+                candidate
+            } else {
+                let used_ref: HashSet<&str> =
+                    used.iter().map(String::as_str).collect();
+                capture_block_ids::mint_block_id(&row.text, &used_ref)
+            };
+            used.insert(chosen.clone());
+            finals.insert(*row_idx, (chosen, true));
+        }
+    }
+
+    // Stage parent mint edits for ID-less picks.
+    let mut lines: Vec<String> =
+        parent_contents.lines().map(str::to_string).collect();
+    let had_trailing_newline = parent_contents.ends_with('\n');
+    for (row_idx, _) in &picks {
+        let (final_id, is_minted) = finals.get(row_idx).expect("final");
+        if !is_minted {
+            continue;
+        }
+        let row = &slot.rows[*row_idx];
+        let line_idx = row.line.saturating_sub(1);
+        let Some(line) = lines.get_mut(line_idx) else {
+            return Err(CaptureError::io(
+                "move choice invariant failed: parent line is missing",
+            ));
+        };
+        if line.contains(&format!("^{final_id}")) {
+            continue;
+        }
+        let trimmed = line.trim_end().to_string();
+        *line = format!("{trimmed} ^{final_id}");
+    }
+    let mut staged = lines.join("\n");
+    if had_trailing_newline {
+        staged.push('\n');
+    }
+    planner.stage(&source_path, staged)?;
+
+    // Splice synthetic moves at the `^^` index in parent order.
+    let target = parsed_items
+        .iter_mut()
+        .find(|p| p.index == parsed_index)
+        .expect("choice item");
+    let choice_pos = target
+        .parsed
+        .sub_bullets
+        .iter()
+        .position(|b| b.move_choice.is_some())
+        .ok_or_else(|| {
+            CaptureError::io(
+                "move choice invariant failed: ^^ marker is missing",
+            )
+        })?;
+    let choice_range = target.parsed.sub_bullets[choice_pos]
+        .move_choice
+        .as_ref()
+        .expect("choice range")
+        .range;
+    let mut synthetics: Vec<
+        crate::native::capture_language::AuthoredSubBullet,
+    > = Vec::new();
+    for (row_idx, sigil) in picks {
+        let (final_id, is_minted) = finals.remove(&row_idx).expect("final");
+        synthetics.push(crate::native::capture_language::AuthoredSubBullet {
+            body: String::new(),
+            depth: crate::native::capture_language::AuthoredDepth::First,
+            task_id: None,
+            move_task: Some(crate::native::capture_language::MoveBullet {
+                sigil,
+                block_id: Some(final_id),
+                range: choice_range,
+                via: crate::native::capture_language::MoveVia::Choice,
+                minted: is_minted,
+            }),
+            move_choice: None,
+            drawer: None,
+        });
+    }
+    target
+        .parsed
+        .sub_bullets
+        .splice(choice_pos..=choice_pos, synthetics);
+    Ok(())
 }

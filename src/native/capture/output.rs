@@ -523,6 +523,7 @@ pub(super) struct ProjectNoteMovedTask {
     pub(super) link: Option<ProjectTaskLinkJson>,
     pub(super) not_linked: Option<String>,
     pub(super) detail: Option<String>,
+    pub(super) via: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

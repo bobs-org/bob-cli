@@ -3092,40 +3092,6 @@ fn capture_project_note_choice_report_lists_rows_and_refuses_real() {
 }
 
 #[test]
-fn capture_project_note_choice_answered_still_unavailable() {
-    // cli-report interim: answered `- ^^` refuses `move_choice_unavailable`
-    // until cli-execute.
-    let temp = TempDir::new("bob-cli-choice-answered");
-    let vault = temp.path().join("vault");
-    write_file(
-        &vault.join("cash.md"),
-        "---\ntype: \"[[area]]\"\n---\n- [ ] #task Alpha ^a\n- [ ] #task Beta ^b\n",
-    );
-    for flag in ["-m", "--move-in"] {
-        let mut command = bob_command();
-        command
-            .arg("capture")
-            .arg("-b")
-            .arg(&vault)
-            .arg("-f")
-            .arg("json")
-            .arg("--dry-run")
-            .arg(flag)
-            .arg("1")
-            .env("BOB_NOW", "2026-09-20 14:31:07")
-            .env("TZ", "UTC0");
-        let output = run_with_stdin(&mut command, "Finish @cash^x@\n- ^^\n");
-        assert!(!output.status.success(), "{flag}");
-        let json: serde_json::Value =
-            serde_json::from_str(stdout(&output).trim())
-                .expect("unavailable JSON");
-        assert_eq!(json["code"], "move_choice_unavailable");
-        assert_eq!(json["move_choice"]["slots"][0]["answered"], true);
-    }
-    assert!(!vault.join("cash_x.md").exists());
-}
-
-#[test]
 fn capture_project_note_choice_refusals_are_write_free() {
     // MQ10/MQ14: unasked, conflict, stale, refused, usage.
     let temp = TempDir::new("bob-cli-choice-refusals");

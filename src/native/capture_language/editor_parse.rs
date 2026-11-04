@@ -3675,6 +3675,7 @@ fn interpret_editor_move(
                 block_id: None,
                 range: (span.start, span.end),
                 via: super::model::MoveVia::Bullet,
+                minted: false,
             });
             let marker = if sigil == ':' {
                 SpanKind::ProjectTaskMoveLinkMarker
@@ -3725,6 +3726,7 @@ fn interpret_editor_move(
                         block_id: Some(id),
                         range,
                         via: super::model::MoveVia::Bullet,
+                        minted: false,
                     });
                     let marker = if sigil == ':' {
                         SpanKind::ProjectTaskMoveLinkMarker

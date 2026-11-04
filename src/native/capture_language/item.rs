@@ -2070,6 +2070,7 @@ fn interpret_execution_move(
                         block_id: Some(id),
                         range: (sigil_span.0, id_span.1),
                         via: super::model::MoveVia::Bullet,
+                        minted: false,
                     }))
                 }
                 MoveIdOutcome::Duplicate { first_line } => {

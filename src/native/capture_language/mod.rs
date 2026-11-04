@@ -141,6 +141,7 @@ pub(crate) use self::model::ListContext;
 pub(crate) use self::model::ListKind;
 pub(crate) use self::model::MoveBullet;
 pub(crate) use self::model::MoveChoiceBullet;
+pub(crate) use self::model::MoveVia;
 pub(crate) use self::model::ParsedCaptureDraft;
 pub(crate) use self::model::ParsedCaptureItem;
 pub(crate) use self::model::ParsedCaptureText;
