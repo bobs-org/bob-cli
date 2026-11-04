@@ -230,25 +230,41 @@ fn try_escaped(tokens: &[Token<'_>], source: &str) -> Option<TransferScan> {
     })
 }
 
+/// Claim a glued arrow only in a near-transfer shape: a leading run of
+/// source-like tokens whose next `>` is glued to a source (`@a+x>@c`,
+/// `@a+x> @c`) or to a destination (`@a+x >@c`). Any other `>` — `=>`,
+/// `<https://…>`, `a>b` mid-prose — stays ordinary text.
 fn try_glued_arrow(tokens: &[Token<'_>]) -> TransferScan {
-    for token in tokens {
+    for (index, token) in tokens.iter().enumerate() {
         if token.text == "\\>" {
             continue;
         }
-        if let Some(off) = token.text.find('>') {
-            let abs = token.start + off;
-            if is_escaped_gt(token.text, off) {
-                continue;
-            }
-            if inside_quoted_literal(token.text, off) {
-                continue;
-            }
-            return TransferScan::Invalid {
-                code: TRANSFER_ARROW_SPACING_CODE,
-                message: TRANSFER_ARROW_SPACING_MESSAGE.to_string(),
-                span: (abs, abs + 1),
-            };
+        let Some(off) = token.text.find('>') else {
+            continue;
+        };
+        if is_escaped_gt(token.text, off)
+            || inside_quoted_literal(token.text, off)
+        {
+            continue;
         }
+        let before = &tokens[..index];
+        if !before.iter().all(|t| is_source_like(t.text)) {
+            return TransferScan::Unclaimed;
+        }
+        let left = &token.text[..off];
+        let right = &token.text[off + 1..];
+        let glued_to_source = is_source_like(left);
+        let glued_to_destination =
+            left.is_empty() && !before.is_empty() && right.starts_with('@');
+        if !glued_to_source && !glued_to_destination {
+            return TransferScan::Unclaimed;
+        }
+        let abs = token.start + off;
+        return TransferScan::Invalid {
+            code: TRANSFER_ARROW_SPACING_CODE,
+            message: TRANSFER_ARROW_SPACING_MESSAGE.to_string(),
+            span: (abs, abs + 1),
+        };
     }
     TransferScan::Unclaimed
 }

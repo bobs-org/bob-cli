@@ -389,6 +389,20 @@ fn destination_is_source_when_it_names_a_source_task() {
 fn prose_code_and_blockquotes_stay_unclaimed() {
     assert_eq!(scan("called Bob > 3 times"), TransferScan::Unclaimed);
     assert_eq!(scan("> @a+x > @c"), TransferScan::Unclaimed);
+    // A `>` glued to anything but a leading source run stays prose.
+    for text in [
+        "=>",
+        "a=>b",
+        "<https://x.org/a>",
+        "<https://example.com/post> %l",
+        "x>y note",
+        "note @a+x>@c",
+        "@a+x note>@c",
+        "@a+x >3 times",
+        "->@c",
+    ] {
+        assert_eq!(scan(text), TransferScan::Unclaimed, "{text:?}");
+    }
     assert_eq!(scan(""), TransferScan::Unclaimed);
     assert_eq!(scan("@@inbox"), TransferScan::Unclaimed);
     let code_draft = "`@a+x > @c`";

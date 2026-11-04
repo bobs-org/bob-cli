@@ -919,17 +919,25 @@ pub(crate) fn parse_capture_text_with_options(
     }
     let options = options.with_global(!draft.declarations.is_empty());
 
+    // Singleton parsing claims transfers exactly like the draft parser but
+    // keeps ordinary items on the unfanned singleton parser.
     let mut item_outcomes = Vec::new();
     for item in &draft.items {
-        item_outcomes.extend(
-            parse_capture_item_members(
-                item,
-                forced_route,
-                forced_section,
-                &options,
-            )
-            .map_err(|error| error.message)?,
-        );
+        match parse_transfer_claim(item, forced_route, forced_section, &options)
+            .map_err(|error| error.message)?
+        {
+            Some(outcomes) => item_outcomes.extend(outcomes),
+            None => item_outcomes.push(
+                parse_capture_item(
+                    item,
+                    forced_route,
+                    forced_section,
+                    &options,
+                    None,
+                )
+                .map_err(|error| error.message)?,
+            ),
+        }
     }
     let mut declarations = draft.declarations;
     for outcome in &item_outcomes {
@@ -1266,6 +1274,29 @@ fn parse_capture_item_members<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<Vec<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
+    if let Some(outcomes) =
+        parse_transfer_claim(item, forced_route, forced_section, options)?
+    {
+        return Ok(outcomes);
+    }
+    parse_capture_item_members_legacy(
+        item,
+        forced_route,
+        forced_section,
+        options,
+    )
+}
+
+/// Claim a transfer directive before target-run fan-out. Returns `None`
+/// when the shared scanner leaves the parent line unclaimed (or a forced
+/// destination keeps the line literal), so callers continue with ordinary
+/// item parsing.
+fn parse_transfer_claim<'a>(
+    item: &CaptureItem<'a>,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<Option<Vec<ParsedCaptureItemOutcome<'a>>>, CaptureItemParseError> {
     if forced_route.is_none()
         && forced_section.is_none()
         && !options.explicit_destination
@@ -1315,15 +1346,17 @@ fn parse_capture_item_members<'a>(
                         forced_section,
                         options,
                     )?;
-                    return Ok(outcomes
-                        .into_iter()
-                        .map(|outcome| {
-                            rebind_capture_item_declarations(
-                                outcome,
-                                item.source,
-                            )
-                        })
-                        .collect());
+                    return Ok(Some(
+                        outcomes
+                            .into_iter()
+                            .map(|outcome| {
+                                rebind_capture_item_declarations(
+                                    outcome,
+                                    item.source,
+                                )
+                            })
+                            .collect(),
+                    ));
                 }
                 super::transfer::TransferScan::Incomplete {
                     need,
@@ -1377,23 +1410,17 @@ fn parse_capture_item_members<'a>(
                         dependency_target: None,
                         type_marker: None,
                     };
-                    return Ok(vec![parsed_capture_item_outcome(
+                    return Ok(Some(vec![parsed_capture_item_outcome(
                         item,
                         parsed,
                         Vec::new(),
                         None,
-                    )]);
+                    )]));
                 }
             }
         }
     }
-
-    parse_capture_item_members_legacy(
-        item,
-        forced_route,
-        forced_section,
-        options,
-    )
+    Ok(None)
 }
 
 fn parse_capture_item_members_legacy<'a>(
