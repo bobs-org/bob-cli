@@ -95,7 +95,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 report the resulting edits, cursor, and a human summary.\n\n\
 The command is purely lexical and completely read-only: it never opens the \
 vault, never reads the clipboard, never touches the filesystem, and takes no \
---bob-dir. It implements three rules.\n\n\
+--bob-dir. It implements four rules.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id' or '@route+id', ':' after '@route^id' or \
 '@route+id', or '+' after '@route:id' or '@route^id' consumes that character \
@@ -129,6 +129,14 @@ left unchanged. The caret lands just past the glued '|'. This is an editor \
 assist: 'bob capture' and 'bob capture-parse' keep the literal ' |' \
 text. Without --cursor this rule is skipped rather than searching the \
 draft.\n\n\
+Sigil alias (requires --cursor): typing '.' immediately after '@route' \
+becomes '^', or ';' becomes ':', only where bob's completion grammar would \
+open the corresponding Block ID picker. A whole-item ';' becomes ':' only \
+where the Task Link picker opens. For example, '@errands.' becomes \
+'@errands^', '@errands;' becomes '@errands:', and ';' becomes ':'. The \
+aliases use the same picker behavior as the real sigils. 'bob capture' and \
+'bob capture-parse' keep the literal text. Without --cursor this rule is \
+skipped rather than searching the draft.\n\n\
 Bare '@@' absorption: typing a bare '@@' inside an item that already \
 carries a local destination marker (or, absent that, when the draft already \
 carries exactly one other '@@' declaration) rewrites the bare token to \
@@ -155,7 +163,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())
@@ -511,6 +519,46 @@ mod tests {
             ])
         );
         assert_eq!(value["summary"], "Attached | to ~tasks:target");
+        assert!(value.get("notices").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_shape_expands_a_route_sigil_alias() {
+        let value = json("@errands.", Some(9));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["input"], "@errands.");
+        assert_eq!(value["text"], "@errands^");
+        assert_eq!(value["changed"], true);
+        assert_eq!(value["cursor"], 9);
+        assert_eq!(value["rule"], "expand_sigil_alias");
+        assert_eq!(
+            value["edits"],
+            serde_json::json!([
+                { "range": { "start": 8, "end": 9 }, "replacement": "^" },
+            ])
+        );
+        assert_eq!(value["summary"], "Typed ^ for .");
+        assert!(value.get("notices").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_shape_expands_a_whole_item_task_link_alias() {
+        let value = json(";", Some(1));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["input"], ";");
+        assert_eq!(value["text"], ":");
+        assert_eq!(value["changed"], true);
+        assert_eq!(value["cursor"], 1);
+        assert_eq!(value["rule"], "expand_sigil_alias");
+        assert_eq!(
+            value["edits"],
+            serde_json::json!([
+                { "range": { "start": 0, "end": 1 }, "replacement": ":" },
+            ])
+        );
+        assert_eq!(value["summary"], "Typed : for ;");
         assert!(value.get("notices").is_none(), "{value}");
     }
 

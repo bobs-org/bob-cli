@@ -43,6 +43,7 @@ pub(crate) enum RewriteRule {
     AbsorbDeclaration,
     SwitchBlockIdSeparator,
     AttachRelationLabel,
+    ExpandSigilAlias,
 }
 
 impl RewriteRule {
@@ -52,6 +53,7 @@ impl RewriteRule {
             Self::AbsorbDeclaration => "absorb_declaration",
             Self::SwitchBlockIdSeparator => "switch_block_id_separator",
             Self::AttachRelationLabel => "attach_relation_label",
+            Self::ExpandSigilAlias => "expand_sigil_alias",
         }
     }
 }
@@ -96,8 +98,68 @@ pub(crate) fn rewrite_draft(
     {
         return rewrite;
     }
+    if let Some(position) = cursor
+        && let Some(rewrite) = expand_sigil_alias(raw_text, position)
+    {
+        return rewrite;
+    }
 
     absorb_bare_declaration(raw_text, cursor)
+}
+
+/// Typing `.` or `;` in a position where its real sigil would open a picker
+/// swaps that byte to `^` or `:`. The candidate is checked by the ordinary
+/// completion grammar, keeping the assist lexical and aligned with picker
+/// eligibility. Only the selected route-scope contexts are accepted.
+fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
+    let start = cursor.checked_sub(1)?;
+    let alias = raw_text.get(start..cursor)?;
+    let (sigil, allowed_context) = match alias {
+        "." => ('^', super::completion::CompletionContext::TaskBlockId),
+        ";" => (':', super::completion::CompletionContext::PomodoroBlockId),
+        _ => return None,
+    };
+    let token = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor)?;
+    if token.end != cursor {
+        return None;
+    }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, &sigil.to_string());
+    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    let allowed = match alias {
+        "." => {
+            field.context == allowed_context && field.replacement.0 == cursor
+        }
+        ";" if field.context == allowed_context => {
+            field.replacement.0 == cursor
+        }
+        ";" => {
+            field.context == super::completion::CompletionContext::TaskLink
+                && field.replacement == (start, cursor)
+        }
+        _ => false,
+    };
+    if !allowed {
+        return None;
+    }
+    let replacement = sigil.to_string();
+    let edits = vec![TextEdit {
+        start,
+        end: cursor,
+        replacement: replacement.clone(),
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    debug_assert_eq!(text, candidate);
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::ExpandSigilAlias),
+        edits,
+        text,
+        cursor: Some(cursor),
+        summary: Some(format!("Typed {sigil} for {alias}")),
+        notices: Vec::new(),
+    })
 }
 
 fn absorb_bare_declaration(

@@ -711,6 +711,104 @@ fn rewrite_draft_attach_relation_label_requires_a_cursor() {
 }
 
 #[test]
+fn rewrite_draft_expands_sigil_aliases_in_route_picker_positions() {
+    for (raw, expected, alias, sigil) in [
+        ("@r.", "@r^", ".", "^"),
+        ("Buy milk @r.", "Buy milk @r^", ".", "^"),
+        ("- Call mom @home.", "- Call mom @home^", ".", "^"),
+        ("@r;", "@r:", ";", ":"),
+        ("Fix it @r;", "Fix it @r:", ";", ":"),
+        (";", ":", ";", ":"),
+        ("Buy milk\n\n;", "Buy milk\n\n:", ";", ":"),
+    ] {
+        let cursor = raw.len();
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some(format!("Typed {sigil} for {alias}").as_str()),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.notices, Vec::<String>::new(), "{raw:?}");
+        assert_eq!(
+            rewrite.edits,
+            vec![TextEdit {
+                start: cursor - 1,
+                end: cursor,
+                replacement: sigil.to_string(),
+            }],
+            "{raw:?}"
+        );
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+
+    let raw = "café @r.";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+    assert_eq!(rewrite.text, "café @r^");
+    assert_eq!(rewrite.edits[0].start, raw.len() - 1);
+    assert!(raw.is_char_boundary(rewrite.edits[0].start));
+
+    let transfer = "@inbox; > @db";
+    let cursor = transfer.find(';').expect("transfer alias") + 1;
+    let candidate = "@inbox: > @db";
+    if super::super::completion::completion_field_at(candidate, cursor)
+        .is_some_and(|field| {
+            field.context
+                == super::super::completion::CompletionContext::PomodoroBlockId
+                && field.replacement.0 == cursor
+        })
+    {
+        let rewrite = rewrite_draft(transfer, Some(cursor));
+        assert_eq!(rewrite.rule, Some(RewriteRule::ExpandSigilAlias));
+        assert_eq!(rewrite.text, "@inbox: > @db");
+    }
+}
+
+#[test]
+fn rewrite_draft_sigil_aliases_exclude_other_contexts() {
+    for raw in [
+        "Buy milk.",
+        "foo@bar.",
+        "@@r.",
+        "@r#Sec.",
+        "&note;",
+        "^r;",
+        "@r:id.",
+        "@r.foo",
+        "x\n- 1 work;",
+    ] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+
+    let raw = "@r.";
+    let no_cursor = rewrite_draft(raw, None);
+    assert_eq!(no_cursor.rule, None);
+    assert_eq!(no_cursor.text, raw);
+
+    let mid_token = "@r.foo";
+    let mid_token_rewrite = rewrite_draft(mid_token, Some(3));
+    assert_eq!(mid_token_rewrite.rule, None);
+    assert_eq!(mid_token_rewrite.text, mid_token);
+
+    let template = "Task {0} %t\n\n@r.";
+    let template_rewrite = rewrite_draft(template, Some(template.len()));
+    assert_eq!(template_rewrite.rule, None);
+    assert_eq!(template_rewrite.text, template);
+}
+
+#[test]
 fn rewrite_draft_separator_toggle_parses_as_the_switched_mode() {
     let caret = switch_at("Do work @file:id^");
     let parsed = parse_for_editor(&caret.text);

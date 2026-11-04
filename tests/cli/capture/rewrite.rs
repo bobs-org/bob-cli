@@ -13,7 +13,7 @@ fn capture_rewrite_help_describes_only_the_remaining_rules() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("It implements three rules."),
+        out.contains("It implements four rules."),
         "capture-rewrite help miscounts its rules:\n{out}"
     );
     assert!(
@@ -93,6 +93,39 @@ fn capture_rewrite_json_absorbs_a_local_marker() {
     );
     assert_eq!(json["summary"], "Moved @dev into @@dev");
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_rewrite_json_expands_a_route_sigil_alias() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("9")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@errands.")
+        .output()
+        .expect("run bob capture-rewrite sigil alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "@errands.");
+    assert_eq!(json["text"], "@errands^");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 9);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 8, "end": 9 }, "replacement": "^" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed ^ for .");
 }
 
 #[test]

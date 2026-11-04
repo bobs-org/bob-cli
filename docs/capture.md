@@ -8015,8 +8015,8 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 ```
 
 Applies the capture grammar's automatic draft rewrites -- the
-block-ID separator toggle, the relation-label pipe attach, and the bare `@@`
-absorption rule -- and reports the
+block-ID separator toggle, the relation-label pipe attach, the sigil alias,
+and the bare `@@` absorption rule -- and reports the
 resulting edits, cursor, and a human summary. It is purely lexical and
 completely read-only: it never opens the vault, never reads the clipboard
 or the URL routing config, never touches the filesystem, and takes no
@@ -8085,6 +8085,16 @@ sigil immediately after a complete ID switches `:id` to `^id` or `^id` to
 candidate, including IDs on nested lines.
 This is an editor assist: `bob capture` and `bob capture-parse` keep the
 literal `@file:id+` text.
+
+**Sigil alias.** With `--cursor`, typing `.` immediately after `@route`
+becomes `^`, and typing `;` there becomes `:` when the candidate opens the
+same Block ID picker as the real sigil. A whole-item `;` becomes `:` when
+the candidate opens the Task Link picker. For example, `@errands.` becomes
+`@errands^`, `@errands;` becomes `@errands:`, and `;` becomes `:`. Bob's
+completion grammar decides eligibility, so prose and other picker contexts
+stay unchanged. The caret stays just past the sigil. This is an editor assist:
+`bob capture` and `bob capture-parse` keep the literal text. Feeding the
+result back through the command is a no-op.
 
 **Relation-label pipe attach.** Typing `|` after whitespace that follows a
 relation token deletes that whitespace so the pipe glues to the token.
@@ -8197,10 +8207,11 @@ JSON output is a single versioned object:
 ```
 
 `rule` is `switch_block_id_separator`,
-`attach_relation_label`, `absorb_local_marker`, or `absorb_declaration`,
+`attach_relation_label`, `expand_sigil_alias`, `absorb_local_marker`, or `absorb_declaration`,
 omitted when nothing changed. `cursor` is present only when `--cursor` was
 supplied and is mapped through every edit. Separator toggles land
-just past the unchanged ID, pipe attaches land just past the glued `|`, and
+just past the unchanged ID, sigil aliases keep the caret just past the sigil,
+pipe attaches land just past the glued `|`, and
 absorption lands just past the rewritten `@@<payload>` token.
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when

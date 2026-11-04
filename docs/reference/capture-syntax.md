@@ -363,6 +363,9 @@ Contract: [Bulk templates](../capture.md#bulk-templates).
 
 ## Block IDs and linked tasks
 
+Mac Capture uses `capture-rewrite` for `@route.` / `@route;` → `^` / `:`
+and whole-item `;` → `:`; direct input stays literal.
+
 ### `@route^block-id` {#at-route-caret}
 
 Create an ordinary open task with that block ID.
@@ -488,8 +491,8 @@ Contract: [Linking and starting existing tasks](../capture.md#linking-and-starti
 
 ### `:<query>` {#colon-picker}
 
-Incomplete: pick any open task to link. `capture-parse` needs `task_link`.
-Accepting inserts `@route:block-id`. Execution never captures the query.
+Incomplete task-link picker (`task_link`). Accepting inserts
+`@route:block-id`; the query stays uncaptured.
 
 ```bash
 bob capture ':queue'
@@ -503,8 +506,8 @@ Contract: [Picking any open task with ':'](../capture.md#picking-any-open-task-w
 
 ### `/<query>` {#slash-picker}
 
-Incomplete: pick any open task to open in Obsidian. `capture-parse` needs
-`task_goto`. Accepting opens the task; execution never captures it.
+Incomplete Go To picker (`task_goto`); accepting opens tasks in Obsidian
+without capture.
 
 ```bash
 bob capture '/queue'
