@@ -206,6 +206,22 @@ pub(crate) struct MergeTargetDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) section: Option<String>,
     pub(crate) kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) line: Option<usize>,
+    pub(crate) created: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) status_symbol: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) status_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct MergeConsequence {
+    pub(crate) kind: String,
+    pub(crate) tone: String,
+    pub(crate) text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -230,12 +246,20 @@ pub(crate) struct MergeRecord {
     pub(crate) outcome: MergeOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) previous_status: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) previous_status_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) status_symbol: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) status_name: Option<String>,
     pub(crate) moved_lines: usize,
     pub(crate) moved_notes: usize,
     pub(crate) dependents_repointed: Vec<String>,
     pub(crate) prerequisites_left: Vec<String>,
     pub(crate) successors_orphaned: Vec<String>,
     pub(crate) links_pruned: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) consequences: Vec<MergeConsequence>,
     pub(crate) offers: Vec<MergeOffer>,
     pub(crate) message: String,
 }

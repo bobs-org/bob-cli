@@ -179,8 +179,10 @@ stderr. Schema version 1 contains:
 - `error` as `null` on success or `{stage, message, hint}` on failure. Usage
   errors are handled by clap and exit 2; operational errors exit 1.
 
-`moves[]` records source and destination paths, source line, title, nullable old
-and new block ids, and nullable old and new dependency ids. Rename records
+`moves[]` records source and destination paths, source line, `destination_line`
+(the 1-based landing line), `destination_section` (the H2 the landing line sits
+under, or null), `status_symbol`/`status_name` (the moved task's final status),
+title, nullable old and new block ids, and nullable old and new dependency ids. Rename records
 include destination path and old/new block ids. Repaired-file records include
 `path`, `link_count`, and `dependency_token_count`. `relocated[]` records
 each moved link as `{route, block_id, from, to, type}` where `from` is the

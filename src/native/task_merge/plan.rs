@@ -27,9 +27,9 @@ use super::{
         SourceOutcome,
     },
     types::{
-        DailyNoteReadState, MergeContainer, MergeContext, MergeError,
-        MergeGesture, MergeOffer, MergeOutcome, MergePlan, MergeRecord,
-        MergeRequest, MergeTargetDescriptor, MergeTaskDescriptor,
+        DailyNoteReadState, MergeConsequence, MergeContainer, MergeContext,
+        MergeError, MergeGesture, MergeOffer, MergeOutcome, MergePlan,
+        MergeRecord, MergeRequest, MergeTargetDescriptor, MergeTaskDescriptor,
         PreparedMerge,
     },
 };
@@ -187,6 +187,7 @@ pub(crate) fn plan_task_merge(
         &target,
         &label,
         context,
+        &staged,
     );
     let mut warnings = prepared
         .as_ref()
@@ -304,6 +305,7 @@ pub(crate) fn plan_task_merge(
         }
     }
 
+    enrich_target_lines(&mut records, &staged, context);
     let postimages = staged
         .into_iter()
         .filter(|(path, contents)| snapshot.notes.get(path) != Some(contents))
@@ -376,20 +378,23 @@ fn target_descriptor(
     match target {
         MergeContainer::Task(locator) | MergeContainer::Drawer(locator, _) => {
             let located = containers::resolve_task(snapshot, locator, context)?;
-            let (kind, drawer) = match target {
-                MergeContainer::Task(_) => ("task", None),
+            let (kind, drawer, created) = match target {
+                MergeContainer::Task(_) => ("task", None, false),
                 MergeContainer::Drawer(_, selector) => {
-                    let title = prepared
+                    let (title, created) = prepared
                         .and_then(|prepared| prepared.container.as_ref())
                         .and_then(|container| match &container.kind {
                             super::types::PreparedContainerKind::Drawer {
                                 title,
-                                ..
-                            } => Some(title.clone()),
+                                created,
+                            } => Some((title.clone(), *created)),
                             _ => None,
                         })
-                        .unwrap_or_else(|| selector.text.clone());
-                    ("drawer", Some(title))
+                        .map_or_else(
+                            || (selector.text.clone(), false),
+                            |(title, created)| (title, created),
+                        );
+                    ("drawer", Some(title), created)
                 }
                 MergeContainer::Section { .. } => unreachable!(),
             };
@@ -404,6 +409,10 @@ fn target_descriptor(
                 drawer,
                 section: None,
                 kind: kind.to_string(),
+                line: None,
+                created,
+                status_symbol: Some(located.task.status_symbol),
+                status_name: Some(located.task.status_name.clone()),
             })
         }
         MergeContainer::Section { note, selector } => {
@@ -425,16 +434,19 @@ fn target_descriptor(
                     ));
                 }
             };
-            let title = prepared
+            let (title, created) = prepared
                 .and_then(|prepared| prepared.container.as_ref())
                 .and_then(|container| match &container.kind {
                     super::types::PreparedContainerKind::Section {
                         title,
-                        ..
-                    } => Some(title.clone()),
+                        created,
+                    } => Some((title.clone(), *created)),
                     _ => None,
                 })
-                .unwrap_or_else(|| selector.text.clone());
+                .map_or_else(
+                    || (selector.text.clone(), false),
+                    |(title, created)| (title, created),
+                );
             Ok(MergeTargetDescriptor {
                 path,
                 block_id: None,
@@ -442,6 +454,10 @@ fn target_descriptor(
                 drawer: None,
                 section: Some(title),
                 kind: "section".to_string(),
+                line: None,
+                created,
+                status_symbol: None,
+                status_name: None,
             })
         }
     }
@@ -593,6 +609,7 @@ fn build_records(
     target: &MergeTargetDescriptor,
     label: &str,
     context: &MergeContext<'_>,
+    staged: &BTreeMap<PathBuf, String>,
 ) -> Vec<MergeRecord> {
     sources
         .iter()
@@ -652,6 +669,15 @@ fn build_records(
                     "Recorded merge relation to “{target_title}”; source was already closed"
                 ),
             };
+            let consequences = build_consequences(
+                &source_title,
+                &target_title,
+                &report,
+                staged,
+                context,
+            );
+            let cancelled_name =
+                vault_status_name(context.task_settings, '-');
             MergeRecord {
                 source: MergeTaskDescriptor {
                     path: source.located.path.clone(),
@@ -663,17 +689,178 @@ fn build_records(
                 label: label.to_string(),
                 outcome,
                 previous_status: Some(source.located.task.status_symbol),
+                previous_status_name: Some(
+                    source.located.task.status_name.clone(),
+                ),
+                status_symbol: Some('-'),
+                status_name: Some(cancelled_name),
                 moved_lines,
                 moved_notes,
                 dependents_repointed: report.dependents_repointed,
                 prerequisites_left: report.prerequisites_left,
                 successors_orphaned: report.successors_orphaned,
                 links_pruned: report.links_pruned,
+                consequences,
                 offers: Vec::new(),
                 message,
             }
         })
         .collect()
+}
+
+fn vault_status_name(
+    settings: &crate::native::note_tasks::NoteTaskSettings,
+    symbol: char,
+) -> String {
+    settings
+        .status_definitions
+        .iter()
+        .find(|definition| {
+            let mut characters = definition.symbol.chars();
+            characters.next() == Some(symbol) && characters.next().is_none()
+        })
+        .map(|definition| definition.name.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| {
+            if symbol == '-' {
+                "Cancelled".to_string()
+            } else {
+                "Unknown".to_string()
+            }
+        })
+}
+
+fn title_for_key(
+    notes: &BTreeMap<PathBuf, String>,
+    key: &str,
+    settings: &crate::native::note_tasks::NoteTaskSettings,
+) -> Option<String> {
+    let (path_text, block_id) = key.split_once("#^")?;
+    let path = PathBuf::from(path_text);
+    let contents = notes.get(&path)?;
+    let scan = note_tasks::scan(contents, settings);
+    let task = scan
+        .tasks()
+        .iter()
+        .find(|task| task.block_id.as_deref() == Some(block_id))?;
+    Some(note_tasks::clean_description(
+        &task.description,
+        &settings.global_filter,
+        task.block_id.as_deref(),
+    ))
+}
+
+fn quoted_title_or_fallback(
+    notes: &BTreeMap<PathBuf, String>,
+    key: &str,
+    settings: &crate::native::note_tasks::NoteTaskSettings,
+) -> String {
+    if let Some(title) = title_for_key(notes, key, settings)
+        && !title.is_empty()
+    {
+        return format!("“{title}”");
+    }
+    let path = key.split_once("#^").map(|(path, _)| path).unwrap_or(key);
+    format!("a task in {path}")
+}
+
+fn hint_for_key(key: &str) -> String {
+    let (path_text, block_id) = key
+        .split_once("#^")
+        .map_or((key, ""), |(path, id)| (path, id));
+    let stem = path_text.strip_suffix(".md").unwrap_or(path_text);
+    if block_id.is_empty() {
+        format!("&{stem}")
+    } else {
+        format!("&{stem}:{block_id}")
+    }
+}
+
+fn build_consequences(
+    source_title: &str,
+    target_title: &str,
+    report: &RetirementReports,
+    staged: &BTreeMap<PathBuf, String>,
+    context: &MergeContext<'_>,
+) -> Vec<MergeConsequence> {
+    let mut out = Vec::new();
+    for key in &report.dependents_repointed {
+        let dependent =
+            quoted_title_or_fallback(staged, key, context.task_settings);
+        out.push(MergeConsequence {
+            kind: "dependent".to_string(),
+            tone: "info".to_string(),
+            text: format!("{dependent} now waits on “{target_title}”"),
+            keys: vec![key.clone()],
+        });
+    }
+    if !report.prerequisites_left.is_empty() {
+        let names: Vec<String> = report
+            .prerequisites_left
+            .iter()
+            .map(|key| {
+                if let Some(title) =
+                    title_for_key(staged, key, context.task_settings)
+                    && !title.is_empty()
+                {
+                    format!("“{title}”")
+                } else {
+                    let path = key
+                        .split_once("#^")
+                        .map(|(path, _)| path)
+                        .unwrap_or(key.as_str());
+                    format!("a task in {path}")
+                }
+            })
+            .collect();
+        let hints: Vec<String> = report
+            .prerequisites_left
+            .iter()
+            .map(|key| hint_for_key(key))
+            .collect();
+        out.push(MergeConsequence {
+            kind: "prerequisite_left".to_string(),
+            tone: "warning".to_string(),
+            text: format!(
+                "“{source_title}” waited on {}; “{target_title}” does not · add {}",
+                names.join(", "),
+                hints.join(", "),
+            ),
+            keys: report.prerequisites_left.clone(),
+        });
+    }
+    if !report.successors_orphaned.is_empty() {
+        let count = report.successors_orphaned.len();
+        out.push(MergeConsequence {
+            kind: "successor_orphaned".to_string(),
+            tone: "warning".to_string(),
+            text: format!(
+                "{count} task(s) start after “{source_title}”; they won't be offered when “{target_title}” finishes · relink with ~"
+            ),
+            keys: report.successors_orphaned.clone(),
+        });
+    }
+    if !report.pruned_entries.is_empty() {
+        for entry in &report.pruned_entries {
+            out.push(MergeConsequence {
+                kind: "link_pruned".to_string(),
+                tone: "info".to_string(),
+                text: format!("“{source_title}” leaves {entry}"),
+                keys: Vec::new(),
+            });
+        }
+    } else if report.links_pruned > 0 {
+        out.push(MergeConsequence {
+            kind: "link_pruned".to_string(),
+            tone: "info".to_string(),
+            text: format!(
+                "“{source_title}” leaves {} of today's Pomodoros",
+                report.links_pruned
+            ),
+            keys: Vec::new(),
+        });
+    }
+    out
 }
 
 fn target_display(target: &MergeTargetDescriptor) -> String {
@@ -683,6 +870,58 @@ fn target_display(target: &MergeTargetDescriptor) -> String {
         .or_else(|| target.drawer.clone())
         .or_else(|| target.section.clone())
         .unwrap_or_else(|| target.path.to_string_lossy().into_owned())
+}
+
+fn enrich_target_lines(
+    records: &mut [MergeRecord],
+    staged: &BTreeMap<PathBuf, String>,
+    context: &MergeContext<'_>,
+) {
+    for record in records.iter_mut() {
+        let line = target_line(&record.target, staged, context);
+        record.target.line = line;
+        if (record.target.kind == "task" || record.target.kind == "drawer")
+            && let Some(contents) = staged.get(&record.target.path)
+        {
+            let scan = note_tasks::scan(contents, context.task_settings);
+            if let Some(block_id) = record.target.block_id.as_deref()
+                && let Some(task) = scan
+                    .tasks()
+                    .iter()
+                    .find(|task| task.block_id.as_deref() == Some(block_id))
+            {
+                record.target.status_symbol = Some(task.status_symbol);
+                record.target.status_name = Some(task.status_name.clone());
+            }
+        }
+    }
+}
+
+fn target_line(
+    target: &MergeTargetDescriptor,
+    staged: &BTreeMap<PathBuf, String>,
+    context: &MergeContext<'_>,
+) -> Option<usize> {
+    let contents = staged.get(&target.path)?;
+    if target.kind == "section" {
+        let section = target.section.as_deref()?;
+        for (index, line) in contents.lines().enumerate() {
+            if let Some((level, title)) =
+                crate::native::markdown::atx_heading(line)
+                && level == 2
+                && title == section
+            {
+                return Some(index + 1);
+            }
+        }
+        return None;
+    }
+    let block_id = target.block_id.as_deref()?;
+    let scan = note_tasks::scan(contents, context.task_settings);
+    scan.tasks()
+        .iter()
+        .find(|task| task.block_id.as_deref() == Some(block_id))
+        .map(|task| task.line_index + 1)
 }
 
 fn ordered_paths(

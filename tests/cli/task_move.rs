@@ -1055,3 +1055,26 @@ fn move_without_field_relocates_live_link_to_new_inherited_type() {
     let day2_after = fs::read_to_string(&day2).expect("read day2");
     assert!(day2_after.contains("— FIX"), "{day2_after}");
 }
+
+#[test]
+fn move_json_reports_landing_line_section_and_status() {
+    let temp = TempDir::new("bob-task-move-landing");
+    let vault = basic_vault(&temp);
+    crate::support::write_toggle_task_settings(&vault);
+    let output = run_json(
+        &temp,
+        &vault,
+        &["-o", "-f", "json", "source", "dest", "-b", "move-me"],
+    );
+    assert_exit(&output, 0);
+    let json = parse_json(&output);
+    let movement = &json["moves"][0];
+    assert!(
+        movement["destination_line"].as_u64().unwrap_or(0) > 0,
+        "{json}"
+    );
+    assert_eq!(movement["destination_section"], "Tasks");
+    assert!(movement["status_symbol"].is_string(), "{movement}");
+    assert!(movement["status_name"].is_string(), "{movement}");
+    assert_eq!(movement["title"], "Move this task");
+}

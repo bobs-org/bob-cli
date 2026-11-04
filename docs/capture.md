@@ -6195,8 +6195,14 @@ with `start`, `end`, `marker`, `route`, `block_id`; `arrow` with `start`,
 plus `route`, `block_id`, `drawer`, or `section`), `transfer_source`,
 `transfer_arrow`, and `transfer_destination` spans, and the legacy
 `route`/`block_id` fields describing the destination. `bob capture -f json`
-adds `moves[]` (the `bob task move` record shape) or `merges[]` (the merge
-record shape) plus `repaired_files[]`; ordinary items omit the empty fields.
+adds `moves[]` (the `bob task move` record shape, including `destination_line`,
+`destination_section`, `status_symbol`, and `status_name`) or `merges[]` (the
+merge record shape with status names, target status, container-created flags,
+and Bob-authored `consequences[]` sentences) plus item `merge_offers` (the
+merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
+ordinary items omit the empty fields. Merge-only offers get their own Pull-In
+copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
+the CLI's dependent rows print titles from `consequences`.
 `capture-parse` and `capture-complete` report grammar revision 11 while
 `schema_version` stays 1 (see [Capture-language
 revision](reference/compatibility.md#capture-language-revision)).
@@ -6809,13 +6815,16 @@ Transfer results use kind `"task_move"` for a bare-note destination and
 `"task_merge"` for a task, drawer, or section destination, with
 `placement: "updated"`. The legacy `route`/`block_id` fields
 describe the destination. A move adds `moves[]` (one `bob task move` record
-per source in typed order) and a merge adds `merges[]` (one merge record per
-source in typed order), plus `repaired_files[]`; ordinary items omit the
-empty fields. Merge warnings and successor offers join the batch-level
-`pull_in` offers like any other offer source. Human output prints `↪ Moved N
-tasks into <note> › Tasks` for moves and `⤵ merged N tasks into “<target>”`
-for merges (dry-run: `Would move` / `would merge`), with per-task lines,
-dependent repoints, prerequisite warnings, and offer rows; see [Moving and
+per source in typed order, with `destination_line`, `destination_section`,
+and final `status_symbol`/`status_name`) and a merge adds `merges[]` (one
+merge record per source in typed order, with `consequences[]`) plus item
+`merge_offers[]` (omitted when empty) and `repaired_files[]`; ordinary items
+omit the empty fields. Merge warnings and successor offers join the
+batch-level `pull_in` offers like any other offer source. Human output prints
+`↪ Moved N tasks into <note> › Tasks` for moves and `⤵ merged N tasks into
+“<target>”` for merges (dry-run: `Would move` / `would merge`), with per-task
+lines, titled dependent repoints from `consequences`, titled prerequisite and
+successor warnings, and offer rows; see [Moving and
 merging tasks with `>`](#moving-and-merging-tasks-with).
 
 When the link guard consumes a link or Ensure Next gesture, `link_guard`

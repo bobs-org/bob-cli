@@ -864,7 +864,7 @@ pub(super) struct CaptureItemResult {
 pub(super) struct RelationMergeOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) merges: Vec<crate::native::task_merge::MergeRecord>,
-    #[serde(skip)]
+    #[serde(rename = "merge_offers", skip_serializing_if = "Vec::is_empty")]
     pub(super) offer_rows: Vec<TaskCompleteUnblockedJson>,
 }
 
@@ -3906,19 +3906,16 @@ fn print_human_transfer_merges(result: &CaptureItemResult) {
     );
     for record in records {
         println!("  {}", record.message);
-        for dependent in &record.dependents_repointed {
-            println!("  ⛓ {dependent}   now waits on “{target}”");
-        }
-        if !record.prerequisites_left.is_empty() {
-            println!(
-                "  ⚠ “{}” waited on {}; “{target}” does not · add &note:id",
-                record.source.title,
-                record.prerequisites_left.join(", ")
-            );
-        }
-        if !record.successors_orphaned.is_empty() {
-            println!("  ⚠ {} task(s) start after “{}”; they won't be offered when “{target}” finishes · relink with ~",
-                record.successors_orphaned.len(), record.source.title);
+        for consequence in &record.consequences {
+            match consequence.kind.as_str() {
+                "dependent" => {
+                    println!("  ⛓ {}", consequence.text);
+                }
+                "prerequisite_left" | "successor_orphaned" => {
+                    println!("  ⚠ {}", consequence.text);
+                }
+                _ => {}
+            }
         }
         for offer in &record.offers {
             println!(

@@ -206,14 +206,19 @@ bob task merge [OPTIONS] -i <TASK|NOTE> [-D TITLE | -s TITLE] <TASK>...
   offers use snake_case field names; absent optional fields are omitted.
   - **`merges[]`** (`MergeRecord`, shared with capture):
     - `source{path, block_id, line, title}`;
-    - `target{path, block_id?, title?, drawer?, section?, kind}`;
+    - `target{path, block_id?, title?, drawer?, section?, kind, line?, created, status_symbol?, status_name?}`;
+      `line` is the 1-based post-merge line, `created` is true when the merge
+      created the drawer or section, and `status_symbol`/`status_name` report
+      the target's final status for `task` and `drawer` kinds;
     - `label`, `outcome` (`merged`, `unchanged`, or `already_closed`),
-      `previous_status`;
+      `previous_status`, `previous_status_name`, `status_symbol`, `status_name`
+      (the source's status after the merge: `-`, Cancelled, using the vault's names);
     - `moved_lines`, `moved_notes`;
     - `dependents_repointed[]`, `prerequisites_left[]`,
       `successors_orphaned[]`;
-    - `links_pruned`, `offers[]`;
-    - `message` (Bob-authored).
+    - `links_pruned`, `consequences[]` (`{kind, tone, text, keys}` with titled
+      Bob-authored sentences, never keys), `offers[]`;
+    - `message` (Bob-authored, byte-identical).
   - The top level adds `pull_in` (capture's shape).
 - **Human output.** Coloured with the capture styler. A dry run says
   _Would …_. Merge output looks like this:
@@ -241,10 +246,14 @@ clients render them.
 | --- | --- |
 | merge header | `⤵ Merged N task(s) into “T” · c.md[ › CONTAINER]` / `Would merge …` |
 | source row | `⊘ S  path:line · Prev → Cancelled · N notes moved` (or `· title only`) |
-| dependent row | `⛓ D  now waits on “T”` |
+| dependent row | `⛓ “D” now waits on “T”` (from `consequences[]`, titles never keys) |
 | prune/offer row | `◌ ENTRY link removed  offer N: link “T” under ENTRY` |
-| prerequisite warning | `⚠ “S” waited on “P”; “T” does not · add &note:id` |
+| link leaves row | `“S” leaves ENTRY` (one per open Pomodoro entry that lost S's link) |
+| link leaves aggregate | `“S” leaves N of today's Pomodoros` (when entries cannot be named) |
+| prerequisite warning | `⚠ “S” waited on “P”; “T” does not · add &note:id` (names every prerequisite with titles; hint uses the real locator) |
 | successor warning | `⚠ N task(s) start after “S”; they won't be offered when “T” finishes · relink with ~` |
+| merge-only Pull-In (one) | `Link “T” in place of “S”` (capsule `Pull in`, glyph `hand_off`) |
+| merge-only Pull-In (many) | `Link “T” in place of N merged tasks` |
 | repair row | `↻ repaired N link(s) in M note(s)` |
 | section Cancel Log | `📥 merged into [[c#Section]]` |
 | merge_section_has_dependents | `“D” waits on ^s; merge into a task (@c+id) so it can wait there` |

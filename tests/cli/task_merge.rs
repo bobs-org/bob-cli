@@ -516,3 +516,198 @@ fn move_t_same_note_is_refused() {
     let json = parse_json(&output);
     assert_eq!(json["error"]["code"], "move_same_note");
 }
+
+#[test]
+fn merge_records_carry_status_names_target_and_titled_consequences() {
+    let temp = TempDir::new("bob-task-merge-records");
+    let vault = temp.path().join("vault");
+    crate::support::write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("inbox.md"),
+        "---\ntype: [[area]]\n---\n\n## Tasks\n\n- [*] #task Source task ^src\n\t- ⛓️ **DEPENDS ON:** [[#^pre]]\n- [ ] #task Prereq task ^pre\n- [ ] #task Dependent task ^dep\n\t- ⛓️ **DEPENDS ON:** [[#^src]]\n- [ ] #task Successor task ^succ\n\t- 🪢 **LINKS:** starts after [[#^src]]\n",
+    );
+    write_file(
+        &vault.join("db.md"),
+        "---\ntype: [[area]]\n---\n\n## Tasks\n\n- [ ] #task Target task ^tgt\n",
+    );
+    let day = vault.join("day.md");
+    write_file(
+        &day,
+        "## Pomodoros\n\n- [ ] () — BUILD\n  - [[inbox#^src]]\n- [ ] () — ADMIN\n  - [[inbox#^src]]\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(&config, "relations:\n  successor_labels: [starts after]\n");
+    let mut human_command = configured(
+        &temp,
+        &vault,
+        &["merge", "-o", "-d", "-i", "db:tgt", "inbox:src"],
+        Some(&day),
+    );
+    human_command.env("BOB_CONFIG_FILE", &config);
+    let human_output = human_command.output().expect("run merge human");
+    assert_exit(&human_output, 0);
+    let human = String::from_utf8_lossy(&human_output.stdout).into_owned();
+    assert!(
+        human.contains("⛓ “Dependent task” now waits on “Target task”"),
+        "{human}"
+    );
+    assert!(human.contains("Prereq task"), "{human}");
+    assert!(
+        human.contains("Successor task") || human.contains("start after"),
+        "{human}"
+    );
+    assert!(!human.contains("inbox.md#^"), "{human}");
+
+    let mut command = configured(
+        &temp,
+        &vault,
+        &["merge", "-o", "-f", "json", "-i", "db:tgt", "inbox:src"],
+        Some(&day),
+    );
+    command.env("BOB_CONFIG_FILE", &config);
+    let output = command.output().expect("run merge records");
+    assert_exit(&output, 0);
+    let json = parse_json(&output);
+    let record = &json["merges"][0];
+    assert_eq!(record["outcome"], "merged");
+    assert_eq!(record["previous_status"], "*");
+    assert_eq!(record["previous_status_name"], "Next");
+    assert_eq!(record["status_symbol"], "-");
+    assert_eq!(record["status_name"], "Canceled");
+    let target = &record["target"];
+    assert_eq!(target["kind"], "task");
+    assert!(target["line"].as_u64().unwrap_or(0) > 0, "{target}");
+    assert_eq!(target["created"], false);
+    assert_eq!(target["status_symbol"], " ");
+    assert_eq!(target["status_name"], "Ready");
+    let consequences = record["consequences"]
+        .as_array()
+        .expect("consequences array");
+    let kinds: Vec<&str> = consequences
+        .iter()
+        .map(|row| row["kind"].as_str().unwrap_or(""))
+        .collect();
+    assert!(kinds.contains(&"dependent"), "{kinds:?}");
+    assert!(kinds.contains(&"prerequisite_left"), "{kinds:?}");
+    assert!(kinds.contains(&"successor_orphaned"), "{kinds:?}");
+    assert!(kinds.contains(&"link_pruned"), "{kinds:?}");
+    let dependent = consequences
+        .iter()
+        .find(|row| row["kind"] == "dependent")
+        .expect("dependent consequence");
+    assert_eq!(dependent["tone"], "info");
+    assert!(
+        dependent["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Dependent task"),
+        "{dependent}"
+    );
+    assert!(
+        dependent["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Target task"),
+        "{dependent}"
+    );
+    assert!(
+        !dependent["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("inbox.md#^"),
+        "titles not keys: {dependent}"
+    );
+    let prereq = consequences
+        .iter()
+        .find(|row| row["kind"] == "prerequisite_left")
+        .expect("prerequisite consequence");
+    assert_eq!(prereq["tone"], "warning");
+    assert!(
+        prereq["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Prereq task"),
+        "{prereq}"
+    );
+    assert!(
+        prereq["text"].as_str().unwrap_or("").contains("&inbox:pre"),
+        "{prereq}"
+    );
+    let successor = consequences
+        .iter()
+        .find(|row| row["kind"] == "successor_orphaned")
+        .expect("successor consequence");
+    assert_eq!(successor["tone"], "warning");
+    assert!(
+        successor["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Source task"),
+        "{successor}"
+    );
+    let pruned: Vec<&serde_json::Value> = consequences
+        .iter()
+        .filter(|row| row["kind"] == "link_pruned")
+        .collect();
+    assert_eq!(pruned.len(), 2, "{consequences:?}");
+    assert!(
+        pruned
+            .iter()
+            .any(|row| row["text"].as_str().unwrap_or("").contains("BUILD")),
+        "{pruned:?}"
+    );
+    assert!(
+        pruned
+            .iter()
+            .any(|row| row["text"].as_str().unwrap_or("").contains("ADMIN")),
+        "{pruned:?}"
+    );
+    let message = record["message"].as_str().unwrap_or("");
+    assert!(message.starts_with("⊘ Source task"), "{message}");
+    assert!(message.contains("Next → Cancelled"), "{message}");
+
+    let drawer_json = run_merge(
+        &temp,
+        &vault,
+        &[
+            "-o",
+            "-f",
+            "json",
+            "-i",
+            "db:tgt",
+            "-D",
+            "RESEARCH",
+            "inbox:pre",
+        ],
+        Some(&day),
+    );
+    assert_exit(&drawer_json, 0);
+    let drawer_parsed = parse_json(&drawer_json);
+    let drawer_record = &drawer_parsed["merges"][0];
+    assert_eq!(
+        drawer_record["target"]["created"], true,
+        "drawer merge JSON: {drawer_parsed}"
+    );
+    assert_eq!(drawer_record["target"]["kind"], "drawer");
+
+    let section_json = run_merge(
+        &temp,
+        &vault,
+        &[
+            "-o",
+            "-f",
+            "json",
+            "-i",
+            "db",
+            "-s",
+            "New Section",
+            "inbox:dep",
+        ],
+        Some(&day),
+    );
+    assert_exit(&section_json, 0);
+    let section_record = &parse_json(&section_json)["merges"][0];
+    assert_eq!(section_record["target"]["created"], true);
+    assert_eq!(section_record["target"]["kind"], "section");
+    assert!(section_record["target"]["line"].as_u64().unwrap_or(0) > 0);
+}

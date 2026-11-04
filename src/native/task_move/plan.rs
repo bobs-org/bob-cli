@@ -230,6 +230,8 @@ pub(crate) struct MoveRecord {
     pub(crate) new_block_id: Option<String>,
     pub(crate) old_dependency_id: Option<String>,
     pub(crate) new_dependency_id: Option<String>,
+    pub(crate) destination_section: Option<String>,
+    pub(crate) status_symbol: char,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1006,6 +1008,9 @@ pub(crate) fn plan_task_move(
             .as_ref()
             .and_then(|id| dependency_id(&dest_path, id).ok());
         let dest_line = landing_line + 1;
+        let destination_section = postimages
+            .get(&dest_path)
+            .and_then(|contents| section_for_line(contents, dest_line));
         moves.push(MoveRecord {
             source_path: source_path.clone(),
             dest_path: dest_path.clone(),
@@ -1016,6 +1021,8 @@ pub(crate) fn plan_task_move(
             new_block_id,
             old_dependency_id,
             new_dependency_id,
+            destination_section,
+            status_symbol: task.symbol,
         });
     }
 
@@ -1770,6 +1777,23 @@ fn append_tasks_section(contents: &str, insertion: &str) -> String {
     result.push_str(ending);
     result.push_str(insertion);
     result
+}
+
+fn section_for_line(contents: &str, line_1based: usize) -> Option<String> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let target = line_1based.saturating_sub(1);
+    let mut section: Option<String> = None;
+    for (index, line) in lines.iter().enumerate() {
+        if index >= target {
+            break;
+        }
+        if let Some((level, title)) = markdown::atx_heading(line)
+            && level == 2
+        {
+            section = Some(title.to_string());
+        }
+    }
+    section
 }
 
 fn tasks_heading_index(contents: &str) -> Option<usize> {

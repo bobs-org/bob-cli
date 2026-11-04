@@ -385,8 +385,33 @@ pub(crate) fn prepare_task_merge(
         staged_destination.container.path.clone(),
         repaired_destination.contents.clone(),
     );
-    let final_destination =
+    let mut final_destination =
         containers::resolve_destination(&staged, &request.target, context)?;
+    let staged_created = match &staged_destination.container.kind {
+        super::types::PreparedContainerKind::Drawer { created, .. }
+        | super::types::PreparedContainerKind::Section { created, .. } => {
+            *created
+        }
+        _ => false,
+    };
+    let initial_created = match &initial_destination.container.kind {
+        super::types::PreparedContainerKind::Drawer { created, .. }
+        | super::types::PreparedContainerKind::Section { created, .. } => {
+            *created
+        }
+        _ => false,
+    };
+    if staged_created || initial_created {
+        match &mut final_destination.container.kind {
+            super::types::PreparedContainerKind::Drawer { created, .. }
+            | super::types::PreparedContainerKind::Section {
+                created, ..
+            } => {
+                *created = true;
+            }
+            _ => {}
+        }
+    }
     let fragments: Vec<String> = prepared_payloads
         .iter()
         .map(|payload| payload.contents.clone())

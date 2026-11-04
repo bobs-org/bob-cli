@@ -986,22 +986,16 @@ fn print_report(report: &Report) {
             display_relative(&record.source.path),
             record.source.line
         );
-        for dependent in &record.dependents_repointed {
-            println!("  ⛓ {dependent}   now waits on “{target_label}”");
-        }
-        if !record.prerequisites_left.is_empty() {
-            println!(
-                "  ⚠ “{}” waited on {}; “{target_label}” does not · add &note:id",
-                record.source.title,
-                record.prerequisites_left.join(", ")
-            );
-        }
-        if !record.successors_orphaned.is_empty() {
-            println!(
-                "  ⚠ {} task(s) start after “{}”; they won't be offered when “{target_label}” finishes · relink with ~",
-                record.successors_orphaned.len(),
-                record.source.title
-            );
+        for consequence in &record.consequences {
+            match consequence.kind.as_str() {
+                "dependent" => {
+                    println!("  ⛓ {}", consequence.text);
+                }
+                "prerequisite_left" | "successor_orphaned" => {
+                    println!("  ⚠ {}", consequence.text);
+                }
+                _ => {}
+            }
         }
         for offer in &record.offers {
             if offer.selected {
@@ -1089,12 +1083,16 @@ fn json_document(report: &Report) -> Value {
                         "label": record.label,
                         "outcome": record.outcome,
                         "previous_status": record.previous_status.map(|status| status.to_string()),
+                        "previous_status_name": record.previous_status_name,
+                        "status_symbol": record.status_symbol.map(|status| status.to_string()),
+                        "status_name": record.status_name,
                         "moved_lines": record.moved_lines,
                         "moved_notes": record.moved_notes,
                         "dependents_repointed": record.dependents_repointed,
                         "prerequisites_left": record.prerequisites_left,
                         "successors_orphaned": record.successors_orphaned,
                         "links_pruned": record.links_pruned,
+                        "consequences": record.consequences,
                         "offers": record.offers,
                         "message": record.message,
                     })

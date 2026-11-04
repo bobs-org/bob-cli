@@ -1220,3 +1220,105 @@ fn transfer_merge_offers_follow_later_draft_actions() {
         }
     }
 }
+
+#[test]
+fn transfer_records_serialize_merge_offers_top_copy_and_move_fields() {
+    let (_temp, vault, day) = setup_merge_vault("transfer-merge-records");
+    write_file(
+        &day,
+        "## Pomodoros\n\n- [ ] () — BUILD\n  - [[inbox#^bench]]\n  - keep this slot\n",
+    );
+    let dry = capture_json(&vault, &day, "@inbox+bench > @db+upgrade", true);
+    assert_success(&dry);
+    let json = json_body(&dry);
+    let record = &json["merges"][0];
+    assert_eq!(record["outcome"], "merged");
+    assert_eq!(record["previous_status_name"], "Ready");
+    assert_eq!(record["status_symbol"], "-");
+    let target = &record["target"];
+    assert!(target["line"].as_u64().unwrap_or(0) > 0, "{target}");
+    assert_eq!(target["created"], false);
+    let consequences = record["consequences"]
+        .as_array()
+        .expect("consequences array");
+    assert!(
+        consequences.iter().any(|row| row["kind"] == "dependent"
+            || row["kind"] == "link_pruned"
+            || row["kind"] == "prerequisite_left"
+            || row["kind"] == "successor_orphaned"),
+        "{consequences:?}"
+    );
+    for row in consequences {
+        let text = row["text"].as_str().unwrap_or("");
+        assert!(!text.contains("inbox.md#^"), "titles not keys: {row}");
+        assert!(!text.contains("[[org]]"), "titles not keys: {row}");
+    }
+    let offers = json["merge_offers"]
+        .as_array()
+        .expect("merge_offers present");
+    assert_eq!(offers.len(), 1, "{json}");
+    let offer = &offers[0];
+    assert_eq!(offer["trigger"], "merge");
+    assert!(offer["offer"]["merged_from"].is_string(), "{offer}");
+    assert_eq!(offer["offer"]["group"], "hand_off");
+    let dry_n = offer["offer"]["n"].as_u64().unwrap_or(0);
+    assert!(dry_n > 0, "{offer}");
+    assert_eq!(
+        json["pull_in"]["copy"]["title"],
+        serde_json::json!(format!(
+            "Link “{}” in place of “Benchmark logical replication”",
+            target["title"].as_str().unwrap_or("")
+        )),
+        "{json}"
+    );
+    assert_eq!(json["pull_in"]["copy"]["capsule"], "Pull in");
+    assert_eq!(json["pull_in"]["copy"]["glyph"], "hand_off");
+
+    let required = bob_command()
+        .args(["capture", "-b"])
+        .arg(&vault)
+        .args(["-f", "json", "--dry-run", "--require-pull-in-choice", "--"])
+        .arg("@inbox+bench > @db+upgrade")
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("require choice failure");
+    assert!(!required.status.success());
+    let failure: serde_json::Value = serde_json::from_str(
+        stdout(&required).trim(),
+    )
+    .unwrap_or_else(|error| {
+        panic!("failure JSON: {error}\n{}", format_output(&required))
+    });
+    let failure_n = failure["offers"][0]["offer"]["n"].as_u64().unwrap_or(0);
+    assert_eq!(dry_n, failure_n, "{failure}");
+
+    let two = capture_json(
+        &vault,
+        &day,
+        "@work+pgdump @inbox+bench > @db+upgrade",
+        true,
+    );
+    assert_success(&two);
+    let two_json = json_body(&two);
+    assert_eq!(
+        two_json["pull_in"]["copy"]["title"],
+        serde_json::json!(format!(
+            "Link “{}” in place of 2 merged tasks",
+            two_json["merges"][0]["target"]["title"]
+                .as_str()
+                .unwrap_or("")
+        )),
+        "{two_json}"
+    );
+
+    let moved = capture_json(&vault, &day, "@inbox+bench > @db", true);
+    assert_success(&moved);
+    let moved_json = json_body(&moved);
+    let movement = &moved_json["moves"][0];
+    assert!(movement["destination_line"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(movement["destination_section"], "Tasks");
+    assert!(movement["status_symbol"].is_string(), "{movement}");
+    assert!(movement["status_name"].is_string(), "{movement}");
+    assert_eq!(movement["title"], "Benchmark logical replication");
+}

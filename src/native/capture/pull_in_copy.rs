@@ -139,7 +139,7 @@ pub(super) fn assemble_groups(
             )
         })
         .collect();
-    let copy = top_copy(&json_groups, &groups);
+    let copy = top_copy(&json_groups, &groups, items);
     (json_groups, copy)
 }
 
@@ -569,12 +569,71 @@ fn keep_moving_fold_line(fold: &PullInFoldedJson) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
+fn merge_only_copy(items: &[PlannedCaptureItem]) -> Option<PullInTopCopyJson> {
+    let mut rows = Vec::new();
+    for item in items {
+        for row in all_offer_rows(&item.result) {
+            let Some(offer) = row.offer.as_ref() else {
+                continue;
+            };
+            rows.push(row);
+            let is_merge = row.trigger == "merge"
+                && offer.group == "hand_off"
+                && offer.merged_from.is_some();
+            if !is_merge {
+                return None;
+            }
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let mut merged: Vec<(String, String)> = Vec::new();
+    for item in items {
+        for record in &item.result.relation_merge_output.merges {
+            if record.outcome != crate::native::task_merge::MergeOutcome::Merged
+            {
+                continue;
+            }
+            let target = record
+                .target
+                .title
+                .clone()
+                .or_else(|| record.target.drawer.clone())
+                .or_else(|| record.target.section.clone())
+                .unwrap_or_default();
+            merged.push((target, record.source.title.clone()));
+        }
+    }
+    if merged.is_empty() {
+        return None;
+    }
+    let title = if merged.len() == 1 {
+        format!("Link “{}” in place of “{}”", merged[0].0, merged[0].1)
+    } else {
+        format!(
+            "Link “{}” in place of {} merged tasks",
+            merged[0].0,
+            merged.len()
+        )
+    };
+    Some(PullInTopCopyJson {
+        title,
+        capsule: "Pull in".to_string(),
+        glyph: "hand_off",
+    })
+}
+
 fn top_copy(
     groups: &[PullInGroupJson],
     acc: &[GroupAcc<'_>],
+    items: &[PlannedCaptureItem],
 ) -> Option<PullInTopCopyJson> {
     if groups.is_empty() {
         return None;
+    }
+    if let Some(merge_copy) = merge_only_copy(items) {
+        return Some(merge_copy);
     }
     let relation_only = groups.iter().all(|group| group.group == "relation");
     let keep_only = groups.iter().all(|group| group.group == "keep_moving");

@@ -18,7 +18,7 @@ use std::{
 
 use super::{
     super::{
-        note_tasks,
+        capture_pomodoros, note_tasks, pomodoro,
         relation_labels::relation_label_key,
         task_cancel,
         task_dependencies::{
@@ -32,7 +32,7 @@ use super::{
             label::normalize_relation_label, parse as relation_parse,
             plan as relation_plan,
         },
-        task_status_hooks,
+        task_status_hooks::{self, scan_pomodoros},
         vault_links::{LinkResolution, NoteIndex},
     },
     types::{
@@ -69,6 +69,7 @@ pub(crate) struct RetirementReports {
     pub(crate) successors_orphaned: Vec<String>,
     pub(crate) dependents_repointed: Vec<String>,
     pub(crate) links_pruned: usize,
+    pub(crate) pruned_entries: Vec<String>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -789,6 +790,51 @@ pub(crate) fn successor_orphans(
     out.sort();
     out.dedup();
     out
+}
+
+/// Map prune slots to distinct open Pomodoro entry names from the daily
+/// preimage. Names follow the ledger order and are deduplicated; empty
+/// names are dropped so callers fall back to the aggregate copy.
+fn pruned_entry_names(
+    daily_preimage: Option<&str>,
+    slots: &[crate::native::task_cancel::prune::PrunedLinkSlot],
+) -> Vec<String> {
+    let Some(preimage) = daily_preimage else {
+        return Vec::new();
+    };
+    let lines = task_status_hooks::logical_lines(preimage);
+    let Some(section) = pomodoro::pomodoros_section_range(&lines) else {
+        return Vec::new();
+    };
+    let model = scan_pomodoros(&lines, section);
+    let capture = capture_pomodoros::scan(preimage);
+    let mut names_by_line = std::collections::BTreeMap::new();
+    for entry in &capture.entries {
+        names_by_line.insert(
+            entry.line.saturating_sub(1),
+            entry.name.clone().unwrap_or_default(),
+        );
+    }
+    let mut names = Vec::new();
+    for slot in slots {
+        let Some(entry) = model.entries.get(slot.entry_index) else {
+            continue;
+        };
+        if !entry.open {
+            continue;
+        }
+        let name = names_by_line
+            .get(&entry.line_index)
+            .cloned()
+            .unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
 }
 
 /// Classify one source against the pre-payload snapshot for
@@ -1556,6 +1602,7 @@ pub(crate) fn apply_retirement(
         let prerequisites = source_prerequisites(&staged, &identity, context);
         let orphans = successor_orphans(&staged, &identity, context);
         let mut links_pruned = 0usize;
+        let mut pruned_entries = Vec::new();
         if let Some(target) = &target_identity {
             stage_task_provenance(
                 &mut staged,
@@ -1569,9 +1616,14 @@ pub(crate) fn apply_retirement(
                 target.0.with_extension("").to_string_lossy().into_owned(),
                 target.1
             );
+            let daily_preimage = staged.get(&context.daily_path).cloned();
             let plan =
                 cancel_source(&mut staged, &identity, &reason, context, None)?;
             links_pruned = plan.removed_pomodoro_links;
+            pruned_entries = pruned_entry_names(
+                daily_preimage.as_deref(),
+                &plan.prune.removed_slots,
+            );
             staged.insert(identity.0.clone(), plan.source_postimage.clone());
             if let Some(daily) = plan.daily_postimage {
                 staged.insert(context.daily_path.clone(), daily);
@@ -1593,9 +1645,14 @@ pub(crate) fn apply_retirement(
             // The provenance step already wrote the section Cancel Log
             // entry; cancelling with an empty reason keeps the status
             // change without adding the same reason twice.
+            let daily_preimage = staged.get(&context.daily_path).cloned();
             let plan =
                 cancel_source(&mut staged, &identity, "", context, None)?;
             links_pruned = plan.removed_pomodoro_links;
+            pruned_entries = pruned_entry_names(
+                daily_preimage.as_deref(),
+                &plan.prune.removed_slots,
+            );
             staged.insert(identity.0.clone(), plan.source_postimage.clone());
             if let Some(daily) = plan.daily_postimage {
                 staged.insert(context.daily_path.clone(), daily);
@@ -1643,6 +1700,7 @@ pub(crate) fn apply_retirement(
             successors_orphaned: orphans,
             dependents_repointed: repointed_here,
             links_pruned,
+            pruned_entries,
             warnings: std::mem::take(&mut graph_warnings),
         });
     }

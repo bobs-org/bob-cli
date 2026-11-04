@@ -1381,6 +1381,28 @@ fn print_report(report: &Report) {
     }
 }
 
+fn move_status_name(vault: &Path, symbol: char) -> String {
+    let settings = crate::native::note_tasks::read_settings(vault);
+    settings
+        .status_definitions
+        .iter()
+        .find(|definition| {
+            let mut characters = definition.symbol.chars();
+            characters.next() == Some(symbol) && characters.next().is_none()
+        })
+        .map(|definition| definition.name.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| match symbol {
+            ' ' => "Ready".to_string(),
+            '?' => "Blocked".to_string(),
+            '*' => "Next".to_string(),
+            '/' => "In Progress".to_string(),
+            'x' | 'X' => "Done".to_string(),
+            '-' => "Canceled".to_string(),
+            _ => "Unknown".to_string(),
+        })
+}
+
 fn json_document(report: &Report) -> Value {
     let plan = report.plan.as_ref();
     let moves = plan.map_or_else(Vec::new, |plan| {
@@ -1391,6 +1413,10 @@ fn json_document(report: &Report) -> Value {
                     "source_path": display_relative(&item.source_path),
                     "destination_path": display_relative(&item.dest_path),
                     "source_line": item.source_line,
+                    "destination_line": item.dest_line,
+                    "destination_section": item.destination_section,
+                    "status_symbol": item.status_symbol.to_string(),
+                    "status_name": move_status_name(&report.vault, item.status_symbol),
                     "title": item.title,
                     "old_block_id": item.old_block_id,
                     "new_block_id": item.new_block_id,
