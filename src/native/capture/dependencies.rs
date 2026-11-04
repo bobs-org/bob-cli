@@ -3613,6 +3613,7 @@ pub(super) fn plan_dependency_only_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update,
             consumed_links: Vec::new(),

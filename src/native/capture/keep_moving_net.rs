@@ -355,6 +355,12 @@ fn parked_targets(
                     .iter()
                     .flat_map(|summary| summary.relation_groups.iter()),
             )
+            .chain(
+                result
+                    .pomodoro_past
+                    .iter()
+                    .flat_map(|past| past.close.relation_groups.iter()),
+            )
             .collect();
     for group in groups {
         if group.event

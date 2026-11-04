@@ -3348,9 +3348,10 @@ pub(crate) fn past_token_len(text: &str) -> Option<usize> {
         let after_hash_in_first = &first[hash_pos + 1..];
         if opens_exact_name(after_hash_in_first) {
             let after_hash_full = &text[hash_pos + 1..];
-            if let Some(lex) =
-                lex_exact_name_after_hash(after_hash_full, after_hash_full.len())
-            {
+            if let Some(lex) = lex_exact_name_after_hash(
+                after_hash_full,
+                after_hash_full.len(),
+            ) {
                 let literal_end = hash_pos + 1 + lex.literal_len;
                 let after_literal = &text[literal_end..];
                 let suffix_len = after_literal
@@ -4506,8 +4507,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 split_past_token, validate_past_e, PastEOutcome,
             };
             const PAST_FORCED_ERROR: &str = "Pomodoro past `x=` cannot be combined with --route, --section, --task, --task-ref, --drawer, or --clip; capture the past alone";
-            let raw_token =
-                parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+            let raw_token = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
             let Some(split) = split_past_token(raw_token) else {
                 return Ok(None);
             };
@@ -4543,8 +4543,10 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             };
             let single_token_parent = parent_trimmed == raw_token;
             if single_token_parent && item.lines.len() == 1 {
-                let mut close =
-                    close_spec_from_lex(split.close_text.clone(), &lexed_selection);
+                let mut close = close_spec_from_lex(
+                    split.close_text.clone(),
+                    &lexed_selection,
+                );
                 close.log = Vec::new();
                 let spec = PomodoroPastSpec {
                     raw: raw_token.to_string(),
@@ -4674,9 +4676,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     AuthoredLineClass::EmptyOrPlaceholder
                 )
             });
-            let tail_text = parent_trimmed
-                .get(raw_token.len()..)
-                .unwrap_or("");
+            let tail_text = parent_trimmed.get(raw_token.len()..).unwrap_or("");
             let tail_start = token_abs_start + raw_token.len();
             let tail_raw = RawLine {
                 text: tail_text,

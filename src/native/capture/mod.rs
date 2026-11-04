@@ -81,6 +81,7 @@ mod pomodoro_close;
 mod pomodoro_insert;
 mod pomodoro_link;
 mod pomodoro_merge;
+pub(super) mod pomodoro_past;
 mod pomodoro_split;
 mod pomodoro_start;
 mod project_deps;

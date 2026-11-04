@@ -935,6 +935,7 @@ pub(super) fn plan_pomodoro_merge_item(
             pomodoro_split: None,
             pomodoro_merge: Some(summary),
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: None,
             consumed_links: Vec::new(),

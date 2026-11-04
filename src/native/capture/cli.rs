@@ -270,7 +270,7 @@ Pomodoro sessions form a lifecycle: `=`/`=<X>` starts the next session, \
 `=name` starts that named session, `+[N]`/`-[N]` resizes the \
 running session, `++[N]`/`--[N]` shifts it, and `x` stops the running one \
 (`=` starts the next session, `=name` starts that one, `x` stops the \
-running one). A whole-item `x=` past token records already-happened work (`x=3`, `x=build`, `x=fix@2=*3`); `capture-parse` understands it as grammar 12 while `bob capture` refuses it until record lands. Session operators may share one line when whitespace \
+running one). A whole-item `x=` past token records already-happened work (`x=3`, `x=build`, `x=build@2 x=fix@3`); each member closes at its own clock and files chronologically. Session operators may share one line when whitespace \
 separates them: `+2 x` means `+2`, blank line, `x`, and `x =` closes \
 then starts the next session. Quote `=` items in zsh, which expands a \
 leading `=word` to a command path.\n\n\

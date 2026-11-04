@@ -31,7 +31,9 @@ use crate::native::{
         insert_link_into_entry, insert_named_placeholder_after_last_open,
     },
     clock_tags::{self, ClockKind, ClockTag},
-    event_task, markdown,
+    event_task,
+    ledger_place::{self, LedgerInsert},
+    markdown,
     pomodoro::pomodoros_section_range,
     pomodoro_homes::ClockLookup,
 };
@@ -2504,35 +2506,10 @@ fn status_for_phase(phase: Option<LinkPhase>) -> char {
 }
 
 fn closed_insert_at(contents: &str, cluster_start: i32) -> LineInsert {
-    let scan = capture_pomodoros::scan(contents);
-    let lines = line_spans(contents);
-    let line_text: Vec<&str> = lines.iter().map(|line| line.text).collect();
-    let section =
-        pomodoros_section_range(&line_text).expect("Pomodoros section exists");
-    let completed: Vec<&PomodoroEntry> = scan
-        .entries
-        .iter()
-        .filter(|entry| entry.state == PomodoroState::Completed)
-        .collect();
-    if let Some(last) = completed
-        .iter()
-        .rev()
-        .find(|entry| entry_start_min(entry) <= cluster_start)
-    {
-        let end = child_block_end_line(&lines, last.line - 1);
-        return LineInsert::After(end);
+    match ledger_place::closed_insert_at(contents, cluster_start) {
+        LedgerInsert::Before(index) => LineInsert::Before(index),
+        LedgerInsert::After(index) => LineInsert::After(index),
     }
-    if let Some(first) = completed.first() {
-        return LineInsert::Before(first.line - 1);
-    }
-    if let Some(first_open) = scan
-        .entries
-        .iter()
-        .find(|entry| entry.state == PomodoroState::Open)
-    {
-        return LineInsert::Before(first_open.line - 1);
-    }
-    LineInsert::Before(section.start)
 }
 
 fn running_insert_at(contents: &str) -> LineInsert {
@@ -2557,15 +2534,6 @@ fn running_insert_at(contents: &str) -> LineInsert {
         return LineInsert::Before(first_open.line - 1);
     }
     LineInsert::Before(section.start)
-}
-
-fn entry_start_min(entry: &PomodoroEntry) -> i32 {
-    entry
-        .time_range
-        .as_deref()
-        .and_then(|range| range.split_once('-'))
-        .and_then(|(start, _)| parse_hhmm(start).map(i32::from))
-        .unwrap_or(0)
 }
 
 fn insert_ledger_line(

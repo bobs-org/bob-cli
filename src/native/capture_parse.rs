@@ -20,8 +20,8 @@ use super::{
         EditorParseOptions, EditorTarget, ListContext, MoveBullet,
         MoveChoiceBullet, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
         PomodoroMergeSpec, PomodoroPastSpec, PomodoroShiftSpec,
-        PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId,
-        RelationDirection, RelationEntry, ResolvedTypeName, Severity, Span,
+        PomodoroSplitSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
+        RelationEntry, ResolvedTypeName, Severity, Span,
     },
     capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -2374,15 +2374,16 @@ fn refusal_diagnostic(
         ) || matches!(mode, EditorMode::PomodoroTask | EditorMode::PomodoroLink)
             && (start.is_some() || close.is_some() || past.is_some())
     };
-    let session = is_session(mode, pomodoro_start, pomodoro_close, pomodoro_past)
-        || items.iter().any(|item| {
-            is_session(
-                item.mode,
-                &item.pomodoro_start,
-                &item.pomodoro_close,
-                &item.pomodoro_past,
-            )
-        });
+    let session =
+        is_session(mode, pomodoro_start, pomodoro_close, pomodoro_past)
+            || items.iter().any(|item| {
+                is_session(
+                    item.mode,
+                    &item.pomodoro_start,
+                    &item.pomodoro_close,
+                    &item.pomodoro_past,
+                )
+            });
     if !session {
         return None;
     }
@@ -3198,8 +3199,7 @@ fn format_past_close_summary(close: &PomodoroCloseSpec) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(in_progress) = close.in_progress.as_ref() {
         if in_progress.is_empty() {
-            if close.park.is_empty() && !close.park_all && !close.complete_all
-            {
+            if close.park.is_empty() && !close.park_all && !close.complete_all {
                 parts.push("in progress none".to_string());
             }
         } else {

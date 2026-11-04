@@ -230,6 +230,9 @@ fn completion_summary_count(
     if result.pomodoro_close.is_some() {
         count += 1;
     }
+    if result.pomodoro_past.is_some() {
+        count += 1;
+    }
     if result
         .project_note
         .as_ref()

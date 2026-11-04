@@ -271,6 +271,238 @@ pub(crate) fn plan_ledger_close(
     plan_ledger_close_with_parked(contents, entry, now, &BTreeSet::new(), None)
 }
 
+/// How a close plans its continuation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LedgerClosePolicy {
+    /// Ordinary `x`: always leave a next entry; MEET continuations move
+    /// to the end of the open queue.
+    Ordinary,
+    /// Recorded past session: create a continuation only when links
+    /// carry, at the source slot (no MEET last-placement).
+    Record,
+}
+
+pub(crate) fn plan_ledger_close_with_policy(
+    contents: &str,
+    entry: &RunningPomodoro,
+    now: NaiveDateTime,
+    parked_lines: &BTreeSet<usize>,
+    names: Option<&CloseNames>,
+    policy: LedgerClosePolicy,
+) -> LedgerClosePlan {
+    // Record and ordinary share the ledger implementation except for the
+    // continuation decision; branch here so ordinary stays byte-identical.
+    if policy == LedgerClosePolicy::Ordinary {
+        return plan_ledger_close_with_parked(
+            contents,
+            entry,
+            now,
+            parked_lines,
+            names,
+        );
+    }
+    plan_record_ledger_close(contents, entry, now, parked_lines, names)
+}
+
+/// Record-only ledger close: continuation only when links carry, kept at
+/// the source slot (no MEET last-placement, no empty continuation).
+fn plan_record_ledger_close(
+    contents: &str,
+    entry: &RunningPomodoro,
+    now: NaiveDateTime,
+    parked_lines: &BTreeSet<usize>,
+    names: Option<&CloseNames>,
+) -> LedgerClosePlan {
+    let closed_name = match names {
+        Some(names) => entry.name.as_ref().map(|_| names.closed.clone()),
+        None => entry.name.clone(),
+    };
+    let continuation_name = match names {
+        Some(names) => entry.name.as_ref().map(|_| names.continuation.clone()),
+        None => entry.name.clone(),
+    };
+    let spans = line_spans(contents);
+    let line_text = spans.iter().map(|line| line.text).collect::<Vec<_>>();
+    let entry_index = entry.line.saturating_sub(1);
+    let range = sub_bullet_range(&line_text, entry_index);
+    let fenced = markdown::fenced_lines(&line_text, 0..line_text.len());
+    let classified = classify_sub_bullets(&line_text, &range, &fenced);
+    let work_log_groups =
+        collect_work_log_note_groups(&spans, entry_index, &range, &fenced);
+    let notes = classified
+        .iter()
+        .filter(|bullet| {
+            bullet.kind == BulletKind::Note
+                && !fenced.contains(&bullet.line)
+                && nearest_shallower_list_item_parent(&spans, bullet.line)
+                    == Some(entry_index)
+                && wikilink_tokens(&bullet.stripped).is_empty()
+        })
+        .filter_map(|bullet| {
+            let body = list_item_body(&bullet.stripped).map(str::trim)?;
+            (!body.is_empty()).then(|| body.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    let entry_line = line_text.get(entry_index).copied().unwrap_or("");
+    let parsed_range = parse_adjustment_range(entry_line);
+    let (timing, unparseable_range) = match parsed_range.as_ref() {
+        Some(parsed) => (Some(close_timing(parsed, now)), false),
+        None => (None, true),
+    };
+
+    let mut classified_links = Vec::new();
+    let mut startable_targets = Vec::new();
+    let mut embedded_targets = Vec::new();
+    for bullet in &classified {
+        collect_links_from_bullet(
+            bullet,
+            &mut classified_links,
+            &mut startable_targets,
+            &mut embedded_targets,
+        );
+    }
+    for link in classified_links.iter_mut() {
+        if parked_lines.contains(&link.line) {
+            link.carried = false;
+        }
+    }
+
+    let mut carried_lines = Vec::new();
+    for bullet in classified
+        .iter()
+        .filter(|bullet| bullet.kind == BulletKind::WorkedOn)
+    {
+        if parked_lines.contains(&(bullet.line + 1)) {
+            continue;
+        }
+        carried_lines.push(bullet.stripped.clone());
+    }
+    let mut deferred_lines = BTreeSet::new();
+    for bullet in classified
+        .iter()
+        .filter(|bullet| bullet.kind == BulletKind::Deferred)
+    {
+        deferred_lines.insert(bullet.line);
+        if let Some(destination) = &bullet.deferred_destination {
+            carried_lines.push(destination.clone());
+        }
+    }
+    let mut dropped_lines = BTreeSet::new();
+    for bullet in classified
+        .iter()
+        .filter(|bullet| bullet.kind == BulletKind::Dropped)
+    {
+        dropped_lines.insert(bullet.line);
+    }
+    let removed_lines: BTreeSet<usize> =
+        deferred_lines.union(&dropped_lines).copied().collect();
+
+    let should_create = !carried_lines.is_empty();
+
+    let mut output_lines = Vec::new();
+    for (index, line) in line_text.iter().enumerate() {
+        if index >= range.start {
+            break;
+        }
+        if index == entry_index {
+            output_lines.push(close_entry_line(
+                line,
+                timing.as_ref(),
+                entry.name.as_deref(),
+                closed_name.as_deref(),
+            ));
+        } else {
+            output_lines.push((*line).to_string());
+        }
+    }
+    for index in range.clone() {
+        let line = line_text[index];
+        if removed_lines.contains(&index) {
+            continue;
+        }
+        if fenced.contains(&index) {
+            output_lines.push(line.to_string());
+            continue;
+        }
+        output_lines.push(rewrite_completed_markers(line));
+    }
+
+    // Record continuations stay at the source slot (no MEET last move).
+    let anchor_end = range.end;
+    let mut created_next = None;
+    let mut shed = Vec::new();
+    if should_create {
+        let placeholder = match continuation_name.as_deref() {
+            Some(name) => {
+                capture_pomodoros::format_named_placeholder_line(name)
+            }
+            None => PLACEHOLDER_LINE.to_string(),
+        };
+        let placeholder_index = output_lines.len();
+        output_lines.push(placeholder);
+        if carried_lines.is_empty() {
+            output_lines.push(EMPTY_SUB_BULLET.to_string());
+        } else {
+            output_lines.extend(carried_lines.iter().cloned());
+        }
+        created_next = Some(NextPomodoro {
+            line: placeholder_index + 1,
+            name: continuation_name.clone(),
+            time_range: None,
+            created: true,
+            placed_last: false,
+        });
+        if let Some(names) = names {
+            shed = names.shed.clone();
+        }
+    }
+    output_lines.extend(
+        line_text[anchor_end..]
+            .iter()
+            .map(|line| (*line).to_string()),
+    );
+
+    let later_entry = find_next_pomodoro_line(&line_text, entry_index);
+    let next_pomodoro = created_next.or_else(|| {
+        later_entry.map(|later_index| {
+            let shifted = later_index - removed_lines.len();
+            let line = line_text[later_index];
+            NextPomodoro {
+                line: shifted + 1,
+                name: pomodoro_line_name(line),
+                time_range: pomodoro_line_time_range(line),
+                created: false,
+                placed_last: false,
+            }
+        })
+    });
+
+    let ending = line_ending(contents);
+    let had_final_newline = contents.ends_with('\n');
+    let mut rebuilt = output_lines.join(ending);
+    if had_final_newline {
+        rebuilt.push_str(ending);
+    }
+
+    LedgerClosePlan {
+        contents: rebuilt,
+        timing,
+        unparseable_range,
+        classified_links,
+        carried_lines,
+        notes,
+        next_pomodoro,
+        startable_targets,
+        embedded_targets,
+        work_log_groups,
+        sub_bullet_range: range,
+        closed_name,
+        continuation_name,
+        shed,
+    }
+}
+
 /// Ledger close with explicit parked-line suppression. `parked_lines` holds
 /// 1-based day-note lines in `contents` (the post-selection working copy)
 /// whose worked lines must be recorded but not carried. Parked lines stay in

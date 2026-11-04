@@ -244,24 +244,30 @@ fn close_created_component_counts(
 ) -> BTreeMap<String, u32> {
     let mut counts = BTreeMap::new();
     for item in &batch.items {
-        let Some(close) = item.result.pomodoro_close.as_ref() else {
-            continue;
-        };
-        let Some(next) = close.next_pomodoro.as_ref() else {
-            continue;
-        };
-        if !next.created {
-            continue;
-        }
-        let Some(name) = next.name.as_deref() else {
-            continue;
-        };
-        for component in plan_budget::split_components(name) {
-            let key = plan_budget::normalize_component(&component);
-            if key.is_empty() {
+        let closes: Vec<&super::output::PomodoroCloseSummaryJson> = item
+            .result
+            .pomodoro_close
+            .as_ref()
+            .into_iter()
+            .chain(item.result.pomodoro_past.as_ref().map(|past| &*past.close))
+            .collect();
+        for close in closes {
+            let Some(next) = close.next_pomodoro.as_ref() else {
+                continue;
+            };
+            if !next.created {
                 continue;
             }
-            *counts.entry(key).or_default() += 1;
+            let Some(name) = next.name.as_deref() else {
+                continue;
+            };
+            for component in plan_budget::split_components(name) {
+                let key = plan_budget::normalize_component(&component);
+                if key.is_empty() {
+                    continue;
+                }
+                *counts.entry(key).or_default() += 1;
+            }
         }
     }
     counts

@@ -66,6 +66,7 @@ mod pomodoro_link;
 mod pomodoro_merge;
 mod pomodoro_name;
 mod pomodoro_override;
+mod pomodoro_past;
 mod pomodoro_reset;
 mod pomodoro_shift;
 mod pomodoro_split;

@@ -16,6 +16,7 @@ pub(crate) enum Placement {
     Completed,
     Queued,
     Unchanged,
+    Recorded,
 }
 
 /// Additive `ref` object on a reference item result: the classified
@@ -273,6 +274,45 @@ pub(super) struct PomodoroCloseSummaryJson {
     #[serde(skip)]
     pub(super) keep_moving_folds:
         Vec<crate::native::task_complete::KeepMovingFold>,
+}
+
+/// Recorded past session: the nested close summary plus record identity.
+/// `trims` stays empty in the record phase (h2.4 fills it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroPastSummaryJson {
+    pub(super) raw: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    pub(super) target: PomodoroPastTargetJson,
+    pub(super) blocks: u32,
+    pub(super) repair: bool,
+    pub(super) stack: PomodoroPastStackJson,
+    pub(super) anchor: String,
+    pub(super) window: PomodoroPastWindowJson,
+    pub(super) closed_at: String,
+    pub(super) line: usize,
+    #[serde(default)]
+    pub(super) trims: Vec<serde_json::Value>,
+    pub(super) close: Box<PomodoroCloseSummaryJson>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroPastTargetJson {
+    pub(super) source: String,
+    pub(super) line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroPastStackJson {
+    pub(super) index: u32,
+    pub(super) size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroPastWindowJson {
+    pub(super) start: String,
+    pub(super) end: String,
+    pub(super) minutes: u64,
 }
 
 /// One note-free `x0` reset: the current Pomodoro returned to the
@@ -683,6 +723,8 @@ pub(super) struct CaptureItemResult {
     pub(super) pomodoro_merge: Option<PomodoroMergeSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_close: Option<PomodoroCloseSummaryJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_past: Option<PomodoroPastSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_reset: Option<PomodoroResetSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2678,6 +2720,11 @@ pub(super) fn all_unblocked(
                 .flat_map(|summary| summary.unblocked.iter()),
         )
         .chain(
+            item.pomodoro_past
+                .iter()
+                .flat_map(|past| past.close.unblocked.iter()),
+        )
+        .chain(
             item.project_note
                 .iter()
                 .flat_map(|note| note.successors.iter().flatten()),
@@ -2703,6 +2750,11 @@ pub(super) fn all_still_blocked(
                 .iter()
                 .flat_map(|summary| summary.still_blocked.iter()),
         )
+        .chain(
+            item.pomodoro_past
+                .iter()
+                .flat_map(|past| past.close.still_blocked.iter()),
+        )
 }
 
 /// Every project fold an item reports, in the same order as
@@ -2722,6 +2774,11 @@ pub(super) fn all_project_folds(
             item.pomodoro_close
                 .iter()
                 .flat_map(|summary| summary.project_folds.iter()),
+        )
+        .chain(
+            item.pomodoro_past
+                .iter()
+                .flat_map(|past| past.close.project_folds.iter()),
         )
         .chain(
             item.project_note
@@ -2745,6 +2802,9 @@ pub(super) fn unblocked_vecs_mut(
     }
     if let Some(summary) = item.pomodoro_close.as_mut() {
         vecs.push(&mut summary.unblocked);
+    }
+    if let Some(past) = item.pomodoro_past.as_mut() {
+        vecs.push(&mut past.close.unblocked);
     }
     if let Some(note) = item.project_note.as_mut()
         && let Some(successors) = note.successors.as_mut()
@@ -2775,6 +2835,11 @@ pub(super) fn all_keep_moving(
                 .iter()
                 .flat_map(|summary| summary.keep_moving.iter()),
         )
+        .chain(
+            item.pomodoro_past
+                .iter()
+                .flat_map(|past| past.close.keep_moving.iter()),
+        )
 }
 
 /// Every relation-winning successor row an item reports: item-level
@@ -2795,6 +2860,11 @@ pub(super) fn all_relation_successors(
                 item.pomodoro_close
                     .iter()
                     .flat_map(|summary| summary.relation_successors.iter()),
+            )
+            .chain(
+                item.pomodoro_past
+                    .iter()
+                    .flat_map(|past| past.close.relation_successors.iter()),
             ),
     )
 }
@@ -2853,6 +2923,11 @@ pub(super) fn all_relation_groups(
                 item.pomodoro_close
                     .iter()
                     .flat_map(|summary| summary.relation_groups.iter()),
+            )
+            .chain(
+                item.pomodoro_past
+                    .iter()
+                    .flat_map(|past| past.close.relation_groups.iter()),
             ),
     )
 }
@@ -2873,6 +2948,11 @@ pub(super) fn all_relation_held(
                 item.pomodoro_close
                     .iter()
                     .flat_map(|summary| summary.relation_held.iter()),
+            )
+            .chain(
+                item.pomodoro_past
+                    .iter()
+                    .flat_map(|past| past.close.relation_held.iter()),
             ),
     )
 }
@@ -2895,6 +2975,11 @@ pub(super) fn all_relation_check<'a>(
                     item.pomodoro_close
                         .iter()
                         .filter_map(|summary| summary.relation_check),
+                )
+                .chain(
+                    item.pomodoro_past
+                        .iter()
+                        .filter_map(|past| past.close.relation_check),
                 ),
         ) {
             if value == "unavailable" {
@@ -2922,6 +3007,9 @@ pub(super) fn relation_successors_vecs_mut(
     if let Some(summary) = item.pomodoro_close.as_mut() {
         vecs.push(&mut summary.relation_successors);
     }
+    if let Some(past) = item.pomodoro_past.as_mut() {
+        vecs.push(&mut past.close.relation_successors);
+    }
     vecs
 }
 
@@ -2945,6 +3033,9 @@ pub(super) fn relation_groups_mut(
     if let Some(summary) = item.pomodoro_close.as_mut() {
         vecs.push(&mut summary.relation_groups);
     }
+    if let Some(past) = item.pomodoro_past.as_mut() {
+        vecs.push(&mut past.close.relation_groups);
+    }
     vecs
 }
 
@@ -2962,6 +3053,9 @@ pub(super) fn keep_moving_vecs_mut(
     }
     if let Some(summary) = item.pomodoro_close.as_mut() {
         vecs.push(&mut summary.keep_moving);
+    }
+    if let Some(past) = item.pomodoro_past.as_mut() {
+        vecs.push(&mut past.close.keep_moving);
     }
     vecs
 }
@@ -2986,6 +3080,12 @@ pub(super) fn keep_moving_parts_mut(
     if let Some(summary) = item.pomodoro_close.as_mut() {
         parts.push((&mut summary.keep_moving, &mut summary.keep_moving_folds));
     }
+    if let Some(past) = item.pomodoro_past.as_mut() {
+        parts.push((
+            &mut past.close.keep_moving,
+            &mut past.close.keep_moving_folds,
+        ));
+    }
     parts
 }
 
@@ -3004,6 +3104,11 @@ pub(super) fn all_keep_moving_folds(
             item.pomodoro_close
                 .iter()
                 .flat_map(|summary| summary.keep_moving_folds.iter()),
+        )
+        .chain(
+            item.pomodoro_past
+                .iter()
+                .flat_map(|past| past.close.keep_moving_folds.iter()),
         )
 }
 
@@ -3261,6 +3366,13 @@ pub(super) fn print_human_item_success(
             &prefix,
             &ordinal,
             &target_label,
+        );
+        print_consumed_links(result, &styler);
+        return;
+    }
+    if let Some(past) = result.pomodoro_past.as_ref() {
+        print_human_pomodoro_past_success(
+            result, past, &styler, &prefix, &ordinal,
         );
         print_consumed_links(result, &styler);
         return;
@@ -3940,6 +4052,14 @@ pub(super) fn print_human_pomodoro_close_success(
         ));
     }
     println!("{prefix} {ordinal}{header}");
+    print_close_body(result, close, styler);
+}
+
+fn print_close_body(
+    result: &CaptureItemResult,
+    close: &PomodoroCloseSummaryJson,
+    styler: &Styler,
+) {
     // Link forms: existing link status and ledger lines.
     if result.routed
         && let (Some(action), Some(dest)) = (
@@ -4241,6 +4361,54 @@ pub(super) fn print_human_pomodoro_close_success(
             ))
         );
     }
+}
+
+pub(super) fn print_human_pomodoro_past_success(
+    result: &CaptureItemResult,
+    past: &PomodoroPastSummaryJson,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+) {
+    let close = &*past.close;
+    let verb = if result.dry_run {
+        "would record"
+    } else {
+        "recorded"
+    };
+    let name = past
+        .name
+        .as_deref()
+        .or(close.closed_name.as_deref())
+        .or(close.pomodoro_name.as_deref())
+        .unwrap_or("session");
+    let narrowed_from = match (&close.closed_name, &close.pomodoro_name) {
+        (Some(closed), Some(running)) if closed != running => {
+            format!(" · from {running}")
+        }
+        _ => String::new(),
+    };
+    let off_clock = crate::native::pomodoro_homes::off_clock_via_label(
+        close.off_clock,
+        close.clock_note.as_deref(),
+    );
+    let range_text = format!(
+        "{}-{} ({}m{})",
+        past.window.start, past.window.end, past.window.minutes, off_clock
+    );
+    let mut header = format!(
+        "{verb} {name} {range_text}{narrowed_from} · {} line {}",
+        close.day_relative, past.line
+    );
+    if past.stack.size > 1 {
+        header.push_str(&format!(
+            " · {} of {}",
+            past.stack.index, past.stack.size
+        ));
+    }
+    // Records never overrun and never decrement by construction.
+    println!("{prefix} {ordinal}{header}");
+    print_close_body(result, close, styler);
 }
 
 fn format_event_hhmm(value: &str) -> String {
@@ -7029,6 +7197,7 @@ mod tests {
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: None,
             consumed_links: Vec::new(),

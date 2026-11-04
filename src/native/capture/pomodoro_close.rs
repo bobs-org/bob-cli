@@ -632,17 +632,19 @@ pub(super) fn stage_close_plan(
 }
 
 /// Outcome of the close successor pass, ready for the summary JSON.
-struct CloseSuccessorOutcome {
-    unblocked: Vec<TaskCompleteUnblockedJson>,
-    keep_moving: Vec<TaskCompleteUnblockedJson>,
-    relation_successors: Vec<TaskCompleteUnblockedJson>,
-    relation_held: Vec<RelationHeldJson>,
-    relation_check: Option<&'static str>,
-    relation_groups: Vec<crate::native::task_complete::RelationOfferGroup>,
-    still_blocked: Vec<TaskCompleteStillBlockedJson>,
-    unblocked_check: &'static str,
-    project_folds: Vec<crate::native::task_complete::ProjectFold>,
-    keep_moving_folds: Vec<crate::native::task_complete::KeepMovingFold>,
+pub(super) struct CloseSuccessorOutcome {
+    pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
+    pub(super) keep_moving: Vec<TaskCompleteUnblockedJson>,
+    pub(super) relation_successors: Vec<TaskCompleteUnblockedJson>,
+    pub(super) relation_held: Vec<RelationHeldJson>,
+    pub(super) relation_check: Option<&'static str>,
+    pub(super) relation_groups:
+        Vec<crate::native::task_complete::RelationOfferGroup>,
+    pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
+    pub(super) unblocked_check: &'static str,
+    pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
+    pub(super) keep_moving_folds:
+        Vec<crate::native::task_complete::KeepMovingFold>,
 }
 
 /// 0-based line of the closed entry in the post-close day text: the
@@ -797,7 +799,7 @@ fn parked_relation_events(
 /// nothing here, so `x` closes that complete nothing stay
 /// byte-identical.
 #[allow(clippy::too_many_arguments)]
-fn plan_close_successors(
+pub(super) fn plan_close_successors(
     request: &CaptureRequest,
     today: chrono::NaiveDate,
     planner: &mut CaptureBatchPlanner,
@@ -1451,6 +1453,7 @@ fn plan_reset_link_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: Some(summary),
             dependency_update: None,
             consumed_links: Vec::new(),
@@ -1615,6 +1618,7 @@ fn plan_reset_task_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: Some(summary),
             dependency_update: close_dependencies
                 .as_ref()
@@ -1747,6 +1751,7 @@ fn plan_reset_whole_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: Some(summary),
             dependency_update: None,
             consumed_links: Vec::new(),
@@ -2002,6 +2007,7 @@ pub(super) fn plan_pomodoro_close_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: Some(summary),
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: None,
             consumed_links: Vec::new(),
@@ -2079,9 +2085,19 @@ fn locate_close_headline(
     candidate
 }
 
+/// Record-path headline refresh: same as the ordinary close refresh.
+/// Exposed under a record-specific name so the record planner's call site
+/// reads as the specified pipeline step.
+pub(super) fn refresh_close_headline_for_record(
+    post_day: &str,
+    summary: &mut PomodoroCloseSummaryJson,
+) -> usize {
+    refresh_close_headline(post_day, summary)
+}
+
 /// Keep the JSON headline and its preview reference on the same resolved
 /// post-edit ledger row.
-fn refresh_close_headline(
+pub(super) fn refresh_close_headline(
     post_day: &str,
     summary: &mut PomodoroCloseSummaryJson,
 ) -> usize {
@@ -2798,6 +2814,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: Some(summary),
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: None,
             consumed_links: Vec::new(),
@@ -3149,6 +3166,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: Some(summary),
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: close_dependencies
                 .as_ref()

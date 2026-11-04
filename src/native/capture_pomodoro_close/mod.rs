@@ -30,16 +30,19 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use ledger::plan_ledger_close;
+#[allow(unused_imports)]
 pub(crate) use ledger::{
-    find_running_pomodoro, plan_ledger_close_with_parked, sub_bullet_range,
-    target_from_token, BlockLinkTarget, FindRunningError, LedgerClosePlan,
+    find_running_pomodoro, plan_ledger_close_with_parked,
+    plan_ledger_close_with_policy, sub_bullet_range, target_from_token,
+    BlockLinkTarget, FindRunningError, LedgerClosePlan, LedgerClosePolicy,
     LedgerLinkRole, RunningPomodoro, WorkLogNode,
 };
 #[allow(unused_imports)]
 pub(crate) use linked_tasks::{
     clock_resolver, lookup_task, plan_pomodoro_close,
-    plan_pomodoro_close_outcome, CloseVault, CloseVaultHomeSource,
-    PomodoroCloseOutcome, PomodoroClosePlan, PomodoroClosePlanError,
+    plan_pomodoro_close_for_entry, plan_pomodoro_close_outcome, CloseVault,
+    CloseVaultHomeSource, PomodoroCloseOutcome, PomodoroClosePlan,
+    PomodoroClosePlanError,
 };
 pub(crate) use links::{
     bare_embedded_link, bare_plain_link, dropped_plain_link, range_is_struck,

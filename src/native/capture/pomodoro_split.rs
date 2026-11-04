@@ -828,6 +828,7 @@ pub(super) fn plan_pomodoro_split_item(
             pomodoro_split: Some(summary),
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: None,
             consumed_links: Vec::new(),

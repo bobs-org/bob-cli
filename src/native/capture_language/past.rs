@@ -5,9 +5,7 @@
 //! The token split respects quoted exact-name literals: `!` and `=` inside
 //! quotes are name content, never repair/close delimiters.
 
-use super::pomodoro_literal::{
-    lex_exact_name_after_hash, opens_exact_name,
-};
+use super::pomodoro_literal::{lex_exact_name_after_hash, opens_exact_name};
 use super::tokens::is_pomodoro_selector_component;
 
 /// Split of a raw `x=` token (no inline entry, no surrounding whitespace)
@@ -84,9 +82,7 @@ pub(crate) fn split_past_token(raw_token: &str) -> Option<PastSplit> {
     let mut repair_offset = None;
     if left_end > 2 {
         let candidate = left_end - 1;
-        if raw_token.as_bytes()[candidate] == b'!'
-            && !in_literal(candidate)
-        {
+        if raw_token.as_bytes()[candidate] == b'!' && !in_literal(candidate) {
             repair = true;
             repair_offset = Some(candidate);
         }
@@ -129,7 +125,10 @@ pub(crate) enum PastEOutcome {
     Valid(PastEValid),
     /// Unfinished input: the editor needs `need`, execution reports the
     /// matching incomplete error. `message` is the execution message.
-    Incomplete { need: PastNeed, message: String },
+    Incomplete {
+        need: PastNeed,
+        message: String,
+    },
     /// Malformed `E`: teaching error message for execution (the editor
     /// reports the same message with code `invalid_pomodoro_past`).
     Invalid(String),
@@ -290,8 +289,7 @@ pub(crate) fn validate_past_e(
             hash_name = Some(decoded.to_ascii_uppercase());
             hash_is_literal = true;
             let abs_start = 2 + pos + 1;
-            hash_range =
-                Some((abs_start, abs_start + lex.literal_len));
+            hash_range = Some((abs_start, abs_start + lex.literal_len));
             pos += 1 + lex.literal_len;
             let _ = hash_empty;
             let _ = hash_unterminated;
@@ -346,9 +344,7 @@ pub(crate) fn validate_past_e(
         if after_at.is_empty() {
             return PastEOutcome::Incomplete {
                 need: PastNeed::Timing,
-                message: format!(
-                    "`{raw_token}` needs a block count after `@`"
-                ),
+                message: format!("`{raw_token}` needs a block count after `@`"),
             };
         }
         // `@` takes ASCII digits only; anything else is malformed. A
@@ -453,10 +449,7 @@ pub(crate) fn validate_past_e(
         // Glued letters after a count without `#` (for example `x=3x`,
         // `x=3build`).
         if !d_text.is_empty()
-            && rest
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphabetic)
+            && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
         {
             // `rest` runs to `!`/`=`/`@`/`~`/whitespace via `past_name_extent`
             // already? Here `rest` is the remainder after `D` (and optional
@@ -616,7 +609,9 @@ fn bare_name_of(e: &str) -> Option<String> {
     if !e.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) {
         return None;
     }
-    bare_start_name_len(e).filter(|len| *len == e.len()).map(|_| e.to_string())
+    bare_start_name_len(e)
+        .filter(|len| *len == e.len())
+        .map(|_| e.to_string())
 }
 
 /// Rewrite for dash offsets: drop the dash part of the typed token.
@@ -639,8 +634,7 @@ fn dash_rewrite(raw_token: &str, split: &PastSplit) -> String {
                 lex_exact_name_after_hash(after_hash, after_hash.len())
             && lex.complete
         {
-            literal_inside =
-                Some((hash_pos, hash_pos + 1 + lex.literal_len));
+            literal_inside = Some((hash_pos, hash_pos + 1 + lex.literal_len));
         }
     }
     let mut dash_in_e: Option<usize> = None;
@@ -727,15 +721,14 @@ pub(crate) fn compute_past_stacks(
     blocks: &[Option<u32>],
 ) -> Vec<super::PastStackPos> {
     use super::PastStackPos;
-    let mut out =
-        vec![
-            PastStackPos {
-                index: 0,
-                size: 0,
-                offset_blocks: 0,
-            };
-            blocks.len()
-        ];
+    let mut out = vec![
+        PastStackPos {
+            index: 0,
+            size: 0,
+            offset_blocks: 0,
+        };
+        blocks.len()
+    ];
     let mut run_start: Option<usize> = None;
     for (i, b) in blocks.iter().enumerate() {
         let is_past = b.is_some();
@@ -760,8 +753,7 @@ pub(crate) fn compute_past_stacks(
                 out[k] = PastStackPos {
                     index: (k - start + 1) as u32,
                     size,
-                    offset_blocks: u32::try_from(suffix)
-                        .unwrap_or(u32::MAX),
+                    offset_blocks: u32::try_from(suffix).unwrap_or(u32::MAX),
                 };
                 suffix = suffix.saturating_add(blk);
             }

@@ -355,6 +355,7 @@ fn json_success_shape_is_stable() {
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: None,
             consumed_links: Vec::new(),

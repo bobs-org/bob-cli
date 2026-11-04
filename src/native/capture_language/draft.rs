@@ -415,7 +415,9 @@ fn merge_past_literal_tokens<'a>(
     raw: &RawLine<'a>,
     mut tokens: Vec<Token<'a>>,
 ) -> Vec<Token<'a>> {
-    use super::pomodoro_literal::{lex_exact_name_after_hash, opens_exact_name};
+    use super::pomodoro_literal::{
+        lex_exact_name_after_hash, opens_exact_name,
+    };
     let mut index = 0;
     while index < tokens.len() {
         let first = tokens[index].text;

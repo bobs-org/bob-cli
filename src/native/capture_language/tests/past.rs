@@ -48,7 +48,15 @@ fn past_token_table_reports_expected_specs() {
         assert_eq!(spec.name.as_deref(), name, "{typed}");
         assert_eq!(spec.repair, repair, "{typed}");
         assert_eq!(spec.close.raw, close_raw, "{typed}");
-        assert_eq!(spec.stack, PastStackPos { index: 1, size: 1, offset_blocks: 0 }, "{typed}");
+        assert_eq!(
+            spec.stack,
+            PastStackPos {
+                index: 1,
+                size: 1,
+                offset_blocks: 0
+            },
+            "{typed}"
+        );
         // Editor agrees.
         let edit = editor(typed);
         assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
@@ -99,13 +107,17 @@ fn past_teaching_errors_name_token_and_rewrite() {
         ("x=3build", "x=3#build"),
     ];
     for (typed, rewrite) in rows {
-        let err = execute(typed).expect_err(format!("{typed} should fail").as_str());
+        let err =
+            execute(typed).expect_err(format!("{typed} should fail").as_str());
         assert!(err.contains(typed), "{typed}: {err}");
         assert!(err.contains(rewrite), "{typed}: {err}");
         let edit = editor(typed);
         assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
         assert_eq!(edit.diagnostics.len(), 1, "{typed}");
-        assert_eq!(edit.diagnostics[0].code, "invalid_pomodoro_past", "{typed}");
+        assert_eq!(
+            edit.diagnostics[0].code, "invalid_pomodoro_past",
+            "{typed}"
+        );
         assert!(edit.diagnostics[0].message.contains(typed), "{typed}");
         assert!(edit.diagnostics[0].message.contains(rewrite), "{typed}");
     }
@@ -113,7 +125,13 @@ fn past_teaching_errors_name_token_and_rewrite() {
     for typed in ["x=/foo", "x=*build"] {
         let err = execute(typed).expect_err("should fail");
         assert!(err.contains(typed));
-        assert!(err.contains("can't split") || err.contains("can't merge") || err.contains("split") || err.contains("merge"), "{err}");
+        assert!(
+            err.contains("can't split")
+                || err.contains("can't merge")
+                || err.contains("split")
+                || err.contains("merge"),
+            "{err}"
+        );
     }
     // Oversized reuses the start too-large wording.
     let big = format!("x={}", "9".repeat(30));
@@ -147,7 +165,10 @@ fn past_unfinished_uses_existing_needs() {
 fn past_prose_guards_stay_prose() {
     for typed in ["X=3", "Plan x=3"] {
         let parsed = execute(typed).expect("prose should parse");
-        assert!(!matches!(parsed.kind, CaptureKind::PomodoroPast { .. }), "{typed}");
+        assert!(
+            !matches!(parsed.kind, CaptureKind::PomodoroPast { .. }),
+            "{typed}"
+        );
         let edit = editor(typed);
         assert_ne!(edit.mode, EditorMode::PomodoroPast, "{typed}");
         assert!(edit.pomodoro_past.is_none(), "{typed}");
@@ -168,17 +189,32 @@ fn past_names_stop_at_operators_and_literals_hold_them() {
 #[test]
 fn past_compatibility_breaks_parse_as_chains() {
     // `x=3` was prose.
-    assert!(matches!(execute("x=3").unwrap().kind, CaptureKind::PomodoroPast { .. }));
+    assert!(matches!(
+        execute("x=3").unwrap().kind,
+        CaptureKind::PomodoroPast { .. }
+    ));
     // `x x=3` was a close with Work Log entry `x=3`; now Close + Past.
     let draft = execute_draft("x x=3").expect("chain");
     assert_eq!(draft.items.len(), 2);
-    assert!(matches!(draft.items[0].parsed.kind, CaptureKind::PomodoroClose { .. }));
-    assert!(matches!(draft.items[1].parsed.kind, CaptureKind::PomodoroPast { .. }));
+    assert!(matches!(
+        draft.items[0].parsed.kind,
+        CaptureKind::PomodoroClose { .. }
+    ));
+    assert!(matches!(
+        draft.items[1].parsed.kind,
+        CaptureKind::PomodoroPast { .. }
+    ));
     // `=3 x=3` was a start shape error; now Start + Past.
     let draft = execute_draft("=3 x=3").expect("start+past");
     assert_eq!(draft.items.len(), 2);
-    assert!(matches!(draft.items[0].parsed.kind, CaptureKind::PomodoroStart { .. }));
-    assert!(matches!(draft.items[1].parsed.kind, CaptureKind::PomodoroPast { .. }));
+    assert!(matches!(
+        draft.items[0].parsed.kind,
+        CaptureKind::PomodoroStart { .. }
+    ));
+    assert!(matches!(
+        draft.items[1].parsed.kind,
+        CaptureKind::PomodoroPast { .. }
+    ));
 }
 
 #[test]
@@ -194,8 +230,14 @@ fn past_chain_ownership_and_stacks() {
         CaptureKind::PomodoroPast { spec } => spec,
         other => panic!("second not past: {other:?}"),
     };
-    assert_eq!((a.stack.index, a.stack.size, a.stack.offset_blocks), (1, 2, 3));
-    assert_eq!((b.stack.index, b.stack.size, b.stack.offset_blocks), (2, 2, 0));
+    assert_eq!(
+        (a.stack.index, a.stack.size, a.stack.offset_blocks),
+        (1, 2, 3)
+    );
+    assert_eq!(
+        (b.stack.index, b.stack.size, b.stack.offset_blocks),
+        (2, 2, 0)
+    );
     assert_eq!(a.blocks, 2);
     assert_eq!(b.blocks, 3);
     // Blank-line-separated items also stack.

@@ -70,7 +70,10 @@ fn past_parse_reports_full_contract_and_grammar_12() {
     assert_eq!(two["pomodoro_past"]["blocks"], 3);
     assert_eq!(two["pomodoro_past"]["minutes"], 15);
     assert_eq!(two["pomodoro_past"]["repair"], true);
-    assert_eq!(two["pomodoro_past"]["close"]["park"], serde_json::json!([3]));
+    assert_eq!(
+        two["pomodoro_past"]["close"]["park"],
+        serde_json::json!([3])
+    );
     // Both `pomodoro_past` spans: `x=` and `@3`, plus name/repair/close.
     let kinds: Vec<&str> = two["spans"]
         .as_array()
@@ -103,8 +106,14 @@ fn past_parse_reports_full_contract_and_grammar_12() {
     // Stacks across one line.
     let stack = parse("x=build@2 x=fix@3");
     assert_eq!(stack["items"].as_array().unwrap().len(), 2);
-    assert_eq!(stack["items"][0]["pomodoro_past"]["stack"], serde_json::json!({ "index": 1, "size": 2, "offset_blocks": 3 }));
-    assert_eq!(stack["items"][1]["pomodoro_past"]["stack"], serde_json::json!({ "index": 2, "size": 2, "offset_blocks": 0 }));
+    assert_eq!(
+        stack["items"][0]["pomodoro_past"]["stack"],
+        serde_json::json!({ "index": 1, "size": 2, "offset_blocks": 3 })
+    );
+    assert_eq!(
+        stack["items"][1]["pomodoro_past"]["stack"],
+        serde_json::json!({ "index": 2, "size": 2, "offset_blocks": 0 })
+    );
 
     // `X=3` and mid-body prose stay prose.
     for text in ["X=3", "Plan x=3"] {
@@ -131,7 +140,11 @@ fn past_parse_teaching_errors_and_incomplete() {
     for (typed, rewrite) in cases {
         let value = parse(typed);
         assert_eq!(value["mode"], "pomodoro_past", "{typed}");
-        assert_eq!(value["diagnostics"].as_array().unwrap().len(), 1, "{typed}");
+        assert_eq!(
+            value["diagnostics"].as_array().unwrap().len(),
+            1,
+            "{typed}"
+        );
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_past",
             "{typed}"
@@ -149,36 +162,42 @@ fn past_parse_teaching_errors_and_incomplete() {
         let value = parse(typed);
         assert_eq!(value["mode"], "incomplete", "{typed}");
         assert!(
-            value["needs"].as_array().unwrap().iter().any(|n| n == "pomodoro_close_task"),
+            value["needs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n == "pomodoro_close_task"),
             "{typed}"
         );
     }
 }
 
 #[test]
-fn past_capture_refuses_with_nothing_written() {
-    let temp = TempDir::new("bob-cli-past-refusal");
+fn past_capture_records_with_nothing_lost() {
+    // Executable records replaced the temporary refusal: a valid `x=`
+    // now records instead of refusing, and leaves no stray bytes.
+    let temp = TempDir::new("bob-cli-past-records");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     let day = vault.join("day.md");
     write_file(&day, "## Pomodoros\n- [ ] ()\n");
-    let before = fs::read_to_string(&day).expect("read day before");
     let output = bob_command()
         .env("BOB_NOW", "2026-11-04 09:21:00")
         .env("BOB_DAY_FILE", &day)
         .arg("capture")
         .arg("-b")
         .arg(&vault)
+        .arg("-f")
+        .arg("json")
         .arg("--")
         .arg("x=3")
         .output()
         .expect("run bob capture");
-    assert!(!output.status.success(), "past must refuse");
-    let message = format!("{}{}", stderr(&output), stdout(&output));
-    assert!(
-        message.contains("recording past Pomodoros (x=) is not available yet"),
-        "{message}"
-    );
+    assert_success(&output);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(value["kind"], "pomodoro_past");
+    assert_eq!(value["placement"], "recorded");
     let after = fs::read_to_string(&day).expect("read day after");
-    assert_eq!(after, before, "refused past leaves the vault unchanged");
+    assert!(after.contains("(**0910-0925**"), "{after}");
 }

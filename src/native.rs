@@ -62,6 +62,7 @@ mod freshness;
 mod gcal;
 mod gkeep;
 mod highlights_ref;
+mod ledger_place;
 mod markdown;
 mod nightly;
 mod note_ready;

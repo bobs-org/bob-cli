@@ -189,6 +189,213 @@ pub(super) fn plan_capture_batch_with_config_path(
                 &parsed_items[item_start..group_end],
             )?;
         }
+        // Record stacks (`x=` runs) plan atomically at the first member:
+        // preflight validates the whole stack against pre-stack history,
+        // then members resolve/record in typed order with per-member
+        // begin/track so later members see staged predecessors.
+        if let CaptureKind::PomodoroPast { spec } =
+            &parsed_items[item_start].parsed.kind
+        {
+            if spec.stack.index != 1 {
+                return Err(CaptureError::io(
+                    "record stack invariant failed: past member outside its stack",
+                ));
+            }
+            let size = spec.stack.size as usize;
+            if item_start + size > parsed_items.len() {
+                return Err(CaptureError::io(
+                    "record stack invariant failed: short stack",
+                ));
+            }
+            for offset in 0..size {
+                if !matches!(
+                    parsed_items[item_start + offset].parsed.kind,
+                    CaptureKind::PomodoroPast { .. }
+                ) {
+                    return Err(CaptureError::io(
+                        "record stack invariant failed: stack broken",
+                    ));
+                }
+            }
+            // Collect specs/bodies for preflight.
+            let mut stack_specs = Vec::new();
+            let mut stack_bodies = Vec::new();
+            for offset in 0..size {
+                match &parsed_items[item_start + offset].parsed.kind {
+                    CaptureKind::PomodoroPast { spec } => {
+                        stack_specs.push(spec.clone());
+                        stack_bodies.push(
+                            parsed_items[item_start + offset]
+                                .parsed
+                                .body
+                                .clone(),
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let preflight = super::pomodoro_past::compute_preflight(
+                &stack_specs,
+                now,
+                today,
+            )
+            .map_err(|mut error| {
+                let item_number = parsed_items[item_start].index + 1;
+                let ctx = capture_error_context(
+                    item_number,
+                    &parsed_items[item_start],
+                );
+                error.message = format!("{}: {}", ctx, error.message);
+                error
+            })?;
+            // Pre-stack snapshot for the guard (earlier batch items staged).
+            if !planner.currently_exists(&day_file).map_err(|mut error| {
+                let item_number = parsed_items[item_start].index + 1;
+                let ctx = capture_error_context(
+                    item_number,
+                    &parsed_items[item_start],
+                );
+                error.message = format!("{}: {}", ctx, error.message);
+                error
+            })? {
+                let item_number = parsed_items[item_start].index + 1;
+                let ctx = capture_error_context(
+                    item_number,
+                    &parsed_items[item_start],
+                );
+                let rel = super::pomodoro_close::close_day_relative(
+                    &request.bob_dir,
+                    &super::pomodoro::day_file_for(&request.bob_dir),
+                );
+                return Err(CaptureError::io(format!(
+                    "{ctx}: no future Pomodoro to record: today's daily note `{rel}` does not exist"
+                )));
+            }
+            let pre_stack_contents =
+                planner.read_existing(&day_file).map_err(|mut error| {
+                    let item_number = parsed_items[item_start].index + 1;
+                    let ctx = capture_error_context(
+                        item_number,
+                        &parsed_items[item_start],
+                    );
+                    error.message = format!("{}: {}", ctx, error.message);
+                    error
+                })?;
+            super::pomodoro_past::preflight_overlaps(
+                &preflight,
+                &pre_stack_contents,
+                &stack_specs,
+            )
+            .map_err(|mut error| {
+                let item_number = parsed_items[item_start].index + 1;
+                let ctx = capture_error_context(
+                    item_number,
+                    &parsed_items[item_start],
+                );
+                error.message = format!("{}: {}", ctx, error.message);
+                error
+            })?;
+            // Record members in typed order, one batch item at a time.
+            for (offset, member) in preflight.members.iter().enumerate() {
+                let parsed_item = parsed_items[item_start + offset].clone();
+                let fanout_context = parsed_item.fanout.clone();
+                let item_list = parsed_item.list.clone();
+                let item_number = parsed_item.index + 1;
+                let error_context =
+                    capture_error_context(item_number, &parsed_item);
+                let pre_day = planner.peek_text(&day_file);
+                planner.begin_item(pre_day.clone());
+                let pre_tasks = task_tracker.snapshot_pre(&planner);
+                let staged = planner.read_existing(&day_file).map_err(
+                    |mut error: CaptureError| {
+                        error.message =
+                            format!("{error_context}: {}", error.message);
+                        error
+                    },
+                )?;
+                let target = super::pomodoro_past::resolve_member_target(
+                    &staged,
+                    &member.spec,
+                    "",
+                )
+                .map_err(|mut error| {
+                    error.message =
+                        format!("{error_context}: {}", error.message);
+                    error
+                })?;
+                let mut planned = super::pomodoro_past::record_one_member(
+                    request,
+                    &stack_bodies[offset],
+                    member,
+                    target,
+                    &preflight,
+                    &mut planner,
+                    &mut warnings,
+                    &mut dependency_ctx,
+                    &mut task_theme_context,
+                    today,
+                    &super::pomodoro::day_file_for(&request.bob_dir),
+                    &super::pomodoro_close::close_day_relative(
+                        &request.bob_dir,
+                        &super::pomodoro::day_file_for(&request.bob_dir),
+                    ),
+                )
+                .map_err(|mut error| {
+                    error.message =
+                        format!("{error_context}: {}", error.message);
+                    error
+                })?;
+                planned.result.list = item_list;
+                planned.result.fanout = fanout_context;
+                planned.result.consumed_links = planner.take_consumed_links();
+                planned.result.normalize_dependency_updates();
+                if let Some(warning) = warning_from_item(&planned.result) {
+                    warnings.push(warning);
+                }
+                if let Some(warning) =
+                    in_progress_warning_from_item(&planned.result)
+                {
+                    warnings.push(warning);
+                }
+                let refs = std::mem::take(&mut planned.pomodoro_refs);
+                match planner.loaded_texts(&day_file) {
+                    Some((original, current)) => {
+                        let pre = pre_day.unwrap_or(original);
+                        block_tracker.track_item(
+                            Some(&pre),
+                            Some(&current),
+                            refs,
+                        );
+                    }
+                    None => {
+                        debug_assert!(
+                            refs.is_empty(),
+                            "pomodoro block refs without a loaded day file"
+                        );
+                    }
+                }
+                let task_refs = std::mem::take(&mut planned.task_block_refs);
+                let move_landings =
+                    std::mem::take(&mut planned.project_move_landings);
+                all_project_moves.extend(move_landings.iter().cloned());
+                task_tracker.remap_project_moves(&planner, &move_landings);
+                task_tracker.remap_transfer_moves(
+                    &planner,
+                    &request.bob_dir,
+                    &planned.result.transfer_move_output.moves,
+                );
+                task_tracker.track_item(&planner, &pre_tasks, task_refs);
+                keep_moving_trace.record(
+                    items.len(),
+                    &planned,
+                    &planner,
+                    &day_file,
+                );
+                items.push(planned);
+            }
+            item_start += size;
+            continue;
+        }
         for parsed_item in parsed_items[item_start..group_end].iter().cloned() {
             let fanout_context = parsed_item.fanout.clone();
             let warning_start = warnings.len();
@@ -803,6 +1010,7 @@ fn plan_ref_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update: None,
             consumed_links: Vec::new(),
@@ -1152,11 +1360,13 @@ pub(super) fn plan_capture_item(
             warnings,
         );
     }
-    // Grammar lands before record: a parsed valid Past never mutates the
-    // vault until the record phase removes this refusal.
+    // Past stacks plan atomically in `plan_capture_batch`; a lone past
+    // reaching the single-item planner is a batch-routing invariant
+    // failure, never a user-facing refusal.
     if let CaptureKind::PomodoroPast { .. } = parsed.kind {
-        return Err(CaptureError::usage(
-            "recording past Pomodoros (x=) is not available yet".to_string(),
+        return Err(CaptureError::io(
+            "record past invariant failed: past must be planned via batch"
+                .to_string(),
         ));
     }
     if let Some(target) = request.forced_sub_bullet_target.as_ref() {
@@ -1392,6 +1602,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_split: None,
                 pomodoro_merge: None,
                 pomodoro_close: None,
+                pomodoro_past: None,
                 pomodoro_reset: None,
                 dependency_update: None,
                 consumed_links: Vec::new(),
@@ -2370,6 +2581,7 @@ pub(super) fn plan_capture_item(
                     pomodoro_split: None,
                     pomodoro_merge: None,
                     pomodoro_close: None,
+                    pomodoro_past: None,
                     pomodoro_reset: None,
                     dependency_update: None,
                     consumed_links: Vec::new(),
@@ -3253,6 +3465,7 @@ pub(super) fn plan_capture_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update,
             consumed_links: Vec::new(),
@@ -4458,6 +4671,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             pomodoro_split: None,
             pomodoro_merge: None,
             pomodoro_close: None,
+            pomodoro_past: None,
             pomodoro_reset: None,
             dependency_update,
             consumed_links: Vec::new(),

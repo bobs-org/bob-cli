@@ -41,9 +41,10 @@ use super::selection::{
 };
 use super::{
     close_names, close_task_text, find_running_pomodoro,
-    plan_ledger_close_with_parked, reset as reset_mod, sub_bullet_range,
+    plan_ledger_close_with_policy, reset as reset_mod, sub_bullet_range,
     wikilink_tokens, BlockLinkTarget, CloseNaming, FindRunningError,
-    LedgerClosePlan, LedgerLinkRole, RunningPomodoro, WorkLogNode,
+    LedgerClosePlan, LedgerClosePolicy, LedgerLinkRole, RunningPomodoro,
+    WorkLogNode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1006,6 +1007,34 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
 ) -> Result<PomodoroClosePlan, PomodoroClosePlanError> {
     let running = find_running_pomodoro(day_contents)
         .map_err(PomodoroClosePlanError::FindRunning)?;
+    plan_pomodoro_close_for_entry(
+        day_path,
+        day_contents,
+        &running,
+        now,
+        vault,
+        selection,
+        naming,
+        LedgerClosePolicy::Ordinary,
+    )
+}
+
+/// Explicit-entry close: the caller already resolved `entry` and its
+/// close clock `now`. Shares the task-effect implementation below entry
+/// resolution; the record path passes `LedgerClosePolicy::Record` to
+/// suppress the empty continuation and MEET last-placement, bypassing
+/// the reset branch entirely (even for `x==0`).
+pub(crate) fn plan_pomodoro_close_for_entry<V: CloseVault>(
+    day_path: &Path,
+    day_contents: &str,
+    entry: &RunningPomodoro,
+    now: NaiveDateTime,
+    vault: &V,
+    selection: Option<&CloseSelection>,
+    naming: Option<&CloseNaming>,
+    policy: LedgerClosePolicy,
+) -> Result<PomodoroClosePlan, PomodoroClosePlanError> {
+    let running = entry.clone();
     let close_clock =
         build_close_clock(day_path, day_contents, &running, now, vault);
     let has_clocked_event = close_clock.as_ref().is_some_and(|clock| {
@@ -1080,12 +1109,13 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
     let names = naming
         .zip(running.name.as_deref())
         .map(|(naming, name)| close_names(name, &task_links, naming));
-    let mut ledger = plan_ledger_close_with_parked(
+    let mut ledger = plan_ledger_close_with_policy(
         &working_contents,
         &running,
         now,
         &parked_lines,
         names.as_ref(),
+        policy,
     );
     let closed_clock = stamp_closed_session_clock(
         &mut ledger,

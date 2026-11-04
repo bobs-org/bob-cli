@@ -1006,9 +1006,23 @@ impl CaptureTaskThemeContext {
         day_contents: &str,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Option<CloseTypes> {
-        use capture_pomodoro_close::CloseVault;
         let running =
             capture_pomodoro_close::find_running_pomodoro(day_contents).ok()?;
+        self.close_types_for_entry(
+            planner, vault, day_file, day_contents, &running, warnings,
+        )
+    }
+
+    pub(super) fn close_types_for_entry(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        vault: &pomodoro_close::SnapshotCloseVault,
+        day_file: &Path,
+        day_contents: &str,
+        running: &capture_pomodoro_close::RunningPomodoro,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Option<CloseTypes> {
+        use capture_pomodoro_close::CloseVault;
         let name = running.name.as_deref()?;
         if split_components(name).len() < 2 || routing::is_meet_name(Some(name))
         {
