@@ -1,4 +1,4 @@
-Vault-wide task maintenance: archive, move, reconcile, reroll
+Vault-wide task maintenance: archive, move, reconcile, reroll, split
 
 Every `bob task` command rewrites task lines across the whole vault.
 
@@ -9,6 +9,7 @@ Commands:
   move       Move open tasks between notes and repair vault links
   reconcile  Reconcile task statuses from the Pomodoro ledger and dependencies
   reroll     Re-roll due prioritized tasks within their priority windows
+  split      Split task notes into linked tasks
 
 Options:
   -h, --help  Print help
@@ -16,6 +17,7 @@ Options:
 Examples:
   bob task archive               Archive done and canceled tasks
   bob task move --dry-run        Preview moving tasks and repairing links
+  bob task split --dry-run       Preview splitting task notes into tasks
   bob task reconcile --dry-run   Preview task status reconciliation
   bob task reroll --dry-run      Preview re-rolling due prioritized tasks
 

@@ -13,7 +13,7 @@
 
 use super::editor_model::{Diagnostic, Severity, SpanKind};
 use super::markers::{
-    is_escaped_priority_token, is_route_token, parse_priority_token,
+    is_escaped_priority_token, parse_priority_token,
     parse_retired_priority_token, parse_schedule_token,
 };
 use super::model::{RetiredPriority, TerminalMarkers, Token};
@@ -259,9 +259,9 @@ fn members_in(
 }
 
 /// Detect duplicate and split refusals on one physical line's
-/// dependency-stripped tokens. Returns duplicate evidence first (same-line
-/// identity wins), then split evidence. All-target lines never split, and
-/// trailing plain routes stay literal (`@a+x note @work`).
+/// dependency-stripped tokens. Duplicate identity is limited to the selected
+/// run; target-shaped prose elsewhere is ignored. A parent line with targets
+/// at both edges is a split refusal, even when those edge targets repeat.
 pub(crate) fn detect_target_refusals(
     tokens: &[Token<'_>],
     leading: bool,
@@ -288,56 +288,12 @@ pub(crate) fn detect_target_refusals(
     if runs.is_empty() {
         return TargetRefusal::None;
     }
-    // Whole-line single run: check duplicates only.
-    if runs.len() == 1 {
-        let (_, _, members) = &runs[0];
-        // A lone run between prose words (body on both sides) stays
-        // literal: no selection, no refusal.
-        let (start, end, _) = runs[0];
-        let has_body_before = start > 0;
-        let has_body_after = end < tokens.len();
-        if has_body_before && has_body_after {
-            return TargetRefusal::None;
-        }
-        // Leading-only runs need `leading`; trailing-only needs body
-        // before. Otherwise literal.
-        if start == 0 && end < tokens.len() && !leading {
-            return TargetRefusal::None;
-        }
-        if end == tokens.len() && start > 0 {
-            // Trailing with body before: valid run.
-        } else if start == 0 && end == tokens.len() {
-            // Whole line: valid.
-        } else if start == 0 && !leading {
-            return TargetRefusal::None;
-        }
-        if let Some(duplicate) = find_duplicate_target(members) {
-            return TargetRefusal::Duplicate(duplicate);
-        }
-        return TargetRefusal::None;
-    }
-    // Multiple runs: leading + trailing with prose between is split, even
-    // with one member per edge. Middle-only runs stay literal.
     let starts_with_target = runs.first().is_some_and(|(s, _, _)| *s == 0);
     let ends_with_target =
         runs.last().is_some_and(|(_, e, _)| *e == tokens.len());
-    // Check duplicates within each edge run first (same-line identity).
-    for (_, _, members) in &runs {
-        if let Some(duplicate) = find_duplicate_target(members) {
-            return TargetRefusal::Duplicate(duplicate);
-        }
-    }
-    // Duplicates across the whole line (same identity in two runs) also
-    // refuse as duplicate rather than split.
-    let all_members: Vec<TargetMember> =
-        runs.iter().flat_map(|(_, _, m)| m.clone()).collect();
-    if let Some(duplicate) = find_duplicate_target(&all_members) {
-        return TargetRefusal::Duplicate(duplicate);
-    }
-    if starts_with_target && ends_with_target {
-        // Prose between edge runs is required; schedule/priority already
-        // left via extraction, so any gap here is body text. All-target
-        // lines cannot reach this branch (single run above).
+    if leading && runs.len() > 1 && starts_with_target && ends_with_target {
+        // Split is the approved parent-line refusal and takes precedence
+        // over duplicate identity across the two edges.
         let leading_members = &runs.first().expect("leading").2;
         let trailing_members = &runs.last().expect("trailing").2;
         let leading_text = leading_members
@@ -353,7 +309,13 @@ pub(crate) fn detect_target_refusals(
             end: trailing.end,
         });
     }
-    TargetRefusal::None
+    let Some(selection) = select_target_run(tokens, leading, detect_route)
+    else {
+        return TargetRefusal::None;
+    };
+    find_duplicate_target(&selection.members)
+        .map(TargetRefusal::Duplicate)
+        .unwrap_or(TargetRefusal::None)
 }
 
 /// One line's refusal outcome: at most one of duplicate or split.
@@ -390,9 +352,7 @@ pub(crate) fn strict_refusal_parts(
 }
 
 /// Editor adapter: shared evidence into a diagnostic with the same code
-/// and message the strict path reports. Used by selection tests; the editor
-/// phase wires it into `parse_editor_item_with`.
-#[allow(dead_code)]
+/// and message the strict path reports. Both adapters consume this evidence.
 pub(crate) fn editor_refusal_diagnostic(
     refusal: &TargetRefusal,
 ) -> Option<Diagnostic> {
@@ -410,9 +370,7 @@ pub(crate) fn editor_refusal_diagnostic(
 /// `0x20` keeps the source length identical and leaves valid UTF-8 (target
 /// markers are ASCII; any drawer literal bytes become spaces). Authored
 /// children and the original item identity are untouched by the caller;
-/// masking never creates a second `@@` declaration. Used by selection tests;
-/// the execution phase fans out through it.
-#[allow(dead_code)]
+/// masking never creates a second `@@` declaration.
 pub(crate) fn masked_source_for_member(
     source: &str,
     members: &[TargetMember],
@@ -430,6 +388,32 @@ pub(crate) fn masked_source_for_member(
             continue;
         }
         for byte in &mut bytes[member.start..member.end] {
+            *byte = b' ';
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| source.to_string())
+}
+
+/// Build a member view with the run's consumed schedule and priority tokens
+/// masked as well. Their semantic values and spans travel in
+/// `TargetRunContext`, so a member parser cannot reinterpret the tokens as
+/// note text after the shared boundary has consumed them.
+pub(crate) fn masked_source_for_member_with_terminals(
+    source: &str,
+    members: &[TargetMember],
+    keep_index: usize,
+    terminal_spans: &[(SpanKind, usize, usize)],
+) -> String {
+    let mut bytes =
+        masked_source_for_member(source, members, keep_index).into_bytes();
+    for (kind, start, end) in terminal_spans {
+        if !matches!(kind, SpanKind::Schedule | SpanKind::Priority)
+            || start >= end
+            || *end > bytes.len()
+        {
+            continue;
+        }
+        for byte in &mut bytes[*start..*end] {
             *byte = b' ';
         }
     }
@@ -630,11 +614,4 @@ pub(crate) fn validate_selected_members(
         parse_sub_bullet_route_token(&member.marker_text)?;
     }
     Ok(())
-}
-
-/// Route-token sanity for duplicate identity: lower-cased route must name a
-/// valid route.
-#[allow(dead_code)]
-pub(crate) fn is_valid_target_route(route: &str) -> bool {
-    is_route_token(route)
 }

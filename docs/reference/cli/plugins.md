@@ -30,7 +30,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: table or json
-          
+
           [default: table]
           [possible values: table, json]
 

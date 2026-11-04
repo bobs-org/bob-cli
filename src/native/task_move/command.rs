@@ -351,7 +351,7 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
     ) {
         Ok(shell) => shell,
         Err(error) => {
-            report.fail("lock", format!("{error}"), Some("wait for the current maintenance run to finish, then retry"));
+            report.fail("lock", error.to_string(), Some("wait for the current maintenance run to finish, then retry"));
             return 1;
         }
     };

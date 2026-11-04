@@ -34,7 +34,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 

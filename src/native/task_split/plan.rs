@@ -344,14 +344,13 @@ pub(crate) fn plan_task_split(
     }
 
     // The parent id may have been minted after the source was snapshotted.
-    if let Some(id) = &owner_minted_id {
-        if let Some(contents) = files.get_mut(&request.owner_path) {
-            let mut lines = split_lines(contents);
-            if owner.line < lines.len() {
-                lines[owner.line] =
-                    set_trailing_block_id(&lines[owner.line], id);
-                *contents = lines.concat();
-            }
+    if let Some(id) = &owner_minted_id
+        && let Some(contents) = files.get_mut(&request.owner_path)
+    {
+        let mut lines = split_lines(contents);
+        if owner.line < lines.len() {
+            lines[owner.line] = set_trailing_block_id(&lines[owner.line], id);
+            *contents = lines.concat();
         }
     }
 
@@ -1060,7 +1059,7 @@ fn is_stub(title: &str) -> bool {
         && text.ends_with("]]")
         && !text[2..text.len().saturating_sub(2)].contains(' ')
         || text.starts_with("[[")
-            && text.contains("]] ") == false
+            && !text.contains("]] ")
             && text.ends_with("]]")
 }
 
@@ -1167,8 +1166,7 @@ fn alias_for(title: &str) -> String {
         .replace("~~", "")
         .replace('`', "")
         .replace('|', "/")
-        .replace('[', "")
-        .replace(']', "");
+        .replace(['[', ']'], "");
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.chars().count() <= 80 {
         return collapsed;

@@ -562,6 +562,19 @@ fn template_row_fans_out_without_changing_row_identity() {
 }
 
 #[test]
+fn template_fanout_applies_cross_run_schedule_to_each_member() {
+    let parsed = draft_active("Apply {0} to @work+a s:3 @dev+b %t\n\ntask\n")
+        .expect("scheduled template run parses");
+    assert_eq!(parsed.items.len(), 2);
+    for (item, route) in parsed.items.iter().zip(["work", "dev"]) {
+        assert_eq!(item.parsed.route.as_deref(), Some(route));
+        assert_eq!(item.parsed.body, "Apply task to");
+        assert_eq!(item.parsed.scheduled_offset, Some(3));
+        assert_eq!(item.template_row.as_ref().unwrap().row, 1);
+    }
+}
+
+#[test]
 fn template_clipboard_refusal_keeps_its_coded_error() {
     let error = draft_active("Apply {0} to @a+x @b+y %c %t\n\ntask\n")
         .expect_err("template clipboard remains refused");
@@ -869,4 +882,152 @@ fn editor_separate_route_lines_still_refuse_duplicates() {
         "{:?}",
         item.diagnostics
     );
+}
+
+#[test]
+fn refusal_detection_checks_only_the_selected_run() {
+    let literal = "hello @a+x middle @a+x goodbye";
+    let parsed = draft_active(literal).expect("middle target prose is literal");
+    assert_eq!(parsed.items.len(), 1);
+    assert_eq!(parsed.items[0].parsed.body, literal);
+    assert!(parsed.items[0].parsed.route.is_none());
+    assert!(parse_editor_active(literal).items[0].targets.is_empty());
+
+    let leading = "@a+x @b+y note @a+x later";
+    let parsed =
+        draft_active(leading).expect("later target-shaped prose is literal");
+    assert_eq!(parsed.items.len(), 2);
+    assert_eq!(parsed.items[0].parsed.body, "note @a+x later");
+    assert_eq!(parsed.items[0].parsed.route.as_deref(), Some("a"));
+    let editor = parse_editor_active(leading);
+    assert_eq!(editor.items[0].targets.len(), 2);
+    assert_eq!(editor.items[0].body, "note @a+x later");
+
+    let trailing = "hello @a+x middle @a+x @b+y";
+    let parsed =
+        draft_active(trailing).expect("duplicate prose before trailing run");
+    assert_eq!(parsed.items.len(), 2);
+    assert_eq!(parsed.items[0].parsed.body, "hello @a+x middle");
+    assert_eq!(parsed.items[0].parsed.route.as_deref(), Some("a"));
+    let editor = parse_editor_active(trailing);
+    assert_eq!(editor.items[0].targets.len(), 2);
+    assert_eq!(editor.items[0].body, "hello @a+x middle");
+}
+
+#[test]
+fn split_refusal_precedes_duplicate_identity_across_edges() {
+    let raw = "@a+x note @a+x";
+    let error = draft_active(raw).expect_err("opposite edges are split");
+    assert_eq!(error.code, Some("split_capture_targets"));
+    let parsed = parse_editor_active(raw);
+    let diagnostic = parsed.items[0]
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "split_capture_targets")
+        .expect("split diagnostic");
+    let start = raw.rfind("@a+x").unwrap();
+    assert_eq!(diagnostic.range, Some((start, start + "@a+x".len())));
+
+    let duplicate = "note café @a+x @a+x";
+    let error =
+        draft_active(duplicate).expect_err("selected trailing duplicate");
+    assert_eq!(error.code, Some("duplicate_capture_target"));
+    let parsed = parse_editor_active(duplicate);
+    let diagnostic = parsed.items[0]
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "duplicate_capture_target")
+        .expect("duplicate diagnostic");
+    let start = duplicate.rfind("@a+x").unwrap();
+    assert_eq!(diagnostic.range, Some((start, start + "@a+x".len())));
+}
+
+#[test]
+fn leading_run_terminals_reach_each_member_with_original_editor_spans() {
+    for (raw, schedule, priority) in [
+        ("@a+x s:3 @b+y note", Some(3), None),
+        ("s:3 @a+x @b+y note", Some(3), None),
+        ("@a+x $2 @b+y note", None, Some(2)),
+        ("$2 @a+x @b+y note", None, Some(2)),
+    ] {
+        let parsed =
+            draft_active(raw).expect("run with terminal marker parses");
+        assert_eq!(parsed.items.len(), 2, "{raw}");
+        for (item, (route, expected_block_id)) in
+            parsed.items.iter().zip([("a", "x"), ("b", "y")])
+        {
+            assert_eq!(item.parsed.body, "note", "{raw}");
+            assert_eq!(item.parsed.route.as_deref(), Some(route), "{raw}");
+            let CaptureKind::SubBullet {
+                target: SubBulletTarget::BlockId(actual_block_id),
+                ..
+            } = &item.parsed.kind
+            else {
+                panic!(
+                    "{raw}: expected sub-bullet, got {:?}",
+                    item.parsed.kind
+                );
+            };
+            assert_eq!(actual_block_id, expected_block_id, "{raw}");
+            assert_eq!(item.parsed.scheduled_offset, schedule, "{raw}");
+            assert_eq!(item.parsed.priority_level, priority, "{raw}");
+            let singleton = if schedule.is_some() {
+                format!("@{route}+{expected_block_id} note s:3")
+            } else {
+                format!("@{route}+{expected_block_id} note $2")
+            };
+            assert_eq!(item.parsed, parse_singleton(&singleton), "{raw}");
+        }
+
+        let editor = parse_editor_active(raw);
+        let item = &editor.items[0];
+        assert_eq!(item.targets.len(), 2, "{raw}");
+        assert_eq!(item.body, "note", "{raw}");
+        let (marker, kind) = if schedule.is_some() {
+            ("s:3", SpanKind::Schedule)
+        } else {
+            ("$2", SpanKind::Priority)
+        };
+        let start = raw.find(marker).unwrap();
+        assert!(
+            item.spans.iter().any(|span| {
+                span.kind == kind
+                    && span.start == start
+                    && span.end == start + marker.len()
+            }),
+            "{raw}: {:?}",
+            item.spans
+        );
+    }
+}
+
+#[test]
+fn retired_priority_probe_preserves_singleton_and_selected_run_boundaries() {
+    let singleton = execute_active("@a+x p:2 note").expect("literal singleton");
+    assert_eq!(singleton.body, "p:2 note");
+    let editor = parse_editor_active("@a+x p:2 note");
+    assert_eq!(editor.items[0].body, "p:2 note");
+    assert!(!editor.items[0]
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "retired_priority_marker"));
+
+    for raw in ["@a+x p:2", "@a+x @b+y p:2 note", "p:2 @a+x @b+y note"] {
+        let error = draft_active(raw).expect_err("retired terminal is refused");
+        assert!(
+            error.message.contains("is retired"),
+            "{raw}: {}",
+            error.message
+        );
+    }
+    let terminal = "@a+x @b+y p:2 note";
+    let editor = parse_editor_active(terminal);
+    assert_eq!(editor.items[0].targets.len(), 2);
+    let diagnostic = editor.items[0]
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "retired_priority_marker")
+        .expect("run retired-priority diagnostic");
+    let start = terminal.find("p:2").unwrap();
+    assert_eq!(diagnostic.range, Some((start, start + 3)));
 }

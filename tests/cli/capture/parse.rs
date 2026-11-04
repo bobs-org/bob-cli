@@ -139,6 +139,8 @@ fn capture_parse_json_reports_duplicate_and_split_target_diagnostics() {
             "@work+a",
         ),
         ("@a+x note @b+y", "split_capture_targets", "@b+y"),
+        ("@a+x note @a+x", "split_capture_targets", "@a+x"),
+        ("note @a+x @a+x", "duplicate_capture_target", "@a+x"),
     ] {
         let output = bob_command()
             .arg("capture-parse")
@@ -168,6 +170,59 @@ fn capture_parse_json_reports_duplicate_and_split_target_diagnostics() {
 }
 
 #[test]
+fn capture_parse_ignores_target_shaped_prose_outside_selected_run() {
+    let parse = |raw: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(raw)
+            .output()
+            .expect("run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    let literal = "hello @a+x middle @a+x goodbye";
+    let parsed = parse(literal);
+    assert_eq!(parsed["body"], literal);
+    assert!(parsed["targets"].is_null(), "{parsed}");
+    assert!(parsed["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| {
+            entry["code"] != "duplicate_capture_target"
+                && entry["code"] != "split_capture_targets"
+        }));
+
+    let leading = "@a+x @b+y note @a+x later";
+    let parsed = parse(leading);
+    assert_eq!(parsed["body"], "note @a+x later");
+    assert_eq!(parsed["targets"].as_array().unwrap().len(), 2);
+
+    let trailing = "hello @a+x middle @a+x @b+y";
+    let parsed = parse(trailing);
+    assert_eq!(parsed["body"], "hello @a+x middle");
+    assert_eq!(parsed["targets"].as_array().unwrap().len(), 2);
+
+    let later_item = "first note\n\nnote café @a+x @a+x";
+    let parsed = parse(later_item);
+    let diagnostics = parsed["diagnostics"].as_array().unwrap();
+    let diagnostic = diagnostics
+        .iter()
+        .find(|entry| entry["code"] == "duplicate_capture_target")
+        .expect("later-item duplicate diagnostic");
+    let start = later_item.rfind("@a+x").unwrap();
+    assert_eq!(
+        diagnostic["range"],
+        serde_json::json!([start, start + "@a+x".len()])
+    );
+}
+
+#[test]
 fn capture_strict_json_preserves_target_refusal_codes() {
     let temp = TempDir::new("bob-cli-capture-target-refusal-codes");
     let vault = temp.path().join("vault");
@@ -175,6 +230,7 @@ fn capture_strict_json_preserves_target_refusal_codes() {
     for (raw, code) in [
         ("@work+a @work+a note", "duplicate_capture_target"),
         ("@a+x note @b+y", "split_capture_targets"),
+        ("@a+x note @a+x", "split_capture_targets"),
     ] {
         let output = bob_command()
             .arg("capture")
@@ -302,6 +358,92 @@ fn capture_parse_and_dry_run_use_the_same_public_target_run_in_scratch_vault() {
         before,
         "dry-run must not change vault bytes"
     );
+
+    for draft in ["@work+a s:3 @dev+b note", "s:3 @work+a @dev+b note"] {
+        let parsed = scratch("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .output()
+            .expect("run scratch capture-parse with schedule");
+        assert_success(&parsed);
+        let parsed_json: serde_json::Value =
+            serde_json::from_str(stdout(&parsed).trim())
+                .expect("scheduled capture-parse JSON");
+        assert_eq!(parsed_json["body"], "note", "{draft}: {parsed_json}");
+        assert_eq!(parsed_json["targets"].as_array().unwrap().len(), 2);
+
+        let dry_run = scratch("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg("--")
+            .arg(draft)
+            .output()
+            .expect("run scheduled scratch capture dry-run");
+        assert_success(&dry_run);
+        let capture_json: serde_json::Value =
+            serde_json::from_str(stdout(&dry_run).trim())
+                .expect("scheduled capture JSON");
+        let captures = capture_json["captures"].as_array().expect("captures");
+        assert_eq!(captures.len(), 2, "{draft}");
+        for (capture, route) in captures.iter().zip(["work", "dev"]) {
+            assert_eq!(capture["route"], route, "{draft}: {capture}");
+            assert_eq!(capture["kind"], "sub_bullet", "{draft}: {capture}");
+            assert_eq!(capture["text"], "note", "{draft}: {capture}");
+            assert_eq!(
+                capture["scheduled"], "2026-11-06",
+                "{draft}: {capture}"
+            );
+        }
+        assert_eq!(
+            snapshot(&vault),
+            before,
+            "{draft} dry-run changed vault bytes"
+        );
+    }
+
+    let invalid_later_member = "@work+a note\n\n@work+a @dev+ note";
+    let rejected = scratch("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(invalid_later_member)
+        .output()
+        .expect("run capture with a malformed later member");
+    assert!(!rejected.status.success(), "{}", stdout(&rejected));
+    assert_eq!(
+        snapshot(&vault),
+        before,
+        "a malformed later member must reject the whole draft before writes"
+    );
+
+    for invalid in ["@work+a @work+a note", "@work+a note @dev+b"] {
+        let rejected = scratch("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(invalid)
+            .output()
+            .expect("run rejected target capture");
+        assert!(
+            !rejected.status.success(),
+            "{invalid}: {}",
+            stdout(&rejected)
+        );
+        assert_eq!(
+            snapshot(&vault),
+            before,
+            "rejected capture must not change vault bytes: {invalid}"
+        );
+    }
 }
 
 #[test]

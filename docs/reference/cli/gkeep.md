@@ -32,7 +32,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: table or json
-          
+
           [default: table]
           [possible values: table, json]
 
@@ -41,7 +41,7 @@ Options:
 
   -s, --source <SOURCE>
           Show both inboxes, Keep only, or the vault only
-          
+
           [default: both]
           [possible values: both, keep, vault]
 

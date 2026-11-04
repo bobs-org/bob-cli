@@ -923,7 +923,13 @@ pub(crate) fn parse_capture_text_with_options(
         .items
         .iter()
         .map(|item| {
-            parse_capture_item(item, forced_route, forced_section, &options)
+            parse_capture_item(
+                item,
+                forced_route,
+                forced_section,
+                &options,
+                None,
+            )
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.message)?;
@@ -1270,19 +1276,27 @@ fn parse_capture_item_members<'a>(
             forced_route,
             forced_section,
             options,
+            None,
         )?]);
     };
     let count = run.selection.members.len();
     let mut outcomes = Vec::with_capacity(count);
     for (member_index, member) in run.selection.members.iter().enumerate() {
-        let masked_source = super::target_runs::masked_source_for_member(
-            item.source,
-            &run.selection.members,
-            member_index,
-        );
+        let masked_source =
+            super::target_runs::masked_source_for_member_with_terminals(
+                item.source,
+                &run.selection.members,
+                member_index,
+                &run.terminal_spans,
+            );
         let view = capture_item_source_view(item, &masked_source);
-        let parsed =
-            parse_capture_item(&view, forced_route, forced_section, options)?;
+        let parsed = parse_capture_item(
+            &view,
+            forced_route,
+            forced_section,
+            options,
+            Some(&run),
+        )?;
         let mut outcome = rebind_capture_item_declarations(parsed, item.source);
         outcome.fanout = Some(FanoutContext {
             line: run.line,

@@ -38,6 +38,34 @@ pub(super) struct ParsedCaptureItemOutcome<'a> {
 pub(super) struct TargetRunContext {
     pub(super) line: usize,
     pub(super) selection: super::target_runs::TargetRunSelection,
+    pub(super) terminal_markers: TerminalMarkers,
+    pub(super) terminal_spans:
+        Vec<(super::editor_model::SpanKind, usize, usize)>,
+}
+
+fn apply_target_run_terminal_markers(
+    destination: &mut TerminalMarkers,
+    extracted: &TerminalMarkers,
+) -> Result<(), String> {
+    if let Some(offset) = extracted.scheduled_offset {
+        if destination.scheduled_offset.is_some() {
+            return Err(duplicate_marker_error("schedule marker (s:<N>)"));
+        }
+        destination.scheduled_offset = Some(offset);
+    }
+    if let Some(level) = extracted.priority_level {
+        if destination.priority_level.is_some() {
+            return Err(duplicate_marker_error("priority marker ($<N>)"));
+        }
+        destination.priority_level = Some(level);
+    }
+    if let Some(retired) = &extracted.retired_priority {
+        return Err(retired_priority_marker_error(&retired.token));
+    }
+    destination
+        .priority_escapes
+        .extend(extracted.priority_escapes.iter().copied());
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,47 +96,58 @@ impl From<String> for CaptureItemParseError {
     }
 }
 
-/// Attempt run-aware parent-line resolution. Returns `None` to fall back to the singleton
-/// `resolve_line` path (single-target or literal), `Some(Ok)` for a valid
-/// multi-target run (first member as the route, remaining tokens as body),
-/// and `Some(Err)` for duplicate/split refusals or malformed members using
-/// their existing strict messages.
+/// Attempt run-aware parent-line resolution. A one-member or literal line
+/// falls back to the established singleton parser; a selected run carries
+/// its extracted terminal evidence alongside the member selection.
 fn try_resolve_parent_target_run<'a>(
     mut tokens: Vec<Token<'a>>,
     detect_route: bool,
 ) -> Option<
-    Result<(LineOutcome<'a>, super::target_runs::TargetRunSelection), String>,
+    Result<
+        (
+            LineOutcome<'a>,
+            super::target_runs::TargetRunSelection,
+            Vec<(super::editor_model::SpanKind, usize, usize)>,
+        ),
+        CaptureItemParseError,
+    >,
 > {
     use super::target_runs;
     let declarations = take_global_declarations(&mut tokens);
-    let (markers, _) =
+    let (markers, terminal_spans) =
         target_runs::extract_terminal_markers_crossing_runs(&mut tokens);
-    if let Some(retired) = &markers.retired_priority {
-        return Some(Err(retired_priority_marker_error(&retired.token)));
-    }
     if tokens.is_empty() {
         return None;
     }
     let refusal =
         target_runs::detect_target_refusals(&tokens, true, detect_route);
-    if let Some((_, message, _)) = target_runs::strict_refusal_parts(&refusal) {
-        return Some(Err(message));
+    if let Some((code, message, _)) =
+        target_runs::strict_refusal_parts(&refusal)
+    {
+        return Some(Err(CaptureItemParseError::coded(code, message)));
     }
     let selection =
         target_runs::select_target_run(&tokens, true, detect_route)?;
     if selection.members.len() < 2 {
         return None;
     }
+    if let Some(retired) = &markers.retired_priority {
+        return Some(Err(CaptureItemParseError::generic(
+            retired_priority_marker_error(&retired.token),
+        )));
+    }
     if let Err(message) =
         target_runs::validate_selected_members(&selection.members)
     {
-        return Some(Err(message));
+        return Some(Err(CaptureItemParseError::generic(message)));
     }
     let first_text = selection.members.first()?.marker_text.clone();
     let route_token = match parse_terminal_route_token(&first_text) {
         Ok(Some(token)) => token,
         Ok(None) => return None,
-        Err(message) => return Some(Err(message)),
+        Err(message) => {
+            return Some(Err(CaptureItemParseError::generic(message)))
+        }
     };
     // Body is everything outside the selected run; the run is contiguous.
     let first_start = selection.members.first()?.token_index;
@@ -146,6 +185,7 @@ fn try_resolve_parent_target_run<'a>(
             declarations,
         },
         selection,
+        terminal_spans,
     )))
 }
 
@@ -156,22 +196,28 @@ fn try_resolve_child_target_run<'a>(
     mut tokens: Vec<Token<'a>>,
     detect_route: bool,
 ) -> Option<
-    Result<(LineOutcome<'a>, super::target_runs::TargetRunSelection), String>,
+    Result<
+        (
+            LineOutcome<'a>,
+            super::target_runs::TargetRunSelection,
+            Vec<(super::editor_model::SpanKind, usize, usize)>,
+        ),
+        CaptureItemParseError,
+    >,
 > {
     use super::target_runs;
     let declarations = take_global_declarations(&mut tokens);
-    let (markers, _) =
+    let (markers, terminal_spans) =
         target_runs::extract_terminal_markers_crossing_runs(&mut tokens);
-    if let Some(retired) = &markers.retired_priority {
-        return Some(Err(retired_priority_marker_error(&retired.token)));
-    }
     if tokens.is_empty() {
         return None;
     }
     let refusal =
         target_runs::detect_target_refusals(&tokens, false, detect_route);
-    if let Some((_, message, _)) = target_runs::strict_refusal_parts(&refusal) {
-        return Some(Err(message));
+    if let Some((code, message, _)) =
+        target_runs::strict_refusal_parts(&refusal)
+    {
+        return Some(Err(CaptureItemParseError::coded(code, message)));
     }
     let selection =
         target_runs::select_target_run(&tokens, false, detect_route)?;
@@ -181,16 +227,23 @@ fn try_resolve_child_target_run<'a>(
     if selection.position == target_runs::TargetRunPosition::WholeLine {
         return None;
     }
+    if let Some(retired) = &markers.retired_priority {
+        return Some(Err(CaptureItemParseError::generic(
+            retired_priority_marker_error(&retired.token),
+        )));
+    }
     if let Err(message) =
         target_runs::validate_selected_members(&selection.members)
     {
-        return Some(Err(message));
+        return Some(Err(CaptureItemParseError::generic(message)));
     }
     let first_text = selection.members.first()?.marker_text.clone();
     let route_token = match parse_terminal_route_token(&first_text) {
         Ok(Some(token)) => token,
         Ok(None) => return None,
-        Err(message) => return Some(Err(message)),
+        Err(message) => {
+            return Some(Err(CaptureItemParseError::generic(message)))
+        }
     };
     let mut run_positions = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
@@ -223,6 +276,7 @@ fn try_resolve_child_target_run<'a>(
             declarations,
         },
         selection,
+        terminal_spans,
     )))
 }
 
@@ -434,6 +488,7 @@ pub(super) fn parse_capture_item<'a>(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
+    target_run: Option<&TargetRunContext>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, CaptureItemParseError> {
     let occurrences = super::type_marker::collect_item(item);
     let type_masked_source =
@@ -526,6 +581,7 @@ pub(super) fn parse_capture_item<'a>(
         clip,
         note,
         listen,
+        target_run,
     );
     let mut outcome = match parsed {
         Ok(outcome) => {
@@ -800,14 +856,14 @@ pub(super) fn select_target_run_for_item(
     if let Some(result) =
         try_resolve_parent_target_run(parent_tokens.clone(), true)
     {
-        return result
-            .map(|(_, selection)| {
-                Some(TargetRunContext {
-                    line: parent_line.line_number,
-                    selection,
-                })
+        return result.map(|(outcome, selection, terminal_spans)| {
+            Some(TargetRunContext {
+                line: parent_line.line_number,
+                selection,
+                terminal_markers: outcome.markers,
+                terminal_spans,
             })
-            .map_err(target_run_parse_error);
+        });
     }
 
     // Child runs can follow a project-note task ID that the established
@@ -851,27 +907,17 @@ pub(super) fn select_target_run_for_item(
         }
         let tokens = unescape_execution_tokens(tokens, &dependencies.escapes);
         if let Some(result) = try_resolve_child_target_run(tokens, true) {
-            return result
-                .map(|(_, selection)| {
-                    Some(TargetRunContext {
-                        line: line.line_number,
-                        selection,
-                    })
+            return result.map(|(outcome, selection, terminal_spans)| {
+                Some(TargetRunContext {
+                    line: line.line_number,
+                    selection,
+                    terminal_markers: outcome.markers,
+                    terminal_spans,
                 })
-                .map_err(target_run_parse_error);
+            });
         }
     }
     Ok(None)
-}
-
-fn target_run_parse_error(message: String) -> CaptureItemParseError {
-    if message.contains("twice on this line; name each task once") {
-        CaptureItemParseError::coded("duplicate_capture_target", message)
-    } else if message.contains("are at opposite ends of the line; put every") {
-        CaptureItemParseError::coded("split_capture_targets", message)
-    } else {
-        CaptureItemParseError::generic(message)
-    }
 }
 
 /// Editor target-run probe: the same source-preserving masks and line
@@ -998,11 +1044,8 @@ fn editor_probe_tokens(
 )> {
     use super::target_runs as runs;
     let _ = take_global_declarations(&mut tokens);
-    let (markers, _) =
+    let (markers, terminal_spans) =
         runs::extract_terminal_markers_crossing_runs(&mut tokens);
-    if markers.retired_priority.is_some() {
-        return None;
-    }
     if tokens.is_empty() {
         return Some((None, None));
     }
@@ -1027,11 +1070,16 @@ fn editor_probe_tokens(
     {
         return Some((None, None));
     }
+    // A retired priority extracted from a leading/trailing block belongs
+    // to a selected run. For singleton input, leave it to the established
+    // editor parser, which may keep a nonterminal `p:N` as literal text.
     let refusal = if has_refusal { Some(refusal) } else { None };
     Some((
         Some(TargetRunContext {
             line: line_number,
             selection,
+            terminal_markers: markers,
+            terminal_spans,
         }),
         refusal,
     ))
@@ -2014,6 +2062,7 @@ fn parse_capture_item_masked<'a>(
     clip: Option<ClipRequest>,
     note: bool,
     listen: bool,
+    target_run: Option<&TargetRunContext>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, String> {
     let Some((parent_line, child_lines)) = item.lines.split_first() else {
         return Err(missing_text_error());
@@ -2244,9 +2293,9 @@ fn parse_capture_item_masked<'a>(
         parent_tokens,
         &parent_line_dependencies.escapes,
     );
-    let parent_outcome = if detect_route {
+    let mut parent_outcome = if detect_route {
         match try_resolve_parent_target_run(parent_tokens, detect_route) {
-            Some(result) => result?.0,
+            Some(result) => result.map_err(|error| error.message)?.0,
             None => {
                 // Re-tokenize for the singleton fallback: the probe above
                 // consumed the original vector.
@@ -2272,6 +2321,14 @@ fn parse_capture_item_masked<'a>(
     } else {
         resolve_line(parent_tokens, true, detect_route)?
     };
+    if let Some(target_run) = target_run
+        && target_run.line == parent_line.line_number
+    {
+        apply_target_run_terminal_markers(
+            &mut parent_outcome.markers,
+            &target_run.terminal_markers,
+        )?;
+    }
     declarations.extend(global_declarations_from_tokens(
         parent_outcome.declarations,
         parent_line.line_number,
@@ -2361,9 +2418,9 @@ fn parse_capture_item_masked<'a>(
         };
         let tokens =
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
-        let outcome = if detect_route {
+        let mut outcome = if detect_route {
             match try_resolve_child_target_run(tokens, detect_route) {
-                Some(result) => result?.0,
+                Some(result) => result.map_err(|error| error.message)?.0,
                 None => {
                     let retry = tokenize_line_with_spans(&child_line);
                     let (mut retry, _) = extract_line_dependencies(
@@ -2385,6 +2442,14 @@ fn parse_capture_item_masked<'a>(
         } else {
             resolve_line(tokens, false, detect_route)?
         };
+        if let Some(target_run) = target_run
+            && target_run.line == line_number
+        {
+            apply_target_run_terminal_markers(
+                &mut outcome.markers,
+                &target_run.terminal_markers,
+            )?;
+        }
         declarations.extend(global_declarations_from_tokens(
             outcome.declarations,
             line_number,

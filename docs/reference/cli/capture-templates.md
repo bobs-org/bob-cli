@@ -49,7 +49,7 @@ Usage: bob capture-templates clear [OPTIONS]
 Options:
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -76,7 +76,7 @@ Arguments:
 Options:
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -100,7 +100,7 @@ Usage: bob capture-templates list [OPTIONS]
 Options:
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -129,7 +129,7 @@ Arguments:
 Options:
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -157,7 +157,7 @@ Arguments:
 Options:
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 

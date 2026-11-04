@@ -52,7 +52,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -95,13 +95,13 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human, json, or csv
-          
+
           [default: human]
           [possible values: human, json, csv]
 
   -g, --group <GROUP>
           Bucket points by auto, day, week, month, or quarter
-          
+
           [default: auto]
           [possible values: auto, day, week, month, quarter]
 
@@ -110,7 +110,7 @@ Options:
 
   -k, --clock <CLOCK>
           Pomodoro clock: worked, off-clock, or total
-          
+
           [default: worked]
           [possible values: worked, off-clock, total]
 
@@ -168,13 +168,13 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human, json, or csv
-          
+
           [default: human]
           [possible values: human, json, csv]
 
   -g, --group <GROUP>
           Bucket points by auto, day, week, month, or quarter
-          
+
           [default: auto]
           [possible values: auto, day, week, month, quarter]
 
@@ -183,7 +183,7 @@ Options:
 
   -k, --clock <CLOCK>
           Pomodoro clock: worked, off-clock, or total
-          
+
           [default: worked]
           [possible values: worked, off-clock, total]
 

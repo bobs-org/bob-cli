@@ -626,6 +626,26 @@ const TABLE: &[Entry] = &[
         kind: Kind::Files(None),
     },
     Entry {
+        path: &["task", "split"],
+        arg: "owner",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "split"],
+        arg: "match",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "split"],
+        arg: "nth",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "split"],
+        arg: "bullet-ref",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["types", "suggest"],
         arg: "target",
         kind: Kind::FreeText,

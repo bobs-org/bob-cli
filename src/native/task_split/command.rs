@@ -233,13 +233,13 @@ fn parse_locator(raw: &str, allow_note: bool) -> Result<OwnerRef, String> {
             block_id: Some(block.to_string()),
         });
     }
-    if let Some((path, block)) = text.rsplit_once(':') {
-        if !block.is_empty() {
-            return Ok(OwnerRef {
-                path: with_md(path),
-                block_id: Some(block.trim_start_matches('^').to_string()),
-            });
-        }
+    if let Some((path, block)) = text.rsplit_once(':')
+        && !block.is_empty()
+    {
+        return Ok(OwnerRef {
+            path: with_md(path),
+            block_id: Some(block.trim_start_matches('^').to_string()),
+        });
     }
     if allow_note {
         return Ok(OwnerRef {

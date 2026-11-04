@@ -559,6 +559,18 @@ pub(crate) const ENTRIES: &[Row] = &[
             300,
         )
     },
+    Row {
+        invalidates: &["tasks"],
+        ..writes(
+            "task-split",
+            &["task", "split"],
+            "Split task notes",
+            &["split", "task", "bullet", "promote"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
+        )
+    },
     // Vault
     reads(
         "articles-list",

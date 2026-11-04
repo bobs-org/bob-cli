@@ -21,13 +21,13 @@ Options:
 
   -e, --engine <ENGINE>
           Query engine: native for Dataview and Tasks, obsidian for live Dataview
-          
+
           [default: native]
           [possible values: native, obsidian]
 
   -f, --format <FORMAT>
           Output format: paths, structured json, or rendered markdown
-          
+
           [default: paths]
           [possible values: json, markdown, paths]
 

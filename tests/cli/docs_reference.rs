@@ -32,7 +32,11 @@ fn capture_help(path: &[&str]) -> String {
         panic!("run bob {} --help: {error}", path.join(" "))
     });
     assert_success(&output);
-    let help = stdout(&output);
+    let help = stdout(&output)
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         !help.as_bytes().contains(&0x1b),
         "bob {} --help must not emit ANSI escape codes:\n{}",

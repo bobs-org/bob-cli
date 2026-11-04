@@ -64,7 +64,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: md (Markdown) or json
-          
+
           [default: md]
           [possible values: md, json]
 
@@ -112,7 +112,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -166,7 +166,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -215,7 +215,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -224,7 +224,7 @@ Options:
 
   -k, --kind <KIND>
           Show only one period kind
-          
+
           [possible values: week, quarter, year]
 
   -p, --problems
@@ -271,7 +271,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -323,13 +323,13 @@ Arguments:
 Options:
   -k, --clock <CLOCK>
           Pomodoro clock: worked, off-clock, or total
-          
+
           [default: worked]
           [possible values: worked, off-clock, total]
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 

@@ -31,12 +31,12 @@ Options:
 
   -D, --day <DAY>
           Local day: today, tomorrow, yesterday, or YYYY-MM-DD
-          
+
           [default: today]
 
   -f, --format <FORMAT>
           Output format: table or json
-          
+
           [default: table]
           [possible values: table, json]
 

@@ -1375,6 +1375,14 @@ fn parse_editor_item_singleton_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
+    parse_editor_item_singleton_with_target_run(item, options, None)
+}
+
+fn parse_editor_item_singleton_with_target_run<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+    target_run: Option<&super::item::TargetRunContext>,
+) -> EditorItemOutcome<'a> {
     let occurrences = super::type_marker::collect_item(item);
     let type_masked_source =
         super::type_marker::masked_source(item, &occurrences);
@@ -1435,7 +1443,8 @@ fn parse_editor_item_singleton_with<'a>(
         }
     }
     if occurrences.is_empty() && directive_occurrences.is_empty() {
-        let mut outcome = parse_editor_item_inner(item, options, false, false);
+        let mut outcome =
+            parse_editor_item_inner(item, options, false, false, target_run);
         attach_list_header_marker_diagnostic(item, &mut outcome.item);
         return outcome;
     }
@@ -1454,8 +1463,13 @@ fn parse_editor_item_singleton_with<'a>(
     masked_item
         .lines
         .retain(|line| !skips.contains(&(line.raw.start, line.raw.end)));
-    let inner =
-        parse_editor_item_inner(&masked_item, options, has_clip, has_listen);
+    let inner = parse_editor_item_inner(
+        &masked_item,
+        options,
+        has_clip,
+        has_listen,
+        target_run,
+    );
     let declarations =
         remap_type_marker_declarations(inner.declarations, item.source);
     let mut outcome = EditorItemOutcome {
@@ -1503,6 +1517,16 @@ fn try_parse_editor_target_run<'a>(
         return Some(outcome);
     };
     let mut combined = combine_editor_target_members(item, &run, options);
+    if let Some(diagnostic) =
+        retired_priority_marker_diagnostic(&run.terminal_markers)
+        && !combined.item.diagnostics.iter().any(|existing| {
+            existing.code == diagnostic.code
+                && existing.range == diagnostic.range
+                && existing.message == diagnostic.message
+        })
+    {
+        combined.item.diagnostics.push(diagnostic);
+    }
     if let Some(refusal) = refusal
         && let Some(diagnostic) =
             super::target_runs::editor_refusal_diagnostic(&refusal)
@@ -1532,11 +1556,13 @@ fn combine_editor_target_members<'a>(
 ) -> EditorItemOutcome<'a> {
     let mut members: Vec<EditorItemOutcome<'a>> = Vec::new();
     for index in 0..run.selection.members.len() {
-        let masked_source = super::target_runs::masked_source_for_member(
-            item.source,
-            &run.selection.members,
-            index,
-        );
+        let masked_source =
+            super::target_runs::masked_source_for_member_with_terminals(
+                item.source,
+                &run.selection.members,
+                index,
+                &run.terminal_spans,
+            );
         let lines = item
             .lines
             .iter()
@@ -1561,7 +1587,11 @@ fn combine_editor_target_members<'a>(
             lines,
             list: item.list.clone(),
         };
-        let parsed = parse_editor_item_singleton_with(&view, options);
+        let parsed = parse_editor_item_singleton_with_target_run(
+            &view,
+            options,
+            Some(run),
+        );
         let declarations =
             remap_type_marker_declarations(parsed.declarations, item.source);
         members.push(EditorItemOutcome {
@@ -3192,6 +3222,7 @@ pub(super) fn parse_editor_item_inner<'a>(
     options: &EditorParseOptions<'_>,
     has_clip: bool,
     has_listen: bool,
+    target_run: Option<&super::item::TargetRunContext>,
 ) -> EditorItemOutcome<'a> {
     // List bullets parse as their own task-bullet grammar: no whole-item
     // claims, no operator or picker forms.
@@ -3238,12 +3269,17 @@ pub(super) fn parse_editor_item_inner<'a>(
     let parent_item_line = item.lines.first().expect("nonempty item");
     let parent_line = parent_item_line.raw;
     let parent_tokens = tokenize_line_with_spans(&parent_line);
-    let parent_parse = parse_editor_line(
+    let mut parent_parse = parse_editor_line(
         parent_tokens,
         parent_line.text,
         parent_line.start,
         true,
         false,
+    );
+    extend_target_run_terminal_spans(
+        &mut parent_parse.terminal_spans,
+        target_run,
+        parent_item_line.line_number,
     );
     declarations.extend(global_declarations_from_tokens(
         parent_parse.declarations,
@@ -3368,12 +3404,17 @@ pub(super) fn parse_editor_item_inner<'a>(
             end: raw.end,
         };
         let child_tokens = tokenize_line_with_spans(&child_line);
-        let child_parse = parse_editor_line(
+        let mut child_parse = parse_editor_line(
             child_tokens,
             child_line.text,
             child_line.start,
             false,
             parent_takes_ids,
+        );
+        extend_target_run_terminal_spans(
+            &mut child_parse.terminal_spans,
+            target_run,
+            line_number,
         );
         item_dependencies.absorb(&child_parse.dependencies);
         declarations.extend(global_declarations_from_tokens(
@@ -4737,6 +4778,30 @@ pub(super) fn parse_editor_item_inner<'a>(
             targets: Vec::new(),
         },
         declarations,
+    }
+}
+
+fn extend_target_run_terminal_spans(
+    spans: &mut Vec<Span>,
+    target_run: Option<&super::item::TargetRunContext>,
+    line_number: usize,
+) {
+    let Some(target_run) = target_run.filter(|run| run.line == line_number)
+    else {
+        return;
+    };
+    for (kind, start, end) in &target_run.terminal_spans {
+        let span = Span {
+            start: *start,
+            end: *end,
+            kind: *kind,
+            project_note: None,
+            title: None,
+            key: None,
+        };
+        if !spans.contains(&span) {
+            spans.push(span);
+        }
     }
 }
 

@@ -25,7 +25,7 @@ Options:
 
   -d, --days <N>
           Also match tasks closed in the last N days
-          
+
           [default: 30]
 
   -e, --exclude <NOTE:LINE>
@@ -33,7 +33,7 @@ Options:
 
   -f, --format <FORMAT>
           Output format: human or json
-          
+
           [default: human]
           [possible values: human, json]
 
@@ -42,7 +42,7 @@ Options:
 
   -l, --limit <N>
           Matches per item
-          
+
           [default: 5]
 
   -q, --query <TEXT>
