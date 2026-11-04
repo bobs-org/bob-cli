@@ -268,9 +268,12 @@ The shell sees a leading `-` as a flag, so spell an earlier shift as \
 stays the end-of-options marker and carries no text.\n\n\
 Pomodoro sessions form a lifecycle: `=`/`=<X>` starts the next session, \
 `=name` starts that named session, `+[N]`/`-[N]` resizes the \
-running session, `++[N]`/`--[N]` shifts it, and `x` stops the running one \
-(`=` starts the next session, `=name` starts that one, `x` stops the \
-running one). A whole-item `x=` past token records already-happened work (`x=3`, `x=build`, `x=build@2 x=fix@3`); each member closes at its own clock and files chronologically. Session operators may share one line when whitespace \
+running session, `++[N]`/`--[N]` shifts it, and `x` stops the running one. \
+Mnemonic: `=` starts now, `x` stops now, and `x=` records what already \
+happened. A whole-item `x=` token records past work (`x=3`, `x=build`, \
+`x=build@2 x=fix@3`) ending at the next five-minute boundary; stack members \
+fill earlier windows backward. It never changes a running session, and `!` \
+only permits trimming one edge of a closed row. Session operators may share one line when whitespace \
 separates them: `+2 x` means `+2`, blank line, `x`, and `x =` closes \
 then starts the next session. Quote `=` items in zsh, which expands a \
 leading `=word` to a command path.\n\n\

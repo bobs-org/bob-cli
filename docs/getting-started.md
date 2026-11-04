@@ -154,6 +154,10 @@ embed (`![[note#^id]]`) requests completion. Unresolved or ineligible targets
 can be skipped with warnings; check the capture report. See
 [close outcomes](capture.md#closing-the-running-pomodoro) for the full rules.
 
+To record work that already happened, use a whole-item past token such as
+`bob capture 'x=build@2'`. It records backward from the next five-minute
+boundary; see [Recording a past Pomodoro](capture.md#recording-a-past-pomodoro).
+
 When the close completes a planned task, Bob recovers newly unblocked
 dependents immediately and offers them as successor offers
 (`plan.link_unblocked: true` by default). Nothing is auto-linked; pick

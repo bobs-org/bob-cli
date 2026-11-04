@@ -78,6 +78,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `=*[source][#destination…]` | Merge the next planned Pomodoro or named destinations into one open session | [`=*`](#equals-merge) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
 | `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
+| `x=E[!][=X]` | Record a past Pomodoro ending at the next five-minute boundary | [Recording past Pomodoros](#recording-past-pomodoros) |
 | `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
 | `x*<P>` | Close, parking those Task Links | [`x*<P>`](#x-park-links) |
 | `x~<K>` | Close, dropping those Task Links | [`x~<K>`](#x-drop-links) |
@@ -105,41 +106,22 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 
 | Marker | Context | Meaning |
 | --- | --- | --- |
-| `+` | `+[N]` alone | Adjust the current Pomodoro |
-| `+` | `++[N]` alone | Shift the running session later |
-| `+` | `+query` / lone `+` | Parent-task picker |
-| `+` | `@route+block-id` | Child under an existing task, or Ensure Next when the item has no other text |
-| `+` | `@route^block-id` / `@route:block-id` (typed last) | Switch to `@route+block-id` |
-| `+` | after `#name` | Part of the Pomodoro name (`BUGS+`) |
-| `%n` | `%n` at an item edge | Pomodoro note |
-| `#` | `@route#Section` | Heading in that note |
-| `#` | free-standing `#` at an item edge | Incomplete type marker: add `#fix` or write `\#` |
-| `#` | free-standing `#<type>` at an item edge | Type the new task or retype its selected task; unconfigured names refuse |
-| `#` | `@route^id #<type>` (separate token) | Type the new task with that block ID |
-| `#` | `@route+id #<type>` (separate token) | Retype the target in the same transaction; marker-only also ensures Next |
-| `#` | `@route+id#drawer` (glued) | Task drawer; requires note text, child bullets, or `%c` |
-| `#` | First-level `- #drawer` | Drawer shortcut; requires nested notes |
-| `#` | `@route:id#pomodoro` / `=name` | Named Pomodoro (`=bugs` and `=#bugs` are one token) |
-| `@` | `@route…` | Route / destination token |
-| `@` | `@@route` | Draft-wide destination |
-| `@` | `x@<N>` / `=name@<X>` | Timing or keep-list typed last (`=bugs@3` means `=3#bugs`) |
-| `@` | `URL @route` | Explicit reference parent |
-| `%l` | `URL %l` | Request companion audio |
-| `@` | right after `@route^block-id` / `@route:block-id` | Project-note seal: `^…@` creates the note, `:…@` also offers its tasks |
-| `*` | `*note:block-id` | Blocked-task (star) link |
-| `*` | `x*` | Park Task Links on close |
-| `*` | `=*` / `=*source` / `=*source#destination` | Merge the next planned Pomodoro or named destinations into source |
-| `/` | `=/base#type` | Split a type out of a merged Pomodoro |
-| `*` | line-initial bare `*` | Never a blocked-task marker |
-| `~` | `~note:block-id[\|"label"]`, `~note:block-id\|\|"label"` | Relation link ([`~`](#tilde-link)); `||` hides the label from suggestions once the capture succeeds |
-| `~` | `x~` / `=~` | Drop Task Links on close / drop on start |
-| `~` | `~/path`, `~5m`, mid-line `~x:y` | Never a relation marker |
-| `~~` | `~~note:block-id[\|"label"]` | Reverse relation link ([`~~`](#tilde-tilde-link)) |
-| `~~` | `~~old~~` | Strikethrough, never a relation marker |
-| `!` | `!note:block-id` | Complete an existing task |
-| `!` | `x!` | Complete Task Links on close |
-| `%` | bare `%` | Incomplete directive |
-| `%` | trailing `%c` / `%c<N>` | Clipboard capture |
+| `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
+| `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
+| `%n` | Item edge | Pomodoro note |
+| `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
+| `#` | `@route+id#drawer`; `- #drawer`; `x=#"NAME"` | Drawer, drawer shortcut, or exact past-session name |
+| `@` | `@route`, `@@route`, `URL @route`; after project owner ID | Note/draft/reference route or project seal (`:id@` offers tasks) |
+| `@` | `=name@N`, `x=NAME@N`, `x@N` | Start/past timing or close keep-list |
+| `%l` | URL | Request companion audio |
+| `*` | `*note:id`, `x*`, `=*source` | Block task, park links, or merge sessions |
+| `/` | `=/base#type` | Split a merged session |
+| `*` | Line-initial bare `*` | Markdown bullet, not a blocked-task marker |
+| `~` | `~note:id|label`, `~note:id||label`; `x~`, `=~` | Relation label or drop close/start links |
+| `~` | `~/path`, `~5m`, mid-line `~x:y` | Not relation syntax |
+| `~~` | `~~note:id`; `~~old~~` | Reverse relation; strikethrough |
+| `!` | `!note:id`, `x!`, `x=E!` | Complete task/links or permit closed-edge repair |
+| `%` | Bare `%`, `%c` / `%c<N>`, `%n` | Directive picker, clipboard, or Pomodoro note |
 
 Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
 
@@ -171,8 +153,26 @@ These are not valid commands. Bob teaches the replacement.
 | `#now` / a free `#tag` at an item edge | Refused with `type_not_configured` unless the name is configured; a bare `@route` adds the heading hint |
 | `t:fix` | Ordinary prose; `t:` is retired as a type marker |
 | `x#bugs` | Error: `x` always closes the running session; write `x =bugs` to close then start |
+| `x=3-1`, `x=-2`, `x=3-`, `x=build@3-1` | No offsets; remove the dash part (`x=3` or `x=`) |
+| `x=3#fix@2` | Give the count once: `x=3#fix` or `x=fix@3` |
+| `x=~2`, `x=3~2`, `x=*3`, `x=1!2` | Put close modifiers after a second `=` (`x==~2`, `x=3=~2`, `x==*3`, `x==1!2`) |
+| `x=0`, `x=build@0` | Need at least one block: `x=1` |
+| `x=/build`, `x=*build` | `x=` cannot split or merge a session |
+| `x=fix!2` | Use `x=fix=!2`; to repair too, use `x=fix!=!2` |
+| `x=3x`, `x=3build` | Separate count and name: `x=3#x`, `x=3#build` |
 
 Contract: [Retired close spellings](../capture.md#retired-close-spellings).
+
+## Recording past Pomodoros
+
+### `x=E[!][=X]` {#recording-past-pomodoros}
+
+`x=E[!][=X]` is a whole-item lowercase record. `E` is omitted (25 minutes),
+a positive block count, or a name; names beginning with a digit use `#`, and
+`@N` gives a named duration. Records stack backward from the next
+five-minute boundary. `!` permits trimming only an older closed edge; open,
+erased, or split rows refuse. The second `=X` uses close selection. See the
+full [past Pomodoro contract](../capture.md#recording-a-past-pomodoro).
 
 ## Routes and destinations
 

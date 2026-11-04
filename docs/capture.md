@@ -54,6 +54,7 @@ workflow guide.
     - [Retired close spellings](#retired-close-spellings)
     - [Choosing each Task Link's outcome](#choosing-each-task-links-outcome)
     - [Logging work while closing](#logging-work-while-closing)
+  - [Recording a past Pomodoro](#recording-a-past-pomodoro)
   - [Chaining session operators on one line](#chaining-session-operators-on-one-line)
   - [Project notes](#project-notes)
     - [Offer a new project's tasks](#offer-a-new-projects-tasks)
@@ -151,6 +152,7 @@ anything is written, and any failure rolls the whole batch back.
 | `x` + `- [<n>] <text>` / `- * <text>` (+ `  - <detail>`) | Several entries while closing: bullets are numbered all or none except star bullets — a numbered bullet logs its text to worked task `<n>`, unnumbered bullets log in order to the close's worked tasks (one worked task takes them all, otherwise bullet `i` logs to worked task `i`), and `- * <text>` logs the same entry to every worked task no other entry in this close logs to; a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
 | `+2 x`, `x =`, `x =bugs`, `x =~2`, `x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; an inline entry sits right after its close with operators trailing (`x wired the lexer =` closes with the entry then starts); `x =~2` closes then starts without link 2 of the next lineup, while `x~2 =` drops link 2 of the running session and then starts |
 | `x =` + `- 1 wired the lexer` | Close with a Work Log bullet in a chain: the child lines attach to the line's `x`, so this logs the entry then starts the next session |
+| `x=E[!][=X]` | Record finished work ending at the next five-minute boundary; `E` is an optional positive block count or name, `!` permits trimming a closed row's edge, and the optional second `=X` applies the existing close outcomes |
 | `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first; a refused drop keeps today's history link); the `=` is the suffix separator, the same selection may follow the `x`, and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
@@ -1167,7 +1169,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 11`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 12`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -3371,8 +3373,9 @@ Pomodoro sessions form a lifecycle, taught in this order:
 | `+[N]` / `-[N]` | resize | Move the running session's end N × 5 min later / earlier | `N\p` / `N\P` |
 | `++[N]` / `--[N]` | shift | Move the running session's start and end N × 5 min later / earlier | `N\o` / `N\O` |
 | `x` | close | Close the running session | Ctrl+Enter |
+| `x=E[!][=X]` | record past | Record finished work ending at the next five-minute boundary; `!` permits trimming a closed row's edge | — |
 
-Mnemonic: "`=` starts the next session — or the meeting in progress, or restarts the running one; `=name` starts that one — or swaps it in; `x` stops the running one."
+Mnemonic: "`=` starts now, `x` stops now, and `x=` records what already happened. `=name` starts that named session — or swaps it in."
 
 Which clock the session is on — `[t::]` or `[off::]` — follows the
 counted-links rule in [Which clock a session is on](#which-clock-a-session-is-on).
@@ -5149,10 +5152,128 @@ a block link
 (``a Work Log bullet can't contain the block link `[[bob#^x]]`; the close would treat it as a Task Link``),
 and a fence (``a Work Log bullet can't start with a code fence``).
 
+### Recording a past Pomodoro
+
+The mnemonic is _`=` starts now, `x` stops now, `x=` records what already
+happened_. A whole-item `x=` token writes a Pomodoro for finished work. It
+does not start, restart, swap, or close the currently running session. The
+recorded span ends at the next five-minute boundary, so the last few minutes
+before that boundary remain part of the session.
+
+The lowercase token must start a capture item or appear as a token in a
+same-line session chain; `X=3` and mid-body `Plan x=3` remain prose. It has
+this shape:
+
+```text
+x=E[!][=X] [work-log entry]
+```
+
+`E` is empty, a positive number of five-minute blocks, or a Pomodoro name.
+With no number, the duration is 5 blocks (25 minutes). A numeric count can
+precede a name as `x=2#fix`; a name can instead precede its count as
+`x=fix@2`. Use `#` for names that begin with a digit or need exact quoted
+matching, such as `x=#"DEEP WORK"`. A count cannot include an offset: every
+past Pomodoro ends at the same boundary. `!` belongs to `E` and authorizes
+edge repair against older closed rows. The optional second `=X` uses the
+existing close selection grammar, including Work Log entries and task
+outcomes.
+
+| Typed | Meaning |
+| --- | --- |
+| `x=` | Record the next untimed placeholder for 25 minutes |
+| `x=3` | Record an unnamed 15-minute session |
+| `x=3!` | Same, and permit trimming a closed row's edge if needed |
+| `x=build` | Record a 25-minute session named BUILD |
+| `x=build@2 x=fix@3` | Record BUILD for 10 minutes, then FIX for 15 minutes |
+| `x=2#fix=*3 apollo agent` | Record FIX for 10 minutes, park task 3, and log `apollo agent` at the close time |
+| `x==1!2` | Record 25 minutes; keep task 1 in progress and complete task 2 |
+
+Each maximal consecutive run of `x=` items is one stack. Same-line tokens
+and blank-line-separated items both count. Another operator or any ordinary
+capture item ends the stack. If `T` is the current time rounded up to the
+next five-minute boundary, the rightmost member ends at `T`; earlier
+members fill adjacent windows backward in typed order. A 2-block member
+followed by a 3-block member therefore occupies `[T−25m,T−15m)` and then
+`[T−15m,T)`. A member closes at `C = min(window end, now)`, so earlier
+members close at their own end and the last closes at the current time.
+Work Log timestamps use that same close time.
+
+An unnamed token uses the first open untimed placeholder. It does not use a
+MEET placeholder. If none is available, name the session. A named token
+resolves like `=name`: it reuses an open untimed placeholder, creates a new
+row for a completed match or an unknown name, and refuses to target an open
+timed row. `x=meet` uses the typed duration rather than the calendar event
+run. A recorded row is inserted chronologically among completed rows and
+before open rows. Carried links keep a continuation at the source
+placeholder's slot; when nothing carries, Bob leaves no empty replacement
+placeholder. Any running session stays in place and unchanged.
+
+Before recording the stack, Bob checks every member against all timed rows in
+today's Pomodoros section. Intervals are half-open, so touching endpoints do
+not overlap. The stack is checked as a whole, including its union of windows:
+
+| History under a member's window | Without `!` | With `!` |
+| --- | --- | --- |
+| No overlap, including a touching endpoint | Record | Error: `!` is unnecessary; remove it |
+| Open timed row | Refuse and teach `x x=…!` | Refuse; `!` never changes open work |
+| Closed row leaves one nonempty piece after the full stack is subtracted | Refuse and show the trim | Trim that edge, record, and warn |
+| Closed row would be erased or split in two | Refuse | Refuse; `!` only trims an edge |
+
+`!` is required only on members that overlap closed history; it is an error
+on every other member. Bob stages the trims before recording any member.
+A trim changes only the old row's time span and duration; its name, checkbox,
+clock, ID, children, and links stay intact. Other day files are not checked.
+
+Common teaching errors show the exact rewrite:
+
+| Typed | Rewrite |
+| --- | --- |
+| `x=3-1`, `x=-2`, `x=3-`, `x=build@3-1` | Past work has no offset; remove the dash part (`x=3-1` → `x=3`, `x=-2` → `x=`) |
+| `x=3#fix@2` | Give the count once: `x=3#fix` or `x=fix@3` |
+| `x=~2`, `x=3~2`, `x=build~2` | Put link drops after a second equals: `x==~2`, `x=3=~2`, `x=build=~2` |
+| `x=*3` | Put the task selection after a second equals: `x==*3` |
+| `x=0`, `x=build@0` | Use at least one block: `x=1` |
+| `x=/build`, `x=*build` | `x=` records one session; it cannot split or merge |
+| `x=1!2`, `x=!2` | Put the task selection after a second equals: `x==1!2`, `x==!2` |
+| `x=fix!2` | Put the task selection after a second equals: `x=fix=!2`; to also repair, write `x=fix!=!2` |
+| `x=3x`, `x=3build` | Separate the count and name: `x=3#x`, `x=3#build` |
+
+An unfinished name such as `x=#`, `x=3#`, or `x=#"DEEP` remains incomplete
+and asks for `pomodoro_name`; `x=build@` needs `pomodoro_start_timing`.
+Close dangles such as `x==1,` and `x==~` need `pomodoro_close_task`, while
+`x= 2` needs `pomodoro_close_log_text`. Oversized block counts use the
+existing start-family “too large” wording.
+
+Human output says `recorded` (or `would record` in a dry run), numbers stack
+members as `1 of 2`, and prints each trim once as a warning. JSON reports
+each member as `kind: "pomodoro_past"` with `pomodoro_past` details for its
+target, window, close time, line, trims, stack position, and existing close
+summary. The batch `pomodoro_blocks` marks `recorded` and `trimmed` rows;
+each trim also has warning code `pomodoro_past_trim`. A past record has no
+top-level `pomodoro_close`, because it is not a close of the running row.
+See [Capture JSON](reference/json-outputs.md#capture-and-protocol-helpers).
+
+At `BOB_NOW=2026-11-04 09:21`, the boundary is 09:25:
+
+| Draft | Result |
+| --- | --- |
+| `x=build` | BUILD 09:00–09:25, closed at 09:21 |
+| `x=build@2 x=fix@3` | BUILD 09:00–09:10; FIX 09:10–09:25, closed at 09:21 |
+| `x=3!` over closed PLAN 08:55–09:20 | Record 09:10–09:25; trim PLAN to 08:55–09:10 and warn |
+| `x=3` while WORK is open 09:00–09:25 | Refuse; close first with `x x=3!` |
+| `x=3` after starting a session at 09:21 | Touches its 09:25 start, so record 09:10–09:25 before it |
+| `x=3` at 00:05 | Refuse because it would start before midnight |
+
+Useful idioms are `x=3 =` to record the past and start the next session,
+`x x=fix@3!` to close the running session before recording a past FIX block,
+and a typed timeline such as `x=email@1 x=build@3 x=fix@2`. Single-quote
+tokens containing `!`, `*`, or `~` in Zsh (for example,
+`bob capture 'x=3!'`).
+
 ### Chaining session operators on one line
 
-The seven whole-item Pomodoro session operators — `+[N]`, `-[N]`, `++[N]`,
-`--[N]`, `=`/`=<X>`, `=name`, and `x[<N>][!<M>][~<K>]` — may share one physical line when
+The eight whole-item Pomodoro session operators — `+[N]`, `-[N]`, `++[N]`,
+`--[N]`, `=`/`=<X>`, `=name`, `x[<N>][!<M>][~<K>]`, and `x=E[!][=X]` — may share one physical line when
 whitespace separates them:
 
 ```bash
@@ -5161,6 +5282,8 @@ bob capture 'x ='
 bob capture 'x =bugs'
 bob capture 'x =~2'
 bob capture '=~2 +2'
+bob capture 'x x=3!'
+bob capture 'x=3 ='
 ```
 
 Recognition: the line must hold at least two whitespace-separated tokens and
@@ -5685,7 +5808,7 @@ names come from the item's seal):
 
 The parser and completion commands expose the same draft shape:
 
-- `capture-parse` uses grammar revision 11. A complete `- ^id` has a
+- Grammar 11 added project-task move bullets. A complete `- ^id` has a
   `project_task_move_marker` span over `^`; `- :id` uses
   `project_task_move_link_marker` over `:`. `project_task_move_block_id`
   covers the ID, including a partial ID. A lone sigil is `incomplete`, needs
@@ -5697,7 +5820,8 @@ The parser and completion commands expose the same draft shape:
   empty and their task-ID entry is null.
   Completed items report `project_note`, or `pomodoro_project_note` when a
   `:` move is present. Human output says `move ^id` or
-  `move & link :id`.
+  `move & link :id`. Grammar 12 adds whole-item `x=` past Pomodoro records;
+  see [Recording a past Pomodoro](#recording-a-past-pomodoro).
 - `capture-complete` serves `project_task_move` when the cursor is inside a
   move token, from its sigil through its ID. `query` is the typed ID prefix
   up to the cursor and
@@ -6203,7 +6327,8 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 11 while
+`capture-parse` and `capture-complete` report grammar revision 12. Grammar 11
+added the move-choice markers; grammar 12 adds the `x=` past-Pomodoro syntax.
 `schema_version` stays 1 (see [Capture-language
 revision](reference/compatibility.md#capture-language-revision)).
 
@@ -7416,7 +7541,7 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 11` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 12` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
@@ -8610,7 +8735,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 11`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 12`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

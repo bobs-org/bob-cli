@@ -196,6 +196,9 @@ start suffix (including the short `=name` suffix, e.g. `@work:outline=bugs`), an
 adjustment, an optional pomodoro_shift object for a whole-item `++[N]`/`--[N]` \
 shift, an optional pomodoro_split object for a whole-item `=/` split, an optional pomodoro_merge object for a whole-item `=*` merge, an optional pomodoro_close object for a `=x` link close suffix or \
 whole-item close, and structured diagnostics. \
+An `x=` item adds a text-only `pomodoro_past` object (the typed name, \
+blocks, repair flag, stack position, and existing close spec) plus \
+`pomodoro_past` and `pomodoro_past_repair` spans. \
 Wikilink highlighting is syntax-only and never touches the vault. Byte \
 offsets index the original TEXT before whitespace normalization, are \
 half-open [start, end), never overlap, and always land on a character \

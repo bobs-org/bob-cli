@@ -68,7 +68,7 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 10` revision. Clients can use it to distinguish
+additive top-level `grammar: 12` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
 envelope. Grammar 8 kept grammar 7's note-pull behavior: an exactly lone
 `@route` task-list header is a note pull, `@route` with bullets remains a
@@ -88,6 +88,15 @@ the shell keeps the `>`): a complete transfer reports mode `task_move` or
 `route`/`block_id` describe the destination. A line that used to file the
 note `> @dest` now claims a transfer directive, so clients must handle the
 new modes before enabling the grammar.
+
+Grammar 11 adds the `^^` project-task move choice to sealed project-note
+items. It reports `project_task_move_choice_marker` and per-child
+`sub_bullet_move_choices[]` while keeping the capture parse complete.
+Grammar 12 claims whole-item `x=` as a past Pomodoro record: stacks end at
+the next five-minute boundary and fill backward, while `!` can trim only an
+edge of an older closed row. It adds the `pomodoro_past` mode and object;
+clients should treat that as a distinct session operation rather than a
+close of the running Pomodoro.
 
 ## Runtime dependencies
 
