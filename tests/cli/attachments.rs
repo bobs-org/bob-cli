@@ -200,19 +200,25 @@ fn attachments_import_classifies_like_clipboard_lines() {
     let temp = TempDir::new("bob-cli-attachments-classify");
     let vault = temp.path().join("vault");
     let cache = temp.path().join("cache");
-    let src = temp.path().join("src");
+    let home = temp.path().join("home");
     fs::create_dir_all(&vault).expect("vault");
-    let shot = write_source(&src, "spaced name.png", b"spaced");
+    fs::create_dir_all(&home).expect("home");
+    let shot = write_source(&home, "Mixed Case image.png", b"spaced");
 
-    // Quoted paths and file:// URIs resolve exactly as `%c` lines do.
-    for raw in [
-        format!("'{}'", shot.display()),
-        format!("file://{}", shot.display()),
+    let uri = format!("file://{}", shot.display()).replace(' ', "%20");
+    // Quoted, unwrapped URI, and angle-wrapped paths resolve through the
+    // shared classifier used by `%c`.
+    for (raw, reused) in [
+        (format!("'{}'", shot.display()), false),
+        (uri.clone(), true),
+        (format!("<{}>", shot.display()), true),
+        (format!("<{uri}>"), true),
     ] {
         let output = attachments_command(&vault, &cache)
             .args(["attachments", "import", "-f", "json"])
             .arg("--")
             .arg(&raw)
+            .env("HOME", &home)
             .output()
             .expect("classified import");
         assert_success(&output);
@@ -225,7 +231,35 @@ fn attachments_import_classifies_like_clipboard_lines() {
             json!(shot.display().to_string()),
             "raw {raw}"
         );
+        assert_eq!(
+            report["attachments"][0]["display"],
+            json!("~/Mixed Case image.png"),
+            "raw {raw}"
+        );
+        assert_eq!(
+            report["attachments"][0]["reused"],
+            json!(reused),
+            "raw {raw}"
+        );
     }
+
+    let origin = attachments_command(&vault, &cache)
+        .args(["attachments", "origin", "-f", "json", "--"])
+        .arg("img/Mixed Case image.png")
+        .env("HOME", &home)
+        .output()
+        .expect("resolve wrapped import origin");
+    assert_success(&origin);
+    let report: Value = serde_json::from_str(stdout(&origin).trim())
+        .unwrap_or_else(|error| {
+            panic!("origin JSON: {error}\n{}", format_output(&origin))
+        });
+    assert_eq!(
+        report["origin"]["source"],
+        json!(shot.display().to_string())
+    );
+    assert_eq!(report["origin"]["display"], json!("~/Mixed Case image.png"));
+    assert_eq!(report["origin"]["state"], json!("present"));
 }
 
 #[test]
@@ -475,7 +509,7 @@ fn attachments_capture_clip_records_origins_and_keeps_json_stable() {
     let clipboard = temp.path().join("clipboard.sh");
     write_executable(
         &clipboard,
-        &format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", shot.display()),
+        &format!("#!/bin/sh\nprintf '%s\\n' '<{}>'\n", shot.display()),
     );
 
     let output = attachments_command(&vault, &cache)

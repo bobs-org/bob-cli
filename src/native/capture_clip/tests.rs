@@ -10,7 +10,10 @@ use rusqlite::Connection;
 use super::{
     clipboard::{merge_history_candidates, normalize_clipboard_output},
     clipy::read_clipy_history,
-    files::{percent_decode, sanitize_file_name, sha256_hex, snippet_slug},
+    files::{
+        classify_path_candidate, percent_decode, sanitize_file_name,
+        sha256_hex, snippet_slug, PathState,
+    },
     persist::TEMP_COUNTER,
     plan::{
         is_structural_line, MAX_ATTACHMENT_COUNT, MAX_INLINE_CHARACTERS,
@@ -464,6 +467,37 @@ fn percent_decodes_file_uris() {
         "/tmp/hello world.md"
     );
     assert!(percent_decode("/tmp/%xx").is_err());
+}
+
+#[test]
+fn classifies_angle_wrapped_paths_and_file_uris() {
+    let root = test_root("wrapped-paths");
+    let source = root.join("Mixed Case image.png");
+    fs::write(&source, b"image").expect("source");
+
+    let absolute = format!("<{}>", source.display());
+    assert_eq!(
+        classify_path_candidate(&absolute).expect("wrapped absolute path"),
+        PathState::File(source.clone())
+    );
+
+    let uri = format!("file://{}", source.display()).replace(' ', "%20");
+    assert_eq!(
+        classify_path_candidate(&format!("<{uri}>")).expect("wrapped file URI"),
+        PathState::File(source.clone())
+    );
+
+    assert_eq!(
+        classify_path_candidate(&format!("\"{}\"", source.display()))
+            .expect("quoted path"),
+        PathState::File(source.clone())
+    );
+    assert_eq!(
+        classify_path_candidate(source.to_str().expect("UTF-8 path"))
+            .expect("unwrapped path"),
+        PathState::File(source)
+    );
+    fs::remove_dir_all(root).expect("cleanup");
 }
 
 #[test]

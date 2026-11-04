@@ -30,8 +30,8 @@ pub(super) enum PathState {
 }
 
 pub(crate) fn classify_path_candidate(line: &str) -> Result<PathState, String> {
-    let unquoted = strip_matching_quotes(line.trim());
-    let decoded = if let Some(rest) = unquoted.strip_prefix("file://") {
+    let unwrapped = strip_matching_wrapper(line.trim());
+    let decoded = if let Some(rest) = unwrapped.strip_prefix("file://") {
         let path = match rest.strip_prefix('/') {
             Some(_) => rest,
             None => rest.split_once('/').map(|(_, path)| path).unwrap_or(""),
@@ -43,7 +43,7 @@ pub(crate) fn classify_path_candidate(line: &str) -> Result<PathState, String> {
         };
         percent_decode(&with_root)?
     } else {
-        unquoted.to_string()
+        unwrapped.to_string()
     };
     let expanded = bob_env::expand_tilde(Path::new(&decoded));
     if !expanded.is_absolute() {
@@ -63,12 +63,12 @@ pub(crate) fn classify_path_candidate(line: &str) -> Result<PathState, String> {
     }
 }
 
-fn strip_matching_quotes(value: &str) -> &str {
+fn strip_matching_wrapper(value: &str) -> &str {
     if value.len() >= 2 {
         let bytes = value.as_bytes();
         if matches!(
             (bytes[0], bytes[value.len() - 1]),
-            (b'\'', b'\'') | (b'"', b'"')
+            (b'\'', b'\'') | (b'"', b'"') | (b'<', b'>')
         ) {
             return &value[1..value.len() - 1];
         }

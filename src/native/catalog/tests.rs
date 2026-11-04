@@ -392,8 +392,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 67);
-    assert_eq!(ENTRIES.len(), 67);
+    assert_eq!(catalog.entries.len(), 69);
+    assert_eq!(ENTRIES.len(), 69);
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog
         .entries
@@ -404,6 +404,14 @@ fn document_shape() {
     }));
     assert!(catalog.entries.iter().any(|entry| {
         entry.id == "periods-migrate" && entry.path == ["periods", "migrate"]
+    }));
+    assert!(catalog.entries.iter().any(|entry| {
+        entry.id == "attachments-import"
+            && entry.path == ["attachments", "import"]
+    }));
+    assert!(catalog.entries.iter().any(|entry| {
+        entry.id == "attachments-origin"
+            && entry.path == ["attachments", "origin"]
     }));
     assert!(catalog.excluded.iter().any(|row| row.path == ["capture"]));
 }
