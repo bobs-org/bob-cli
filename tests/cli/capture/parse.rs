@@ -72,7 +72,236 @@ fn capture_parse_json_output_is_stable_and_parseable() {
         ])
     );
     assert_eq!(json["diagnostics"], serde_json::json!([]));
+    assert!(json.get("targets").is_none(), "{json}");
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn capture_parse_json_reports_public_target_runs_and_batch_offsets() {
+    let parse = |raw: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(raw)
+            .output()
+            .expect("run target-run capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    let leading_raw = "@work+a @dev+b note";
+    let leading = parse(leading_raw);
+    assert_eq!(leading["grammar"], 9);
+    assert_eq!(leading["body"], "note");
+    assert_eq!(leading["route"], "work");
+    assert!(leading.get("items").is_none(), "{leading}");
+    let targets = leading["targets"].as_array().expect("targets");
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0]["marker"], "@work+a");
+    assert_eq!(targets[1]["marker"], "@dev+b");
+    assert_eq!(targets[0]["mode"], "sub_bullet");
+    assert_eq!(
+        (targets[0]["start"].as_u64(), targets[0]["end"].as_u64()),
+        (Some(0), Some(7))
+    );
+    assert_eq!(
+        (targets[1]["start"].as_u64(), targets[1]["end"].as_u64()),
+        (Some(8), Some(14))
+    );
+
+    let trailing = parse("note @work+a @dev+b");
+    assert_eq!(trailing["body"], "note");
+    assert_eq!(trailing["targets"].as_array().unwrap().len(), 2);
+
+    let partial = parse("@work+a @dev+ note");
+    assert_eq!(partial["body"], "note");
+    assert_eq!(partial["needs"], serde_json::json!(["task"]));
+    assert_eq!(partial["targets"][1]["mode"], "incomplete");
+    assert_eq!(partial["targets"][1]["marker"], "@dev+");
+
+    let batch = parse("first\n\n@work+a @dev+b note");
+    let items = batch["items"].as_array().expect("batch items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[1]["body"], "note");
+    assert_eq!(items[1]["targets"].as_array().unwrap().len(), 2);
+    assert_eq!(items[1]["targets"][0]["start"], 7);
+}
+
+#[test]
+fn capture_parse_json_reports_duplicate_and_split_target_diagnostics() {
+    for (raw, code, offending) in [
+        (
+            "@work+a @work+a note",
+            "duplicate_capture_target",
+            "@work+a",
+        ),
+        ("@a+x note @b+y", "split_capture_targets", "@b+y"),
+    ] {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(raw)
+            .output()
+            .expect("run target refusal parse");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("capture-parse JSON");
+        let diagnostic = json["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("missing {code}: {json}"));
+        assert_eq!(diagnostic["code"], code);
+        let start = raw.rfind(offending).unwrap();
+        assert_eq!(
+            diagnostic["range"],
+            serde_json::json!([start, start + offending.len()])
+        );
+    }
+}
+
+#[test]
+fn capture_strict_json_preserves_target_refusal_codes() {
+    let temp = TempDir::new("bob-cli-capture-target-refusal-codes");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create scratch vault");
+    for (raw, code) in [
+        ("@work+a @work+a note", "duplicate_capture_target"),
+        ("@a+x note @b+y", "split_capture_targets"),
+    ] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--dry-run")
+            .arg("--")
+            .arg(raw)
+            .env("BOB_NOW", "2026-11-03 09:30")
+            .env("BOB_REF_JOBS_KICK", "off")
+            .output()
+            .expect("run strict target refusal");
+        assert!(!output.status.success(), "{raw}: {}", stdout(&output));
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+        assert_eq!(json["code"], code, "{raw}: {json}");
+    }
+}
+
+#[test]
+fn capture_parse_and_dry_run_use_the_same_public_target_run_in_scratch_vault() {
+    fn snapshot(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+        fn visit(
+            root: &std::path::Path,
+            current: &std::path::Path,
+            files: &mut Vec<(String, Vec<u8>)>,
+        ) {
+            for entry in fs::read_dir(current).expect("read scratch tree") {
+                let entry = entry.expect("scratch entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(root, &path, files);
+                } else {
+                    files.push((
+                        path.strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
+                        fs::read(&path).expect("read scratch file"),
+                    ));
+                }
+            }
+        }
+        let mut files = Vec::new();
+        visit(root, root, &mut files);
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        files
+    }
+
+    let temp = TempDir::new("bob-cli-capture-target-run-scratch");
+    let home = temp.path().join("home");
+    let config = temp.path().join("xdg-config");
+    let data = temp.path().join("xdg-data");
+    let state = temp.path().join("xdg-state");
+    let cache = temp.path().join("xdg-cache");
+    let vault = temp.path().join("vault");
+    for directory in [&home, &config, &data, &state, &cache, &vault] {
+        fs::create_dir_all(directory)
+            .expect("create isolated scratch directory");
+    }
+    write_file(
+        &vault.join("work.md"),
+        "# Work\n\n## Tasks\n- [ ] #task Existing work ^a\n",
+    );
+    write_file(
+        &vault.join("dev.md"),
+        "# Dev\n\n## Tasks\n- [ ] #task Existing dev ^b\n",
+    );
+    let before = snapshot(&vault);
+    let draft = "@work+a @dev+b note";
+    let scratch = |command: &str| {
+        let mut process = bob_command();
+        process
+            .arg(command)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_DATA_HOME", &data)
+            .env("XDG_STATE_HOME", &state)
+            .env("XDG_CACHE_HOME", &cache)
+            .env("BOB_DIR", &vault)
+            .env("BOB_NOW", "2026-11-03 09:30")
+            .env("BOB_REF_JOBS_KICK", "off");
+        process
+    };
+
+    let parsed = scratch("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run scratch capture-parse");
+    assert_success(&parsed);
+    let parsed_json: serde_json::Value =
+        serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
+    assert_eq!(parsed_json["grammar"], 9);
+    assert_eq!(parsed_json["body"], "note");
+    assert_eq!(parsed_json["targets"].as_array().unwrap().len(), 2);
+
+    let dry_run = scratch("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run scratch capture dry-run");
+    assert_success(&dry_run);
+    let capture_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("capture JSON");
+    let captures = capture_json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 2);
+    assert_eq!(captures[0]["kind"], "sub_bullet");
+    assert_eq!(captures[1]["kind"], "sub_bullet");
+    assert_eq!(captures[0]["text"], "note");
+    assert_eq!(captures[1]["text"], "note");
+    assert_eq!(captures[0]["route"], "work");
+    assert_eq!(captures[1]["route"], "dev");
+    assert_eq!(
+        snapshot(&vault),
+        before,
+        "dry-run must not change vault bytes"
+    );
 }
 
 #[test]
@@ -1662,7 +1891,7 @@ fn capture_parse_json_reports_move_bullets() {
     assert_success(&output);
     let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
         .expect("capture-parse JSON");
-    assert_eq!(json["grammar"], 8);
+    assert_eq!(json["grammar"], 9);
     assert_eq!(json["mode"], "incomplete");
     assert_eq!(json["needs"], serde_json::json!(["project_task_move"]));
     assert_eq!(

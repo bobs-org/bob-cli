@@ -75,7 +75,6 @@ pub(super) fn plan_capture_batch_with_config_path(
             || request.forced_clip.is_some(),
         has_global_destination: false,
         recognize_lists: !forced_literal,
-        enable_target_runs: false,
     };
     let parsed_draft = parse_capture_draft_with_options(
         &request.raw_text,

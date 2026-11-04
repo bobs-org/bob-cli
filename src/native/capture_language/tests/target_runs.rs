@@ -1,7 +1,6 @@
 //! Shared target-run selection tests: lexical selection, terminal
 //! extraction across runs, refusal metadata, and byte-preserving member
-//! views. Opt-in tests set `enable_target_runs`; default-path tests prove
-//! public behavior is unchanged.
+//! views and public execution/editor behavior.
 
 use super::super::draft::*;
 use super::super::editor_model::*;
@@ -9,45 +8,41 @@ use super::super::editor_parse::*;
 use super::super::model::*;
 use super::super::target_runs::*;
 
-fn opt_in() -> CaptureParseOptions<'static> {
-    CaptureParseOptions {
-        enable_target_runs: true,
-        ..CaptureParseOptions::routing_off()
-    }
+fn active() -> CaptureParseOptions<'static> {
+    CaptureParseOptions::routing_off()
 }
 
 fn default_options() -> CaptureParseOptions<'static> {
     CaptureParseOptions::routing_off()
 }
 
-fn editor_opt_in() -> EditorParseOptions<'static> {
+fn editor_active() -> EditorParseOptions<'static> {
     EditorParseOptions {
         url_routing: None,
         has_global_destination: false,
-        enable_target_runs: true,
     }
 }
 
-fn parse_editor_opt_in(raw: &str) -> EditorParse {
-    parse_for_editor_with(raw, &editor_opt_in())
+fn parse_editor_active(raw: &str) -> EditorParse {
+    parse_for_editor_with(raw, &editor_active())
 }
 
 fn parse_editor_default(raw: &str) -> EditorParse {
     parse_for_editor_with(raw, &EditorParseOptions::routing_off())
 }
 
-fn execute_opt_in(raw: &str) -> Result<ParsedCaptureText, String> {
-    parse_capture_text_with_options(raw, None, None, &opt_in())
+fn execute_active(raw: &str) -> Result<ParsedCaptureText, String> {
+    parse_capture_text_with_options(raw, None, None, &active())
 }
 
-fn draft_opt_in(
+fn draft_active(
     raw: &str,
 ) -> Result<ParsedCaptureDraft, super::super::draft::TemplateCodedError> {
-    parse_capture_draft_with_options_coded(raw, None, None, &opt_in())
+    parse_capture_draft_with_options_coded(raw, None, None, &active())
 }
 
 fn parse_singleton(raw: &str) -> ParsedCaptureText {
-    parse_capture_draft_with_options_coded(raw, None, None, &opt_in())
+    parse_capture_draft_with_options_coded(raw, None, None, &active())
         .expect("singleton parses")
         .items
         .into_iter()
@@ -127,8 +122,8 @@ fn non_target_tokens_end_the_run() {
             detect_target_refusals(&tokens, true, true),
             TargetRefusal::None
         ));
-        // Opt-in still parses as a singleton (no new refusal).
-        let parsed = execute_opt_in(raw).expect("singleton parses");
+        // The maximal run stops at this token; the item remains single-target.
+        let parsed = execute_active(raw).expect("singleton parses");
         assert_eq!(parsed.route.as_deref(), Some("a"), "{raw}");
     }
 }
@@ -145,7 +140,7 @@ fn forced_destinations_keep_targets_literal() {
         "@a+x @b+y note",
         Some("work"),
         None,
-        &opt_in(),
+        &active(),
     )
     .expect("forced parses");
     // Forced route keeps `@tokens` literal: the body retains them.
@@ -161,7 +156,7 @@ fn partial_and_malformed_members_are_selected() {
     assert_eq!(selection.members.len(), 2);
     assert_eq!(selection.members[0].marker_text, "@a+");
     // Malformed members receive the existing strict error, never prose.
-    let error = execute_opt_in("@a+ @b+y note").unwrap_err();
+    let error = execute_active("@a+ @b+y note").unwrap_err();
     assert!(
         error.contains("sub-bullet capture"),
         "unexpected error: {error}"
@@ -200,7 +195,7 @@ fn terminal_extraction_crosses_the_run() {
         "note @a+x s:3 @b+y",
     ];
     for raw in variants {
-        let parsed = execute_opt_in(raw).expect("parses");
+        let parsed = execute_active(raw).expect("parses");
         assert_eq!(parsed.scheduled_offset, Some(3), "{raw}");
         assert_eq!(parsed.body, "note", "{raw}");
     }
@@ -210,7 +205,7 @@ fn terminal_extraction_crosses_the_run() {
         "note @a+x $2 @b+y",
     ];
     for raw in priorities {
-        let parsed = execute_opt_in(raw).expect("parses");
+        let parsed = execute_active(raw).expect("parses");
         assert_eq!(parsed.priority_level, Some(2), "{raw}");
         assert_eq!(parsed.body, "note", "{raw}");
     }
@@ -225,7 +220,7 @@ fn duplicate_identity_ignores_case_drawer_and_toggle() {
         "@work+a @work+a! note",
         "@work+a @work+a#sec note",
     ] {
-        let error = draft_opt_in(raw).unwrap_err();
+        let error = draft_active(raw).unwrap_err();
         assert_eq!(error.code, Some("duplicate_capture_target"), "{raw}");
         assert!(
             error.message.contains("twice on this line"),
@@ -234,7 +229,7 @@ fn duplicate_identity_ignores_case_drawer_and_toggle() {
         );
     }
     // Separate draft items may name the same task.
-    let both = draft_opt_in("@work+a note\n\n@work+a note")
+    let both = draft_active("@work+a note\n\n@work+a note")
         .expect("separate items share tasks");
     assert_eq!(both.items.len(), 2);
 }
@@ -273,7 +268,7 @@ fn split_edges_refuse_with_trailing_range() {
         message,
         "`@a+x` and `@b+y` are at opposite ends of the line; put every `@route+id` target in one run at the start or end"
     );
-    let error = draft_opt_in(raw).unwrap_err();
+    let error = draft_active(raw).unwrap_err();
     assert_eq!(error.code, Some("split_capture_targets"));
     assert!(error.message.contains(&message), "{raw}: {}", error.message);
     // Editor shares the same evidence.
@@ -367,50 +362,33 @@ fn member_views_match_singleton_equivalence() {
 }
 
 #[test]
-fn default_path_stays_single_target() {
-    // Public behavior is unchanged: the second target stays body text.
-    let leading = parse_capture_text_with_options(
-        "@work+a @dev+b note",
-        None,
-        None,
-        &default_options(),
-    )
-    .expect("leading parses");
-    assert_eq!(leading.route.as_deref(), Some("work"));
-    assert!(leading.body.contains("@dev+b"), "{}", leading.body);
-    let trailing = parse_capture_text_with_options(
-        "note @work+a @dev+b",
-        None,
-        None,
-        &default_options(),
-    )
-    .expect("trailing parses");
-    assert_eq!(trailing.route.as_deref(), Some("dev"));
-    assert!(trailing.body.contains("@work+a"), "{}", trailing.body);
-    // No new codes on the default path, even for duplicates/splits.
-    for raw in ["@work+a @work+a note", "@a+x note @b+y"] {
-        let draft = parse_capture_draft_with_options_coded(
-            raw,
-            None,
-            None,
-            &default_options(),
-        );
-        if let Err(error) = draft {
-            assert_ne!(error.code, Some("duplicate_capture_target"), "{raw}");
-            assert_ne!(error.code, Some("split_capture_targets"), "{raw}");
-        }
+fn public_execution_fans_out_runs_and_reports_refusal_codes() {
+    for raw in ["@work+a @dev+b note", "note @work+a @dev+b"] {
+        let draft = draft_active(raw).expect("public run parses");
+        assert_eq!(draft.items.len(), 2, "{raw}");
+        assert_eq!(draft.items[0].parsed.body, "note", "{raw}");
+        assert_eq!(draft.items[1].parsed.body, "note", "{raw}");
+        assert_eq!(draft.items[0].fanout.as_ref().unwrap().position, 1);
+        assert_eq!(draft.items[1].fanout.as_ref().unwrap().position, 2);
+    }
+    for (raw, code) in [
+        ("@work+a @work+a note", "duplicate_capture_target"),
+        ("@a+x note @b+y", "split_capture_targets"),
+    ] {
+        let error = draft_active(raw).expect_err("target refusal");
+        assert_eq!(error.code, Some(code), "{raw}: {}", error.message);
     }
 }
 
 #[test]
-fn list_bullets_keep_list_marker_with_opt_in() {
-    let error = draft_opt_in("@dev\n- A @cash+a").unwrap_err();
+fn list_bullets_keep_list_marker() {
+    let error = draft_active("@dev\n- A @cash+a").unwrap_err();
     assert_eq!(error.code, Some("list_bullet_marker"));
 }
 
 #[test]
 fn ordinary_draft_fans_out_in_typed_order_with_shared_source_identity() {
-    let parsed = draft_opt_in("first\n\n@work+a @dev+b note\n\nlast")
+    let parsed = draft_active("first\n\n@work+a @dev+b note\n\nlast")
         .expect("run parses");
     assert_eq!(parsed.items.len(), 4);
     assert_eq!(
@@ -486,7 +464,7 @@ fn each_member_reuses_singleton_semantics_for_toggles_drawers_and_schedule() {
             vec!["note @a+x ~~foo:bar", "note @b+y ~~foo:bar"],
         ),
     ] {
-        let actual = draft_opt_in(run).expect("run parses");
+        let actual = draft_active(run).expect("run parses");
         assert_eq!(actual.items.len(), members.len(), "{run}");
         for (actual, singleton) in actual.items.iter().zip(members) {
             let mut actual = actual.parsed.clone();
@@ -501,7 +479,7 @@ fn each_member_reuses_singleton_semantics_for_toggles_drawers_and_schedule() {
 #[test]
 fn type_marker_spans_remain_at_original_draft_offsets_for_each_member() {
     let raw = "note @a+x @b+y #bugs";
-    let parsed = draft_opt_in(raw).expect("typed run parses");
+    let parsed = draft_active(raw).expect("typed run parses");
     let start = raw.find("#bugs").expect("type marker");
     for item in &parsed.items {
         let marker = item.parsed.type_marker.as_ref().expect("type marker");
@@ -514,7 +492,7 @@ fn type_marker_spans_remain_at_original_draft_offsets_for_each_member() {
 #[test]
 fn child_line_runs_and_dependency_ownership_are_member_local() {
     let child_run = "Parent task\n- child note @a+x @b+y";
-    let parsed = draft_opt_in(child_run).expect("child run parses");
+    let parsed = draft_active(child_run).expect("child run parses");
     assert_eq!(parsed.items.len(), 2);
     assert_eq!(parsed.items[0].parsed.route.as_deref(), Some("a"));
     assert_eq!(parsed.items[1].parsed.route.as_deref(), Some("b"));
@@ -529,7 +507,7 @@ fn child_line_runs_and_dependency_ownership_are_member_local() {
     assert_eq!(parsed.items[0].fanout.as_ref().unwrap().line, 2);
 
     let dependency_run = "note @a+x @b+y &foo:bar";
-    let parsed = draft_opt_in(dependency_run).expect("dependency run parses");
+    let parsed = draft_active(dependency_run).expect("dependency run parses");
     assert_eq!(parsed.items.len(), 2);
     assert_eq!(
         parsed.items[0].parsed,
@@ -543,7 +521,7 @@ fn child_line_runs_and_dependency_ownership_are_member_local() {
 
 #[test]
 fn expanded_members_share_one_inline_global_declaration() {
-    let parsed = draft_opt_in("@a+x @b+y @@global note")
+    let parsed = draft_active("@a+x @b+y @@global note")
         .expect("one declaration is shared by both members");
     assert_eq!(parsed.items.len(), 2);
     assert_eq!(
@@ -558,7 +536,7 @@ fn expanded_members_share_one_inline_global_declaration() {
 
 #[test]
 fn template_row_fans_out_without_changing_row_identity() {
-    let parsed = draft_opt_in("Apply {0} to @work+a @dev+b %t\n\ntask\n")
+    let parsed = draft_active("Apply {0} to @work+a @dev+b %t\n\ntask\n")
         .expect("template fan-out parses");
     assert_eq!(parsed.items.len(), 2);
     assert_eq!(parsed.items[0].parsed.route.as_deref(), Some("work"));
@@ -585,7 +563,7 @@ fn template_row_fans_out_without_changing_row_identity() {
 
 #[test]
 fn template_clipboard_refusal_keeps_its_coded_error() {
-    let error = draft_opt_in("Apply {0} to @a+x @b+y %c %t\n\ntask\n")
+    let error = draft_active("Apply {0} to @a+x @b+y %c %t\n\ntask\n")
         .expect_err("template clipboard remains refused");
     assert_eq!(error.code, Some("template_clipboard"));
 }
@@ -597,7 +575,7 @@ fn fanout_keeps_coded_refusals_for_later_members_and_templates() {
         "@a+x note @b+y",
         "Task {0} @a+x @a+x %t\n\nvalue\n",
     ] {
-        let error = draft_opt_in(raw).expect_err("refusal stays an error");
+        let error = draft_active(raw).expect_err("refusal stays an error");
         let expected = if raw.contains("note @b") {
             "split_capture_targets"
         } else {
@@ -609,7 +587,7 @@ fn fanout_keeps_coded_refusals_for_later_members_and_templates() {
 
 #[test]
 fn malformed_later_member_keeps_its_existing_strict_error() {
-    let error = draft_opt_in("@a+x @b+ note")
+    let error = draft_active("@a+x @b+ note")
         .expect_err("malformed member rejects the full draft");
     assert_eq!(error.code, None);
     assert!(!error.message.is_empty());
@@ -617,7 +595,7 @@ fn malformed_later_member_keeps_its_existing_strict_error() {
 
 #[test]
 fn toggle_member_keeps_relationship_refusal() {
-    let error = draft_opt_in("@a+x! @b+y *foo:bar")
+    let error = draft_active("@a+x! @b+y *foo:bar")
         .expect_err("a toggle cannot own a relationship");
     assert!(
         error.message.contains("relationship-only '@a+x!'"),
@@ -629,7 +607,7 @@ fn toggle_member_keeps_relationship_refusal() {
 #[test]
 fn editor_leading_run_combines_into_one_item_with_targets() {
     let raw = "@work+a @dev+b note";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     assert_eq!(parse.items.len(), 1, "{raw}");
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2, "{raw}");
@@ -682,24 +660,24 @@ fn editor_leading_run_combines_into_one_item_with_targets() {
     assert_eq!(parse.targets, item.targets);
     assert_eq!(parse.body, item.body);
     assert_eq!(parse.route, item.route);
-    // Default path stays singleton with no targets.
+    // The ordinary public editor entry point activates the same run.
     let default = parse_editor_default(raw);
-    assert!(default.items[0].targets.is_empty());
-    assert!(default.targets.is_empty());
-    assert!(default.items[0].body.contains("@dev+b"));
+    assert_eq!(default.items[0].targets.len(), 2);
+    assert_eq!(default.targets.len(), 2);
+    assert_eq!(default.items[0].body, "note");
 }
 
 #[test]
 fn editor_trailing_and_whole_line_runs_keep_body_and_offsets() {
     let trailing = "note @a+x @b+y";
-    let parse = parse_editor_opt_in(trailing);
+    let parse = parse_editor_active(trailing);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2);
     assert_eq!(item.body, "note");
     assert_eq!(item.route.as_deref(), Some("a"));
 
     let whole = "@a+x @b+y";
-    let parse = parse_editor_opt_in(whole);
+    let parse = parse_editor_active(whole);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2, "{whole}");
     assert!(item.body.is_empty(), "{}", item.body);
@@ -708,7 +686,7 @@ fn editor_trailing_and_whole_line_runs_keep_body_and_offsets() {
 #[test]
 fn editor_mixed_toggle_and_drawer_spans_are_all_kept() {
     let raw = "@a+x! @b+y";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2);
     assert_eq!(item.targets[0].marker, "@a+x!");
@@ -721,7 +699,7 @@ fn editor_mixed_toggle_and_drawer_spans_are_all_kept() {
     );
 
     let raw = "@a+x#first @b+y#second note";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2);
     assert_eq!(item.targets[0].section.as_deref(), Some("first"));
@@ -739,7 +717,7 @@ fn editor_mixed_toggle_and_drawer_spans_are_all_kept() {
 #[test]
 fn editor_partial_members_union_needs_without_prose() {
     let raw = "@a+ @b+y note";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2);
     assert_eq!(item.body, "note");
@@ -749,7 +727,7 @@ fn editor_partial_members_union_needs_without_prose() {
     assert_eq!(parse.needs, item.needs);
 
     let raw = "@a+x @b+ note";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2);
     assert!(item.needs.contains(&Need::Task), "{:?}", item.needs);
@@ -763,7 +741,7 @@ fn editor_terminal_extraction_matches_execution_across_the_run() {
         "note @a+x @b+y s:3",
         "note @a+x s:3 @b+y",
     ] {
-        let parse = parse_editor_opt_in(raw);
+        let parse = parse_editor_active(raw);
         let item = &parse.items[0];
         assert_eq!(item.targets.len(), 2, "{raw}");
         assert_eq!(item.body, "note", "{raw}");
@@ -780,7 +758,7 @@ fn editor_terminal_extraction_matches_execution_across_the_run() {
         "note @a+x @b+y $2",
         "note @a+x $2 @b+y",
     ] {
-        let parse = parse_editor_opt_in(raw);
+        let parse = parse_editor_active(raw);
         let item = &parse.items[0];
         assert_eq!(item.targets.len(), 2, "{raw}");
         assert!(
@@ -796,7 +774,7 @@ fn editor_terminal_extraction_matches_execution_across_the_run() {
 #[test]
 fn editor_duplicate_and_split_diagnostics_share_strict_evidence() {
     let raw = "@work+a @work+a note";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2, "{raw}");
     let diagnostic = item
@@ -815,7 +793,7 @@ fn editor_duplicate_and_split_diagnostics_share_strict_evidence() {
     );
 
     let raw = "@a+x note @b+y";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert!(item.targets.is_empty(), "{:?}", item.targets);
     let diagnostic = item
@@ -830,18 +808,16 @@ fn editor_duplicate_and_split_diagnostics_share_strict_evidence() {
         Some((trailing_at, trailing_at + "@b+y".len()))
     );
 
-    // Default path keeps no new codes and no targets.
+    // The ordinary public editor entry point reports the same coded evidence.
     for raw in ["@work+a @work+a note", "@a+x note @b+y"] {
         let default = parse_editor_default(raw);
-        assert!(default.items[0].targets.is_empty(), "{raw}");
         assert!(
-            !default.items[0]
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code
-                    == "duplicate_capture_target"
-                    || diagnostic.code == "split_capture_targets"),
-            "{raw}"
+            default.items[0].diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "duplicate_capture_target"
+                    || diagnostic.code == "split_capture_targets"
+            }),
+            "{raw}: {:?}",
+            default.items[0].diagnostics
         );
     }
 }
@@ -849,7 +825,7 @@ fn editor_duplicate_and_split_diagnostics_share_strict_evidence() {
 #[test]
 fn editor_second_item_offsets_and_unicode_stay_absolute() {
     let raw = "first\n\nnote @a+x @b+y";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     assert_eq!(parse.items.len(), 2);
     let item = &parse.items[1];
     assert_eq!(item.targets.len(), 2);
@@ -859,7 +835,7 @@ fn editor_second_item_offsets_and_unicode_stay_absolute() {
     assert_eq!(parse.targets, parse.items[0].targets);
 
     let raw = "café note @a+x @b+y";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert_eq!(item.targets.len(), 2);
     let first_at = raw.find("@a+x").unwrap();
@@ -883,7 +859,7 @@ fn editor_separate_route_lines_still_refuse_duplicates() {
     // A parent route plus a child trailing route is not a target run: the
     // existing cross-line duplicate stands, and no targets are emitted.
     let raw = "@a+x note\n- child @b+y";
-    let parse = parse_editor_opt_in(raw);
+    let parse = parse_editor_active(raw);
     let item = &parse.items[0];
     assert!(item.targets.is_empty(), "{:?}", item.targets);
     assert!(

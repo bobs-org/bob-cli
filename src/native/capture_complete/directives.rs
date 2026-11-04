@@ -249,7 +249,6 @@ fn directive_refusal(
         &capture_language::EditorParseOptions {
             url_routing,
             has_global_destination: false,
-            enable_target_runs: false,
         },
     );
     parsed

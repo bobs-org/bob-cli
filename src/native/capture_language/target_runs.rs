@@ -8,9 +8,8 @@
 //! member receives its existing strict error or editor needs instead of
 //! being treated as prose.
 //!
-//! The temporary internal parser option `enable_target_runs` gates all
-//! run-aware behavior. Production entry points pass `false`; new grammar
-//! unit tests opt in explicitly. The activate phase removes the option.
+//! Both execution and editor parsing use this selector for public target-run
+//! behavior. Lexical selection remains separate from strict member parsing.
 
 use super::editor_model::{Diagnostic, Severity, SpanKind};
 use super::markers::{

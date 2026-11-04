@@ -50,7 +50,6 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
     let options = EditorParseOptions {
         url_routing: None,
         has_global_destination: false,
-        enable_target_runs: false,
     };
     let parsed = CaptureParseResult::new(draft, &options);
     let route = parsed.items.first().and_then(|item| item.route.clone());
@@ -118,7 +117,6 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let options = EditorParseOptions {
         url_routing: policy.as_ref(),
         has_global_destination: false,
-        enable_target_runs: false,
     };
     let mut result = CaptureParseResult::new(raw_text, &options);
     let theme_keys = theme_component_keys(&result);
@@ -175,11 +173,15 @@ command also best-effort reads the configured vault's theme catalog and adds \
 theme refs; if the catalog is unavailable, parsing still succeeds without \
 those refs. It never writes to the vault or reads the clipboard, and takes no \
 --bob-dir. A '%c' directive still succeeds without reading the clipboard.\n\n\
-Success JSON reports `grammar: 8` for the capture-language revision while \
+Success JSON reports `grammar: 9` for the capture-language revision while \
 `schema_version` stays 1.\n\n\
 A lone task-list header `@route` with no section, bullets, or other text \
 reports mode `note_pull`; `@route` with bullets remains a task list, and a \
 lone `@route#section` remains an empty-list refusal.\n\n\
+Adjacent `@route+id` target markers at the start or end of one line fill one \
+route slot. Capture-parse keeps one item and adds `targets[]` for runs; \
+duplicate task identities and targets at opposite edges report the coded \
+diagnostics `duplicate_capture_target` and `split_capture_targets`.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> \
@@ -3198,7 +3200,7 @@ mod tests {
         let value = json("Call bank @Cash+");
         assert_eq!(value["ok"], true);
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["grammar"], 8);
+        assert_eq!(value["grammar"], 9);
         assert_eq!(value["input"], "Call bank @Cash+");
         assert_eq!(value["body"], "Call bank");
         assert_eq!(value["mode"], "incomplete");
@@ -3218,21 +3220,21 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_targets_only_for_opt_in_runs() {
+    fn json_reports_targets_for_public_runs() {
         let raw = "@work+a @dev+b note";
-        // Default path stays singleton: no targets, second member in body.
+        // The production result builder activates target runs by default.
         let default = json(raw);
-        assert!(default.get("targets").is_none(), "{default}");
-        assert!(default["body"].as_str().unwrap().contains("@dev+b"));
+        let default_targets = default["targets"].as_array().expect("targets");
+        assert_eq!(default_targets.len(), 2);
+        assert_eq!(default["body"], "note");
 
-        // Opt-in staging combines one item with additive targets.
         let options = EditorParseOptions {
             url_routing: None,
             has_global_destination: false,
-            enable_target_runs: true,
         };
         let result = CaptureParseResult::new(raw.to_string(), &options);
         let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value, default);
         let targets = value["targets"].as_array().expect("targets");
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0]["marker"], "@work+a");
@@ -3256,12 +3258,12 @@ mod tests {
     fn lone_route_reports_note_pull_mode() {
         // NP27: `bob capture-parse -f json -- @sase` reports mode
         // `note_pull` with no needs, the route, and the ordinary list
-        // summary (`kind: "tasks"`, `count: 0`) under grammar 8. A lone
+        // summary (`kind: "tasks"`, `count: 0`) under grammar 9. A lone
         // header keeps its task-list metadata so clients can still offer
         // "start a list" from it.
         let value = json("@sase");
         assert_eq!(value["ok"], true);
-        assert_eq!(value["grammar"], 8);
+        assert_eq!(value["grammar"], 9);
         assert_eq!(value["mode"], "note_pull");
         assert_eq!(value["route"], "sase");
         assert!(value["section"].is_null());

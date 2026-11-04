@@ -68,8 +68,7 @@ impl From<String> for CaptureItemParseError {
     }
 }
 
-/// Attempt run-aware parent-line resolution when the internal target-runs
-/// staging is enabled. Returns `None` to fall back to the singleton
+/// Attempt run-aware parent-line resolution. Returns `None` to fall back to the singleton
 /// `resolve_line` path (single-target or literal), `Some(Ok)` for a valid
 /// multi-target run (first member as the route, remaining tokens as body),
 /// and `Some(Err)` for duplicate/split refusals or malformed members using
@@ -754,12 +753,8 @@ pub(super) fn select_target_run_for_item(
     item: &CaptureItem<'_>,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
-    options: &CaptureParseOptions<'_>,
 ) -> Result<Option<TargetRunContext>, CaptureItemParseError> {
-    if !options.enable_target_runs
-        || forced_route.is_some()
-        || forced_section.is_some()
-        || item.list.is_some()
+    if forced_route.is_some() || forced_section.is_some() || item.list.is_some()
     {
         return Ok(None);
     }
@@ -2249,7 +2244,7 @@ fn parse_capture_item_masked<'a>(
         parent_tokens,
         &parent_line_dependencies.escapes,
     );
-    let parent_outcome = if options.enable_target_runs && detect_route {
+    let parent_outcome = if detect_route {
         match try_resolve_parent_target_run(parent_tokens, detect_route) {
             Some(result) => result?.0,
             None => {
@@ -2366,7 +2361,7 @@ fn parse_capture_item_masked<'a>(
         };
         let tokens =
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
-        let outcome = if options.enable_target_runs && detect_route {
+        let outcome = if detect_route {
             match try_resolve_child_target_run(tokens, detect_route) {
                 Some(result) => result?.0,
                 None => {

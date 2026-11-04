@@ -95,6 +95,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; also routes default (routeless) refs (source `global`) |
 | `%t` | Mark the draft's first item as a [template](#bulk-templates): expand one capture item per row below it; captures exactly like the expansion |
 | `@route` with task text | Write a task to `<route>.md` (default route is `mac_inbox`) |
+| `@route+id @route+id <note>` | Apply the same note, child bullets, and item operations to each named existing task (see [Several tasks on one line](#several-tasks-on-one-line)) |
 | `@route` alone on its line, with no bullets or other markers | Pull the note's unlinked, unblocked Pending, Next, and Ready tasks into today's Pomodoros through the explicit Pull-In choice; see [Pulling ready tasks from a note](#pulling-ready-tasks-from-a-note) |
 | `- ^<id>` in a sealed project-note item | Move that open top-level task from the parent note into this slot in the new project's `## Tasks` section; see [Moving parent tasks in](#moving-parent-tasks-in) |
 | `- :<id>` in a sealed project-note item | Move the parent task into this slot, make it Next, and link it into today's plan (or the selected `#name`); see [Moving parent tasks in](#moving-parent-tasks-in) |
@@ -179,6 +180,72 @@ anything is written, and any failure rolls the whole batch back.
 | `- #future-work` | Drawer shortcut on a first-level bullet under a new task or new project note: nest notes beneath it; capture writes `- FUTURE WORK` |
 | `- FUTURE WORK` with nested notes | Drawer bullet: an ALL-CAPS title with nested notes is a drawer; a childless ALL-CAPS bullet stays a plain note |
 | `- #` | Incomplete drawer shortcut: add `#future-work` (`needs: ["drawer"]`) or write `\#`; a complete childless shortcut needs nested notes (`needs: ["drawer_notes"]`) |
+
+### Several tasks on one line
+
+Two or more adjacent `@route+block-id` markers name a target run. Bob applies
+the line once per task, in marker order, inside the same atomic capture. A
+member is any complete, partial, or malformed token accepted by the
+sub-bullet marker grammar, optionally with its own glued `#drawer` or terminal
+`!` suffix. Plain routes, section routes, colon/caret routes, `^route:id`, and
+`!note:id` are not members. Existing quoting, protected Markdown, and escape
+rules still apply.
+
+The run fills the one route/mode slot that a single marker uses. Bob removes
+type and `%` directives, dependency/relation modifiers, and terminal
+schedule/priority markers before route selection; those operations still
+apply to each member.
+
+| Position | Meaning |
+| --- | --- |
+| Start of parent line | The maximal adjacent run selects the tasks; remaining tokens are the note. |
+| Entire parent line | Each member gets its existing marker-only operation (Ensure Next, toggle, or retype). |
+| End of parent or child line | A run is selected when body text precedes it, as with a single trailing marker. |
+| Between prose words | The markers stay literal text. |
+
+Each member has the same meaning it would have if its marker stood alone.
+Suffixes stay local: `@a+x#req @b+y note` puts the note in ^x's REQUIREMENTS
+drawer and as a plain child of ^y; `@a+x! @b+y` toggles ^x and Ensures Next
+for ^y. Note-less child bullets, clipboard notes, `#type`, `s:<N>`/`$<N>`,
+`&`/`*`/`~`, drawers, Ensure Next, and `!` toggle keep their existing
+semantics for every member.
+
+| Line shape | Each named task gets |
+| --- | --- |
+| `@a+x @b+y <note>` (or a trailing run) | The same child note, with authored bullets nested beneath it. |
+| `@a+x @b+y` plus child bullets | Each first-level bullet as a note; drawer bullets merge into or create each task's drawer. |
+| `@a+x @b+y <note> %c` or `%c<N>` | The shared clipboard content under the child note. |
+| `@a+x @b+y %c` | Clipboard notes directly under each task. |
+| `@a+x @b+y <note> s:3` or `$1` | The same schedule or rolled priority on each capture. |
+| `@a+x @b+y` | Ensure both tasks are Next and relocate their existing Pomodoro links. |
+| `@a+x! @b+y!` | Toggle each task's Pomodoro link. |
+| `@a+x @b+y #fix` (with or without a note) | Retype both tasks; marker-only input also Ensures Next. |
+| `… &p:q`, `… *t:u`, `… ~r:s` | Apply the same dependency or relation for each owner. |
+
+Non-target tokens end the run: `@a+x @b:y note` selects only ^x and leaves
+`@b:y note` as text; `@a+x @bob hi` leaves `@bob hi` as text. A malformed
+member is still selected and receives its normal error or editor `needs`.
+Forced `-r/--route`, `--task`, and `--drawer` destinations keep `@` tokens
+literal. A run on a task-list bullet keeps the existing `list_bullet_marker`
+refusal. A second route-bearing physical line in the item still triggers the
+existing `duplicate_capture_marker` refusal; the run itself consumes one
+route slot.
+
+A line whose parent content is only targets (with any terminal modifiers) is
+one whole-line run and keeps each marker's marker-only operation; it is not a
+split-edge refusal.
+
+Bob refuses two cases before planning writes:
+
+- Repeating a normalized route and exact block ID in one run reports
+  `duplicate_capture_target` on the repeated marker: `` `@work+a` names ^a
+  twice on this line; name each task once ``. Drawer and toggle suffixes do
+  not make duplicate task identities distinct.
+- A target at the start and another target after intervening prose reports
+  `split_capture_targets` on the trailing target: `` `@a+x` and `@b+y` are at
+  opposite ends of the line; put every `@route+id` target in one run at the
+  start or end ``. A trailing plain route is not a target, so
+  `@a+x note @work` keeps `@work` as text.
 
 `#` is not one marker. Read it by what it is attached to:
 
@@ -885,11 +952,12 @@ marker is an item-wide directive no matter
 which physical line in that item it appears on -- as shown above, `@work` and
 `$1` on the last child still route and prioritize that item -- and is
 stripped from the rendered line it was typed on. A second line in the same
-item that resolves the same marker slot (two routes, two schedules, two
-priorities, or two `%c` directives) is ambiguous and fails with a usage
-error before anything is written. Only the first physical line of an item
-keeps the established leading `@route text` form; later lines compose trailing
-markers only. A `sub_bullet`
+item that resolves the same marker slot is ambiguous and fails with a usage
+error before anything is written. An adjacent target run consumes one route
+slot; a repeated task within that run is `duplicate_capture_target`, while a
+route-bearing marker or run on another physical line remains a duplicate
+slot. Only the first physical line of an item accepts a leading target run;
+later lines compose trailing runs only. A `sub_bullet`
 capture (`@route+block-id`) nests the newly captured line under the selected
 existing task, then preserves both authored levels relative to that new line.
 
@@ -1085,7 +1153,7 @@ uses the normal successor-offer shape with `trigger: "note_pull"`, an empty
 `pull_in.groups[]` row carries `note` and Bob-authored copy. Capture remains
 unversioned; `capture-parse` reports `mode: "note_pull"`, `needs: []`, no
 diagnostics, the route spans, and the ordinary list summary with
-`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 8`.
+`kind: "tasks"`, `count: 0`, and its header ranges under `grammar: 9`.
 See [task-dependencies.md §12.20](task-dependencies.md#1220-note-pull-offers)
 for the JSON, copy, gate, and protocol contracts, and
 [§12.21](task-dependencies.md#1221-np-note-pull-vectors) for the NP vectors.
@@ -1265,9 +1333,12 @@ route fails the item with near-miss hints and the whole batch rolls back; it
 never silently creates a new note. A pasted blank-line-free block in which
 every line is a bare URL splits into one item per line, and each line is then
 classified on its own, so mixed lists queue the links and keep the rest as
-tasks. A plain `@@sase` routes default (routeless) refs to `sase` while an
-explicit local `@route` keeps local precedence. Ordinary task `@route` capture
-does not resolve aliases.
+tasks. A plain `@@sase` routes default (routeless) refs to `sase`; an explicit
+local route or target run keeps local precedence. A target run is one local
+route slot. A target at both edges of one line is refused as
+`split_capture_targets` instead of silently keeping the trailing target in
+the note. Forced destinations keep every `@` token literal. Ordinary task
+`@route` capture does not resolve aliases.
 
 Submit never touches the network and returns at once: it writes a durable
 ref job staged with the resolved parent and a detached background worker
@@ -5425,7 +5496,7 @@ names come from the item's seal):
 
 The parser and completion commands expose the same draft shape:
 
-- `capture-parse` uses grammar revision 8. A complete `- ^id` has a
+- `capture-parse` uses grammar revision 9. A complete `- ^id` has a
   `project_task_move_marker` span over `^`; `- :id` uses
   `project_task_move_link_marker` over `:`. `project_task_move_block_id`
   covers the ID, including a partial ID. A lone sigil is `incomplete`, needs
@@ -6970,14 +7041,23 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-Success JSON includes top-level `grammar: 8` while keeping `schema_version: 1`.
+Success JSON includes top-level `grammar: 9` while keeping `schema_version: 1`.
 It shares the tokenizer, terminal-marker extraction, and `@token`
 classification with `bob capture`. Parse does not validate vault targets
 or execute the draft, so a successful parse does not guarantee a capture
 will succeed. Wikilink highlighting is syntax-only and additive; it does
 not change capture routing or diagnostics.
 
-Grammar 8 adds move bullets to sealed project-note items. See
+Grammar 8 added move bullets to sealed project-note items. Grammar 9 adds
+target runs. `targets` is present only for two or more selected members and
+contains `[{start, end, marker, mode, route, block_id, section}, ...]` with
+absolute UTF-8 byte ranges. The legacy `mode`, `route`, `section`, and
+`block_id` describe the first member; `needs` is the ordered union of member
+needs, and member spans and diagnostics retain their original byte ranges.
+Partial members are included. `duplicate_capture_target` and
+`split_capture_targets` diagnostics use the same codes and messages as strict
+`bob capture` refusals. Single-marker output is unchanged apart from the
+intentional grammar revision. See
 [Moving parent tasks in](#moving-parent-tasks-in) for the `sub_bullet_moves`
 shape, move-marker and ID spans, shared lexical diagnostics, and human output.
 
@@ -8122,7 +8202,7 @@ the menu never reads the clipboard. Disabled rows explain composition rules
 such as `%n` beside a route, `%t` on a later item, and `%c` in a template.
 
 Every successful `capture-parse` and `capture-complete` response includes
-top-level `grammar: 8`; `schema_version` remains 1. An empty query opened by a
+top-level `grammar: 9`; `schema_version` remains 1. An empty query opened by a
 bare `#` or `%` adds `initial_selection: "none"`, so clients leave every row
 unselected. The field is omitted for typed queries and other contexts.
 

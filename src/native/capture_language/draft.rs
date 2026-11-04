@@ -1262,12 +1262,8 @@ fn parse_capture_item_members<'a>(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<Vec<ParsedCaptureItemOutcome<'a>>, CaptureItemParseError> {
-    let Some(run) = select_target_run_for_item(
-        item,
-        forced_route,
-        forced_section,
-        options,
-    )?
+    let Some(run) =
+        select_target_run_for_item(item, forced_route, forced_section)?
     else {
         return Ok(vec![parse_capture_item(
             item,

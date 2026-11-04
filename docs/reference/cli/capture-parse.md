@@ -13,9 +13,11 @@ Report the authoritative capture grammar's view of TEXT.
 
 The grammar parse is lexical and read-only. For Pomodoro-name spans, the command also best-effort reads the configured vault's theme catalog and adds theme refs; if the catalog is unavailable, parsing still succeeds without those refs. It never writes to the vault or reads the clipboard, and takes no --bob-dir. A '%c' directive still succeeds without reading the clipboard.
 
-Success JSON reports `grammar: 8` for the capture-language revision while `schema_version` stays 1.
+Success JSON reports `grammar: 9` for the capture-language revision while `schema_version` stays 1.
 
 A lone task-list header `@route` with no section, bullets, or other text reports mode `note_pull`; `@route` with bullets remains a task list, and a lone `@route#section` remains an empty-list refusal.
+
+Adjacent `@route+id` target markers at the start or end of one line fill one route slot. Capture-parse keeps one item and adds `targets[]` for runs; duplicate task identities and targets at opposite edges report the coded diagnostics `duplicate_capture_target` and `split_capture_targets`.
 
 It reports the normalized body, the overall capture mode, the resolved route, section, and block ID, which parts a picker still has to supply, an optional global_destination object for a @@<route> declaration token anywhere in the draft, ordered blank-line-separated item summaries and ranges after inheritance, the UTF-8 byte spans of every recognized token (including a `task_type` span for `#<type>` markers), Obsidian wikilink component spans, every authored sub-bullet's normalized body plus depth, an optional pomodoro_start object for a `@<route>:<block-id>[#<name>]=<X>` start suffix (including the short `=name` suffix, e.g. `@work:outline=bugs`), an optional pomodoro_adjust object for a whole-item `+[N]`/`-[N]` adjustment, an optional pomodoro_shift object for a whole-item `++[N]`/`--[N]` shift, an optional pomodoro_split object for a whole-item `=/` split, an optional pomodoro_merge object for a whole-item `=*` merge, an optional pomodoro_close object for a `=x` link close suffix or whole-item close, and structured diagnostics. Wikilink highlighting is syntax-only and never touches the vault. Byte offsets index the original TEXT before whitespace normalization, are half-open [start, end), never overlap, and always land on a character boundary.
 

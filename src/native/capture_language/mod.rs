@@ -41,7 +41,7 @@ mod tokens;
 mod type_marker;
 
 /// Revision of the capture grammar contract exposed to clients.
-pub(crate) const GRAMMAR_REVISION: u32 = 8;
+pub(crate) const GRAMMAR_REVISION: u32 = 9;
 
 #[cfg(test)]
 mod tests;

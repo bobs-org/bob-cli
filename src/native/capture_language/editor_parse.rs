@@ -320,9 +320,6 @@ pub(crate) fn parse_for_editor_with(
     };
     let mut global_spans = Vec::new();
     let mut global_diagnostics = Vec::new();
-    // Staging flag for target runs; the editor phase wires diagnostics.
-    // Reading it here keeps the option carried through the editor path.
-    let _ = options.enable_target_runs;
     let options = EditorParseOptions {
         has_global_destination: options.has_global_destination
             || !draft.declarations.is_empty(),
@@ -1368,11 +1365,16 @@ pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
-    if options.enable_target_runs
-        && let Some(outcome) = try_parse_editor_target_run(item, options)
-    {
+    if let Some(outcome) = try_parse_editor_target_run(item, options) {
         return outcome;
     }
+    parse_editor_item_singleton_with(item, options)
+}
+
+fn parse_editor_item_singleton_with<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+) -> EditorItemOutcome<'a> {
     let occurrences = super::type_marker::collect_item(item);
     let type_masked_source =
         super::type_marker::masked_source(item, &occurrences);
@@ -1487,11 +1489,7 @@ fn try_parse_editor_target_run<'a>(
     let (run, refusal) = super::item::find_editor_target_run(item);
     let Some(run) = run else {
         let refusal = refusal?;
-        let disabled = EditorParseOptions {
-            enable_target_runs: false,
-            ..*options
-        };
-        let mut outcome = parse_editor_item_with(item, &disabled);
+        let mut outcome = parse_editor_item_singleton_with(item, options);
         if let Some(diagnostic) =
             super::target_runs::editor_refusal_diagnostic(&refusal)
             && !outcome.item.diagnostics.iter().any(|existing| {
@@ -1532,10 +1530,6 @@ fn combine_editor_target_members<'a>(
     run: &super::item::TargetRunContext,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
-    let disabled = EditorParseOptions {
-        enable_target_runs: false,
-        ..*options
-    };
     let mut members: Vec<EditorItemOutcome<'a>> = Vec::new();
     for index in 0..run.selection.members.len() {
         let masked_source = super::target_runs::masked_source_for_member(
@@ -1567,7 +1561,7 @@ fn combine_editor_target_members<'a>(
             lines,
             list: item.list.clone(),
         };
-        let parsed = parse_editor_item_with(&view, &disabled);
+        let parsed = parse_editor_item_singleton_with(&view, options);
         let declarations =
             remap_type_marker_declarations(parsed.declarations, item.source);
         members.push(EditorItemOutcome {
@@ -1576,11 +1570,7 @@ fn combine_editor_target_members<'a>(
         });
     }
     let Some(first) = members.first() else {
-        let disabled = EditorParseOptions {
-            enable_target_runs: false,
-            ..*options
-        };
-        return parse_editor_item_with(item, &disabled);
+        return parse_editor_item_singleton_with(item, options);
     };
     let mut needs: Vec<Need> = Vec::new();
     for outcome in &members {
