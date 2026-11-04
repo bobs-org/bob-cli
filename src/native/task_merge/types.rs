@@ -9,6 +9,7 @@ use serde::Serialize;
 use super::super::{
     capture_drawers::DrawerCatalogRecord,
     capture_language::DrawerSelector,
+    config::relations::CancelLabel,
     note_tasks::NoteTaskSettings,
     task_complete::SuccessorSelection,
     task_locator::{LocatedTask, TaskLocator},
@@ -82,6 +83,8 @@ pub(crate) struct MergeContext<'a> {
     pub(crate) note_index: &'a NoteIndex,
     pub(crate) drawer_catalog: &'a BTreeMap<String, DrawerCatalogRecord>,
     pub(crate) relation_policy: MergeRelationPolicy,
+    /// Configured successor labels, already normalized by the caller.
+    pub(crate) successor_labels: &'a [CancelLabel],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +186,6 @@ pub(crate) enum MergeOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct MergeTaskDescriptor {
     pub(crate) path: PathBuf,
     pub(crate) block_id: String,
@@ -192,7 +194,6 @@ pub(crate) struct MergeTaskDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct MergeTargetDescriptor {
     pub(crate) path: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -207,7 +208,6 @@ pub(crate) struct MergeTargetDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct MergeOffer {
     pub(crate) key: String,
     pub(crate) n: usize,
@@ -222,7 +222,6 @@ pub(crate) struct MergeOffer {
 /// One source result in source argument order, shared by command and
 /// capture adapters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct MergeRecord {
     pub(crate) source: MergeTaskDescriptor,
     pub(crate) target: MergeTargetDescriptor,

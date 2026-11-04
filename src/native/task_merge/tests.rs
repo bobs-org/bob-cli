@@ -52,6 +52,7 @@ fn prepare(
         note_index: &note_index,
         drawer_catalog: &catalog,
         relation_policy: MergeRelationPolicy::default(),
+        successor_labels: &[],
     };
     prepare_task_merge(snapshot, request, &context)
 }
@@ -59,6 +60,15 @@ fn prepare(
 fn plan(
     snapshot: &VaultSnapshot,
     request: &MergeRequest,
+) -> Result<MergePlan, MergeError> {
+    plan_with_policy(snapshot, request, MergeRelationPolicy::default(), &[])
+}
+
+fn plan_with_policy(
+    snapshot: &VaultSnapshot,
+    request: &MergeRequest,
+    relation_policy: MergeRelationPolicy,
+    successor_labels: &[crate::native::config::relations::CancelLabel],
 ) -> Result<MergePlan, MergeError> {
     let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
     let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
@@ -70,7 +80,8 @@ fn plan(
         task_settings: &settings,
         note_index: &note_index,
         drawer_catalog: &catalog,
-        relation_policy: MergeRelationPolicy::default(),
+        relation_policy,
+        successor_labels,
     };
     plan_task_merge(snapshot, request, &context)
 }
@@ -144,6 +155,7 @@ fn assert_planner_invariants(
         note_index: &note_index,
         drawer_catalog: &catalog,
         relation_policy: MergeRelationPolicy::default(),
+        successor_labels: &[],
     };
     let first = plan_task_merge(before, request, &context)
         .unwrap_or_else(|error| panic!("{case}: {error:?}"));
@@ -807,6 +819,88 @@ fn authored_payload_moves_while_managed_history_stays_on_source() {
 }
 
 #[test]
+fn payload_moves_unwrapped_authored_bytes_around_managed_logs() {
+    let paragraph_only = snapshot(&[
+        (
+            "src.md",
+            "- [ ] #task Source ^src\n  A paragraph without a wrapper bullet.\n",
+        ),
+        ("dest.md", "- [ ] #task Target ^target\n"),
+    ]);
+    let plan = prepare(
+        &paragraph_only,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
+    )
+    .expect("paragraph-only payload");
+    assert!(post(&plan, "dest.md")
+        .contains("\t\tA paragraph without a wrapper bullet."));
+    assert!(!post(&plan, "src.md").contains("paragraph without"));
+    assert_eq!(plan.sources[0].moved_notes, 1);
+
+    let source = concat!(
+        "- [ ] #task Source ^src\n",
+        "  Prose before the first child.\n",
+        "  | Name | Value |\n",
+        "  | - | - |\n",
+        "  ```text\n",
+        "  fenced - [ ] #task example ^fake\n",
+        "  ```\n",
+        "  - Authored before the logs\n",
+        "  - 🪢 **LINKS:** [[other#^related]]\n",
+        "  - ❌ **CANCEL LOG**\n",
+        "    - *2026-11-02* — earlier reason\n",
+        "  - Authored after the logs\n",
+    );
+    let snapshot = snapshot(&[
+        ("src.md", source),
+        ("dest.md", "- [ ] #task Target ^target\n"),
+        ("other.md", "- [ ] #task Related ^related\n"),
+    ]);
+    let plan = prepare(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
+    )
+    .expect("all task-owned authored ranges move");
+    let destination = post(&plan, "dest.md");
+    for moved in [
+        "Prose before the first child.",
+        "| Name | Value |",
+        "fenced - [ ] #task example ^fake",
+        "Authored before the logs",
+        "Authored after the logs",
+    ] {
+        assert_eq!(destination.matches(moved).count(), 1, "{moved}");
+    }
+    let retained = post(&plan, "src.md");
+    assert!(!retained.contains("Prose before the first child"));
+    assert!(!retained.contains("Authored before the logs"));
+    assert!(!retained.contains("Authored after the logs"));
+    assert!(retained.contains("🪢 **LINKS:** [[other#^related]]"));
+    assert!(retained.contains("❌ **CANCEL LOG**"));
+    assert!(retained.contains("earlier reason"));
+}
+
+#[test]
+fn payload_cut_preserves_crlf_and_missing_final_newline() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\r\n  Authored CRLF note"),
+        ("dest.md", "- [ ] #task Target ^target\r\n"),
+    ]);
+    let plan = prepare(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
+    )
+    .expect("CRLF payload without a final newline");
+    let destination = post(&plan, "dest.md");
+    assert!(destination.contains("\r\n\t\tAuthored CRLF note"));
+    assert!(destination.match_indices('\n').all(|(index, _)| {
+        index > 0 && destination.as_bytes()[index - 1] == b'\r'
+    }));
+    let source = post(&plan, "src.md");
+    assert!(source.starts_with("- [ ] #task Source ^src\r\n"));
+}
+
+#[test]
 fn structural_refusals_cover_nested_open_tasks_and_destination_relationships() {
     let nested = snapshot(&[
         (
@@ -964,6 +1058,28 @@ fn retire(
     snapshot: &VaultSnapshot,
     request: &MergeRequest,
 ) -> Result<(BTreeMap<PathBuf, String>, Vec<RetirementReports>), MergeError> {
+    retire_with_successor_labels(snapshot, request, &[])
+}
+
+fn retire_with_successor_labels(
+    snapshot: &VaultSnapshot,
+    request: &MergeRequest,
+    successor_labels: &[crate::native::config::relations::CancelLabel],
+) -> Result<(BTreeMap<PathBuf, String>, Vec<RetirementReports>), MergeError> {
+    retire_with_policies(
+        snapshot,
+        request,
+        MergeRelationPolicy::default(),
+        successor_labels,
+    )
+}
+
+fn retire_with_policies(
+    snapshot: &VaultSnapshot,
+    request: &MergeRequest,
+    relation_policy: MergeRelationPolicy,
+    successor_labels: &[crate::native::config::relations::CancelLabel],
+) -> Result<(BTreeMap<PathBuf, String>, Vec<RetirementReports>), MergeError> {
     let settings = note_tasks::read_settings(Path::new("/no-bob-vault"));
     let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
     let catalog = BTreeMap::new();
@@ -974,7 +1090,8 @@ fn retire(
         task_settings: &settings,
         note_index: &note_index,
         drawer_catalog: &catalog,
-        relation_policy: MergeRelationPolicy::default(),
+        relation_policy,
+        successor_labels,
     };
     let prepared = prepare_task_merge(snapshot, request, &context)?;
     let target = match &request.target {
@@ -1017,6 +1134,7 @@ fn classify(
         note_index: &note_index,
         drawer_catalog: &catalog,
         relation_policy: MergeRelationPolicy::default(),
+        successor_labels: &[],
     };
     let request = MergeRequest {
         sources: vec![locator(source)],
@@ -1078,6 +1196,196 @@ fn mg5_open_dependents_repoint_with_mirrors_and_provenance() {
 }
 
 #[test]
+fn planner_validates_duplicates_and_source_structure_before_retry_filtering() {
+    let duplicate = snapshot(&[
+        (
+            "src.md",
+            "- [-] #task Retired ^src\n\t- 🪢 **LINKS:** merged into [[dest#^target]]\n",
+        ),
+        ("dest.md", "- [ ] #task Target ^target\n"),
+    ]);
+    let error = plan(
+        &duplicate,
+        &request(
+            &["src:src", "src:src"],
+            MergeContainer::Task(locator("dest:target")),
+        ),
+    )
+    .expect_err("duplicate unchanged sources remain invalid");
+    assert_eq!(error.code, "merge_duplicate_source");
+
+    let nested_target = snapshot(&[
+        (
+            "same.md",
+            "- [-] #task Retired ^closed\n  - [ ] #task Target ^target\n",
+        ),
+        ("open.md", "- [ ] #task Open source ^open\n"),
+    ]);
+    let error = plan(
+        &nested_target,
+        &request(
+            &["same:closed", "open:open"],
+            MergeContainer::Task(locator("same:target")),
+        ),
+    )
+    .expect_err("closed members still participate in structural checks");
+    assert_eq!(error.code, "merge_target_inside_source");
+}
+
+#[test]
+fn unchanged_retry_skips_unrelated_preexisting_dependency_cycles() {
+    let snapshot = snapshot(&[
+        (
+            "src.md",
+            "- [-] #task Retired ^src\n\t- 🪢 **LINKS:** merged into [[dest#^target]]\n",
+        ),
+        ("dest.md", "- [ ] #task Target ^target\n"),
+        (
+            "x.md",
+            "- [ ] #task X ^x\n\t- ⛓️ **DEPENDS ON:** [[y#^y]]\n",
+        ),
+        (
+            "y.md",
+            "- [ ] #task Y ^y\n\t- ⛓️ **DEPENDS ON:** [[x#^x]]\n",
+        ),
+    ]);
+    let plan = plan(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:target"))),
+    )
+    .expect("true retry does not validate unrelated graph defects");
+    assert!(plan.postimages.is_empty());
+    assert_eq!(plan.records[0].outcome, MergeOutcome::Unchanged);
+}
+
+#[test]
+fn relation_policy_controls_mirrors_and_preserves_existing_mentions() {
+    let base = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        ("older.md", "- [ ] #task Older ^older\n"),
+    ]);
+    for linked_from_mentions in [false, true] {
+        let plan = plan_with_policy(
+            &base,
+            &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+            MergeRelationPolicy {
+                linked_from_lines: true,
+                linked_from_mentions,
+            },
+            &[],
+        )
+        .expect("enabled relationship mirror");
+        let destination = &plan.postimages[Path::new("dest.md")];
+        assert!(destination.contains("[[src#^src]] (merged into)"));
+        assert!(!destination.contains("mentions"));
+
+        let with_mention = snapshot(&[
+            ("src.md", "- [ ] #task Source ^src\n"),
+            (
+                "dest.md",
+                "- [ ] #task Target ^dst\n\t- 🪢 **LINKED FROM:** [[older#^older]] (💬 mentions)\n",
+            ),
+            ("older.md", "- [ ] #task Older ^older\n"),
+        ]);
+        let plan = plan_with_policy(
+            &with_mention,
+            &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+            MergeRelationPolicy {
+                linked_from_lines: true,
+                linked_from_mentions,
+            },
+            &[],
+        )
+        .expect("merge keeps existing mention mirrors");
+        let destination = &plan.postimages[Path::new("dest.md")];
+        assert!(destination.contains("[[older#^older]] (💬 mentions)"));
+        assert!(destination.contains("[[src#^src]] (merged into)"));
+    }
+
+    let disabled = plan_with_policy(
+        &base,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+        MergeRelationPolicy {
+            linked_from_lines: false,
+            linked_from_mentions: false,
+        },
+        &[],
+    )
+    .expect("disabled mirror leaves target unchanged");
+    assert!(!disabled.postimages[Path::new("dest.md")].contains("LINKED FROM"));
+    assert!(disabled.postimages[Path::new("src.md")].contains("LINKS:"));
+}
+
+#[test]
+fn malformed_linked_from_refuses_only_when_mirror_is_enabled() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "dest.md",
+            "- [ ] #task Target ^dst\n\t- 🪢 **LINKED FROM:** [[broken\n",
+        ),
+    ]);
+    let enabled = plan_with_policy(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+        MergeRelationPolicy::default(),
+        &[],
+    )
+    .expect_err("enabled mirror cannot write through malformed input");
+    assert_eq!(enabled.code, "merge_provenance_malformed");
+
+    let disabled = plan_with_policy(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+        MergeRelationPolicy {
+            linked_from_lines: false,
+            linked_from_mentions: false,
+        },
+        &[],
+    )
+    .expect("disabled mirror preserves malformed input");
+    assert!(disabled.postimages[Path::new("dest.md")]
+        .contains("LINKED FROM:** [[broken"));
+    assert!(disabled.postimages[Path::new("src.md")].contains("LINKS:"));
+}
+
+#[test]
+fn closed_label_gesture_writes_only_relations_and_keeps_unrelated_entries() {
+    let snapshot = snapshot(&[
+        (
+            "src.md",
+            "- [x] #task Closed source ^src\n\t- 🪢 **LINKS:** retained [[older#^older]]\n",
+        ),
+        (
+            "dest.md",
+            "- [ ] #task Target ^dst\n\t- 🪢 **LINKED FROM:** [[older#^older]] (💬 mentions)\n",
+        ),
+        ("older.md", "- [ ] #task Older ^older\n"),
+    ]);
+    let mut request =
+        request(&["src:src"], MergeContainer::Task(locator("dest:dst")));
+    request.gesture = MergeGesture::Label;
+    let plan =
+        plan(&snapshot, &request).expect("label relation on closed task");
+    assert_eq!(plan.records[0].outcome, MergeOutcome::AlreadyClosed);
+    let source = &plan.postimages[Path::new("src.md")];
+    assert!(source.starts_with("- [x]"));
+    assert!(!source.contains("[cancelled::"));
+    assert!(source.contains("retained [[older#^older]]"));
+    assert!(source.contains("merged into [[dest#^dst]]"));
+    let target = &plan.postimages[Path::new("dest.md")];
+    assert!(target.contains("[[older#^older]] (💬 mentions)"));
+    assert!(target.contains("[[src#^src]] (merged into)"));
+
+    let json = serde_json::to_value(&plan.records[0]).expect("record JSON");
+    assert_eq!(json["outcome"], "already_closed");
+    assert_eq!(json["previous_status"], "x");
+    assert!(json["target"].get("drawer").is_none());
+    assert!(json.get("previousStatus").is_none());
+}
+
+#[test]
 fn mg5_shared_dependent_dedups_to_one_target_link() {
     let snapshot = snapshot(&[
         ("first.md", "- [ ] #task First ^first\n"),
@@ -1113,6 +1421,79 @@ fn mg5_shared_dependent_dedups_to_one_target_link() {
         reports[1].dependents_repointed,
         vec!["dep.md#^dep".to_string()]
     );
+}
+
+#[test]
+fn repoint_preserves_unresolved_links_and_field_breadcrumbs() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "dep.md",
+            concat!(
+                "- [ ] #task Dependent [dependsOn:: legacy-id] ^dep\n",
+                "\t- ⛓️ **DEPENDS ON:** [[src#^src]] • [[missing#^missing]]\n",
+            ),
+        ),
+    ]);
+    let plan = plan(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("resolved edge can be repointed conservatively");
+    let dependent = &plan.postimages[Path::new("dep.md")];
+    assert!(dependent.contains("[[dest#^dst]] • [[missing#^missing]]"));
+    assert!(dependent.contains("[dependsOn::"));
+    assert!(dependent.contains("legacy-id"));
+    assert!(plan.warnings.iter().any(|warning| {
+        warning
+            .contains("unresolved or ambiguous dependency [[missing#^missing]]")
+    }));
+}
+
+#[test]
+fn idless_open_dependents_are_refused_for_task_and_section_merges() {
+    let task_snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "dep.md",
+            "- [ ] #task No id\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+        ),
+    ]);
+    let error = plan(
+        &task_snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect_err("unsafe BLOCKS mirror must refuse atomically");
+    assert_eq!(error.code, "merge_dependent_missing_id");
+    assert!(error.message.contains("No id"));
+
+    let section_snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "areas/work.md",
+            "---\ntype: [[area]]\n---\n## Future Work\n",
+        ),
+        (
+            "dep.md",
+            "- [ ] #task No id\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+        ),
+    ]);
+    let section_request = request(
+        &["src:src"],
+        MergeContainer::Section {
+            note: "areas/work".to_string(),
+            selector: DrawerSelector {
+                text: "Future Work".to_string(),
+                exact: true,
+            },
+        },
+    );
+    let error = plan(&section_snapshot, &section_request)
+        .expect_err("section cannot leave any open dependent behind");
+    assert_eq!(error.code, "merge_section_has_dependents");
+    assert!(error.message.contains("No id"));
 }
 
 #[test]
@@ -1159,6 +1540,56 @@ fn mg7_repoint_cycle_refuses_the_whole_batch() {
 }
 
 #[test]
+fn cycle_checks_include_project_and_inherited_resident_edges() {
+    for (project_path, target, project, subproject) in [
+        (
+            "project.md",
+            "project:target",
+            concat!(
+                "---\ntype: [[project]]\n---\n",
+                "- [ ] #task Project ^prj\n",
+                "\t- ⛓️ **DEPENDS ON:** [[dependent#^dep]]\n",
+                "- [ ] #task Target ^target\n",
+            ),
+            None,
+        ),
+        (
+            "project.md",
+            "subproject:target",
+            concat!(
+                "---\ntype: [[project]]\n---\n",
+                "- [ ] #task Project ^prj\n",
+                "\t- ⛓️ **DEPENDS ON:** [[dependent#^dep]]\n",
+            ),
+            Some(concat!(
+                "---\ntype: [[project]]\nparent: [[project]]\n---\n",
+                "- [ ] #task Subproject ^prj\n",
+                "- [ ] #task Target ^target\n",
+            )),
+        ),
+    ] {
+        let mut notes = vec![
+            ("src.md", "- [ ] #task Source ^src\n"),
+            (project_path, project),
+            (
+                "dependent.md",
+                "- [ ] #task Dependent ^dep\n\t- ⛓️ **DEPENDS ON:** [[src#^src]]\n",
+            ),
+        ];
+        if let Some(subproject) = subproject {
+            notes.push(("subproject.md", subproject));
+        }
+        let snapshot = snapshot(&notes);
+        let error = plan(
+            &snapshot,
+            &request(&["src:src"], MergeContainer::Task(locator(target))),
+        )
+        .expect_err("resident inherited edge closes a proposed cycle");
+        assert_eq!(error.code, "merge_dependency_cycle");
+    }
+}
+
+#[test]
 fn mg8_starts_after_successors_are_reported_untouched() {
     let snapshot = snapshot(&[
         ("src.md", "- [ ] #task Source ^src\n"),
@@ -1168,9 +1599,14 @@ fn mg8_starts_after_successors_are_reported_untouched() {
             "- [ ] #task Other ^other\n\t- 🪢 **LINKS:** starts after [[src#^src]]\n",
         ),
     ]);
-    let (staged, reports) = retire(
+    let labels = [crate::native::config::relations::CancelLabel {
+        key: "starts after".to_string(),
+        name: "starts after".to_string(),
+    }];
+    let (staged, reports) = retire_with_successor_labels(
         &snapshot,
         &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+        &labels,
     )
     .expect("retire with successor");
     assert_eq!(
@@ -1179,6 +1615,36 @@ fn mg8_starts_after_successors_are_reported_untouched() {
     );
     let other = staged_text(&staged, "other.md");
     assert!(other.contains("starts after [[src#^src]]"), "{other}");
+}
+
+#[test]
+fn successor_orphans_use_only_the_supplied_normalized_labels() {
+    let snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "other.md",
+            "- [ ] #task Other ^other\n\t- 🪢 **LINKS:** follows [[src#^src]]\n",
+        ),
+    ]);
+    let labels = [crate::native::config::relations::CancelLabel {
+        key: "follows".to_string(),
+        name: "follows".to_string(),
+    }];
+    let (_, reports) = retire_with_successor_labels(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+        &labels,
+    )
+    .expect("configured custom successor relation");
+    assert_eq!(reports[0].successors_orphaned, ["other.md#^other"]);
+
+    let (_, reports) = retire(
+        &snapshot,
+        &request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+    )
+    .expect("no configured labels");
+    assert!(reports[0].successors_orphaned.is_empty());
 }
 
 #[test]
@@ -1301,6 +1767,88 @@ fn mg13_section_provenance_writes_one_cancel_log_entry() {
 }
 
 #[test]
+fn section_batch_logs_each_source_and_retry_is_write_free() {
+    let snapshot = snapshot(&[
+        (
+            "src.md",
+            concat!(
+                "- [ ] #task First ^first\n",
+                "- [ ] #task Second ^second\n",
+            ),
+        ),
+        (
+            "areas/work.md",
+            "---\ntype: [[area]]\n---\n## Future Work\n",
+        ),
+    ]);
+    let request = request(
+        &["src:first", "src:second"],
+        MergeContainer::Section {
+            note: "areas/work".to_string(),
+            selector: DrawerSelector {
+                text: "Future Work".to_string(),
+                exact: true,
+            },
+        },
+    );
+    let first = plan(&snapshot, &request).expect("batch section merge");
+    let source = &first.postimages[Path::new("src.md")];
+    assert_eq!(
+        source
+            .matches("📥 merged into [[areas/work#Future Work]]")
+            .count(),
+        2,
+        "each source owns one dated entry: {source}"
+    );
+    let mut after = snapshot.notes.clone();
+    after.extend(first.postimages);
+    let second = plan(&VaultSnapshot::from_notes(after), &request)
+        .expect("same section batch retry");
+    assert!(second.postimages.is_empty());
+    assert!(second
+        .records
+        .iter()
+        .all(|record| record.outcome == MergeOutcome::Unchanged));
+}
+
+#[test]
+fn section_retry_ignores_matching_prose_fences_and_later_task_logs() {
+    let snapshot = snapshot(&[
+        (
+            "src.md",
+            concat!(
+                "- [-] #task Closed source ^src\n",
+                "  - prose 📥 merged into [[areas/work#Future Work]]\n",
+                "  - ❌ **CANCEL LOG**\n",
+                "  ```text\n",
+                "    - *2026-11-03* — 📥 merged into [[areas/work#Future Work]]\n",
+                "  ```\n",
+                "- [-] #task Later ^later\n",
+                "  - ❌ **CANCEL LOG**\n",
+                "    - *2026-11-03* — 📥 merged into [[areas/work#Future Work]]\n",
+            ),
+        ),
+        (
+            "areas/work.md",
+            "---\ntype: [[area]]\n---\n## Future Work\n",
+        ),
+    ]);
+    let request = request(
+        &["src:src"],
+        MergeContainer::Section {
+            note: "areas/work".to_string(),
+            selector: DrawerSelector {
+                text: "Future Work".to_string(),
+                exact: true,
+            },
+        },
+    );
+    let error = plan(&snapshot, &request)
+        .expect_err("only source's direct dated log can establish identity");
+    assert_eq!(error.code, "merge_source_closed");
+}
+
+#[test]
 fn mg16_rerun_against_same_target_is_unchanged() {
     let snapshot = snapshot(&[
         ("src.md", "- [ ] #task Source ^src\n"),
@@ -1325,20 +1873,38 @@ fn mg16_rerun_against_same_target_is_unchanged() {
 
 #[test]
 fn closed_sources_classify_for_label_gestures_and_refuse_explicit() {
-    let snapshot = snapshot(&[
+    let before = snapshot(&[
         ("closed.md", "- [x] #task Closed ^closed\n"),
         ("dest.md", "- [ ] #task Target ^dst\n"),
     ]);
     let (outcome, _) = classify(
-        &snapshot,
+        &before,
         "closed:closed",
         MergeContainer::Task(locator("dest:dst")),
         "merged into",
         MergeGesture::Label,
     );
     assert_eq!(outcome, SourceOutcome::AlreadyClosed);
+
+    let done_with_edge = snapshot(&[
+        (
+            "closed.md",
+            "- [x] #task Done source ^closed\n\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n",
+        ),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+    ]);
+    let (outcome, disposition) = classify(
+        &done_with_edge,
+        "closed:closed",
+        MergeContainer::Task(locator("dest:dst")),
+        "merged into",
+        MergeGesture::Label,
+    );
+    assert_eq!(outcome, SourceOutcome::AlreadyClosed);
+    assert_eq!(disposition, SourceDisposition::Closed);
+
     let error = retire(
-        &snapshot,
+        &before,
         &request(
             &["closed:closed"],
             MergeContainer::Task(locator("dest:dst")),
@@ -1493,6 +2059,64 @@ fn mg12_offer_uses_earliest_removed_slot_and_selected_pick_semantics() {
 }
 
 #[test]
+fn mg12_picked_slot_rebases_after_same_daily_note_edits_and_source_permutations(
+) {
+    let snapshot = snapshot(&[
+        (
+            "daily/2026-11-03.md",
+            concat!(
+                "- [ ] #task Source A ^a\n",
+                "- [ ] #task Target ^target\n",
+                "- [ ] #task Source B ^b\n",
+                "## Pomodoros\n",
+                "- [ ] () — EARLY\n",
+                "\t- [[before#^before]]\n",
+                "\t- [[#^a]]\n",
+                "\t- [[after#^after]]\n",
+                "- [ ] () — LATER\n",
+                "\t- [[#^b]]\n",
+            ),
+        ),
+        ("before.md", "- [ ] #task Before ^before\n"),
+        ("after.md", "- [ ] #task After ^after\n"),
+    ]);
+    let expected_ledger = concat!(
+        "## Pomodoros\n",
+        "- [ ] () — EARLY\n",
+        "\t- [[before#^before]]\n",
+        "\t- [[2026-11-03#^target]]\n",
+        "\t- [[after#^after]]\n",
+        "- [ ] () — LATER\n",
+    );
+    for order in [
+        ["daily/2026-11-03:a", "daily/2026-11-03:b"],
+        ["daily/2026-11-03:b", "daily/2026-11-03:a"],
+    ] {
+        let mut request = request(
+            &order,
+            MergeContainer::Task(locator("daily/2026-11-03:target")),
+        );
+        request.selection = SuccessorSelection::All;
+        let plan = plan(&snapshot, &request)
+            .expect("same-daily-note picked merge offer");
+        let daily = &plan.postimages[Path::new("daily/2026-11-03.md")];
+        let ledger = &daily[daily.find("## Pomodoros").expect("ledger")..];
+        assert_eq!(ledger, expected_ledger);
+        let a_record = plan
+            .records
+            .iter()
+            .find(|record| record.source.block_id == "a")
+            .expect("source A record");
+        assert_eq!(a_record.offers.len(), 1);
+        assert!(a_record.offers[0].selected);
+        assert!(plan
+            .write_order
+            .iter()
+            .all(|path| { plan.postimages.contains_key(path) }));
+    }
+}
+
+#[test]
 fn mg16_public_planner_rerun_has_no_writes_and_serializes_source_order() {
     let before = snapshot(&[
         ("src.md", "- [ ] #task Source ^src\n"),
@@ -1512,6 +2136,86 @@ fn mg16_public_planner_rerun_has_no_writes_and_serializes_source_order() {
             .expect("serializable merge records")[0]["source"]["line"],
         1
     );
+}
+
+#[test]
+fn merge_record_and_offer_json_use_snake_case_and_omit_absent_fields() {
+    let before = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        ("dest.md", "- [ ] #task Target ^dst\n"),
+        (
+            "daily/2026-11-03.md",
+            "## Pomodoros\n- [ ] () — BUILD\n\t- [[src#^src]]\n",
+        ),
+    ]);
+    let mut merge_request =
+        request(&["src:src"], MergeContainer::Task(locator("dest:dst")));
+    merge_request.selection = SuccessorSelection::All;
+    let merge_plan =
+        plan(&before, &merge_request).expect("record with an offer");
+    let record =
+        serde_json::to_value(&merge_plan.records[0]).expect("record JSON");
+    for key in [
+        "previous_status",
+        "moved_lines",
+        "moved_notes",
+        "dependents_repointed",
+        "prerequisites_left",
+        "successors_orphaned",
+        "links_pruned",
+    ] {
+        assert!(record.get(key).is_some(), "missing {key}: {record}");
+    }
+    assert!(record.get("previousStatus").is_none());
+    assert_eq!(record["source"]["block_id"], "src");
+    assert_eq!(record["target"]["block_id"], "dst");
+    assert!(record["target"].get("drawer").is_none());
+    assert!(record["target"].get("section").is_none());
+    let offer = &record["offers"][0];
+    assert_eq!(offer["entry_name"], "BUILD");
+    assert_eq!(offer["merged_from"], "src.md#^src");
+    assert!(offer.get("entryName").is_none());
+    assert!(offer.get("mergedFrom").is_none());
+
+    let section_snapshot = snapshot(&[
+        ("src.md", "- [ ] #task Source ^src\n"),
+        (
+            "areas/work.md",
+            "---\ntype: [[area]]\n---\n## Future Work\n",
+        ),
+    ]);
+    let section_plan = plan(
+        &section_snapshot,
+        &request(
+            &["src:src"],
+            MergeContainer::Section {
+                note: "areas/work".to_string(),
+                selector: DrawerSelector {
+                    text: "Future Work".to_string(),
+                    exact: true,
+                },
+            },
+        ),
+    )
+    .expect("section target record");
+    let section_record = serde_json::to_value(&section_plan.records[0])
+        .expect("section record JSON");
+    assert!(section_record["target"].get("block_id").is_none());
+    assert_eq!(section_record["target"]["section"], "Future Work");
+
+    let no_origin = MergeOffer {
+        key: "target".to_string(),
+        n: 1,
+        group: "hand_off".to_string(),
+        selected: false,
+        entry_name: "BUILD".to_string(),
+        entry_role: "slot".to_string(),
+        merged_from: None,
+    };
+    assert!(serde_json::to_value(no_origin)
+        .expect("optional offer JSON")
+        .get("merged_from")
+        .is_none());
 }
 
 #[test]
@@ -1614,6 +2318,17 @@ fn mg_successful_merge_fixtures_hold_identity_reconcile_and_repeatability() {
             "MG4 tables and fences",
             snapshot(&[
                 ("src.md", "- [ ] #task Source ^src\n  - Table\n    | A | B |\n    | - | - |\n    ```text\n    body\n    ```\n"),
+                ("dest.md", "- [ ] #task Target ^dst\n"),
+            ]),
+            request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),
+        ),
+        (
+            "MG4 wrapper-free authored body",
+            snapshot(&[
+                (
+                    "src.md",
+                    "- [ ] #task Source ^src\n  Paragraph continuation before children.\n\n  | A | B |\n  | - | - |\n  ```text\n  body\n  ```\n\t- 🪢 **LINKS:** merged into [[dest#^dst]]\n  - Authored child after the managed log\n",
+                ),
                 ("dest.md", "- [ ] #task Target ^dst\n"),
             ]),
             request(&["src:src"], MergeContainer::Task(locator("dest:dst"))),

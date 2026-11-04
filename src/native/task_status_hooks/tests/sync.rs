@@ -801,7 +801,7 @@ fn desired_statuses_raise_a_directly_linked_prj() {
 #[test]
 fn residents_inherit_prj_links_as_implicit_edges() {
     let proj = format!(
-        "{PROJECT_FRONTMATTER}- [?] #task #prj Ship [dependsOn:: t__pre] ^prj\n- [ ] #task Resident ^r1\n"
+        "{PROJECT_FRONTMATTER}- [?] #task #prj Ship [dependsOn:: t__pre] ^prj\n  - ⛓️ **DEPENDS ON:** [[t#^pre]]\n- [ ] #task Resident ^r1\n"
     );
     let scanned = edge_scan(&[
         ("proj.md", proj.as_str()),
@@ -811,7 +811,11 @@ fn residents_inherit_prj_links_as_implicit_edges() {
         scanned.edges.get(&edge("proj.md", "r1")),
         Some(&BTreeSet::from([edge("t.md", "pre")])),
     );
-    assert!(scanned.edges.get(&edge("proj.md", "prj")).is_none());
+    assert_eq!(
+        scanned.edges.get(&edge("proj.md", "prj")),
+        Some(&BTreeSet::from([edge("t.md", "pre")])),
+        "the project keeps its explicit prerequisite edge"
+    );
 }
 
 // PDB2: `^prj` reports only its own reasons, never a `project_*`

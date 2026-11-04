@@ -308,6 +308,50 @@ pub(crate) use model::{
     ResolvedReference, SettledEvent, StruckCompletedReference, StructuralPlan,
     TaskLine,
 };
+
+/// Build the same explicit and project-resident dependency graph used by
+/// reconcile, directly from an in-memory note snapshot. Merge planning uses
+/// this pure adapter to validate the graph after a complete batch of edge
+/// replacements without loading configuration or reading the filesystem.
+pub(crate) fn merge_dependency_edges(
+    notes: &BTreeMap<PathBuf, String>,
+    settings: &TasksSettings,
+) -> BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> {
+    let files = notes
+        .iter()
+        .map(|(relative_path, contents)| FileScan {
+            path: relative_path.clone(),
+            relative_path: relative_path.clone(),
+            contents: contents.clone(),
+            tasks: parse_tasks(contents, settings),
+        })
+        .collect::<Vec<_>>();
+    let note_index = NoteIndex::from_paths(
+        files.iter().map(|file| file.relative_path.clone()),
+    );
+    let contexts = files
+        .iter()
+        .map(super::project_dependencies::ProjectContext::for_note)
+        .collect::<Vec<_>>();
+    let reasons = vec![
+        super::project_dependencies::ProjectBlockReasons::default(
+        );
+        files.len()
+    ];
+    let project_tree = super::project_dependencies::ProjectTree::build(
+        &files,
+        &contexts,
+        &reasons,
+        &note_index,
+    );
+    let task_blocks = parse::task_blocks(&files);
+    references::dependency_edges(
+        &files,
+        &note_index,
+        &task_blocks,
+        &project_tree,
+    )
+}
 pub(crate) use parse::parse_tasks;
 #[cfg(test)]
 pub(crate) fn reconcile_for_scanner_isolation(contents: &str) -> String {

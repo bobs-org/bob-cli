@@ -365,7 +365,13 @@ pub(super) fn dependency_edges(
             }
         }
     }
-    add_resident_implicit_edges(files, project_tree, &mut edges);
+    let explicit_edges = edges.clone();
+    add_resident_implicit_edges(
+        files,
+        project_tree,
+        &explicit_edges,
+        &mut edges,
+    );
     edges
 }
 
@@ -375,23 +381,9 @@ pub(super) fn dependency_edges(
 fn add_resident_implicit_edges(
     files: &[FileScan],
     project_tree: &ProjectTree,
+    explicit_edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
     edges: &mut BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
 ) {
-    let mut task_ids: BTreeMap<String, Vec<(PathBuf, String)>> =
-        BTreeMap::new();
-    for file in files {
-        for task in &file.tasks {
-            let (Some(task_id), Some(block_id)) =
-                (task.task_id.clone(), task.block_id.clone())
-            else {
-                continue;
-            };
-            task_ids
-                .entry(task_id)
-                .or_default()
-                .push((file.relative_path.clone(), block_id));
-        }
-    }
     for (file_index, file) in files.iter().enumerate() {
         let Some(project_task_index) =
             project_tree.project_task_index(file_index)
@@ -419,27 +411,25 @@ fn add_resident_implicit_edges(
         let owners = std::iter::once(file_index)
             .chain(project_tree.ancestors(file_index).iter().copied());
         for owner_index in owners {
-            let owner = &files[owner_index];
-            let Some(prj) = project_tree
+            let Some(project_identity) = project_tree
                 .project_task_index(owner_index)
-                .and_then(|index| owner.tasks.get(index))
+                .and_then(|index| files[owner_index].tasks.get(index))
+                .and_then(|task| task.block_id.as_ref())
+                .map(|block_id| {
+                    (files[owner_index].relative_path.clone(), block_id.clone())
+                })
             else {
                 continue;
             };
-            let mut targets = BTreeSet::new();
-            for id in &prj.depends_on {
-                if let Some(identities) = task_ids.get(id) {
-                    targets.extend(
-                        identities
-                            .iter()
-                            .filter(|&(path, _block)| {
-                                !project_tree
-                                    .is_internal_target(owner_index, path)
-                            })
-                            .map(|(path, block)| (path.clone(), block.clone())),
-                    );
-                }
-            }
+            let targets = explicit_edges
+                .get(&project_identity)
+                .into_iter()
+                .flatten()
+                .filter(|(path, _)| {
+                    !project_tree.is_internal_target(owner_index, path)
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>();
             for source in &sources {
                 // Residents inherit their own project's prerequisites, but
                 // the project's `^prj` task does not gain a synthetic edge

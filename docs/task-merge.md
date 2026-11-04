@@ -51,10 +51,10 @@ are born, live `[[#^id|Title]]` stubs stay in the parent).
 | --- | --- |
 | S's task line | `[-]` with `[cancelled:: today]`. `^id`, fields, and the creation date are kept, so every link to S still resolves. |
 | S's description | Becomes the group title bullet `- <description>` in the container. The text comes from Bob's description extractor (`note_tasks::clean_description`). It carries **no link back to S**: a ring would draw ⊘ beside live work, and S would gain a reverse mention. Provenance is T's _merged from_ chip. |
-| S's authored children (notes, drawers, closed nested tasks) | Cut under the title bullet with their relative structure kept. Descendant anchors move, with transplant link repair and collision renaming. Same-named drawers are **not** flattened into T's drawers. |
+| S's authored body (continuation paragraphs, tables, fences, and authored children) | Cut under the title bullet with relative structure kept, including bytes before the first child and body text without a list wrapper. Descendant anchors move, with transplant link repair and collision renaming. Same-named drawers are **not** flattened into T's drawers. |
 | S's open nested tasks | The merge is refused (`merge_source_open_subtasks`). |
 | S's managed children: Depends-On, BLOCKS, LINKS, LINKED FROM, and the Schedule, Work, Rotten, and Cancel logs | Stay on S as history. An existing Cancel Log gets `*date* — 🪢 merged into [[T]]` prepended, as relation cancels do today. |
-| Open tasks that depend on S (other than T) | Their Depends-On link to S is **re-pointed to T**, deduplicated, with BLOCKS mirrors and `[dependsOn::]`/`[id::]` fields updated. A resulting cycle refuses the whole operation (`merge_dependency_cycle`). Re-pointing happens before the cancel, so cancel recovery never releases them. |
+| Open tasks that depend on S (other than T) | The production dependency graph finds direct and inherited project dependents. Resolved Depends-On links to any source are replaced with T and deduplicated; unresolved or ambiguous links stay byte-for-byte and are reported, with their field IDs retained as breadcrumbs. A dependent without a block ID refuses the merge because it cannot be safely rewritten. BLOCKS mirrors follow the configured relation policy. A resulting cycle refuses the whole operation (`merge_dependency_cycle`). Re-pointing happens before the cancel, so cancel recovery never releases them. |
 | T depending on S | Left in place. Cancel's existing recovery then treats it exactly as it would any cancelled prerequisite, which may recover T with `[unblocked::]`. |
 | S's own open prerequisites | Not transferred. Reported in `prerequisites_left[]`, with a hint to add them by hand. |
 | `starts after` successors pointing at S | Untouched. Reported in `successors_orphaned[]`, with a warning. |
@@ -208,7 +208,8 @@ bob task merge [OPTIONS] -i <TASK|NOTE> [-D TITLE | -s TITLE] <TASK>...
 - **JSON** uses schema 1, the same envelope as `bob task move`: `ok`,
   `dry_run`, `warnings`, `repaired_files[]`, `git`, `applied_paths[]`,
   `deferred_paths[]`, `recovery_directory`, and
-  `error{stage, code, message, hint}`.
+  `error{stage, code, message, hint}`. Merge records, targets, sources, and
+  offers use snake_case field names; absent optional fields are omitted.
   - **`merges[]`** (`MergeRecord`, shared with capture):
     - `source{path, block_id, line, title}`;
     - `target{path, block_id?, title?, drawer?, section?, kind}`;
@@ -301,15 +302,15 @@ four-list YAML wiring remains part of the later `merge-label` phase.
 | MG1 | Title-only S into T | S with no children merges as one title bullet under T's plain-child anchor; S retires with `merged into` |
 | MG2 | Nested drawers travel | S with nested drawers cuts them under the title bullet; same-named drawers are not flattened |
 | MG3 | Anchors linked from a daily note | Descendant anchors move with transplant link repair and collision renaming; daily-note links still resolve |
-| MG4 | Fences and tables | Fenced code is re-based, never re-indented; tables travel as plain children |
-| MG5 | Re-point dependents | Open dependents of S (other than T) re-point to T, deduplicated, with BLOCKS mirrors and field updates |
+| MG4 | Authored body | Continuation prose before children, wrapper-free tables and fences, and authored children travel; direct managed logs stay on S |
+| MG5 | Re-point dependents | The production graph finds direct and inherited project dependents; resolved links re-point, unresolved links and field breadcrumbs remain, and ID-less dependents refuse |
 | MG6 | T depends on S | Left in place; cancel recovery may recover T with `[unblocked::]` |
 | MG7 | Dependency cycle | Re-pointing that would create a cycle refuses the whole operation (`merge_dependency_cycle`) |
-| MG8 | Successor warning | `starts after` successors of S are untouched and reported in `successors_orphaned[]` |
+| MG8 | Successor warning | Configured `starts after` successors of S are untouched and reported in `successors_orphaned[]`; labels outside the supplied policy are ignored |
 | MG9 | No transient unblock | Re-pointing lands before the cancel, so cancel recovery never releases a re-pointed dependent |
 | MG10 | T already linked | No offer when T already has a live link under today's open Pomodoros |
 | MG11 | T Blocked | No offer when T cannot hold one; the prune still lands |
-| MG12 | Offer placed | T with no live link is offered once under the earliest open entry that lost a source link, at the first removed bullet's slot, with `merged_from` |
+| MG12 | Offer placed | T with no live link is offered once under the earliest open entry that lost a source link, at the first removed bullet's rebased slot after edits, with `merged_from` |
 | MG13 | Section dependents refusal | A section merge whose S has open dependents is refused (`merge_section_has_dependents`) |
 | MG14 | Section near-duplicate refusal | A section name at strict prefix or slug edit distance 1 is refused (`merge_section_near_duplicate`) |
 | MG15 | Section Title Case creation | A missing section is appended as `## Title Case`; `#"Exact Title"` forces exact text |
@@ -326,20 +327,23 @@ The current test names for those vectors are:
 | MG1 | `mg1_title_only_source_is_prepared_as_one_plain_child` |
 | MG2 | `mg2_nested_drawers_travel_under_the_source_title_without_flattening` |
 | MG3 | `mg3_descendant_anchor_collision_repairs_external_links` |
-| MG4 | `mg4_tables_and_fences_are_rebased_as_authored_payload` |
-| MG5 | `mg5_open_dependents_repoint_with_mirrors_and_provenance`, `mg5_shared_dependent_dedups_to_one_target_link` |
+| MG4 | `mg4_tables_and_fences_are_rebased_as_authored_payload`, `mg_successful_merge_fixtures_hold_identity_reconcile_and_repeatability` (wrapper-free body fixture) |
+| MG5 | `mg5_open_dependents_repoint_with_mirrors_and_provenance`, `mg5_shared_dependent_dedups_to_one_target_link`, `repoint_preserves_unresolved_links_and_field_breadcrumbs`, `idless_open_dependents_are_refused_for_task_and_section_merges`, `relation_policy_controls_mirrors_and_preserves_existing_mentions`, `malformed_linked_from_refuses_only_when_mirror_is_enabled` |
 | MG6 | `mg6_target_prerequisite_on_source_is_never_repointed` |
-| MG7 | `mg7_repoint_cycle_refuses_the_whole_batch` |
-| MG8 | `mg8_starts_after_successors_are_reported_untouched` |
+| MG7 | `mg7_repoint_cycle_refuses_the_whole_batch`, `cycle_checks_include_project_and_inherited_resident_edges` |
+| MG8 | `mg8_starts_after_successors_are_reported_untouched`, `successor_orphans_use_only_the_supplied_normalized_labels` |
 | MG9 | `mg9_repoint_lands_before_cancel_without_transient_recovery`, `mg9_source_prerequisites_are_retained_and_reported` |
 | MG10 | `mg10_existing_target_link_suppresses_merge_offer` |
 | MG11 | `mg11_blocked_target_is_not_offered_after_pruning` |
-| MG12 | `mg12_offer_uses_earliest_removed_slot_and_selected_pick_semantics` |
-| MG13 | `mg13_section_merge_with_open_dependents_refuses`, `mg13_section_provenance_writes_one_cancel_log_entry` |
+| MG12 | `mg12_offer_uses_earliest_removed_slot_and_selected_pick_semantics`, `mg12_picked_slot_rebases_after_same_daily_note_edits_and_source_permutations` |
+| MG13 | `mg13_section_merge_with_open_dependents_refuses`, `mg13_section_provenance_writes_one_cancel_log_entry`, `idless_open_dependents_are_refused_for_task_and_section_merges`, `section_batch_logs_each_source_and_retry_is_write_free`, `section_retry_ignores_matching_prose_fences_and_later_task_logs` |
 | MG14 | `mg14_section_slug_near_duplicate_refuses` |
 | MG15 | `mg15_section_slug_title_cases_and_exact_literal_preserves_text` |
-| MG16 | `mg16_rerun_against_same_target_is_unchanged`, `mg16_public_planner_rerun_has_no_writes_and_serializes_source_order` |
+| MG16 | `mg16_rerun_against_same_target_is_unchanged`, `mg16_public_planner_rerun_has_no_writes_and_serializes_source_order`, `planner_validates_duplicates_and_source_structure_before_retry_filtering`, `unchanged_retry_skips_unrelated_preexisting_dependency_cycles`, `closed_label_gesture_writes_only_relations_and_keeps_unrelated_entries` |
 | MG17 | `mg17_production_reconciliation_is_a_noop_after_merge` |
 | MG18 | `mg18_archive_planner_repairs_merged_from_to_tombstone_archive` |
 | MG19 | `mg19_shared_key_with_merge_labels_drops_everywhere_once`, `mg19_three_list_warnings_stay_byte_identical` |
 | MG20 | `mg20_source_groups_keep_typed_order_after_existing_entries` |
+
+The JSON wire shape is pinned by
+`merge_record_and_offer_json_use_snake_case_and_omit_absent_fields`.

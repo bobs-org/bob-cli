@@ -22,8 +22,8 @@ use super::{
         relation_labels::relation_label_key,
         task_cancel,
         task_dependencies::{
-            self, blocks as blocks_mod, format as dependency_format,
-            parse as dependency_parse,
+            self, block_link_spans, blocks as blocks_mod,
+            format as dependency_format, parse as dependency_parse,
         },
         task_locator::TaskLocator,
         task_move::VaultSnapshot,
@@ -45,7 +45,8 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct OpenDependent {
     pub(crate) path: PathBuf,
-    pub(crate) block_id: String,
+    pub(crate) block_id: Option<String>,
+    pub(crate) description: String,
     pub(crate) line_index: usize,
 }
 
@@ -68,6 +69,7 @@ pub(crate) struct RetirementReports {
     pub(crate) successors_orphaned: Vec<String>,
     pub(crate) dependents_repointed: Vec<String>,
     pub(crate) links_pruned: usize,
+    pub(crate) warnings: Vec<String>,
 }
 
 /// Normalize the caller-supplied merge label with the shared relation
@@ -143,9 +145,6 @@ pub(crate) fn find_open_dependents(
             else {
                 continue;
             };
-            let Some(block_id) = task.block_id.clone() else {
-                continue;
-            };
             let mut waits_on_source = false;
             for link in links {
                 let Some(identity) = resolve_dependency_identity(
@@ -164,7 +163,8 @@ pub(crate) fn find_open_dependents(
             if waits_on_source {
                 dependents.push(OpenDependent {
                     path: path.clone(),
-                    block_id,
+                    block_id: task.block_id.clone(),
+                    description: task.description.clone(),
                     line_index: task.line_index,
                 });
             }
@@ -173,59 +173,6 @@ pub(crate) fn find_open_dependents(
     dependents.sort();
     dependents.dedup();
     dependents
-}
-
-/// Build the complete Depends-On edge map over `notes`, resolving each
-/// accepted link to a vault identity. Malformed lines and unresolvable
-/// targets contribute no edges.
-fn dependency_edges(
-    notes: &BTreeMap<PathBuf, String>,
-    context: &MergeContext<'_>,
-) -> BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> {
-    let index = context.note_index.with_additional(notes.keys().cloned());
-    let mut edges: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> =
-        BTreeMap::new();
-    for (path, contents) in notes {
-        let lines: Vec<&str> = contents.lines().collect();
-        if lines.is_empty() {
-            continue;
-        }
-        let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
-        let scan = note_tasks::scan(contents, context.task_settings);
-        for task in scan.tasks() {
-            let Some(block_id) = task.block_id.clone() else {
-                continue;
-            };
-            let identity = (path.clone(), block_id);
-            let Some(child) = dependency_parse::dependency_child_of(
-                &lines,
-                &fenced,
-                task.line_index,
-            ) else {
-                continue;
-            };
-            let dependency_parse::DependencyLine::Accepted { links, .. } =
-                &child.parsed
-            else {
-                continue;
-            };
-            let mut targets = BTreeSet::new();
-            for link in links {
-                if let Some(resolved) = resolve_dependency_identity(
-                    &index,
-                    path,
-                    &link.target,
-                    &link.block_id,
-                ) {
-                    targets.insert(resolved);
-                }
-            }
-            if !targets.is_empty() {
-                edges.insert(identity, targets);
-            }
-        }
-    }
-    edges
 }
 
 /// Whether `from` reaches `to` following `edges`.
@@ -263,14 +210,15 @@ fn reaches(
 pub(crate) fn validate_repoint_cycles(
     notes: &BTreeMap<PathBuf, String>,
     repoints: &[((PathBuf, String), (PathBuf, String))],
+    sources: &BTreeSet<(PathBuf, String)>,
     context: &MergeContext<'_>,
 ) -> Result<(), MergeError> {
-    let mut edges = dependency_edges(notes, context);
+    let mut edges =
+        task_status_hooks::merge_dependency_edges(notes, context.task_settings);
     for (dependent, target) in repoints {
-        edges
-            .entry(dependent.clone())
-            .or_default()
-            .insert(target.clone());
+        let targets = edges.entry(dependent.clone()).or_default();
+        targets.retain(|current| !sources.contains(current));
+        targets.insert(target.clone());
     }
     for (dependent, target) in repoints {
         if reaches(&edges, target, dependent) {
@@ -303,12 +251,24 @@ pub(crate) fn repoint_dependents(
     sources: &BTreeSet<(PathBuf, String)>,
     target: &(PathBuf, String),
     context: &MergeContext<'_>,
-) -> Result<Vec<String>, MergeError> {
+) -> Result<(Vec<String>, Vec<String>), MergeError> {
     let mut repointed = Vec::new();
+    let mut warnings = Vec::new();
     // Snapshot the index once; staged paths never change, only bytes.
     let index = context.note_index.with_additional(staged.keys().cloned());
     for dependent in dependents {
-        let identity = (dependent.path.clone(), dependent.block_id.clone());
+        let Some(block_id) = dependent.block_id.as_deref() else {
+            return Err(MergeError::new(
+                "merge_dependent_missing_id",
+                format!(
+                    "“{}” in {}:{} depends on a merge source but has no block id; add an id before merging",
+                    dependent.description,
+                    dependent.path.display(),
+                    dependent.line_index + 1,
+                ),
+            ));
+        };
+        let identity = (dependent.path.clone(), block_id.to_string());
         if identity == *target {
             continue;
         }
@@ -318,9 +278,11 @@ pub(crate) fn repoint_dependents(
         let lines: Vec<&str> = contents.lines().collect();
         let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
         let scan = note_tasks::scan(&contents, context.task_settings);
-        let Some(task) = scan.tasks().iter().find(|task| {
-            task.block_id.as_deref() == Some(dependent.block_id.as_str())
-        }) else {
+        let Some(task) = scan
+            .tasks()
+            .iter()
+            .find(|task| task.block_id.as_deref() == Some(block_id))
+        else {
             continue;
         };
         if !task.status_type.is_open() {
@@ -339,15 +301,41 @@ pub(crate) fn repoint_dependents(
             // Preserve malformed/uncertain content conservatively.
             continue;
         };
+        let original_child =
+            lines.get(child.line_index).unwrap_or(&"").to_string();
+        let spans = block_link_spans(&original_child);
+        if spans.len() != links.len() {
+            return Err(MergeError::new(
+                "merge_dependency_uncertain",
+                format!(
+                    "cannot safely repoint dependencies for ^{} in {}: parsed link spans do not match",
+                    block_id,
+                    dependent.path.display(),
+                ),
+            ));
+        }
         let mut ordered: Vec<(PathBuf, String)> = Vec::new();
         let mut seen: BTreeSet<(PathBuf, String)> = BTreeSet::new();
-        for link in links {
+        let mut link_texts = Vec::new();
+        let mut has_unresolved = false;
+        for (link, span) in links.iter().zip(&spans) {
             let Some(resolved) = resolve_dependency_identity(
                 &index,
                 &dependent.path,
                 &link.target,
                 &link.block_id,
             ) else {
+                has_unresolved = true;
+                link_texts.push(
+                    original_child[span.full_start..span.full_end].to_string(),
+                );
+                warnings.push(format!(
+                    "kept unresolved or ambiguous dependency [[{}#^{}]] on {}#^{}",
+                    link.target,
+                    link.block_id,
+                    dependent.path.display(),
+                    block_id,
+                ));
                 continue;
             };
             let mapped = if sources.contains(&resolved) {
@@ -356,25 +344,18 @@ pub(crate) fn repoint_dependents(
                 resolved
             };
             if seen.insert(mapped.clone()) {
+                link_texts.push(dependency_format::canonical_link(
+                    &mapped.0,
+                    &mapped.1,
+                    &dependent.path,
+                    &index,
+                ));
                 ordered.push(mapped);
             }
         }
         // Drop the dependent's own identity if a self-edge would form;
         // the cycle validator refuses the batch first, so reaching here
         // means the self reference came from deduplication order.
-        let link_texts: Vec<String> = ordered
-            .iter()
-            .map(|(path, block)| {
-                dependency_format::canonical_link(
-                    path,
-                    block,
-                    &dependent.path,
-                    &index,
-                )
-            })
-            .collect();
-        let original_child =
-            lines.get(child.line_index).unwrap_or(&"").to_string();
         let mut note_lines: Vec<String> =
             contents.lines().map(str::to_string).collect();
         if link_texts.is_empty() {
@@ -389,10 +370,8 @@ pub(crate) fn repoint_dependents(
         // Rebuild derived fields from the kept dependency ids.
         let task_line =
             note_lines.get(task.line_index).cloned().unwrap_or_default();
-        let metadata = task_status_hooks::task_metadata(
-            &task_line,
-            Some(&dependent.block_id),
-        );
+        let metadata =
+            task_status_hooks::task_metadata(&task_line, Some(block_id));
         let mut kept_field_ids: Vec<String> = Vec::new();
         let mut seen_fields = BTreeSet::new();
         for (path, block) in &ordered {
@@ -401,6 +380,17 @@ pub(crate) fn repoint_dependents(
             };
             if seen_fields.insert(id.clone()) {
                 kept_field_ids.push(id);
+            }
+        }
+        // R4 keeps unaccounted [dependsOn::] values as healing breadcrumbs
+        // while any accepted line target remains unresolved. Mirror that
+        // production policy instead of erasing metadata whose identity is
+        // still uncertain.
+        if has_unresolved {
+            for id in &metadata.depends_on {
+                if seen_fields.insert(id.clone()) {
+                    kept_field_ids.push(id.clone());
+                }
             }
         }
         // Preserve the existing task id; only the dependsOn list
@@ -424,15 +414,13 @@ pub(crate) fn repoint_dependents(
             remove_blocks_entry(staged, source, &identity, context);
         }
         add_blocks_entry(staged, target, &identity, context)?;
-        repointed.push(format!(
-            "{}#^{}",
-            dependent.path.display(),
-            dependent.block_id
-        ));
+        repointed.push(format!("{}#^{}", dependent.path.display(), block_id));
     }
     repointed.sort();
     repointed.dedup();
-    Ok(repointed)
+    warnings.sort();
+    warnings.dedup();
+    Ok((repointed, warnings))
 }
 
 /// Read the `[id::]` of the task at `line_index` by re-scanning the
@@ -738,7 +726,14 @@ pub(crate) fn successor_orphans(
     context: &MergeContext<'_>,
 ) -> Vec<String> {
     let index = context.note_index.with_additional(notes.keys().cloned());
-    let wanted_key = relation_label_key("starts after");
+    let wanted_keys = context
+        .successor_labels
+        .iter()
+        .map(|label| label.key.clone())
+        .collect::<BTreeSet<_>>();
+    if wanted_keys.is_empty() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     for (path, contents) in notes {
         let lines: Vec<&str> = contents.lines().collect();
@@ -765,7 +760,7 @@ pub(crate) fn successor_orphans(
                         .as_deref()
                         .map(relation_label_key)
                         .unwrap_or_default();
-                    if label_key != wanted_key {
+                    if !wanted_keys.contains(&label_key) {
                         continue;
                     }
                     let resolved = if entry.target.is_empty() {
@@ -837,7 +832,9 @@ pub(crate) fn classify_source(
             context,
         ),
     };
-    if matches_task_edge {
+    if matches_task_edge
+        && located.task.status_type == note_tasks::TaskStatusType::Cancelled
+    {
         return Ok((SourceOutcome::Unchanged, SourceDisposition::Closed));
     }
     Ok((SourceOutcome::AlreadyClosed, SourceDisposition::Closed))
@@ -914,7 +911,14 @@ fn section_log_matches(
     let Some(contents) = snapshot.notes.get(source_path) else {
         return false;
     };
-    let lines: Vec<&str> = contents.lines().collect();
+    let scan = note_tasks::scan(contents, context.task_settings);
+    let Some(task) = scan
+        .tasks()
+        .iter()
+        .find(|task| task.line_index == *source_line)
+    else {
+        return false;
+    };
     let Ok(note_path) = section_note_path(snapshot, note, context) else {
         return false;
     };
@@ -929,11 +933,50 @@ fn section_log_matches(
     let note_target =
         note_path.with_extension("").to_string_lossy().into_owned();
     let reason = section_provenance_reason(&note_target, &heading);
-    // The Cancel Log holds dated entries; match the reason suffix.
-    lines
+    cancel_log_has_reason(contents, task.line_index, task.block_end, &reason)
+}
+
+/// Match one dated reason only inside this task's direct managed Cancel Log.
+/// Prose, fences, and later sibling tasks cannot establish merge identity.
+fn cancel_log_has_reason(
+    contents: &str,
+    task_line: usize,
+    task_block_end: usize,
+    reason: &str,
+) -> bool {
+    let lines = task_status_hooks::logical_lines(contents);
+    let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
+    let direct = blocks_mod::direct_child_lines(&lines, &fenced, task_line);
+    let Some(log_position) = direct
         .iter()
-        .skip(*source_line + 1)
-        .any(|line| line.contains(&reason))
+        .position(|index| blocks_mod::is_cancel_log(lines[*index]))
+    else {
+        return false;
+    };
+    let log_line = direct[log_position];
+    let end_line = direct.get(log_position + 1).copied().unwrap_or_else(|| {
+        crate::native::capture::line_spans(contents)
+            .iter()
+            .position(|line| line.end > task_block_end)
+            .unwrap_or(lines.len())
+    });
+    (log_line + 1..end_line).any(|line_index| {
+        if fenced.contains(&line_index) {
+            return false;
+        }
+        let line = lines[line_index].trim_start();
+        let Some(item) = line.strip_prefix("- ") else {
+            return false;
+        };
+        let Some(dated) = item.strip_prefix('*') else {
+            return false;
+        };
+        dated
+            .split_once("* — ")
+            .is_some_and(|(date, entry_reason)| {
+                !date.is_empty() && entry_reason == reason
+            })
+    })
 }
 
 fn section_note_path(
@@ -1033,6 +1076,13 @@ pub(crate) fn stage_task_provenance(
         staged_source
     };
     staged.insert(source.0.clone(), staged_source);
+
+    // Relation mirrors are optional. Merge writes the source LINKS edge even
+    // when the caller has disabled target-side LINKED FROM lines; mention
+    // mirrors remain owned by the separate mention planner.
+    if !context.relation_policy.linked_from_lines {
+        return Ok(());
+    }
 
     // Target LINKED FROM edit via the desired-after-delta planner.
     let target_contents = staged.get(&target.0).cloned().ok_or_else(|| {
@@ -1270,7 +1320,12 @@ pub(crate) fn stage_section_provenance(
     let note_target =
         note_path.with_extension("").to_string_lossy().into_owned();
     let reason = section_provenance_reason(&note_target, heading);
-    if contents.contains(&reason) {
+    if cancel_log_has_reason(
+        &contents,
+        task.line_index,
+        task.block_end,
+        &reason,
+    ) {
         return Ok(());
     }
     let edited = task_cancel::line::edit_source_create_log(
@@ -1445,36 +1500,46 @@ pub(crate) fn apply_retirement(
     };
     if section_heading.is_some() && !dependents.is_empty() {
         let first = &dependents[0];
-        return Err(MergeError::new(
-            "merge_section_has_dependents",
+        let message = if let Some(block_id) = &first.block_id {
             format!(
                 "“{}” waits on ^{}; merge into a task so it can wait there",
-                first.block_id, first.block_id,
-            ),
-        ));
+                first.description, block_id,
+            )
+        } else {
+            format!(
+                "“{}” in {}:{} depends on a merge source but has no block id; add an id before merging into a section",
+                first.description,
+                first.path.display(),
+                first.line_index + 1,
+            )
+        };
+        return Err(MergeError::new("merge_section_has_dependents", message));
     }
 
     // Cycle validation over the complete proposed batch graph.
+    let mut graph_warnings = Vec::new();
     if let Some(target) = &target_identity {
         let repoints: Vec<((PathBuf, String), (PathBuf, String))> = dependents
             .iter()
-            .map(|dependent| {
-                (
-                    (dependent.path.clone(), dependent.block_id.clone()),
+            .filter_map(|dependent| {
+                let block_id = dependent.block_id.as_ref()?;
+                Some((
+                    (dependent.path.clone(), block_id.clone()),
                     target.clone(),
-                )
+                ))
             })
             .filter(|(dependent, _)| dependent != target)
             .collect();
-        validate_repoint_cycles(&staged, &repoints, context)?;
+        validate_repoint_cycles(&staged, &repoints, &sources, context)?;
         // Stage graph changes before cancellation recovery.
-        let repointed = repoint_dependents(
+        let (repointed, warnings) = repoint_dependents(
             &mut staged,
             &dependents,
             &sources,
             target,
             context,
         )?;
+        graph_warnings = warnings;
         if !repointed.is_empty() {
             stamp_target_dependency_id(&mut staged, target, context);
         }
@@ -1545,23 +1610,32 @@ pub(crate) fn apply_retirement(
             .filter(|dependent| {
                 // T itself is never repointed even when it waits on S;
                 // its edge stays for normal cancel recovery (MG6).
-                let dependent_identity =
-                    (dependent.path.clone(), dependent.block_id.clone());
-                if target_identity.as_ref() == Some(&dependent_identity) {
+                let dependent_identity = dependent
+                    .block_id
+                    .as_ref()
+                    .map(|block_id| (dependent.path.clone(), block_id.clone()));
+                if target_identity.as_ref() == dependent_identity.as_ref() {
                     return false;
                 }
+                let Some(block_id) = dependent.block_id.as_deref() else {
+                    return false;
+                };
                 // Attribute dependents to the source they waited on by
                 // re-resolving the pre-repoint snapshot.
                 pre_repoint_waited_on(
                     snapshot,
                     &dependent.path,
-                    &dependent.block_id,
+                    block_id,
                     &identity,
                     context,
                 )
             })
             .map(|dependent| {
-                format!("{}#^{}", dependent.path.display(), dependent.block_id)
+                format!(
+                    "{}#^{}",
+                    dependent.path.display(),
+                    dependent.block_id.as_deref().unwrap_or_default()
+                )
             })
             .collect();
         reports.push(RetirementReports {
@@ -1569,6 +1643,7 @@ pub(crate) fn apply_retirement(
             successors_orphaned: orphans,
             dependents_repointed: repointed_here,
             links_pruned,
+            warnings: std::mem::take(&mut graph_warnings),
         });
     }
     // Idempotency guard for the gesture variants lives in

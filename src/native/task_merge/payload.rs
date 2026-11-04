@@ -38,6 +38,106 @@ struct RawPayload {
     contents: String,
 }
 
+/// Validate source identities and structural relationships for the complete
+/// request, including sources that are already closed. This deliberately does
+/// not resolve or create the destination container, so an unchanged retry can
+/// remain harmless when the original container has since disappeared.
+pub(crate) fn validate_merge_request(
+    snapshot: &VaultSnapshot,
+    request: &MergeRequest,
+    context: &MergeContext<'_>,
+) -> Result<(), MergeError> {
+    if request.sources.is_empty() {
+        return Err(MergeError::new(
+            "merge_no_sources",
+            "select at least one source task",
+        ));
+    }
+
+    let mut sources = Vec::with_capacity(request.sources.len());
+    let mut identities = BTreeSet::new();
+    for locator in &request.sources {
+        let located = task_locator::resolve_task(
+            &snapshot.notes,
+            &locator_text(locator),
+            context.task_settings,
+        )
+        .map_err(|error| MergeError::new(error.code, error.message))?;
+        let identity = (
+            located.path.clone(),
+            located.task.block_id.clone().unwrap_or_default(),
+        );
+        if !identities.insert(identity) {
+            return Err(MergeError::new(
+                "merge_duplicate_source",
+                format!(
+                    "source ^{} was selected more than once",
+                    locator.block_id
+                ),
+            ));
+        }
+        let lines =
+            capture::line_spans(note_contents(snapshot, &located.path)?);
+        let source_line = lines
+            .get(located.task.line_index)
+            .map(|line| line.text)
+            .ok_or_else(|| {
+                MergeError::new(
+                    "task_not_found",
+                    format!(
+                        "no task `^{}` in `{}`",
+                        locator.block_id,
+                        located.path.display()
+                    ),
+                )
+            })?;
+        if task_complete::is_recurring_task_line(source_line) {
+            return Err(MergeError::new(
+                "merge_source_recurring",
+                format!("^{} is recurring", locator.block_id),
+            ));
+        }
+        if located.task.block_id.as_deref() == Some("prj") {
+            return Err(MergeError::new(
+                "merge_source_project",
+                "the ^prj task cannot be merged",
+            ));
+        }
+        sources.push(SourceWork {
+            prepared: PreparedSource {
+                locator: locator.clone(),
+                path: located.path.clone(),
+                line: located.line,
+                block_id: located.task.block_id.clone().unwrap_or_default(),
+                title: String::new(),
+                previous_status: located.task.status_symbol,
+                disposition: SourceDisposition::from(&located),
+                moved_lines: 0,
+                moved_notes: 0,
+            },
+            start_offset: line_start_offset(&lines, located.task.line_index),
+            located,
+            child_ranges: Vec::new(),
+            child_fragments: Vec::new(),
+        });
+    }
+
+    let target_task = target_task(snapshot, &request.target, context)?;
+    validate_target_and_source_ranges(
+        snapshot,
+        &sources,
+        target_task.as_ref(),
+    )?;
+    for source in &sources {
+        source_payload(
+            note_contents(snapshot, &source.located.path)?,
+            &source.located,
+            context,
+        )?;
+    }
+    Ok(())
+}
+
 /// Prepare destination payloads and anchor/link repair without retiring
 /// sources or applying dependency, cancellation, and offer effects.
 pub(crate) fn prepare_task_merge(
@@ -161,7 +261,7 @@ pub(crate) fn prepare_task_merge(
         if source.prepared.disposition == SourceDisposition::Closed {
             continue;
         }
-        let (child_ranges, child_fragments) = source_payload(
+        let (child_ranges, child_fragments, moved_notes) = source_payload(
             note_contents(snapshot, &source.located.path)?,
             &source.located,
             context,
@@ -170,7 +270,7 @@ pub(crate) fn prepare_task_merge(
             .iter()
             .map(|range| range.end.saturating_sub(range.start))
             .sum();
-        source.prepared.moved_notes = child_ranges.len();
+        source.prepared.moved_notes = moved_notes;
         source.child_ranges = child_ranges;
         source.child_fragments = child_fragments;
     }
@@ -354,7 +454,7 @@ fn source_payload(
     contents: &str,
     source: &LocatedTask,
     context: &MergeContext<'_>,
-) -> Result<(Vec<LineRange>, Vec<(String, String)>), MergeError> {
+) -> Result<(Vec<LineRange>, Vec<(String, String)>, usize), MergeError> {
     let lines = capture::line_spans(contents);
     let tasks = note_tasks::scan(contents, context.task_settings);
     let open_nested = tasks
@@ -384,9 +484,6 @@ fn source_payload(
         &source.task,
         context.task_settings,
     );
-    if children.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
     let end_line = lines
         .iter()
         .position(|line| line.end > source.task.block_end)
@@ -408,25 +505,40 @@ fn source_payload(
             .unwrap_or("\t")
             .to_string()
     });
+    // Direct list roots define the boundaries of managed child blocks, but
+    // authored bytes also include continuations before the first root and
+    // paragraphs, tables, or fences with no wrapper bullet. Move the whole
+    // task body, cutting out only direct managed roots and their nested bodies.
+    let body_start = source.task.line_index + 1;
     let mut ranges = Vec::new();
-    let mut fragments = Vec::new();
+    let mut cursor = body_start;
     for (offset, child) in children.iter().enumerate() {
-        if child.kind.is_managed() {
+        if !child.kind.is_managed() {
             continue;
         }
         let end = children
             .get(offset + 1)
             .map(|next| next.line_index)
             .unwrap_or(end_line);
-        if child.line_index >= end {
-            continue;
+        if cursor < child.line_index {
+            ranges.push(LineRange {
+                start: cursor,
+                end: child.line_index,
+            });
         }
-        let range = LineRange {
-            start: child.line_index,
-            end,
-        };
-        let fragment = transplant::cut_line_range(contents, &range)
-            .ok_or_else(|| {
+        cursor = cursor.max(end);
+    }
+    if cursor < end_line {
+        ranges.push(LineRange {
+            start: cursor,
+            end: end_line,
+        });
+    }
+
+    let mut fragments = Vec::new();
+    for range in &ranges {
+        let fragment =
+            transplant::cut_line_range(contents, range).ok_or_else(|| {
                 MergeError::new(
                     "merge_source_structure",
                     format!(
@@ -435,10 +547,23 @@ fn source_payload(
                     ),
                 )
             })?;
-        ranges.push(range);
         fragments.push((fragment, source_unit.clone()));
     }
-    Ok((ranges, fragments))
+    let authored_roots = children
+        .iter()
+        .filter(|child| !child.kind.is_managed())
+        .count();
+    let moved_notes = if authored_roots > 0 {
+        authored_roots
+    } else if fragments
+        .iter()
+        .any(|(fragment, _)| !fragment.trim().is_empty())
+    {
+        1
+    } else {
+        0
+    };
+    Ok((ranges, fragments, moved_notes))
 }
 
 fn build_payloads(

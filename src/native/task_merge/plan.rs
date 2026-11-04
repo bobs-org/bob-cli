@@ -9,17 +9,19 @@ use super::super::{
     capture_task_toggle::set_task_line_status,
     freshness::stamp_fresh,
     note_tasks,
+    pomodoro::pomodoros_section_range,
     task_cancel::{self, TaskIdentity},
     task_complete::successors::{
         self as successors, DayView, SuccessorPlacement, SuccessorTarget,
     },
     task_locator::{self, LocatedTask},
     task_move::VaultSnapshot,
+    task_status_hooks::{logical_lines, scan_pomodoros},
     vault_links::LinkResolution,
 };
 use super::{
     containers,
-    payload::prepare_task_merge,
+    payload::{prepare_task_merge, validate_merge_request},
     retirement::{
         self, classify_source, normalize_merge_label, RetirementReports,
         SourceOutcome,
@@ -52,6 +54,7 @@ pub(crate) fn plan_task_merge(
         ));
     }
     let label = normalize_merge_label(&request.label)?;
+    validate_merge_request(snapshot, request, context)?;
     let target_identity = target_identity(snapshot, &request.target, context)?;
 
     let mut sources = Vec::with_capacity(request.sources.len());
@@ -189,6 +192,11 @@ pub(crate) fn plan_task_merge(
         .as_ref()
         .map(|prepared| prepared.warnings.clone())
         .unwrap_or_default();
+    warnings.extend(
+        retirement_reports
+            .iter()
+            .flat_map(|report| report.warnings.iter().cloned()),
+    );
 
     if let Some(target_identity) = target_identity.as_ref()
         && !prune.removed_slots.is_empty()
@@ -206,13 +214,28 @@ pub(crate) fn plan_task_merge(
             .removed_slots
             .iter()
             .filter(|slot| active_sources.contains(&slot.task))
-            .min_by_key(|slot| (slot.entry_index, slot.original_line));
+            .min_by_key(|slot| {
+                (
+                    slot.entry_index,
+                    slot.original_line,
+                    slot.task.path.clone(),
+                    slot.task.block_id.clone(),
+                )
+            });
         if let Some(slot) = slot {
+            let Some((slot_entry_index, _)) =
+                rebase_pruned_slot(day_text, slot)
+            else {
+                return Err(MergeError::new(
+                    "merge_offer_slot_missing",
+                    "the removed ledger link slot could not be found after staging",
+                ));
+            };
             let day_view =
                 DayView::parse(day_text, &context.daily_path, &note_index);
             if let Some(entry) = day_view
                 .entries
-                .get(slot.entry_index)
+                .get(slot_entry_index)
                 .filter(|entry| entry.open)
             {
                 let located_target =
@@ -241,6 +264,14 @@ pub(crate) fn plan_task_merge(
                         .or(prune.content.as_ref())
                         .map(String::as_str)
                         .unwrap_or_default();
+                    let Some((entry_index, line_index)) =
+                        rebase_pruned_slot(day_text, slot)
+                    else {
+                        return Err(MergeError::new(
+                            "merge_offer_slot_missing",
+                            "the removed ledger link slot could not be found after target edits",
+                        ));
+                    };
                     let link = successors::successor_link_text(
                         &target_identity.0,
                         &target_identity.1,
@@ -253,8 +284,8 @@ pub(crate) fn plan_task_merge(
                         &note_index,
                         vec![SuccessorPlacement {
                             target: SuccessorTarget::ExactSlot {
-                                entry_index: slot.entry_index,
-                                line_index: slot.insertion_line,
+                                entry_index,
+                                line_index,
                                 indent: slot.indentation.clone(),
                             },
                             block_link: link,
@@ -309,6 +340,36 @@ pub(crate) fn plan_task_merge(
         warnings,
         read_paths,
     })
+}
+
+/// Rebase a pruned slot onto the final staged daily note using its ledger
+/// header identity and the count of retained linked bullets before it.
+fn rebase_pruned_slot(
+    day_text: &str,
+    slot: &task_cancel::prune::PrunedLinkSlot,
+) -> Option<(usize, usize)> {
+    let lines = logical_lines(day_text);
+    let section = pomodoros_section_range(&lines)?;
+    let model = scan_pomodoros(&lines, section);
+    let entry_index = model
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.context == slot.entry_context)
+        .nth(slot.entry_ordinal)
+        .map(|(index, _)| index)?;
+    let entry = model.entries.get(entry_index)?;
+    if !entry.open {
+        return None;
+    }
+    let line_index = model
+        .bullets
+        .iter()
+        .filter(|bullet| bullet.entry_index == entry_index)
+        .nth(slot.retained_bullets_before)
+        .map(|bullet| bullet.line_index)
+        .unwrap_or(entry.end_line);
+    Some((entry_index, line_index))
 }
 
 fn target_descriptor(

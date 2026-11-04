@@ -35,7 +35,11 @@ pub(crate) struct PrunedLinkSlot {
     pub(crate) task: TaskIdentity,
     pub(crate) entry_index: usize,
     pub(crate) original_line: usize,
-    pub(crate) insertion_line: usize,
+    /// Stable ledger-header identity used to rebase after other staged writes.
+    pub(crate) entry_context: String,
+    pub(crate) entry_ordinal: usize,
+    /// Number of retained linked bullets before this slot in the pruned entry.
+    pub(crate) retained_bullets_before: usize,
     pub(crate) indentation: String,
 }
 
@@ -204,18 +208,45 @@ pub(crate) fn prune_daily(
     }
     let end_index = original_to_output.len() - 1;
     original_to_output[end_index] = output_line;
+    let output_lines = logical_lines(&output);
+    let output_section = pomodoros_section_range(&output_lines);
+    let output_model =
+        output_section.map(|section| scan_pomodoros(&output_lines, section));
     let removed_slots = matches
         .iter()
         .filter_map(|matched| {
-            original_to_output.get(matched.bullet_line).copied().map(
-                |insertion_line| PrunedLinkSlot {
-                    task: matched.task.clone(),
-                    entry_index: matched.entry_index,
-                    original_line: matched.bullet_line,
-                    insertion_line,
-                    indentation: matched.indentation.clone(),
-                },
-            )
+            let entry = model.entries.get(matched.entry_index)?;
+            let entry_ordinal = model.entries[..matched.entry_index]
+                .iter()
+                .filter(|candidate| candidate.context == entry.context)
+                .count();
+            let output_model = output_model.as_ref()?;
+            let output_entry_index = output_model
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| candidate.context == entry.context)
+                .nth(entry_ordinal)
+                .map(|(index, _)| index)?;
+            let insertion_line =
+                original_to_output.get(matched.bullet_line).copied()?;
+            let retained_bullets_before = output_model
+                .bullets
+                .iter()
+                .filter(|bullet| {
+                    bullet.entry_index == output_entry_index
+                        && bullet.line_index < insertion_line
+                })
+                .count();
+            Some(PrunedLinkSlot {
+                task: matched.task.clone(),
+                entry_index: matched.entry_index,
+                original_line: matched.bullet_line,
+                entry_context: entry.context.clone(),
+                entry_ordinal,
+                retained_bullets_before,
+                indentation: matched.indentation.clone(),
+            })
         })
         .collect();
     PruneResult {
