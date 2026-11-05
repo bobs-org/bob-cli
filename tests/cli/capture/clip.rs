@@ -567,6 +567,52 @@ fn capture_history_provider_failures_leave_the_vault_untouched() {
 }
 
 #[test]
+fn stale_counted_clipboard_history_refuses_without_writing() {
+    let temp = TempDir::new("bob-cli-stale-clipboard-history");
+    let vault = temp.path().join("vault");
+    let inbox = vault.join("mac_inbox.md");
+    let clipboard = temp.path().join("clipboard");
+    let history = temp.path().join("history");
+    write_file(&inbox, "sentinel\n");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'new\\n'\n");
+    write_executable(
+        &history,
+        "#!/bin/sh\nprintf '%s\\n' '[\"old\",\"older\",\"oldest\"]'\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("task %c3")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &history)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("stale counted clipboard capture");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("error JSON");
+    assert_eq!(json["code"], "clipboard_history_mismatch", "{json}");
+    assert!(json["error"]
+        .as_str()
+        .expect("error message")
+        .contains("doesn't match the live clipboard"));
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .ends_with("`%c` still captures the live clipboard alone"));
+    assert_eq!(
+        fs::read_to_string(&inbox).expect("read inbox"),
+        "sentinel\n"
+    );
+    assert!(!vault.join("img").exists());
+    assert!(!vault.join("file").exists());
+}
+
+#[test]
 fn capture_clipboard_history_config_selects_the_provider() {
     let temp = TempDir::new("bob-cli-capture-history-config");
     let vault = temp.path().join("vault");
@@ -612,6 +658,8 @@ fn capture_clipboard_history_config_selects_the_provider() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
+        .arg("-f")
+        .arg("json")
         .arg("task %c2")
         .env("BOB_CLIPBOARD_CMD", &clipboard)
         .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
@@ -620,11 +668,10 @@ fn capture_clipboard_history_config_selects_the_provider() {
         .output()
         .expect("disabled history capture");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
-    assert!(
-        stderr(&output).contains("`off`"),
-        "{}",
-        format_output(&output)
-    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("off JSON");
+    assert_eq!(json["code"], "clipboard_history_unavailable", "{json}");
+    assert!(json["error"].as_str().unwrap().contains("`off`"));
 
     // An invalid value refuses with the config error, loudly.
     write_file(&config, "capture:\n  clipboard_history: spotlight\n");
@@ -632,6 +679,8 @@ fn capture_clipboard_history_config_selects_the_provider() {
         .arg("capture")
         .arg("-b")
         .arg(&vault)
+        .arg("-f")
+        .arg("json")
         .arg("task %c2")
         .env("BOB_CLIPBOARD_CMD", &clipboard)
         .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
@@ -640,11 +689,50 @@ fn capture_clipboard_history_config_selects_the_provider() {
         .output()
         .expect("invalid history config capture");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
-    assert!(
-        stderr(&output).contains("capture.clipboard_history"),
-        "{}",
-        format_output(&output)
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("invalid config JSON");
+    assert_eq!(json["code"], "clipboard_history_unavailable", "{json}");
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("capture.clipboard_history"));
+
+    // The environment provider outranks a valid config-selected command.
+    let configured = temp.path().join("configured-history");
+    write_executable(
+        &configured,
+        "#!/bin/sh\nprintf '%s\\n' '[\"live value\",\"config older\"]'\n",
     );
+    let environment = temp.path().join("environment-history");
+    write_executable(
+        &environment,
+        "#!/bin/sh\nprintf '%s\\n' '[\"live value\",\"environment older\"]'\n",
+    );
+    write_file(
+        &config,
+        &format!(
+            "capture:\n  clipboard_history: command\n  clipboard_history_command:\n    - {}\n",
+            configured.display()
+        ),
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("task %c2")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_CLIPBOARD_HISTORY_CMD", &environment)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("environment history override");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert!(json.to_string().contains("environment older"), "{json}");
+    assert!(!json.to_string().contains("config older"), "{json}");
 }
 
 #[test]

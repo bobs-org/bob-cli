@@ -123,7 +123,9 @@ Append a `%` directive at either edge of any physical line, with only \
 other markers between it and that edge. `%c` reads the clipboard into child \
 bullets of this item; `%c<N>` (N ≥ 2) captures that many values, starting \
 with the live clipboard and then recent history newest first. '%c1' is \
-equivalent to '%c'. `%n` files the item as a Pomodoro note (see below) and \
+equivalent to '%c'; N is a count, not a history index. Counted history is \
+used only when its newest entry matches the live clipboard within a 1.5-second \
+wait, and otherwise the capture refuses. `%n` files the item as a Pomodoro note (see below) and \
 composes with `%c`. `%l` queues a bare-URL reference with companion audio \
 (see below); anywhere else it refuses. Each directive appears at most once \
 per item. `%c` composes with s:<N>, $<N>, #<type>, and every route kind. \

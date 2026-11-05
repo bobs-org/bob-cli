@@ -58,7 +58,7 @@ pub(super) struct PlannedCaptureItem {
 #[derive(Clone)]
 pub(super) enum FanoutClipboardRead {
     Current(String),
-    History(Vec<String>),
+    History(capture_clip::AgreedClipboardHistory),
 }
 
 pub(super) fn plan_capture_batch(
@@ -1016,8 +1016,12 @@ fn read_capture_clipboard(
             capture_clip::read_clipboard().map_err(CaptureError::io)?,
         ),
         ClipRequest::History { count } => FanoutClipboardRead::History(
-            capture_clip::read_clipboard_history(count.get())
-                .map_err(CaptureError::io)?,
+            capture_clip::read_clipboard_history(count.get()).map_err(
+                |error: capture_clip::ClipboardHistoryError| match error.code {
+                    Some(code) => CaptureError::io_code(error.message, code),
+                    None => CaptureError::io(error.message),
+                },
+            )?,
         ),
     };
     if fanout_item {
@@ -2324,7 +2328,7 @@ pub(super) fn plan_capture_item(
             Some(
                 capture_clip::plan_history_with_reservations(
                     &request.bob_dir,
-                    &clipboards,
+                    &clipboards.values,
                     now,
                     clip_indent,
                     clip_reservations,

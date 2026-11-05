@@ -6815,6 +6815,26 @@ impl CaptureError {
         }
     }
 
+    pub(super) fn io_code(
+        message: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: message.into(),
+            code: Some(code.into()),
+            extra: None,
+            human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
+            typed: None,
+        }
+    }
+
     pub(super) fn pull_in_choice_required(
         extra: serde_json::Map<String, serde_json::Value>,
         human_unblocked: Vec<TaskCompleteUnblockedJson>,

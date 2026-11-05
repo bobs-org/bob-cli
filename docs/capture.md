@@ -1216,7 +1216,7 @@ content beneath the new task or bullet:
 - `%c<N>` (N ≥ 2) captures exactly that many values: the live clipboard
   first, followed by recent history newest first. For example,
   `bob capture research links %c3` captures three values. `%c1` is
-  equivalent to `%c`.
+  equivalent to `%c`. N is the total count, not a history index.
 
 Counted history comes from one clipboard manager, newest first, in the
 manager's own most-recently-used order — matching what its viewer shows —
@@ -1231,6 +1231,25 @@ or `off` (which refuses `%c<N>` while `%c` keeps working). A non-blank
 `BOB_CLIPBOARD_HISTORY_CMD` still overrides every config value. An invalid
 value refuses the counted capture with a config error instead of falling
 back silently.
+
+Before using counted history, Bob waits up to 1.5 seconds, polling every
+150 ms, for a provider's newest entry to match the normalized live clipboard.
+With `auto`, Bob tries providers in preference order and uses the first one
+that agrees. If none agrees, the capture refuses. The chosen provider must
+also have N text entries; a short history or a file/image entry at a requested
+position refuses the whole capture. `%c` still reads the live clipboard alone.
+If the manager skips the current copy because it was concealed, transient, or
+from an ignored app, counted capture refuses rather than adding older history.
+
+Clipboard history refusals keep exit status 1 and expose these stable JSON
+codes:
+
+| Code | Meaning |
+| --- | --- |
+| `clipboard_history_mismatch` | No provider's newest text entry matched the live clipboard before the wait ended. |
+| `clipboard_history_short` | The agreeing provider had fewer than N entries. |
+| `clipboard_history_not_text` | A requested history entry was a file, image, or unusable text value. |
+| `clipboard_history_unavailable` | History is disabled, the configuration is invalid, or the selected provider could not be read. |
 
 The marker composes with `s:<N>`, `$<N>`, `#<type>`, ordinary routes, bullet
 routes, ID-only task routes, and Pomodoro routes in either terminal order. A

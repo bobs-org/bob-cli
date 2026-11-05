@@ -1,7 +1,9 @@
 use std::{
+    cell::Cell,
     env, fs,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
+    time::{Duration, SystemTime},
 };
 
 use chrono::NaiveDateTime;
@@ -9,13 +11,16 @@ use rusqlite::Connection;
 
 use super::{
     alfred::read_alfred_history,
-    clipboard::{merge_history_candidates, normalize_clipboard_output},
+    clipboard::{normalize_clipboard_output, read_agreed_history},
     clipy::read_clipy_history,
     files::{
         classify_path_candidate, percent_decode, sanitize_file_name,
         sha256_hex, snippet_slug, PathState,
     },
-    history::{EntryKind, HistoryEntry, ProviderError},
+    history::{
+        CommandOrigin, EntryKind, HistoryEntry, HistoryProvider, ProviderError,
+        SelectionSource,
+    },
     persist::TEMP_COUNTER,
     plan::{
         is_structural_line, MAX_ATTACHMENT_COUNT, MAX_INLINE_CHARACTERS,
@@ -72,50 +77,323 @@ fn normalizes_clipboard_text_and_rejects_binary_or_empty() {
     );
 }
 
+fn fake_command_provider() -> HistoryProvider {
+    HistoryProvider::Command {
+        argv: vec!["fake-history".to_string()],
+        origin: CommandOrigin::Env,
+    }
+}
+
+fn fake_alfred_provider() -> HistoryProvider {
+    HistoryProvider::Alfred(PathBuf::from("/fake/clipboard.alfdb"))
+}
+
+fn fake_clipy_provider() -> HistoryProvider {
+    HistoryProvider::Clipy(PathBuf::from("/fake/sqlite.db"))
+}
+
+fn text_history(values: &[&str], at: Option<SystemTime>) -> Vec<HistoryEntry> {
+    values
+        .iter()
+        .map(|value| HistoryEntry::text(value.to_string(), at, None))
+        .collect()
+}
+
+fn agreement_time() -> SystemTime {
+    std::time::UNIX_EPOCH + Duration::from_secs(1_794_000_000)
+}
+
 #[test]
-fn merges_live_clipboard_with_up_to_date_and_lagging_histories() {
-    assert_eq!(
-        merge_history_candidates(
-            "current".to_string(),
-            vec![
-                "current".to_string(),
-                "older".to_string(),
-                "oldest".to_string(),
-            ],
-            3,
-        )
-        .expect("up-to-date history"),
-        ["current", "older", "oldest"]
-    );
-    assert_eq!(
-        merge_history_candidates(
-            "current".to_string(),
-            vec![
-                "older".to_string(),
-                "current".to_string(),
-                "oldest".to_string(),
-            ],
-            3,
-        )
-        .expect("lagging history"),
-        ["current", "older", "oldest"]
-    );
-    assert_eq!(
-        merge_history_candidates(
-            "same".to_string(),
-            vec!["same".to_string(), "same".to_string(), "older".to_string(),],
-            3,
-        )
-        .expect("later duplicate"),
-        ["same", "same", "older"]
-    );
-    let error = merge_history_candidates(
-        "current".to_string(),
-        vec!["older".to_string()],
+fn clipboard_history_agrees_on_the_first_poll() {
+    let provider = fake_command_provider();
+    let base = agreement_time();
+    let mut reads = 0;
+    let result = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
         3,
+        |_, count| {
+            reads += 1;
+            assert_eq!(count, 3);
+            Ok(text_history(&["live", "older", "oldest"], None))
+        },
+        || base,
+        |_| panic!("an immediate agreement must not sleep"),
+        |_| None,
     )
-    .expect_err("insufficient history");
-    assert!(error.contains("requested 3") && error.contains("only 2"));
+    .expect("matching history");
+    assert_eq!(reads, 1);
+    assert_eq!(result.values, ["live", "older", "oldest"]);
+    assert_eq!(result.provider, "command");
+    assert_eq!(result.entries.len(), 3);
+}
+
+#[test]
+fn clipboard_history_waits_for_a_lagging_provider_to_agree() {
+    let provider = fake_command_provider();
+    let base = agreement_time();
+    let elapsed = Cell::new(Duration::ZERO);
+    let reads = Cell::new(0);
+    let result = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
+        2,
+        |_, _| {
+            let attempt = reads.get();
+            reads.set(attempt + 1);
+            if attempt == 0 {
+                Ok(text_history(&["previous", "older"], None))
+            } else {
+                Ok(text_history(&["live", "previous"], None))
+            }
+        },
+        || base + elapsed.get(),
+        |duration| elapsed.set(elapsed.get() + duration),
+        |_| None,
+    )
+    .expect("provider catches up within the wait");
+    assert_eq!(reads.get(), 2);
+    assert_eq!(elapsed.get(), Duration::from_millis(150));
+    assert_eq!(result.values, ["live", "previous"]);
+}
+
+#[test]
+fn stale_clipboard_history_refuses_after_the_shared_deadline() {
+    let provider = fake_alfred_provider();
+    let base = agreement_time();
+    let stale = base - Duration::from_secs(16 * 24 * 60 * 60);
+    let elapsed = Cell::new(Duration::ZERO);
+    let reads = Cell::new(0);
+    let error = read_agreed_history(
+        "new".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::DefaultAuto,
+        3,
+        |_, _| {
+            reads.set(reads.get() + 1);
+            Ok(text_history(&["old", "older", "oldest"], Some(stale)))
+        },
+        || base + elapsed.get(),
+        |duration| elapsed.set(elapsed.get() + duration),
+        |_| Some(false),
+    )
+    .expect_err("stale history never agrees");
+    assert_eq!(error.code, Some("clipboard_history_mismatch"));
+    assert!(error.message.contains("newest entry 16 days old"));
+    assert!(error.message.contains("doesn't match the live clipboard"));
+    assert!(error
+        .message
+        .ends_with("`%c` still captures the live clipboard alone"));
+    assert_eq!(elapsed.get(), Duration::from_millis(1_500));
+    assert_eq!(reads.get(), 10);
+}
+
+#[test]
+fn concealed_live_clip_refuses_with_the_likely_cause_hint() {
+    let provider = fake_alfred_provider();
+    let base = agreement_time();
+    let elapsed = Cell::new(Duration::ZERO);
+    let error = read_agreed_history(
+        "secret".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::DefaultAuto,
+        2,
+        |_, _| {
+            Ok(text_history(
+                &["previous copy", "older"],
+                Some(base - Duration::from_secs(3)),
+            ))
+        },
+        || base + elapsed.get(),
+        |duration| elapsed.set(elapsed.get() + duration),
+        |_| Some(true),
+    )
+    .expect_err("history skipped the concealed copy");
+    assert_eq!(error.code, Some("clipboard_history_mismatch"));
+    assert!(error
+        .message
+        .contains("password-manager, transient, or ignored-app"));
+    assert_eq!(elapsed.get(), Duration::from_millis(1_500));
+}
+
+#[test]
+fn auto_uses_the_first_provider_that_agrees() {
+    let alfred = fake_alfred_provider();
+    let clipy = fake_clipy_provider();
+    let base = agreement_time();
+    let mut read_order = Vec::new();
+    let result = read_agreed_history(
+        "live".to_string(),
+        &[alfred, clipy],
+        &SelectionSource::DefaultAuto,
+        2,
+        |provider, _| {
+            read_order.push(match provider {
+                HistoryProvider::Alfred(_) => "Alfred",
+                HistoryProvider::Clipy(_) => "Clipy",
+                HistoryProvider::Command { .. } => "command",
+            });
+            if matches!(provider, HistoryProvider::Alfred(_)) {
+                Ok(text_history(&["stale", "older"], None))
+            } else {
+                Ok(text_history(&["live", "older"], None))
+            }
+        },
+        || base,
+        |_| panic!("a later provider agreed on the first poll"),
+        |_| None,
+    )
+    .expect("Clipy agrees after Alfred does not");
+    assert_eq!(read_order, ["Alfred", "Clipy"]);
+    assert_eq!(result.provider, "clipy");
+}
+
+#[test]
+fn busy_provider_is_retried_until_it_agrees() {
+    let provider = fake_command_provider();
+    let base = agreement_time();
+    let elapsed = Cell::new(Duration::ZERO);
+    let reads = Cell::new(0);
+    let result = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
+        2,
+        |_, _| {
+            let attempt = reads.get();
+            reads.set(attempt + 1);
+            if attempt == 0 {
+                Err(ProviderError::Busy("database is locked".to_string()))
+            } else {
+                Ok(text_history(&["live", "older"], None))
+            }
+        },
+        || base + elapsed.get(),
+        |duration| elapsed.set(elapsed.get() + duration),
+        |_| None,
+    )
+    .expect("busy provider recovered");
+    assert_eq!(reads.get(), 2);
+    assert_eq!(result.values, ["live", "older"]);
+}
+
+#[test]
+fn auto_skips_a_permanent_provider_failure() {
+    let alfred = fake_alfred_provider();
+    let clipy = fake_clipy_provider();
+    let base = agreement_time();
+    let result = read_agreed_history(
+        "live".to_string(),
+        &[alfred, clipy],
+        &SelectionSource::DefaultAuto,
+        2,
+        |provider, _| match provider {
+            HistoryProvider::Alfred(_) => Err(ProviderError::Unsupported(
+                "unsupported Alfred clipboard database".to_string(),
+            )),
+            HistoryProvider::Clipy(_) => {
+                Ok(text_history(&["live", "older"], None))
+            }
+            HistoryProvider::Command { .. } => unreachable!(),
+        },
+        || base,
+        |_| panic!("Clipy agreed on the first poll"),
+        |_| None,
+    )
+    .expect("auto skips Alfred and uses Clipy");
+    assert_eq!(result.provider, "clipy");
+}
+
+#[test]
+fn agreeing_history_must_be_complete_and_text() {
+    let provider = fake_command_provider();
+    let base = agreement_time();
+    let short = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
+        3,
+        |_, _| Ok(text_history(&["live", "older"], None)),
+        || base,
+        |_| panic!("the head agrees immediately"),
+        |_| None,
+    )
+    .expect_err("short history refuses");
+    assert_eq!(short.code, Some("clipboard_history_short"));
+    assert!(short.message.contains("requested 3 entries but only 2"));
+
+    let non_text = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
+        2,
+        |_, _| {
+            Ok(vec![
+                HistoryEntry::text("live".to_string(), None, None),
+                HistoryEntry::not_text("file or image".to_string(), None, None),
+            ])
+        },
+        || base,
+        |_| panic!("the head agrees immediately"),
+        |_| None,
+    )
+    .expect_err("non-text history refuses");
+    assert_eq!(non_text.code, Some("clipboard_history_not_text"));
+    assert!(non_text.message.contains("entry 2 is a file or image"));
+
+    let elapsed = Cell::new(Duration::ZERO);
+    let invalid_head = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
+        2,
+        |_, _| Ok(text_history(&["  \n", "older"], None)),
+        || base + elapsed.get(),
+        |duration| elapsed.set(elapsed.get() + duration),
+        |_| None,
+    )
+    .expect_err("an unnormalizable head never agrees");
+    assert_eq!(invalid_head.code, Some("clipboard_history_mismatch"));
+    assert!(invalid_head
+        .message
+        .contains("newest entry could not be normalized"));
+    assert!(invalid_head
+        .message
+        .contains("doesn't match the live clipboard"));
+}
+
+#[test]
+fn history_does_not_inspect_entries_beyond_the_requested_count() {
+    let provider = fake_command_provider();
+    let base = agreement_time();
+    let mut requested = 0;
+    let result = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
+        2,
+        |_, count| {
+            requested = count;
+            Ok(vec![
+                HistoryEntry::text("live".to_string(), None, None),
+                HistoryEntry::text("older".to_string(), None, None),
+                HistoryEntry::not_text(
+                    "unsupported surplus".to_string(),
+                    None,
+                    None,
+                ),
+            ])
+        },
+        || base,
+        |_| panic!("the head agrees immediately"),
+        |_| None,
+    )
+    .expect("surplus row is ignored");
+    assert_eq!(requested, 2);
+    assert_eq!(result.values, ["live", "older"]);
+    assert_eq!(result.entries.len(), 2);
 }
 
 #[test]
@@ -206,10 +484,7 @@ fn reads_clipy_sqlite_assets_in_deterministic_order() {
         .map(|value| normalize_clipboard_output(value.as_bytes().to_vec()))
         .collect::<Result<Vec<_>, _>>()
         .expect("normalize fixture history");
-    let error =
-        merge_history_candidates("newest\ntext".to_string(), normalized, 4)
-            .expect_err("fixture is insufficient for four entries");
-    assert!(error.contains("requested 4") && error.contains("only 3"));
+    assert_eq!(normalized.len(), 3);
     fs::remove_dir_all(root).expect("cleanup");
 }
 

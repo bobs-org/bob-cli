@@ -19,7 +19,10 @@ mod render;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use clipboard::{read_clipboard, read_clipboard_history};
+pub(crate) use clipboard::{
+    read_clipboard, read_clipboard_history, AgreedClipboardHistory,
+    ClipboardHistoryError,
+};
 pub(crate) use files::{attachment_reference, sha256_hex};
 pub(crate) use model::{
     AttachmentKind, AttachmentOutput, ClipMode, ClipOutput, ClipPlan,
