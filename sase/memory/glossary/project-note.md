@@ -9,5 +9,5 @@ context and work. Its [[project-task]] (`^prj`) states the completion criteria a
 represents the project's overall status; ordinary tasks describe work toward that
 outcome. A closed project remains a project note if its `^prj` task is archived. An
 `offclock: true|false` key sets the clock default for tasks on the root walk
-beneath it (see [[decisions:off-clock-follows-tag-then-note-default]]). See
+beneath it (see [[decisions:off-clock-follows-tag-then-note-default]]). `offclock_types` sets the clock off only for tasks whose effective type is listed and wins when both keys are present (see [[decisions:off-clock-note-defaults-filter-by-task-type]]). See
 `docs/projects.md`.

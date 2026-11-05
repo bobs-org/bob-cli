@@ -1,13 +1,16 @@
 ---
 keyword: Off-Clock Follows Tag Then Note Default
 aliases:
-  - offclock note default
-  - "#off #on tags"
-  - inherited off-clock
-summary: "A task's clock is #on, then #off (or a deprecated alias), then the nearest area/project offclock default on its root walk, then on-clock; writers stamp that effective clock and closed rows stay frozen."
+- offclock note default
+- '#off #on tags'
+- inherited off-clock
+summary: 'A task''s clock is #on, then #off (or a deprecated alias), then the nearest
+  area/project offclock default on its root walk, then on-clock; writers stamp that
+  effective clock and closed rows stay frozen.'
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-11-03
+  superseded_by: decisions:off-clock-note-defaults-filter-by-task-type
 ---
 
 # Off-Clock Follows Tag Then Note Default
@@ -56,3 +59,5 @@ Evidence: `plan:202611/off_on_tags_and_offclock_areas.md`;
 See [[decisions:off-clock-pomodoros-count-apart]],
 [[glossary:off-clock-pomodoro]], [[glossary:event-task]],
 [[glossary:area-note]], and [[glossary:project-note]].
+
+[[decisions:off-clock-note-defaults-filter-by-task-type]] retires the note-default rule in part: `offclock_types` on the nearest area or project note decides by effective task type and overrides a same-note `offclock:`.
