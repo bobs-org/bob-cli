@@ -108,8 +108,6 @@
   location: /reference/capture-syntax/#equals-start
 - query: "=<X>"
   location: /reference/capture-syntax/#equals-start
-- query: "=<X>#pomodoro"
-  location: /reference/capture-syntax/#equals-named
 - query: "=name"
   location: /reference/capture-syntax/#equals-named
 - query: "=/[base][#type…]"

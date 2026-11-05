@@ -453,8 +453,10 @@ another thin client of that service (see `docs/capture.md`
   the `x` line. The exact lone `+` remains an action; capture completion
   separately opens the parent-task picker, while shell completion offers
   only identified `@route+block-id` values in the `parent tasks` group.
-- **Named starts and links complete Pomodoro names.** `=name`, `=#name`,
-  and link-name suffixes use today's entries plus the type catalog. Recent
+- **Named starts and links complete Pomodoro names.** Bare starts use `=name`
+  with timing glued before or after it (`=3name`, `=name3`); a bare start uses
+  `#` only for names it cannot spell bare. Link-name suffixes use today's
+  entries plus the type catalog. Recent
   rows exclude hidden types and components already represented by Today;
   at most 5 appear for an empty query and 12 for a nonempty query. They are
   grouped `Recent` with last-use and day-count descriptions. Acceptance

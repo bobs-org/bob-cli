@@ -300,10 +300,11 @@ name directly after `=`: `=bugs`, `=3bugs`, `=bugs3`, `=fix3~2`. Bare names \
 start with a letter, contain no `-`, do not end in a digit, and cannot read \
 like a close. Use `#` only for a name that needs it, such as `=3#deep-work`, \
 `=#2fa`, or `=#x2`; quoted names keep their quotes. \
-`=deep-work` teaches `=#deep-work`; `=3#bugs` teaches `=3bugs`, because `#` \
-is only for names a bare start cannot spell. A timing can precede or follow \
-a bare name (`=3bugs` or `=bugs3`); `@` and a second timing are retired. \
-`=bugs@3` teaches `=bugs3`, and `=bugs3~2` starts BUGS without queued Task \
+`#` is needed when a bare spelling cannot express the name; Bob teaches the \
+escaped selector when a bare name contains a dash. A timing can precede or \
+follow a bare name (`=3bugs` or `=bugs3`); the old `@` separator and a \
+second timing are retired and get a glued rewrite. `=bugs3~2` starts BUGS \
+without queued Task \
 Link 2. An open match (whole slug, else prefix) starts in place, a completed \
 match starts a new session with that name (an again start), and otherwise \
 a new named session is created and started. A trailing `~<K>` drop list (for \

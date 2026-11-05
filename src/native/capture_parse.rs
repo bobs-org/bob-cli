@@ -253,8 +253,8 @@ starts 25 minutes with a 10-minute offset) reports mode 'pomodoro_start' \
 with a `pomodoro_start` object (`raw` excludes `=`, plus 5-minute \
 `duration_units`/`offset_units` and the additive `drop` list) and a \
 `pomodoro_start` span covering the `=` and leading X, plus a separate span \
-for trailing X (only timing spans when a `~<K>` drop is present, with a \
-`pomodoro_start_drop` span covering `~<K>` including the `~`); the human \
+for trailing X; a `~<K>` drop part adds a `pomodoro_start_drop` span covering \
+`~<K>` including the `~`. The human \
 `start` line reads `=3bugs~1,3 (15m, offset 0u · drop 1, 3)`. Every claimed \
 doubled start (`==`, `==3#deep-work`, \
 `==#`, `==~`, `==#deep-work=3`) reports mode 'pomodoro_start' with an \
@@ -269,7 +269,7 @@ with child lines, and an oversized suffix report 'pomodoro_start' plus an \
 `invalid_pomodoro_start` diagnostic (the extra text, the child line, or \
 the token for overflow), while `bob capture` keeps its strict execution \
 errors for the same text. A trailing `~<K>` drop list (`=~2`, `=3~2,4`, \
-`=3#bugs~1`) starts the next session without those queued Task Links; a \
+`=3bugs~1`) starts the next session without those queued Task Links; a \
 dangling `~`/`,` (`=~`, `=~2,`) reports mode 'incomplete' needing \
 `pomodoro_start_task` with the partial spec, the spans typed so far, and \
 one `interactive_placeholder` span over the separator, and every malformed \
@@ -285,9 +285,9 @@ only needed for names a bare spelling cannot express, such as `deep-work`, \
 `2fa`, or `x2`. `=<X>#` with no name reports mode 'incomplete' needing \
 `pomodoro_name` with an `interactive_placeholder` span over `#` and the partial \
 `pomodoro_start` spec, and `x#name` reports mode 'pomodoro_close' with an \
-`invalid_pomodoro_close` diagnostic over `#name`. Retired separators and \
-redundant hashes (`=bugs@3`, `=3#bugs`) report `invalid_pomodoro_start` \
-with a teaching rewrite (`=bugs3`, `=3bugs`); a dashed bare name such as \
+`invalid_pomodoro_close` diagnostic over `#name`. Retired timing separators \
+and redundant `#` prefixes report `invalid_pomodoro_start` with a teaching \
+rewrite; a dashed bare name such as \
 `=deep-work` teaches `=#deep-work`. A trailing timing follows a bare name \
 (`=bugs3`); timing for a `#` name stays before it (`=3#deep-work`). \
 A whole-item \
@@ -356,7 +356,7 @@ and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' (or \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
 list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
 `=name` items, and neither is ever rewritten. \
-A whole-item `x=` past (`x=` starts now, `x` stops now, `x=` records what already happened: everything before the second `=` is time, everything after it is tasks) is lowercase only and must start an item or sit inside a same-line session chain; `X=3` and mid-body `Plan x=3` stay prose, while every `x=` token is claimed as valid, invalid, or unfinished, never prose. It reports mode 'pomodoro_past' with `section` carrying the typed name and a `pomodoro_past` object (`raw` exactly as typed, `name` (null when unnamed), `name_is_literal`, `blocks` (default 5), `minutes` (`blocks` times 5), `repair`, `stack` (`index` 1-based in typed order, `size`, `offset_blocks` summed from later members), and `close` in the existing close-spec shape including `log`). Names follow the `=name` rules: bare names need an ASCII letter, contain no `-`, do not end in a digit, and must not be close-shaped (digit-led needs `#`: `x=#2fa`; `x=2fa` starts FA for 10 minutes); a bare name takes one glued count on either side (`x=3fix`, `x=fix3`), and bytes `=name` rejects report its `Pomodoro name` wording; unquoted names end at `!`, `=`, `@`, `~`, `*`, `-`, and whitespace, while `#\"literal\"` quotes (straight or curly) canonicalize like `=#\"…\"`, match by key equality, and run through the closing quote (so `!`/`=` inside quotes are name content, not delimiters). The repair `!` binds to `E`, and everything after the second `=` goes to the close lexer unchanged (including `x=3=1,` needing `pomodoro_close_task` and `x= 2` needing `pomodoro_close_log_text`); an `x=` token counts as a close for chain ownership, inline entries, and child bullets. Spans cover `x=` plus a leading count (`pomodoro_past`), a trailing count (`pomodoro_past`), the name only (`pomodoro_name`), the repair `!` (`pomodoro_past_repair`), the second `=` (`pomodoro_close`), plus the existing close sub-spans and `pomodoro_close_log_index` entries. Malformed `E` reports `invalid_pomodoro_past` (usage error from `bob capture`): `x=3-1`/`x=-2`/`x=3-`/`x=fix-`/`x=fix3-1`/`x=3-1fix` take no offset (`x=3`, `x=`, `x=3`, `x=fix`, `x=fix3`, `x=3fix`); `x=3fix2` gives the timing twice (`x=3fix` or `x=fix2`); `x=fix@3`/`x=build@` retire `@` (`x=fix3`, `x=build3`); `x=3#fix`/`x=#fix` retire `#` (`x=3fix`, `x=fix`); `x=deep-work` puts `-` in a bare name (`x=#deep-work`); `x=~2`/`x=3~2`/`x=fix3~2` drop after a second `=` (`x==~2`, `x=3=~2`, `x=fix3=~2`); `x=*3` parks after a second `=` (`x==*3`); `x=0`/`x=fix0` need one block (`x=1`, `x=fix1`); `x=/…`/`x=*build` never split/merge; `x=1!2`/`x=!2` select after a second `=` (`x==1!2`, `x==!2`); `x=fix!2` selects after a second `=` (`x=fix=!2`, repair `x=fix!=!2`); `x=3x` needs `#` (`x=3#x`); every rewrite is built from the typed count, name, repair `!`, and close part (`x=*5` → `x==*5`, `x=2#build@4` → `x=2build`); oversized counts reuse the start `too large` wording; `x=#`/`x=3#`/`x=#\"DEEP` need `pomodoro_name`. \
+A whole-item `x=` past (`x=` starts now, `x` stops now, `x=` records what already happened: everything before the second `=` is time, everything after it is tasks) is lowercase only and must start an item or sit inside a same-line session chain; `X=3` and mid-body `Plan x=3` stay prose, while every `x=` token is claimed as valid, invalid, or unfinished, never prose. It reports mode 'pomodoro_past' with `section` carrying the typed name and a `pomodoro_past` object (`raw` exactly as typed, `name` (null when unnamed), `name_is_literal`, `blocks` (default 5), `minutes` (`blocks` times 5), `repair`, `stack` (`index` 1-based in typed order, `size`, `offset_blocks` summed from later members), and `close` in the existing close-spec shape including `log`). Names follow the `=name` rules: bare names need an ASCII letter, contain no `-`, do not end in a digit, and must not be close-shaped (digit-led needs `#`: `x=#2fa`; `x=2fa` starts FA for 10 minutes); a bare name takes one glued count on either side (`x=3fix`, `x=fix3`), and bytes `=name` rejects report its `Pomodoro name` wording; unquoted names end at `!`, `=`, `@`, `~`, `*`, `-`, and whitespace, while `#\"literal\"` quotes (straight or curly) canonicalize like `=#\"…\"`, match by key equality, and run through the closing quote (so `!`/`=` inside quotes are name content, not delimiters). The repair `!` binds to `E`, and everything after the second `=` goes to the close lexer unchanged (including `x=3=1,` needing `pomodoro_close_task` and `x= 2` needing `pomodoro_close_log_text`); an `x=` token counts as a close for chain ownership, inline entries, and child bullets. Spans cover `x=` plus a leading count (`pomodoro_past`), a trailing count (`pomodoro_past`), the name only (`pomodoro_name`), the repair `!` (`pomodoro_past_repair`), the second `=` (`pomodoro_close`), plus the existing close sub-spans and `pomodoro_close_log_index` entries. Malformed `E` reports `invalid_pomodoro_past` (usage error from `bob capture`): past records have no offsets; a second count, zero count, close-shaped bare name, dashed bare name, retired `@` separator, or redundant `#` prefix gets a teaching rewrite. Drop, park, and completion modifiers belong after a second `=`; `x=` cannot split or merge. Every rewrite preserves the typed count, name, repair `!`, and close part; oversized counts reuse the start `too large` wording; `x=#`/`x=3#`/`x=#\"DEEP` need `pomodoro_name`. \
 A '@^id@' marker already carries the project-note intent: it reports mode \
 'project_note' with a 'route' need until the \
 route is typed. A '@:id@' marker is the offer form: it reports mode \
@@ -3133,8 +3133,8 @@ fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
 /// exactly as typed plus the text-only summary. The parenthetical lists the
 /// canonical name (when typed), minutes, stack position (only when the run
 /// has more than one member), `repair` (when typed), and the close summary
-/// (when the close carries work). For example `x=fix@3!=*3` with a second
-/// stack member reads `past x=fix@3!=*3 (FIX · 15m · 2 of 2 · repair ·
+/// (when the close carries work). For example `x=fix3!=*3` with a second
+/// stack member reads `past x=fix3!=*3 (FIX · 15m · 2 of 2 · repair ·
 /// close: parked 3 · defer the rest)`.
 fn format_pomodoro_past(past: &PastWire) -> String {
     let base = past.raw.clone();

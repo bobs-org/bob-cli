@@ -73,7 +73,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `++[N]` | Shift the running session later | [`++[N]`](#plus-plus-shift) |
 | `--[N]` | Shift the running session earlier | [`--[N]`](#minus-minus-shift) |
 | `=` / `=<X>` | Start the next future Pomodoro, or restart | [`=`](#equals-start) |
-| `=name` | Start a named Pomodoro (`=bugs`, same token as `=#bugs`) | [`=name`](#equals-named) |
+| `=name` | Start a named Pomodoro (`=bugs`, `=3bugs`, or `=bugs3`) | [`=name`](#equals-named) |
 | `=/[base][#type…]` | Split types into separate planned Pomodoros | [`=/`](#equals-split) |
 | `=*[source][#destination…]` | Merge the next planned Pomodoro or named destinations into one open session | [`=*`](#equals-merge) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
@@ -113,7 +113,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |
 | `#` | `@route+id#drawer`; `- #drawer`; `x=#"NAME"` | Drawer, drawer shortcut, or exact past-session name |
 | `@` | `@route`, `@@route`, `URL @route`; after project owner ID | Note/draft/reference route or project seal (`:id@` offers tasks) |
-| `@` | `=name@N`, `x=NAME@N`, `x@N` | Start/past timing or close keep-list |
+| `@` | `x@N` | Close keep-list; `@` is retired as start or past timing |
 | `%l` | URL | Request companion audio |
 | `*` | `*note:id`, `x*`, `=*source` | Block task, park links, or merge sessions |
 | `/` | `=/base#type` | Split a merged session |
@@ -133,7 +133,7 @@ A picker token is a draft state, not a capture. `bob capture` and
 becomes a concrete `@route:id`, `!note:id`, `&note:id`, `*note:id`,
 `~note:id`, `~~note:id`, or
 `@route+id`. Session tokens that still need a number or name (`x~`, `=~`, `x@`,
-`=#`) are the same kind of incomplete input. A bare `=name` start is complete (`=bugs`); only the empty `=#` needs `pomodoro_name`.
+`=#`) are the same kind of incomplete input. A bare `=name` start is complete (`=bugs`); an empty `=#` is an editing state needing a non-bare name (`pomodoro_name`).
 
 A signed count with extra prose (`+2 more`, `=3 more`) is an error, not a
 task. A sign or `=` followed by prose (`Plan +5`, `= foo`) stays ordinary
@@ -147,6 +147,7 @@ These are not valid commands. Bob teaches the replacement.
 | Typed | What happens |
 | --- | --- |
 | `==`, `==<X>`, `==#name` | Retired restart/swap; write one `=` (`=`, `=3`, `=bugs`) |
+| `=NAME@N`, `=<N>#BARE` | Retired named-start spellings; glue timing to a bare name (`=bugs3`, `=3bugs`) |
 | `==x` | Error: close with `x` |
 | `@route^id+` / `@route:id+` (with or without `#pomodoro`) | Retired project-note forms; write `@route:id@` to choose which tasks to link or `@route^id@` to link none |
 | `@route^id#pomodoro@` / `@route:id#pomodoro@` | Error: the seal goes right after the ID (`@route:id@#pomodoro`) |
@@ -154,13 +155,13 @@ These are not valid commands. Bob teaches the replacement.
 | `#now` / a free `#tag` at an item edge | Refused with `type_not_configured` unless the name is configured; a bare `@route` adds the heading hint |
 | `t:fix` | Ordinary prose; `t:` is retired as a type marker |
 | `x#bugs` | Error: `x` always closes the running session; write `x =bugs` to close then start |
-| `x=3-1`, `x=-2`, `x=3-`, `x=build@3-1` | No offsets; remove the dash part (`x=3` or `x=`) |
-| `x=3#fix@2` | Give the count once: `x=3#fix` or `x=fix@3` |
+| `x=3-1`, `x=-2`, `x=3-`, `x=build@3-1` | No past offsets; remove the offset-shaped dash (`x=3` or `x=`) |
+| `x=NAME@N`, `x=<N>#BARE` | Retired past spellings; write `x=fix3` or `x=3fix` |
 | `x=~2`, `x=3~2`, `x=*3`, `x=1!2` | Put close modifiers after a second `=` (`x==~2`, `x=3=~2`, `x==*3`, `x==1!2`) |
-| `x=0`, `x=build@0` | Need at least one block: `x=1`, `x=build@1` |
+| `x=0`, `x=build@0` | Need at least one block: `x=1`, `x=build1` |
 | `x=/build`, `x=*build` | `x=` cannot split or merge a session |
 | `x=fix!2` | Use `x=fix=!2`; to repair too, use `x=fix!=!2` |
-| `x=3x`, `x=3build` | Separate count and name: `x=3#x`, `x=3#build` |
+| `x=3x` | Close-shaped name: write `x=3#x` |
 
 Contract: [Retired close spellings](../capture.md#retired-close-spellings).
 
@@ -168,12 +169,12 @@ Contract: [Retired close spellings](../capture.md#retired-close-spellings).
 
 ### `x=E[!][=X]` {#recording-past-pomodoros}
 
-`x=E[!][=X]` is a whole-item lowercase record. `E` is omitted (25 minutes),
-a positive block count, or a name; names beginning with a digit use `#`, and
-`@N` gives a named duration. Records stack backward from the next
-five-minute boundary. `!` permits trimming only an older closed edge; open,
-erased, or split rows refuse. The second `=X` uses close selection. See the
-full [past Pomodoro contract](../capture.md#recording-a-past-pomodoro).
+`x=E[!][=X]` records a past Pomodoro. `E` is empty (25 minutes), a positive
+count, or a name. Counts can go before or after bare names (`x=3fix`,
+`x=fix3`); names with `-`, a trailing digit, or close shape use `#` when
+needed. `@N` timing is retired. Records stack backward from the next
+five-minute boundary; `!` permits trimming an older closed edge. See the
+[past Pomodoro contract](../capture.md#recording-a-past-pomodoro).
 
 ## Routes and destinations
 
@@ -430,11 +431,10 @@ bob capture '@work:outline=bugs'
 
 | Suffix on `@work:outline` or `^work:outline` | Session and timing |
 | --- | --- |
-| `=focus@3` | FOCUS, 15 minutes; equivalent to `=3#focus` or `#focus=3` |
-| `=focus@-2` | FOCUS, 25 minutes; start is now minus 10 minutes, rounded up to a five-minute boundary |
-| `=#2fa` | A name starting with a digit, using the explicit `#` form |
-| `=focus@` | Incomplete: timing is still needed |
-| `=3#focus@2` | Rejected: timing appears twice |
+| `=focus3`, `=3focus` | FOCUS, 15 minutes |
+| `=focus-2` | FOCUS starts 10 minutes ago |
+| `=#2fa`, `=3#deep-work` | `#` escapes names that cannot be spelled bare |
+| `=focus@3`, `=3#focus` | Retired; write `=focus3` or `=3focus` |
 
 A link-and-start fills an open `()` placeholder or creates a started session.
 It refuses while any timed Pomodoro in today's daily note is open. The whole-item [`=name`
@@ -874,14 +874,16 @@ bob capture '=3'
 
 Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro).
 
-### `=name` / `=<X>#pomodoro` {#equals-named}
+### `=name` / `=<X>name` {#equals-named}
 
-Start a named Pomodoro with `=focus`; use `#` when the bare name needs it (`=#2fa`). An open match (whole slug, else prefix)
-starts in place; a completed match starts a new session with that name
-("again"); otherwise a new named session is created and started. While
-another session runs, a different named target swaps in. Empty `<X>` keeps
-the running ledger. Use `#` when a number comes first (`=3#bugs`), the name
-starts with a digit or reads as a close (`=#2fa`, `=#x2`), or the name is quoted.
+Start with `=focus`, `=3focus`, or `=focus3`; timing can precede or follow a
+bare name. Bare names start with a letter, contain no `-`, do not end in a
+digit, and are not close-shaped. Use `#` for names that cannot be spelled
+bare (`=3#deep-work`, `=#2fa`, `=#x2`) or exact literals; timing goes before
+`#`. An open match starts in place (whole slug before prefix); a completed
+match starts a new session with that name ("again"); otherwise Bob creates
+and starts it. With a session running, a different name swaps in; no `<X>`
+keeps its clock, and `<X>` supplies fresh timing.
 
 ```bash
 bob capture '=focus'
@@ -1483,7 +1485,7 @@ inventory labels are excluded. Unknown names fail transactionally with
 authored children it also ensures Next, while with body text the glued
 `#drawer` suffix keeps its task-drawer meaning. `@route^block-id #type` (separate
 token) types the new task with that explicit block ID. Named Pomodoro owners such as `@route:block-id#NAME`,
-`^route:block-id#NAME`, `=#NAME`, and project-note `@route^block-id@#NAME` /
+`^route:block-id#NAME`, `=NAME`, and project-note `@route^block-id@#NAME` /
 `@route:block-id@#NAME` keep their existing meanings.
 
 When the item also names a Pomodoro, the task keeps its effective type

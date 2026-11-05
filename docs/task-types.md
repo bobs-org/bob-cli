@@ -223,10 +223,13 @@ Fetching, filtering, and accepting suggestions never touch the journal.
 A history or “again” row emits its plain slug only when the slug round-trips to the
 displayed name and does not prefix-select a different today entry.
 Otherwise it emits the exact-name literal `#"NAME"`. Compare by key
-equality, never by slug or prefix. In a bare start (`=name`), a literal
-replacement includes the leading `#`; in a `#` field it replaces just the
-name. Partial straight or curly quotes match normalized key prefixes, and
-acceptance replaces the whole partial literal. Bob emits straight quotes.
+equality, never by slug or prefix. In a bare start (`=name`), a bare-spellable
+candidate replaces the name without `#`; a candidate that cannot be spelled
+bare (for example, one containing `-`, ending in a digit, starting with a digit,
+or close-shaped) includes `#` in its replacement. Exact literals also include
+the leading `#`. In a `#` field, replacement covers just the name. Partial
+straight or curly quotes match normalized key prefixes, and acceptance
+replaces the whole partial literal. Bob emits straight quotes.
 A prefix-shadowed “again” name also uses a literal: with SASE V18 open,
 accepting completed SASE creates SASE instead of starting SASE V18.
 
