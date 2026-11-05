@@ -160,6 +160,32 @@ fn clipboard_history_waits_for_a_lagging_provider_to_agree() {
 }
 
 #[test]
+fn slow_agreeing_provider_is_trusted_past_the_deadline() {
+    // A read that starts inside the wait but finishes after it (a slow
+    // history command) still agrees; it must never be reported as a
+    // mismatch.
+    let provider = fake_command_provider();
+    let base = agreement_time();
+    let elapsed = Cell::new(Duration::ZERO);
+    let result = read_agreed_history(
+        "live".to_string(),
+        std::slice::from_ref(&provider),
+        &SelectionSource::EnvCommand,
+        2,
+        |_, _| {
+            elapsed.set(elapsed.get() + Duration::from_secs(2));
+            Ok(text_history(&["live", "older"], None))
+        },
+        || base + elapsed.get(),
+        |_| panic!("an agreeing read must not sleep"),
+        |_| None,
+    )
+    .expect("a slow agreeing provider is accepted");
+    assert_eq!(result.values, ["live", "older"]);
+    assert_eq!(result.provider, "command");
+}
+
+#[test]
 fn stale_clipboard_history_refuses_after_the_shared_deadline() {
     let provider = fake_alfred_provider();
     let base = agreement_time();

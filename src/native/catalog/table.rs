@@ -1000,6 +1000,14 @@ pub(crate) const ENTRIES: &[Row] = &[
         30,
     ),
     // Integrations
+    reads(
+        "clipboard",
+        &["clipboard"],
+        "Clipboard history check",
+        &["clipboard", "clip", "history", "paste", "alfred", "doctor"],
+        Presentation::Report,
+        30,
+    ),
     Row {
         network: true,
         ..reads(

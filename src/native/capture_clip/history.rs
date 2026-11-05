@@ -1,11 +1,11 @@
 //! Clipboard history provider boundary.
 //!
 //! A history provider returns newest-first [`HistoryEntry`] values. The
-//! `agreement` phase polls these providers until one agrees with the live
-//! clipboard; this phase only selects the ordered candidates and reads the
-//! first one. Selection itself is a pure, platform-neutral function so the
-//! full precedence matrix is unit-tested on Linux; only the dispatch into
-//! the SQLite adapters is cfg-gated.
+//! agreement read (`clipboard::read_agreed_history`) polls the ordered
+//! candidates selected here until one agrees with the live clipboard.
+//! Selection itself is a pure, platform-neutral function so the full
+//! precedence matrix is unit-tested on Linux; only the dispatch into the
+//! SQLite adapters is cfg-gated.
 
 use std::{
     path::{Path, PathBuf},
@@ -178,7 +178,6 @@ pub(crate) enum SelectionSource {
 /// skipping any whose store file is missing. `command` without a config
 /// argv list is a config error raised at parse time, so reaching here with
 /// an empty list is an internal error.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn select_history_providers(
     env_command: Option<&str>,
     setting: &crate::native::config::ClipboardHistorySetting,

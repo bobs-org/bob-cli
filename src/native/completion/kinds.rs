@@ -530,6 +530,12 @@ const TABLE: &[Entry] = &[
         arg: "days",
         kind: Kind::FreeText,
     },
+    // `bob clipboard --count` is a free-form count (minimum 2).
+    Entry {
+        path: &["clipboard"],
+        arg: "count",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &["capture-related"],
         arg: "draft",

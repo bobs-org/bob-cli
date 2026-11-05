@@ -41,14 +41,12 @@ impl ClipboardHistoryError {
     }
 }
 
-/// The accepted, single-provider history and the source rows needed to
-/// report provenance in the next capture-output phase.
+/// The accepted, single-provider history plus the source rows that
+/// capture output reports as `clip.history` provenance.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AgreedClipboardHistory {
     pub(crate) values: Vec<String>,
-    #[allow(dead_code)]
     pub(crate) provider: &'static str,
-    #[allow(dead_code)]
     pub(crate) entries: Vec<HistoryEntry>,
 }
 
@@ -80,20 +78,6 @@ pub(crate) struct ClipboardProviderStatus {
 pub(crate) fn read_clipboard() -> Result<String, String> {
     let bytes = clipboard_command_output()?;
     normalize_clipboard_output(bytes)
-}
-
-// Shared by the status-command phase: the single-shot entry that reads
-// the live value itself before running agreement.
-#[allow(dead_code)]
-pub(crate) fn read_clipboard_history(
-    count: usize,
-) -> Result<AgreedClipboardHistory, ClipboardHistoryError> {
-    let current =
-        read_clipboard().map_err(|message| ClipboardHistoryError {
-            code: None,
-            message,
-        })?;
-    read_clipboard_history_with_current(current, count)
 }
 
 /// Inspect the exact configured history path used by `%c<N>`, then add a
@@ -309,19 +293,20 @@ fn live_source_name() -> String {
     {
         return "BOB_CLIPBOARD_CMD".to_string();
     }
-    #[cfg(target_os = "macos")]
-    return "pbpaste".to_string();
-    #[cfg(target_os = "linux")]
-    {
+    if cfg!(target_os = "macos") {
+        return "pbpaste".to_string();
+    }
+    if cfg!(target_os = "linux") {
         if bob_env::var_os("WAYLAND_DISPLAY").is_some() {
             return "wl-paste".to_string();
         }
         if bob_env::var_os("DISPLAY").is_some() {
             return "xclip or xsel".to_string();
         }
-        if bob_env::var_os("TMUX").is_some() {
-            return "tmux show-buffer".to_string();
-        }
+    }
+    // Every non-macOS platform falls back to tmux, as the live read does.
+    if bob_env::var_os("TMUX").is_some() {
+        return "tmux show-buffer".to_string();
     }
     "unavailable".to_string()
 }
@@ -436,9 +421,9 @@ where
                     observations[index].entries = Some(entries.clone());
                     observations[index].last_error = None;
                     if matches {
-                        if now() > deadline {
-                            break 'poll;
-                        }
+                        // The read began before the deadline, so a slow
+                        // provider that agrees is trusted, never reported
+                        // as a mismatch.
                         return accepted_history(
                             current, provider, entries, count,
                         );

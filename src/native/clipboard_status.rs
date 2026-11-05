@@ -95,15 +95,15 @@ fn to_json(report: &ClipboardStatusReport) -> Value {
         match &report.result {
             Ok(history) => {
                 let entries = history
-                .entries
-                .iter()
-                .map(|entry| {
-                    json!({
-                        "age_seconds": entry.at.and_then(|at| age_seconds(at)),
-                        "app": entry.app.as_deref(),
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        json!({
+                            "age_seconds": entry.at.and_then(age_seconds),
+                            "app": entry.app.as_deref(),
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
+                    .collect::<Vec<_>>();
                 (
                     true,
                     Some(history.provider),

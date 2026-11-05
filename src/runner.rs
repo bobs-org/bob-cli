@@ -2253,6 +2253,7 @@ mod tests {
             NativeCommand::CaptureTemplatesList,
             NativeCommand::CaptureTemplatesSave,
             NativeCommand::CaptureTemplatesShow,
+            NativeCommand::ClipboardStatus,
             NativeCommand::Completion,
             NativeCommand::Freshness,
             NativeCommand::Gcal,
