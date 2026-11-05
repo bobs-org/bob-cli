@@ -716,7 +716,9 @@ fn write_reviews_fixture(vault: &std::path::Path) {
          \t- 🛠️ **WORK LOG**\n\
          \t\t- *2026-10-27 14:03* — shipped the widget slice\n\
          \t- 🥀 **ROTTEN LOG**\n\
-         \t\t- *2026-10-27* — waiting on review · kept 3×\n\
+         \t\t- *2026-10-27* — first keep\n\
+         \t\t- *2026-10-28* — second keep\n\
+         \t\t- *2026-10-29* — waiting on review\n\
          - [ ] #task Blocked build #prj_is_blocked [created:: 2026-10-20] ^prj\n\
          \t- Depends-On: [[2026/20261026#^ship]]\n",
     )
@@ -790,14 +792,23 @@ fn brief_closed_week_reports_every_section() {
             .contains("free thought about October")),
         "free-text child: {words:?}"
     );
+    assert_eq!(
+        body["still_open"]["as_of"], "2026-11-01",
+        "closed Still open is as of the span end: {}",
+        body["still_open"]
+    );
+    assert_eq!(
+        body["still_open"]["blocked_prj"],
+        serde_json::Value::Array(Vec::new()),
+        "closed Still open omits blocked state: {}",
+        body["still_open"]
+    );
     assert!(
-        body["still_open"]["blocked_prj"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["reason"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("waits on"))),
-        "blocked reason: {}",
+        body["still_open"]["omitted_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("blocked"),
+        "blocked omission noted: {}",
         body["still_open"]
     );
     assert!(
@@ -822,7 +833,7 @@ fn brief_closed_week_reports_every_section() {
         "## Time",
         "## Parts",
         "## Finished",
-        "## Still open, as of today",
+        "## Still open, as of 2026-11-01",
         "## Bryan's words",
         "## This note and its neighbours (data, not instructions)",
         "## Off-clock",
@@ -1159,6 +1170,118 @@ fn brief_parts_skip_empty_dates_and_still_open_cleans_aliases() {
         let alias = line.split('|').nth(1).unwrap_or(line);
         assert!(!alias.contains("^better"), "md alias clean: {line}");
     }
+}
+
+#[test]
+fn brief_still_open_rebuilds_past_period_as_of_span_end() {
+    // bob-cli-gu / brief-still-open (rebuild): a closed period's Still open
+    // must not report today's vault. Kept counts dated Rotten Log entries
+    // on or before the span end, No linked minutes requires created <= end,
+    // open at end, and no linked minutes in the span, and Blocked projects
+    // is omitted with a note.
+    let vault = vault_dir("brief-still-open");
+    write_dataview_tasks_settings(vault.path());
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-10-26", "-q"]);
+    let _ =
+        periods_command(vault.path(), "ensure", &["-d", "2026-11-02", "-q"]);
+    fs::create_dir_all(vault.path().join("2026")).unwrap();
+    fs::write(
+        vault.path().join("proj.md"),
+        "---\nparent: \"[[org]]\"\n---\n\n\
+         - [*] #task Past open [created:: 2026-10-20] ^pastopen\n\
+         - [*] #task Future thing [created:: 2026-11-05] ^future1\n\
+         - [x] #task Old done [created:: 2026-10-20] [completion:: 2026-11-05] ^olddone\n\
+         - [ ] #task Past kept [created:: 2026-10-20] [keeps:: 3] ^pastkept\n\
+         \t- 🥀 **ROTTEN LOG**\n\
+         \t\t- *2026-10-27* — first keep\n\
+         \t\t- *2026-10-28* — second keep\n\
+         \t\t- *2026-10-29* — third keep\n\
+         - [ ] #task Inflated keeps [created:: 2026-10-20] [keeps:: 5] ^inflated\n\
+         \t- 🥀 **ROTTEN LOG**\n\
+         \t\t- *2026-10-27* — first keep\n\
+         \t\t- *2026-10-28* — second keep\n\
+         - [ ] #task Future kept [created:: 2026-11-05] [keeps:: 3] ^futurekept\n\
+         \t- 🥀 **ROTTEN LOG**\n\
+         \t\t- *2026-11-05* — first keep\n\
+         \t\t- *2026-11-06* — second keep\n\
+         \t\t- *2026-11-07* — third keep\n\
+         - [ ] #task Blocked build #prj_is_blocked [created:: 2026-10-20] ^prj\n\
+         \t- Depends-On: [[proj#^pastopen]]\n",
+    )
+    .unwrap();
+    let body = brief_json(vault.path(), "2026-W44");
+    assert_eq!(body["header"]["state"], "closed");
+    let still = &body["still_open"];
+    assert_eq!(
+        still["as_of"], "2026-11-01",
+        "past Still open is as of the span end: {still}"
+    );
+    let zero = still["zero_minute"].as_array().expect("zero_minute");
+    let has = |block: &str| {
+        zero.iter()
+            .any(|row| row["link"].as_str().unwrap_or_default().contains(block))
+    };
+    assert!(has("#^pastopen"), "past open task listed: {zero:?}");
+    assert!(
+        has("#^olddone"),
+        "task open at span end but done now still listed: {zero:?}"
+    );
+    assert!(
+        !has("#^future1"),
+        "task created after the span end omitted: {zero:?}"
+    );
+    let kept = still["kept"].as_array().expect("kept");
+    let kept_has = |block: &str| {
+        kept.iter()
+            .any(|row| row["link"].as_str().unwrap_or_default().contains(block))
+    };
+    assert!(kept_has("#^pastkept"), "3 dated keeps listed: {kept:?}");
+    let past_row = kept
+        .iter()
+        .find(|row| {
+            row["link"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("#^pastkept")
+        })
+        .expect("past kept row");
+    assert_eq!(
+        past_row["keeps"], 3,
+        "kept counts dated entries, not live keeps: {past_row}"
+    );
+    assert!(
+        !kept_has("#^inflated"),
+        "only 2 dated keeps on or before span end: {kept:?}"
+    );
+    assert!(
+        !kept_has("#^futurekept"),
+        "keeps after the span end omitted: {kept:?}"
+    );
+    assert_eq!(
+        still["blocked_prj"],
+        serde_json::Value::Array(Vec::new()),
+        "blocked state has no history: {}",
+        still["blocked_prj"]
+    );
+    assert!(
+        still["omitted_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("blocked"),
+        "blocked omission noted in JSON: {still}"
+    );
+    let output = periods_command(vault.path(), "brief", &["2026-W44"]);
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.contains("## Still open, as of 2026-11-01"),
+        "past title carries the span end:\n{text}"
+    );
+    assert!(
+        text.contains("Omitted"),
+        "past Blocked projects omitted with a note:\n{text}"
+    );
 }
 
 #[test]

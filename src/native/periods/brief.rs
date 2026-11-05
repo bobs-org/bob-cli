@@ -1133,81 +1133,176 @@ fn dropped_section(ctx: &Ctx) -> CappedRows {
 }
 
 fn still_open_section(ctx: &Ctx) -> Value {
-    let snapshot = crate::native::freshness::scan::scan(&ctx.vault).ok();
-    let mut zero_minute: Vec<Value> = Vec::new();
-    if let Some(snapshot) = snapshot.as_ref() {
-        let mut lanes: Vec<&crate::native::freshness::scan::RowCtx> = snapshot
-            .next
-            .iter()
-            .chain(snapshot.pending.iter())
-            .collect();
-        lanes.sort_by(|left, right| {
-            left.task
-                .path
-                .cmp(&right.task.path)
-                .then(left.task.line.cmp(&right.task.line))
-        });
-        let mut seen: BTreeMap<String, bool> = BTreeMap::new();
-        for row in lanes {
-            let task = &row.task;
-            let block = task.block_id.as_deref().unwrap_or_default();
-            let key = task_key(&task.path, block);
-            if seen.contains_key(&key) {
-                continue;
-            }
-            seen.insert(key.clone(), true);
-            let minutes = linked_for_path(&task.path, block, ctx);
-            if minutes == 0 {
-                let alias =
-                    short_description(&clean_scan_alias(&task.text), 120);
-                let link = if block.trim().is_empty() {
-                    note_link(&task.path, &alias)
-                } else {
-                    format!("[[{}#^{block}|{alias}]]", stem_of(&task.path))
-                };
-                zero_minute.push(json!({ "link": link }));
+    // Ended periods never report today's vault. Rebuild Kept 3+ and No
+    // linked minutes as of the span end; Blocked projects has no history
+    // and is omitted with a note. The current (and future) period keeps
+    // today's live behavior.
+    let is_past = matches!(ctx.state, super::calendar::PeriodState::Closed)
+        && ctx.observed_end.is_some();
+    let as_of = ctx
+        .observed_end
+        .unwrap_or(ctx.today)
+        .format("%Y-%m-%d")
+        .to_string();
+    if !is_past {
+        let snapshot = crate::native::freshness::scan::scan(&ctx.vault).ok();
+        let mut zero_minute: Vec<Value> = Vec::new();
+        if let Some(snapshot) = snapshot.as_ref() {
+            let mut lanes: Vec<&crate::native::freshness::scan::RowCtx> =
+                snapshot
+                    .next
+                    .iter()
+                    .chain(snapshot.pending.iter())
+                    .collect();
+            lanes.sort_by(|left, right| {
+                left.task
+                    .path
+                    .cmp(&right.task.path)
+                    .then(left.task.line.cmp(&right.task.line))
+            });
+            let mut seen: BTreeMap<String, bool> = BTreeMap::new();
+            for row in lanes {
+                let task = &row.task;
+                let block = task.block_id.as_deref().unwrap_or_default();
+                let key = task_key(&task.path, block);
+                if seen.contains_key(&key) {
+                    continue;
+                }
+                seen.insert(key.clone(), true);
+                let minutes = linked_for_path(&task.path, block, ctx);
+                if minutes == 0 {
+                    let alias =
+                        short_description(&clean_scan_alias(&task.text), 120);
+                    let link = if block.trim().is_empty() {
+                        note_link(&task.path, &alias)
+                    } else {
+                        format!("[[{}#^{block}|{alias}]]", stem_of(&task.path))
+                    };
+                    zero_minute.push(json!({ "link": link }));
+                }
             }
         }
+        zero_minute.truncate(ctx.finish_cap);
+        // Blocked `^prj` lines and kept tasks are still open wherever they
+        // live, so they come from the vault index, not just the lanes.
+        let mut blocked_prj: Vec<Value> = Vec::new();
+        let mut kept: Vec<Value> = Vec::new();
+        let mut open_tasks: Vec<&IndexedTask> = ctx
+            .index
+            .tasks
+            .iter()
+            .filter(|task| is_open(task))
+            .collect();
+        open_tasks.sort_by(|left, right| {
+            left.source_path
+                .cmp(&right.source_path)
+                .then(left.description.cmp(&right.description))
+        });
+        for task in open_tasks {
+            let link = task_link(task);
+            if is_prj(task) && is_blocked(task) {
+                blocked_prj.push(json!({
+                    "link": link.clone(),
+                    "reason": index_block_reason(ctx, task),
+                }));
+            }
+            let keeps = parse_keeps(&task.line);
+            if keeps >= 3 {
+                kept.push(json!({
+                    "link": link,
+                    "keeps": keeps,
+                    "reason": index_rotten_log_reason(ctx, task),
+                }));
+            }
+        }
+        blocked_prj.truncate(ctx.finish_cap);
+        kept.truncate(ctx.finish_cap);
+        let mut section = json!({
+            "zero_minute": zero_minute,
+            "blocked_prj": blocked_prj,
+            "kept": kept,
+            "as_of": as_of,
+            "omitted_reason": Value::Null,
+        });
+        if matches!(ctx.id, PeriodId::Quarter { .. } | PeriodId::Year(_)) {
+            let mut stalled: Vec<Value> = ctx
+                .index
+                .tasks
+                .iter()
+                .filter(|task| {
+                    is_prj(task) && is_open(task) && linked_for(task, ctx) == 0
+                })
+                .map(|task| task_row(task, ctx))
+                .collect();
+            stalled.sort_by(|left, right| {
+                str_field(left, "link").cmp(&str_field(right, "link"))
+            });
+            stalled.truncate(ctx.finish_cap);
+            section["stalled"] = Value::Array(stalled);
+        } else {
+            section["stalled"] = Value::Null;
+        }
+        return section;
     }
-    zero_minute.truncate(ctx.finish_cap);
-    // Blocked `^prj` lines and kept tasks are still open wherever they
-    // live, so they come from the vault index, not just the lanes.
-    let mut blocked_prj: Vec<Value> = Vec::new();
-    let mut kept: Vec<Value> = Vec::new();
-    let mut open_tasks: Vec<&IndexedTask> = ctx
+    let end = ctx.observed_end.expect("past has a span end");
+    // No linked minutes as of the span end: created on or before the end,
+    // still open at the end, and no linked minutes in the span. The lane
+    // filter is not recoverable, so history carries the list.
+    let mut candidates: Vec<&IndexedTask> = ctx
         .index
         .tasks
         .iter()
-        .filter(|task| is_open(task))
+        .filter(|task| {
+            created_on_or_before(task, end)
+                && is_open_at(task, end)
+                && linked_for(task, ctx) == 0
+                && task
+                    .block_id
+                    .as_deref()
+                    .is_some_and(|block| !block.trim().is_empty())
+        })
         .collect();
-    open_tasks.sort_by(|left, right| {
+    candidates.sort_by(|left, right| {
         left.source_path
             .cmp(&right.source_path)
             .then(left.description.cmp(&right.description))
     });
-    for task in open_tasks {
-        let link = task_link(task);
-        if is_prj(task) && is_blocked(task) {
-            blocked_prj.push(json!({
-                "link": link.clone(),
-                "reason": index_block_reason(ctx, task),
-            }));
-        }
-        let keeps = parse_keeps(&task.line);
-        if keeps >= 3 {
+    let mut zero_minute: Vec<Value> = candidates
+        .into_iter()
+        .map(|task| json!({ "link": task_link(task) }))
+        .collect();
+    zero_minute.truncate(ctx.finish_cap);
+    // Kept 3+ as of the span end: count dated Rotten Log entries on or
+    // before the end, not today's `[keeps:: N]`.
+    let mut historical: Vec<&IndexedTask> = ctx
+        .index
+        .tasks
+        .iter()
+        .filter(|task| created_on_or_before(task, end) && is_open_at(task, end))
+        .collect();
+    historical.sort_by(|left, right| {
+        left.source_path
+            .cmp(&right.source_path)
+            .then(left.description.cmp(&right.description))
+    });
+    let mut kept: Vec<Value> = Vec::new();
+    for task in historical {
+        let entries = rotten_entries_as_of(ctx, task, end);
+        if entries.len() >= 3 {
             kept.push(json!({
-                "link": link,
-                "keeps": keeps,
-                "reason": index_rotten_log_reason(ctx, task),
+                "link": task_link(task),
+                "keeps": entries.len() as u64,
+                "reason": entries.last().map(|(_, reason)| reason.clone()).unwrap_or_default(),
             }));
         }
     }
-    blocked_prj.truncate(ctx.finish_cap);
     kept.truncate(ctx.finish_cap);
     let mut section = json!({
         "zero_minute": zero_minute,
-        "blocked_prj": blocked_prj,
+        "blocked_prj": Value::Array(Vec::new()),
         "kept": kept,
+        "as_of": end.format("%Y-%m-%d").to_string(),
+        "omitted_reason": "blocked state has no history",
     });
     if matches!(ctx.id, PeriodId::Quarter { .. } | PeriodId::Year(_)) {
         let mut stalled: Vec<Value> = ctx
@@ -1215,7 +1310,10 @@ fn still_open_section(ctx: &Ctx) -> Value {
             .tasks
             .iter()
             .filter(|task| {
-                is_prj(task) && is_open(task) && linked_for(task, ctx) == 0
+                is_prj(task)
+                    && created_on_or_before(task, end)
+                    && is_open_at(task, end)
+                    && linked_for(task, ctx) == 0
             })
             .map(|task| task_row(task, ctx))
             .collect();
@@ -1228,6 +1326,119 @@ fn still_open_section(ctx: &Ctx) -> Value {
         section["stalled"] = Value::Null;
     }
     section
+}
+
+/// Whether a task was still open at the span end: neither done nor
+/// cancelled on or before that date.
+fn is_open_at(task: &IndexedTask, end: NaiveDate) -> bool {
+    done_date(task).is_none_or(|date| date > end)
+        && cancelled_date(task).is_none_or(|date| date > end)
+}
+
+/// Whether a task existed at the span end: its `[created::]` falls on or
+/// before that date. Tasks without a created date cannot be placed, so
+/// past periods omit them rather than risk a wrong list.
+fn created_on_or_before(task: &IndexedTask, end: NaiveDate) -> bool {
+    created_date(task).is_some_and(|date| date <= end)
+}
+
+/// The task's created date, falling back to the raw line: the Tasks
+/// parser stops at the first unrecognized trailing field (such as
+/// `[keeps:: N]`), so `task.created` is empty for kept tasks even
+/// though the line carries `[created:: …]`.
+fn created_date(task: &IndexedTask) -> Option<NaiveDate> {
+    task.created
+        .date
+        .or_else(|| inline_date(&task.line, &["created"]))
+}
+
+/// The task's done date, with the same raw-line fallback. The vault
+/// writes `[completion:: …]` for completions.
+fn done_date(task: &IndexedTask) -> Option<NaiveDate> {
+    task.done
+        .date
+        .or_else(|| inline_date(&task.line, &["completion", "done"]))
+}
+
+fn cancelled_date(task: &IndexedTask) -> Option<NaiveDate> {
+    task.cancelled
+        .date
+        .or_else(|| inline_date(&task.line, &["cancelled"]))
+}
+
+/// The first `YYYY-MM-DD` in a `[key:: …]` span on a raw task line.
+fn inline_date(line: &str, keys: &[&str]) -> Option<NaiveDate> {
+    for key in keys {
+        let marker = format!("[{key}::");
+        let mut rest = line;
+        while let Some(start) = rest.find(&marker) {
+            let after = rest[start + marker.len()..].trim_start();
+            if let Some(day) = after.get(..10)
+                && let Ok(date) = NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            {
+                return Some(date);
+            }
+            rest = &rest[start + marker.len()..];
+        }
+    }
+    None
+}
+
+/// Dated Rotten Log entries on or before the span end, in file order.
+fn rotten_entries_as_of(
+    ctx: &Ctx,
+    task: &IndexedTask,
+    end: NaiveDate,
+) -> Vec<(NaiveDate, String)> {
+    let Some(contents) = ctx.buffers.get(task_effective_path(task)) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = contents.lines().collect();
+    let at = task.line_number.saturating_sub(1);
+    let Some(task_line) = lines.get(at) else {
+        return Vec::new();
+    };
+    let indent = leading_spaces(task_line);
+    let mut in_rotten = false;
+    let mut entries = Vec::new();
+    for next in lines.iter().skip(at + 1) {
+        if next.trim().is_empty() {
+            continue;
+        }
+        let trimmed = next.trim_start();
+        if leading_spaces(next) <= indent
+            && (trimmed.starts_with("- ") || trimmed.starts_with("* "))
+            && !in_rotten
+        {
+            break;
+        }
+        if next.contains("ROTTEN LOG") {
+            in_rotten = true;
+            continue;
+        }
+        if in_rotten {
+            if let Some(reason) = dated_entry_text(next) {
+                if let Some(date) = dated_entry_date(next)
+                    && date <= end
+                {
+                    entries.push((date, reason));
+                }
+            } else if leading_spaces(next) <= indent {
+                break;
+            }
+        }
+    }
+    entries
+}
+
+/// The date of a `*YYYY-MM-DD …* — reason` drawer entry.
+fn dated_entry_date(line: &str) -> Option<NaiveDate> {
+    let star = line.find('*')?;
+    let after = &line[star + 1..];
+    let end = after.find('*')?;
+    let stamp = after[..end].trim();
+    let day = stamp.get(..10)?;
+    NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
 }
 
 /// `[keeps:: N]` from a raw task line (0 when absent).
@@ -1972,7 +2183,7 @@ fn summarize_list(items: &[String], cap: usize) -> String {
     format!("{} +{} more", items[..cap].join(", "), items.len() - cap)
 }
 
-fn render_markdown(_ctx: &Ctx, json: &Value) -> String {
+fn render_markdown(ctx: &Ctx, json: &Value) -> String {
     let header = json.get("header").unwrap_or(&Value::Null);
     let mut out = String::new();
     out.push_str(&format!(
@@ -2119,8 +2330,18 @@ fn render_markdown(_ctx: &Ctx, json: &Value) -> String {
             .and_then(Value::as_u64)
             .unwrap_or(0),
     );
-    // Still open.
-    out.push_str("\n## Still open, as of today\n");
+    // Still open. Ended periods carry the span end in the title; the
+    // current period keeps today's wording.
+    if matches!(ctx.state, super::calendar::PeriodState::Closed)
+        && let Some(end) = ctx.observed_end
+    {
+        out.push_str(&format!(
+            "\n## Still open, as of {}\n",
+            end.format("%Y-%m-%d")
+        ));
+    } else {
+        out.push_str("\n## Still open, as of today\n");
+    }
     if let Some(still) = json.get("still_open") {
         out.push_str("No linked minutes:\n");
         render_links(
@@ -2129,7 +2350,21 @@ fn render_markdown(_ctx: &Ctx, json: &Value) -> String {
             "None.",
         );
         out.push_str("Blocked projects:\n");
-        if let Some(rows) = still.get("blocked_prj").and_then(Value::as_array) {
+        if still
+            .get("omitted_reason")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            out.push_str(&format!(
+                "Omitted — {}.\n",
+                still
+                    .get("omitted_reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("blocked state has no history")
+            ));
+        } else if let Some(rows) =
+            still.get("blocked_prj").and_then(Value::as_array)
+        {
             if rows.is_empty() {
                 out.push_str("None.\n");
             }

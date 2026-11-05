@@ -387,13 +387,23 @@ token; Bryan's words, then caveats, are trimmed first). Sections:
    tasks cancelled in it (capped). Dropped carries `dropped_total`
    and `dropped_more` in JSON and the same `+N more` tail in
    Markdown.
-7. **Still open, as of today**: Next and WIP tasks with zero linked
-   minutes in the period; `^prj` lines that are Blocked now, with
-   their reason (Depends-On links, else the scheduled date); tasks
-   with `[keeps:: N]` N ≥ 3, with their latest Rotten Log reason.
-   No-linked-minutes aliases strip inline fields and `^block` ids
-   the way finished rows do. Quarter and year briefs add stalled
-   projects: open `^prj` tasks with no linked minutes.
+7. **Still open**: the open period keeps today's wording
+   ("as of today"): Next and WIP tasks with zero linked minutes in
+   the period; `^prj` lines that are Blocked now, with their reason
+   (Depends-On links, else the scheduled date); tasks with
+   `[keeps:: N]` N ≥ 3, with their latest Rotten Log reason. Ended
+   periods are titled "as of <span end>" and rebuilt from history:
+   No linked minutes lists tasks created on or before the span end,
+   still open at the end, with no linked minutes in the span; Kept
+   3+ counts dated Rotten Log entries on or before the span end,
+   with the latest reason then; Blocked projects is omitted
+   ("blocked state has no history"; JSON carries `as_of` and an
+   additive `omitted_reason`). Quarter and year stalled projects
+   rebuild the same way (open `^prj` at the end with no linked
+   minutes). No-linked-minutes aliases strip inline fields and
+   `^block` ids the way finished rows do. Tasks whose `[created::]`
+   cannot be placed are left out of past lists rather than risk a
+   wrong list.
 8. **Practice** (year only): recurring `#gtd` rows created, cancelled,
    or finished in the year, and the review-closed rate per quarter
    (`N of M days`).
