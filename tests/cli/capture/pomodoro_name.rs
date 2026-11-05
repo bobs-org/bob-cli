@@ -1437,3 +1437,145 @@ fn naming_unnamed_entry_retypes_its_tasks_to_keep_agreement() {
         fs::read_to_string(vault2.join("areas/dev.md")).expect("read task2");
     assert!(!task2_after.contains("[type::"), "{task2_after}");
 }
+
+#[test]
+fn naming_a_running_entry_restamps_its_clock_from_retyped_tasks() {
+    let temp = TempDir::new("bob-cli-pomodoro-name-restamp");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261030.md");
+    let config = temp.path().join("config.yml");
+    let original_task = concat!(
+        "---\n",
+        "type: [[area]]\n",
+        "task_type: CHORE\n",
+        "offclock_types:\n",
+        "  - MEET\n",
+        "---\n",
+        "# Love\n## Tasks\n",
+        "- [ ] #task Lunch with Kelly ^meet1\n",
+        "- [ ] #task Walk the dog [type:: MEET] ^meet2\n",
+    );
+    let original_day = concat!(
+        "# 2026-10-30\n## Pomodoros\n",
+        "- [ ] (**0900-0930** [t:: 30m])\n",
+        "  - [[love#^meet1]]\n",
+        "- [ ] (**1000-1030** [off:: 30m])\n",
+        "  - [[love#^meet2]]\n",
+    );
+    write_file(&vault.join("love.md"), original_task);
+    write_file(&day_file, original_day);
+    write_file(
+        &config,
+        "plan:\n  types:\n    CHORE: yellow\n    MEET: blue\n",
+    );
+    let pomodoro_ref =
+        capture_pomodoro_ref("- [ ] (**0900-0930** [t:: 30m])", 3);
+    let second_ref =
+        capture_pomodoro_ref("- [ ] (**1000-1030** [off:: 30m])", 5);
+
+    let dry_run = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&pomodoro_ref)
+        .arg("-n")
+        .arg("MEET")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-30 09:15:00")
+        .output()
+        .expect("dry-run naming");
+    assert_success(&dry_run);
+    let dry: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).expect("dry JSON");
+    assert_eq!(dry["pomodoro"]["time_range"], "0900-0930", "{dry}");
+    assert_eq!(fs::read_to_string(&day_file).unwrap(), original_day);
+    assert_eq!(
+        fs::read_to_string(vault.join("love.md")).unwrap(),
+        original_task
+    );
+
+    let written = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&pomodoro_ref)
+        .arg("-n")
+        .arg("MEET")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-30 09:15:00")
+        .output()
+        .expect("write named entry");
+    assert_success(&written);
+    let result: serde_json::Value =
+        serde_json::from_str(stdout(&written).trim()).expect("write JSON");
+    assert_eq!(result["pomodoro"], dry["pomodoro"], "{dry}\n{result}");
+    let after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        after.contains("(**0900-0930** [off:: 30m]) — MEET"),
+        "{after}"
+    );
+    assert!(
+        fs::read_to_string(vault.join("love.md"))
+            .unwrap()
+            .contains("[type:: MEET]"),
+        "task should be retyped before the day write"
+    );
+
+    let dry_back = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&second_ref)
+        .arg("-n")
+        .arg("CHORE")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-30 09:15:00")
+        .output()
+        .expect("dry-run naming back to CHORE");
+    assert_success(&dry_back);
+    let dry_back: serde_json::Value =
+        serde_json::from_str(stdout(&dry_back).trim()).expect("dry JSON");
+    assert_eq!(dry_back["pomodoro"]["time_range"], "1000-1030");
+
+    let written_back = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&second_ref)
+        .arg("-n")
+        .arg("CHORE")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-10-30 09:15:00")
+        .output()
+        .expect("write name back to CHORE");
+    assert_success(&written_back);
+    let written_back: serde_json::Value =
+        serde_json::from_str(stdout(&written_back).trim()).expect("write JSON");
+    assert_eq!(
+        written_back["pomodoro"], dry_back["pomodoro"],
+        "{dry_back}\n{written_back}"
+    );
+    let after_back = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        after_back.contains("(**1000-1030** [t:: 30m]) — CHORE"),
+        "{after_back}"
+    );
+}

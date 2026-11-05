@@ -615,9 +615,11 @@ not a clock flip, including on a worked row.
 
 Sync computes MEET clocks from the line left after this run's merge,
 including retained vault tags and roots. List previews the same event
-through Google's chosen root instead: an untagged love-rooted lunch creates
-an `[off::]` past cluster and running MEET with no tag on its row, while
-`#on` keeps it worked. This intentional difference is covered by the
+through Google's chosen root and its synced effective type, `[type:: MEET]`.
+That makes `offclock_types: [MEET]` agree with sync whether the root itself
+supplies `task_type: MEET` or sync must add the field. An untagged
+love-rooted lunch creates an `[off::]` past cluster and running MEET with no
+tag on its row, while `#on` keeps it worked. This behavior is covered by the
 `clock`, `clock_source`, and `clock_note` fields.
 
 `list` shows `task · MEET · off-clock` in VAULT for explicit off tags and

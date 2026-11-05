@@ -466,3 +466,83 @@ fn listed_clock_uses_google_root_and_via_note() {
         "context rows stay tag-only:\n{table_text}"
     );
 }
+
+#[test]
+fn list_and_sync_agree_on_love_meets_with_type_filtered_clock_defaults() {
+    for (case, inherits_meet, writes_type) in [
+        ("inherits-meet", true, false),
+        ("needs-meet-field", false, true),
+    ] {
+        let env = GcalEnv::new(&format!("bob-cli-gcal-list-sync-{case}"));
+        prepare(&env);
+        let type_default = if inherits_meet {
+            "task_type: MEET\n"
+        } else {
+            ""
+        };
+        fs::write(
+            env.vault().join("love.md"),
+            format!(
+                "---\ntype: area\noffclock_types:\n  - MEET\n{type_default}---\n# Love\n"
+            ),
+        )
+        .expect("write love area");
+        let fake = FakeGog::new(&env, "fake-gog");
+        fake.events_json(
+            r##"{
+              "events": [{
+                "id": "lunch",
+                "summary": "Lunch @love",
+                "status": "confirmed",
+                "start": {"dateTime": "2026-10-30T13:00:00-04:00"},
+                "end": {"dateTime": "2026-10-30T13:30:00-04:00"},
+                "attendees": [{"self": true, "responseStatus": "accepted"}]
+              }],
+              "nextPageToken": null
+            }"##,
+        );
+
+        let mut list = env.command();
+        fake.install(&mut list).args(["gcal", "list", "-f", "json"]);
+        let listed = list.output().expect("list before sync");
+        assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
+        let listed: Value =
+            serde_json::from_str(&stdout(&listed)).expect("list JSON");
+        let before = list_event(&listed, "Lunch");
+        assert_eq!(before["off_clock"], true, "{before}");
+        assert_eq!(before["clock_source"], "note", "{before}");
+        assert_eq!(before["clock_note"], "love.md", "{before}");
+
+        let mut sync = env.command();
+        let synced = fake
+            .install(&mut sync)
+            .args(["gcal", "sync"])
+            .output()
+            .expect("sync after list");
+        assert_eq!(synced.status.code(), Some(0), "{}", stderr(&synced));
+        let day = fs::read_to_string(env.vault().join("2026/20261030.md"))
+            .expect("read synced day");
+        let event_row = day
+            .lines()
+            .find(|line| line.contains("^lunch"))
+            .expect("synced Lunch Event Task");
+        assert!(event_row.contains("[root:: love]"), "{event_row}");
+        assert_eq!(
+            event_row.contains("[type:: MEET]"),
+            writes_type,
+            "{event_row}"
+        );
+
+        let mut list = env.command();
+        fake.install(&mut list).args(["gcal", "list", "-f", "json"]);
+        let listed = list.output().expect("list after sync");
+        assert_eq!(listed.status.code(), Some(0), "{}", stderr(&listed));
+        let listed: Value =
+            serde_json::from_str(&stdout(&listed)).expect("list JSON");
+        let after = list_event(&listed, "Lunch");
+        assert_eq!(after["off_clock"], true, "{after}");
+        assert_eq!(after["clock_source"], "note", "{after}");
+        assert_eq!(after["clock_note"], "love.md", "{after}");
+        assert_eq!(after["off_clock"], before["off_clock"]);
+    }
+}

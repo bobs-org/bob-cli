@@ -187,6 +187,36 @@ pub(crate) use sub_bullet::{
 };
 pub(crate) use task_theme::CaptureTaskThemeContext;
 
+/// Apply the shared lineup clock rule to a named Pomodoro against staged
+/// task-note edits. This lets `capture-pomodoro-name` preview and write the
+/// same post-image without maintaining a second clock resolver.
+pub(crate) fn restamp_named_pomodoro_clock(
+    bob_dir: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    day_contents: String,
+    entry_line: usize,
+    task_postimages: &[(PathBuf, String)],
+    now: chrono::NaiveDateTime,
+) -> Result<String, CaptureError> {
+    let mut planner = CaptureBatchPlanner::default();
+    planner.stage(day_file, day_contents)?;
+    for (path, postimage) in task_postimages {
+        planner.stage(path, postimage.clone())?;
+    }
+    let mut warnings = Vec::new();
+    meet_event_run::restamp_session_clock(
+        &mut planner,
+        bob_dir,
+        day_file,
+        day_relative,
+        entry_line,
+        now,
+        &mut warnings,
+    )?;
+    planner.read_existing(day_file)
+}
+
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
     if let Some(hit) = super::capture_flag_guard::find_unknown_long_flag(

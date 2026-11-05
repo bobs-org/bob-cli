@@ -559,6 +559,61 @@ fn rename_placeholder_preview_rewrites_the_headline() {
 }
 
 #[test]
+fn type_relocation_restamps_a_running_entry_when_only_its_name_changes() {
+    let task_note = concat!(
+        "---\n",
+        "type: [[area]]\n",
+        "task_type: CHORE\n",
+        "offclock_types:\n",
+        "  - MEET\n",
+        "---\n# Love\n## Tasks\n",
+        "- [ ] #task Lunch with Kelly ^lunch\n",
+    );
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930** [t:: 30m]) — CHORE\n",
+        "  - [[sase#^lunch]]\n",
+    );
+    let (_temp, vault, day_file, config) =
+        fixture("bob-type-existing-clock-name", task_note, day);
+    write_file(
+        &config,
+        concat!("plan:\n", "themes:\n  CHORE: yellow\n  MEET: blue\n",),
+    );
+
+    let (_, dry) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["^sase:lunch", "#meet"],
+        true,
+    );
+    assert!(dry.get("type_relocation").is_some(), "{dry}");
+    assert_eq!(
+        fs::read_to_string(&day_file).unwrap(),
+        day,
+        "dry-run leaves the source note unchanged"
+    );
+
+    let (_, written) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["^sase:lunch", "#meet"],
+        false,
+    );
+    assert_eq!(
+        written["pomodoro_blocks"], dry["pomodoro_blocks"],
+        "{dry}\n{written}"
+    );
+    let after = fs::read_to_string(&day_file).unwrap();
+    assert!(
+        after.contains("(**0900-0930** [off:: 30m]) — MEET"),
+        "{after}"
+    );
+}
+
+#[test]
 fn create_below_preview_reports_a_created_destination() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-type-existing-create-preview",

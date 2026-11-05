@@ -304,14 +304,6 @@ fn assign_capture_pomodoro_name_at(
 ) -> Result<CapturePomodoroNameResult, CapturePomodoroNameError> {
     let plan = plan_assignment(&request, day_file)?;
     if !request.dry_run {
-        collect_done::atomic_write(&plan.target, &plan.updated).map_err(
-            |error| {
-                CapturePomodoroNameError::io(format!(
-                    "replace daily note {}: {error}",
-                    plan.target.display()
-                ))
-            },
-        )?;
         for write in &plan.retype_writes {
             if let Err(error) = write_retype_file(write) {
                 return Err(CapturePomodoroNameError::io(format!(
@@ -320,6 +312,14 @@ fn assign_capture_pomodoro_name_at(
                 )));
             }
         }
+        collect_done::atomic_write(&plan.target, &plan.updated).map_err(
+            |error| {
+                CapturePomodoroNameError::io(format!(
+                    "replace daily note {}: {error}",
+                    plan.target.display()
+                ))
+            },
+        )?;
     }
     Ok(plan.result)
 }
@@ -397,14 +397,14 @@ fn plan_assignment(
     let slug = capture_language::selector_slug(&request.name);
     let line_index = entry.line - 1;
     let replace_existing = entry.name.is_some();
-    let updated = assign_name_to_line(
+    let mut updated = assign_name_to_line(
         &original,
         line_index,
         &request.name,
         replace_existing,
     )?;
     let updated_scan = capture_pomodoros::scan(&updated);
-    let updated_entry = updated_scan
+    let named_entry = updated_scan
         .entries
         .iter()
         .find(|candidate| candidate.line == entry.line)
@@ -413,9 +413,9 @@ fn plan_assignment(
                 "updated Pomodoro disappeared from {relative_day_file}"
             ))
         })?;
-    if updated_entry.name.as_deref() != Some(request.name.as_str())
-        || updated_entry.slug != slug
-        || !updated_entry.selectable
+    if named_entry.name.as_deref() != Some(request.name.as_str())
+        || named_entry.slug != slug
+        || !named_entry.selectable
     {
         return Err(CapturePomodoroNameError::io(format!(
             "failed to assign Pomodoro name {} on line {} of {relative_day_file}",
@@ -427,9 +427,43 @@ fn plan_assignment(
         &request.bob_dir,
         day_file,
         &updated,
-        updated_entry.line,
+        named_entry.line,
         &request.name,
     );
+    if !retype_writes.is_empty() {
+        let postimages =
+            retype_postimages(&retype_writes).map_err(|error| {
+                CapturePomodoroNameError::io(format!(
+                    "read task for retype preview: {error}"
+                ))
+            })?;
+        let day_relative =
+            day_file.strip_prefix(&request.bob_dir).unwrap_or(day_file);
+        updated = super::capture::restamp_named_pomodoro_clock(
+            &request.bob_dir,
+            day_file,
+            day_relative,
+            updated,
+            named_entry.line,
+            &postimages,
+            bob_env::current_datetime(),
+        )
+        .map_err(|error| {
+            CapturePomodoroNameError::io(format!(
+                "re-stamp running Pomodoro clock: {}",
+                error.message
+            ))
+        })?;
+    }
+    let final_entry = capture_pomodoros::scan(&updated)
+        .entries
+        .into_iter()
+        .find(|candidate| candidate.line == named_entry.line)
+        .ok_or_else(|| {
+            CapturePomodoroNameError::io(format!(
+                "updated Pomodoro disappeared from {relative_day_file}"
+            ))
+        })?;
     let retyped = retype_writes
         .iter()
         .map(|write| RetypedEntry {
@@ -451,14 +485,33 @@ fn plan_assignment(
             relative_day_file,
             name: request.name.clone(),
             slug,
-            line: updated_entry.line,
-            pomodoro_ref: updated_entry.pomodoro_ref.to_string(),
-            pomodoro: updated_entry.clone(),
+            line: final_entry.line,
+            pomodoro_ref: final_entry.pomodoro_ref.to_string(),
+            pomodoro: final_entry,
             warnings: name_warnings(&request.bob_dir, day_file, &request.name),
             retyped,
         },
         retype_writes,
     })
+}
+
+fn retype_postimages(
+    writes: &[RetypeWrite],
+) -> io::Result<Vec<(PathBuf, String)>> {
+    let mut postimages = std::collections::BTreeMap::<PathBuf, String>::new();
+    for write in writes {
+        let contents = match postimages.get(&write.path) {
+            Some(contents) => contents.clone(),
+            None => fs::read_to_string(&write.path)?,
+        };
+        let updated = if contents.contains(&write.before) {
+            contents.replacen(&write.before, &write.after, 1)
+        } else {
+            contents
+        };
+        postimages.insert(write.path.clone(), updated);
+    }
+    Ok(postimages.into_iter().collect())
 }
 
 fn name_warnings(

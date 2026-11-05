@@ -1212,7 +1212,7 @@ impl CaptureTaskThemeContext {
             return Ok(None);
         };
         let restamped_refs =
-            super::project_deps::restamp_changed_timed_entries(
+            super::project_deps::restamp_retyped_timed_entries(
                 planner,
                 &self.root,
                 &day_file,

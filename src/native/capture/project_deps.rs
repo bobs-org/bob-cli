@@ -510,6 +510,55 @@ pub(super) fn restamp_changed_timed_entries(
     now: chrono::NaiveDateTime,
     warnings: &mut Vec<CaptureWarning>,
 ) -> Result<Vec<PomodoroBlockRef>, CaptureError> {
+    restamp_changed_or_retyped_timed_entries(
+        planner,
+        bob_dir,
+        day_file,
+        day_relative,
+        before,
+        after,
+        now,
+        warnings,
+        false,
+    )
+}
+
+/// Like `restamp_changed_timed_entries`, but also re-stamp an open timed
+/// entry whose type relocation renamed or moved its ledger row.
+pub(super) fn restamp_retyped_timed_entries(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    before: &str,
+    after: String,
+    now: chrono::NaiveDateTime,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<Vec<PomodoroBlockRef>, CaptureError> {
+    restamp_changed_or_retyped_timed_entries(
+        planner,
+        bob_dir,
+        day_file,
+        day_relative,
+        before,
+        after,
+        now,
+        warnings,
+        true,
+    )
+}
+
+fn restamp_changed_or_retyped_timed_entries(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    day_file: &Path,
+    day_relative: &Path,
+    before: &str,
+    after: String,
+    now: chrono::NaiveDateTime,
+    warnings: &mut Vec<CaptureWarning>,
+    include_renamed_or_moved: bool,
+) -> Result<Vec<PomodoroBlockRef>, CaptureError> {
     let before_spans = line_spans(before);
     let after_spans = line_spans(&after);
     let before_lines = before_spans
@@ -520,6 +569,16 @@ pub(super) fn restamp_changed_timed_entries(
         after_spans.iter().map(|span| span.text).collect::<Vec<_>>();
     let (before_to_after, _) = line_maps(&before_lines, &after_lines);
     let scan = capture_pomodoros::scan(before);
+    let after_scan = capture_pomodoros::scan(&after);
+    let after_timed_entries = after_scan
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.state == capture_pomodoros::PomodoroState::Open
+                && entry.time_range.is_some()
+        })
+        .map(|entry| entry.line.saturating_sub(1))
+        .collect::<BTreeSet<_>>();
     let mut restamp = Vec::new();
     for entry in &scan.entries {
         if entry.state != capture_pomodoros::PomodoroState::Open
@@ -528,15 +587,33 @@ pub(super) fn restamp_changed_timed_entries(
             continue;
         }
         let before_index = entry.line.saturating_sub(1);
-        let Some(after_index) = before_to_after.get(&before_index).copied()
-        else {
-            continue;
-        };
         let before_end =
             crate::native::capture_task_toggle::child_block_end_line(
                 &before_spans,
                 before_index,
             );
+        let after_index = before_to_after
+            .get(&before_index)
+            .copied()
+            .or_else(|| {
+                (before_index + 1..before_end).find_map(|child_index| {
+                    let mapped_child =
+                        before_to_after.get(&child_index).copied()?;
+                    let parent = nearest_shallower_list_item_parent(
+                        &after_spans,
+                        mapped_child,
+                    )?;
+                    after_timed_entries.contains(&parent).then_some(parent)
+                })
+            })
+            .or_else(|| {
+                after_timed_entries
+                    .contains(&before_index)
+                    .then_some(before_index)
+            });
+        let Some(after_index) = after_index else {
+            continue;
+        };
         let after_end =
             crate::native::capture_task_toggle::child_block_end_line(
                 &after_spans,
@@ -554,7 +631,12 @@ pub(super) fn restamp_changed_timed_entries(
             .take(after_end.saturating_sub(after_index))
             .map(|span| span.text)
             .collect::<Vec<_>>();
-        if before_children != after_children {
+        let headline_changed =
+            before_lines[before_index] != after_lines[after_index];
+        let entry_moved = before_index != after_index;
+        if before_children != after_children
+            || (include_renamed_or_moved && (headline_changed || entry_moved))
+        {
             restamp.push((before_index, after_index));
         }
     }

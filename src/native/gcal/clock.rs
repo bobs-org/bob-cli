@@ -48,7 +48,7 @@ fn probe_line(root: &str, tag: &ClockTag) -> String {
     }
     line.push_str(" [root:: ");
     line.push_str(root);
-    line.push(']');
+    line.push_str("] [type:: MEET]");
     line
 }
 
@@ -148,5 +148,31 @@ mod tests {
             off_clock_status_suffix(&inherited),
             " · off-clock via love"
         );
+    }
+
+    #[test]
+    fn listed_clock_resolves_the_synced_meet_type() {
+        let mut notes = BTreeMap::new();
+        notes.insert(
+            PathBuf::from("love.md"),
+            "---\ntype: [[area]]\noffclock_types: [MEET]\n---\n".to_string(),
+        );
+        notes.insert(PathBuf::from("2026/20261030.md"), "# Day\n".to_string());
+        let index = NoteIndex::from_paths(notes.keys().cloned());
+        let mut resolver =
+            HomeResolver::new(IndexedHomeSource::new(&index, &notes));
+
+        let (effective, root_only) = resolve_listed_clock(
+            &mut resolver,
+            Path::new("2026/20261030.md"),
+            Some("love"),
+            &ClockTag::None,
+            true,
+        );
+
+        assert!(effective.off_clock);
+        assert_eq!(effective.source, ClockSource::Note);
+        assert_eq!(effective.note.as_deref(), Some("love.md"));
+        assert!(root_only.off_clock);
     }
 }

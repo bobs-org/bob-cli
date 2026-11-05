@@ -670,6 +670,12 @@ the shared relocation applier. The item reports `type_relocation` when the
 ledger moves; types are never refused. Closed targets are refused:
 closed tasks keep their fields as history.
 
+If a `#type` retype renames or moves an open timed entry, capture re-stamps
+that entry's clock from its post-retype links in the same transaction, even
+when the child lines did not change. A retype that leaves the entry in place,
+hand edits to a task type or `[root::]`, and note-default edits keep the
+running key until close re-stamps it.
+
 With a configured `types:` vocabulary, only its entries are accepted.
 Without one, only names already present in Pomodoro history are accepted;
 inventory labels are excluded. Literals match by key, and slugs also try
@@ -4091,6 +4097,10 @@ task's root walk that declares a clock policy — a non-empty
 iff the task's effective type key is listed), otherwise the nearest
 `offclock: true|false`; else on-clock. An invalid nearer value stays
 on-clock and raises `note_offclock_invalid` naming the key.
+When a note declares `offclock_types:`, membership uses the task's effective
+type key: its own type field, then the reading type or nearest note type
+default, then `plan.default_type`. The list does not depend on the configured
+`types:` catalog.
 Anything else stays on the work clock: an unlinked session, a mixed
 lineup, or a link that does not resolve. Mixed never splits per link —
 one on-clock or unresolved neighbour keeps the whole session on the
@@ -4104,6 +4114,8 @@ clock. Off-clock rows write `[off:: Nm]`; worked rows write `[t:: Nm]`.
 | Any other start (plain, named, created, restart, kept-ledger swap, link start) | The started entry's counted Task Links, resolved against the staged vault. Same-note Event Tasks read the note being rewritten. |
 | Close | The links the closed row keeps after by-the-clock classification and the selection. Deferred and dropped lines are gone; a worked link that is also carried still counts. The key switches even when remaining time is under five minutes and the span does not retime. |
 | Running lineup edit (`^route:id`, a new-task link, `~K` on a start, merge `=*`, split `=/`, capture blocked-link consumption) | The running entry's counted Task Links after the add, move, or drop, so the Now card stays honest. Open rows never count toward stats. |
+| Naming a timed open entry, or a `#type` relocation that renames or moves its running entry | Recompute from its counted Task Links after the linked tasks are retyped, even when the child lines stay the same. |
+| Other task type, root, or note-default changes | Keep the current key; close re-stamps it from the links the row keeps. |
 
 Four edges:
 
@@ -9608,8 +9620,11 @@ Naming an entry that holds Task Links applies the shared retype rule (D6
 Enter) to each linked task whose type the new name does not include: a
 container or label result retypes nothing, otherwise the task gains
 `[type:: X]` or clears to its inherited type, catalog-spelled. A label or
-container result keeps the task's type. Ctrl+X merges only add types, so
-they never retype.
+container result keeps the task's type. If the entry is already timed, its
+clock key is recomputed from the counted links after these retypes; dry-run
+returns the same post-image. Other effective-type changes keep a running
+entry's key until close re-stamps it. Ctrl+X merges only add types, so they
+never retype.
 
 JSON success is a single versioned object with `ok`, `schema_version` `1`,
 `dry_run`, `day_file`, `relative_day_file`, the canonical `name`, the `slug` to
