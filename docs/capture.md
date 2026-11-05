@@ -8434,6 +8434,11 @@ editor assist:
 `bob capture` and `bob capture-parse` keep the literal text. Feeding the
 result back through the command is a no-op.
 
+Typing `-` after a space or tab aliases `~` only where a bare `~` would open
+the Links To relation picker. It stays literal at a line or bullet-body start,
+glued to a word, after another `-`, inside an unclosed backtick span, or inside
+a wikilink. For example, `Fix it -` becomes `Fix it ~`.
+
 **Relation-label pipe attach.** Typing `|` after whitespace that follows a
 relation token deletes that whitespace so the pipe glues to the token.
 `--cursor` is required: only the `|` token ending at that caret is examined,

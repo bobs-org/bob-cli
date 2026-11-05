@@ -775,6 +775,86 @@ fn rewrite_draft_expands_sigil_aliases_in_route_picker_positions() {
 }
 
 #[test]
+fn rewrite_draft_expands_relation_dash_alias() {
+    for (raw, expected) in [
+        ("Fix it -", "Fix it ~"),
+        ("Fix it\t-", "Fix it\t~"),
+        ("@bob+fix-retries -", "@bob+fix-retries ~"),
+        ("Fix it &dev:build -", "Fix it &dev:build ~"),
+        ("Buy milk\n- note -", "Buy milk\n- note ~"),
+        ("Buy milk\n\nFix it -", "Buy milk\n\nFix it ~"),
+        ("Fix [[note]] -", "Fix [[note]] ~"),
+        ("Fix it `code` -", "Fix it `code` ~"),
+        ("Café run -", "Café run ~"),
+    ] {
+        let cursor = raw.len();
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Typed ~ for -"),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].start, cursor - 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].end, cursor, "{raw:?}");
+        assert_eq!(rewrite.edits[0].replacement, "~", "{raw:?}");
+        assert!(raw.is_char_boundary(rewrite.edits[0].start), "{raw:?}");
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_relation_dash_alias_stays_literal() {
+    let mut cases = vec![
+        ("-", 1),
+        ("  -", 3),
+        ("Buy milk\n-", 10),
+        ("Buy milk\n  -", 12),
+        ("- -", 3),
+        ("* -", 3),
+        ("+ -", 3),
+        ("Fix it\n\n- -", 11),
+        ("fix-", 4),
+        ("Fix it --", 9),
+        ("x -", 3),
+        ("=bugs -", 7),
+        ("+5 -", 4),
+        ("x\n- 1 work -", 12),
+        ("see [[foo -", 11),
+        ("Fix ((foo -", 11),
+        ("run `cargo -", 12),
+    ];
+    for raw in ["Fix it - about", "Fix it -foo"] {
+        cases.push((raw, raw.find('-').expect("dash") + 1));
+    }
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?} at {cursor}");
+        assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+    }
+
+    let raw = "Fix it -";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+
+    let raw = "Task {0} %t\n\nFix it -";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+}
+
+#[test]
 fn rewrite_draft_expands_comma_to_parent_task_picker() {
     for (raw, expected) in [
         ("@cash,", "@cash+"),

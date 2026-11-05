@@ -129,6 +129,39 @@ fn capture_rewrite_json_expands_a_route_sigil_alias() {
 }
 
 #[test]
+fn capture_rewrite_json_expands_a_relation_dash_alias() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("8")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Fix it -")
+        .output()
+        .expect("run bob capture-rewrite relation dash alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "Fix it -");
+    assert_eq!(json["text"], "Fix it ~");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 8);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 7, "end": 8 }, "replacement": "~" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed ~ for -");
+}
+
+#[test]
 fn capture_rewrite_json_expands_glued_target_comma_with_one_edit() {
     let draft = "@cash+goog-exit,";
     let output = bob_command()

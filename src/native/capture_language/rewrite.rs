@@ -107,8 +107,8 @@ pub(crate) fn rewrite_draft(
     absorb_bare_declaration(raw_text, cursor)
 }
 
-/// Typing `.`, `;`, `,`, `\`, or `/` in a position where its real sigil would
-/// open a picker swaps that byte to `^`, `:`, `+`, or `#`. The candidate is
+/// Typing `.`, `;`, `,`, `-`, `\`, or `/` in a position where its real sigil would
+/// open a picker swaps that byte to `^`, `:`, `+`, `~`, or `#`. The candidate is
 /// checked by the ordinary completion grammar, keeping the assist lexical and
 /// aligned with picker eligibility. Route-scope contexts plus lone
 /// move-bullet sigils are accepted; a `.` that completes a `- ^^` choice
@@ -117,6 +117,9 @@ pub(crate) fn rewrite_draft(
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
+    if alias == "-" {
+        return expand_relation_dash_alias(raw_text, start, cursor);
+    }
     if alias == "\\" || alias == "/" {
         return expand_hash_alias(raw_text, start, cursor, alias);
     }
@@ -205,6 +208,65 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }
     Some(finish_sigil_alias(
         raw_text, &candidate, start, cursor, sigil, alias,
+    ))
+}
+
+/// Typing `-` after whitespace aliases `~` only where a bare relation sigil
+/// would open the Links To picker. Line and bullet starts, code spans, and
+/// wikilink fields stay literal.
+fn expand_relation_dash_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    if start == 0
+        || !matches!(raw_text.as_bytes().get(start - 1), Some(b' ' | b'\t'))
+    {
+        return None;
+    }
+
+    let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
+    let mut prefix = raw_text.get(line_start..start)?;
+    prefix = prefix.trim_start_matches([' ', '\t']);
+    let bytes = prefix.as_bytes();
+    if bytes.len() >= 2
+        && matches!(bytes[0], b'-' | b'*' | b'+')
+        && matches!(bytes[1], b' ' | b'\t')
+    {
+        prefix = prefix[1..].trim_start_matches([' ', '\t']);
+    }
+    if prefix.trim().is_empty()
+        || prefix.bytes().filter(|byte| *byte == b'`').count() % 2 != 0
+    {
+        return None;
+    }
+
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, "~");
+    if crate::native::capture_links::completion_field_at(
+        &candidate,
+        cursor,
+        String::new(),
+    )
+    .is_some()
+        || crate::native::capture_task_wikilinks::completion_field_at(
+            &candidate,
+            cursor,
+            "mac_inbox.md",
+        )
+        .is_some()
+    {
+        return None;
+    }
+    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    if field.context != super::completion::CompletionContext::RelationTo
+        || field.replacement != (start, cursor)
+    {
+        return None;
+    }
+
+    Some(finish_sigil_alias(
+        raw_text, &candidate, start, cursor, '~', "-",
     ))
 }
 
