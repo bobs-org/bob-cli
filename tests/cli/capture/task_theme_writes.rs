@@ -436,14 +436,23 @@ fn ref_today_named_selection_retypes_to_the_explicit_destination() {
     assert_success(&output);
     let json: Value =
         serde_json::from_slice(&output.stdout).expect("ref today JSON");
-    assert!(json["capture"].get("task_theme").is_none(), "{json}");
-    let merged = &json["capture"]["pomodoro_link_destination"]["merged"];
-    assert_eq!(merged["before"], "WRITE", "{json}");
-    assert_eq!(merged["after"], "WRITE + FIX", "{json}");
+    // The `-p WRITE` destination is created by the run, so the task
+    // retypes instead of merging (A10).
+    assert_eq!(json["capture"]["task_theme"]["action"], "set", "{json}");
+    assert!(
+        json["capture"]["pomodoro_link_destination"]
+            .get("merged")
+            .is_none(),
+        "{json}"
+    );
     let task_after = fs::read_to_string(vault.join("sase.md")).unwrap();
     assert!(
-        task_after.contains("[theme:: FIX]"),
-        "ref-today merges instead of retyping: {task_after}"
+        task_after.contains("[type:: WRITE]"),
+        "ref-today retypes into the created destination: {task_after}"
+    );
+    assert!(
+        !task_after.contains("[theme:: FIX]"),
+        "the explicit field is replaced by the retype: {task_after}"
     );
 }
 
@@ -616,6 +625,62 @@ fn named_project_note_bullets_retype_linked_tasks() {
 }
 
 #[test]
+fn new_named_capture_into_created_entry_retypes_the_task() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-created-retype",
+        &project(Some("BUILD"), ""),
+        "## Pomodoros\n- [ ] () — LATER\n",
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["Fix it @sase:fixit#FIX"],
+        false,
+    );
+    assert_eq!(
+        json["pomodoro_link_destination"]["role"], "created",
+        "{json}"
+    );
+    assert!(
+        json["pomodoro_link_destination"].get("merged").is_none(),
+        "{json}"
+    );
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    let line = json["task_line"].as_str().unwrap();
+    assert!(line.contains("[type:: FIX]"), "{line}");
+    assert!(!line.contains("[type:: BUILD]"), "{line}");
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("— FIX"), "{day}");
+    assert!(!day.contains("BUILD + FIX"), "{day}");
+    assert!(!day.contains("FIX + BUILD"), "{day}");
+    let task_note = fs::read_to_string(vault.join("sase.md")).unwrap();
+    assert!(task_note.contains("[type:: FIX]"), "{task_note}");
+}
+
+#[test]
+fn new_named_capture_into_existing_entry_still_merges() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-existing-merge",
+        &project(Some("BUILD"), ""),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["Fix it @sase:fixit#FIX"],
+        false,
+    );
+    assert!(json.get("task_theme").is_none(), "{json}");
+    let merged = &json["pomodoro_link_destination"]["merged"];
+    assert_eq!(merged["before"], "FIX", "{json}");
+    assert_eq!(merged["after"], "FIX + BUILD", "{json}");
+    let task_note = fs::read_to_string(vault.join("sase.md")).unwrap();
+    assert!(!task_note.contains("[type::"), "{task_note}");
+}
+
+#[test]
 fn active_existing_task_link_start_shorthand_uses_the_resolved_name() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-capture-task-theme-start-shorthand",
@@ -626,12 +691,20 @@ fn active_existing_task_link_start_shorthand_uses_the_resolved_name() {
     let (output, json) =
         capture_json(&vault, &day_file, &config, &["^sase:work=fix"], false);
     assert_success(&output);
-    assert!(json.get("task_theme").is_none(), "{json}");
+    // The `=fix` start creates its entry, so the linked task retypes
+    // into it (A10) instead of merging.
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
     assert!(json.get("pomodoro_start").is_some(), "{json}");
     assert!(
-        fs::read_to_string(vault.join("sase.md"))
-            .unwrap()
-            .contains("[theme:: BUILD]"),
-        "the task line keeps its theme under merge"
+        json["pomodoro_link_destination"].get("merged").is_none(),
+        "{json}"
     );
+    let task_note = fs::read_to_string(vault.join("sase.md")).unwrap();
+    assert!(
+        task_note.contains("[type:: FIX]"),
+        "the started entry retypes the task: {task_note}"
+    );
+    let day = fs::read_to_string(&day_file).unwrap();
+    assert!(day.contains("— FIX\n"), "{day}");
+    assert!(!day.contains("FIX + BUILD"), "{day}");
 }

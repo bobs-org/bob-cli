@@ -940,6 +940,9 @@ pub(super) fn plan_project_note_item(
                 &task.block_id,
                 Some(current_destination.as_str()),
                 Some(selector),
+                // A10: `place_project_task_links` above may have created
+                // this destination in the same run.
+                creates_pomodoro.unwrap_or(false),
                 warnings,
             )? {
                 if let Some(link) = task_links
@@ -1169,6 +1172,8 @@ pub(super) fn plan_project_note_item(
                     });
                 }
                 // Deliberate named-type behavior (D6) for new tasks.
+                // A10: tasks landing in an entry this run created retype
+                // instead of merging.
                 if project_link_guard.is_none()
                     && let Some(dest_name) = current_destination.clone()
                     && let Some(selector) = pomodoro_name.as_deref()
@@ -1179,6 +1184,7 @@ pub(super) fn plan_project_note_item(
                         &named.block_id,
                         Some(dest_name.as_str()),
                         Some(selector),
+                        insertion.creates_pomodoro,
                         warnings,
                     )?
                 {
@@ -1287,6 +1293,10 @@ pub(super) fn plan_project_note_item(
                 }
                 // Link succeeded; deliberate named retype (plan.rs outer).
                 let mut nested_result = nested.result;
+                // A10: tasks landing in an entry this run created retype
+                // instead of merging.
+                let nested_created =
+                    nested_result.creates_pomodoro.unwrap_or(false);
                 if pomodoro_name.is_some()
                     && nested_result.link_guard.is_none()
                     && let Some(previous) =
@@ -1305,6 +1315,7 @@ pub(super) fn plan_project_note_item(
                             &previous,
                             Some(resolved_name.as_str()),
                             Some(selector),
+                            nested_created,
                             warnings,
                         )?
                 {

@@ -970,29 +970,11 @@ mod tests {
                 other => panic!("{id}: unexpected split kind {other}"),
             }
         }
-        for case in vectors["narrow"].as_array().expect("narrow vectors") {
-            let id = case["name"].as_str().unwrap_or("?");
-            let made = sources(
-                &strings(&case["vocab"]),
-                &strings(&case["exempt"]),
-                &strings(&case["inventory"]),
-            );
-            let worked: Vec<&str> = case["worked"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|item| item.as_str().unwrap())
-                .collect();
-            assert_eq!(
-                super::super::merged::narrow_closed(
-                    case["entry"].as_str().unwrap(),
-                    &worked,
-                    &made,
-                ),
-                case["expected"].as_str().unwrap(),
-                "{id}"
-            );
-        }
+        // The `narrow` vectors stay for the Ledger Tools JS mirror,
+        // which still runs `narrowClosed` until the task-status-cycler
+        // close switches to `settleClosed`. Rust reads them no longer:
+        // the close settle (`agree::settle_closed`) replaced
+        // `merged::narrow_closed`.
         for case in vectors["shed"].as_array().expect("shed vectors") {
             let id = case["name"].as_str().unwrap_or("?");
             let made = sources(

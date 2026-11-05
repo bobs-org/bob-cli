@@ -1,15 +1,16 @@
-//! R6 close names: narrow the closed session, shed the carried one.
+//! R6 close names: settle the closed session, agree the continuation.
 //!
-//! The pure planners live in `pomodoro_themes::merged`; this module feeds
-//! them from a close's numbered Task Links. Each link carries its
-//! _pre-close_ effective type key (read before the close stages anything,
-//! so closed tasks do not stop suggesting) and its outcome.
+//! The pure planners live in `pomodoro_themes::agree` (plus
+//! `merged::shed` for the continuation base); this module feeds them from
+//! a close's numbered Task Links. Each link carries its _pre-close_
+//! effective type key and catalog spelling (read before the close stages
+//! anything, so closed tasks do not stop suggesting) and its outcome.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::native::{
     config::themes::ThemeSources,
-    pomodoro_themes::{merged, routing},
+    pomodoro_themes::{agree, merged, routing},
 };
 
 use super::selection::{NumberedTaskLink, TaskLinkOutcome};
@@ -20,8 +21,9 @@ use super::selection::{NumberedTaskLink, TaskLinkOutcome};
 pub(crate) struct CloseNaming {
     pub sources: ThemeSources,
     /// `(path_part, block_id)` of a Task Link to its pre-close effective
-    /// type key. Links without an effective type are absent.
-    pub link_types: BTreeMap<(String, String), String>,
+    /// type `(key, catalog-spelled name)`. Links without an effective type
+    /// are absent.
+    pub link_types: BTreeMap<(String, String), (String, String)>,
 }
 
 /// The two names a close derives from the running entry's name.
@@ -50,47 +52,72 @@ impl CloseNames {
 
 /// Apply R6 to `name`. Worked = in progress, parked, or complete.
 /// Carried = in progress or deferred. Links without a type are ignored,
-/// and a name the planners leave alone (single-type, MEET, unnamed)
+/// and a name the planners leave alone (MEET, container, untyped work)
 /// yields [`CloseNames::unchanged`].
 pub(crate) fn close_names(
     name: &str,
     links: &[NumberedTaskLink],
     naming: &CloseNaming,
 ) -> CloseNames {
-    let typed: Vec<(&str, TaskLinkOutcome)> = links
+    let typed: Vec<((&str, &str), TaskLinkOutcome)> = links
         .iter()
         .filter_map(|link| {
-            let key = naming
+            let (key, display) = naming
                 .link_types
                 .get(&(link.path_part.clone(), link.block_id.clone()))?;
-            Some((key.as_str(), link.outcome))
+            Some(((key.as_str(), display.as_str()), link.outcome))
         })
         .collect();
-    let before: Vec<&str> = typed.iter().map(|(key, _)| *key).collect();
-    let worked: Vec<&str> = typed
+    let is_worked = |outcome: &TaskLinkOutcome| {
+        matches!(
+            outcome,
+            TaskLinkOutcome::InProgress
+                | TaskLinkOutcome::Parked
+                | TaskLinkOutcome::Complete
+        )
+    };
+    let is_carried = |outcome: &TaskLinkOutcome| {
+        matches!(
+            outcome,
+            TaskLinkOutcome::InProgress | TaskLinkOutcome::Deferred
+        )
+    };
+    let worked: Vec<agree::WorkedType> = typed
         .iter()
-        .filter(|(_, outcome)| {
-            matches!(
-                outcome,
-                TaskLinkOutcome::InProgress
-                    | TaskLinkOutcome::Parked
-                    | TaskLinkOutcome::Complete
-            )
+        .filter(|(_, outcome)| is_worked(outcome))
+        .map(|((key, display), _)| agree::WorkedType {
+            key: (*key).to_string(),
+            name: (*display).to_string(),
         })
-        .map(|(key, _)| *key)
         .collect();
+    let before: Vec<&str> = typed.iter().map(|((key, _), _)| *key).collect();
     let carried: Vec<&str> = typed
         .iter()
-        .filter(|(_, outcome)| {
-            matches!(
-                outcome,
-                TaskLinkOutcome::InProgress | TaskLinkOutcome::Deferred
-            )
-        })
-        .map(|(key, _)| *key)
+        .filter(|(_, outcome)| is_carried(outcome))
+        .map(|((key, _), _)| *key)
         .collect();
-    let closed = merged::narrow_closed(name, &worked, &naming.sources);
-    let continuation = merged::shed(name, &before, &carried, &naming.sources);
+    let closed = agree::settle_closed(name, &worked, &naming.sources);
+    // The continuation sheds, then agrees over its carried children, so it
+    // is a fixed point of `agree_entry` the way reconcile would leave it.
+    // Untyped carried links are Unknown, which protects every type.
+    let shed_base = merged::shed(name, &before, &carried, &naming.sources);
+    let children: Vec<agree::AgreeChild> = links
+        .iter()
+        .filter(|link| is_carried(&link.outcome))
+        .map(|link| {
+            naming
+                .link_types
+                .get(&(link.path_part.clone(), link.block_id.clone()))
+                .map(|(key, display)| agree::AgreeChild::Live {
+                    key: key.clone(),
+                    name: display.clone(),
+                })
+                .unwrap_or(agree::AgreeChild::Unknown)
+        })
+        .collect();
+    let continuation =
+        agree::agree_entry(Some(&shed_base), true, &children, &naming.sources)
+            .name;
     let kept: BTreeSet<String> =
         routing::type_components(Some(continuation.as_str()), &naming.sources)
             .into_iter()
@@ -154,47 +181,91 @@ mod tests {
         }
     }
 
-    fn naming(types: &[(&str, &str)]) -> CloseNaming {
+    fn naming(types: &[(&str, &str, &str)]) -> CloseNaming {
         CloseNaming {
             sources: sources(),
             link_types: types
                 .iter()
-                .map(|(block, key)| {
+                .map(|(block, key, name)| {
                     (
                         ("n".to_string(), (*block).to_string()),
-                        (*key).to_string(),
+                        ((*key).to_string(), (*name).to_string()),
                     )
                 })
                 .collect(),
         }
     }
 
+    /// The continuation's carried children as `agree_entry` sees them.
+    fn carried_children(
+        links: &[NumberedTaskLink],
+        naming: &CloseNaming,
+    ) -> Vec<agree::AgreeChild> {
+        links
+            .iter()
+            .filter(|link| {
+                matches!(
+                    link.outcome,
+                    TaskLinkOutcome::InProgress | TaskLinkOutcome::Deferred
+                )
+            })
+            .map(|link| {
+                naming
+                    .link_types
+                    .get(&(link.path_part.clone(), link.block_id.clone()))
+                    .map(|(key, display)| agree::AgreeChild::Live {
+                        key: key.clone(),
+                        name: display.clone(),
+                    })
+                    .unwrap_or(agree::AgreeChild::Unknown)
+            })
+            .collect()
+    }
+
+    fn assert_continuation_is_stable(
+        continuation: &str,
+        links: &[NumberedTaskLink],
+        naming: &CloseNaming,
+    ) {
+        let children = carried_children(links, naming);
+        let outcome = agree::agree_entry(
+            Some(continuation),
+            true,
+            &children,
+            &naming.sources,
+        );
+        assert_eq!(outcome.name, continuation);
+        assert!(outcome.added.is_empty());
+        assert!(outcome.removed.is_empty());
+    }
+
     #[test]
     fn only_fix_worked_narrows_and_the_last_fix_done_sheds() {
-        let names = close_names(
-            "BUILD + FIX",
-            &[
-                link(1, "b", TaskLinkOutcome::Deferred),
-                link(2, "f", TaskLinkOutcome::Complete),
-            ],
-            &naming(&[("b", "build"), ("f", "fix")]),
-        );
+        let links = [
+            link(1, "b", TaskLinkOutcome::Deferred),
+            link(2, "f", TaskLinkOutcome::Complete),
+        ];
+        let naming = naming(&[("b", "build", "BUILD"), ("f", "fix", "FIX")]);
+        let names = close_names("BUILD + FIX", &links, &naming);
         assert_eq!(names.closed, "FIX");
         assert_eq!(names.continuation, "BUILD");
         assert_eq!(names.shed, vec![("fix".to_string(), "FIX".to_string())]);
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
     }
 
     #[test]
     fn parked_and_dropped_links_are_not_carried() {
-        let names = close_names(
-            "BUILD + FIX + READ",
-            &[
-                link(1, "b", TaskLinkOutcome::InProgress),
-                link(2, "f", TaskLinkOutcome::Parked),
-                link(3, "r", TaskLinkOutcome::Dropped),
-            ],
-            &naming(&[("b", "build"), ("f", "fix"), ("r", "read")]),
-        );
+        let links = [
+            link(1, "b", TaskLinkOutcome::InProgress),
+            link(2, "f", TaskLinkOutcome::Parked),
+            link(3, "r", TaskLinkOutcome::Dropped),
+        ];
+        let naming = naming(&[
+            ("b", "build", "BUILD"),
+            ("f", "fix", "FIX"),
+            ("r", "read", "READ"),
+        ]);
+        let names = close_names("BUILD + FIX + READ", &links, &naming);
         assert_eq!(names.closed, "BUILD + FIX");
         assert_eq!(names.continuation, "BUILD");
         assert_eq!(
@@ -204,56 +275,108 @@ mod tests {
                 ("read".to_string(), "READ".to_string()),
             ]
         );
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
     }
 
     #[test]
-    fn labels_stay_and_untyped_or_drifted_work_leaves_the_name() {
-        let names = close_names(
-            "BOB + BUILD + FIX",
-            &[
-                link(1, "b", TaskLinkOutcome::InProgress),
-                link(2, "u", TaskLinkOutcome::Complete),
-            ],
-            &naming(&[("b", "read")]),
-        );
-        // Only drift (READ) and an untyped link were worked: unchanged.
+    fn untyped_worked_links_keep_the_name() {
+        let links = [link(1, "u", TaskLinkOutcome::Complete)];
+        let naming = naming(&[]);
+        let names = close_names("BOB + BUILD + FIX", &links, &naming);
+        // No typed worked link: the closed session keeps its history.
         assert_eq!(names.closed, "BOB + BUILD + FIX");
-        // READ is not a component, so nothing sheds; BUILD and FIX never
-        // had links and stay.
         assert_eq!(names.continuation, "BOB + BUILD + FIX");
         assert!(names.shed.is_empty());
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
+    }
+
+    #[test]
+    fn drifted_work_settles_both_sessions() {
+        let links = [
+            link(1, "b", TaskLinkOutcome::InProgress),
+            link(2, "u", TaskLinkOutcome::Complete),
+        ];
+        let naming = naming(&[("b", "read", "READ")]);
+        let names = close_names("BOB + BUILD + FIX", &links, &naming);
+        // The worked type is drift (READ is no component): the closed
+        // session records exactly the worked types, and the continuation
+        // agrees the same way reconcile would.
+        assert_eq!(names.closed, "BOB + READ");
+        assert_eq!(names.continuation, "BOB + READ");
+        assert_eq!(
+            names.shed,
+            vec![
+                ("build".to_string(), "BUILD".to_string()),
+                ("fix".to_string(), "FIX".to_string()),
+            ]
+        );
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
+    }
+
+    #[test]
+    fn single_type_close_settles_to_the_worked_type() {
+        let links = [link(1, "f", TaskLinkOutcome::Complete)];
+        let naming = naming(&[("f", "build", "BUILD")]);
+        let names = close_names("FIX", &links, &naming);
+        // A `— FIX` session that worked only BUILD closes as `— BUILD`.
+        assert_eq!(names.closed, "BUILD");
+        // Nothing carries, so the empty continuation keeps the base.
+        assert_eq!(names.continuation, "FIX");
+        assert!(names.shed.is_empty());
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
+    }
+
+    #[test]
+    fn carried_drift_retypes_the_continuation() {
+        let links = [link(1, "f", TaskLinkOutcome::Deferred)];
+        let naming = naming(&[("f", "build", "BUILD")]);
+        let names = close_names("FIX", &links, &naming);
+        // Deferred links never work the closed session, but the carried
+        // BUILD link still agrees the continuation.
+        assert_eq!(names.closed, "FIX");
+        assert_eq!(names.continuation, "BUILD");
+        assert_eq!(names.shed, vec![("fix".to_string(), "FIX".to_string())]);
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
+    }
+
+    #[test]
+    fn deferring_everything_keeps_both_names() {
+        let links = [
+            link(1, "b", TaskLinkOutcome::Deferred),
+            link(2, "f", TaskLinkOutcome::Deferred),
+        ];
+        let naming = naming(&[("b", "build", "BUILD"), ("f", "fix", "FIX")]);
+        let names = close_names("BUILD + FIX", &links, &naming);
+        // The `x0` shape: nothing worked, everything carried.
+        assert_eq!(names.closed, "BUILD + FIX");
+        assert_eq!(names.continuation, "BUILD + FIX");
+        assert!(names.shed.is_empty());
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
     }
 
     #[test]
     fn shedding_every_type_keeps_the_base() {
-        let names = close_names(
-            "BOB + BUILD + FIX",
-            &[
-                link(1, "b", TaskLinkOutcome::Complete),
-                link(2, "f", TaskLinkOutcome::Complete),
-            ],
-            &naming(&[("b", "build"), ("f", "fix")]),
-        );
+        let links = [
+            link(1, "b", TaskLinkOutcome::Complete),
+            link(2, "f", TaskLinkOutcome::Complete),
+        ];
+        let naming = naming(&[("b", "build", "BUILD"), ("f", "fix", "FIX")]);
+        let names = close_names("BOB + BUILD + FIX", &links, &naming);
         assert_eq!(names.closed, "BOB + BUILD + FIX");
         assert_eq!(names.continuation, "BOB + BUILD");
         assert_eq!(names.shed, vec![("fix".to_string(), "FIX".to_string())]);
+        assert_continuation_is_stable(&names.continuation, &links, &naming);
     }
 
     #[test]
     fn single_type_meet_and_unnamed_never_rename() {
-        let one = close_names(
-            "FIX",
-            &[link(1, "f", TaskLinkOutcome::Complete)],
-            &naming(&[("f", "fix")]),
-        );
+        let links = [link(1, "f", TaskLinkOutcome::Complete)];
+        let naming = naming(&[("f", "fix", "FIX")]);
+        let one = close_names("FIX", &links, &naming);
         assert_eq!(one, CloseNames::unchanged("FIX"));
-        let meet = close_names(
-            "MEET",
-            &[link(1, "f", TaskLinkOutcome::Complete)],
-            &naming(&[("f", "fix")]),
-        );
+        let meet = close_names("MEET", &links, &naming);
         assert_eq!(meet, CloseNames::unchanged("MEET"));
-        let none = close_names("BUILD + FIX", &[], &naming(&[]));
+        let none = close_names("BUILD + FIX", &[], &naming);
         assert_eq!(none, CloseNames::unchanged("BUILD + FIX"));
     }
 }

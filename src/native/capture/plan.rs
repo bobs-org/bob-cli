@@ -1972,6 +1972,16 @@ pub(super) fn plan_capture_item(
                 .pomodoro_link_destination
                 .as_ref()
                 .and_then(|destination| destination.name.as_deref());
+            // A10: the shared link planner already landed once inside;
+            // a destination it created (or an earlier batch item did)
+            // retypes instead of merging.
+            let destination_is_new = planned
+                .result
+                .pomodoro_link_destination
+                .as_ref()
+                .is_some_and(|destination| {
+                    destination.role == Some("created")
+                });
             if let Some(applied) = task_theme_context.apply_existing_task(
                 planner,
                 &target,
@@ -1980,6 +1990,7 @@ pub(super) fn plan_capture_item(
                 previous_task_line,
                 resolved_name,
                 pomodoro_name.as_deref(),
+                destination_is_new,
                 warnings,
             )? {
                 planned.result.task_line = applied.task_line.clone();
@@ -3446,6 +3457,12 @@ pub(super) fn plan_capture_item(
                     .as_ref()
                     .and_then(|edit| edit.details.pomodoro_name.as_deref())
                     .map(str::to_string);
+                // A10: a destination the same run created retypes the
+                // task instead of merging into the entry name.
+                let destination_is_new = note_plan
+                    .pomodoro
+                    .as_ref()
+                    .is_some_and(|edit| edit.details.creates_pomodoro);
                 let landing = task_theme_context.apply_new_task(
                     planner,
                     &target,
@@ -3453,6 +3470,7 @@ pub(super) fn plan_capture_item(
                     block_id,
                     destination_name.as_deref(),
                     Some(selector.as_str()),
+                    destination_is_new,
                     warnings,
                 )?;
                 if let Some(landing) = landing {

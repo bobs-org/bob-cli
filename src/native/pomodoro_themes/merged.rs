@@ -1,5 +1,6 @@
-//! Pure merged-Pomodoro planners: merge names, split, select, narrow,
-//! and shed (R3–R7).
+//! Pure merged-Pomodoro planners: merge names, split, select, and
+//! shed (R3–R5, R7). The closed-session settle lives in
+//! [`super::agree::settle_closed`] (R6).
 //!
 //! Landing lives in [`super::routing::land`]. These helpers are plain
 //! data in, plain data out so capture and the Obsidian mirror share one
@@ -32,39 +33,6 @@ pub(crate) fn merge_names(base: &str, others: &[&str]) -> String {
         }
     }
     parts.join(" + ")
-}
-
-/// Closed-session name (R6 narrow). Labels stay. When at least one
-/// worked link's type is a type component of `name`, the result is
-/// those labels plus exactly the matching type components, in `name`
-/// order and spelling. Single-type and MEET names are unchanged.
-pub(crate) fn narrow_closed(
-    name: &str,
-    worked_keys: &[&str],
-    sources: &ThemeSources,
-) -> String {
-    if is_meet_name(Some(name)) {
-        return name.to_string();
-    }
-    let classified = type_components(Some(name), sources);
-    let type_keys: BTreeSet<&str> = classified
-        .iter()
-        .filter(|item| item.is_type)
-        .map(|item| item.key.as_str())
-        .collect();
-    if type_keys.len() < 2 {
-        return name.to_string();
-    }
-    let worked: BTreeSet<String> = worked_keys
-        .iter()
-        .map(|key| normalize_component(key))
-        .collect();
-    if !worked.iter().any(|key| type_keys.contains(key.as_str())) {
-        return name.to_string();
-    }
-    join_kept(&classified, |item| {
-        !item.is_type || worked.contains(&item.key)
-    })
 }
 
 /// Carried-session / source-after-move name (R6 / R7 shed). Drop each

@@ -36,6 +36,11 @@ pub(crate) struct CaptureTaskThemeContext {
     catalog: Option<Catalog>,
     resolver: HomeResolver<CaptureHomeSource>,
     warned_suggestions: BTreeSet<(String, Option<String>)>,
+    /// Normalized names of ledger entries this capture run created. A
+    /// `#NAME` / `=name` destination created by the same run retypes the
+    /// tasks landing in it (A10); an entry created earlier in the same
+    /// batch counts as new.
+    created_entry_names: BTreeSet<String>,
 }
 
 /// Pre-close type inputs for R6 close names: the theme vocabulary, each
@@ -132,9 +137,11 @@ impl CaptureTaskThemeContext {
             catalog: None,
             resolver: HomeResolver::new(CaptureHomeSource::new(root)),
             warned_suggestions: BTreeSet::new(),
+            created_entry_names: BTreeSet::new(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_new_task(
         &mut self,
         planner: &mut CaptureBatchPlanner,
@@ -143,6 +150,7 @@ impl CaptureTaskThemeContext {
         block_id: &str,
         destination_name: Option<&str>,
         selector: Option<&str>,
+        destination_is_new: bool,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedLanding>, CaptureError> {
         let Some(destination_name) = destination_name else {
@@ -168,6 +176,7 @@ impl CaptureTaskThemeContext {
             &source_line,
             destination_name,
             selector,
+            destination_is_new,
             warnings,
         )
     }
@@ -294,6 +303,7 @@ impl CaptureTaskThemeContext {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_existing_task(
         &mut self,
         planner: &mut CaptureBatchPlanner,
@@ -303,6 +313,7 @@ impl CaptureTaskThemeContext {
         previous_task_line: &str,
         destination_name: Option<&str>,
         selector: Option<&str>,
+        destination_is_new: bool,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedLanding>, CaptureError> {
         let Some(destination_name) = destination_name else {
@@ -316,6 +327,7 @@ impl CaptureTaskThemeContext {
             previous_task_line,
             destination_name,
             selector,
+            destination_is_new,
             warnings,
         )
     }
@@ -640,8 +652,18 @@ impl CaptureTaskThemeContext {
         source_line: &str,
         destination_name: &str,
         selector: Option<&str>,
+        destination_is_new: bool,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedLanding>, CaptureError> {
+        // A10: a `#NAME` / `=name` destination created by the same capture
+        // run retypes the tasks landing in it. An entry created earlier in
+        // the same batch counts as new.
+        let normalized = normalize_component(destination_name);
+        if destination_is_new {
+            self.created_entry_names.insert(normalized.clone());
+        }
+        let retype = destination_is_new
+            || self.created_entry_names.contains(&normalized);
         self.refresh_residence_snapshot(planner);
         if !self.load_config(warnings) || !self.load_catalog(warnings) {
             return Ok(None);
@@ -680,9 +702,10 @@ impl CaptureTaskThemeContext {
         let inherited_key =
             inherited.as_ref().map(|item| item.theme.key.as_str());
         let sources = catalog.theme_sources();
-        // R2 landing: links merge by default, never retype. Only MEET
-        // destinations and explicit Obsidian Alt+Enter retypes take the
-        // Set/Clear path; capture always lands with `retype: false`.
+        // R2 landing: links merge into existing destinations by default.
+        // A destination created by the same capture run takes the
+        // explicit Set/Clear retype path instead (A10); MEET destinations
+        // always do.
         let outcome = routing::land(
             &routing::LandInput {
                 field: &field,
@@ -691,7 +714,7 @@ impl CaptureTaskThemeContext {
                 inherited_key,
                 destination: destination_name,
                 selector,
-                retype: false,
+                retype,
                 tab_pick: None,
             },
             &sources,
@@ -996,7 +1019,7 @@ impl CaptureTaskThemeContext {
     /// the close stages anything, because a closed task stops suggesting.
     ///
     /// Returns `None` when no naming can apply (no running entry, an
-    /// unnamed, MEET, or single-type name, or an unreadable config or
+    /// unnamed, MEET, or container name, or an unreadable config or
     /// catalog), so plain closes pay for no catalog load and never rename.
     pub(super) fn close_types(
         &mut self,
@@ -1029,8 +1052,9 @@ impl CaptureTaskThemeContext {
     ) -> Option<CloseTypes> {
         use capture_pomodoro_close::CloseVault;
         let name = running.name.as_deref()?;
-        if split_components(name).len() < 2 || routing::is_meet_name(Some(name))
-        {
+        // MEET entries never rename; single-type entries may now settle to
+        // the worked type, so only typeless containers skip naming.
+        if routing::is_meet_name(Some(name)) {
             return None;
         }
         if !self.load_config(warnings) || !self.load_catalog(warnings) {
@@ -1042,7 +1066,7 @@ impl CaptureTaskThemeContext {
             .iter()
             .filter(|item| item.is_type)
             .count();
-        if types < 2 {
+        if types == 0 {
             return None;
         }
         let refs = catalog.theme_refs_for_name(name);
@@ -1092,13 +1116,16 @@ impl CaptureTaskThemeContext {
                     .with_extension("")
                     .to_string_lossy()
                     .replace('\\', "/");
+                // The suggestion theme name is already catalog
+                // spelling (`suggest` applies `display_name`).
                 if let Some(placement) = self.placement_for_task(
                     planner,
                     &route,
                     task_line,
                     &mut scratch,
                 ) {
-                    link_types.insert(key, placement.suggestion.theme.key);
+                    let theme = placement.suggestion.theme;
+                    link_types.insert(key, (theme.key, theme.name));
                 }
             }
         }

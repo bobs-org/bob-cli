@@ -1554,14 +1554,18 @@ Cancelled, nested, and fenced lookalikes are not anchors. Multiple open timed
 entries remain an invariant error when a new named entry would need the
 current-Pomodoro anchor.
 
-An explicit `#NAME` choice lands by merging (R2): the task keeps its
-type and the destination Pomodoro gains it. For a new task, the type comes
+An explicit `#NAME` choice lands by merging (R2) into an existing
+destination: the task keeps its type and the destination Pomodoro gains
+it. When the same capture run created the destination entry, the task
+instead takes the retype path (A10): the field is set to the matching
+type component of the new name (or cleared on an inherited match), and
+`task_theme` reports the change. For a new task, the type comes
 from its staged line and destination note (a free `#<type>` marker sets X
 first). For an existing task, its staged pre-edit line and destination note
 resolve the effective type. When that type is missing from the resolved name,
 Bob renames the destination to `D + T` in catalog spelling and reports
 `merged: {before, after, added}` on the destination endpoint; human output
-appends ` · merged T` to the destination row. No task field is written, so
+appends ` · merged T` to the destination row. A merge writes no task field, so
 `task_theme` stays omitted. A container name such as `#later` or `#snack`
 keeps the task's type and warns. A consistent landing, a guarded link, or a
 no-op leaves both the line and the name alone. The rename joins the routed
@@ -3405,7 +3409,9 @@ cascade source, and the human label (`from dev`, `default type`); legacy
 and named destinations omit it, and the `role` values are unchanged.
 Destinations that gained a type on landing add a `merged` object
 `{before, after, added}` with the pre-merge name, the merged name, and the
-appended `ThemeRef` entries; consistent landings omit it. New
+appended `ThemeRef` entries; consistent landings omit it. Destinations the
+same run created carry no `merged` object: the task retypes instead, and
+`task_theme` reports the Set/Clear. New
 `<text> @route:id[#NAME]` Pomodoro-task captures report
 `pomodoro_link_destination`, `pomodoro_name`, and `creates_pomodoro`
 too, and human output names the landing spot: `→ into running GOALS
@@ -4455,40 +4461,42 @@ when an explicit selection wins. Human output adds one dim caption: `ended
 
 A close names the session it ends after the work actually done, and the session
 it carries after the work still planned. This is the
-[close-names rule](task-types.md#merged-pomodoros) (R6) over a
-[merged Pomodoro](task-types.md#merged-pomodoros), one whose name holds two or
-more type components such as `BUILD + FIX`. Every form of the close agrees:
-whole-item `x`, `^route:id=x…`, and `<text> @route:id=x…`.
+[close-names rule](task-types.md#merged-pomodoros) (R6), which applies to any
+named entry — single-type sessions may settle too. Every form of the close
+agrees: whole-item `x`, `^route:id=x…`, and `<text> @route:id=x…`.
 
 Each numbered Task Link has the type its task had _before_ the close (a task
 this close completes still counts as its type) and its outcome. **Worked**
 links are in progress, parked, or complete; **carried** links are in progress
 or deferred.
 
-- **The closed session narrows.** When at least one worked link's type is a
-  component of the running name, the completed entry keeps its labels plus
-  exactly the type components some worked link has, in the running name's
-  order and spelling. Only a FIX task worked in `BUILD + FIX` closes as `FIX`.
-  When nothing typed was worked, or only drift (a type the name does not
-  hold) or untyped links were, the name is unchanged.
-- **The carried session sheds.** When the close _creates_ the next entry, it
-  drops each type that had a link in the running entry and has no carried
-  link. Finishing the last FIX task of `BUILD + FIX` leaves `BUILD`; a FIX
-  link that was parked or dropped sheds FIX too. If that would drop every
-  type, the base stays. Types that never had a link and labels stay.
-- **Nothing else renames.** Single-type and untyped entries, `MEET`, the
+- **The closed session settles.** The completed entry keeps its labels
+  plus exactly the worked types: type components some worked link has
+  stay, in the running name's order and spelling, and worked types the
+  name does not hold append in link order in catalog spelling. A `— FIX`
+  session that worked only BUILD closes as `— BUILD`; drift worked into
+  `BUILD + FIX` closes as the drift type. When nothing typed was worked,
+  or only untyped links were, the name is unchanged.
+- **The carried session sheds, then agrees.** When the close _creates_ the
+  next entry, it drops each type that had a link in the running entry and
+  has no carried link. Finishing the last FIX task of `BUILD + FIX` leaves
+  `BUILD`; a FIX link that was parked or dropped sheds FIX too. If that
+  would drop every type, the base stays. The shed name then agrees over
+  the continuation's carried children the way reconcile would, so the
+  continuation is a fixed point of the agreement rule.
+- **Nothing else renames.** Untyped entries, `MEET`, the
   `x0` reset, and a close that continues into an existing later entry keep
   their names.
 
 `pomodoro_close.closed_name` is the completed entry's name after the close
-(equal to `pomodoro_name` when nothing narrows), present when the entry is
+(equal to `pomodoro_name` when nothing settles), present when the entry is
 named. `pomodoro_close.next_pomodoro.name` is the continuation's name after
-shedding, and `next_pomodoro.shed` lists the dropped types as `ThemeRef`
-objects, omitted when none were shed. Successor links are named, found, and
-reused through the continuation's name, so a later open entry named `BUILD`
-is the destination after `BUILD + FIX` sheds FIX.
+shedding and agreement, and `next_pomodoro.shed` lists the dropped types as
+`ThemeRef` objects, omitted when none were shed. Successor links are named,
+found, and reused through the continuation's name, so a later open entry
+named `BUILD` is the destination after `BUILD + FIX` sheds FIX.
 
-Human output narrows the headline and says where the session came from,
+Human output settles the headline and says where the session came from,
 `closed FIX 0920-0940 (20m) · from BUILD + FIX · 2026/20260928.md line 5`, and
 names the shed types on the next line,
 `next: BUILD (created) at line 7 · carries 1 link · shed FIX`.
@@ -4532,7 +4540,7 @@ auto-decrement below, the deliberate atomicity divergences, and the
 intentional capture-only `x0` reset exception (a note-free `x0` resets to
 first future instead of completing; Obsidian completion remains separate). The
 promise now includes [close names](#close-names-follow-the-work); the Task
-Status Cycler adopts the same narrowing and shedding in the Bob Plugins
+Status Cycler adopts the same settling and agreement in the Bob Plugins
 `obsidian-close-names` change, so until that ships the two differ by name only. A session
 closed before its planned end is shortened to the stop time
 (`BOB_NOW=2026-09-28 09:37:00` closing `0920-0950` writes `0920-0940 [t::
@@ -4711,8 +4719,9 @@ Field notes:
   end](#a-meet-close-carries-later-meetings-to-the-end)), omitted
   otherwise. Successor-created continuations omit it.
 - `pomodoro_close.closed_name` is the completed entry's name after the
-  close (narrowed, per [Close names follow the work](#close-names-follow-the-work)),
-  present when the entry is named. `next_pomodoro.name` carries the shed name,
+  close (settled, per [Close names follow the work](#close-names-follow-the-work)),
+  present when the entry is named. `next_pomodoro.name` carries the agreed
+  continuation name,
   and `next_pomodoro.shed` (an array of `ThemeRef`) lists the types the created
   continuation dropped, omitted when none.
 - Added block lines that equal a surviving picked successor bullet carry

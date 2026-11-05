@@ -730,6 +730,8 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
         && let Some(context) = task_theme_context
         && let Some(link) = note_plan.pomodoro_link.as_mut()
     {
+        // A10: a destination this link created retypes the task; an
+        // entry created earlier in the batch counts as new.
         let applied = context.apply_existing_task(
             planner,
             target,
@@ -738,6 +740,7 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
             &link.task_line,
             Some(link.pomodoro_name.as_deref().unwrap_or_default()),
             None,
+            link.creates_pomodoro,
             warnings,
         )?;
         if let Some(applied) = applied {

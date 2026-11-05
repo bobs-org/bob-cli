@@ -130,13 +130,35 @@ fn labels_stay_and_a_parked_type_is_not_carried() {
 }
 
 #[test]
-fn drift_and_untyped_work_never_rename() {
+fn drifted_work_settles_the_closed_session() {
     let (_temp, vault, day_file, config_file) = vault_with(
         "bob-cli-close-names-drift",
         "BUILD + FIX",
         &["[[tasks#^read1]]", "[[tasks#^plain1]]"],
     );
     let json = close(&vault, &day_file, &config_file, &["x!1,2"]);
+    let close = &json["pomodoro_close"];
+    // Only READ was worked (the plain link is untyped): the closed
+    // session records exactly the worked type.
+    assert_eq!(close["closed_name"], "READ", "{json}");
+    assert_eq!(
+        close["entry_line"], "- [x] (**0920-0940** [t:: 20m]) — READ",
+        "{json}"
+    );
+    // Nothing carries, so the continuation keeps the running name.
+    let next = &close["next_pomodoro"];
+    assert_eq!(next["name"], "BUILD + FIX", "{json}");
+    assert!(next.get("shed").is_none(), "{json}");
+}
+
+#[test]
+fn untyped_work_never_renames() {
+    let (_temp, vault, day_file, config_file) = vault_with(
+        "bob-cli-close-names-untyped",
+        "BUILD + FIX",
+        &["[[tasks#^plain1]]"],
+    );
+    let json = close(&vault, &day_file, &config_file, &["x!1"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["closed_name"], "BUILD + FIX", "{json}");
     let next = &close["next_pomodoro"];
@@ -145,7 +167,7 @@ fn drift_and_untyped_work_never_rename() {
 }
 
 #[test]
-fn single_type_entries_never_rename() {
+fn single_type_entries_keep_matching_work() {
     let (_temp, vault, day_file, config_file) =
         vault_with("bob-cli-close-names-single", "FIX", &["[[tasks#^fix1]]"]);
     let json = close(&vault, &day_file, &config_file, &["x!1"]);
@@ -153,6 +175,28 @@ fn single_type_entries_never_rename() {
     assert_eq!(close["closed_name"], "FIX", "{json}");
     assert_eq!(close["next_pomodoro"]["name"], "FIX", "{json}");
     assert!(close["next_pomodoro"].get("shed").is_none(), "{json}");
+}
+
+#[test]
+fn single_type_close_settles_to_the_worked_type() {
+    let (_temp, vault, day_file, config_file) = vault_with(
+        "bob-cli-close-names-single-settle",
+        "FIX",
+        &["[[tasks#^build1]]"],
+    );
+    let json = close(&vault, &day_file, &config_file, &["x!1"]);
+    let close = &json["pomodoro_close"];
+    // A `— FIX` session that worked only BUILD closes as `— BUILD`.
+    assert_eq!(close["closed_name"], "BUILD", "{json}");
+    assert_eq!(
+        close["entry_line"], "- [x] (**0920-0940** [t:: 20m]) — BUILD",
+        "{json}"
+    );
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day.contains("- [x] (**0920-0940** [t:: 20m]) — BUILD\n"),
+        "{day}"
+    );
 }
 
 #[test]

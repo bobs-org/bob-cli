@@ -638,19 +638,26 @@ consumed as trailing metadata, and overlapping removals from adjacent
 fields stay safe. Catalog spelling is used for X; a semantic no-op
 (exactly one valid field already holding X's key) never rewrites bytes.
 
-### Named captures merge types
+### Named captures merge or retype
 
-Capture `#NAME`, `#"NAME"`, and `=name` land by merging (R2): the task
-keeps its type and the destination Pomodoro gains it. Bob resolves the
-destination Pomodoro name D, then applies the landing rule:
+Capture `#NAME`, `#"NAME"`, and `=name` land by merging (R2) into an
+existing destination: the task keeps its type and the destination
+Pomodoro gains it. When the same capture run created the destination
+entry (A10), the task instead takes the explicit retype path, the same
+D6 path that renaming an entry uses. Bob resolves the destination
+Pomodoro name D, then applies the landing rule:
 
 1. D is a container (no type components): the task keeps its type, and
    capture warns `LATER is a label · tasks keep their own types` or
    `SNACK isn't one of your types; tasks here keep their own types`.
 2. The task has no effective type, or its type is already a component of
    D: consistent, nothing changes.
-3. D is MEET: take the retype path (`Set MEET` or `Clear`); MEET names
-   never grow.
+3. D is MEET, or D was created by the same capture run: take the retype
+   path. The task field is set to one type component of D (the authored
+   selector's match, else the first non-exempt type component, else the
+   first type component; a match with the inherited type clears the
+   field instead); MEET names never grow. An entry created earlier in
+   the same batch counts as new.
 4. Otherwise merge: D gains ` + T`, where T is the task's effective type
    in catalog spelling. No task field is written. Several links landing
    at once append each missing type once, in link order, deduped by key.
@@ -661,10 +668,12 @@ the equivalent `=name` shorthands,
 project-note ` :<id>` bullets (and picked project offers) under a `#NAME`
 after the seal, and `bob ref today -p/-P` (through the shared link
 planner). Link guards,
-unnamed links, ordinary toggles, and close gestures never merge. A batch
-re-evaluates against its staged note snapshot, so two captures landing
-BUILD in BUGS append it once, and the destination rename joins the same
-task-and-ledger transaction.
+unnamed links, ordinary toggles, and close gestures never merge or retype.
+A batch re-evaluates against its staged note snapshot, so two captures
+landing BUILD in BUGS append it once, and the destination rename joins
+the same task-and-ledger transaction. A retyped landing reports
+`task_theme` like any Set/Clear and carries no `merged` object: the
+destination role is `created`.
 
 Capture JSON omits `task_theme` on an unchanged write unless the capture
 has an explicit `#<type>` marker. A marker always reports the result, including
@@ -700,10 +709,13 @@ excluding inventory labels. Unknown names fail with `type_not_configured`
 before any write. Type-only changes stamp no freshness, change no lane, and
 consume no dependency guard.
 
-The explicitly named capture choice and the `#<type>` marker are the writer
-boundary in this phase. Close, roll, typed `^^`, move, rollover,
-reconcile, ordinary successor placement, and ref-today remain
-never-writers.
+Task fields are written only by an explicit type choice: a `#<type>`
+marker, an explicit retype gesture (Obsidian Alt+Enter, a Pomodoro
+rename, or a `#NAME` / `=name` landing into an entry the same run
+created, including `bob ref today -p/-P`), or D8 relocation. Close,
+roll, typed `^^`, move, rollover, reconcile, ordinary successor
+placement, bare captures, and bare ref-today links never write task
+fields; they rename entries or relocate links instead.
 
 ### Bare captures place by type
 
@@ -854,8 +866,9 @@ Pure planners in `src/native/pomodoro_themes/routing.rs`,
 ref-today, and successor offers; note moves relocate the link when
 inherited types change, and Pomodoro naming and renames retype linked
 tasks (D6 Enter). The `agree`, `agree_entry`, `settle`, `land`,
-`place`, `relocate`, `merge`, `split`, `narrow`, `shed`, and `select`
-vector sections are the Ledger Tools JS mirror's contract.
+`place`, `relocate`, `merge`, `split`, `shed`, and `select`
+vector sections are the Ledger Tools JS mirror's contract (the `narrow`
+section stays in the file for the mirror's `narrowClosed`).
 
 | Gesture | Changes | Bob restores agreement by |
 | --- | --- | --- |
@@ -863,6 +876,7 @@ vector sections are the Ledger Tools JS mirror's contract.
 | Task move to another note | the inherited type, if no field | relocating the live link (D8), then agreeing the source entry |
 | Capture `#<type>` on an existing task | the type | relocating the live link (D8) via the shared applier |
 | Capture unlink, drop, Ensure Next, link into running, dependency drops, consumed links | the entry's links | agreeing each touched entry via the shared applier |
+| Capture `#NAME` / `=name` creating its entry | the task's type | retyping the task (A10); later items in the batch retype too |
 | `bob task cancel`, `bob task complete` ledger edits | the entry's links | agreeing each touched entry via the shared applier |
 | D8 `MoveTo` source | the entry's links | agreeing the source entry in the same write |
 | Naming or renaming an entry that holds links | the entry's types | retyping its tasks, count previewed (D6) |
@@ -912,8 +926,9 @@ vector sections are the Ledger Tools JS mirror's contract.
   step wins: a container D means no change (`keeps BUILD`); the task has
   no effective type, or its type is already a component of D, means
   consistent; a MEET destination takes today's Set/Clear path (MEET
-  names never grow); an explicit retype (Obsidian Alt+Enter, or capture
-  named `#NAME` / `=name` until their merge phase) chooses one type
+  names never grow); an explicit retype (Obsidian Alt+Enter, a Pomodoro
+  rename, or a capture `#NAME` / `=name` landing into an entry the same
+  run created) chooses one type
   component X of D — the authored selector's match (by slug or prefix),
   else the Obsidian Tab-cycled choice, else the first non-exempt type
   component, else the first type component — and when X equals the
@@ -998,14 +1013,19 @@ rule here ever renames, merges, or splits it.
   entry, and naming S twice each refuse.
 - **Close names (R6).** At close, **worked** links are in progress,
   parked, or complete, and **carried** links are in progress or
-  deferred. When at least one worked link's type is a type component of
-  E, the closed name becomes E's labels plus exactly those type
-  components, in E's order and spelling; otherwise the name is
-  unchanged. When the close creates the next entry, that name **sheds**
-  each type T that had at least one link before and no carried link
-  after; if that would drop every type, the base stays; components that
-  never had a link stay; labels stay. Single-type entries, MEET, `x0`,
-  and a close that points at an existing later entry never rename.
+  deferred. The closed name **settles** to E's labels plus exactly the
+  worked types (`settle_closed`): type components whose key was worked
+  stay, in E's order and spelling, and worked types missing from E
+  append in link order in catalog spelling (one drop plus one add
+  substitutes in place). A MEET entry, a container, or a close with no
+  typed worked link keeps its name; single-type sessions may now rename
+  (`— FIX` that worked only BUILD closes as `— BUILD`). When the close
+  creates the next entry, that name **sheds** each type T that had at
+  least one link before and no carried link after (if that would drop
+  every type, the base stays), then **agrees** over the continuation's
+  carried children the way reconcile would, so the continuation is a
+  fixed point of `agree_entry`. The `x0` reset, MEET closes, and a
+  close that continues into an existing later entry keep their names.
 - **Shedding on move (R7).** When Task Links move out of an open merged
   Pomodoro, the source agrees via the shared applier over its touched
   entry (the guarded shed as the no-link special case). When the move empties
@@ -1143,7 +1163,10 @@ and writes nothing to the journal.
 `relocate`, `merge`, `split`, `narrow`, `shed`, and `select`.
 CLI tests consume the menu and literal sections, including
 capture dry-run round trips; Rust tests consume the routing sections,
-including mini-vault suggest cases with expected JSON and warnings.
+including mini-vault suggest cases with expected JSON and warnings —
+except `narrow`, which Rust no longer reads: the close settle replaced
+it, and the section stays for the JS mirror until the task-status-cycler
+close switches to `settleClosed`.
 bob-plugins copies the file byte-for-byte and runs the same hue, fold, and
 ranking vectors in JavaScript; the `agree_entry`, `settle`, and routing
 vectors are the Ledger Tools JS mirror's contract.
