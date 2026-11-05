@@ -59,10 +59,10 @@ fn run_record_expect_error(
 }
 
 fn record_items(value: &serde_json::Value) -> Vec<serde_json::Value> {
-    if let Some(captures) = value.get("captures").and_then(|v| v.as_array()) {
-        if !captures.is_empty() {
-            return captures.clone();
-        }
+    if let Some(captures) = value.get("captures").and_then(|v| v.as_array())
+        && !captures.is_empty()
+    {
+        return captures.clone();
     }
     vec![value.clone()]
 }
@@ -426,11 +426,15 @@ fn record_chronological_insertion_and_block_roles() {
     let mid = after.find("MID").unwrap();
     let build = after.find("— BUILD").unwrap();
     assert!(early < mid && mid < build, "{after}");
-    // Block roles include recorded.
-    assert!(
-        v["pomodoro_blocks"].as_array().is_some() || true,
-        "blocks optional"
-    );
+    // The recorded row reports the `recorded` block role.
+    let blocks = v["pomodoro_blocks"].as_array().expect("pomodoro_blocks");
+    let recorded = blocks
+        .iter()
+        .find(|block| block["name"] == "BUILD")
+        .expect("BUILD block");
+    assert_eq!(recorded["time_range"], "0915-0925", "{recorded}");
+    assert_eq!(recorded["status"], "completed", "{recorded}");
+    assert_eq!(recorded["roles"], serde_json::json!(["recorded"]));
 }
 
 #[test]
@@ -784,5 +788,146 @@ fn guard_user_five_examples_end_to_end() {
     assert_eq!(
         fs::read_to_string(&df).unwrap(),
         "## Pomodoros\n- [x] (**0855-0910** [t:: 15m]) — PLAN\n- [x] (**0910-0925** [t:: 15m]) — BUILD\n"
+    );
+}
+
+/// Linked-task vault for the `x=N` versus `=N-N x` golden comparison.
+fn equivalence_vault(name: &str) -> (TempDir, std::path::PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    write_toggle_task_settings(&vault);
+    write_day(
+        &vault,
+        concat!(
+            "## Pomodoros\n",
+            "\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "\t- \u{1F345} [[bob#^a1]]\n",
+            "- [ ] () — BUILD\n",
+            "\t- [[bob#^a1]]\n",
+            "\t- [[bob#^a2]]\n",
+            "\t- [[bob#^a3]]\n",
+            "- [ ] () — SASE\n",
+            "\t- [[bob#^a4]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("bob.md"),
+        concat!(
+            "## Tasks\n",
+            "\n",
+            "- [*] #task Alpha [created::2026-11-01] ^a1\n",
+            "- [*] #task Beta [created::2026-11-01] ^a2\n",
+            "- [*] #task Gamma [created::2026-11-01] ^a3\n",
+            "- [ ] #task Delta [created::2026-11-01] ^a4\n",
+        ),
+    );
+    (temp, vault)
+}
+
+fn run_capture_status(vault: &std::path::Path, now: &str, draft: &str) -> bool {
+    bob_command()
+        .env("BOB_NOW", now)
+        .env("BOB_DAY_FILE", vault.join("2026").join("20261104.md"))
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture")
+        .status
+        .success()
+}
+
+#[test]
+fn record_matches_start_then_close_byte_for_byte() {
+    // On a quiet ledger whose first open entry is the target, `x=3=<X>`
+    // writes exactly what `=3-3 x<X>` writes. `x==0` is excluded on
+    // purpose: a record never resets (A9), while `x0` does.
+    for close in ["", "1!2", "!", "*1", "~2", "1"] {
+        for now in [
+            "2026-11-04 09:20:00",
+            "2026-11-04 09:20:59",
+            "2026-11-04 09:21:00",
+            "2026-11-04 09:22:00",
+            "2026-11-04 09:23:00",
+            "2026-11-04 09:24:00",
+        ] {
+            let (past, recorded) = if close.is_empty() {
+                ("x=3".to_string(), "=3-3 x".to_string())
+            } else {
+                (format!("x=3={close}"), format!("=3-3 x{close}"))
+            };
+            let (_a, vault_a) = equivalence_vault("bob-cli-past-equiv-a");
+            let (_b, vault_b) = equivalence_vault("bob-cli-past-equiv-b");
+            assert!(run_capture_status(&vault_a, now, &past), "{past} {now}");
+            assert!(
+                run_capture_status(&vault_b, now, &recorded),
+                "{recorded} {now}"
+            );
+            for relative in ["2026/20261104.md", "bob.md"] {
+                let a = fs::read_to_string(vault_a.join(relative)).unwrap();
+                let b = fs::read_to_string(vault_b.join(relative)).unwrap();
+                assert_eq!(a, b, "{past} vs {recorded} at {now}: {relative}");
+            }
+        }
+    }
+}
+
+#[test]
+fn record_earlier_member_classifies_event_tasks_at_its_own_end() {
+    // BUILD 0900-0910 closes at its own end (09:10), so the 09:15 meeting
+    // has not started: `!` skips it and it carries. Closing at the wall
+    // clock (09:21) would have completed it as ended inside.
+    let temp = TempDir::new("bob-cli-past-event-clock");
+    let vault = temp.path().join("vault");
+    write_toggle_task_settings(&vault);
+    write_file(&vault.join("bob.md"), "## Tasks\n");
+    let day = write_day(
+        &vault,
+        concat!(
+            "## Events\n",
+            "\n",
+            "- [ ] #task **0915-0920** Standup ^standup\n",
+            "\n",
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] () — BUILD\n",
+            "\t- [[#^standup]]\n",
+            "- [ ] () — FIX\n",
+        ),
+    );
+    let value = run_record_json(
+        &vault,
+        &day,
+        "2026-11-04 09:21:00",
+        &["x=build@2=! x=fix@3"],
+    );
+    let items = record_items(&value);
+    let build = &items[0]["pomodoro_past"];
+    assert_eq!(build["closed_at"], "0910");
+    assert_eq!(build["close"]["remaining_minutes"], 0);
+    assert_eq!(build["close"]["decremented_minutes"], 0);
+    let standup = &build["close"]["tasks"][0];
+    assert_eq!(standup["block_id"], "standup", "{standup}");
+    assert_eq!(standup["role"], "deferred", "{standup}");
+    assert_eq!(standup["status_symbol"], " ", "{standup}");
+    assert_eq!(standup["carried"], true, "{standup}");
+    assert_eq!(items[1]["pomodoro_past"]["closed_at"], "0921");
+    assert_eq!(
+        fs::read_to_string(&day).unwrap(),
+        concat!(
+            "## Events\n",
+            "\n",
+            "- [ ] #task **0915-0920** Standup ^standup\n",
+            "\n",
+            "## Pomodoros\n",
+            "\n",
+            "- [x] (**0900-0910** [t:: 10m]) — BUILD\n",
+            "- [x] (**0910-0925** [t:: 15m]) — FIX\n",
+            "- [ ] () — BUILD\n",
+            "\t- [[#^standup]]\n",
+        )
     );
 }

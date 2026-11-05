@@ -5172,8 +5172,10 @@ x=E[!][=X] [work-log entry]
 With no number, the duration is 5 blocks (25 minutes). A numeric count can
 precede a name as `x=2#fix`; a name can instead precede its count as
 `x=fix@2`. Use `#` for names that begin with a digit or need exact quoted
-matching, such as `x=#"DEEP WORK"`. A count cannot include an offset: every
-past Pomodoro ends at the same boundary. `!` belongs to `E` and authorizes
+matching, such as `x=#"DEEP WORK"`. Names follow the `=name` rules, so `-`
+is a name byte: `x=deep-work@2` names DEEP-WORK. A count cannot include an
+offset: every past Pomodoro ends at the same boundary, and a dash right after
+a count is refused. `!` belongs to `E` and authorizes
 edge repair against older closed rows. The optional second `=X` uses the
 existing close selection grammar, including Work Log entries and task
 outcomes.
@@ -5231,12 +5233,13 @@ Common teaching errors show the exact rewrite:
 | `x=3-1`, `x=-2`, `x=3-`, `x=build@3-1` | Past work has no offset; remove the dash part (`x=3-1` → `x=3`, `x=-2` → `x=`) |
 | `x=3#fix@2` | Give the count once: `x=3#fix` or `x=fix@3` |
 | `x=~2`, `x=3~2`, `x=build~2` | Put link drops after a second equals: `x==~2`, `x=3=~2`, `x=build=~2` |
-| `x=*3` | Put the task selection after a second equals: `x==*3` |
-| `x=0`, `x=build@0` | Use at least one block: `x=1` |
+| `x=*3`, `x=build*3` | Put the task selection after a second equals: `x==*3`, `x=build=*3` |
+| `x=0`, `x=build@0` | Use at least one block: `x=1`, `x=build@1` |
 | `x=/build`, `x=*build` | `x=` records one session; it cannot split or merge |
 | `x=1!2`, `x=!2` | Put the task selection after a second equals: `x==1!2`, `x==!2` |
 | `x=fix!2` | Put the task selection after a second equals: `x=fix=!2`; to also repair, write `x=fix!=!2` |
 | `x=3x`, `x=3build` | Separate the count and name: `x=3#x`, `x=3#build` |
+| `x=a$b`, `x=#"a$b"` | The `=name` name error: names follow the same byte rules as `=name` and `=#"…"` |
 
 An unfinished name such as `x=#`, `x=3#`, or `x=#"DEEP` remains incomplete
 and asks for `pomodoro_name`; `x=build@` needs `pomodoro_start_timing`.
@@ -8926,7 +8929,7 @@ JSON output is a single versioned object:
 `replacement` is the half-open UTF-8 byte range a chosen candidate replaces in
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
-`context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `project_task_move`, `pomodoro_name`, `pomodoro_start_name`, `task`,
+`context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `project_task_move`, `pomodoro_name`, `pomodoro_start_name`, `pomodoro_past_name`, `task`,
 `drawer`, `active_task`, `task_type`, `directive`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers

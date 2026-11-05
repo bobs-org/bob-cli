@@ -105,12 +105,27 @@ fn past_teaching_errors_name_token_and_rewrite() {
         ("x=fix!2", "x=fix=!2"),
         ("x=3x", "x=3#x"),
         ("x=3build", "x=3#build"),
+        // Rewrites come from the typed parts, never from the table rows.
+        ("x=*5", "x==*5"),
+        ("x=build*5", "x=build=*5"),
+        ("x=2#build@4", "x=2#build"),
+        ("x=2#build@4", "x=build@2"),
+        ("x=2#\"DEEP WORK\"@4", "x=#\"DEEP WORK\"@2"),
+        ("x=3@2", "x=3"),
+        ("x=fix@0", "x=fix@1"),
+        ("x=0#fix", "x=1#fix"),
+        ("x=0!=1", "x=1!=1"),
+        ("x=3!5", "x==3!5"),
+        ("x=build!2", "x=build!=!2"),
+        ("x=3#fix!2", "x=3#fix=!2"),
+        ("x=build@3~2", "x=build@3=~2"),
+        ("x=4-2=1", "x=4=1"),
     ];
     for (typed, rewrite) in rows {
         let err =
             execute(typed).expect_err(format!("{typed} should fail").as_str());
-        assert!(err.contains(typed), "{typed}: {err}");
-        assert!(err.contains(rewrite), "{typed}: {err}");
+        assert!(err.contains(&format!("`{typed}`")), "{typed}: {err}");
+        assert!(err.contains(&format!("`{rewrite}`")), "{typed}: {err}");
         let edit = editor(typed);
         assert_eq!(edit.mode, EditorMode::PomodoroPast, "{typed}");
         assert_eq!(edit.diagnostics.len(), 1, "{typed}");
@@ -118,8 +133,7 @@ fn past_teaching_errors_name_token_and_rewrite() {
             edit.diagnostics[0].code, "invalid_pomodoro_past",
             "{typed}"
         );
-        assert!(edit.diagnostics[0].message.contains(typed), "{typed}");
-        assert!(edit.diagnostics[0].message.contains(rewrite), "{typed}");
+        assert_eq!(edit.diagnostics[0].message, err, "{typed}");
     }
     // Merge/split shapes.
     for typed in ["x=/foo", "x=*build"] {
@@ -180,10 +194,53 @@ fn past_names_stop_at_operators_and_literals_hold_them() {
     // `!` and `=` end unquoted names.
     let parsed = execute("x=fix!2").expect_err("should be teaching error");
     assert!(parsed.contains("x=fix=!2"));
-    // Quoted literals may contain `!` and `=`.
-    let parsed = execute("x=#\"A!B=C\"").expect("literal with operators");
+    // `!` and `=` inside a quoted literal stay name content (the error
+    // names the whole literal), and then fail the `=#"…"` name rules.
+    let err = execute("x=#\"A!B=C\"").expect_err("literal name rules");
+    assert!(err.contains("Pomodoro name `A!B=C`"), "{err}");
+    let parsed = execute("x=#\"A&B\"=1").expect("literal before close");
     let spec = past_spec(&parsed);
-    assert_eq!(spec.name.as_deref(), Some("A!B=C"));
+    assert_eq!(spec.name.as_deref(), Some("A&B"));
+    assert_eq!(spec.close.raw, "1");
+    // Literals canonicalize like `=#"…"`.
+    let parsed = execute("x=#\"deep   work\"").expect("spaced literal");
+    assert_eq!(past_spec(&parsed).name.as_deref(), Some("DEEP WORK"));
+}
+
+#[test]
+fn past_names_follow_start_name_rules() {
+    // `-` is a name byte (the slug spelling of a space), never an offset.
+    for (typed, name, blocks) in [
+        ("x=deep-work", "DEEP-WORK", 5),
+        ("x=#deep-work", "DEEP-WORK", 5),
+        ("x=deep-work@2", "DEEP-WORK", 2),
+        ("x=2#deep-work", "DEEP-WORK", 2),
+        ("x=#\"A-B\"", "A-B", 5),
+    ] {
+        let parsed = execute(typed).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        let spec = past_spec(&parsed);
+        assert_eq!(spec.name.as_deref(), Some(name), "{typed}");
+        assert_eq!(spec.blocks, blocks, "{typed}");
+        let edit = editor(typed);
+        assert!(edit.diagnostics.is_empty(), "{typed}");
+        assert_eq!(editor_past(&edit).name.as_deref(), Some(name), "{typed}");
+    }
+    // Bytes `=name` rejects are rejected with the start-family wording.
+    for (typed, name) in [
+        ("x=a$b", "a$b"),
+        ("x=build#2", "build#2"),
+        ("x=#b:x", "b:x"),
+        ("x=#\"a$b\"", "a$b"),
+    ] {
+        let err = execute(typed).expect_err(typed);
+        assert!(
+            err.contains(&format!("Pomodoro name `{name}` in `{typed}`")),
+            "{typed}: {err}"
+        );
+        let edit = editor(typed);
+        assert_eq!(edit.diagnostics.len(), 1, "{typed}");
+        assert_eq!(edit.diagnostics[0].code, "invalid_pomodoro_past");
+    }
 }
 
 #[test]

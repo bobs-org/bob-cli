@@ -156,7 +156,7 @@ These are not valid commands. Bob teaches the replacement.
 | `x=3-1`, `x=-2`, `x=3-`, `x=build@3-1` | No offsets; remove the dash part (`x=3` or `x=`) |
 | `x=3#fix@2` | Give the count once: `x=3#fix` or `x=fix@3` |
 | `x=~2`, `x=3~2`, `x=*3`, `x=1!2` | Put close modifiers after a second `=` (`x==~2`, `x=3=~2`, `x==*3`, `x==1!2`) |
-| `x=0`, `x=build@0` | Need at least one block: `x=1` |
+| `x=0`, `x=build@0` | Need at least one block: `x=1`, `x=build@1` |
 | `x=/build`, `x=*build` | `x=` cannot split or merge a session |
 | `x=fix!2` | Use `x=fix=!2`; to repair too, use `x=fix!=!2` |
 | `x=3x`, `x=3build` | Separate count and name: `x=3#x`, `x=3#build` |

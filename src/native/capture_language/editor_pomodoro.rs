@@ -3265,15 +3265,15 @@ fn parse_editor_past_item<'a>(
         };
         spans.push(mk_span(token_start, leading_end, SpanKind::PomodoroPast));
         // `@D` timing suffix as a second `pomodoro_past`.
-        if let Some((s, e)) = valid.blocks_range {
-            if s != 2 {
-                // `@D` range covers digits only; include the `@`.
-                spans.push(mk_span(
-                    token_start + s - 1,
-                    token_start + e,
-                    SpanKind::PomodoroPast,
-                ));
-            }
+        if let Some((s, e)) = valid.blocks_range
+            && s != 2
+        {
+            // `@D` range covers digits only; include the `@`.
+            spans.push(mk_span(
+                token_start + s - 1,
+                token_start + e,
+                SpanKind::PomodoroPast,
+            ));
         }
         // Name only.
         if let Some((s, e)) = valid.name_range {
@@ -3285,30 +3285,28 @@ fn parse_editor_past_item<'a>(
             ));
         }
         // Repair `!` only.
-        if split.repair {
-            if let Some(off) = split.repair_offset {
-                spans.push(mk_span(
-                    token_start + off,
-                    token_start + off + 1,
-                    SpanKind::PomodoroPastRepair,
-                ));
-            }
+        if split.repair
+            && let Some(off) = split.repair_offset
+        {
+            spans.push(mk_span(
+                token_start + off,
+                token_start + off + 1,
+                SpanKind::PomodoroPastRepair,
+            ));
         }
         // Second `=` only.
-        if split.has_second_eq {
-            if let Some(off) = split.second_eq_offset {
-                spans.push(mk_span(
-                    token_start + off,
-                    token_start + off + 1,
-                    SpanKind::PomodoroClose,
-                ));
-            }
+        if split.has_second_eq
+            && let Some(off) = split.second_eq_offset
+        {
+            spans.push(mk_span(
+                token_start + off,
+                token_start + off + 1,
+                SpanKind::PomodoroClose,
+            ));
         }
         spans
     };
-    let Some(split) = split_past_token(raw_token) else {
-        return None;
-    };
+    let split = split_past_token(raw_token)?;
     let valid = match validate_past_e(raw_token, &split) {
         PastEOutcome::Invalid(message) => {
             return Some(editor_past_outcome(
@@ -3677,7 +3675,7 @@ fn parse_editor_past_item<'a>(
             let mut spans = base_past_spans.clone();
             spans.extend(close_sub_spans.clone());
             spans.sort_by_key(|s| (s.start, s.end));
-            return Some(editor_past_outcome(
+            Some(editor_past_outcome(
                 item,
                 parent_trimmed,
                 EditorMode::PomodoroPast,
@@ -3691,7 +3689,7 @@ fn parse_editor_past_item<'a>(
                     message: error.message,
                     range: Some(error.range),
                 }],
-            ));
+            ))
         }
         Ok(CloseInlineLex::Dangling { index, index_range }) => {
             if has_bullet_child {
@@ -3740,7 +3738,7 @@ fn parse_editor_past_item<'a>(
                     offset_blocks: 0,
                 },
             };
-            return Some(editor_past_outcome(
+            Some(editor_past_outcome(
                 item,
                 parent_trimmed,
                 EditorMode::Incomplete,
@@ -3749,7 +3747,7 @@ fn parse_editor_past_item<'a>(
                 spans,
                 vec![Need::PomodoroCloseLogText],
                 Vec::new(),
-            ));
+            ))
         }
         Ok(entry @ CloseInlineLex::Entry { .. }) => {
             let (index, index_range, text) = match &entry {
@@ -3812,7 +3810,7 @@ fn parse_editor_past_item<'a>(
                     offset_blocks: 0,
                 },
             };
-            return Some(editor_past_outcome(
+            Some(editor_past_outcome(
                 item,
                 parent_trimmed,
                 EditorMode::PomodoroPast,
@@ -3821,7 +3819,7 @@ fn parse_editor_past_item<'a>(
                 spans,
                 Vec::new(),
                 Vec::new(),
-            ));
+            ))
         }
     }
 }
