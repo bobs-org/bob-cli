@@ -61,6 +61,9 @@ pub(crate) mod file_coordination;
 mod freshness;
 mod gcal;
 mod gkeep;
+// Offline Gmail URL identity; no command consumes it yet.
+#[allow(dead_code)]
+mod gmail;
 mod highlights_ref;
 mod ledger_place;
 mod markdown;
