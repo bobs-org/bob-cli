@@ -2458,6 +2458,9 @@ More edge cases:
   re-plan at commit. If the consequence changed, nav writes nothing and
   re-renders for a fresh Return. Capture always plans at commit, so its
   result reports what happened.
+- **S or T without a `^block-id`:** in the nav stages, Return runs the §5
+  new-block-ID prompt for each id-less task before the preview, because
+  `bob task merge` addresses tasks as `note:block-id`.
 
 ### ML6 Equivalences
 
@@ -2490,6 +2493,7 @@ Name the task, use ⤵, stay calm.
 | Verdict `recurring` (disabled row) | `“{S}” repeats — merge it by hand first` |
 | Verdict `new_task` (disabled row, refusal) | `“{S}” is new — it would be born merged · to fold “{T}”, use ~~` |
 | Rename warning | `“{label}” is a merge label in config.yml — update relations.merge_labels` |
+| Prompt subtitle | `⤵ Merging needs an ID · 1 of 2 · line N` |
 | Mac submit hint | `Capture & merge {N} task(s)` |
 
 ### ML8 Contracts
