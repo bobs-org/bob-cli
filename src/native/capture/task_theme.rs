@@ -80,6 +80,9 @@ pub(super) struct ExistingTypeMarkerApplication {
     pub(super) summary: CaptureTaskThemeChange,
     pub(super) type_key: String,
     pub(super) type_name: String,
+    /// Note holding the retyped task; D8 relocation matches live links on
+    /// this path plus the block ID.
+    pub(super) task_path: PathBuf,
 }
 
 /// D8 relocation plus the identity the capture tracker needs to report
@@ -471,6 +474,7 @@ impl CaptureTaskThemeContext {
             summary,
             type_key: x_key,
             type_name: x_name,
+            task_path: target.to_path_buf(),
         })
     }
 
@@ -601,6 +605,7 @@ impl CaptureTaskThemeContext {
             summary,
             type_key: x_key,
             type_name: x_name,
+            task_path: target.to_path_buf(),
         })
     }
 
@@ -1209,6 +1214,7 @@ impl CaptureTaskThemeContext {
     pub(super) fn relocate_for_retype(
         &mut self,
         planner: &mut CaptureBatchPlanner,
+        task_path: &Path,
         block_id: &str,
         type_key: &str,
         type_name: &str,
@@ -1227,9 +1233,31 @@ impl CaptureTaskThemeContext {
             Ok(contents) => contents,
             Err(_) => return Ok(None),
         };
+        // The live link must resolve to the retyped task's own note: a
+        // same-ID link into another note never matches, and several open
+        // matches are ambiguous and leave the ledger unchanged.
+        let day_rel = day_file
+            .strip_prefix(&self.root)
+            .unwrap_or(day_file.as_path())
+            .to_path_buf();
+        let task_rel = task_path
+            .strip_prefix(&self.root)
+            .unwrap_or(task_path)
+            .to_path_buf();
+        let resolver = &self.resolver;
+        let mut matches_target = |target: &str| {
+            if target.is_empty() {
+                return day_rel == task_rel;
+            }
+            resolver
+                .resolve_target(&day_rel, target)
+                .path()
+                .is_some_and(|path| path == task_rel)
+        };
         let Some((updated, info)) =
-            crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents(
+            crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents_for_task(
                 &day_contents,
+                &mut matches_target,
                 block_id,
                 type_key,
                 type_name,

@@ -1144,14 +1144,28 @@ fn compute_move_relocation(
         // Shared D8 applier keeps the live link agreeing with the moved
         // task's new type; capture `#<type>` retypes call the same helper.
         // Types are listed, never budgeted, so the applier never refuses.
-        // The live link must resolve to the moved task's own home: a
-        // same-ID link into another note never matches, and several open
-        // matches are ambiguous and leave the ledger unchanged.
+        // The live link must resolve, through the vault's link index, to
+        // the moved task's own note: the destination once the move's link
+        // repair rewrote the daily post-image, else the source. A same-ID
+        // link into another note never matches, and several open matches
+        // are ambiguous and leave the ledger unchanged.
+        let mut matches_target = |target: &str| {
+            let resolved = if target.is_empty() {
+                Some(day_rel.clone())
+            } else {
+                resolver
+                    .resolve_target(&day_rel, target)
+                    .path()
+                    .map(Path::to_path_buf)
+            };
+            resolved.is_some_and(|path| {
+                path == mv.dest_path || path == mv.source_path
+            })
+        };
         if let Some((updated, info)) =
             crate::native::pomodoro_themes::relocation_apply::apply_to_day_contents_for_task(
                 &day_contents,
-                &day_rel,
-                &mv.source_path,
+                &mut matches_target,
                 &block_id,
                 &after_key,
                 &after_name,

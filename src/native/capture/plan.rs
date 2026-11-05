@@ -1425,6 +1425,7 @@ fn apply_existing_marker_after_gesture(
     }
     let Some(relocation) = task_theme_context.relocate_for_retype(
         planner,
+        &applied.task_path,
         block_id,
         &applied.type_key,
         &applied.type_name,
@@ -3235,6 +3236,7 @@ pub(super) fn plan_capture_item(
         if let Some(block_id_owned) = block_id_opt
             && let Some(relocation) = task_theme_context.relocate_for_retype(
                 planner,
+                &applied.task_path,
                 &block_id_owned,
                 &applied.type_key,
                 &applied.type_name,
@@ -4670,6 +4672,7 @@ pub(super) fn plan_multi_note_sub_bullet_item(
             let mut empty_refs = Vec::new();
             if let Some(relocation) = task_theme_context.relocate_for_retype(
                 planner,
+                &applied.task_path,
                 &block_id_owned,
                 &applied.type_key,
                 &applied.type_name,

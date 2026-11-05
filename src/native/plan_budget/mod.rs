@@ -435,20 +435,15 @@ pub(crate) fn with_type_mismatch_lints(
             Path::new(&task.path),
             line,
         );
+        // A task with no effective type agrees with every entry
+        // (`routing::agrees`), so it is never a mismatch.
         let Some(suggestion) = suggestion.suggestion else {
-            push_lint(
-                format!(
-                    "unresolved task link under {} · {route}#^{} · reconcile leaves it; fix the link or task type",
-                    task.entry_name, task.block_id,
-                ),
-                None,
-            );
             continue;
         };
         if suggestion.repair.is_some() {
             push_lint(
                 format!(
-                    "unresolved task link under {} · {route}#^{} · reconcile leaves it; fix the link or task type",
+                    "task type field needs repair under {} · {route}#^{} · reconcile leaves it; fix the task type",
                     task.entry_name, task.block_id,
                 ),
                 None,
@@ -1380,19 +1375,16 @@ mod tests {
             vault.path().join("tasks.md"),
             "- [ ] Build work #task [type:: BUILD] ^aaa111\n\
             - [ ] Fix work #task [type:: FIX] ^bbb222\n\
-            - [ ] Write work #task [type:: WRITE] ^ccc333\n",
+            - [ ] Write work #task [type:: WRITE] ^ccc333\n\
+            - [ ] Untyped work #task ^ddd444\n",
         )
         .expect("write tasks note");
         let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).expect("date");
         let config = PlanConfig::default();
-        let catalog =
-            ThemeCatalog::load(vault.path(), today, false)
-                .expect("catalog loads");
-        let ledger = compute_for_daily(
-            "## Pomodoros\n",
-            &config,
-            Some("2026/20261105"),
-        );
+        let catalog = ThemeCatalog::load(vault.path(), today, false)
+            .expect("catalog loads");
+        let ledger =
+            compute_for_daily("## Pomodoros\n", &config, Some("2026/20261105"));
         let lanes = Lanes {
             next: LaneBudget {
                 count: 0,
@@ -1412,12 +1404,11 @@ mod tests {
             TodayTask {
                 path: "tasks.md".to_string(),
                 block_id: block_id.to_string(),
-                line: if block_id == "aaa111" {
-                    1
-                } else if block_id == "bbb222" {
-                    2
-                } else {
-                    3
+                line: match block_id {
+                    "aaa111" => 1,
+                    "bbb222" => 2,
+                    "ccc333" => 3,
+                    _ => 4,
                 },
                 status_symbol: " ".to_string(),
                 status_name: "Todo".to_string(),
@@ -1482,5 +1473,33 @@ mod tests {
             .filter(|warning| warning.code == LINT_TYPE_MISMATCH)
             .collect();
         assert_eq!(mismatches.len(), 1, "{:?}", report.warnings);
+        // A task with no effective type agrees with any entry: no lint.
+        let untyped = TodayResult {
+            tasks: vec![task("ddd444", "BUILD", 3, 2)],
+            warnings: Vec::new(),
+        };
+        let report = assemble_report(
+            today,
+            "2026/20261105.md",
+            &config,
+            &ledger,
+            &lanes,
+            &untyped,
+        );
+        let report = with_type_mismatch_lints(
+            report,
+            vault.path(),
+            &untyped,
+            &catalog,
+            &config,
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .all(|warning| warning.code != LINT_TYPE_MISMATCH),
+            "untyped task yields no type_mismatch: {:?}",
+            report.warnings
+        );
     }
 }

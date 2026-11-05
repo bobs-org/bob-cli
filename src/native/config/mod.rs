@@ -18,8 +18,8 @@ pub(crate) mod stats;
 pub(crate) mod themes;
 
 pub(crate) use capture::{
-    load_capture_config, load_clipboard_history_config, ClipboardHistorySetting,
-    DEFAULT_MAX_SAVED_TEMPLATES,
+    load_capture_config, load_clipboard_history_config,
+    ClipboardHistorySetting, DEFAULT_MAX_SAVED_TEMPLATES,
 };
 pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;

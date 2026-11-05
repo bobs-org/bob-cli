@@ -1056,20 +1056,19 @@ pub(super) fn sync_task_statuses(
     // Type-agreement pass: run the shared applier over today's open
     // entries after blocked-link consumption. Renaming never empties an
     // entry, so no later cleanup is needed.
-    let (type_agreement, type_agreement_unrepaired) =
-        apply_type_agreement(
-            &mut compose,
-            &files,
-            &daily_path,
-            canonical_daily_path.as_ref(),
-            &daily_contents,
-            &normalized_daily,
-            daily_relative,
-            &mut inputs,
-            &settings,
-            anchor,
-            &request.bob_dir,
-        );
+    let (type_agreement, type_agreement_unrepaired) = apply_type_agreement(
+        &mut compose,
+        &files,
+        &daily_path,
+        canonical_daily_path.as_ref(),
+        &daily_contents,
+        &normalized_daily,
+        daily_relative,
+        &mut inputs,
+        &settings,
+        anchor,
+        &request.bob_dir,
+    );
     let apply_report = if request.dry_run {
         ApplyReport::default()
     } else {
@@ -1527,16 +1526,13 @@ fn apply_type_agreement(
             })
         })
         .unwrap_or_else(|| normalized_daily.to_string());
-    let daily_rel: PathBuf = daily_relative
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| {
+    let daily_rel: PathBuf =
+        daily_relative.map(Path::to_path_buf).unwrap_or_else(|| {
             daily_path
                 .strip_prefix(vault)
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|_| {
-                    PathBuf::from(
-                        daily_path.to_string_lossy().into_owned(),
-                    )
+                    PathBuf::from(daily_path.to_string_lossy().into_owned())
                 })
         });
     let sources = bob_config::themes::load_theme_sources();
@@ -1557,21 +1553,19 @@ fn apply_type_agreement(
     // Each entry's own children are inspected; the deduplicated
     // `today_tasks` list is never used.
     let mut staged: BTreeMap<(PathBuf, String), String> = BTreeMap::new();
-    for (index, file) in files.iter().enumerate() {
+    for file in files {
         let contents = compose
             .outputs
             .iter()
             .find(|output| {
                 output.path == file.path
                     || canonical_daily_path.is_some_and(|daily| {
-                        output.path.canonicalize().ok().as_ref()
-                            == Some(daily)
+                        output.path.canonicalize().ok().as_ref() == Some(daily)
                             && file.path == *daily_path
                     })
             })
             .map(|output| output.contents.clone())
             .unwrap_or_else(|| file.contents.clone());
-        let _ = index;
         let lines = logical_lines(&contents);
         for task in parse_tasks(&contents, settings) {
             let Some(block_id) = task.block_id.clone() else {
@@ -1622,12 +1616,10 @@ fn apply_type_agreement(
     // changing it between planning and writing defers instead of
     // writing stale names.
     let config_path = bob_config::config_path();
-    if snapshot_for_path(inputs, &config_path).is_none() {
-        if let Ok(snapshot) =
-            capture_optional(&config_path, InputKind::Note)
-        {
-            push_unique_input(inputs, snapshot);
-        }
+    if snapshot_for_path(inputs, &config_path).is_none()
+        && let Ok(snapshot) = capture_optional(&config_path, InputKind::Note)
+    {
+        push_unique_input(inputs, snapshot);
     }
     let mut renames = Vec::new();
     for entry in &outcome.entries {
@@ -1687,8 +1679,7 @@ struct StagedAgreementLookup {
     staged: BTreeMap<(PathBuf, String), String>,
     catalog: crate::native::pomodoro_themes::Catalog,
     plan_config: crate::native::config::PlanConfig,
-    resolver:
-        HomeResolver<crate::native::pomodoro_homes::DiskHomeSource>,
+    resolver: HomeResolver<crate::native::pomodoro_homes::DiskHomeSource>,
     settings: crate::native::note_tasks::NoteTaskSettings,
 }
 
@@ -1705,10 +1696,7 @@ impl crate::native::pomodoro_themes::agree_apply::TaskTypeLookup
         let residence: PathBuf = if target.is_empty() {
             self.daily_rel.clone()
         } else {
-            match self
-                .resolver
-                .resolve_target(&self.daily_rel, target)
-            {
+            match self.resolver.resolve_target(&self.daily_rel, target) {
                 LinkResolution::Found(path) => path,
                 LinkResolution::Ambiguous => {
                     return TaskResolution::Ambiguous;

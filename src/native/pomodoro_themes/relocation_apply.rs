@@ -55,7 +55,10 @@ fn dest_headline_after_removing_source(
 /// Apply D8 relocation to `day_contents` for `block_id` becoming
 /// `type_key`/`type_name`. Returns `None` when the ledger needs no change
 /// (no live link, already agreeing, or no Pomodoros section). The ledger
-/// never refuses: types are listed, never budgeted.
+/// never refuses: types are listed, never budgeted. Matches the live link
+/// on block ID alone; production callers use
+/// [`apply_to_day_contents_for_task`] so identity includes the task's note.
+#[cfg(test)]
 pub(crate) fn apply_to_day_contents(
     day_contents: &str,
     block_id: &str,
@@ -66,14 +69,18 @@ pub(crate) fn apply_to_day_contents(
     apply_inner(day_contents, block_id, type_key, type_name, sources, None)
 }
 
-/// Same as [`apply_to_day_contents`] but the live link must resolve to
-/// `(expected_path, block_id)`. A same-ID link into another note never
-/// matches; several open matches for the same task are ambiguous and
-/// leave the ledger unchanged.
+/// Decides whether a live link's raw target (empty for a same-note
+/// `[[#^id]]` link) resolves to the task being relocated. Callers resolve
+/// through their own vault link index so basename links match.
+pub(crate) type TargetMatcher<'a> = &'a mut dyn FnMut(&str) -> bool;
+
+/// Same as [`apply_to_day_contents`] but the live link's target must
+/// satisfy `matches_target`, so identity is (resolved path, block ID). A
+/// same-ID link into another note never matches; several open matches for
+/// the same task are ambiguous and leave the ledger unchanged.
 pub(crate) fn apply_to_day_contents_for_task(
     day_contents: &str,
-    daily_path: &std::path::Path,
-    expected_path: &std::path::Path,
+    matches_target: TargetMatcher<'_>,
     block_id: &str,
     type_key: &str,
     type_name: &str,
@@ -85,7 +92,7 @@ pub(crate) fn apply_to_day_contents_for_task(
         type_key,
         type_name,
         sources,
-        Some((daily_path, expected_path)),
+        Some(matches_target),
     )
 }
 
@@ -95,12 +102,13 @@ fn apply_inner(
     type_key: &str,
     type_name: &str,
     sources: &ThemeSources,
-    expected: Option<(&std::path::Path, &std::path::Path)>,
+    matches_target: Option<TargetMatcher<'_>>,
 ) -> Option<(String, TypeRelocation)> {
     if !capture_pomodoros::scan(day_contents).has_section {
         return None;
     }
-    let found = find_live_link_filtered(day_contents, block_id, expected)?;
+    let found =
+        find_live_link_filtered(day_contents, block_id, matches_target)?;
     let scan = capture_pomodoros::scan(day_contents);
     let mut entries = Vec::new();
     for entry in &scan.entries {
@@ -200,8 +208,7 @@ fn apply_inner(
                 .name
                 .clone()
                 .unwrap_or_else(|| type_name.to_string());
-            let link =
-                find_live_link_filtered(day_contents, block_id, expected)?;
+            let link = &found;
             let dest_before = dest_entry.line.saturating_sub(1);
             let dest_after = dest_headline_after_removing_source(
                 dest_before,
@@ -232,8 +239,7 @@ fn apply_inner(
         routing::RelocateOutcome::CreateBelow { from, name } => {
             let source_entry = scan.entries.get(from)?;
             let from_name = source_entry.name.clone();
-            let link =
-                find_live_link_filtered(day_contents, block_id, expected)?;
+            let link = &found;
             let spans = line_spans(day_contents);
             let source_index = source_entry.line.saturating_sub(1);
             let source_end = child_block_end_line(&spans, source_index);
@@ -307,13 +313,11 @@ pub(crate) fn find_live_link(
     find_live_link_filtered(day_contents, block_id, None)
 }
 
-/// Find a dedicated live link to `(expected_path, block_id)`.
-///
-/// Links resolve to a vault-relative path: an empty target means the
-/// daily note itself, otherwise `target_to_markdown_path`. A same-ID
-/// link into another note never matches and never poisons ambiguity.
-/// Two or more open matches for the same task are ambiguous and leave
-/// the ledger unchanged.
+/// Find a dedicated live link to `(expected_path, block_id)`, resolving
+/// full-path targets literally: an empty target means the daily note
+/// itself, otherwise `target_to_markdown_path`. A same-ID link into
+/// another note never matches and never poisons ambiguity. Two or more
+/// open matches for the same task are ambiguous.
 #[cfg(test)]
 pub(crate) fn find_live_link_for_task(
     day_contents: &str,
@@ -321,17 +325,21 @@ pub(crate) fn find_live_link_for_task(
     expected_path: &std::path::Path,
     block_id: &str,
 ) -> Option<LiveLink> {
-    find_live_link_filtered(
-        day_contents,
-        block_id,
-        Some((daily_path, expected_path)),
-    )
+    let mut matches_target = |target: &str| {
+        let resolved = if target.is_empty() {
+            Some(daily_path.to_path_buf())
+        } else {
+            crate::native::vault_links::target_to_markdown_path(target)
+        };
+        resolved.as_deref() == Some(expected_path)
+    };
+    find_live_link_filtered(day_contents, block_id, Some(&mut matches_target))
 }
 
 fn find_live_link_filtered(
     day_contents: &str,
     block_id: &str,
-    expected: Option<(&std::path::Path, &std::path::Path)>,
+    mut matches_target: Option<TargetMatcher<'_>>,
 ) -> Option<LiveLink> {
     let spans = line_spans(day_contents);
     let scan = capture_pomodoros::scan(day_contents);
@@ -363,20 +371,8 @@ fn find_live_link_filtered(
                     continue;
                 }
                 if span.block_id == block_id {
-                    if let Some((daily_path, expected_path)) = expected
-                        && {
-                            let resolved = if span.target.is_empty() {
-                                daily_path.to_path_buf()
-                            } else {
-                                match crate::native::vault_links::target_to_markdown_path(
-                                    &span.target,
-                                ) {
-                                    Some(path) => path,
-                                    None => continue,
-                                }
-                            };
-                            resolved != expected_path
-                        }
+                    if let Some(matches_target) = matches_target.as_mut()
+                        && !matches_target(&span.target)
                     {
                         continue;
                     }
