@@ -118,6 +118,20 @@ pub(crate) struct Home {
 pub(crate) struct NoteLint {
     pub(crate) path: String,
     pub(crate) raw: String,
+    /// The frontmatter key that caused the lint (`offclock` or
+    /// `offclock_types`). `None` for lints that predate key naming.
+    pub(crate) key: Option<String>,
+}
+
+/// Type rules for the catalog-free effective-type walk shared by type
+/// suggestions and the clock. Loaded lazily from the plan config on
+/// the first list hit so the ~44 `HomeResolver::new` call sites stay
+/// untouched; tests inject rules explicitly and never read the
+/// developer's real config.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TypeRules {
+    pub(crate) reading: Option<String>,
+    pub(crate) default: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +158,7 @@ pub(crate) struct ResolverHealth {
     pub(crate) area_color_invalid: Vec<NoteLint>,
     pub(crate) note_offclock_invalid: Vec<NoteLint>,
     pub(crate) note_offclock_ignored: Vec<NoteLint>,
+    pub(crate) note_offclock_shadowed: Vec<NoteLint>,
     pub(crate) root_field_invalid: Vec<RootFieldInvalidLint>,
     pub(crate) root_field_not_root: Vec<RootFieldNotRootLint>,
 }
@@ -153,10 +168,12 @@ pub(crate) struct HomeResolver<S> {
     homes: HashMap<PathBuf, Home>,
     facts: HashMap<PathBuf, Option<NoteFacts>>,
     color_linted: BTreeSet<PathBuf>,
-    offclock_invalid_linted: BTreeSet<PathBuf>,
-    offclock_ignored_linted: BTreeSet<PathBuf>,
+    offclock_invalid_linted: BTreeSet<(PathBuf, String)>,
+    offclock_ignored_linted: BTreeSet<(PathBuf, String)>,
+    offclock_shadowed_linted: BTreeSet<PathBuf>,
     root_invalid_linted: BTreeSet<(String, usize)>,
     root_not_root_linted: BTreeSet<(String, usize)>,
+    type_rules: Option<TypeRules>,
     health: ResolverHealth,
 }
 
@@ -169,14 +186,42 @@ impl<S: HomeSource> HomeResolver<S> {
             color_linted: BTreeSet::new(),
             offclock_invalid_linted: BTreeSet::new(),
             offclock_ignored_linted: BTreeSet::new(),
+            offclock_shadowed_linted: BTreeSet::new(),
             root_invalid_linted: BTreeSet::new(),
             root_not_root_linted: BTreeSet::new(),
+            type_rules: None,
             health: ResolverHealth::default(),
         }
     }
 
     pub(crate) fn health(&self) -> &ResolverHealth {
         &self.health
+    }
+
+    /// Explicit type rules for tests. Commands that already hold a
+    /// `PlanConfig` may inject it here instead of relying on the lazy
+    /// config load.
+    #[cfg(test)]
+    pub(crate) fn set_type_rules(&mut self, rules: TypeRules) {
+        self.type_rules = Some(rules);
+    }
+
+    /// Type rules for the effective-type walk, loaded lazily once on
+    /// the first list hit via `load_plan_config(config_path())` with
+    /// `unwrap_or_default()`. Tests must inject rules and never read
+    /// the developer's real config.
+    pub(crate) fn type_rules(&mut self) -> TypeRules {
+        if self.type_rules.is_none() {
+            let plan = crate::native::config::load_plan_config(
+                &crate::native::config::config_path(),
+            )
+            .unwrap_or_default();
+            self.type_rules = Some(TypeRules {
+                reading: plan.reading_theme().map(str::to_string),
+                default: plan.default_type().map(str::to_string),
+            });
+        }
+        self.type_rules.clone().expect("type rules loaded")
     }
 
     /// Clear derived note facts and homes after the source's snapshot has
@@ -188,6 +233,7 @@ impl<S: HomeSource> HomeResolver<S> {
         self.color_linted.clear();
         self.offclock_invalid_linted.clear();
         self.offclock_ignored_linted.clear();
+        self.offclock_shadowed_linted.clear();
         self.root_invalid_linted.clear();
         self.root_not_root_linted.clear();
         self.health = ResolverHealth::default();
@@ -232,11 +278,16 @@ impl<S: HomeSource> HomeResolver<S> {
         &mut self,
         path: &Path,
         raw: &str,
+        key: &str,
     ) {
-        if self.offclock_invalid_linted.insert(path.to_path_buf()) {
+        if self
+            .offclock_invalid_linted
+            .insert((path.to_path_buf(), key.to_string()))
+        {
             self.health.note_offclock_invalid.push(NoteLint {
                 path: path_string(path),
                 raw: raw.to_string(),
+                key: Some(key.to_string()),
             });
         }
     }
@@ -245,11 +296,33 @@ impl<S: HomeSource> HomeResolver<S> {
         &mut self,
         path: &Path,
         raw: &str,
+        key: &str,
     ) {
-        if self.offclock_ignored_linted.insert(path.to_path_buf()) {
+        if self
+            .offclock_ignored_linted
+            .insert((path.to_path_buf(), key.to_string()))
+        {
             self.health.note_offclock_ignored.push(NoteLint {
                 path: path_string(path),
                 raw: raw.to_string(),
+                key: Some(key.to_string()),
+            });
+        }
+    }
+
+    /// Stats-health-only lint for a dual-key note: `offclock:` is
+    /// present but `offclock_types:` decides the clock. Never a
+    /// per-capture warning.
+    pub(crate) fn lint_note_offclock_shadowed(
+        &mut self,
+        path: &Path,
+        raw: &str,
+    ) {
+        if self.offclock_shadowed_linted.insert(path.to_path_buf()) {
+            self.health.note_offclock_shadowed.push(NoteLint {
+                path: path_string(path),
+                raw: raw.to_string(),
+                key: Some("offclock".to_string()),
             });
         }
     }
@@ -514,6 +587,7 @@ impl<S: HomeSource> HomeResolver<S> {
             self.health.area_color_invalid.push(NoteLint {
                 path: path_string(path),
                 raw: raw.to_string(),
+                key: None,
             });
         }
     }

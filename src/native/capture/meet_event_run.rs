@@ -771,6 +771,7 @@ fn event_run_clock_warnings(run: &EventRun) -> Vec<CaptureWarning> {
                     item.event.clock_tag,
                     crate::native::clock_tags::ClockTag::Conflict { .. }
                 ),
+                key: item.event.clock_key.clone(),
             }),
         })
         .collect();
@@ -789,6 +790,7 @@ fn event_run_clock_note(run: &EventRun) -> Option<String> {
                 item.event.clock_tag,
                 crate::native::clock_tags::ClockTag::Conflict { .. }
             ),
+            key: item.event.clock_key.clone(),
         })
         .collect();
     via_clock_note(run.off_clock, resolutions.iter())
@@ -905,8 +907,9 @@ fn clock_link_warnings(links: &[CountedLinkFact]) -> Vec<CaptureWarning> {
             }
             "note_offclock_invalid" => {
                 let note = resolution.note.as_deref().unwrap_or("a note");
+                let key = resolution.key.as_deref().unwrap_or("offclock");
                 format!(
-                    "◌ {note} has an invalid offclock: value; that task stays on the clock"
+                    "◌ {note} has an invalid {key}: value; that task stays on the clock"
                 )
             }
             _ => continue,

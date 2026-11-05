@@ -312,6 +312,7 @@ impl<'a> HomesEngine<'a> {
                 .map(|lint| HomeLintReport {
                     path: lint.path.clone(),
                     raw: lint.raw.clone(),
+                    key: lint.key.clone(),
                 })
                 .collect();
             health.note_offclock_invalid = resolver_health
@@ -320,6 +321,7 @@ impl<'a> HomesEngine<'a> {
                 .map(|lint| HomeLintReport {
                     path: lint.path.clone(),
                     raw: lint.raw.clone(),
+                    key: lint.key.clone(),
                 })
                 .collect();
             health.note_offclock_ignored = resolver_health
@@ -328,6 +330,16 @@ impl<'a> HomesEngine<'a> {
                 .map(|lint| HomeLintReport {
                     path: lint.path.clone(),
                     raw: lint.raw.clone(),
+                    key: lint.key.clone(),
+                })
+                .collect();
+            health.note_offclock_shadowed = resolver_health
+                .note_offclock_shadowed
+                .iter()
+                .map(|lint| HomeLintReport {
+                    path: lint.path.clone(),
+                    raw: lint.raw.clone(),
+                    key: lint.key.clone(),
                 })
                 .collect();
             health.root_field_invalid = resolver_health
@@ -1124,24 +1136,37 @@ fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
         });
     }
     for lint in &health.note_offclock_invalid {
+        let key = lint.key.as_deref().unwrap_or("offclock");
         warnings.push(StatsWarning {
             code: "note_offclock_invalid".to_string(),
             metric: None,
             date: None,
             message: format!(
-                "{}: invalid offclock value {:?}; using on-clock. Use true or false",
+                "{}: invalid {key} value {:?}; using on-clock. Use true or false",
                 lint.path, lint.raw
             ),
         });
     }
     for lint in &health.note_offclock_ignored {
+        let key = lint.key.as_deref().unwrap_or("offclock");
         warnings.push(StatsWarning {
             code: "note_offclock_ignored".to_string(),
             metric: None,
             date: None,
             message: format!(
-                "{}: offclock value {:?} ignored; only area and project notes set clock defaults",
+                "{}: {key} value {:?} ignored; only area and project notes set clock defaults",
                 lint.path, lint.raw
+            ),
+        });
+    }
+    for lint in &health.note_offclock_shadowed {
+        warnings.push(StatsWarning {
+            code: "note_offclock_shadowed".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{}: offclock ignored; offclock_types decides this note's clock",
+                lint.path
             ),
         });
     }

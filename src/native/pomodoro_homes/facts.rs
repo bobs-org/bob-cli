@@ -5,8 +5,9 @@ use super::super::{
     markdown,
     projects::{
         frontmatter_is_area, frontmatter_is_project, frontmatter_scalar,
-        frontmatter_value, parse_frontmatter, trim_yaml_scalar,
-        wikilink_path_target, FrontmatterScalar,
+        frontmatter_value, parse_frontmatter, parse_offclock_types,
+        trim_yaml_scalar, wikilink_path_target, FrontmatterScalar,
+        OffclockTypesParsed,
     },
     ref_tasks::strip_blockquote_prefix,
     task_fields::canonical_theme_name,
@@ -38,6 +39,16 @@ pub(crate) enum NoteOffClock {
     Invalid(String),
 }
 
+/// An area's or project's `offclock_types:` filter. Canonical display
+/// names, unique by normalized key; empty shapes map to `None` on the
+/// note facts so they inherit. Invalid values stop the walk and resolve
+/// on-clock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NoteOffClockTypes {
+    Keys(Vec<String>),
+    Invalid(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TaskRootFact {
     pub(crate) line_number: usize,
@@ -53,6 +64,7 @@ pub(crate) struct NoteFacts {
     pub(crate) theme: Option<NoteTheme>,
     pub(crate) theme_conflict: bool,
     pub(crate) offclock: Option<NoteOffClock>,
+    pub(crate) offclock_types: Option<NoteOffClockTypes>,
     /// Unique trailing block id → root field on that task line.
     /// Duplicate block ids are omitted, matching `note_tasks::by_block_id`.
     pub(crate) task_roots: HashMap<String, TaskRootFact>,
@@ -92,6 +104,9 @@ impl NoteFacts {
         let offclock = frontmatter
             .as_ref()
             .and_then(|frontmatter| parse_note_offclock(frontmatter));
+        let offclock_types = frontmatter
+            .as_ref()
+            .and_then(|frontmatter| parse_note_offclock_types(frontmatter));
         Self {
             kind,
             parent,
@@ -100,6 +115,7 @@ impl NoteFacts {
             theme,
             theme_conflict,
             offclock,
+            offclock_types,
             task_roots: collect_task_roots(contents),
         }
     }
@@ -118,6 +134,19 @@ fn parse_note_offclock(
                 "false" => NoteOffClock::False,
                 _ => NoteOffClock::Invalid(raw),
             })
+        }
+    }
+}
+
+fn parse_note_offclock_types(
+    frontmatter: &super::super::projects::Frontmatter<'_>,
+) -> Option<NoteOffClockTypes> {
+    match parse_offclock_types(frontmatter) {
+        OffclockTypesParsed::Absent | OffclockTypesParsed::Empty => None,
+        OffclockTypesParsed::Keys(keys) if keys.is_empty() => None,
+        OffclockTypesParsed::Keys(keys) => Some(NoteOffClockTypes::Keys(keys)),
+        OffclockTypesParsed::Invalid(raw) => {
+            Some(NoteOffClockTypes::Invalid(raw))
         }
     }
 }

@@ -135,6 +135,34 @@ fn write_case(vault: &Path, case: &Value) {
     }
 }
 
+/// The case's `config` member as a config file, when present. The JSON
+/// object is written verbatim: JSON is valid YAML, so the bob config
+/// loader reads it as the bob config document (for example
+/// `{"plan": {"default_type": "CHORE"}}`). When `config` is absent no
+/// config file is written.
+fn write_case_config(temp: &Path, case: &Value) -> Option<PathBuf> {
+    let config = case.get("config")?;
+    let path = temp.join("config.yml");
+    write_file(&path, &serde_json::to_string(config).expect("config JSON"));
+    Some(path)
+}
+
+fn run_case_capture(
+    vault: &Path,
+    day_file: &Path,
+    config: Option<&Path>,
+    now: &str,
+    token: &str,
+    dry_run: bool,
+) -> Value {
+    match config {
+        Some(path) => {
+            run_capture_with_config(vault, day_file, path, now, token, dry_run)
+        }
+        None => run_capture(vault, day_file, now, token, dry_run),
+    }
+}
+
 #[test]
 fn capture_matches_shared_pomodoro_clock_vectors() {
     for case in vectors()["cases"].as_array().expect("cases") {
@@ -142,10 +170,18 @@ fn capture_matches_shared_pomodoro_clock_vectors() {
         let temp = TempDir::new(&format!("bob-cli-pomodoro-clock-{id}"));
         let vault = temp.path().join("vault");
         write_case(&vault, case);
+        let config = write_case_config(temp.path(), case);
         let day_file = vault.join("2026/20261101.md");
         let now = case["now"].as_str().expect("now");
         let token = case["token"].as_str().expect("token");
-        let json = run_capture(&vault, &day_file, now, token, false);
+        let json = run_case_capture(
+            &vault,
+            &day_file,
+            config.as_deref(),
+            now,
+            token,
+            false,
+        );
         assert_eq!(
             fs::read_to_string(&day_file).expect("written day"),
             case["expected_day"].as_str().expect("expected day"),
@@ -176,11 +212,13 @@ fn dry_run_matches_vector_json_and_writes_nothing() {
         let temp = TempDir::new(&format!("bob-cli-pomodoro-clock-dry-{id}"));
         let vault = temp.path().join("vault");
         write_case(&vault, case);
+        let config = write_case_config(temp.path(), case);
         let day_file = vault.join("2026/20261101.md");
         let before = fs::read_to_string(&day_file).expect("day before");
-        let json = run_capture(
+        let json = run_case_capture(
             &vault,
             &day_file,
+            config.as_deref(),
             case["now"].as_str().expect("now"),
             case["token"].as_str().expect("token"),
             true,

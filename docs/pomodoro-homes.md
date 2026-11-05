@@ -32,8 +32,9 @@ note without either type is `@unfiled`. A set `[root:: X]` field starts this
 walk at X instead of the linked note ([R11](#r11-task-root-fields)).
 
 Task type defaults and effective clock defaults share this root start and
-residence chain. Clock defaults use `offclock: true|false` on area or project
-notes, with `#off` and `#on` as task-line overrides; see the
+residence chain. Clock defaults use `offclock: true|false` (or an
+`offclock_types:` type filter, which wins on a dual-key note) on area or
+project notes, with `#off` and `#on` as task-line overrides; see the
 [vault clock contract](reference/vault-format.md#task-clock-tags-and-note-defaults).
 
 An empty target resolves to the current daily note. A daily note walks

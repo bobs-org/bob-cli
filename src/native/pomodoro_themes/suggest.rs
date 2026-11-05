@@ -219,6 +219,119 @@ fn resolve_without_task_field<S: HomeSource>(
     )
 }
 
+/// Catalog-free effective type key: the task field (closed rows
+/// included; repair states fall through), then the reading rule, then
+/// the nearest `task_type:`/`theme:` default on the task's own walk
+/// (`task_type: off` stops note inheritance), then the global default.
+/// Never consults the `types:` catalog, so unconfigured types still
+/// match. Shared by the type pill and the clock so they cannot drift.
+pub(crate) fn effective_type_key<S: HomeSource>(
+    source: &mut HomeResolver<S>,
+    reading: Option<&str>,
+    default: Option<&str>,
+    residence_path: &Path,
+    line: &str,
+) -> Option<String> {
+    if let TaskThemeState::Set { key, .. } = parse_task_theme(line) {
+        return Some(key);
+    }
+    if is_reading_task(line)
+        && let Some(name) = reading
+    {
+        return Some(normalize_component(name));
+    }
+    let root_start = source.root_walk_start(residence_path, line);
+    let (start, from_root) = match root_start {
+        Some(path) => (path, true),
+        None => (residence_path.to_path_buf(), false),
+    };
+    if let Some(key) = note_key_walk(source, &start, from_root) {
+        return Some(key);
+    }
+    default.map(normalize_component)
+}
+
+/// Catalog-free note-default walk: the normalized key of the nearest
+/// `task_type:`/`theme:` name on the walk, or `None` when `off` stops
+/// inheritance, no name is found, or a daily residence has no root.
+/// Shared by [`note_default`] and [`effective_type_key`].
+fn note_key_walk<S: HomeSource>(
+    source: &mut HomeResolver<S>,
+    residence_path: &Path,
+    from_root_field: bool,
+) -> Option<String> {
+    let (_, hit, _) =
+        note_key_walk_full(source, residence_path, from_root_field);
+    hit.map(|hit| hit.key)
+}
+
+/// One shared-walk hit: the normalized key and its walk index.
+struct NoteKeyHit {
+    key: String,
+    index: usize,
+}
+
+/// Full shared walk backing both the suggestion pill and the clock:
+/// the residence chain, the nearest name hit (if any), and the
+/// default warnings in walk order.
+fn note_key_walk_full<S: HomeSource>(
+    source: &mut HomeResolver<S>,
+    residence_path: &Path,
+    from_root_field: bool,
+) -> (Vec<String>, Option<NoteKeyHit>, Vec<SuggestWarning>) {
+    if !from_root_field && canonical_daily_date(residence_path).is_some() {
+        return (Vec::new(), None, Vec::new());
+    }
+    let home = source.resolve_note(residence_path);
+    let mut warnings = Vec::new();
+    let mut seen_invalid = BTreeSet::new();
+    let mut seen_conflict = BTreeSet::new();
+    let mut hit: Option<NoteKeyHit> = None;
+    for (index, path_str) in home.residence_chain.iter().enumerate() {
+        let path = Path::new(path_str);
+        let Some(facts) = source.facts(path) else {
+            continue;
+        };
+        if !matches!(facts.kind, NoteKind::Area | NoteKind::Project) {
+            continue;
+        }
+        if facts.theme_conflict && seen_conflict.insert(path_str.clone()) {
+            warnings.push(SuggestWarning {
+                code: "type_default_conflict".to_string(),
+                path: Some(path_str.clone()),
+            });
+        }
+        match &facts.theme {
+            None => {}
+            Some(NoteTheme::Off) => {
+                // `off` stops inheritance; a later name never wins.
+                break;
+            }
+            Some(NoteTheme::Invalid(_))
+                if seen_invalid.insert(path_str.clone()) =>
+            {
+                warnings.push(SuggestWarning {
+                    code: "theme_default_invalid".to_string(),
+                    path: Some(path_str.clone()),
+                });
+            }
+            Some(NoteTheme::Invalid(_)) => {}
+            Some(NoteTheme::Name(canonical)) => {
+                hit = Some(NoteKeyHit {
+                    key: normalize_component(canonical),
+                    index,
+                });
+                break;
+            }
+        }
+    }
+    // The loop breaks on the first decisive note (`off` or a name) but
+    // keeps invalid/conflict warnings from earlier notes only — matching
+    // the historic single-pass order. Names after `off` are unreachable
+    // because `off` breaks first.
+    (home.residence_chain.clone(), hit, warnings)
+}
+
 fn with_global_default(
     mut result: SuggestResult,
     catalog: &Catalog,
@@ -247,78 +360,50 @@ fn note_default<S: HomeSource>(
     residence_path: &Path,
     from_root_field: bool,
 ) -> SuggestResult {
-    if !from_root_field && canonical_daily_date(residence_path).is_some() {
+    let (chain, hit, warnings) =
+        note_key_walk_full(source, residence_path, from_root_field);
+    let Some(hit) = hit else {
         return SuggestResult {
             suggestion: None,
-            warnings: Vec::new(),
+            warnings,
         };
-    }
-    let home = source.resolve_note(residence_path);
-    let mut warnings = Vec::new();
-    let mut seen_invalid = BTreeSet::new();
-    let mut seen_conflict = BTreeSet::new();
-    for (index, path_str) in home.residence_chain.iter().enumerate() {
-        let path = Path::new(path_str);
-        let Some(facts) = source.facts(path) else {
-            continue;
-        };
-        if !matches!(facts.kind, NoteKind::Area | NoteKind::Project) {
-            continue;
+    };
+    let (index, path_str) = (hit.index, chain[hit.index].clone());
+    let key = hit.key;
+    let path = Path::new(&path_str);
+    let facts = source.facts(path).expect("note hit has facts");
+    let canonical = match facts.theme {
+        Some(NoteTheme::Name(canonical)) => canonical,
+        _ => {
+            return SuggestResult {
+                suggestion: None,
+                warnings,
+            };
         }
-        if facts.theme_conflict && seen_conflict.insert(path_str.clone()) {
-            warnings.push(SuggestWarning {
-                code: "type_default_conflict".to_string(),
-                path: Some(path_str.clone()),
-            });
-        }
-        match facts.theme {
-            None => continue,
-            Some(NoteTheme::Off) => {
-                return SuggestResult {
-                    suggestion: None,
-                    warnings,
-                };
-            }
-            Some(NoteTheme::Invalid(_)) => {
-                if seen_invalid.insert(path_str.clone()) {
-                    warnings.push(SuggestWarning {
-                        code: "theme_default_invalid".to_string(),
-                        path: Some(path_str.clone()),
-                    });
-                }
-            }
-            Some(NoteTheme::Name(canonical)) => {
-                let key = normalize_component(&canonical);
-                let display = catalog.display_name(&key, &canonical);
-                let declaring = source.resolve_note(path);
-                let kind = match facts.kind {
-                    NoteKind::Area => "area",
-                    NoteKind::Project => "project",
-                    NoteKind::Other => unreachable!("filtered above"),
-                };
-                let stem = note_stem(path);
-                return SuggestResult {
-                    suggestion: Some(ThemeSuggestion {
-                        theme: catalog.theme_ref(&key, &display),
-                        source: SuggestionSource::Note,
-                        label: format!("from {stem}"),
-                        from: Some(NoteOrigin {
-                            path: path_str.clone(),
-                            stem,
-                            kind: kind.to_string(),
-                            hue: declaring.hue,
-                            chain: home.residence_chain[..=index].to_vec(),
-                        }),
-                        inherited: None,
-                        repair: None,
-                    }),
-                    warnings,
-                };
-            }
-        }
-    }
+    };
+    let display = catalog.display_name(&key, &canonical);
+    let declaring = source.resolve_note(path);
+    let kind = match facts.kind {
+        NoteKind::Area => "area",
+        NoteKind::Project => "project",
+        NoteKind::Other => unreachable!("filtered above"),
+    };
+    let stem = note_stem(path);
     SuggestResult {
-        suggestion: None,
+        suggestion: Some(ThemeSuggestion {
+            theme: catalog.theme_ref(&key, &display),
+            source: SuggestionSource::Note,
+            label: format!("from {stem}"),
+            from: Some(NoteOrigin {
+                path: path_str.clone(),
+                stem,
+                kind: kind.to_string(),
+                hue: declaring.hue,
+                chain: chain[..=index].to_vec(),
+            }),
+            inherited: None,
+            repair: None,
+        }),
         warnings,
     }
 }

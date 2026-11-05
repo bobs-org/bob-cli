@@ -268,7 +268,23 @@ clock default for tasks whose root walk reaches this note. A nearer area or
 project value wins; `false` ends inheritance and a deeper `true` can turn it
 back on. Blank or absent values inherit. Other values are invalid, resolve
 on-clock, and are reported as `note_offclock_invalid`. On other note kinds the
-key is ignored and reported as `note_offclock_ignored`. Optional
+key is ignored and reported as `note_offclock_ignored`. An area or project
+note may instead declare an `offclock_types:` list of effective task types,
+in block-list form:
+
+```yaml
+offclock_types:
+  - MEET
+```
+
+The nearest note on the walk that carries a non-empty `offclock_types:` list
+decides the clock, whatever its `offclock:` says (a dual-key note is reported
+as `note_offclock_shadowed`): the task is off-clock iff its effective type
+key is listed, and any other type — or no type at all — is on-clock. A scalar
+`offclock_types: MEET` is a one-item list. Absent, blank, `null`, `~`, `[]`,
+and all-blank lists inherit. Any other shape is invalid, resolves on-clock,
+and is reported as `note_offclock_invalid` naming `offclock_types`. On other
+note kinds the key is ignored and reported as `note_offclock_ignored`. Optional
 `project_name_aliases` lists extra capture/ref names for the stem.
 
 ### Task clock tags and note defaults
@@ -279,6 +295,7 @@ key is ignored and reported as `note_offclock_ignored`. Optional
 | `#on` | Explicit on-clock override; it wins if an off spelling is also present, with a `clock_tag_conflict` diagnostic. |
 | `#offclock`, `#off-clock`, `#untracked` | Deprecated aliases that remain readable. |
 | `offclock: true` / `offclock: false` | Area or project default inherited on the task's root walk. |
+| `offclock_types: [MEET]` | Area or project type filter: off-clock iff the task's effective type key is listed; wins over `offclock:` on the same note. |
 
 On vault lines, clock tags are standalone ASCII-case-insensitive tokens,
 outside code spans and Markdown links. A tag starts at the line or after
@@ -289,12 +306,16 @@ and `#online` do not match. The aliases match as whole tokens too.
 The first matching rule decides a task's clock:
 
 1. `#on` on the task line means on-clock and wins a same-line conflict.
-2. `#off` or a deprecated alias means off-clock, including under
-   `offclock: false`.
-3. Otherwise, the nearest area or project `offclock:` value on the root walk
-   decides. `false` stops the walk; an invalid nearer value resolves on-clock
-   instead of inheriting a parent value.
-4. With no value, the task is on-clock.
+2. `#off` or a deprecated alias means off-clock. It beats `offclock: false`
+   and beats an `offclock_types:` list that does not include the task's type.
+3. Otherwise, the nearest area or project note on the root walk that declares
+   a clock policy decides. A note with a non-empty `offclock_types:` list
+   decides whatever its `offclock:` says: the task is off-clock iff its
+   effective type key is listed, and any other type — or no type at all — is
+   on-clock and stops the walk. Otherwise an `offclock: true|false` value
+   behaves as before: `false` stops the walk, and an invalid nearer value
+   resolves on-clock instead of inheriting a parent value.
+4. With no declaration, the task is on-clock.
 
 The root walk starts at a valid task `[root:: NOTE]` target, otherwise at the
 residence note, and follows the same 16-note, cycle-safe parent chain as task
@@ -419,8 +440,9 @@ Hours are `00`–`23` and minutes are `00`–`59`; when the end is earlier than
 the start, the event crosses midnight. Context rows have no checkbox, so they
 are not Event Tasks. A standalone `#off` tag (deprecated aliases `#offclock`,
 `#off-clock`, and `#untracked`) marks an Event Task off-clock; `#on` is an
-on-clock override. Untagged Event Tasks inherit the area or project
-`offclock:` default through their `[root::]` walk. A session is off-clock only
+on-clock override. Untagged Event Tasks inherit the area or project clock
+policy (`offclock:` default or matching `offclock_types:` list) through
+their `[root::]` walk. A session is off-clock only
 when it links at least one task and every link resolves off-clock; unresolved,
 unlinked, or mixed links stay worked. An Event Task may carry
 `[root:: NOTE]` to attribute its Pomodoro time to that area or project;

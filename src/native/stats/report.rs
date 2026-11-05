@@ -428,6 +428,8 @@ pub(crate) struct HomesHealthReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) note_offclock_ignored: Vec<HomeLintReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) note_offclock_shadowed: Vec<HomeLintReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) hue_collisions: Vec<HueCollisionReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) root_field_invalid: Vec<RootFieldInvalidReport>,
@@ -439,6 +441,10 @@ pub(crate) struct HomesHealthReport {
 pub(crate) struct HomeLintReport {
     pub(crate) path: String,
     pub(crate) raw: String,
+    /// The frontmatter key that caused the lint. Additive and optional
+    /// so older reports still parse.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) key: Option<String>,
 }
 
 /// One overlapping pair of closed timed sessions. At most 50 entries are

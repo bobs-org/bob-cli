@@ -18,7 +18,7 @@ use super::facts::{NoteFacts, NoteOffClock, NoteTheme};
 use super::{
     attribute_session, closed_session_task_credit, effective_clock,
     fallback_hue, session_links, split_minutes, ClockSource, DiskHomeSource,
-    HomeResolver, HomeSource, Hue, IndexedHomeSource, SessionLink,
+    HomeResolver, HomeSource, Hue, IndexedHomeSource, SessionLink, TypeRules,
 };
 
 #[derive(Debug, Deserialize)]
@@ -1067,6 +1067,381 @@ fn evaluate_case<S: HomeSource>(
         })
         .collect();
     (actual, resolver.health().clone(), leads)
+}
+
+fn default_test_rules() -> TypeRules {
+    TypeRules {
+        reading: Some("READ".to_string()),
+        default: None,
+    }
+}
+
+fn resolver_with_rules<'a>(
+    note_index: &'a NoteIndex,
+    notes: &'a BTreeMap<PathBuf, String>,
+    rules: TypeRules,
+) -> HomeResolver<IndexedHomeSource<'a>> {
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(note_index, notes));
+    resolver.set_type_rules(rules);
+    resolver
+}
+
+#[test]
+fn offclock_types_list_decides_by_effective_type() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [MEET]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    let meet = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Sync [type:: MEET]",
+    );
+    assert!(meet.off_clock);
+    assert_eq!(meet.source, ClockSource::Note);
+    assert_eq!(meet.note.as_deref(), Some("love.md"));
+    assert_eq!(meet.key.as_deref(), Some("offclock_types"));
+
+    let chore = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Tidy [type:: CHORE]",
+    );
+    assert!(!chore.off_clock);
+    assert_eq!(chore.source, ClockSource::Note);
+    assert_eq!(chore.key.as_deref(), Some("offclock_types"));
+
+    // No type at all is on-clock, and the walk stops at the list.
+    let untyped =
+        effective_clock(&mut resolver, Path::new("love.md"), "- [ ] Tidy");
+    assert!(!untyped.off_clock);
+    assert_eq!(untyped.source, ClockSource::Note);
+}
+
+#[test]
+fn offclock_types_tags_beat_the_list() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [MEET]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    let on_meet = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Sync [type:: MEET] #on",
+    );
+    assert!(!on_meet.off_clock);
+    assert_eq!(on_meet.source, ClockSource::OnTag);
+
+    // `#off` beats a list that does not include the task's type.
+    let off_chore = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Tidy [type:: CHORE] #off",
+    );
+    assert!(off_chore.off_clock);
+    assert_eq!(off_chore.source, ClockSource::OffTag);
+}
+
+#[test]
+fn offclock_types_dual_key_note_prefers_the_list() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock: true\noffclock_types: [MEET]\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    // The list wins: a CHORE task is on-clock despite `offclock: true`.
+    let chore = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Tidy [type:: CHORE]",
+    );
+    assert!(!chore.off_clock);
+    assert_eq!(chore.key.as_deref(), Some("offclock_types"));
+    // A shadowed dual-key note is stats-health-only, never a capture
+    // warning.
+    assert_eq!(resolver.health().note_offclock_shadowed.len(), 1);
+    assert_eq!(
+        resolver.health().note_offclock_shadowed[0].key.as_deref(),
+        Some("offclock")
+    );
+    assert_eq!(chore.capture_warning_code(), None);
+}
+
+#[test]
+fn offclock_types_child_list_narrows_parent_true() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock: true\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("kid.md"),
+        "---\ntype: [[project]]\nparent: [[love]]\noffclock_types: [MEET]\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    let meet = effective_clock(
+        &mut resolver,
+        Path::new("kid.md"),
+        "- [ ] Sync [type:: MEET]",
+    );
+    assert!(meet.off_clock);
+    assert_eq!(meet.note.as_deref(), Some("kid.md"));
+
+    let chore = effective_clock(
+        &mut resolver,
+        Path::new("kid.md"),
+        "- [ ] Tidy [type:: CHORE]",
+    );
+    assert!(!chore.off_clock);
+    assert_eq!(chore.note.as_deref(), Some("kid.md"));
+}
+
+#[test]
+fn offclock_types_child_false_decides_under_parent_list() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [MEET]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("kid.md"),
+        "---\ntype: [[project]]\nparent: [[love]]\noffclock: false\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    let meet = effective_clock(
+        &mut resolver,
+        Path::new("kid.md"),
+        "- [ ] Sync [type:: MEET]",
+    );
+    assert!(!meet.off_clock);
+    assert_eq!(meet.source, ClockSource::Note);
+    assert_eq!(meet.note.as_deref(), Some("kid.md"));
+    assert_eq!(meet.key.as_deref(), Some("offclock"));
+}
+
+#[test]
+fn offclock_types_empty_shapes_inherit_parent_true() {
+    for frontmatter in [
+        "offclock_types:",
+        "offclock_types: []",
+        "offclock_types: null",
+        "offclock_types: ~",
+    ] {
+        let mut notes = BTreeMap::new();
+        notes.insert(
+            PathBuf::from("love.md"),
+            "---\ntype: [[area]]\noffclock: true\n---\n".to_string(),
+        );
+        notes.insert(
+            PathBuf::from("kid.md"),
+            format!(
+                "---\ntype: [[project]]\nparent: [[love]]\n{frontmatter}\n---\n"
+            ),
+        );
+        let note_index = NoteIndex::from_paths(notes.keys().cloned());
+        let mut resolver =
+            resolver_with_rules(&note_index, &notes, default_test_rules());
+        let task =
+            effective_clock(&mut resolver, Path::new("kid.md"), "- [ ] Tidy");
+        assert!(task.off_clock, "{frontmatter}");
+        assert_eq!(task.note.as_deref(), Some("love.md"), "{frontmatter}");
+    }
+    // A lone `-` block item is an empty shape too.
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock: true\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("kid.md"),
+        "---\ntype: [[project]]\nparent: [[love]]\noffclock_types:\n  -\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+    let task =
+        effective_clock(&mut resolver, Path::new("kid.md"), "- [ ] Tidy");
+    assert!(task.off_clock);
+    assert_eq!(task.note.as_deref(), Some("love.md"));
+}
+
+#[test]
+fn offclock_types_invalid_item_stops_walk_and_names_key() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [MEET, 7]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    let meet = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Sync [type:: MEET]",
+    );
+    assert!(!meet.off_clock);
+    assert_eq!(meet.source, ClockSource::InvalidNote);
+    assert_eq!(meet.key.as_deref(), Some("offclock_types"));
+    assert_eq!(resolver.health().note_offclock_invalid.len(), 1);
+    assert_eq!(
+        resolver.health().note_offclock_invalid[0].key.as_deref(),
+        Some("offclock_types")
+    );
+    assert_eq!(meet.capture_warning_code(), Some("note_offclock_invalid"));
+}
+
+#[test]
+fn offclock_types_on_non_area_note_is_ignored() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock: true\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("note.md"),
+        "---\nparent: [[love]]\noffclock_types: [MEET]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    let task =
+        effective_clock(&mut resolver, Path::new("note.md"), "- [ ] Tidy");
+    assert!(task.off_clock);
+    assert_eq!(task.note.as_deref(), Some("love.md"));
+    assert_eq!(resolver.health().note_offclock_ignored.len(), 1);
+    assert_eq!(
+        resolver.health().note_offclock_ignored[0].key.as_deref(),
+        Some("offclock_types")
+    );
+}
+
+#[test]
+fn offclock_types_reads_note_default_reading_and_global_default() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [MEET]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("typed.md"),
+        "---\ntype: [[project]]\nparent: [[love]]\ntask_type: MEET\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    // MEET inherited from a `task_type: MEET` note with no field.
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+    let inherited =
+        effective_clock(&mut resolver, Path::new("typed.md"), "- [ ] Tidy");
+    assert!(inherited.off_clock);
+
+    // A reading task resolves through the reading rule.
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [READ]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+    let reading = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [ ] Chapter ^ref",
+    );
+    assert!(reading.off_clock);
+
+    // CHORE comes only from `plan.default_type`.
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [CHORE]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver = resolver_with_rules(
+        &note_index,
+        &notes,
+        TypeRules {
+            reading: Some("READ".to_string()),
+            default: Some("CHORE".to_string()),
+        },
+    );
+    let from_default =
+        effective_clock(&mut resolver, Path::new("love.md"), "- [ ] Tidy");
+    assert!(from_default.off_clock);
+
+    // `task_type: off` stops note inheritance; the global default
+    // still applies.
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [CHORE]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("off.md"),
+        "---\ntype: [[project]]\nparent: [[love]]\ntask_type: off\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver = resolver_with_rules(
+        &note_index,
+        &notes,
+        TypeRules {
+            reading: Some("READ".to_string()),
+            default: Some("CHORE".to_string()),
+        },
+    );
+    let after_off =
+        effective_clock(&mut resolver, Path::new("off.md"), "- [ ] Tidy");
+    assert!(after_off.off_clock);
+}
+
+#[test]
+fn offclock_types_closed_rows_keep_their_type() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("love.md"),
+        "---\ntype: [[area]]\noffclock_types: [MEET]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        resolver_with_rules(&note_index, &notes, default_test_rules());
+
+    let closed = effective_clock(
+        &mut resolver,
+        Path::new("love.md"),
+        "- [x] Synced [type:: MEET]",
+    );
+    assert!(closed.off_clock);
+    assert_eq!(closed.key.as_deref(), Some("offclock_types"));
 }
 
 fn assert_health(

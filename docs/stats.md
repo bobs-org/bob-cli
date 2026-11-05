@@ -218,9 +218,10 @@ Each row has exactly one classification. A closed row with both keys is
 Worked using `[t::]` and raises a conflict diagnostic. A closed placeholder
 `()` counts on neither clock. Closed history is never reinterpreted from
 today's task tags: a later `#off` edit or `offclock:` change shows up as
-drift, not as a new total. Toggling an area or project `offclock:` default
-only changes new decisions; earlier love-rooted `[t::]` sessions drift by
-design. Counts count the selected sessions, not minutes.
+drift, not as a new total. Toggling an area or project `offclock:` default —
+or narrowing it with an `offclock_types:` list — only changes new decisions;
+earlier love-rooted `[t::]` sessions drift by design. Counts count the
+selected sessions, not minutes.
 
 **Selection.** `-k/--clock worked|off-clock|total` on `bob stats` and
 `bob stats show` sets the request lens (default Worked). The hidden aliases
@@ -277,8 +278,9 @@ never inflates it; clock totals never subtract it). An empty fully resolved
 lineup uses the shared Unlinked verdict, so a keyed off-clock row with no
 counted links drifts and a keyed Worked row does not. Drift resolves the
 same effective clock the writers stamp: `#on` wins, then `#off` (or a
-deprecated alias), then the nearest area/project `offclock:` on the task's
-root walk, then on-clock. `note_tasks` scans skip frontmatter and fenced
+deprecated alias), then the nearest area/project clock policy on the task's
+root walk (an `offclock_types:` list decides whatever the note's `offclock:`
+says; otherwise the nearest `offclock: true|false`), then on-clock. `note_tasks` scans skip frontmatter and fenced
 examples, ordinary links honor the global filter, embedded links do not,
 and same-note Event Tasks win for empty targets. Overlap uses date-aware
 coordinates, so an overnight session can overlap the next day's early
@@ -438,9 +440,12 @@ counts with the latest timestamp and day), and `health.homes` (in-window
 `unfiled_links` /
 `ambiguous_links` / `unresolved_links`, plus global
 `area_color_invalid` and hue-collision lists, additive
-`note_offclock_invalid` / `note_offclock_ignored` lists (`{path, raw}` for an
-area/project `offclock:` value that is not `true`/`false`, or an `offclock:`
-key on a note that is neither area nor project), and additive
+`note_offclock_invalid` / `note_offclock_ignored` lists (`{path, raw, key}`
+for an invalid clock value — an area/project `offclock:` value that is not
+`true`/`false`, or a malformed `offclock_types:` — or a clock key on a note
+that is neither area nor project; `key` names `offclock` or `offclock_types`),
+plus an additive `note_offclock_shadowed` list for dual-key notes whose
+`offclock:` is ignored because `offclock_types:` decides, and additive
 `root_field_invalid` / `root_field_not_root` lists keyed by
 `(path, line)`). The clock diagnostics add `off_clock_sessions` (deprecated
 `untracked_sessions` stays equal to it during the compatibility window),
@@ -452,7 +457,7 @@ date. Same-note pairs omit `paths`; a cross-note pair adds `paths` aligned
 with `lines`, ordered by source date then line. Zero counts and empty
 lists are omitted. Matching
 `warning <message>  <code>` lines use `area_color_invalid`,
-`note_offclock_invalid`, `note_offclock_ignored`,
+`note_offclock_invalid`, `note_offclock_ignored`, `note_offclock_shadowed`,
 `area_hue_collision`, `root_field_invalid`,
 `root_field_not_root`, `clock_conflict`, `clock_drift`, `clock_unstamped`, and
 `clock_overlap`, once each. `invalid_dates` counts a task

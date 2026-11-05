@@ -1421,6 +1421,7 @@ fn close_fact_from_event(
             event.clock_tag,
             super::super::clock_tags::ClockTag::Conflict { .. }
         ),
+        key: event.clock_key.clone(),
     };
     CloseClockFact {
         fact: LinkFact {
@@ -1486,8 +1487,9 @@ fn close_clock_diagnostics(
             }
             "note_offclock_invalid" => {
                 let note = resolution.note.as_deref().unwrap_or("a note");
+                let key = resolution.key.as_deref().unwrap_or("offclock");
                 format!(
-                    "◌ {note} has an invalid offclock: value; that task stays on the clock"
+                    "◌ {note} has an invalid {key}: value; that task stays on the clock"
                 )
             }
             _ => continue,

@@ -3481,8 +3481,8 @@ and Event Tasks that already ended are skipped.
 
 An event run is off-clock when every linked Event Task resolves off-clock:
 `#off` (deprecated aliases `#offclock`, `#off-clock`, and `#untracked`) or
-an inherited area/project `offclock: true`, with `#on` and `offclock: false`
-as overrides. The session then writes `(**1200-1300** [off:: 60m])`, which
+an inherited area/project clock policy (`offclock: true` or a matching
+`offclock_types:` list), with `#on` and `offclock: false` as overrides. The session then writes `(**1200-1300** [off:: 60m])`, which
 remains on the ledger and outside Worked metrics (see
 [vault format](reference/vault-format.md)).
 A worked event and an off-clock event never share a run, so lunch at
@@ -3518,8 +3518,8 @@ for an off-clock session and omitted otherwise; deprecated `tracked: false`
 and `pomodoro_blocks[].tracked` remain for compatibility, while
 `pomodoro_blocks[].off_clock` mirrors the new field. `pomodoro_start.clock_note`
 is the vault-relative path of the shared inherited note when every counted
-off-clock link resolved through that note's `offclock:` default, and is
-omitted otherwise. `pomodoro_start.event_run`
+off-clock link resolved through one note's clock policy (`offclock:`
+default or `offclock_types:` list), and is omitted otherwise. `pomodoro_start.event_run`
 appears when a MEET
 has a non-empty run:
 
@@ -4048,9 +4048,12 @@ A session is **off-clock** when the Task Links it keeps, **K**, are
 non-empty and every one of them resolves off-clock. First match on the
 task wins: a standalone `#on` (even beside an off spelling, with warning
 `clock_tag_conflict`); else `#off` or a deprecated alias (`#offclock`,
-`#off-clock`, `#untracked`); else the nearest area or project
-`offclock: true|false` on the task's root walk; else on-clock. An invalid
-nearer `offclock:` value stays on-clock and raises `note_offclock_invalid`.
+`#off-clock`, `#untracked`); else the nearest area or project note on the
+task's root walk that declares a clock policy — a non-empty
+`offclock_types:` list decides whatever the note's `offclock:` says (off-clock
+iff the task's effective type key is listed), otherwise the nearest
+`offclock: true|false`; else on-clock. An invalid nearer value stays
+on-clock and raises `note_offclock_invalid` naming the key.
 Anything else stays on the work clock: an unlinked session, a mixed
 lineup, or a link that does not resolve. Mixed never splits per link —
 one on-clock or unresolved neighbour keeps the whole session on the
@@ -4070,7 +4073,7 @@ Four edges:
 | Lineup | Clock | Notice |
 | --- | --- | --- |
 | No counted Task Links | Worked | None |
-| Every kept link is off-clock (`#off`, an alias, or inherited `offclock: true`) | Off-clock | None; human copy adds `via love` when every link inherited from the same note |
+| Every kept link is off-clock (`#off`, an alias, inherited `offclock: true`, or a matching `offclock_types:` list) | Off-clock | None; human copy adds `via love` when every link inherited from the same note |
 | At least one off-clock link and one on-clock task (including a love task mixed with a job task) | Worked | `pomodoro_clock_mixed` |
 | At least one off-clock link and one unresolved link | Worked | `pomodoro_clock_mixed` |
 
@@ -4233,7 +4236,7 @@ starting inside a lead-out, and running through the whole event. Both
 warnings can fire for one start only when they name different events.
 Events already in that session's own lineup are skipped. Done (`[x]`)
 and cancelled (`[-]`) rows never warn. Off-clock Event Tasks, whether tagged
-`#off` (or a deprecated alias) or inheriting an `offclock: true` default,
+`#off` (or a deprecated alias) or inheriting an area/project clock policy,
 warn like any other open Event Task. MEET sessions never raise
 `pomodoro_starts_during_event`.
 

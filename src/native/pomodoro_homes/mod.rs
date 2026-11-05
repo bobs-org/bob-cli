@@ -15,13 +15,20 @@ pub(crate) use clock::{
     effective_clock, off_clock_via_label, via_clock_note, ClockLookup,
     ClockResolution, ClockSource,
 };
-pub(crate) use facts::{NoteFacts, NoteKind, NoteOffClock, NoteTheme};
+pub(crate) use facts::{
+    NoteFacts, NoteKind, NoteOffClock, NoteOffClockTypes, NoteTheme,
+};
 pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};
 pub(crate) use palette::{fallback_hue, Hue};
 pub(crate) use resolve::{
     path_string, root_label, unfiled_home, unlinked_home, DiskHomeSource, Home,
     HomeResolver, HomeSource, IndexedHomeSource, ResolverHealth,
 };
+// `TypeRules` is named by unit tests (which inject rules so they never
+// read the developer's real config); the runtime path uses it without
+// naming it, so the re-export is test-only.
+#[cfg(test)]
+pub(crate) use resolve::TypeRules;
 #[cfg(test)]
 pub(crate) use session::session_links;
 pub(crate) use session::{

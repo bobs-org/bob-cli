@@ -448,3 +448,116 @@ fn frontmatter_scalar_trims_quotes_and_classifies_value_blocks() {
         FrontmatterScalar::Absent
     );
 }
+
+fn offclock_types(contents: &str) -> OffclockTypesParsed {
+    let frontmatter = parse_frontmatter(contents).expect("frontmatter parses");
+    parse_offclock_types(&frontmatter)
+}
+
+#[test]
+fn offclock_types_absent_and_empty_shapes_inherit() {
+    assert_eq!(
+        offclock_types("---\ntype: [[area]]\n---\n"),
+        OffclockTypesParsed::Absent
+    );
+    for contents in [
+        "---\ntype: [[area]]\noffclock_types:\n---\n",
+        "---\ntype: [[area]]\noffclock_types:\nparent: [[dev]]\n---\n",
+        "---\ntype: [[area]]\noffclock_types: null\n---\n",
+        "---\ntype: [[area]]\noffclock_types: ~\n---\n",
+        "---\ntype: [[area]]\noffclock_types: []\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [ ]\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [null, ~]\n---\n",
+        "---\ntype: [[area]]\noffclock_types:\n  - null\n  - ~\n---\n",
+        "---\ntype: [[area]]\noffclock_types:\n  -\n---\n",
+        "---\ntype: [[area]]\noffclock_types:\n  - \"\"\n---\n",
+    ] {
+        assert_eq!(
+            offclock_types(contents),
+            OffclockTypesParsed::Empty,
+            "{contents:?}"
+        );
+    }
+}
+
+#[test]
+fn offclock_types_scalar_and_lists_canonicalize_and_dedupe() {
+    assert_eq!(
+        offclock_types("---\ntype: [[area]]\noffclock_types: MEET\n---\n"),
+        OffclockTypesParsed::Keys(vec!["MEET".to_string()])
+    );
+    assert_eq!(
+        offclock_types("---\ntype: [[area]]\noffclock_types: meet\n---\n"),
+        OffclockTypesParsed::Keys(vec!["MEET".to_string()])
+    );
+    assert_eq!(
+        offclock_types(
+            "---\ntype: [[area]]\noffclock_types: [MEET, CALL]\n---\n"
+        ),
+        OffclockTypesParsed::Keys(vec!["MEET".to_string(), "CALL".to_string()])
+    );
+    // Deduplicated by normalized key, keeping the first spelling.
+    assert_eq!(
+        offclock_types(
+            "---\ntype: [[area]]\noffclock_types: [MEET, meet]\n---\n"
+        ),
+        OffclockTypesParsed::Keys(vec!["MEET".to_string()])
+    );
+    assert_eq!(
+        offclock_types(
+            "---\ntype: [[area]]\noffclock_types:\n  - MEET\n  - CALL\n---\n"
+        ),
+        OffclockTypesParsed::Keys(vec!["MEET".to_string(), "CALL".to_string()])
+    );
+    // Quotes, blank items, and trailing comments are handled.
+    assert_eq!(
+        offclock_types(
+            "---\ntype: [[area]]\noffclock_types: [\"MEET\", null, CALL # weekly]\n---\n"
+        ),
+        OffclockTypesParsed::Keys(vec![
+            "MEET".to_string(),
+            "CALL".to_string()
+        ])
+    );
+    assert_eq!(
+        offclock_types(
+            "---\ntype: [[area]]\noffclock_types:\n  - MEET # weekly\n  - null\n  - CALL\n---\n"
+        ),
+        OffclockTypesParsed::Keys(vec![
+            "MEET".to_string(),
+            "CALL".to_string()
+        ])
+    );
+}
+
+#[test]
+fn offclock_types_invalid_shapes_invalidate_the_whole_key() {
+    for contents in [
+        // Composite names.
+        "---\ntype: [[area]]\noffclock_types: BUILD + FIX\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [MEET, BUILD + FIX]\n---\n",
+        // Uncanonical names.
+        "---\ntype: [[area]]\noffclock_types: \"???\"\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [MEET, \"???\"]\n---\n",
+        // Reserved clock spellings.
+        "---\ntype: [[area]]\noffclock_types: OFF\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [MEET, ON]\n---\n",
+        "---\ntype: [[area]]\noffclock_types:\n  - offclock\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [UNTRACKED]\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [OFF-CLOCK]\n---\n",
+        // Mappings and nested lists.
+        "---\ntype: [[area]]\noffclock_types: {a: b}\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [[MEET]]\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [MEET, {a: b}]\n---\n",
+        // Unquoted YAML bools and numbers.
+        "---\ntype: [[area]]\noffclock_types: true\n---\n",
+        "---\ntype: [[area]]\noffclock_types: 7\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [MEET, 7]\n---\n",
+        "---\ntype: [[area]]\noffclock_types: [MEET, false]\n---\n",
+    ] {
+        assert!(
+            matches!(offclock_types(contents), OffclockTypesParsed::Invalid(_)),
+            "{contents:?}"
+        );
+    }
+}

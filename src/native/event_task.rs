@@ -216,6 +216,7 @@ pub(crate) struct EventTask {
     pub clock_tag: ClockTag,
     pub clock_source: ClockSource,
     pub clock_note: Option<String>,
+    pub clock_key: Option<String>,
     pub status: char,
     pub block_id: Option<String>,
     pub title: String,
@@ -244,6 +245,7 @@ pub(crate) struct EventNoteRow {
     pub clock_tag: ClockTag,
     pub clock_source: ClockSource,
     pub clock_note: Option<String>,
+    pub clock_key: Option<String>,
     pub status: Option<char>,
     pub block_id: Option<String>,
     pub title: String,
@@ -268,6 +270,7 @@ impl EventNoteRow {
             clock_tag: self.clock_tag.clone(),
             clock_source: self.clock_source,
             clock_note: self.clock_note.clone(),
+            clock_key: self.clock_key.clone(),
             status: self.status?,
             block_id: self.block_id.clone(),
             title: self.title.clone(),
@@ -580,6 +583,7 @@ fn event_task_from_line(line_index: usize, line: &str) -> Option<EventTask> {
         clock_tag,
         clock_source: clock.source,
         clock_note: clock.note,
+        clock_key: clock.key,
         status: parsed.status,
         block_id: collect_done::trailing_block_id_in_line(line),
         title: clean_event_title(parsed.after),
@@ -603,6 +607,7 @@ fn context_row_from_line(
         clock_tag,
         clock_source: clock.source,
         clock_note: clock.note,
+        clock_key: clock.key,
         status: None,
         block_id: collect_done::trailing_block_id_in_line(line),
         title: clean_event_title(parsed.after),
@@ -682,6 +687,7 @@ pub(crate) fn events_in_note(
                 clock_tag: task.clock_tag,
                 clock_source: task.clock_source,
                 clock_note: task.clock_note,
+                clock_key: task.clock_key,
                 status: Some(task.status),
                 block_id: task.block_id,
                 title: task.title,
@@ -731,6 +737,7 @@ pub(crate) fn enrich_event_clocks<S: HomeSource>(
         event.untracked = resolution.off_clock;
         event.clock_source = resolution.source;
         event.clock_note = resolution.note;
+        event.clock_key = resolution.key;
     }
 }
 

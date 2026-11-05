@@ -86,9 +86,10 @@ rule). Same-note links (the empty target or the canonical daily key)
 check the daily note's Event Tasks first, then any task with that block
 ID. Other links resolve the target note and then the single task line
 with that block ID. The task's effective clock is decided by `#on`,
-then `#off` (or a deprecated alias), then the nearest area/project
-`offclock:` on its root walk (including `[root::]`), and otherwise
-on-clock.
+then `#off` (or a deprecated alias), then the nearest area/project clock
+policy on its root walk (an `offclock_types:` list decides whatever the
+note's `offclock:` says; otherwise the nearest `offclock: true|false`,
+including `[root::]`), and otherwise on-clock.
 
 A pair whose task resolves off-clock is an _off-clock link_. It is left
 out of `links.count`, out of the entry's `links`, out of `status`, and
@@ -1142,7 +1143,8 @@ shared byte-for-byte with the `bob-ledger-tools` mirror at
   count 1, off_clock 1, and today_count 2: the off-clock task stays a
   Today task but leaves the budget.
 - **Area default.** A task in an area note with `offclock: true` is
-  off-clock; `#on` on the task stays counted.
+  off-clock (or a task whose effective type key is listed under a nearest
+  `offclock_types:` list); `#on` on the task stays counted.
 - **Off-clock never over.** With `max_links: 1`, one on-clock link and
   two off-clock links give `1/1`, status `ok`, and no
   `plan_link_cap_exceeded`.

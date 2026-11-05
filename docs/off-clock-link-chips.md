@@ -79,9 +79,11 @@ Exactly the counted-links rule's per-link step
 standalone `#on` on the task line wins (no chip, even beside an off spelling); else
 `#off`, `#offclock`, `#off-clock`, or `#untracked` (case-insensitive, standalone,
 outside code spans and Markdown links) is off; else the nearest area or project
-`offclock: true|false` on the root walk (a valid `[root:: NOTE]` starts the walk;
-untyped notes are walked through; an invalid nearer value is on-clock); else
-on-clock. Same-note links (`[[#^id]]`, including Event Tasks in the daily note's
+note on the root walk that declares a clock policy decides (a valid
+`[root:: NOTE]` starts the walk; untyped notes are walked through): a non-empty
+`offclock_types:` list decides whatever the note's `offclock:` says (off-clock
+iff the task's effective type key is listed), otherwise the nearest
+`offclock: true|false`; an invalid nearer value is on-clock); else on-clock. Same-note links (`[[#^id]]`, including Event Tasks in the daily note's
 `## Events`) read the note's own current lines — in Live Preview the live editor
 document, so an unsaved `#off` edit shows on the same frame. Other-note links read
 the target line through the writer's source (metadata-cache block line +
@@ -146,7 +148,7 @@ No animation.
 One coalesced `scheduleOffClockLinkChipsRefresh()` (about 120 ms) runs on:
 
 - the `scheduleLiveWidgetRefresh()` fan-out;
-- `metadataCache` `changed` (any note: an `offclock:`, `type:`, or `parent:` edit
+- `metadataCache` `changed` (any note: an `offclock:` / `offclock_types:`, `type:`, or `parent:` edit
   changes inheritance, and a target line can gain or lose a tag) and `resolved`;
 - vault `rename` and `delete`;
 - a source-text cache fill (`taskThemeRequestSourceText` already refreshes theme
@@ -236,6 +238,8 @@ holds `- [ ] #task Fix the parser ^parser`.
 | OR6  | `- [ ] #task Lunch #on ^a` in `love.md`                                                    | no                                |
 | OR7  | `- [ ] #task Lunch #on #off ^a` in `love.md`                                               | no (`#on` wins)                   |
 | OR8  | untagged task in `odd.md` (area under love, `offclock: maybe`)                             | no                                |
+| OR8b | `[type:: MEET]` task in `meet.md` (area under love, `offclock_types: [MEET]`)               | yes / `note` (meet)               |
+| OR8c | untagged task in `meet.md` (area under love, `offclock_types: [MEET]`)                     | no                                |
 | OR9  | untagged task in `dog.md` (no `type`, `parent: "[[love]]"`)                                | yes / `note` (love)               |
 | OR10 | untagged `- [ ] #task Swim [root:: abby] ^a` in `inbox.md`                                 | yes / `note` (love)               |
 | OR11 | same-note `[[#^evt]]` to Event Task `- [ ] **1200-1230** School pickup #off ^evt`          | yes / `off_tag`                   |

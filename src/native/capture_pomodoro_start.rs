@@ -521,6 +521,7 @@ fn counted_fact_from_event(
                 event.clock_tag,
                 super::clock_tags::ClockTag::Conflict { .. }
             ),
+            key: event.clock_key.clone(),
         }
     };
     CountedLinkFact {

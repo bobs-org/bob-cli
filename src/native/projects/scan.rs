@@ -726,6 +726,234 @@ fn split_yaml_comment(value: &str) -> &str {
     value
 }
 
+/// A strict `offclock_types:` frontmatter value.
+///
+/// Unlike [`project_name_aliases`], bad entries invalidate the whole key
+/// instead of being dropped one at a time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OffclockTypesParsed {
+    Absent,
+    Empty,
+    Keys(Vec<String>),
+    Invalid(String),
+}
+
+/// Parse the `offclock_types` key per the offclock_types value table:
+/// absent/blank/`null`/`~`/`[]`/all-blank lists inherit; a scalar is a
+/// one-item list; flow and block lists canonicalize each item with
+/// `canonical_theme_name` and dedupe by key; any composite, uncanonical,
+/// reserved-clock, mapping, nested-list, or unquoted bool/number item
+/// invalidates the whole key.
+pub(crate) fn parse_offclock_types(
+    frontmatter: &Frontmatter<'_>,
+) -> OffclockTypesParsed {
+    let key_index = frontmatter.lines.iter().position(|line| {
+        line.strip_prefix("offclock_types")
+            .and_then(|rest| rest.strip_prefix(':'))
+            .is_some()
+    });
+    let Some(key_index) = key_index else {
+        return OffclockTypesParsed::Absent;
+    };
+    let raw = frontmatter.lines[key_index]
+        .strip_prefix("offclock_types")
+        .and_then(|rest| rest.strip_prefix(':'))
+        .unwrap_or("")
+        .trim();
+    if raw.is_empty() {
+        return parse_offclock_block_list(&frontmatter.lines[key_index + 1..]);
+    }
+    if raw.starts_with('[') {
+        return parse_offclock_flow_list(raw);
+    }
+    if raw.starts_with('{') {
+        return OffclockTypesParsed::Invalid(raw.to_string());
+    }
+    parse_offclock_scalar_item(raw)
+}
+
+fn parse_offclock_scalar_item(raw: &str) -> OffclockTypesParsed {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return OffclockTypesParsed::Empty;
+    }
+    let without_comment = split_yaml_comment(trimmed).trim();
+    if without_comment.is_empty() {
+        return OffclockTypesParsed::Empty;
+    }
+    if is_offclock_blank_item(without_comment) {
+        return OffclockTypesParsed::Empty;
+    }
+    // A scalar mapping remnant (`a: b`) is invalid.
+    if without_comment.starts_with(['{', '[']) {
+        return OffclockTypesParsed::Invalid(raw.to_string());
+    }
+    match classify_offclock_item(without_comment) {
+        Ok(Some(name)) => OffclockTypesParsed::Keys(vec![name]),
+        Ok(None) => OffclockTypesParsed::Empty,
+        Err(_) => OffclockTypesParsed::Invalid(raw.to_string()),
+    }
+}
+
+fn parse_offclock_flow_list(raw: &str) -> OffclockTypesParsed {
+    let Some(inner) = raw
+        .strip_prefix('[')
+        .and_then(|rest| rest.rfind(']').map(|end| &rest[..end]))
+    else {
+        return OffclockTypesParsed::Invalid(raw.to_string());
+    };
+    if inner.trim().is_empty() {
+        return OffclockTypesParsed::Empty;
+    }
+    let mut keys: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let mut saw_item = false;
+    for item in split_flow_items(inner) {
+        let trimmed = item.trim();
+        // Allow a trailing `#` comment on the last item before `]`.
+        let without_comment = split_yaml_comment(trimmed).trim();
+        if without_comment.is_empty() {
+            continue;
+        }
+        saw_item = true;
+        match classify_offclock_item(without_comment) {
+            Ok(Some(name)) => {
+                let key =
+                    crate::native::plan_budget::normalize_component(&name);
+                if !seen.iter().any(|seen| seen == &key) {
+                    seen.push(key);
+                    keys.push(name);
+                }
+            }
+            Ok(None) => {}
+            Err(_) => {
+                return OffclockTypesParsed::Invalid(raw.to_string());
+            }
+        }
+    }
+    if !saw_item || keys.is_empty() {
+        return OffclockTypesParsed::Empty;
+    }
+    OffclockTypesParsed::Keys(keys)
+}
+
+fn parse_offclock_block_list(lines: &[&str]) -> OffclockTypesParsed {
+    let mut keys: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let mut saw_item = false;
+    let mut saw_value = false;
+    for line in lines {
+        let trimmed_start = line.trim_start();
+        if trimmed_start.is_empty() || trimmed_start.starts_with('#') {
+            continue;
+        }
+        let Some(item) = trimmed_start
+            .strip_prefix("- ")
+            .or_else(|| trimmed_start.strip_prefix("-\t"))
+            .or_else(|| (trimmed_start == "-").then_some(""))
+        else {
+            break;
+        };
+        saw_item = true;
+        let item = item.trim();
+        let without_comment = split_yaml_comment(item).trim();
+        if without_comment.is_empty() {
+            continue;
+        }
+        saw_value = true;
+        match classify_offclock_item(without_comment) {
+            Ok(Some(name)) => {
+                let key =
+                    crate::native::plan_budget::normalize_component(&name);
+                if !seen.iter().any(|seen| seen == &key) {
+                    seen.push(key);
+                    keys.push(name);
+                }
+            }
+            Ok(None) => {}
+            Err(_) => {
+                return OffclockTypesParsed::Invalid(
+                    without_comment.to_string(),
+                );
+            }
+        }
+    }
+    if !saw_item || !saw_value || keys.is_empty() {
+        return OffclockTypesParsed::Empty;
+    }
+    OffclockTypesParsed::Keys(keys)
+}
+
+/// Classify one raw `offclock_types` item. `Ok(Some)` is a canonical
+/// display name, `Ok(None)` is a skipped blank/null item, `Err` means
+/// the whole key is invalid.
+fn classify_offclock_item(raw: &str) -> Result<Option<String>, ()> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    // Quoted strings are strings even when their content looks like a
+    // YAML scalar (`"null"`, `"7"`, `"true"`).
+    let bytes = trimmed.as_bytes();
+    if trimmed.len() >= 2
+        && ((bytes[0] == b'"' && bytes[trimmed.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[trimmed.len() - 1] == b'\''))
+    {
+        let inner = trimmed[1..trimmed.len() - 1].trim();
+        if inner.is_empty() {
+            return Ok(None);
+        }
+        if inner.eq_ignore_ascii_case("null") || inner == "~" {
+            return Ok(None);
+        }
+        let without_comment = split_yaml_comment(inner).trim();
+        if without_comment.is_empty() {
+            return Ok(None);
+        }
+        return canonical_offclock_name(without_comment);
+    }
+    if is_offclock_blank_item(trimmed) {
+        return Ok(None);
+    }
+    // Mappings and nested lists are invalid.
+    if trimmed.starts_with(['{', '[']) || trimmed.contains(['[', ']', '{', '}'])
+    {
+        return Err(());
+    }
+    if is_yaml_non_string_scalar(trimmed) {
+        return Err(());
+    }
+    let without_comment = split_yaml_comment(trimmed).trim();
+    if without_comment.is_empty() {
+        return Ok(None);
+    }
+    if is_offclock_blank_item(without_comment) {
+        return Ok(None);
+    }
+    if is_yaml_non_string_scalar(without_comment) {
+        return Err(());
+    }
+    canonical_offclock_name(without_comment)
+}
+
+fn canonical_offclock_name(value: &str) -> Result<Option<String>, ()> {
+    let Some(canonical) =
+        crate::native::task_fields::canonical_theme_name(value)
+    else {
+        return Err(());
+    };
+    if crate::native::clock_tags::is_reserved_type_name(&canonical) {
+        return Err(());
+    }
+    // The key is compared by normalized key; keep the canonical display.
+    Ok(Some(canonical))
+}
+
+fn is_offclock_blank_item(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.is_empty() || trimmed.eq_ignore_ascii_case("null") || trimmed == "~"
+}
+
 /// One typed area/project note for the per-note Ready cap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TypedNote {

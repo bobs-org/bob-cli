@@ -77,7 +77,8 @@ row, the time text is copied exactly as written (for example, `1830-1900`).
 State comes from the shared calendar Event time helpers. Today's note uses the current
 clock; another daily note has no past, running, or future state, just like its Events
 pill. A running event uses the MEET hue. `#on` takes precedence over `#off`; otherwise
-the root's inherited `offclock:` setting determines the dashed off-clock treatment.
+the root's inherited clock policy (`offclock:` default or matching
+`offclock_types:` list) determines the dashed off-clock treatment.
 Buffer wings are computed by the same helpers as the Events pill. The shared clock fix
 also corrects the Events pill's handling of afternoon and evening events before they
 start.
@@ -132,7 +133,8 @@ rendered pills for today's note.
 
 A coalesced refresh runs after metadata cache `changed` / `resolved` events, vault rename
 or delete, source-text cache fills, and either toggle. Those updates cover changes to
-inherited `offclock:`, type, and parent data. Reading view sweeps rendered daily notes in
+inherited clock data (`offclock:`, `offclock_types:`), type, and parent data.
+Reading view sweeps rendered daily notes in
 all windows, including popouts, and adds, updates, or removes hosts in place.
 
 ## Toggles

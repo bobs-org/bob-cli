@@ -592,8 +592,9 @@ badge hashes depend only on Google's explicit tag: sync writes ` #off`,
 ` #on`, or no tag at the end of the badge run, before `[root::]`, and an
 untagged `Lunch @love` that resolves off-clock through its root gains no
 inherited tag. `#on` wins conflicts; otherwise off wins, then the nearest
-area/project `offclock:` on the shared PT13 root walk decides, then the
-default is on-clock. See the vault-wide precedence in
+area/project clock policy on the shared PT13 root walk decides (an
+`offclock_types:` list decides whatever the note's `offclock:` says;
+otherwise the nearest `offclock: true|false`), then the default is on-clock. See the vault-wide precedence in
 [pomodoro homes](pomodoro-homes.md). `Lunch @love #on` can force a
 love-rooted lunch back onto the Worked clock.
 
