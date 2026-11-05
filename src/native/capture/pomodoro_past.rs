@@ -18,6 +18,7 @@ use super::{
         self, map_close_plan_error, plan_close_successors, stage_close_plan,
         SnapshotCloseVault,
     },
+    pomodoro_timeline::{collect_timed_rows, TimedRow},
     task_theme::CaptureTaskThemeContext,
 };
 use crate::native::{
@@ -213,70 +214,6 @@ pub(super) fn compute_preflight(
         t_minutes: t,
         members,
     })
-}
-
-#[derive(Debug, Clone)]
-struct TimedRow {
-    line: usize,
-    name: Option<String>,
-    range: String,
-    start: i64,
-    end: i64,
-    is_open: bool,
-    line_text: String,
-}
-
-fn parse_range_minutes(range: &str) -> Option<(i64, i64)> {
-    let (s, e) = range.split_once('-')?;
-    if s.len() != 4 || e.len() != 4 {
-        return None;
-    }
-    let sh: i64 = s[..2].parse().ok()?;
-    let sm: i64 = s[2..].parse().ok()?;
-    let eh: i64 = e[..2].parse().ok()?;
-    let em: i64 = e[2..].parse().ok()?;
-    if sh >= 24 || sm >= 60 || eh >= 24 || em >= 60 {
-        return None;
-    }
-    Some((sh * 60 + sm, eh * 60 + em))
-}
-
-fn collect_timed_rows(contents: &str) -> Vec<TimedRow> {
-    use crate::native::capture::line_spans;
-    let scan = capture_pomodoros::scan(contents);
-    let lines = line_spans(contents);
-    let line_texts: Vec<&str> = lines.iter().map(|line| line.text).collect();
-    let mut rows = Vec::new();
-    for entry in scan.entries {
-        let Some(range) = entry.time_range.clone() else {
-            continue;
-        };
-        let Some((s, mut e)) = parse_range_minutes(&range) else {
-            continue;
-        };
-        if s == e {
-            // Zero-length rows occupy no time.
-            continue;
-        }
-        if e <= s {
-            // Genuine midnight-ending spans wrap across 1440.
-            e += 1440;
-        }
-        let line_text = line_texts
-            .get(entry.line.saturating_sub(1))
-            .unwrap_or(&"")
-            .to_string();
-        rows.push(TimedRow {
-            line: entry.line,
-            name: entry.name.clone(),
-            range,
-            start: s,
-            end: e,
-            is_open: entry.state == PomodoroState::Open,
-            line_text,
-        });
-    }
-    rows
 }
 
 fn overlaps(a_start: i64, a_end: i64, b_start: i64, b_end: i64) -> bool {

@@ -84,6 +84,7 @@ mod pomodoro_merge;
 pub(super) mod pomodoro_past;
 mod pomodoro_split;
 mod pomodoro_start;
+mod pomodoro_timeline;
 mod project_deps;
 mod project_note;
 mod pull_in;
