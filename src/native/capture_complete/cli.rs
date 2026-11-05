@@ -183,7 +183,11 @@ picker descriptor, and replaces the whole selector. ID-less rows carry \
 must offer Add block ID rather than insert the row. A lone `+` is the \
 intentional dual-use case: completion opens this picker and its descriptor \
 returns the action continuation keys `0` through `9` and `+`, allowing an \
-editor to preserve the Pomodoro adjustment. Scoped `@route+id` and \
+editor to preserve the Pomodoro adjustment when the user types a comma, as \
+`action_continuation_aliases {\",\": \"+\"}`. Parent Task pickers \
+also return `continuation: \" +\"` only when the accepted row \
+followed by a comma would open the picker for another target. Scoped \
+`@route+id` and \
 `@route+id` keeps the `task` context, with picker scope and removal ranges \
 identifying the note-local parent marker. The parent-task picker has \
 complete `&` or `*` modifiers on its item, `picker.relationship` reports the \

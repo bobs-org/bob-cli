@@ -240,6 +240,50 @@ fn plus_picker_fixture_vault_catalog_and_entry_points() {
 }
 
 #[test]
+fn parent_task_picker_exposes_comma_continuation_metadata_selectively() {
+    let temp = TempDir::new("bob-cli-parent-task-comma-continuation");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let day_file = write_plus_picker_vault(&vault);
+
+    for (draft, expected) in [
+        ("+", true),
+        ("Buy milk +", true),
+        ("@cash+goog-exit +", true),
+        ("- note +", true),
+        ("@a+x > +", false),
+        ("@cash+goog-exit note", false),
+    ] {
+        let value = complete_json(&vault, &day_file, draft.len(), draft);
+        assert_eq!(
+            value["picker"]["continuation"].as_str() == Some(" +"),
+            expected,
+            "{draft:?}: {value}"
+        );
+        if draft == "+" {
+            assert_eq!(
+                value["picker"]["action_continuation_aliases"],
+                serde_json::json!({",": "+"})
+            );
+        }
+    }
+
+    let scoped = complete_json(&vault, &day_file, 6, "@cash+");
+    assert_eq!(scoped["context"], "task");
+    assert_eq!(scoped["picker"]["continuation"], " +");
+
+    let scoped_with_suffix = "@cash+goog-exit note";
+    let scoped_picker = complete_json(
+        &vault,
+        &day_file,
+        "@cash+goog-exit".len(),
+        scoped_with_suffix,
+    );
+    assert_eq!(scoped_picker["context"], "task");
+    assert!(scoped_picker["picker"]["continuation"].is_null());
+}
+
+#[test]
 fn plus_picker_accepts_insert_and_preserves_operators() {
     let temp = TempDir::new("bob-cli-plus-picker-walks");
     let vault = temp.path().join("vault");

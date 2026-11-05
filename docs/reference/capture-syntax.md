@@ -107,6 +107,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | Marker | Context | Meaning |
 | --- | --- | --- |
 | `+` | `+[N]`, `++[N]`, `+query` | Resize, shift, or open the parent-task picker |
+| `,` | Parent Task picker positions only | Alias `+`; after a complete target run, insert ` +` to open the next picker |
 | `+` | `@route+id`; typed-last owner; after `#name` | Child/Ensure Next, typed-last alias, or name suffix |
 | `%n` | Item edge | Pomodoro note |
 | `#` | `@route#Section`, edge `#type`, existing-task `#type` | Heading, task type, or retype |

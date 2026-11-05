@@ -1136,6 +1136,12 @@ fn picker_descriptor(
             } else {
                 None
             };
+            let continuation =
+                parent_task_comma_continuation(raw_text, marker_range, "@x+y");
+            let action_continuation_aliases =
+                action_continuation_keys.as_ref().map(|_| {
+                    BTreeMap::from([(String::from(","), String::from("+"))])
+                });
             Some(PickerDescriptor {
                 kind: PickerKind::ParentTask,
                 scope: PickerScope::Vault,
@@ -1144,9 +1150,9 @@ fn picker_descriptor(
                 marker_range,
                 trigger_removal_range: marker_range,
                 destination: None,
-                continuation: None,
+                continuation,
                 action_continuation_keys,
-                action_continuation_aliases: None,
+                action_continuation_aliases,
                 relationship: None,
             })
         }
@@ -1205,6 +1211,14 @@ fn picker_descriptor(
                 start: token.start,
                 end: field.replacement.1,
             };
+            let continuation = parent_task_comma_continuation(
+                raw_text,
+                Replacement {
+                    start: field.replacement.0,
+                    end: field.replacement.1,
+                },
+                "y",
+            );
             Some(PickerDescriptor {
                 kind: PickerKind::ParentTask,
                 scope: PickerScope::Note,
@@ -1216,7 +1230,7 @@ fn picker_descriptor(
                     end: field.replacement.1,
                 },
                 destination: None,
-                continuation: None,
+                continuation,
                 action_continuation_keys: None,
                 action_continuation_aliases: None,
                 relationship: None,
@@ -1224,4 +1238,29 @@ fn picker_descriptor(
         }
         _ => None,
     }
+}
+
+/// Advertise accept-and-continue only when Bob's comma rewrite lane would
+/// extend the row inserted by this picker. The simulation keeps rewrite
+/// eligibility as the single source of truth for marker placement,
+/// transfer exclusions, and trailing text.
+fn parent_task_comma_continuation(
+    raw_text: &str,
+    replacement: Replacement,
+    inserted_member: &str,
+) -> Option<String> {
+    let mut simulated = raw_text.to_string();
+    simulated
+        .replace_range(replacement.start..replacement.end, inserted_member);
+    let comma_start = replacement.start + inserted_member.len();
+    simulated.insert(comma_start, ',');
+    let comma_end = comma_start + 1;
+    let rewrite = capture_language::rewrite_draft(&simulated, Some(comma_end));
+    let edit = rewrite.edits.as_slice();
+    (rewrite.rule == Some(capture_language::RewriteRule::ExpandSigilAlias)
+        && edit.len() == 1
+        && edit[0].start == comma_start
+        && edit[0].end == comma_end
+        && edit[0].replacement == " +")
+        .then(|| " +".to_string())
 }

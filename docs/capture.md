@@ -8297,8 +8297,14 @@ word, or right after another `\` stays literal. For example, `Buy milk \`
 becomes `Buy milk #` and `Buy milk @cash+goog-exit\` becomes
 `Buy milk @cash+goog-exit#`. A `\` after `\` never aliases, so `\#` escapes
 stay typeable directly (Mac Capture's double-tap below gives the same text).
-Bob's completion grammar decides eligibility, so prose and other picker contexts
-stay unchanged. The caret stays just past the sigil. This is an editor assist:
+Typing `,` wherever the Parent Task picker would open aliases `+`, including
+as a whole item, after a space, or after `@route`; after a complete
+`@route+id` target it inserts ` +` and opens the next parent picker. For
+example, `@cash,` becomes `@cash+`, `Buy milk ,` becomes `Buy milk +`, and
+`@cash+goog-exit,` becomes `@cash+goog-exit +`. Bob's completion grammar
+decides eligibility, so commas in prose and other picker contexts stay
+literal. The caret stays just past the inserted sigil or plus. This is an
+editor assist:
 `bob capture` and `bob capture-parse` keep the literal text. Feeding the
 result back through the command is a no-op.
 
@@ -8818,6 +8824,12 @@ suggestions for the Add block ID action. A lone `+` keeps its Pomodoro
 adjustment meaning in parsing but completion returns this picker with
 `action_continuation_keys` (`0`–`9` and `+`). Scoped `@route+id` completion
 continues to use context `task` and replace only the ID. When the current item
+has a comma that Bob would rewrite as the next `+` selector, the picker
+descriptor also carries `continuation: " +"`. The lone `+` descriptor adds
+`action_continuation_aliases: {",": "+"}` alongside its continuation keys.
+Other Parent Task contexts omit the alias map. This lets a client accept a
+selected row with comma only when the simulated result can open the next
+picker; prose and other comma positions keep their normal meaning.
 has complete `&` or `*` modifiers, the parent picker descriptor adds
 `relationship.dependencies[]` and `relationship.blocked_tasks[]`, each with
 the typed `raw` token, `note_path`, `block_id`, and resolved `text` when
@@ -8951,7 +8963,11 @@ present only for note scope. `marker_range` covers the selector (or the
 scoped marker through its ID), and `trigger_removal_range` covers the full
 bare selector or only the `+` through the scoped ID. All offsets are
 half-open UTF-8 byte ranges. Only the exact lone `+` includes
-`action_continuation_keys` (`0` through `9`, then `+`). The `task_complete`
+`action_continuation_keys` (`0` through `9`, then `+`) and
+`action_continuation_aliases: {",": "+"}`. When accepting a candidate and
+typing comma would let Bob's rewrite lane open another Parent Task picker,
+the descriptor includes `continuation: " +"`; otherwise it omits that field.
+The `task_complete`
 context carries its own vault-scoped `picker` descriptor (`kind:
 task_complete`, `scope_token: "!"`) instead. The `wikilink_task` context
 carries a vault-scoped `picker` descriptor (`kind: wikilink_task`,

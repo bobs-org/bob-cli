@@ -138,11 +138,11 @@ open, and '- ^.' becomes '- ^^'. Typing '\\' becomes '#' wherever bob's \
 completion grammar would open a '#' menu: task type, section, drawer and \
 drawer bullet, Pomodoro name, named-start and past-session name, split type, \
 merge destination, and wikilink heading. A '\\' at a line start, glued to a \
-word, or right after another '\\' stays literal. For example, '@errands.' \
-becomes '@errands^', '@errands;' becomes '@errands:', ';' becomes ':', \
-'@cash^goog-exit@\n- .' becomes '@cash^goog-exit@\n- ^', '- ^.' becomes \
-'- ^^', 'Buy milk \\' becomes 'Buy milk #', and \
-'Buy milk @cash+goog-exit\\' becomes 'Buy milk @cash+goog-exit#'. The \
+word, or right after another '\\' stays literal. For example, '@cash,' \
+becomes '@cash+', '@cash+goog-exit,' becomes '@cash+goog-exit +', and \
+'Buy milk ,' becomes 'Buy milk +'; '@errands.' and '@errands;' still become \
+'@errands^' and '@errands:'. Bob's completion grammar decides when a \
+comma is eligible; prose and other picker contexts keep it literal. The \
 aliases use the same picker behavior as the real sigils. 'bob capture' and \
 'bob capture-parse' keep the literal text. Without --cursor this rule is \
 skipped rather than searching the draft.\n\n\
@@ -172,7 +172,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())
@@ -549,6 +549,48 @@ mod tests {
         );
         assert_eq!(value["summary"], "Typed ^ for .");
         assert!(value.get("notices").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_shape_expands_comma_to_parent_task_picker() {
+        let value = json("@cash,", Some(6));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["input"], "@cash,");
+        assert_eq!(value["text"], "@cash+");
+        assert_eq!(value["changed"], true);
+        assert_eq!(value["cursor"], 6);
+        assert_eq!(value["rule"], "expand_sigil_alias");
+        assert_eq!(
+            value["edits"],
+            serde_json::json!([
+                { "range": { "start": 5, "end": 6 }, "replacement": "+" },
+            ])
+        );
+        assert_eq!(value["summary"], "Typed + for ,");
+    }
+
+    #[test]
+    fn json_shape_expands_a_glued_target_comma_to_parent_continuation() {
+        let raw = "@cash+goog-exit,";
+        let value = json(raw, Some(raw.len()));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["input"], raw);
+        assert_eq!(value["text"], "@cash+goog-exit +");
+        assert_eq!(value["changed"], true);
+        assert_eq!(value["cursor"], raw.len() + 1);
+        assert_eq!(value["rule"], "expand_sigil_alias");
+        assert_eq!(
+            value["edits"],
+            serde_json::json!([
+                {
+                    "range": { "start": raw.len() - 1, "end": raw.len() },
+                    "replacement": " +"
+                },
+            ])
+        );
+        assert_eq!(value["summary"], "Typed + for ,");
     }
 
     #[test]

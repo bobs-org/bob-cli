@@ -9,6 +9,7 @@ use super::{
     write_file,
 };
 use crate::native::capture_language::CompletionContext;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 fn parent_result(
@@ -44,6 +45,11 @@ fn bare_plus_serves_vault_candidates_and_operator_hints() {
     assert_eq!(picker.note_target, None);
     assert_eq!(picker.marker_range, Replacement { start: 0, end: 1 });
     assert_eq!(picker.trigger_removal_range, picker.marker_range);
+    assert_eq!(
+        picker.action_continuation_aliases.as_ref(),
+        Some(&BTreeMap::from([(String::from(","), String::from("+"))]))
+    );
+    assert_eq!(picker.continuation.as_deref(), Some(" +"));
     let action_keys: Vec<&str> = picker
         .action_continuation_keys
         .as_ref()
@@ -108,6 +114,36 @@ fn bare_plus_serves_vault_candidates_and_operator_hints() {
     assert!(shell.rows.iter().all(|row| !row.full.is_empty()));
     assert!(shell.rows.iter().all(|row| !row.full.ends_with("+")));
     assert!(shell.rows.iter().any(|row| row.full == "@sase+deep-fix"));
+}
+
+#[test]
+fn parent_task_continuation_is_advertised_only_when_comma_extends_the_row() {
+    let temp = super::TempDir::new("bob-cli-parent-task-continuation");
+    let day_file = task_link_fixture(temp.path());
+    write_file(
+        &temp.path().join("cash.md"),
+        "---\ntype: [[area]]\n---\n- [ ] #task Finish packet ^finish\n",
+    );
+
+    for (raw, cursor, expected) in [
+        ("+", 1, true),
+        ("Buy milk +", 10, true),
+        ("@cash+finish +", 14, true),
+        ("- note +", 8, true),
+        ("@a+x > +", 8, false),
+        ("@cash+fin later", 9, false),
+    ] {
+        let value = parent_result(temp.path(), &day_file, raw, cursor, true);
+        let continuation = value
+            .picker
+            .as_ref()
+            .and_then(|picker| picker.continuation.as_deref());
+        assert_eq!(
+            continuation,
+            expected.then_some(" +"),
+            "{raw:?}: {value:?}"
+        );
+    }
 }
 
 #[test]

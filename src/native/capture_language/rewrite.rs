@@ -107,26 +107,30 @@ pub(crate) fn rewrite_draft(
     absorb_bare_declaration(raw_text, cursor)
 }
 
-/// Typing `.`, `;`, or `\` in a position where its real sigil would open a
-/// picker swaps that byte to `^`, `:`, or `#`. The candidate is checked by
-/// the ordinary completion grammar, keeping the assist lexical and aligned
+/// Typing `.`, `;`, `,`, or `\` in a position where its real sigil would open
+/// a picker swaps that byte to `^`, `:`, `+`, or `#`. The candidate is checked
+/// by the ordinary completion grammar, keeping the assist lexical and aligned
 /// with picker eligibility. Route-scope contexts plus lone move-bullet
 /// sigils are accepted; a `.` that completes a `- ^^` choice marker is also
-/// accepted.
+/// accepted. A comma glued to a complete target-run member instead inserts
+/// ` +` to open the next parent-task picker.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
     if alias == "\\" {
         return expand_hash_alias(raw_text, start, cursor);
     }
+    let token = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor)?;
+    if alias == "," {
+        return expand_parent_task_comma_alias(raw_text, start, cursor, token);
+    }
     let (sigil, allowed_context) = match alias {
         "." => ('^', super::completion::CompletionContext::TaskBlockId),
         ";" => (':', super::completion::CompletionContext::PomodoroBlockId),
         _ => return None,
     };
-    let token = tokenize_with_spans(raw_text)
-        .into_iter()
-        .find(|token| token.end == cursor)?;
     if token.end != cursor {
         return None;
     }
@@ -202,6 +206,89 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     Some(finish_sigil_alias(
         raw_text, &candidate, start, cursor, sigil, alias,
     ))
+}
+
+/// Typing `,` where `+` would open a Parent Task picker aliases it to `+`.
+/// A comma glued to the end of a complete target-run member instead becomes
+/// ` +`, advancing to the next target without changing the capture grammar.
+fn expand_parent_task_comma_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+    token: Token<'_>,
+) -> Option<DraftRewrite> {
+    if token.end != cursor {
+        return None;
+    }
+
+    // In-place forms are accepted only when replacing the comma with `+`
+    // opens the ordinary note-scoped task picker or a whole-token parent
+    // picker. This keeps commas in prose, names, and close/start lists literal.
+    let mut swapped = raw_text.to_string();
+    swapped.replace_range(start..cursor, "+");
+    if let Some(field) =
+        super::completion::completion_field_at(&swapped, cursor)
+    {
+        use super::completion::CompletionContext;
+        let allowed = match field.context {
+            CompletionContext::Task => field.replacement.0 == cursor,
+            CompletionContext::TaskParent => {
+                field.replacement == (start, cursor)
+            }
+            _ => false,
+        };
+        if allowed {
+            return Some(finish_sigil_alias(
+                raw_text, &swapped, start, cursor, '+', ",",
+            ));
+        }
+    }
+
+    // A glued comma may continue a run only when the editor parser identifies
+    // a complete target member ending exactly before it. Transfer slots and
+    // drawer suffixes have different span kinds and cannot pass this gate.
+    if token.start >= start {
+        return None;
+    }
+    let mut stripped = raw_text.to_string();
+    stripped.replace_range(start..cursor, "");
+    let parsed = parse_for_editor(&stripped);
+    if !parsed.spans.iter().any(|span| {
+        span.end == start
+            && matches!(
+                span.kind,
+                SpanKind::SubBulletBlockId
+                    | SpanKind::TaskToggleBlockId
+                    | SpanKind::TaskToggleExplicitToggle
+            )
+    }) {
+        return None;
+    }
+
+    let mut continued = raw_text.to_string();
+    continued.replace_range(start..cursor, " +");
+    let continued_cursor = start + 2;
+    let field =
+        super::completion::completion_field_at(&continued, continued_cursor)?;
+    if field.context != super::completion::CompletionContext::TaskParent
+        || field.replacement != (start + 1, continued_cursor)
+    {
+        return None;
+    }
+
+    let edits = vec![TextEdit {
+        start,
+        end: cursor,
+        replacement: " +".to_string(),
+    }];
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::ExpandSigilAlias),
+        edits,
+        text: continued,
+        cursor: Some(continued_cursor),
+        summary: Some("Typed + for ,".to_string()),
+        notices: Vec::new(),
+    })
 }
 
 /// Typing `\` where a real `#` would open a completion menu swaps that byte

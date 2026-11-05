@@ -775,6 +775,101 @@ fn rewrite_draft_expands_sigil_aliases_in_route_picker_positions() {
 }
 
 #[test]
+fn rewrite_draft_expands_comma_to_parent_task_picker() {
+    for (raw, expected) in [
+        ("@cash,", "@cash+"),
+        ("Buy milk @cash,", "Buy milk @cash+"),
+        ("- Call mom @home,", "- Call mom @home+"),
+        ("@a+x @b,", "@a+x @b+"),
+        ("@a+x > @c,", "@a+x > @c+"),
+        (",", "+"),
+        ("Buy milk ,", "Buy milk +"),
+        ("@cash+goog-exit ,", "@cash+goog-exit +"),
+        ("- Draft ,", "- Draft +"),
+        ("x ,", "x +"),
+        ("@cash+goog-exit,", "@cash+goog-exit +"),
+        ("Buy milk @cash+goog-exit,", "Buy milk @cash+goog-exit +"),
+        ("@a+x! @b+y,", "@a+x! @b+y +"),
+        (
+            "Parent\n- detail @cash+goog-exit,",
+            "Parent\n- detail @cash+goog-exit +",
+        ),
+        ("café @cash+goog-exit,", "café @cash+goog-exit +"),
+    ] {
+        let cursor = raw.len();
+        assert!(raw.is_char_boundary(cursor), "{raw:?}");
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(expected.len()), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Typed + for ,"),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].start, raw.len() - 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].end, raw.len(), "{raw:?}");
+        assert_eq!(
+            rewrite.edits[0].replacement,
+            if expected.len() == raw.len() + 1 {
+                " +"
+            } else {
+                "+"
+            },
+            "{raw:?}"
+        );
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_keeps_comma_literal_outside_parent_task_picker_positions() {
+    for raw in [
+        "Buy milk,",
+        "1,000",
+        "x1,",
+        "x!1,",
+        "=~1,",
+        "x=3=1,",
+        "=bugs,",
+        "=bugs,fix",
+        "@cash:goog-exit,",
+        "@cash^goog-exit,",
+        "@cash+goog-exit#req,",
+        "@a+x > @c+tid,",
+        "@a+x, > @c",
+        "@,",
+        "@@cash,",
+        "&note:id,",
+        ":query,",
+        "^route,",
+        "x1, work log",
+        "@a+x,note",
+    ] {
+        let rewrite = rewrite_draft(raw, Some(raw.find(',').unwrap() + 1));
+        assert_eq!(rewrite.rule, None, "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+
+    let raw = "@cash,";
+    let no_cursor = rewrite_draft(raw, None);
+    assert_eq!(no_cursor.rule, None);
+    assert_eq!(no_cursor.text, raw);
+
+    let template = "Task {0} %t\n\n@cash,";
+    let template_rewrite = rewrite_draft(template, Some(template.len()));
+    assert_eq!(template_rewrite.rule, None);
+    assert_eq!(template_rewrite.text, template);
+}
+
+#[test]
 fn rewrite_draft_sigil_aliases_exclude_other_contexts() {
     for raw in [
         "Buy milk.",
