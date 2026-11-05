@@ -235,8 +235,8 @@ with no R0 or D3.
   own pass emptied (PDL8–PDL10, §13.5). Capture also reports
   `consumed_links[]` and `removed` blocks (PDL11). Task completion
   retirement removes only entries its batch emptied. Closed Pomodoros
-  with recorded time stay as history. bob-plugins still follows PDL7
-  until its parity phase lands.
+  with recorded time stay as history. bob-plugins Depends-On consumption follows
+  the same PDL8–PDL10 rules and leaves closed timed rows as history (PDL13).
 - **Not edges:** `#^ref` embeds and archived targets.
 - **Visibility.** An open prerequisite that other open tasks depend on
   carries a generated `🧱 **BLOCKS:**` child listing those dependents
@@ -4123,10 +4123,10 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDL4 | closed entries in the same day file | byte-identical |
 | PDL5 | struck link under an open entry | untouched |
 | PDL6 | prose bullet whose only Task Link token is the Blocked target | token removed; the rest of the bullet kept |
-| PDL7 | plugin: planned link-only bullet with authored child notes | whole subtree removed; reconcile and capture use PDL8 |
-| PDL8 | capture or reconcile: planned link-only bullet with authored child notes | bullet becomes the task's clean display text; children and entry kept (`notes_kept`) |
-| PDL9 | capture or reconcile: an entry had children before this pass and none after | that entry is deleted (including a running timed entry); already-childless placeholders stay |
-| PDL10 | capture or reconcile: ledger links use alias, basename, path, case, or `[[#^local]]` spellings of the same Blocked target | every spelling consumed by resolved identity |
+| PDL7 | plugin: planned link-only bullet with authored child notes | same as PDL8; whole-subtree removal is retired |
+| PDL8 | capture, reconcile, or plugin: planned link-only bullet with authored child notes | bullet becomes the task's clean display text; children and entry kept (`notes_kept`) |
+| PDL9 | capture, reconcile, or plugin: an entry had children before this pass and none after | that entry is deleted (including a running timed entry); already-childless placeholders stay |
+| PDL10 | capture, reconcile, or plugin: ledger links use alias, basename, path, case, or `[[#^local]]` spellings of the same Blocked target | every spelling consumed by resolved identity |
 | PDL11 | capture: any consumed link and any entry this capture emptied | `consumed_links[]` row (`removed` / `token_removed` / `notes_kept`); deleted entry in `pomodoro_blocks` with `removed: true` |
 | PDL12 | `task_complete` retires links from an entry and an unrelated placeholder is already childless | completion removes only the entry it emptied; the placeholder stays |
 | PDL13 | any cleanup sees an empty closed entry with a recorded span, `[t::]`, or `[off::]` | retain the closed row and its recorded time |
