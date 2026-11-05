@@ -227,6 +227,36 @@ invocation, while retaining an entry that receives a moved child.
 
 Dry-run reports the same deterministic removals without changing the vault.
 Live runs write through the normal guarded snapshot, recovery, and retry path.
+
+### Pomodoro type agreement
+
+After blocked-link consumption and before the guarded write, reconcile runs
+the shared name-agreement applier over today's open entries in the daily
+output (falling back to the normalized daily note when it has no output).
+Each entry's own direct children decide: live links add their missing types
+in child order, unsupported types drop only when every child is live or
+worked, and any prose or unknown child protects every existing type. MEET
+entries, containers, and closed entries keep their names; a MEET entry
+holding a non-MEET task reports `meet_mismatch` instead.
+
+Name-tail edits are structural: they obey the quiet period and the
+stale-input guard like the rest of the daily rewrite, and they extend the
+guarded read-set to the type configuration (`types:`, `plan.default_type`,
+`plan.reading_type`) and the area and project notes the inheritance walk
+read. A run changing any of these between planning and writing defers
+instead of writing stale names. Renaming never empties an entry, so no
+later cleanup is needed.
+
+JSON adds `type_agreement` (`line`, `before`, `after`, `added`, `removed`,
+`reason`) and `type_agreement_unrepaired` (`line`, `entry`, optional
+`link`, `code`, `message`); `schema_version` stays 1. Human output prints
+`≈ renamed — BEFORE → — AFTER (reason)` per rename (`would rename` under
+`--dry-run`) and lists unrepaired items briefly. Dry run and apply plan
+identical edits.
+
+Costs: a hand-typed entry rename reverts when the links disagree, a
+running session can be renamed while watched, and reconcile makes
+unattended name writes behind the quiet period.
 A second run after a successful cleanup is a no-op.
 
 ### Settled off-clock events

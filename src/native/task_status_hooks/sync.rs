@@ -1053,6 +1053,23 @@ pub(super) fn sync_task_statuses(
     let mut removed_empty_pomodoros = empty_pomodoro_plan.removed;
     removed_empty_pomodoros.extend(settle_removed_empty);
     removed_empty_pomodoros.extend(consumed_empty_pomodoros);
+    // Type-agreement pass: run the shared applier over today's open
+    // entries after blocked-link consumption. Renaming never empties an
+    // entry, so no later cleanup is needed.
+    let (type_agreement, type_agreement_unrepaired) =
+        apply_type_agreement(
+            &mut compose,
+            &files,
+            &daily_path,
+            canonical_daily_path.as_ref(),
+            &daily_contents,
+            &normalized_daily,
+            daily_relative,
+            &mut inputs,
+            &settings,
+            anchor,
+            &request.bob_dir,
+        );
     let apply_report = if request.dry_run {
         ApplyReport::default()
     } else {
@@ -1127,6 +1144,8 @@ pub(super) fn sync_task_statuses(
         plan_budget,
         settled: settled_events,
         coalesced_pomodoros,
+        type_agreement,
+        type_agreement_unrepaired,
     })
 }
 
@@ -1465,6 +1484,320 @@ fn consume_blocked_links_after_compose(
         project_tasks,
     );
     (consumed, consumption.removed_empty)
+}
+
+/// Type-agreement pass over today's daily output.
+///
+/// Runs after blocked-link consumption (which deletes entries it empties,
+/// so an earlier pass would grow names for links about to vanish) and
+/// before the guarded write. Only today's daily note, only open entries.
+/// Name-tail edits are structural: they obey the quiet period through
+/// `structural_regrouping` and extend the guarded read-set to the type
+/// configuration. Area and project notes are already in `inputs` because
+/// every scanned vault file is snapshotted.
+#[allow(clippy::too_many_arguments)]
+fn apply_type_agreement(
+    compose: &mut ComposeResult,
+    files: &[FileScan],
+    daily_path: &Path,
+    canonical_daily_path: Option<&PathBuf>,
+    daily_contents: &str,
+    normalized_daily: &str,
+    daily_relative: Option<&Path>,
+    inputs: &mut Vec<InputSnapshot>,
+    settings: &TasksSettings,
+    anchor: NaiveDate,
+    vault: &Path,
+) -> (Vec<TypeAgreementRename>, Vec<TypeAgreementUnrepaired>) {
+    let daily_output_index = compose.outputs.iter().position(|output| {
+        output.path == daily_path
+            || canonical_daily_path.is_some_and(|daily| {
+                output.path.canonicalize().ok().as_ref() == Some(daily)
+            })
+    });
+    let daily_text = daily_output_index
+        .map(|index| compose.outputs[index].contents.clone())
+        .or_else(|| {
+            files.iter().find_map(|file| {
+                (file.path == daily_path
+                    || canonical_daily_path.is_some_and(|daily| {
+                        file.path.canonicalize().ok().as_ref() == Some(daily)
+                    }))
+                .then(|| file.contents.clone())
+            })
+        })
+        .unwrap_or_else(|| normalized_daily.to_string());
+    let daily_rel: PathBuf = daily_relative
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| {
+            daily_path
+                .strip_prefix(vault)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| {
+                    PathBuf::from(
+                        daily_path.to_string_lossy().into_owned(),
+                    )
+                })
+        });
+    let sources = bob_config::themes::load_theme_sources();
+    let catalog = match crate::native::pomodoro_themes::Catalog::load(
+        vault, anchor, false,
+    ) {
+        Ok(catalog) => catalog,
+        Err(_) => {
+            return (Vec::new(), Vec::new());
+        }
+    };
+    let plan_config =
+        match bob_config::load_plan_config(&bob_config::config_path()) {
+            Ok(config) => config,
+            Err(_) => crate::native::config::PlanConfig::default(),
+        };
+    // Staged post-images: this run's rewrites typed from the new line.
+    // Each entry's own children are inspected; the deduplicated
+    // `today_tasks` list is never used.
+    let mut staged: BTreeMap<(PathBuf, String), String> = BTreeMap::new();
+    for (index, file) in files.iter().enumerate() {
+        let contents = compose
+            .outputs
+            .iter()
+            .find(|output| {
+                output.path == file.path
+                    || canonical_daily_path.is_some_and(|daily| {
+                        output.path.canonicalize().ok().as_ref()
+                            == Some(daily)
+                            && file.path == *daily_path
+                    })
+            })
+            .map(|output| output.contents.clone())
+            .unwrap_or_else(|| file.contents.clone());
+        let _ = index;
+        let lines = logical_lines(&contents);
+        for task in parse_tasks(&contents, settings) {
+            let Some(block_id) = task.block_id.clone() else {
+                continue;
+            };
+            if let Some(line) = lines.get(task.line_index).copied() {
+                staged.insert(
+                    (file.relative_path.clone(), block_id),
+                    line.to_string(),
+                );
+            }
+        }
+    }
+    // The daily output itself may not be in `files` under the same path
+    // (external daily); ensure its staged lines are present.
+    {
+        let lines = logical_lines(&daily_text);
+        let daily_tasks = parse_tasks(&daily_text, settings);
+        for task in daily_tasks {
+            if let Some(block_id) = task.block_id.clone()
+                && let Some(line) = lines.get(task.line_index).copied()
+            {
+                staged
+                    .entry((daily_rel.clone(), block_id))
+                    .or_insert_with(|| line.to_string());
+            }
+        }
+    }
+    let mut lookup = StagedAgreementLookup {
+        vault: vault.to_path_buf(),
+        daily_rel: daily_rel.clone(),
+        daily_text: daily_text.clone(),
+        staged,
+        catalog,
+        plan_config,
+        resolver: HomeResolver::new(DiskHomeSource::new(vault)),
+        settings: crate::native::note_tasks::read_settings(vault),
+    };
+    let outcome =
+        crate::native::pomodoro_themes::agree_apply::agree_ledger_entries(
+            &daily_text,
+            &daily_rel,
+            &crate::native::pomodoro_themes::agree_apply::EntrySelector::AllOpen,
+            &mut lookup,
+            &sources,
+        );
+    // Extend the guarded read-set to the type configuration so a run
+    // changing it between planning and writing defers instead of
+    // writing stale names.
+    let config_path = bob_config::config_path();
+    if snapshot_for_path(inputs, &config_path).is_none() {
+        if let Ok(snapshot) =
+            capture_optional(&config_path, InputKind::Note)
+        {
+            push_unique_input(inputs, snapshot);
+        }
+    }
+    let mut renames = Vec::new();
+    for entry in &outcome.entries {
+        renames.push(TypeAgreementRename {
+            line: entry.line,
+            before: entry.before.clone(),
+            after: entry.after.clone(),
+            added: entry.added.clone(),
+            removed: entry.removed.clone(),
+            reason: agreement_reason(&entry.added, &entry.removed),
+        });
+    }
+    let mut unrepaired = Vec::new();
+    for item in &outcome.unrepaired {
+        unrepaired.push(TypeAgreementUnrepaired {
+            line: item.line,
+            entry: item.entry.clone(),
+            link: None,
+            code: item.code.clone(),
+            message: item.message.clone(),
+        });
+    }
+    if outcome.changed {
+        if let Some(index) = daily_output_index {
+            compose.outputs[index].contents = outcome.contents;
+            compose.outputs[index].structural_regrouping = true;
+        } else if outcome.contents != daily_contents {
+            compose.outputs.push(ComposedOutput {
+                path: daily_path.to_path_buf(),
+                contents: outcome.contents,
+                structural_regrouping: true,
+            });
+        }
+    }
+    (renames, unrepaired)
+}
+
+fn agreement_reason(added: &[String], removed: &[String]) -> String {
+    if !removed.is_empty() {
+        let names: Vec<String> =
+            removed.iter().map(|key| key.to_uppercase()).collect();
+        format!("{} has no link", names.join(" + "))
+    } else if !added.is_empty() {
+        let names: Vec<String> =
+            added.iter().map(|key| key.to_uppercase()).collect();
+        format!("missing {}", names.join(" + "))
+    } else {
+        "agrees".to_string()
+    }
+}
+
+/// Task-type lookup over staged post-images with one shared resolver.
+struct StagedAgreementLookup {
+    vault: PathBuf,
+    daily_rel: PathBuf,
+    daily_text: String,
+    staged: BTreeMap<(PathBuf, String), String>,
+    catalog: crate::native::pomodoro_themes::Catalog,
+    plan_config: crate::native::config::PlanConfig,
+    resolver:
+        HomeResolver<crate::native::pomodoro_homes::DiskHomeSource>,
+    settings: crate::native::note_tasks::NoteTaskSettings,
+}
+
+impl crate::native::pomodoro_themes::agree_apply::TaskTypeLookup
+    for StagedAgreementLookup
+{
+    fn resolve(
+        &mut self,
+        target: &str,
+        block_id: &str,
+    ) -> crate::native::pomodoro_themes::agree_apply::TaskResolution {
+        use crate::native::pomodoro_themes::agree_apply::TaskResolution;
+        use crate::native::vault_links::LinkResolution;
+        let residence: PathBuf = if target.is_empty() {
+            self.daily_rel.clone()
+        } else {
+            match self
+                .resolver
+                .resolve_target(&self.daily_rel, target)
+            {
+                LinkResolution::Found(path) => path,
+                LinkResolution::Ambiguous => {
+                    return TaskResolution::Ambiguous;
+                }
+                LinkResolution::Missing => {
+                    return TaskResolution::Unresolved;
+                }
+            }
+        };
+        let line_text: Option<String> = self
+            .staged
+            .get(&(residence.clone(), block_id.to_string()))
+            .cloned()
+            .or_else(|| {
+                if residence == self.daily_rel {
+                    let scan = crate::native::note_tasks::scan(
+                        &self.daily_text,
+                        &self.settings,
+                    );
+                    match scan.by_block_id(block_id) {
+                        crate::native::note_tasks::BlockIdLookup::Found(
+                            task,
+                        ) => self
+                            .daily_text
+                            .lines()
+                            .nth(task.line_index)
+                            .map(str::to_string),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                std::fs::read_to_string(self.vault.join(&residence))
+                    .ok()
+                    .and_then(|contents| {
+                        let scan = crate::native::note_tasks::scan(
+                            &contents,
+                            &self.settings,
+                        );
+                        match scan.by_block_id(block_id) {
+                            crate::native::note_tasks::BlockIdLookup::Found(
+                                task,
+                            ) => contents
+                                .lines()
+                                .nth(task.line_index)
+                                .map(str::to_string),
+                            crate::native::note_tasks::BlockIdLookup::Duplicate(
+                                _,
+                            ) => None,
+                            _ => None,
+                        }
+                    })
+            });
+        let Some(line) = line_text else {
+            // Distinguish duplicate (ambiguous) from missing would need
+            // a second scan; report unresolved so drops are blocked.
+            return TaskResolution::Unresolved;
+        };
+        let is_open = !is_closed_task_line(&line);
+        let result =
+            crate::native::pomodoro_themes::suggest::suggest_for_task_as_if_open(
+                &mut self.resolver,
+                &self.catalog,
+                &self.plan_config,
+                &residence,
+                &line,
+            );
+        let has_repair = result
+            .suggestion
+            .as_ref()
+            .is_some_and(|suggestion| suggestion.repair.is_some());
+        match result.suggestion {
+            None => TaskResolution::Untyped { is_open },
+            Some(suggestion) => TaskResolution::Typed {
+                key: suggestion.theme.key,
+                name: suggestion.theme.name,
+                is_open,
+                has_repair,
+            },
+        }
+    }
+}
+
+fn is_closed_task_line(line: &str) -> bool {
+    use crate::native::ref_tasks::{strip_blockquote_prefix, task_mark};
+    let stripped = strip_blockquote_prefix(line);
+    matches!(task_mark(stripped), Some('x' | 'X' | '-'))
 }
 
 fn enrich_consumed_blocked(

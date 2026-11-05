@@ -18,9 +18,10 @@ A Pomodoro name can contain several `+`-separated components. With a configured
 vocabulary, matching components are types and the others are labels; without one, each
 component is a type unless it is an inventory label. A task's effective type and its
 live Pomodoro Task Link agree: retyping updates the task field and moves or renames its
-link as needed, while naming a linked entry retypes its open linked tasks. Disagreement
-is shown as drift; it is not silently repaired. PLAN is an ordinary type, while
-`plan.exempt` only controls budget counting and mute color.
+link as needed, while naming a linked entry retypes its open linked tasks. Writers
+keep open names in agreement and `bob task reconcile` repairs today's open names,
+never task fields ([[decisions:open-pomodoro-names-follow-task-links]]). PLAN is an
+ordinary type, while `plan.exempt` only controls budget counting and mute color.
 
 `bob types` manages the catalog and preferences; `bob themes` remains a CLI alias.
 Configured `types:` colors take precedence, followed by journal pins, exempt and

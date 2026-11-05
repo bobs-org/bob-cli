@@ -29,6 +29,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.removed_canceled_references.len()
         + result.consumed_blocked_references.len()
         + result.removed_duplicate_lines.len()
+        + result.type_agreement.len()
         + result.removed_empty_pomodoros.len()
         + result.grouped_task_sections.len()
         + result.dependency_projection_updates.len()
@@ -153,6 +154,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_empty_pomodoro_section(result);
     print_settled_section(result);
     print_coalesced_section(result);
+    print_type_agreement_section(result);
     print_dependency_projection_sections(&styler, result);
     print_blocks_line_sections(&styler, result);
     print_relation_line_sections(&styler, result);
@@ -232,6 +234,41 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.settled.len(),
         result.coalesced_pomodoros.len()
     );
+}
+
+pub(super) fn print_type_agreement_section(result: &SyncResult) {
+    if result.type_agreement.is_empty()
+        && result.type_agreement_unrepaired.is_empty()
+    {
+        return;
+    }
+    if !result.type_agreement.is_empty() {
+        println!();
+        println!(
+            "  {} Pomodoro names",
+            if result.dry_run {
+                "would rename"
+            } else {
+                "renamed"
+            }
+        );
+        for item in &result.type_agreement {
+            println!(
+                "    ≈ renamed — {} → — {} ({})",
+                item.before, item.after, item.reason
+            );
+        }
+    }
+    if !result.type_agreement_unrepaired.is_empty() {
+        println!();
+        println!("  type-agreement unrepaired");
+        for item in &result.type_agreement_unrepaired {
+            println!(
+                "    line {} — {} [{}] {}",
+                item.line, item.entry, item.code, item.message
+            );
+        }
+    }
 }
 
 pub(super) fn print_settled_section(result: &SyncResult) {

@@ -332,11 +332,13 @@ pub(crate) fn with_configured_theme_lints(
     report
 }
 
-/// Read-only agreement lint (D5): one `type_mismatch` lint per live link
-/// whose task type disagrees with its entry. Drift from hand edits,
-/// frontmatter or config edits, or sync merges is flagged and never
-/// silently repaired. Reuses one [`pomodoro_homes::HomeResolver`] per
-/// run to keep the extra resolver cost inside `bob plan`'s budget.
+/// Read-only agreement lint: one `type_mismatch` lint per live link that
+/// reconcile refuses to repair — MEET mismatches, unconfigured types,
+/// and unknown links. Shapes that `agree_entry` would repair (a missing
+/// type that appends, an unsupported type that drops) yield no lint
+/// because `bob task reconcile` fixes today's open names. Reuses one
+/// [`pomodoro_homes::HomeResolver`] per run to keep the extra resolver
+/// cost inside `bob plan`'s budget.
 pub(crate) fn with_type_mismatch_lints(
     mut report: PlanReport,
     bob_dir: &Path,
@@ -353,12 +355,63 @@ pub(crate) fn with_type_mismatch_lints(
         pomodoro_homes::DiskHomeSource::new(bob_dir),
     );
     for task in &today_result.tasks {
+        let route = task.path.strip_suffix(".md").unwrap_or(&task.path);
+        let entry_ref = || PlanEntryRef {
+            line: task.entry_line,
+            name: task.entry_name.clone(),
+        };
+        let link_ref = || PlanLinkRef {
+            route: route.to_string(),
+            block_id: task.block_id.clone(),
+        };
+        let mut push_lint = |message: String,
+                             task_type: Option<
+            crate::native::pomodoro_themes::ThemeRef,
+        >| {
+            report.warnings.push(PlanLint {
+                code: LINT_TYPE_MISMATCH.to_string(),
+                message,
+                line: Some(task.ledger_line),
+                link: Some(link_ref()),
+                entry: Some(entry_ref()),
+                task_type,
+                entry_types: Some(
+                    catalog.theme_refs_for_name(&task.entry_name),
+                ),
+            });
+        };
+        // Containers hold any task without typing: never a mismatch.
+        if super::pomodoro_themes::routing::type_components(
+            Some(task.entry_name.as_str()),
+            &sources,
+        )
+        .iter()
+        .all(|item| !item.is_type)
+        {
+            continue;
+        }
         let contents = match std::fs::read_to_string(bob_dir.join(&task.path)) {
             Ok(contents) => contents,
-            Err(_) => continue,
+            Err(_) => {
+                push_lint(
+                    format!(
+                        "unresolved task link under {} · {route}#^{} · reconcile leaves it; fix the link or task type",
+                        task.entry_name, task.block_id,
+                    ),
+                    None,
+                );
+                continue;
+            }
         };
         let Some(line) = contents.lines().nth(task.line.saturating_sub(1))
         else {
+            push_lint(
+                format!(
+                    "unresolved task link under {} · {route}#^{} · reconcile leaves it; fix the link or task type",
+                    task.entry_name, task.block_id,
+                ),
+                None,
+            );
             continue;
         };
         let scan = super::note_tasks::scan(&contents, &settings);
@@ -366,6 +419,13 @@ pub(crate) fn with_type_mismatch_lints(
             scan.by_block_id(&task.block_id),
             super::note_tasks::BlockIdLookup::Found(_)
         ) {
+            push_lint(
+                format!(
+                    "unresolved task link under {} · {route}#^{} · reconcile leaves it; fix the link or task type",
+                    task.entry_name, task.block_id,
+                ),
+                None,
+            );
             continue;
         }
         let suggestion = super::pomodoro_themes::suggest::suggest_for_task(
@@ -376,8 +436,56 @@ pub(crate) fn with_type_mismatch_lints(
             line,
         );
         let Some(suggestion) = suggestion.suggestion else {
+            push_lint(
+                format!(
+                    "unresolved task link under {} · {route}#^{} · reconcile leaves it; fix the link or task type",
+                    task.entry_name, task.block_id,
+                ),
+                None,
+            );
             continue;
         };
+        if suggestion.repair.is_some() {
+            push_lint(
+                format!(
+                    "unresolved task link under {} · {route}#^{} · reconcile leaves it; fix the link or task type",
+                    task.entry_name, task.block_id,
+                ),
+                None,
+            );
+            continue;
+        }
+        let key = normalize_component(&suggestion.theme.key);
+        let is_type = match &sources.themes {
+            Some(vocabulary) => vocabulary.contains(&key),
+            None => !sources.inventory.contains(&key),
+        };
+        if !is_type {
+            push_lint(
+                format!(
+                    "{} isn't one of your types · {route}#^{} under {} · reconcile leaves it",
+                    suggestion.theme.name, task.block_id, task.entry_name,
+                ),
+                Some(suggestion.theme.clone()),
+            );
+            continue;
+        }
+        if super::pomodoro_themes::routing::is_meet_name(Some(
+            task.entry_name.as_str(),
+        )) {
+            if key != "meet" {
+                push_lint(
+                    format!(
+                        "{} task under {} · {route}#^{} · Ctrl+Shift+M to move or Ctrl+Shift+P t to retype",
+                        suggestion.theme.name, task.entry_name, task.block_id,
+                    ),
+                    Some(suggestion.theme.clone()),
+                );
+            }
+            continue;
+        }
+        // Any other disagreement is a repaired shape: reconcile appends
+        // the missing type or drops the unsupported one, so no lint.
         if super::pomodoro_themes::routing::agrees(
             Some(suggestion.theme.key.as_str()),
             Some(task.entry_name.as_str()),
@@ -385,27 +493,6 @@ pub(crate) fn with_type_mismatch_lints(
         ) {
             continue;
         }
-        let route = task.path.strip_suffix(".md").unwrap_or(&task.path);
-        report.warnings.push(PlanLint {
-            code: LINT_TYPE_MISMATCH.to_string(),
-            message: format!(
-                "{} task under {} · {route}#^{} · Ctrl+Shift+M to move or Ctrl+Shift+P t to retype",
-                suggestion.theme.name, task.entry_name, task.block_id,
-            ),
-            line: Some(task.ledger_line),
-            link: Some(PlanLinkRef {
-                route: route.to_string(),
-                block_id: task.block_id.clone(),
-            }),
-            entry: Some(PlanEntryRef {
-                line: task.entry_line,
-                name: task.entry_name.clone(),
-            }),
-            task_type: Some(suggestion.theme.clone()),
-            entry_types: Some(
-                catalog.theme_refs_for_name(&task.entry_name),
-            ),
-        });
     }
     report
 }
@@ -1284,5 +1371,116 @@ mod tests {
             serde_json::to_value(&ledger.links).expect("meter serializes");
         assert_eq!(value["count"], serde_json::json!(0));
         assert_eq!(value["off_clock"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn type_mismatch_reports_only_what_reconcile_refuses() {
+        let vault = tempfile::tempdir().expect("temp vault");
+        std::fs::write(
+            vault.path().join("tasks.md"),
+            "- [ ] Build work #task [type:: BUILD] ^aaa111\n\
+            - [ ] Fix work #task [type:: FIX] ^bbb222\n\
+            - [ ] Write work #task [type:: WRITE] ^ccc333\n",
+        )
+        .expect("write tasks note");
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 5).expect("date");
+        let config = PlanConfig::default();
+        let catalog =
+            ThemeCatalog::load(vault.path(), today, false)
+                .expect("catalog loads");
+        let ledger = compute_for_daily(
+            "## Pomodoros\n",
+            &config,
+            Some("2026/20261105"),
+        );
+        let lanes = Lanes {
+            next: LaneBudget {
+                count: 0,
+                cap: 1,
+                over: false,
+            },
+            pending: LaneBudget {
+                count: 0,
+                cap: 1,
+                over: false,
+            },
+        };
+        let task = |block_id: &str,
+                    entry_name: &str,
+                    ledger_line: usize,
+                    entry_line: usize| {
+            TodayTask {
+                path: "tasks.md".to_string(),
+                block_id: block_id.to_string(),
+                line: if block_id == "aaa111" {
+                    1
+                } else if block_id == "bbb222" {
+                    2
+                } else {
+                    3
+                },
+                status_symbol: " ".to_string(),
+                status_name: "Todo".to_string(),
+                text: "work".to_string(),
+                entry_line,
+                entry_name: entry_name.to_string(),
+                ledger_line,
+            }
+        };
+        // A repaired shape (BUILD task under FIX entry) yields no lint:
+        // reconcile would append BUILD and drop FIX.
+        let repaired = TodayResult {
+            tasks: vec![task("aaa111", "FIX", 3, 2)],
+            warnings: Vec::new(),
+        };
+        let report = assemble_report(
+            today,
+            "2026/20261105.md",
+            &config,
+            &ledger,
+            &lanes,
+            &repaired,
+        );
+        let report = with_type_mismatch_lints(
+            report,
+            vault.path(),
+            &repaired,
+            &catalog,
+            &config,
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .all(|warning| warning.code != LINT_TYPE_MISMATCH),
+            "repaired shape yields no type_mismatch: {:?}",
+            report.warnings
+        );
+        // A MEET entry holding a WRITE task yields exactly one lint.
+        let meet = TodayResult {
+            tasks: vec![task("ccc333", "MEET", 3, 2)],
+            warnings: Vec::new(),
+        };
+        let report = assemble_report(
+            today,
+            "2026/20261105.md",
+            &config,
+            &ledger,
+            &lanes,
+            &meet,
+        );
+        let report = with_type_mismatch_lints(
+            report,
+            vault.path(),
+            &meet,
+            &catalog,
+            &config,
+        );
+        let mismatches: Vec<_> = report
+            .warnings
+            .iter()
+            .filter(|warning| warning.code == LINT_TYPE_MISMATCH)
+            .collect();
+        assert_eq!(mismatches.len(), 1, "{:?}", report.warnings);
     }
 }

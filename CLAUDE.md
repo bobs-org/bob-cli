@@ -262,13 +262,17 @@ edited in place.
     Highlights PDFs only through bounded .forMerging file coordination around the whole
     per-PDF write, holding when uncertain or while you read; never UI automation, never
     .forReplacing.
-33. **Projects Block Their Tasks From The ^prj Line** (`projects-block-from-prj-line`) -
+33. **Open Pomodoro Names Follow Task Links**
+    (`open-pomodoro-names-follow-task-links`) - Every live Task Link under one of
+    today's open, typed Pomodoros agrees with its entry's name; writers, the close
+    settle, and bob task reconcile enforce it, and reconcile never writes task fields.
+34. **Projects Block Their Tasks From The ^prj Line** (`projects-block-from-prj-line`) -
     _[partly superseded by `decisions:subprojects-inherit-project-blocking`,
     `decisions:capture-link-drops-blocking-deps`]_ A project's prerequisites and date
     live on its ^prj task; while that line is Blocked, every open resident is Blocked
     and tagged #prj_is_blocked, and Blocked tasks keep no Task Links under today's open
     Pomodoros.
-34. **READY Is Freshness-Gated With NEW and ROTTEN Review**
+35. **READY Is Freshness-Gated With NEW and ROTTEN Review**
     (`ready-is-freshness-gated`) - _[partly superseded by
     `note-ready-cap-counts-the-lane`, `review-walk-is-tiered`,
     `rotten-keeps-use-priority-decay`, `unblocked-tasks-resurface-as-ticklers`]_ READY
@@ -276,119 +280,119 @@ edited in place.
     ROTTEN buckets) with TODAY → NEW → PENDING → NEXT → READY sections and
     NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips; review clears NEW then ROTTEN; no
     tags, fields, or status changes store review state.
-35. **Recurring Occurrences Walk When Due** (`recurring-occurrences-walk-when-due`) -
+36. **Recurring Occurrences Walk When Due** (`recurring-occurrences-walk-when-due`) -
     The ]s walk is PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN
     → POST; due recurring occurrences walk in RECURRING (never stamped); schema 13
     retired REFERENCES so refs use ordinary groups; a ^prj walks in PROJECTS only when
     it lacks #hide.
-36. **Ref Rename Keeps Identity** (`ref-rename-keeps-identity`) - _[superseded by
+37. **Ref Rename Keeps Identity** (`ref-rename-keeps-identity`) - _[superseded by
     `decisions:reference-renames-keep-identity`]_ Ref renames change bundle paths while
     preserving reference and task identity.
-37. **Reference Ids Follow File Stems** (`reference-ids-follow-file-stems`) - A
+38. **Reference Ids Follow File Stems** (`reference-ids-follow-file-stems`) - A
     reference id follows its note stem, with a numbered suffix only to avoid duplicate
     ids across ref/.
-38. **Reference Renames Keep Identity** (`reference-renames-keep-identity`) - _[partly
+39. **Reference Renames Keep Identity** (`reference-renames-keep-identity`) - _[partly
     superseded by `decisions:reference-ids-follow-file-stems`]_ Renaming eligible
     references moves their bundle paths and inbound links while preserving reference and
     reading-task identity.
-39. **Reference Sources Are Preserved Write-Once**
+40. **Reference Sources Are Preserved Write-Once**
     (`reference-sources-are-preserved-write-once`) - bob preserves render-input Markdown
     and its derived code catalog in a hidden, content-addressed .bob store; source bytes
     are write-once and reference notes carry a note-local source_markdown pointer.
-40. **References Are Ingested At Birth** (`references-are-ingested-at-birth`) - The
+41. **References Are Ingested At Birth** (`references-are-ingested-at-birth`) - The
     creating host files each reference under the maintenance and scan locks, queues
     locally when unsafe, and leaves annotation sync to the Mac.
-41. **Relation Card Tab Accepts Ctrl-D Hides**
+42. **Relation Card Tab Accepts Ctrl-D Hides**
     (`relation-card-tab-accepts-ctrl-d-hides`) - Ctrl+N/P navigate the relation card
     without touching the query, Tab accepts or completes the top match, selection is by
     key, and Ctrl+D hides what Return would insert.
-42. **Relation Label Hide Is Suggestions-Only**
+43. **Relation Label Hide Is Suggestions-Only**
     (`relation-label-hide-is-suggestions-only`) - Hiding a relation label removes it
     from suggestions only; LINKS text, mirrors, chips, counts, and typed use stay
     unchanged, and using it never unhides it.
-43. **Relation Label Prefs Live In A Per-Host Journal**
+44. **Relation Label Prefs Live In A Per-Host Journal**
     (`relation-label-prefs-live-in-per-host-journal`) - Relation label hide, unhide, and
     rename events live in vault-synced .bob/relations/<host>.jsonl; fold is
     last-writer-wins and bob is the only writer.
-44. **Relation Label Rename Rewrites History**
+45. **Relation Label Rename Rewrites History**
     (`relation-label-rename-rewrites-history`) - bob relations rename rewrites matching
     label spans everywhere, including done/ and the previous daily note, in one
     previewed transaction and one revertable commit.
-45. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) -
+46. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) -
     _[partly superseded by `recurring-occurrences-walk-when-due`]_ The ]s walk visits
     one shared queue in explicit tiers PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER →
     REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist rows resolve only by
     completion; Pending and Next come due daily under pending_interval / next_interval
     (default 1, false walks that lane off); tiers never feed buckets or chips; upkeep
     outside the lanes counts the budget; stamps stay and the seed never re-runs.
-46. **Rotten Keeps Are Logged** (`rotten-keeps-are-logged`) - _[partly superseded by
+47. **Rotten Keeps Are Logged** (`rotten-keeps-are-logged`) - _[partly superseded by
     `next-keeps-ask-an-optional-rotten-reason`, `task-decay-is-one-ladder`]_ Every
     counted keep — Alt+F/Ctrl+Alt+F on an exact due Ready ROTTEN or scheduled TICKLER
     row, or the decay card's Keep — asks an optional reason and writes one dated 🥀
     ROTTEN LOG entry with the stamp; the entry count is display-only history, never a
     field or a decay input.
-47. **Rotten Keeps Decay Through The Priority Ladder**
+48. **Rotten Keeps Decay Through The Priority Ladder**
     (`rotten-keeps-use-priority-decay`) - _[partly superseded by
     `decay-decisions-are-available-immediately`, `unblocked-tasks-resurface-as-ticklers`
     , `rotten-keeps-are-logged`, `task-decay-is-one-ladder`]_ Repeated due-Ready keeps
     earn an explicit approved decision that enters the existing priority ladder; nothing
     decays silently and freshness itself still never changes priority or schedule.
-48. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
+49. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
     Capture shows a "Similar tasks" band only after typing settles and only when a match
     clears bob's calibrated bars; every row action is an explicit draft edit and Return
     never changes.
-49. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`) -
+50. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`) -
     _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ A blocked project
     passes its dependency or schedule reason through its project descendants, with
     reconcile as the authority and the ^prj tag as the proxy for other engines.
-50. **sync-sorts-event-task-links** (`sync-sorts-event-task-links`) - Every bob gcal
+51. **sync-sorts-event-task-links** (`sync-sorts-event-task-links`) - Every bob gcal
     sync run reorders each Pomodoro entry's same-note Event Task links by meeting span;
     other children keep their slots.
-51. **Synced Meetings Are Linked By Phase At Birth** (`synced-meetings-link-by-phase`) -
+52. **Synced Meetings Are Linked By Phase At Birth** (`synced-meetings-link-by-phase`) -
     _[partly superseded by `decisions:untracked-sessions-omit-t-field`,
     `decisions:event-buffers-widen-the-span`, `decisions:sync-sorts-event-task-links`,
     `decisions:ended-synced-meetings-are-born-done`,
     `decisions:meet-filing-follows-google-until-edited`]_ A new Event Task is filed
     under a past, running, or planned MEET at birth: closed clusters for ended meetings,
     one open MEET for current and future.
-52. **Task Decay Is One Ladder** (`task-decay-is-one-ladder`) - Repeated freshness keeps
+53. **Task Decay Is One Ladder** (`task-decay-is-one-ladder`) - Repeated freshness keeps
     on WIP, Next, Ready, and P-level tasks follow one consent-based decay ladder (WIP →
     Next → Ready → P1 → … → P4): each rung allows a configured number of due keeps, then
     the next due keep opens one rung-aware card whose Enter steps exactly one rung down
     and whose Alt+F stays and restarts the count.
-53. **Task Dependencies Are Links On One Depends-On Line**
+54. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-54. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
+55. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
     (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
     color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
     top-level area stem, then name hash; clients render the hue Bob reports.
-55. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
+56. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
     (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
     `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
     then plan.exempt mute, then top-level area stem, then name hash; clients render the
     hue Bob reports.
-56. **Theme Preferences Live In A Per-Host Journal**
+57. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
     the only writer.
-57. **Today Is Read From The Ledger, Never Written To Tasks**
+58. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-58. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+59. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-59. **Unblocked Tasks Resurface As Ticklers**
+60. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`]_ Every automatic Blocked-to-Ready recovery
     records [unblocked:: today] unless a WRITE skip applies, so the task is TICKLER in
     the next morning review; a keep on that row leaves the streak unchanged.
-60. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
+61. **Untracked Sessions Omit T Field** (`untracked-sessions-omit-t-field`) -
     _[superseded by `decisions:off-clock-pomodoros-count-apart`]_ A timed ledger row
     without [t::] is an untracked session; writers decide trackedness when they write a
     span and readers only look at the row.

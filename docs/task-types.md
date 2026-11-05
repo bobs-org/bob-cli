@@ -855,6 +855,7 @@ vector sections are the Ledger Tools JS mirror's contract.
 | Task move to another note | the inherited type, if no field | relocating the live link (D8) |
 | Capture `#<type>` on an existing task | the type | relocating the live link (D8) via the shared applier |
 | Naming or renaming an entry that holds links | the entry's types | retyping its tasks, count previewed (D6) |
+| `bob task reconcile` | today's open entry names | repairing names through the shared applier; never writes task fields |
 
 - **Type components.** A component of a Pomodoro name is a type component
   iff its key is in the configured `types:` vocabulary; without a
@@ -868,9 +869,12 @@ vector sections are the Ledger Tools JS mirror's contract.
   entry)` is true when the entry is a container, the task has no
   effective type, or the task type's key equals any component key of the
   entry (labels included, so a SNACK-typed task under `— SNACK`
-  agrees). Drift that no gesture caused (hand edits, frontmatter or
-  config edits, sync merges) is flagged and never silently repaired: a
-  `type_mismatch` lint in `bob plan` plus a ledger mark in Obsidian.
+  agrees). Writers keep open entries in agreement at their shared
+  write paths, and `bob task reconcile` repairs today's open names
+  through the shared applier; no task field is ever written. What
+  reconcile refuses — a MEET mismatch, an unconfigured type, or an
+  unknown link — stays a `type_mismatch` lint in `bob plan` plus a
+  ledger mark in Obsidian.
   Closed Pomodoros are history. Type-only edits never stamp freshness,
   change lanes, consume dependency guards, or advance the review walk.
 - **Agreement rule.** `agree_entry(name, open, children, sources)` keeps

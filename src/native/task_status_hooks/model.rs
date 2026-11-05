@@ -320,6 +320,30 @@ pub(super) struct SyncResult {
     pub(super) plan_budget: Option<plan_budget::PlanReport>,
     pub(super) settled: Vec<SettledEvent>,
     pub(super) coalesced_pomodoros: Vec<CoalescedPomodoro>,
+    pub(super) type_agreement: Vec<TypeAgreementRename>,
+    pub(super) type_agreement_unrepaired: Vec<TypeAgreementUnrepaired>,
+}
+
+/// One Pomodoro name repair applied by the type-agreement pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TypeAgreementRename {
+    pub(super) line: usize,
+    pub(super) before: String,
+    pub(super) after: String,
+    pub(super) added: Vec<String>,
+    pub(super) removed: Vec<String>,
+    pub(super) reason: String,
+}
+
+/// One agreement case reconcile reports but never writes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TypeAgreementUnrepaired {
+    pub(super) line: usize,
+    pub(super) entry: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) link: Option<String>,
+    pub(super) code: String,
+    pub(super) message: String,
 }
 
 /// One coalesced run of continuous same-type Pomodoro sessions.

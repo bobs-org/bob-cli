@@ -295,6 +295,8 @@ mod tests {
             plan_budget: None,
             settled: Vec::new(),
             coalesced_pomodoros: Vec::new(),
+            type_agreement: Vec::new(),
+            type_agreement_unrepaired: Vec::new(),
         }
     }
 
