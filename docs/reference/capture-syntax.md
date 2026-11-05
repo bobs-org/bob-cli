@@ -1452,9 +1452,9 @@ Contract: [Directives (`%`)](../capture.md#directives) · [Clipboard](../capture
 A bare `#` at an item edge is an incomplete type marker. In an editor it opens
 task-type completion, with rows in configured type order (or recent catalog
 order) and no row selected. Write `\#` to keep a literal hash. In Mac Capture,
-`\` typed where `#` would open a menu becomes `#` (not at a line start), and
-`\` `\` right away leaves one literal `\`, so type `\` `\` `#` to write the
-`\#` escape there.
+`\` or `/` typed where `#` would open a menu becomes `#` (not at a line
+start), and pressing the same key twice leaves one literal `\` or `/`, so
+type `\` `\` `#` to write the `\#` escape there.
 
 Contract: [Typing tasks with `#<type>`](../capture.md#typing-tasks-with-type).
 

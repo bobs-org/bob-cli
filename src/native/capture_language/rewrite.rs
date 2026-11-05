@@ -107,18 +107,18 @@ pub(crate) fn rewrite_draft(
     absorb_bare_declaration(raw_text, cursor)
 }
 
-/// Typing `.`, `;`, `,`, or `\` in a position where its real sigil would open
-/// a picker swaps that byte to `^`, `:`, `+`, or `#`. The candidate is checked
-/// by the ordinary completion grammar, keeping the assist lexical and aligned
-/// with picker eligibility. Route-scope contexts plus lone move-bullet
-/// sigils are accepted; a `.` that completes a `- ^^` choice marker is also
-/// accepted. A comma glued to a complete target-run member instead inserts
-/// ` +` to open the next parent-task picker.
+/// Typing `.`, `;`, `,`, `\`, or `/` in a position where its real sigil would
+/// open a picker swaps that byte to `^`, `:`, `+`, or `#`. The candidate is
+/// checked by the ordinary completion grammar, keeping the assist lexical and
+/// aligned with picker eligibility. Route-scope contexts plus lone
+/// move-bullet sigils are accepted; a `.` that completes a `- ^^` choice
+/// marker is also accepted. A comma glued to a complete target-run member
+/// instead inserts ` +` to open the next parent-task picker.
 fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
-    if alias == "\\" {
-        return expand_hash_alias(raw_text, start, cursor);
+    if alias == "\\" || alias == "/" {
+        return expand_hash_alias(raw_text, start, cursor, alias);
     }
     let token = tokenize_with_spans(raw_text)
         .into_iter()
@@ -291,16 +291,19 @@ fn expand_parent_task_comma_alias(
     })
 }
 
-/// Typing `\` where a real `#` would open a completion menu swaps that byte
-/// to `#`. A `\` with only whitespace before it on its physical line never
-/// aliases, so a blank draft keeps opening Go To and a later line's leading
-/// `\` stays literal. The candidate is checked by the ordinary completion
-/// grammar: wikilink headings first (matching the engine's precedence), then
-/// the marker grammar's `#` menus.
+/// Typing `\` or `/` where a real `#` would open a completion menu swaps
+/// that byte to `#`. A `\` or `/` with only whitespace before it on its
+/// physical line never aliases, so a blank draft keeps opening Go To and a
+/// later line's leading sigil stays literal. A `/` also stays literal where
+/// bob already reads it as part of a field (Go To, the `=/` split, wikilink
+/// note paths, `@@` routes, section and Pomodoro names). The candidate is
+/// checked by the ordinary completion grammar: wikilink headings first
+/// (matching the engine's precedence), then the marker grammar's `#` menus.
 fn expand_hash_alias(
     raw_text: &str,
     start: usize,
     cursor: usize,
+    alias: &str,
 ) -> Option<DraftRewrite> {
     let line_start = raw_text[..start].rfind('\n').map_or(0, |index| index + 1);
     if raw_text
@@ -315,6 +318,32 @@ fn expand_hash_alias(
     {
         return None;
     }
+    if alias == "/" {
+        if crate::native::capture_links::completion_field_at(
+            raw_text,
+            cursor,
+            String::new(),
+        )
+        .is_some()
+        {
+            return None;
+        }
+        if let Some(raw_field) =
+            super::completion::completion_field_at(raw_text, cursor)
+        {
+            // Block-ID queries are exempt: an ID can never contain `/`, so
+            // there the `/` is only a stray query byte.
+            use super::completion::CompletionContext;
+            if !matches!(
+                raw_field.context,
+                CompletionContext::Task
+                    | CompletionContext::TaskBlockId
+                    | CompletionContext::PomodoroBlockId
+            ) {
+                return None;
+            }
+        }
+    }
     let mut candidate = raw_text.to_string();
     candidate.replace_range(start..cursor, "#");
     if let Some(field) = crate::native::capture_links::completion_field_at(
@@ -327,7 +356,7 @@ fn expand_hash_alias(
             && field.replacement.0 == cursor
         {
             return Some(finish_sigil_alias(
-                raw_text, &candidate, start, cursor, '#', "\\",
+                raw_text, &candidate, start, cursor, '#', alias,
             ));
         }
         return None;
@@ -353,7 +382,7 @@ fn expand_hash_alias(
         return None;
     }
     Some(finish_sigil_alias(
-        raw_text, &candidate, start, cursor, '#', "\\",
+        raw_text, &candidate, start, cursor, '#', alias,
     ))
 }
 

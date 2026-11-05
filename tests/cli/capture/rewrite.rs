@@ -878,3 +878,55 @@ fn capture_rewrite_json_leaves_a_line_start_backslash_literal() {
     assert_eq!(json["changed"], false, "{json}");
     assert_eq!(json["text"], draft, "{json}");
 }
+
+#[test]
+fn capture_rewrite_json_expands_a_slash_hash_alias() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("10")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Buy milk /")
+        .output()
+        .expect("run bob capture-rewrite slash alias");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["input"], "Buy milk /");
+    assert_eq!(json["text"], "Buy milk #");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 10);
+    assert_eq!(json["rule"], "expand_sigil_alias");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 9, "end": 10 }, "replacement": "#" },
+        ])
+    );
+    assert_eq!(json["summary"], "Typed # for /");
+}
+
+#[test]
+fn capture_rewrite_json_leaves_a_split_slash_literal() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("2")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=/")
+        .output()
+        .expect("run bob capture-rewrite split slash");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["changed"], false, "{json}");
+    assert_eq!(json["text"], "=/", "{json}");
+}

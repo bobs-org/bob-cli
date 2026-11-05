@@ -134,11 +134,14 @@ becomes '^', or ';' becomes ':', only where bob's completion grammar would \
 open the corresponding Block ID picker. A whole-item ';' becomes ':' only \
 where the Task Link picker opens. A '- .' or '- ;' first-level bullet in a \
 sealed project-note item becomes '- ^' or '- :' where the Move picker would \
-open, and '- ^.' becomes '- ^^'. Typing '\\' becomes '#' wherever bob's \
-completion grammar would open a '#' menu: task type, section, drawer and \
-drawer bullet, Pomodoro name, named-start and past-session name, split type, \
-merge destination, and wikilink heading. A '\\' at a line start, glued to a \
-word, or right after another '\\' stays literal. For example, '@cash,' \
+open, and '- ^.' becomes '- ^^'. Typing '\\' or '/' becomes '#' wherever \
+bob's completion grammar would open a '#' menu: task type, section, drawer \
+and drawer bullet, Pomodoro name, named-start and past-session name, split \
+type, merge destination, and wikilink heading. A '\\' or '/' at a line \
+start, glued to a word, or right after another '\\' or '/' stays literal. A \
+'/' also stays literal where bob already reads it as part of a field (Go \
+To, the '=/' split, wikilink note paths, '@@' routes, section and Pomodoro \
+names); block-ID fields do not count. For example, '@cash,' \
 becomes '@cash+', '@cash+goog-exit,' becomes '@cash+goog-exit +', and \
 'Buy milk ,' becomes 'Buy milk +'; '@errands.' and '@errands;' still become \
 '@errands^' and '@errands:'. Bob's completion grammar decides when a \
@@ -172,7 +175,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id+'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file^id+'\n  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'\n  bob capture-rewrite -c 9 -f json -- '@errands.'\n  bob capture-rewrite -c 6 -f json -- '@cash,'\n  bob capture-rewrite -c 16 -f json -- '@cash+goog-exit,'\n  bob capture-rewrite -c 1 -f json -- ';'\n  bob capture-rewrite -c 10 -f json -- 'Buy milk \\'\n  printf '@cash^goog-exit@\\n- .' | bob capture-rewrite -c 20 -f json\n  bob capture-rewrite -c 10 -f json -- 'Buy milk /'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  bob capture-rewrite -c 13 -f json -- '@inbox:bench+ > @db'\n  bob capture-rewrite -f json -- '@a+x > @c @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())

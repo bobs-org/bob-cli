@@ -8289,14 +8289,18 @@ becomes `^`, and typing `;` there becomes `:` when the candidate opens the
 same Block ID picker as the real sigil. A whole-item `;` becomes `:` when
 the candidate opens the Task Link picker. A `- .` or `- ;` first-level bullet
 in a sealed project-note item becomes `- ^` or `- :` where the Move picker
-would open, and `- ^.` becomes `- ^^`. Typing `\` becomes `#` wherever bob's
-completion grammar would open a `#` menu: task type, section, drawer and
-drawer bullet, Pomodoro name, named-start and past-session name, split type,
-merge destination, and wikilink heading. A `\` at a line start, glued to a
-word, or right after another `\` stays literal. For example, `Buy milk \`
-becomes `Buy milk #` and `Buy milk @cash+goog-exit\` becomes
-`Buy milk @cash+goog-exit#`. A `\` after `\` never aliases, so `\#` escapes
-stay typeable directly (Mac Capture's double-tap below gives the same text).
+would open, and `- ^.` becomes `- ^^`. Typing `\` or `/` becomes `#`
+wherever bob's completion grammar would open a `#` menu: task type, section,
+drawer and drawer bullet, Pomodoro name, named-start and past-session name,
+split type, merge destination, and wikilink heading. A `\` or `/` at a line
+start, glued to a word, or right after another `\` or `/` stays literal. A
+`/` also stays literal where bob already reads it as part of a field (Go To,
+the `=/` split, wikilink note paths, `@@` routes, section and Pomodoro names);
+block-ID fields do not count. For example, `Buy milk /` becomes `Buy milk #`
+and `Buy milk @cash+goog-exit/` becomes `Buy milk @cash+goog-exit#`, while
+`=/` stays the split. A `\` after `\` (or `/` after `/`) never aliases, so
+`\#` escapes stay typeable directly (Mac Capture's double-tap below gives the
+same text).
 Typing `,` wherever the Parent Task picker would open aliases `+`, including
 as a whole item, after a space, or after `@route`; after a complete
 `@route+id` target it inserts ` +` and opens the next parent picker. For
