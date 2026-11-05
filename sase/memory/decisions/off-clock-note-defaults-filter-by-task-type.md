@@ -1,9 +1,12 @@
 ---
-title: Off-Clock Note Defaults Filter By Task Type
+keyword: Off-Clock Note Defaults Filter By Task Type
 aliases:
 - offclock_types
 summary: Nearest area or project notes can filter off-clock time by effective task
   type; the list wins over a same-note boolean.
+metadata:
+  status: accepted
+  decided: 2026-11-05
 ---
 
 # Off-Clock Note Defaults Filter By Task Type

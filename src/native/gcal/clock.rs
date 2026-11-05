@@ -86,7 +86,7 @@ mod tests {
     use crate::native::vault_links::NoteIndex;
     use crate::native::{
         clock_tags::ClockTag,
-        pomodoro_homes::{HomeResolver, IndexedHomeSource},
+        pomodoro_homes::{HomeResolver, IndexedHomeSource, TypeRules},
     };
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -161,6 +161,9 @@ mod tests {
         let index = NoteIndex::from_paths(notes.keys().cloned());
         let mut resolver =
             HomeResolver::new(IndexedHomeSource::new(&index, &notes));
+        // A list hit resolves type rules; inject them so the test never
+        // reads the developer's real config.
+        resolver.set_type_rules(TypeRules::default());
 
         let (effective, root_only) = resolve_listed_clock(
             &mut resolver,

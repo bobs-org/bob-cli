@@ -158,7 +158,7 @@ edited in place.
     then #off (or a deprecated alias), then the nearest area/project offclock default on
     its root walk, then on-clock; writers stamp that effective clock and closed rows
     stay frozen.
-33. **Off Clock Note Defaults Filter By Task Type**
+33. **Off-Clock Note Defaults Filter By Task Type**
     (`off-clock-note-defaults-filter-by-task-type`) - Nearest area or project notes can
     filter off-clock time by effective task type; the list wins over a same-note
     boolean.
