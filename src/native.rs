@@ -60,10 +60,11 @@ mod event_task;
 pub(crate) mod file_coordination;
 mod freshness;
 mod gcal;
+// Consumer: the Gmail renderer phases bob-cli-hg.3.1.2–.4 consume this pure model.
 mod gkeep;
 // Offline Gmail URL identity; no command consumes it yet.
 #[allow(dead_code)]
-mod gmail;
+pub(crate) mod gmail;
 mod highlights_ref;
 mod ledger_place;
 mod markdown;

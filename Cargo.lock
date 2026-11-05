@@ -157,12 +157,14 @@ dependencies = [
 name = "bob-obsidian"
 version = "0.4.0"
 dependencies = [
+ "base64",
  "block2",
  "bob-obsidian-assets",
  "chrono",
  "chrono-tz",
  "clap",
  "clap_complete",
+ "encoding_rs",
  "fs2",
  "hex",
  "image",

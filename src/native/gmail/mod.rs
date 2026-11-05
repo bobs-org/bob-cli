@@ -1,6 +1,8 @@
-//! Offline Gmail identity: URL parsing, token decoding, and scanning.
+//! Pure Gmail identity, message data, and body decoding shared by mail consumers.
 //!
-//! Pure module with no I/O. Later phases (gmail-save, gmail-link) consume
-//! these verdicts and always confirm a decode against Gmail before writing.
+//! The identity helpers do no I/O; later save/link consumers confirm decoded IDs
+//! against Gmail before writing.
 
+pub(crate) mod body;
 pub(crate) mod ids;
+pub(crate) mod model;
