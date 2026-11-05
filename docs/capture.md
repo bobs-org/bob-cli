@@ -5393,6 +5393,21 @@ At `BOB_NOW=2026-11-04 09:13`:
 
 Single-quote captures in shells: `bob capture 'x=~'`.
 
+Typing `x=2-` becomes `x=2~` with the caret after `~`; typing `x=~-` gives
+`x=~~` (`x=2~-` gives `x=2~~`). The `-` swaps only inside an `x=` past token
+where the swapped text opens the segment picker; after an index (`~2-`),
+after `!`, after the second `=`, in `x=#name` (where `-` is name content),
+or in prose it stays literal. A `pushd`-style `x=~1` shell expansion cannot
+be detected, so always single-quote.
+
+Typing `~` opens the segment picker (`capture-complete` context
+`pomodoro_past_segment`). Rows come from today's timeline in tail,
+`~1…~N`, head order, each with its suffix replacement, label, kind, edge,
+span, minutes, and `needs !` for Pomodoro rows. An empty query lists every
+row; `~` lists only the head; digits prefix-match the index; digits with
+`+` keep the exact index as an end-edge `~n+` row. Accepting a row inserts
+the suffix only, never `!`.
+
 An unnamed token uses the first open untimed placeholder. It does not use a
 MEET placeholder. If none is available, name the session. A named token
 resolves like `=name`: it reuses an open untimed placeholder, creates a new
@@ -8708,7 +8723,14 @@ as a whole item, after a space, or after `@route`; after a complete
 example, `@cash,` becomes `@cash+`, `Buy milk ,` becomes `Buy milk +`, and
 `@cash+goog-exit,` becomes `@cash+goog-exit +`. Bob's completion grammar
 decides eligibility, so commas in prose and other picker contexts stay
-literal. The caret stays just past the inserted sigil or plus. This is an
+literal. The caret stays just past the inserted sigil or plus.
+
+Typing `-` inside an `x=` past token aliases `~` where the swapped text
+opens the `pomodoro_past_segment` picker: `x=-` becomes `x=~`, `x=2-`
+becomes `x=2~`, `x=fix-` becomes `x=fix~`, and `x=~-` becomes `x=~~`
+(`x=2~-` becomes `x=2~~`). It never fires for a `-` extending a plain
+`#name` (where `-` is name content), after an index (`~2-`), after `!`,
+after the second `=`, in chain tokens, or in prose. This is an
 editor assist:
 `bob capture` and `bob capture-parse` keep the literal text. Feeding the
 result back through the command is a no-op.

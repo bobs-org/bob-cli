@@ -1675,3 +1675,61 @@ fn rewrite_draft_relation_flip_alias_stays_literal() {
     assert_eq!(rewrite.rule, None);
     assert_eq!(rewrite.text, raw);
 }
+
+#[test]
+fn rewrite_draft_expands_past_segment_dash_alias() {
+    for (raw, expected) in [
+        ("x=-", "x=~"),
+        ("x=2-", "x=2~"),
+        ("x=fix-", "x=fix~"),
+        ("x=fix2-", "x=fix2~"),
+        ("x=#\"DEEP WORK\"-", "x=#\"DEEP WORK\"~"),
+        ("x=~-", "x=~~"),
+        ("x=2~-", "x=2~~"),
+    ] {
+        let cursor = raw.len();
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::ExpandSigilAlias),
+            "{raw:?}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(cursor), "{raw:?}");
+        assert_eq!(rewrite.edits.len(), 1, "{raw:?}");
+        assert_eq!(rewrite.edits[0].replacement, "~", "{raw:?}");
+
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw:?}");
+        assert_eq!(again.text, expected, "idempotent {raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_past_segment_dash_stays_literal() {
+    // (draft, cursor): every `-` here must not alias to `~`.
+    let cases = [
+        ("x=#deep-", 8),
+        ("x=~2-", 5),
+        ("x=2!-", 5),
+        ("x=2=-", 5),
+        ("x=3 -2", 5),
+        ("-", 1),
+        ("buy milk-", 9),
+        ("=2-", 3),
+    ];
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw:?} at {cursor} should not alias");
+        assert_eq!(rewrite.text, raw, "{raw:?} at {cursor}");
+    }
+    // Prose and bullet lines stay literal even at the end.
+    for raw in ["- buy milk", "buy milk -", "Fix it - about"] {
+        let rewrite = rewrite_draft(raw, Some(raw.len()));
+        if rewrite.rule == Some(RewriteRule::ExpandSigilAlias)
+            && rewrite.text.contains("x=")
+        {
+            panic!("{raw:?} must not alias to a past segment");
+        }
+    }
+}

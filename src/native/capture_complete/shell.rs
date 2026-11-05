@@ -1036,6 +1036,30 @@ pub(crate) fn shell_completion(
             }
             return Ok(Some(ShellCompletion { marker_start, rows }));
         }
+        CompletionContext::PomodoroPastSegment => {
+            let (candidates, _) =
+                super::pomodoros::pomodoro_past_segment_candidates(
+                    bob_dir,
+                    &field.query,
+                )
+                .map_err(|error| error.message.clone())?;
+            let Candidates::PastSegment(items) = candidates else {
+                return Ok(None);
+            };
+            for item in items {
+                let full = format!("{marker_prefix}{}", item.replacement);
+                if full.is_empty() {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description: item.label.clone(),
+                    group: "segments".to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock

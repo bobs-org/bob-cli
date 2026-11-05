@@ -607,6 +607,212 @@ fn wall_cut_and_runs_and_snapshot() {
     );
 }
 
+fn run_complete_json(
+    vault: &std::path::Path,
+    day: &std::path::Path,
+    cursor: usize,
+    text: &str,
+) -> serde_json::Value {
+    let output = bob_command()
+        .env("BOB_NOW", NOW)
+        .env("BOB_DAY_FILE", day)
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(vault)
+        .arg("-c")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(text)
+        .output()
+        .expect("run bob capture-complete");
+    assert_success(&output);
+    serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+        .expect("completion JSON")
+}
+
+fn run_rewrite_json(text: &str, cursor: usize) -> serde_json::Value {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg(cursor.to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(text)
+        .output()
+        .expect("run bob capture-rewrite");
+    assert_success(&output);
+    serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+        .expect("rewrite JSON")
+}
+
+fn run_capture_raw(
+    vault: &std::path::Path,
+    day: &std::path::Path,
+    extra: &[&str],
+    text: &[&str],
+) -> (std::process::ExitStatus, serde_json::Value) {
+    let mut command = bob_command();
+    command
+        .env("BOB_NOW", NOW)
+        .env("BOB_DAY_FILE", day)
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("-f")
+        .arg("json");
+    for flag in extra {
+        command.arg(flag);
+    }
+    command.arg("--");
+    for arg in text {
+        command.arg(arg);
+    }
+    let output = command.output().expect("run bob capture");
+    let value =
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture JSON envelope");
+    (output.status, value)
+}
+
+#[test]
+fn assists_segment_picker_lists_tail_index_and_head() {
+    let (_t, vault, day) = segment_vault("bob-cli-seg-picker");
+    // Empty query lists every row: tail, ~1..~3, head.
+    let value = run_complete_json(&vault, &day, 3, "x=~");
+    assert_eq!(value["context"], "pomodoro_past_segment");
+    let replacements: Vec<&str> = value["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .map(|row| row["replacement"].as_str().expect("replacement"))
+        .collect();
+    assert_eq!(replacements, vec!["~", "~1", "~2", "~3", "~~"]);
+    let first = &value["candidates"][0];
+    assert_eq!(first["label"], "~ since BUILD 0900-0915");
+    assert_eq!(first["kind"], "tail");
+    assert_eq!(first["edge"], "start");
+    assert_eq!(first["needs_repair"], false);
+    let pomodoro = &value["candidates"][1];
+    assert_eq!(pomodoro["replacement"], "~1");
+    assert_eq!(pomodoro["label"], "~1 BUILD 0830-0900");
+    assert_eq!(pomodoro["needs_repair"], true);
+    assert_eq!(pomodoro["index"], 1);
+
+    // `~` query lists only the head.
+    let head = run_complete_json(&vault, &day, 4, "x=~~");
+    let head_replacements: Vec<&str> = head["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .map(|row| row["replacement"].as_str().expect("replacement"))
+        .collect();
+    assert_eq!(head_replacements, vec!["~~"]);
+    assert_eq!(head["candidates"][0]["kind"], "head");
+
+    // Digits prefix-match the index.
+    let digits = run_complete_json(&vault, &day, 4, "x=~2");
+    let digit_replacements: Vec<&str> = digits["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .map(|row| row["replacement"].as_str().expect("replacement"))
+        .collect();
+    assert_eq!(digit_replacements, vec!["~2"]);
+
+    // Digits with `+` keep the exact index as an end-edge row.
+    let plus = run_complete_json(&vault, &day, 5, "x=~2+");
+    let plus_rows = plus["candidates"].as_array().expect("candidates");
+    assert_eq!(plus_rows.len(), 1);
+    assert_eq!(plus_rows[0]["replacement"], "~2+");
+    assert_eq!(plus_rows[0]["edge"], "end");
+
+    // Empty days list no rows but stay successful.
+    let temp = TempDir::new("bob-cli-seg-picker-empty");
+    let empty_vault = temp.path().join("vault");
+    std::fs::create_dir_all(empty_vault.join("2026")).expect("vault");
+    let empty_day = empty_vault.join("2026").join("20261104.md");
+    write_file(&empty_day, "## Pomodoros\n");
+    let empty = run_complete_json(&empty_vault, &empty_day, 3, "x=~");
+    assert_eq!(empty["candidates"].as_array().expect("array").len(), 0);
+}
+
+#[test]
+fn assists_dash_rewrite_and_stale_guard_and_shell_tilde() {
+    // `bob capture-rewrite --cursor` turns `x=2-` into `x=2~`.
+    let rewrite = run_rewrite_json("x=2-", 4);
+    assert_eq!(rewrite["text"], "x=2~");
+    assert_eq!(rewrite["rule"], "expand_sigil_alias");
+
+    // Matching preview windows succeed.
+    let (_t0, v0, d0) = segment_vault("bob-cli-seg-expect-ok");
+    let (status, value) = run_capture_raw(
+        &v0,
+        &d0,
+        &["--expect-past-windows", "0900-0915"],
+        &["x=~=!1"],
+    );
+    assert!(status.success(), "{value}");
+    assert_eq!(value["ok"], true);
+
+    // Mismatched windows refuse with the stale-preview code and message.
+    let (_t1, v1, d1) = segment_vault("bob-cli-seg-expect-mismatch");
+    let (status, value) = run_capture_raw(
+        &v1,
+        &d1,
+        &["--expect-past-windows", "0900-0910"],
+        &["x=~=!1"],
+    );
+    assert!(!status.success(), "expected stale refusal: {value}");
+    assert_eq!(value["code"], "pomodoro_past_windows_changed");
+    assert!(value["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("your timeline changed since the preview"));
+    assert!(value["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("x=~=!1 now means 0900-0915"));
+
+    // Count mismatch and malformed lists also refuse with the same code.
+    let (_t2, v2, d2) = segment_vault("bob-cli-seg-expect-count");
+    let (status, value) = run_capture_raw(
+        &v2,
+        &d2,
+        &["--expect-past-windows", "0900-0915,0800-0810"],
+        &["x=~=!1"],
+    );
+    assert!(!status.success(), "{value}");
+    assert_eq!(value["code"], "pomodoro_past_windows_changed");
+    let (_t3, v3, d3) = segment_vault("bob-cli-seg-expect-malformed");
+    let (status, value) = run_capture_raw(
+        &v3,
+        &d3,
+        &["--expect-past-windows", "bogus"],
+        &["x=~=!1"],
+    );
+    assert!(!status.success(), "{value}");
+    assert_eq!(value["code"], "pomodoro_past_windows_changed");
+
+    // Omitted flag behaves identically (success).
+    let (_t4, v4, d4) = segment_vault("bob-cli-seg-expect-omitted");
+    let (status, value) = run_capture_raw(&v4, &d4, &[], &["x=~=!1"]);
+    assert!(status.success(), "{value}");
+    assert_eq!(value["ok"], true);
+
+    // Shell-expanded tilde refuses with its own code (argv only).
+    let (_t5, v5, d5) = segment_vault("bob-cli-seg-shell-tilde");
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        let token = format!("x={home}");
+        let (status, value) = run_capture_raw(&v5, &d5, &[], &[&token]);
+        assert!(!status.success(), "{value}");
+        assert_eq!(value["code"], "shell_expanded_tilde");
+    }
+}
+
 #[test]
 fn same_capture_refusal_and_rollback() {
     // A later run that would erase a row this capture just recorded refuses.

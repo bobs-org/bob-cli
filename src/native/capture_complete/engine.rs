@@ -111,6 +111,7 @@ fn build_result_inner(
             | CompletionContext::PomodoroName
             | CompletionContext::PomodoroStartName
             | CompletionContext::PomodoroPastName
+            | CompletionContext::PomodoroPastSegment
             | CompletionContext::Task
             | CompletionContext::Drawer
             | CompletionContext::ActiveTask
@@ -490,6 +491,12 @@ fn build_result_inner(
                 bob_dir,
                 &field.query,
                 raw_text[field.replacement.0..].starts_with(['"', '“']),
+            )?
+        }
+        CompletionContext::PomodoroPastSegment => {
+            super::pomodoros::pomodoro_past_segment_candidates(
+                bob_dir,
+                &field.query,
             )?
         }
         CompletionContext::ActiveTask => {

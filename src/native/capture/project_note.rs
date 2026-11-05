@@ -3167,6 +3167,8 @@ mod tests {
             refuse_override: false,
             require_inbox_route_choice: false,
             require_pull_in_choice: false,
+            expect_past_windows: None,
+            argv: false,
             template_origin: None,
             raw_text: String::new(),
             selection: SuccessorSelection::None,

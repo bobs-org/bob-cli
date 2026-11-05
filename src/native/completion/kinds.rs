@@ -432,6 +432,12 @@ const TABLE: &[Entry] = &[
         arg: "template-origin",
         kind: Kind::FreeText,
     },
+    // Internal stale-preview guard list; free text, never completed.
+    Entry {
+        path: &["capture"],
+        arg: "expect-past-windows",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &["capture-templates", "show"],
         arg: "template",

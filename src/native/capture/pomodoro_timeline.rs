@@ -7,17 +7,17 @@ use super::line_spans;
 use crate::native::capture_pomodoros::{self, PomodoroState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TimedRow {
-    pub(super) line: usize,
-    pub(super) name: Option<String>,
-    pub(super) range: String,
-    pub(super) start: i64,
-    pub(super) end: i64,
-    pub(super) is_open: bool,
-    pub(super) line_text: String,
+pub(crate) struct TimedRow {
+    pub(crate) line: usize,
+    pub(crate) name: Option<String>,
+    pub(crate) range: String,
+    pub(crate) start: i64,
+    pub(crate) end: i64,
+    pub(crate) is_open: bool,
+    pub(crate) line_text: String,
 }
 
-pub(super) fn parse_range_minutes(range: &str) -> Option<(i64, i64)> {
+pub(crate) fn parse_range_minutes(range: &str) -> Option<(i64, i64)> {
     let (s, e) = range.split_once('-')?;
     if s.len() != 4 || e.len() != 4 {
         return None;
@@ -34,7 +34,7 @@ pub(super) fn parse_range_minutes(range: &str) -> Option<(i64, i64)> {
 
 /// Read every timed Pomodoro row without imposing timeline-specific filtering.
 /// This is the former reader in `pomodoro_past`; its behavior is unchanged.
-pub(super) fn collect_timed_rows(contents: &str) -> Vec<TimedRow> {
+pub(crate) fn collect_timed_rows(contents: &str) -> Vec<TimedRow> {
     let scan = capture_pomodoros::scan(contents);
     let lines = line_spans(contents);
     let line_texts: Vec<&str> = lines.iter().map(|line| line.text).collect();
@@ -72,7 +72,7 @@ pub(super) fn collect_timed_rows(contents: &str) -> Vec<TimedRow> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SegmentKind {
+pub(crate) enum SegmentKind {
     Pomodoro,
     Gap,
     Tail,
@@ -80,24 +80,24 @@ pub(super) enum SegmentKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Edge {
+pub(crate) enum Edge {
     Start,
     End,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Segment {
-    pub(super) kind: SegmentKind,
-    pub(super) index: Option<u32>,
-    pub(super) start: i64,
-    pub(super) end: i64,
-    pub(super) name: Option<String>,
-    pub(super) line: Option<usize>,
+pub(crate) struct Segment {
+    pub(crate) kind: SegmentKind,
+    pub(crate) index: Option<u32>,
+    pub(crate) start: i64,
+    pub(crate) end: i64,
+    pub(crate) name: Option<String>,
+    pub(crate) line: Option<usize>,
 }
 
 impl Segment {
     /// Canonical short label shared by completion and out-of-range errors.
-    pub(super) fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         let span =
             format!("{}-{}", format_hhmm(self.start), format_hhmm(self.end));
         match self.kind {
@@ -123,14 +123,14 @@ impl Segment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Wall {
-    pub(super) start: i64,
-    pub(super) name: Option<String>,
-    pub(super) line: usize,
+pub(crate) struct Wall {
+    pub(crate) start: i64,
+    pub(crate) name: Option<String>,
+    pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SegmentQuery {
+pub(crate) enum SegmentQuery {
     Tail,
     Start(u32),
     End(u32),
@@ -138,24 +138,24 @@ pub(super) enum SegmentQuery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum LimitKind {
+pub(crate) enum LimitKind {
     Now,
     Wall(Wall),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Pin {
-    pub(super) segment: Segment,
-    pub(super) edge: Edge,
-    pub(super) at: i64,
-    pub(super) far_edge: i64,
+pub(crate) struct Pin {
+    pub(crate) segment: Segment,
+    pub(crate) edge: Edge,
+    pub(crate) at: i64,
+    pub(crate) far_edge: i64,
     /// Present for a start pin. End pins flow backward and have no forward cap.
-    pub(super) forward_limit: Option<i64>,
-    pub(super) limit: LimitKind,
+    pub(crate) forward_limit: Option<i64>,
+    pub(crate) limit: LimitKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum TimelineError {
+pub(crate) enum TimelineError {
     NothingClosed {
         first_row: Option<(Option<String>, i64)>,
     },
@@ -173,19 +173,19 @@ pub(super) enum TimelineError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Timeline {
-    pub(super) now: i64,
-    pub(super) t: i64,
-    pub(super) rows: Vec<TimedRow>,
-    pub(super) walls: Vec<Wall>,
-    pub(super) numbered: Vec<Segment>,
-    pub(super) tail: Option<Segment>,
-    pub(super) head: Option<Segment>,
-    pub(super) tail_wall: Option<Wall>,
+pub(crate) struct Timeline {
+    pub(crate) now: i64,
+    pub(crate) t: i64,
+    pub(crate) rows: Vec<TimedRow>,
+    pub(crate) walls: Vec<Wall>,
+    pub(crate) numbered: Vec<Segment>,
+    pub(crate) tail: Option<Segment>,
+    pub(crate) head: Option<Segment>,
+    pub(crate) tail_wall: Option<Wall>,
 }
 
 impl Timeline {
-    pub(super) fn build(contents: &str, now_min: i64, t: i64) -> Self {
+    pub(crate) fn build(contents: &str, now_min: i64, t: i64) -> Self {
         let now = now_min.clamp(0, 1440);
         let t = t.clamp(0, 1440);
         let rows: Vec<TimedRow> = collect_timed_rows(contents)
@@ -343,7 +343,7 @@ impl Timeline {
         }
     }
 
-    pub(super) fn resolve(
+    pub(crate) fn resolve(
         &self,
         query: SegmentQuery,
     ) -> Result<Pin, TimelineError> {
@@ -415,7 +415,7 @@ impl Timeline {
         }
     }
 
-    pub(super) fn listing(&self) -> String {
+    pub(crate) fn listing(&self) -> String {
         if self.rows.is_empty() {
             return "nothing is on today's timeline yet".to_string();
         }
@@ -441,7 +441,7 @@ impl Timeline {
 
     // Used by the segment picker (assists phase) and unit tests.
     #[allow(dead_code)]
-    pub(super) fn picker_rows(&self) -> Vec<Segment> {
+    pub(crate) fn picker_rows(&self) -> Vec<Segment> {
         self.tail
             .iter()
             .cloned()
@@ -488,35 +488,35 @@ impl Timeline {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct MemberLength {
-    pub(super) requested_minutes: u64,
-    pub(super) typed: bool,
+pub(crate) struct MemberLength {
+    pub(crate) requested_minutes: u64,
+    pub(crate) typed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Cut {
+pub(crate) enum Cut {
     Now,
     Wall,
     Segment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Laid {
-    pub(super) start: i64,
-    pub(super) end: i64,
-    pub(super) requested_minutes: u64,
-    pub(super) cut: Option<Cut>,
+pub(crate) struct Laid {
+    pub(crate) start: i64,
+    pub(crate) end: i64,
+    pub(crate) requested_minutes: u64,
+    pub(crate) cut: Option<Cut>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum LayoutError {
+pub(crate) enum LayoutError {
     NoRoom { member: usize },
     PastLimit { member: usize },
     BeforeMidnight { member: usize, max_blocks: u32 },
     EndPinAfterNow,
 }
 
-pub(super) fn layout_run(
+pub(crate) fn layout_run(
     pin: &Pin,
     members: &[MemberLength],
 ) -> Result<Vec<Laid>, LayoutError> {

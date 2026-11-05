@@ -7137,6 +7137,25 @@ impl CaptureError {
         }
     }
 
+    /// Hidden `--expect-past-windows` guard: an I/O-class error (exit 1)
+    /// carrying `pomodoro_past_windows_changed` for subprocess callers.
+    pub(super) fn past_windows_changed(message: impl Into<String>) -> Self {
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: message.into(),
+            code: Some("pomodoro_past_windows_changed".to_string()),
+            extra: None,
+            human_unblocked: Vec::new(),
+            human_keep_moving_folds: Vec::new(),
+            human_relation_groups: Vec::new(),
+            human_relation_held: Vec::new(),
+            human_relation_check: None,
+            human_note_pull_rows: Vec::new(),
+            human_note_pull_groups: Vec::new(),
+            typed: None,
+        }
+    }
+
     pub(crate) fn with_typed(mut self, typed: CaptureFailureKind) -> Self {
         self.typed = Some(typed);
         self

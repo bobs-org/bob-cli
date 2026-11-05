@@ -222,6 +222,14 @@ pub(super) fn plan_capture_batch_with_config_path(
     // Windows earlier past runs in this capture already recorded, for the
     // same-capture trim/erase/split refusal.
     let mut recorded_past_windows: Vec<(i64, i64)> = Vec::new();
+    // Hidden `--expect-past-windows` stale-preview guard: expected windows in
+    // draft member order, consumed as past runs resolve.
+    let expect_list: Option<Vec<String>> =
+        request.expect_past_windows.as_deref().map(|raw| {
+            raw.split(',').map(|part| part.trim().to_string()).collect()
+        });
+    let mut expect_index: usize = 0;
+    let mut last_expect_guard: Option<(String, String)> = None;
     while item_start < parsed_items.len() {
         let first = &parsed_items[item_start];
         let group_key = first.fanout.as_ref().map(|_| first.index);
@@ -404,6 +412,23 @@ pub(super) fn plan_capture_batch_with_config_path(
                     })?;
                 (preflight, pre_stack_contents)
             };
+            if let Some(expected) = expect_list.as_ref() {
+                for member in &preflight.members {
+                    let actual = member.range_text.clone();
+                    let raw = member.spec.raw.clone();
+                    let want = expected.get(expect_index);
+                    let matched = want.is_some_and(|entry| {
+                        is_valid_expect_window(entry) && entry == &actual
+                    });
+                    if !matched {
+                        return Err(CaptureError::past_windows_changed(
+                            expect_guard_message(&raw, &actual),
+                        ));
+                    }
+                    last_expect_guard = Some((raw, actual));
+                    expect_index += 1;
+                }
+            }
             let pin_ref = preflight.pin.as_ref();
             let trim_plans = super::pomodoro_past::preflight_overlaps(
                 &preflight,
@@ -734,6 +759,19 @@ pub(super) fn plan_capture_batch_with_config_path(
         item_start = group_end;
     }
 
+    if let Some(expected) = expect_list.as_ref()
+        && expect_index < expected.len()
+    {
+        if let Some((raw, actual)) = last_expect_guard {
+            return Err(CaptureError::past_windows_changed(
+                expect_guard_message(&raw, &actual),
+            ));
+        }
+        return Err(CaptureError::past_windows_changed(
+            "your timeline changed since the preview".to_string(),
+        ));
+    }
+
     // Net successor reporting (SL20): drop linked rows whose bullet or
     // open status a later item took back, before blocks resolve reasons.
     apply_successor_net_post_pass(
@@ -1028,6 +1066,32 @@ fn capture_error_context(
         .map_or(context.clone(), |fanout| {
             format!("{context} (target {})", fanout.marker)
         })
+}
+
+fn expect_guard_message(raw: &str, window: &str) -> String {
+    format!("your timeline changed since the preview: {raw} now means {window}")
+}
+
+fn is_valid_expect_window(entry: &str) -> bool {
+    let Some((left, right)) = entry.split_once('-') else {
+        return false;
+    };
+    if left.len() != 4 || right.len() != 4 {
+        return false;
+    }
+    if !left.bytes().all(|b| b.is_ascii_digit())
+        || !right.bytes().all(|b| b.is_ascii_digit())
+    {
+        return false;
+    }
+    for part in [left, right] {
+        let hour: u32 = part[..2].parse().unwrap_or(99);
+        let minute: u32 = part[2..].parse().unwrap_or(99);
+        if hour > 23 || minute > 59 {
+            return false;
+        }
+    }
+    true
 }
 
 /// Resolve every task in a target run against the same staged snapshots

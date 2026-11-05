@@ -57,21 +57,16 @@ bob plan -f json -b /path/to/synthetic-vault
 {"ok":true,"schema_version":3,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_links":…,"max_next":…,"max_pending":…,"max_ready":…},"today":{"count":0},"today_tasks":[],"today_roots":[],"links":{"count":0,"cap":…,"over":false,"off_clock":0},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
 ```
 
-`today_roots` lists the root parents of Today's tasks as
-`{"key","label","hue","tasks"}` rows (`hue` is null for `@unfiled`); the
-`tasks` sum to `today.count`. See [Today roots](../plan.md#today-roots).
-
-`type_mismatch` warnings in `bob plan` carry additive `link` (`route`,
-`block_id`), `entry` (`line`, `name`), `task_type`, and `entry_types`
-beside the usual `code`, `message`, and ledger `line`. See
-[Plan](../plan.md#lints).
+`today_roots` are `{"key","label","hue","tasks"}` rows (`hue` null for
+`@unfiled`); `tasks` sum to `today.count`. See [Today roots](../plan.md#today-roots).
+`type_mismatch` warnings add `link`, `entry`, `task_type`, `entry_types` to
+`code`/`message`/`line`. See [Plan](../plan.md#lints).
 
 ## Capture and protocol helpers
 
-`bob capture` writes the vault. Most `capture-*` helpers are read-only.
-`capture-task-id` and `capture-pomodoro-name` write by default; `-d` previews.
-`capture-templates save`, `delete`, and `clear` mutate the shelf; `list` and
-`show` are read-only.
+`bob capture` writes the vault; most `capture-*` helpers are read-only
+except `capture-task-id`/`capture-pomodoro-name` (write; `-d` previews) and
+`capture-templates save`/`delete`/`clear` (mutate the shelf).
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
@@ -94,10 +89,12 @@ beside the usual `code`, `message`, and ledger `line`. See
 | `bob capture-templates delete` | `-f json` | Removed entries plus remaining count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates clear` | `-f json` | Cleared count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 
-Past results include `kind: "pomodoro_past"`, `placement`, and details; batches
-report `recorded`/`trimmed`, warn `pomodoro_past_trim`, and omit `pomodoro_close`.
-Pinned runs add `segment`, `stack.pin`, and `window.requested_minutes`/`cut`/`wall`/`fit`;
-omitted otherwise.
+Past results are `kind: "pomodoro_past"` with `placement`; batches report
+`recorded`/`trimmed`, warn `pomodoro_past_trim`, omit `pomodoro_close`.
+Pinned runs add `segment`, `stack.pin`, `window.requested_minutes`/`cut`/`wall`/`fit`.
+Stale previews refuse `pomodoro_past_windows_changed`; shell-expanded `~`
+refuses `shell_expanded_tilde`; `pomodoro_past_segment` lists tail/`~1…~N`/head
+rows (empty all, `~` head, digits filter, `+` end).
 
 For `bob capture-complete` in `relation_label` context, visible catalog rows include
 `label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A nonempty

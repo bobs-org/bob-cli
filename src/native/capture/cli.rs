@@ -569,6 +569,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(drawer_arg())
         .arg(dry_run_arg())
         .arg(expand_arg())
+        .arg(expect_past_windows_arg())
         .arg(format_arg())
         .arg(help_arg())
         .arg(inbox_route_arg())
@@ -686,6 +687,14 @@ pub(super) fn pull_in_arg() -> Arg {
         .help(
             "Pull in successor offers: all, none, or a comma list of offer numbers and keys ($<N> in TEXT is still priority)",
         )
+}
+
+pub(super) fn expect_past_windows_arg() -> Arg {
+    Arg::new("expect-past-windows")
+        .long("expect-past-windows")
+        .value_name("LIST")
+        .hide(true)
+        .help("Internal stale-preview guard: expected past windows")
 }
 
 pub(super) fn refuse_override_arg() -> Arg {
@@ -837,6 +846,8 @@ pub(super) struct CaptureRequest {
     pub(super) refuse_override: bool,
     pub(super) require_inbox_route_choice: bool,
     pub(super) require_pull_in_choice: bool,
+    pub(super) expect_past_windows: Option<String>,
+    pub(super) argv: bool,
     pub(super) template_origin: Option<String>,
     pub(super) raw_text: String,
     /// Resolved successor selection for this plan. Defaults to `None`
@@ -918,6 +929,10 @@ impl CaptureRequest {
             require_inbox_route_choice: matches
                 .get_flag("require-inbox-route-choice"),
             require_pull_in_choice: matches.get_flag("require-pull-in-choice"),
+            expect_past_windows: matches
+                .get_one::<String>("expect-past-windows")
+                .cloned(),
+            argv: matches.contains_id("text"),
             template_origin,
             raw_text: raw_text_from_matches(matches)?,
             selection: crate::native::task_complete::SuccessorSelection::None,

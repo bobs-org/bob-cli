@@ -3,14 +3,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::Timelike;
+
 use super::theme_menu;
 
 use super::{
     model::{
         Candidates, CompleteError, OverrideRunningSession,
+        PastSegmentCandidate, PastSegmentEdge, PastSegmentKind,
         PomodoroNameCandidate,
     },
     support::{bounded_warning, rank},
+};
+use crate::native::capture::pomodoro_timeline::{
+    Segment, SegmentKind, Timeline,
 };
 use crate::native::{
     capture, capture_language,
@@ -45,6 +51,159 @@ pub(super) fn pomodoro_past_candidates(
     let (candidates, warnings, _) =
         pomodoro_candidates_inner(bob_dir, query, true, literal, None, true)?;
     Ok((candidates, warnings))
+}
+
+/// Segment picker rows for the `pomodoro_past_segment` context. Reads today's
+/// day file with the same `BOB_DAY_FILE`/date resolution as
+/// [`pomodoro_candidates_inner`], builds the timeline at the current time,
+/// and maps [`Timeline::picker_rows`] to wire rows in timeline order: tail
+/// (when nonempty), `~1…~N`, then head.
+///
+/// Filtering: an empty query lists every row; `~` lists only the head;
+/// digits prefix-match `index`; digits followed by `+` keep the exact index
+/// as an `edge: end` row with a `~n+` replacement, dropping tail/head rows.
+pub(super) fn pomodoro_past_segment_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let today = crate::native::env::current_datetime().date();
+    let canonical = bob_dir.join(format!(
+        "{}/{}.md",
+        today.format("%Y"),
+        today.format("%Y%m%d")
+    ));
+    let day_file = crate::native::env::var_os("BOB_DAY_FILE")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| canonical.clone());
+    let (_scan, contents, warnings) = read_daily(&day_file)?;
+    let now = crate::native::env::current_datetime();
+    let now_min = now.hour() as i64 * 60 + now.minute() as i64;
+    let t = (now_min + 4) / 5 * 5;
+    let timeline = Timeline::build(&contents, now_min, t);
+    let rows = timeline.picker_rows();
+    let filtered = filter_segment_rows(&rows, query);
+    let candidates = filtered
+        .into_iter()
+        .map(|(segment, replacement, edge)| {
+            segment_candidate(&segment, replacement, edge)
+        })
+        .collect::<Vec<_>>();
+    Ok((Candidates::PastSegment(candidates), warnings))
+}
+
+fn filter_segment_rows(
+    rows: &[Segment],
+    query: &str,
+) -> Vec<(Segment, String, PastSegmentEdge)> {
+    // Rows arrive in timeline order: tail (when nonempty), `~1…~N`, head.
+    if query.is_empty() {
+        return rows
+            .iter()
+            .cloned()
+            .map(|segment| {
+                let (replacement, edge) = segment_replacement(&segment, false);
+                (segment, replacement, edge)
+            })
+            .collect();
+    }
+    if query == "~" {
+        return rows
+            .iter()
+            .filter(|segment| segment.kind == SegmentKind::Head)
+            .cloned()
+            .map(|segment| {
+                let (replacement, edge) = segment_replacement(&segment, false);
+                (segment, replacement, edge)
+            })
+            .collect();
+    }
+    if let Some(digits) = query.strip_suffix('+')
+        && !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+    {
+        let Ok(want) = digits.parse::<u32>() else {
+            return Vec::new();
+        };
+        return rows
+            .iter()
+            .filter(|segment| segment.index == Some(want))
+            .cloned()
+            .map(|segment| {
+                let (replacement, edge) = segment_replacement(&segment, true);
+                (segment, replacement, edge)
+            })
+            .collect();
+    }
+    if !query.is_empty() && query.bytes().all(|b| b.is_ascii_digit()) {
+        return rows
+            .iter()
+            .filter(|segment| {
+                segment
+                    .index
+                    .is_some_and(|index| index.to_string().starts_with(query))
+            })
+            .cloned()
+            .map(|segment| {
+                let (replacement, edge) = segment_replacement(&segment, false);
+                (segment, replacement, edge)
+            })
+            .collect();
+    }
+    Vec::new()
+}
+
+fn segment_replacement(
+    segment: &Segment,
+    end_edge: bool,
+) -> (String, PastSegmentEdge) {
+    match segment.kind {
+        SegmentKind::Tail => ("~".to_string(), PastSegmentEdge::Start),
+        SegmentKind::Head => ("~~".to_string(), PastSegmentEdge::End),
+        SegmentKind::Pomodoro | SegmentKind::Gap => {
+            let index = segment.index.unwrap_or_default();
+            if end_edge {
+                (format!("~{index}+"), PastSegmentEdge::End)
+            } else {
+                (format!("~{index}"), PastSegmentEdge::Start)
+            }
+        }
+    }
+}
+
+fn segment_candidate(
+    segment: &Segment,
+    replacement: String,
+    edge: PastSegmentEdge,
+) -> PastSegmentCandidate {
+    let kind = match segment.kind {
+        SegmentKind::Pomodoro => PastSegmentKind::Pomodoro,
+        SegmentKind::Gap => PastSegmentKind::Gap,
+        SegmentKind::Tail => PastSegmentKind::Tail,
+        SegmentKind::Head => PastSegmentKind::Head,
+    };
+    PastSegmentCandidate {
+        replacement,
+        label: segment.label(),
+        kind,
+        edge,
+        start: format_segment_hhmm(segment.start),
+        end: format_segment_hhmm(segment.end),
+        minutes: segment.end - segment.start,
+        needs_repair: segment.kind == SegmentKind::Pomodoro,
+        index: segment.index,
+        name: segment.name.clone(),
+        line: segment.line,
+    }
+}
+
+fn format_segment_hhmm(minutes: i64) -> String {
+    let minutes = minutes.clamp(0, 1440);
+    if minutes == 1440 {
+        "0000".to_string()
+    } else {
+        format!("{:02}{:02}", minutes / 60, minutes % 60)
+    }
 }
 
 pub(super) fn pomodoro_name_candidates_for_task(

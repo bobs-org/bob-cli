@@ -643,6 +643,16 @@ pub(super) fn candidate_lines(
         Candidates::WikilinkTask(items) => {
             items.iter().map(wikilink_task_line).collect()
         }
+        Candidates::PastSegment(items) => items
+            .iter()
+            .map(|item| {
+                let mut detail = format!("{} · {}m", item.label, item.minutes);
+                if item.needs_repair {
+                    detail.push_str(" · needs !");
+                }
+                (item.replacement.clone(), detail)
+            })
+            .collect(),
     }
 }
 
@@ -740,6 +750,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::PomodoroName => "pomodoro_name",
         CompletionContext::PomodoroStartName => "pomodoro_start_name",
         CompletionContext::PomodoroPastName => "pomodoro_past_name",
+        CompletionContext::PomodoroPastSegment => "pomodoro_past_segment",
         CompletionContext::Task => "task",
         CompletionContext::Drawer => "drawer",
         CompletionContext::ActiveTask => "active_task",

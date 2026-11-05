@@ -31,6 +31,7 @@ pub(crate) enum CompletionContext {
     PomodoroName,
     PomodoroStartName,
     PomodoroPastName,
+    PomodoroPastSegment,
     Task,
     /// A `#<type>` task-type marker at either item edge.
     TaskType,
@@ -1056,6 +1057,48 @@ fn pomodoro_start_name_field(
     })
 }
 
+/// Completion field for the segment suffix at the end of `E` (`~`, `~n`,
+/// `~n+`, `~~`). The cursor must lie inside the suffix bytes (from its `~`
+/// through digits, `+`, or a second `~`, before `!` or the second `=`). The
+/// replacement covers the suffix range only; the query is the text after
+/// the first `~` up to the cursor.
+fn pomodoro_past_segment_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let parent = item.lines.first()?;
+    let text = parent.raw.text.trim_start();
+    let token_len = super::item::past_token_len(text)?;
+    let token = &text[..token_len];
+    let token_start = parent.raw.start + parent.raw.text.len() - text.len();
+    let split = super::past::split_past_token(token)?;
+    let (seg_start_rel, seg_end_rel) =
+        match super::past::validate_past_e(token, &split) {
+            super::past::PastEOutcome::Valid(valid) => valid.segment_range?,
+            _ => return None,
+        };
+    let seg_start = token_start + seg_start_rel;
+    let seg_end = token_start + seg_end_rel;
+    if cursor < seg_start || cursor > seg_end {
+        return None;
+    }
+    let suffix = token.get(seg_start_rel..seg_end_rel)?;
+    // Query is the text after the first `~` up to the cursor.
+    let typed_len = cursor.saturating_sub(seg_start + 1);
+    let query = suffix
+        .get(1..)?
+        .get(..typed_len.min(suffix.len().saturating_sub(1)))?
+        .to_string();
+    Some(CompletionField {
+        context: CompletionContext::PomodoroPastSegment,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (seg_start, seg_end),
+        bare_name: false,
+    })
+}
+
 /// The name in `x=<E>` owns only its own bytes, including a quoted
 /// literal but excluding counts, repair, timing, and close selections. A
 /// leading count still leaves a name field (`x=3bu|`), and a plain `#`
@@ -2006,7 +2049,11 @@ pub(crate) fn completion_field_at(
     }
     // Claim the whole past token before generic `#`/`@` completion can
     // mistake a name or duration for a task marker. Child logs stay literal.
+    // The segment suffix owns its bytes; the name field keeps ending at `~`.
     if line_index == 0 && line.text.trim_start().starts_with("x=") {
+        if let Some(field) = pomodoro_past_segment_field_at(item, cursor) {
+            return Some(field);
+        }
         return pomodoro_past_name_field(item, cursor);
     }
     // A `=/` split base or `#type` completes before generic task-type

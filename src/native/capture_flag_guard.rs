@@ -79,6 +79,7 @@ pub(crate) fn capture_spec() -> GuardSpec {
         long("refuse-override", false),
         long("require-inbox-route-choice", false),
         long("require-pull-in-choice", false),
+        long("expect-past-windows", true),
         long("route", true),
         long("section", true),
         long("task", true),

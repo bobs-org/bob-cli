@@ -807,6 +807,44 @@ pub(super) enum Candidates {
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
     WikilinkTask(Vec<WikilinkTaskCandidate>),
+    PastSegment(Vec<PastSegmentCandidate>),
+}
+
+/// One timeline segment row for the `pomodoro_past_segment` context.
+/// Rows come in timeline order: tail (when nonempty), `~1…~N`, then head.
+/// Accepting a row inserts the suffix only, never `!`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PastSegmentCandidate {
+    pub(super) replacement: String,
+    pub(super) label: String,
+    pub(super) kind: PastSegmentKind,
+    pub(super) edge: PastSegmentEdge,
+    pub(super) start: String,
+    pub(super) end: String,
+    pub(super) minutes: i64,
+    pub(super) needs_repair: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) line: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PastSegmentKind {
+    Pomodoro,
+    Gap,
+    Tail,
+    Head,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PastSegmentEdge {
+    Start,
+    End,
 }
 
 impl Candidates {
@@ -837,6 +875,7 @@ impl Candidates {
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
             Self::WikilinkTask(items) => items.len(),
+            Self::PastSegment(items) => items.len(),
         }
     }
 }

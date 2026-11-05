@@ -84,7 +84,7 @@ mod pomodoro_merge;
 pub(super) mod pomodoro_past;
 mod pomodoro_split;
 mod pomodoro_start;
-mod pomodoro_timeline;
+pub(crate) mod pomodoro_timeline;
 mod project_deps;
 mod project_note;
 mod pull_in;
@@ -251,6 +251,17 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Ok(request) => request,
         Err(error) => return print_capture_error(error, output_format),
     };
+    if request.argv
+        && shell_guard::expanded_tilde_token(&request.raw_text).is_some()
+    {
+        return print_capture_error(
+            CaptureError::usage_code(
+                shell_guard::SHELL_EXPANDED_TILDE_MESSAGE,
+                shell_guard::SHELL_EXPANDED_TILDE_CODE,
+            ),
+            output_format,
+        );
+    }
 
     let pending_request = request.clone();
     match capture(request) {

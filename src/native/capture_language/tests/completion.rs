@@ -1523,3 +1523,36 @@ fn move_bullet_completion_opens_under_both_seals() {
         assert_eq!(completion.replacement, (cursor, cursor), "{raw:?}");
     }
 }
+
+#[test]
+fn past_segment_suffix_field_ranges_and_queries() {
+    // (draft, cursor, expected query, expected replacement)
+    for (raw, cursor, query, replacement) in [
+        ("x=~", 3, "", (2, 3)),
+        ("x=2~", 4, "", (3, 4)),
+        ("x=2~1", 5, "1", (3, 5)),
+        ("x=fix~2", 7, "2", (5, 7)),
+        ("x=2~1+", 6, "1+", (3, 6)),
+        ("x=~~", 4, "~", (2, 4)),
+        ("x=2~~", 5, "~", (3, 5)),
+        ("x=2~1!=!1", 5, "1", (3, 5)),
+    ] {
+        let completion = field(raw, cursor).expect("segment field");
+        assert_eq!(
+            completion.context,
+            CompletionContext::PomodoroPastSegment,
+            "{raw:?} at {cursor}"
+        );
+        assert_eq!(completion.query, query, "{raw:?} at {cursor}");
+        assert_eq!(completion.replacement, replacement, "{raw:?} at {cursor}");
+    }
+    // A cursor between the two tildes of `~~` has an empty query.
+    let between = field("x=~~", 3).expect("segment field");
+    assert_eq!(between.context, CompletionContext::PomodoroPastSegment);
+    assert_eq!(between.query, "");
+    assert_eq!(between.replacement, (2, 4));
+    // A cursor in the name still offers the name field, which ends at `~`.
+    let name = field("x=fix~2", 4).expect("name field");
+    assert_eq!(name.context, CompletionContext::PomodoroPastName);
+    assert_eq!(name.query, "fi");
+}

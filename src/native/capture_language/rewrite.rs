@@ -122,6 +122,11 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     let start = cursor.checked_sub(1)?;
     let alias = raw_text.get(start..cursor)?;
     if alias == "-" {
+        if let Some(rewrite) =
+            expand_past_segment_dash_alias(raw_text, start, cursor)
+        {
+            return Some(rewrite);
+        }
         return expand_relation_dash_alias(raw_text, start, cursor);
     }
     if alias == "=" {
@@ -215,6 +220,85 @@ fn expand_sigil_alias(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
     }
     Some(finish_sigil_alias(
         raw_text, &candidate, start, cursor, sigil, alias,
+    ))
+}
+
+/// Typing `-` inside an `x=` past token aliases `~` only where the swapped
+/// text opens the `pomodoro_past_segment` completion field at the cursor.
+/// For a new `~`, the field starts at the swapped byte; for `x=~-` → `x=~~`
+/// (and `x=2~-` → `x=2~~`), the field starts at the prior `~`. A `-` that
+/// extends a plain `#name` never aliases, because `-` is name content there.
+fn expand_past_segment_dash_alias(
+    raw_text: &str,
+    start: usize,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    // The `-` must belong to an `x=` past token in the original draft,
+    // even when the token carries a quoted literal with spaces; prose,
+    // bullet markers, and `=2-` start offsets stay literal.
+    let token_start = {
+        let draft = split_capture_draft(raw_text);
+        let mut found = None;
+        for item in &draft.items {
+            for line in &item.lines {
+                if line.raw.start <= start && start < line.raw.end {
+                    let text = line.raw.text.trim_start();
+                    let Some(token_len) = super::item::past_token_len(text)
+                    else {
+                        continue;
+                    };
+                    let line_token_start =
+                        line.raw.start + line.raw.text.len() - text.len();
+                    if start >= line_token_start
+                        && start < line_token_start + token_len
+                        && text.starts_with("x=")
+                    {
+                        found = Some(line_token_start);
+                        break;
+                    }
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        found?
+    };
+    // A `-` that extends a plain `#name` is name content: the pre-dash token
+    // already contains a `#` that does not open a quoted literal, and no `~`
+    // precedes the dash.
+    let pre_dash = raw_text.get(token_start..start)?;
+    if let Some(hash_pos) = pre_dash.find('#') {
+        let after_hash = &pre_dash[hash_pos + 1..];
+        let quoted = after_hash.starts_with('"') || after_hash.starts_with('“');
+        if !quoted && !pre_dash.contains('~') {
+            return None;
+        }
+    }
+    let mut candidate = raw_text.to_string();
+    candidate.replace_range(start..cursor, "~");
+    if wikilink_claims(&candidate, cursor) {
+        return None;
+    }
+    let field = super::completion::completion_field_at(&candidate, cursor)?;
+    if field.context
+        != super::completion::CompletionContext::PomodoroPastSegment
+    {
+        return None;
+    }
+    // For `x=~-` → `x=~~`, the field starts at the prior `~`; otherwise it
+    // starts at the swapped byte.
+    let expected_start = if start > 0 && raw_text.as_bytes()[start - 1] == b'~'
+    {
+        start - 1
+    } else {
+        start
+    };
+    if field.replacement.0 != expected_start || field.replacement.1 != cursor {
+        return None;
+    }
+    Some(finish_sigil_alias(
+        raw_text, &candidate, start, cursor, '~', "-",
     ))
 }
 

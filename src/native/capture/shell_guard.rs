@@ -18,6 +18,46 @@ pub(crate) const SHELL_ATE_TRANSFER_ARROW_CODE: &str =
 /// Canonical copy from the transfer-capture contract.
 pub(crate) const SHELL_ATE_TRANSFER_ARROW_MESSAGE: &str = "your shell ate “>”: quote the draft (bob capture '@a+x > @c') and delete the empty file “@c”";
 
+/// Machine-readable code for the shell-expanded-tilde refusal.
+pub(crate) const SHELL_EXPANDED_TILDE_CODE: &str = "shell_expanded_tilde";
+/// Canonical copy: the shell expanded an unquoted `~` before bob saw it.
+pub(crate) const SHELL_EXPANDED_TILDE_MESSAGE: &str =
+    "your shell expanded ~; quote the capture: bob capture 'x=~'";
+
+/// Whether an argv draft contains a token starting with `x=` followed by the
+/// non-empty `$HOME` value: the shell expanded an unquoted `~` before bob
+/// saw it. Only argv drafts are checked; piped stdin can carry a literal
+/// `$HOME` path on purpose. A `pushd`-style `x=~1` expansion cannot be
+/// detected and is documented instead.
+pub(crate) fn expanded_tilde_token(raw_text: &str) -> Option<String> {
+    let home = std::env::var_os("HOME")?.to_string_lossy().into_owned();
+    if home.is_empty() {
+        return None;
+    }
+    for token in raw_text.split(|c: char| c.is_whitespace()) {
+        if token.len() <= 2 || !token.starts_with("x=") {
+            continue;
+        }
+        let after = &token[2..];
+        if after.starts_with(&home) {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+/// Rewrite an expanded-tilde token by putting `~` back in place of `$HOME`.
+#[allow(dead_code)]
+pub(crate) fn unexpand_tilde_token(token: &str) -> Option<String> {
+    let home = std::env::var_os("HOME")?.to_string_lossy().into_owned();
+    if home.is_empty() {
+        return None;
+    }
+    let after = token.strip_prefix("x=")?;
+    let rest = after.strip_prefix(&home)?;
+    Some(format!("x=~{rest}"))
+}
+
 /// Whether `path` looks like a shell-ate-arrow redirect target: basename
 /// starts with `@` and the path is a regular file.
 pub(crate) fn is_shell_redirect_target(path: &Path) -> bool {
