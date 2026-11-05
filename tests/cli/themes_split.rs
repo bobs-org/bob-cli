@@ -448,6 +448,51 @@ fn themes_split_preserves_trailing_whitespace_and_mixed_endings_offline() {
 }
 
 #[test]
+fn themes_split_warns_and_leaves_offclock_lists() {
+    let temp = TempDir::new("bob-cli-themes-split-offclock");
+    let (vault, cache) = split_vault(temp.path());
+    write_file(
+        &vault.join("love.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\noffclock_types:\n  - JOB\n---\n",
+    );
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "offclock leftovers"]);
+
+    let value = template_json(&vault, &cache, "JOB");
+    let warnings = value["warnings"].as_array().expect("template warnings");
+    assert!(
+        warnings.iter().any(|warning| {
+            let text = warning.as_str().unwrap();
+            text.contains("split_leaves_task_themes")
+                && text.contains("offclock list")
+        }),
+        "{warnings:?}"
+    );
+
+    let entries = value["entries"].as_array().unwrap();
+    let tsv = tsv_from_entries(entries, |_, _| Some("CHORE".into()));
+    let map = write_map(&vault, &tsv);
+    let (output, preview) =
+        split_json(&vault, &cache, &["JOB", "-m", path_str(&map), "-d"]);
+    assert_success(&output);
+    let preview_warnings = preview["warnings"].as_array().expect("warnings");
+    assert!(
+        preview_warnings
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("offclock list")),
+        "{preview_warnings:?}"
+    );
+
+    let output = split_command(&vault, &cache)
+        .args(["themes", "split", "JOB", "-m", path_str(&map), "-o"])
+        .output()
+        .expect("write");
+    assert_success(&output);
+    let love = fs::read_to_string(vault.join("love.md")).unwrap();
+    assert!(love.contains("- JOB\n"), "{love}");
+}
+
+#[test]
 fn themes_split_stdin_map_works() {
     let temp = TempDir::new("bob-cli-themes-split-stdin");
     let (vault, cache) = split_vault(temp.path());

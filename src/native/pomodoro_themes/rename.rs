@@ -63,16 +63,20 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
         .long_about(
             "Rename one task type across every canonical daily note \
 (past, today, and future, open and closed) plus _templates/daily.md, area \
-and project `task_type:` / `theme:` defaults, and `[type::]` / `(type::)` \
+and project `task_type:` / `theme:` defaults, `offclock_types:` lists, \
+and `[type::]` / `(type::)` \
 plus legacy `[theme::]` / `(theme::)` task fields \
 (including done/), in a single verified Git commit.\n\n\
 Pomodoro ` — NAME` tails keep their `+` spelling, a resulting duplicate \
 collapses (`FIX + FIXES` → `FIX`), and every other byte is preserved. Note \
-defaults and task fields take NEW's spelling (with `--merge`, fields simply \
-take NEW). Prose, fenced examples, `.bob/`, and `_conflicts/` are never \
+defaults, `offclock_types:` items, and task fields take NEW's spelling \
+(with `--merge`, fields simply \
+take NEW). When NEW is already listed, the renamed list item is removed \
+instead, and a block list loses that item's line. Prose, fenced examples, \
+`.bob/`, and `_conflicts/` are never \
 touched.\n\n\
-The preview always rescans from source and counts sessions, defaults, and \
-task types separately. The write takes bob_sync.lock, pre-syncs unless \
+The preview always rescans from source and counts sessions, defaults, task \
+types, and offclock types separately. The write takes bob_sync.lock, pre-syncs unless \
 --offline, snapshots each target and compares again right before writing, \
 writes atomically, appends one theme.rename journal event, verifies by \
 rescanning, makes one commit, then post-syncs. Undo is `git revert`.\n\n\
@@ -238,8 +242,12 @@ struct FilePlan {
     tails: Vec<TailChange>,
     default: Option<ValueChange>,
     task_themes: Vec<ValueChange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    offclock_types: Vec<ValueChange>,
     #[serde(skip_serializing)]
     edits: Vec<LineEdit>,
+    #[serde(skip_serializing)]
+    removed_lines: Vec<usize>,
     #[serde(skip_serializing)]
     before_contents: String,
     #[serde(skip_serializing)]
@@ -267,6 +275,7 @@ struct RenameReport {
     sessions: usize,
     defaults: usize,
     task_themes: usize,
+    offclock_types: usize,
     default_notes: Vec<String>,
     state: StateChange,
     color: ColorChange,
@@ -290,6 +299,8 @@ struct FilePlanView {
     default: Option<ValueChange>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     task_themes: Vec<ValueChange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    offclock_types: Vec<ValueChange>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -385,6 +396,11 @@ impl PreparedRename {
             .count();
         let task_themes: usize =
             self.files.iter().map(|file| file.task_themes.len()).sum();
+        let offclock_types: usize = self
+            .files
+            .iter()
+            .map(|file| file.offclock_types.len())
+            .sum();
         let default_notes = self
             .files
             .iter()
@@ -409,6 +425,7 @@ impl PreparedRename {
             sessions,
             defaults,
             task_themes,
+            offclock_types,
             default_notes,
             files: self
                 .files
@@ -419,6 +436,7 @@ impl PreparedRename {
                     tails: file.tails.clone(),
                     default: file.default.clone(),
                     task_themes: file.task_themes.clone(),
+                    offclock_types: file.offclock_types.clone(),
                 })
                 .collect(),
             state: StateChange {
@@ -887,10 +905,27 @@ fn plan_file(
         })
         .collect::<Vec<_>>();
     edits.extend(task_edits);
-    if edits.is_empty() {
+    let offclock = if rewrite_defaults_and_fields {
+        coverage::offclock_edits(contents, old_key, new_display)
+    } else {
+        coverage::OffclockResult::default()
+    };
+    let offclock_types = offclock
+        .changes
+        .iter()
+        .map(|change| ValueChange {
+            line: change.line,
+            before: change.before.clone(),
+            after: change.after.clone(),
+        })
+        .collect::<Vec<_>>();
+    edits.extend(offclock.edits);
+    let removed_lines = offclock.removed_lines;
+    if edits.is_empty() && removed_lines.is_empty() {
         return None;
     }
-    let after_contents = coverage::apply_line_edits(contents, &edits);
+    let after_contents =
+        coverage::apply_coverage_edits(contents, &edits, &removed_lines);
     Some(FilePlan {
         path: relative.to_string(),
         entries: tails.len(),
@@ -901,7 +936,9 @@ fn plan_file(
             after: edit.after,
         }),
         task_themes,
+        offclock_types,
         edits,
+        removed_lines,
         before_contents: contents.to_string(),
         after_contents,
     })
@@ -1372,16 +1409,27 @@ fn verify_renamed(
             if contents != replanned.after_contents {
                 return Err(format!("{relative} changed during the rename"));
             }
-            let planned_lines: BTreeSet<usize> =
-                replanned.edits.iter().map(|edit| edit.line).collect();
-            verify_raw_tail_splice(
-                relative,
-                &planned.before_contents,
-                &replanned.after_contents,
-                &contents,
-                &planned_lines,
-                "rename",
-            )?;
+            if replanned.removed_lines.is_empty() {
+                let planned_lines: BTreeSet<usize> =
+                    replanned.edits.iter().map(|edit| edit.line).collect();
+                verify_raw_tail_splice(
+                    relative,
+                    &planned.before_contents,
+                    &replanned.after_contents,
+                    &contents,
+                    &planned_lines,
+                    "rename",
+                )?;
+            } else {
+                verify_coverage_splice(
+                    relative,
+                    &planned.before_contents,
+                    &replanned.after_contents,
+                    &contents,
+                    &replanned.edits,
+                    &replanned.removed_lines,
+                )?;
+            }
             verified_paths.insert(relative.as_str());
         }
     }
@@ -1399,15 +1447,88 @@ fn verify_renamed(
         ));
     }
     let leftover = coverage::leftover_theme_uses(vault, &prepared.old_key);
-    if leftover.defaults > 0 || leftover.task_themes > 0 {
+    if leftover.defaults > 0
+        || leftover.task_themes > 0
+        || leftover.offclock > 0
+    {
         return Err(format!(
-            "{} still appears in {} default{} and {} task field{}",
+            "{} still appears in {} default{}, {} task field{}, and {} offclock list{}",
             prepared.old_name,
             leftover.defaults,
             if leftover.defaults == 1 { "" } else { "s" },
             leftover.task_themes,
             if leftover.task_themes == 1 { "" } else { "s" },
+            leftover.offclock,
+            if leftover.offclock == 1 { "" } else { "s" },
         ));
+    }
+    Ok(())
+}
+
+/// Byte-preservation check for renames that delete whole
+/// `offclock_types` block lines: untouched lines keep exact bytes in
+/// order, edited lines keep their terminators, and removed lines are
+/// gone. `edits` and `removed_lines` use original 1-based numbers.
+fn verify_coverage_splice(
+    path: &str,
+    before_contents: &str,
+    planned_contents: &str,
+    reread_contents: &str,
+    edits: &[LineEdit],
+    removed_lines: &[usize],
+) -> Result<(), String> {
+    let before_raw = raw_lines_preserving(before_contents);
+    let planned_raw = raw_lines_preserving(planned_contents);
+    let reread_raw = raw_lines_preserving(reread_contents);
+    let mut removed: Vec<usize> = removed_lines.to_vec();
+    removed.sort_unstable();
+    removed.dedup();
+    if before_raw.len() != planned_raw.len() + removed.len() {
+        return Err(format!("{path} line count changed"));
+    }
+    if planned_raw.len() != reread_raw.len() {
+        return Err(format!("{path} changed during the rename"));
+    }
+    let edited: BTreeSet<usize> = edits.iter().map(|edit| edit.line).collect();
+    let removed_set: BTreeSet<usize> = removed.iter().copied().collect();
+    let mut planned_index = 0usize;
+    for (original_no, before_line) in before_raw.iter().enumerate() {
+        let line_no = original_no + 1;
+        if removed_set.contains(&line_no) {
+            continue;
+        }
+        let Some(planned_line) = planned_raw.get(planned_index) else {
+            return Err(format!("{path} line count changed"));
+        };
+        let Some(reread_line) = reread_raw.get(planned_index) else {
+            return Err(format!("{path} changed during the rename"));
+        };
+        if !edited.contains(&line_no) {
+            if before_line != planned_line {
+                return Err(format!(
+                    "{path} changed outside a type value span"
+                ));
+            }
+            if reread_line != planned_line {
+                return Err(format!("{path} changed during the rename"));
+            }
+        } else {
+            let (_, before_ending) = split_line_ending(before_line);
+            let (_, planned_ending) = split_line_ending(planned_line);
+            let (_, reread_ending) = split_line_ending(reread_line);
+            if before_ending != planned_ending {
+                return Err(format!(
+                    "{path} changed outside a type value span"
+                ));
+            }
+            if reread_ending != planned_ending {
+                return Err(format!("{path} changed during the rename"));
+            }
+        }
+        planned_index += 1;
+    }
+    if planned_index != planned_raw.len() {
+        return Err(format!("{path} line count changed"));
     }
     Ok(())
 }
@@ -1460,6 +1581,17 @@ fn print_human(report: &RenameReport) {
                 if file.task_themes.len() == 1 { "" } else { "s" },
             ));
         }
+        if !file.offclock_types.is_empty() {
+            bits.push(format!(
+                "{} offclock type{}",
+                file.offclock_types.len(),
+                if file.offclock_types.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+            ));
+        }
         if bits.is_empty() {
             println!("  {}:", file.path);
         } else {
@@ -1483,6 +1615,19 @@ fn print_human(report: &RenameReport) {
                 field.line, field.before, field.after
             );
         }
+        for change in &file.offclock_types {
+            if change.after.is_empty() {
+                println!(
+                    "    offclock line {}: {} → (removed)",
+                    change.line, change.before
+                );
+            } else {
+                println!(
+                    "    offclock line {}: {} → {}",
+                    change.line, change.before, change.after
+                );
+            }
+        }
     }
     println!("  sessions: {}", report.sessions);
     if report.default_notes.is_empty() {
@@ -1495,6 +1640,7 @@ fn print_human(report: &RenameReport) {
         );
     }
     println!("  task types: {}", report.task_themes);
+    println!("  offclock types: {}", report.offclock_types);
     println!("  state: {}", report.state.note);
     println!("  color: {}", report.color.note);
     if let Some(commit) = &report.commit {
@@ -2031,7 +2177,9 @@ mod rename_tests {
                 tails,
                 default: None,
                 task_themes: Vec::new(),
+                offclock_types: Vec::new(),
                 edits,
+                removed_lines: Vec::new(),
                 before_contents: before.to_string(),
                 after_contents,
             }],
@@ -2144,6 +2292,7 @@ mod rename_tests {
                     after: "FIX".to_string(),
                 }),
                 task_themes: Vec::new(),
+                offclock_types: Vec::new(),
                 edits: vec![LineEdit {
                     line: 3,
                     start: 7,
@@ -2151,6 +2300,7 @@ mod rename_tests {
                     before: "BUILD".to_string(),
                     after: "FIX".to_string(),
                 }],
+                removed_lines: Vec::new(),
                 before_contents: before.to_string(),
                 after_contents: malformed.to_string(),
             }],

@@ -126,6 +126,92 @@ fn themes_rename_dry_run_previews_collapse_and_leaves_vault_untouched() {
 }
 
 #[test]
+fn themes_rename_rewrites_offclock_types_lists() {
+    let temp = TempDir::new("bob-cli-themes-rename-offclock");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("love.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\noffclock_types: MEET\n---\n",
+    );
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\noffclock_types: [MEET, CALL]\n---\n",
+    );
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\noffclock_types:\n  - MEET\n  - CALL\n---\n",
+    );
+    write_file(
+        &vault.join("2026/20261020.md"),
+        "## Pomodoros\n- [x] (0800-0830 30m) — MEET\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+
+    let (output, value) = rename_json(&vault, &cache, &["MEET", "SYNC", "-d"]);
+    assert_success(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["offclock_types"], 3);
+
+    let (output, _) = rename_json(&vault, &cache, &["MEET", "SYNC", "-o"]);
+    assert_success(&output);
+
+    let love = fs::read_to_string(vault.join("love.md")).unwrap();
+    assert!(love.contains("offclock_types: SYNC\n"), "{love}");
+    let body = fs::read_to_string(vault.join("body.md")).unwrap();
+    assert!(body.contains("offclock_types: [SYNC, CALL]\n"), "{body}");
+    assert!(!body.contains("MEET"), "{body}");
+    let work = fs::read_to_string(vault.join("work.md")).unwrap();
+    assert!(work.contains("  - SYNC\n"), "{work}");
+    assert!(work.contains("  - CALL\n"), "{work}");
+    assert!(!work.contains("MEET"), "{work}");
+    let day = fs::read_to_string(vault.join("2026/20261020.md")).unwrap();
+    assert!(day.contains("— SYNC\n"), "{day}");
+}
+
+#[test]
+fn themes_rename_merge_dedupes_offclock_types_lists() {
+    let temp = TempDir::new("bob-cli-themes-rename-offclock-merge");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("body.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\noffclock_types: [MEET, CALL]\n---\n",
+    );
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\noffclock_types:\n  - MEET\n  - CALL\n---\n",
+    );
+    write_file(
+        &vault.join("2026/20261020.md"),
+        "## Pomodoros\n- [x] (0800-0830 30m) — CALL\n- [x] (0900-0930 30m) — MEET\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+
+    let (output, value) =
+        rename_json(&vault, &cache, &["CALL", "MEET", "--merge", "-o"]);
+    assert_success(&output);
+    assert_eq!(value["ok"], true);
+
+    let body = fs::read_to_string(vault.join("body.md")).unwrap();
+    assert!(body.contains("offclock_types: [MEET]\n"), "{body}");
+    assert!(!body.contains("CALL"), "{body}");
+    let work = fs::read_to_string(vault.join("work.md")).unwrap();
+    assert!(work.contains("offclock_types:\n  - MEET\n"), "{work}");
+    assert!(!work.contains("CALL"), "{work}");
+}
+
+#[test]
 fn themes_alias_matches_types_for_rename_dry_run() {
     let temp = TempDir::new("bob-cli-themes-rename-alias-parity");
     let (vault, cache) = rename_vault(temp.path());

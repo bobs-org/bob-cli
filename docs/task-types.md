@@ -252,19 +252,27 @@ bob types rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-
 One previewed, verified, single-commit rewrite of the type component in
 ` — NAME` tails of canonical daily notes (past, today, and future, open and
 closed) plus `_templates/daily.md`, area and project `task_type:` / `theme:`
-defaults, and `[type::]` / `(type::)` plus legacy `[theme::]` / `(theme::)`
+defaults, `offclock_types:` lists, and `[type::]` / `(type::)` plus legacy
+`[theme::]` / `(theme::)`
 task fields (including `done/`), modeled on `bob ref rename`.
 
-- **Scope:** Pomodoro tails, note defaults on area/project notes, and task
+- **Scope:** Pomodoro tails, note defaults and `offclock_types:` lists on
+  area/project notes, and task
   type fields. Prose, fenced examples, `.bob/`, and `_conflicts/` are
   never touched.
 - **Byte preservation:** separators keep their `+` spelling. A resulting
   duplicate collapses (`FIX + FIXES` → `FIX`). Quote style on default
   scalars is preserved. Task fields and defaults keep their key spelling;
   task fields keep their bracket or paren form and take NEW's spelling;
-  with `--merge`, fields simply take NEW. Every other byte is preserved.
+  with `--merge`, fields simply take NEW. `offclock_types:` items rewrite
+  in scalar, flow, and block form, keeping quote style, trailing `#`
+  comments, and every unrelated byte; matching items rewrite even when
+  another item makes the key invalid, and non-matching items are never
+  touched. When NEW is already listed, the renamed item is removed instead,
+  deduplicating by key (`[MEET, CALL]` with CALL→MEET becomes `[MEET]`),
+  and a block list loses that item's line. Every other byte is preserved.
 - **Counts:** the preview (human and `-f json`) reports `sessions`,
-  `defaults`, and `task_themes` separately and lists the default-bearing
+  `defaults`, `task_themes`, and `offclock_types` separately and lists the default-bearing
   notes. JSON is additive; `entries` remains the session count.
 - **NEW** must be a valid single type. A NEW containing `+` is `invalid_name`.
 - **Vault selection:** before taking a lock, an online write requires
@@ -393,8 +401,8 @@ map from stdin. OLD must be a known type.
   through the shared vault-rewrite transaction (`command_name` `bob types
   split`, worktree subject "type splits"). Split writes **no journal
   event**. OLD keeps its hidden state and pin, and every target keeps its
-  own. Note defaults and `[theme::]` / `(theme::)` task fields are left
-  unchanged. When OLD still appears in either, the preview and result add a
+  own. Note defaults, `offclock_types:` lists, and `[theme::]` / `(theme::)` task fields are left
+  unchanged. When OLD still appears in any of them, the preview and result add a
   `split_leaves_task_themes` warning with those leftover counts. The commit
   subject is `bob types split: OLD → T1, T2, …` with the
   changed target display names in alphabetical order. Verify: reread
