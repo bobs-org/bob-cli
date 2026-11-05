@@ -2,12 +2,16 @@
 //!
 //! Small facade over focused child modules. Production dependencies flow
 //! `plan -> {model, files, render}`, `files -> {model, render}`,
-//! `render/persist -> model`, and `clipboard -> clipy` on macOS history.
+//! `render/persist -> model`, and `clipboard -> history -> {alfred, clipy}`
+//! on macOS history.
 
+#[cfg(any(target_os = "macos", test))]
+mod alfred;
 mod clipboard;
 #[cfg(any(target_os = "macos", test))]
 mod clipy;
 mod files;
+mod history;
 mod model;
 mod persist;
 mod plan;

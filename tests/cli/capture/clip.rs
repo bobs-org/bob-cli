@@ -567,6 +567,87 @@ fn capture_history_provider_failures_leave_the_vault_untouched() {
 }
 
 #[test]
+fn capture_clipboard_history_config_selects_the_provider() {
+    let temp = TempDir::new("bob-cli-capture-history-config");
+    let vault = temp.path().join("vault");
+    let clipboard = temp.path().join("clipboard");
+    let history = temp.path().join("history");
+    let config = temp.path().join("config.yml");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'live value\n'\n");
+    write_executable(
+        &history,
+        "#!/bin/sh\nprintf '%s\\n' '[\"live value\",\"older\"]'\n",
+    );
+
+    // `command` reads the argv list from the config file: no env override.
+    write_file(
+        &config,
+        &format!(
+            "capture:\n  clipboard_history: command\n  clipboard_history_command:\n    - {}\n",
+            history.display()
+        ),
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("task %c2")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("config command history capture");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["clip"]["status"], "read");
+
+    // `off` refuses the counted capture while `%c` keeps working.
+    write_file(&config, "capture:\n  clipboard_history: off\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("task %c2")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("disabled history capture");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("`off`"),
+        "{}",
+        format_output(&output)
+    );
+
+    // An invalid value refuses with the config error, loudly.
+    write_file(&config, "capture:\n  clipboard_history: spotlight\n");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("task %c2")
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env_remove("BOB_CLIPBOARD_HISTORY_CMD")
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", "2026-07-15")
+        .output()
+        .expect("invalid history config capture");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("capture.clipboard_history"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
 fn capture_history_dry_run_plans_colliding_files_without_writes() {
     let temp = TempDir::new("bob-cli-capture-history-files-dry-run");
     let vault = temp.path().join("vault");

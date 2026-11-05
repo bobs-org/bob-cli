@@ -227,7 +227,7 @@ Environment:
 
 Clipboard source order:
   Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer
-  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere
+  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise capture.clipboard_history (default auto: read-only Alfred, then Clipy, on macOS); no automatic provider elsewhere
 ```
 
 ## Related

@@ -90,6 +90,8 @@ its `scheduled` date. `BOB_PRIORITY_ROLL_SEED` can make a roll repeatable. See
 | Key | Type and allowed value | Default | Effect |
 | --- | --- | --- | --- |
 | `capture.max_saved_templates` | Integer, 0–36 | `36` | Maximum saved `%t` template definitions; `0` disables saving. |
+| `capture.clipboard_history` | `auto`, `alfred`, `clipy`, `command`, or `off` | `auto` | Which clipboard manager `%c<N>` (N ≥ 2) reads: `auto` reads read-only Alfred history, then Clipy, on macOS; `alfred`/`clipy` read only that manager on macOS and refuse elsewhere; `command` reads `capture.clipboard_history_command`; `off` refuses `%c<N>` while `%c` keeps working. |
+| `capture.clipboard_history_command` | Non-empty list of non-empty strings | Unset | Argv of the history command used when `capture.clipboard_history` is `command`; receives the requested count as its final argument and prints a newest-first JSON array of strings. Ignored under any other value. |
 
 See [capture templates](../capture.md#saved-templates).
 
@@ -312,7 +314,7 @@ interpret shell quotes unless their contract says otherwise.
 | Variable | Default or unset behavior | Effect |
 | --- | --- | --- |
 | `BOB_CLIPBOARD_CMD` | Platform clipboard discovery | Whitespace-split command that prints live clipboard text; takes precedence over `pbpaste`, Linux clipboard tools, and tmux buffer fallback. |
-| `BOB_CLIPBOARD_HISTORY_CMD` | Clipy read-only history on macOS; no automatic provider elsewhere | Command receives the requested total count as its final argument and prints a newest-first JSON array of clipboard strings. |
+| `BOB_CLIPBOARD_HISTORY_CMD` | `capture.clipboard_history`, whose `auto` reads Alfred, then Clipy, on macOS; no automatic provider elsewhere | Command receives the requested total count as its final argument and prints a newest-first JSON array of clipboard strings. |
 | `BOB_DATAVIEW_OBSIDIAN_COMMAND` | `obsidian` found on `PATH` | Executable used for `bob query --engine obsidian`. |
 | `BOB_DATAVIEW_VAULT` | Obsidian's default vault selection | Vault name or ID forwarded to `obsidian eval`. |
 
