@@ -428,6 +428,49 @@ pub(crate) fn relocate(input: &RelocateInput<'_>) -> RelocateOutcome {
     if agrees(Some(input.type_key), entry.name.as_deref(), input.sources) {
         return RelocateOutcome::Unchanged;
     }
+    if is_meet_name(entry.name.as_deref()) {
+        if entry.running {
+            return RelocateOutcome::Unchanged;
+        }
+        let borrowed: Vec<PlaceEntry<'_>> = input
+            .entries
+            .iter()
+            .map(|item| PlaceEntry {
+                name: item.name.as_deref(),
+                open: item.open,
+                running: item.running,
+            })
+            .collect();
+        let exempt: Vec<String> =
+            input.sources.exempt.iter().cloned().collect();
+        let planned: Vec<PlaceEntry<'_>> = borrowed
+            .iter()
+            .map(|item| PlaceEntry {
+                name: item.name,
+                open: item.open && !item.running,
+                running: false,
+            })
+            .collect();
+        let placed = place(&PlaceInput {
+            type_key: Some(input.type_key),
+            type_name: Some(input.type_name),
+            entries: &planned,
+            exempt: &exempt,
+            already_queued: false,
+        });
+        if let PlaceOutcome::Entry(to) = placed
+            && to != from
+        {
+            return RelocateOutcome::MoveTo { from, to };
+        }
+        if entry.links > 1 {
+            return RelocateOutcome::CreateBelow {
+                from,
+                name: input.type_name.to_string(),
+            };
+        }
+        return RelocateOutcome::Unchanged;
+    }
     if entry.running {
         if entry.links <= 1 {
             return RelocateOutcome::RenameEntry {

@@ -834,13 +834,12 @@ readers at `bob types suggest`.
 
 ## Routing: agreement, landing, placement, relocation
 
-Pure planners in `src/native/pomodoro_themes/routing.rs` and
-`merged.rs`, next to `preselect.rs`. Named capture `#NAME` / `=name`
-forms still call `land` with `retype: true` until the capture merge
-phase. `place` now serves bare capture, existing-task links, ref-today,
-and successor offers; note moves relocate the link when inherited types
-change, and Pomodoro naming and renames retype linked tasks (D6 Enter).
-Task Card integration remains later work. The `agree`, `land`,
+Pure planners in `src/native/pomodoro_themes/routing.rs`,
+`agree.rs`, and `agree_apply.rs` plus `merged.rs`, next to
+`preselect.rs`. `place` now serves bare capture, existing-task links,
+ref-today, and successor offers; note moves relocate the link when
+inherited types change, and Pomodoro naming and renames retype linked
+tasks (D6 Enter). The `agree`, `agree_entry`, `settle`, `land`,
 `place`, `relocate`, `merge`, `split`, `narrow`, `shed`, and `select`
 vector sections are the Ledger Tools JS mirror's contract.
 
@@ -868,6 +867,25 @@ vector sections are the Ledger Tools JS mirror's contract.
   `type_mismatch` lint in `bob plan` plus a ledger mark in Obsidian.
   Closed Pomodoros are history. Type-only edits never stamp freshness,
   change lanes, consume dependency guards, or advance the review walk.
+- **Agreement rule.** `agree_entry(name, open, children, sources)` keeps
+  an open entry's name in agreement with its direct children (`Live`,
+  `Worked`, `Unknown`, `Prose`). Closed entries, containers, and MEET
+  entries keep their names; under MEET each non-MEET live link reports
+  `meet_mismatch`. Each missing live type appends in child order in
+  catalog spelling, deduped by key; a type that would not classify as a
+  type reports `unconfigured_type` instead. Drops run only when every
+  child is live or worked: each unsupported type component drops, while
+  any prose or unknown child protects all types, and the last type never
+  drops alone. One drop plus one add substitutes in place, else drop
+  then append in child order. Only the name tail changes; an agreeing
+  entry is untouched; the rule is idempotent. `settle_closed(name,
+  worked, sources)` names a closed session from its worked types in link
+  order: MEET, container, or no typed worked link keeps the name;
+  otherwise labels plus exactly the worked types, with one-drop-one-add
+  substituting in place. The shared `agree_apply` applier runs
+  `agree_entry` over chosen entries through a pluggable task-type
+  lookup, rewriting only name tails while preserving CRLF and a missing
+  final newline.
 - **Landing.** A link landing in Pomodoro D keeps the task's type and
   merges D's name unless the gesture asked to retype. The first matching
   step wins: a container D means no change (`keeps BUILD`); the task has
@@ -906,6 +924,9 @@ vector sections are the Ledger Tools JS mirror's contract.
   choose (skipping running entries) takes the move; else a sole-link
   planned entry renames in place; else a `— X` placeholder is created
   directly below the source entry. Among duplicates, ledger order decides.
+  A MEET source never renames or grows: a running MEET entry is
+  unchanged, while a planned MEET entry may still move or create below
+  but never renames in place.
 - **Lint.** `BUILD task under FIX · sase#^fix-x · Ctrl+Shift+M to move
   or Ctrl+Shift+P t to retype`.
 
@@ -1096,14 +1117,14 @@ and writes nothing to the journal.
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
 `components`, `hue` (including the `areas` and `configured` inputs), `fold`,
 `rank`, `similar`, `menu`, `literal`, `suggest`, `task_field`,
-`preselect`, `agree`, `land`, `place`, `relocate`, `merge`, `split`,
-`narrow`, `shed`, and `select`.
+`preselect`, `agree`, `agree_entry`, `settle`, `land`, `place`,
+`relocate`, `merge`, `split`, `narrow`, `shed`, and `select`.
 CLI tests consume the menu and literal sections, including
 capture dry-run round trips; Rust tests consume the routing sections,
 including mini-vault suggest cases with expected JSON and warnings.
 bob-plugins copies the file byte-for-byte and runs the same hue, fold, and
-ranking vectors in JavaScript; the suggest and routing vectors are reserved
-for the later JavaScript mirror.
+ranking vectors in JavaScript; the `agree_entry`, `settle`, and routing
+vectors are the Ledger Tools JS mirror's contract.
 
 ## Related
 

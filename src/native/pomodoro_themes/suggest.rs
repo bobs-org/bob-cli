@@ -125,6 +125,49 @@ pub(crate) fn suggest_for_task<S: HomeSource>(
     }
 }
 
+/// As-if-open typing for closed tasks: the same rule as
+/// [`suggest_for_task`] without the `closed_task` refusal. The close already
+/// reads pre-close types for the same reason, and agreement types worked
+/// links as if their tasks were open.
+#[allow(dead_code)]
+pub(crate) fn suggest_for_task_as_if_open<S: HomeSource>(
+    source: &mut HomeResolver<S>,
+    catalog: &Catalog,
+    cfg: &PlanConfig,
+    residence_path: &Path,
+    line: &str,
+) -> SuggestResult {
+    let field = parse_task_theme(line);
+    let inherited =
+        resolve_without_task_field(source, catalog, cfg, residence_path, line);
+    match field {
+        TaskThemeState::Set { value, key } => {
+            let name = catalog.display_name(&key, &value);
+            SuggestResult {
+                suggestion: Some(ThemeSuggestion {
+                    theme: catalog.theme_ref(&key, &name),
+                    source: SuggestionSource::Task,
+                    label: "this task".to_string(),
+                    from: None,
+                    inherited: Some(inherited.suggestion.map(|suggestion| {
+                        Box::new(without_inherited(suggestion))
+                    })),
+                    repair: None,
+                }),
+                warnings: inherited.warnings,
+            }
+        }
+        TaskThemeState::Repair { kind } => {
+            let mut result = inherited;
+            if let Some(suggestion) = result.suggestion.as_mut() {
+                suggestion.repair = Some(kind);
+            }
+            result
+        }
+        TaskThemeState::None => inherited,
+    }
+}
+
 pub(crate) fn suggest_for_new_task<S: HomeSource>(
     source: &mut HomeResolver<S>,
     catalog: &Catalog,

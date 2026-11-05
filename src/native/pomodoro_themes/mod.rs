@@ -15,6 +15,8 @@ use crate::native::{
     style::Styler,
 };
 
+pub(crate) mod agree;
+pub(crate) mod agree_apply;
 mod cache;
 pub(crate) mod cli;
 mod coverage;
